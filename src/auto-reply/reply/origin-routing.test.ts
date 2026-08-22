@@ -24,6 +24,15 @@ describe("origin-routing helpers", () => {
     expect(provider).toBe("workchat");
   });
 
+  it("canonicalizes built-in aliases before comparing delivery routes", () => {
+    expect(
+      resolveOriginMessageProvider({
+        originatingChannel: "imsg",
+        provider: "imessage",
+      }),
+    ).toBe("imessage");
+  });
+
   it("prefers originating destination over fallback destination", () => {
     const to = resolveOriginMessageTo({
       originatingTo: "channel:C1",

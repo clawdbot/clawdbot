@@ -19,6 +19,7 @@ import {
   deactivateMcpLoopbackClientGrantCapture,
   mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
+  transferMcpLoopbackClientGrant,
 } from "../../gateway/mcp-grant-store.js";
 import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
@@ -31,8 +32,8 @@ import {
 } from "../../gateway/mcp-http.runtime.js";
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
-import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import type {
+  CliBackendConfig,
   CliBackendAuthEpochMode,
   CliBackendPreparedExecution,
 } from "../../plugins/cli-backend.types.js";
@@ -49,9 +50,12 @@ import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
-import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
+import {
+  resolveAdmittedRunActiveAssertion,
+  resolvePreparedRunAdmission,
+} from "../admitted-run-context.js";
 import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
-import { resolveAgentConfig, resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { hasUsableOAuthCredential } from "../auth-profiles/credential-state.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import {
@@ -90,8 +94,8 @@ import {
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { resolvePromptBuildHookResult } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
 import {
+  resolvePromptBuildHookResult,
   prependSystemPromptAddition,
   resolveAttemptMediaTaskSystemPromptAddition,
 } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
@@ -183,6 +187,7 @@ const defaultPrepareDeps = {
   deactivateMcpLoopbackClientGrantCapture,
   mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
+  transferMcpLoopbackClientGrant,
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
   resolveOpenClawReferencePaths: async (
@@ -260,11 +265,21 @@ async function resolveCliSkillsPrompt(params: {
     workspaceDir: params.workspaceDir,
   });
   if (!sandboxWorkspace) {
+    const { shouldLoadSkillEntries, skillEntries, loadSkillEntries, preserveEntryOrder } =
+      resolveEmbeddedRunSkillEntries({
+        workspaceDir: params.workspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        skillsSnapshot: params.skillsSnapshot,
+      });
     return resolveSkillsPrompt({
       skillsSnapshot: params.skillsSnapshot,
+      entries: shouldLoadSkillEntries ? skillEntries : undefined,
+      loadEntries: loadSkillEntries,
       workspaceDir: params.workspaceDir,
       config: params.config,
       agentId: params.agentId,
+      preserveEntryOrder,
     });
   }
 
@@ -290,17 +305,18 @@ async function resolveCliSkillsPrompt(params: {
         ? { workspaceAccess: sandboxWorkspace.workspaceAccess }
         : {}),
     },
-    effectiveWorkspace: sandboxWorkspace.workspaceDir,
+    skillsAnchorWorkspace: sandboxWorkspace.workspaceDir,
     skillsSnapshot: params.skillsSnapshot,
   });
-  const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
-    workspaceDir: skillsWorkspaceDir,
-    config: params.config,
-    agentId: params.agentId,
-    eligibility: skillsEligibility,
-    skillsSnapshot: skillsSnapshotForRun,
-    workspaceOnly,
-  });
+  const { shouldLoadSkillEntries, skillEntries, preserveEntryOrder } =
+    resolveEmbeddedRunSkillEntries({
+      workspaceDir: skillsWorkspaceDir,
+      config: params.config,
+      agentId: params.agentId,
+      eligibility: skillsEligibility,
+      skillsSnapshot: skillsSnapshotForRun,
+      workspaceOnly,
+    });
   const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
     entries: shouldLoadSkillEntries ? skillEntries : undefined,
     skillsWorkspaceDir,
@@ -313,6 +329,7 @@ async function resolveCliSkillsPrompt(params: {
     config: params.config,
     agentId: params.agentId,
     eligibility: skillsEligibility,
+    preserveEntryOrder,
   });
 }
 
@@ -432,6 +449,10 @@ export async function prepareCliRunContext(
   const started = Date.now();
   const executionMode = params.executionMode ?? "agent";
   const isSideQuestion = executionMode === "side-question";
+  const isControlOperation = params.controlOperation !== undefined;
+  // Control bytes must reach the resumed backend without turn hooks, prompts,
+  // tools, MCP, skills, or context-engine setup changing their execution.
+  const skipsTurnPreparation = isSideQuestion || isControlOperation;
   const admitPreparedParams = async (
     candidate: RunCliAgentParams,
   ): Promise<
@@ -567,7 +588,6 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: sessionOwner,
   });
-  const agentContextTokens = resolveAgentConfig(params.config ?? {}, sessionAgentId)?.contextTokens;
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
   let effectiveAuthProfileId =
@@ -765,28 +785,29 @@ export async function prepareCliRunContext(
     });
     return openClawHistoryMessages;
   };
+  const promptBuildHookContext = {
+    runId: params.runId,
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    workspaceDir,
+    modelProviderId: params.provider,
+    modelId,
+    trigger: params.trigger,
+    ...buildAgentHookContextChannelFields(params),
+  };
+  const promptBuildHookRunner = skipsTurnPreparation ? undefined : getGlobalHookRunner();
   const promptBuildHookResult = await (async () => {
-    if (isSideQuestion) {
+    if (skipsTurnPreparation) {
       return undefined;
     }
-    const hookRunner = getGlobalHookRunner();
     try {
       return await resolvePromptBuildHookResult({
         config: params.config ?? getRuntimeConfig(),
         prompt: params.prompt,
         messages: await loadOpenClawHistoryMessages(),
-        hookCtx: {
-          runId: params.runId,
-          agentId: sessionAgentId,
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          workspaceDir,
-          modelProviderId: params.provider,
-          modelId,
-          trigger: params.trigger,
-          ...buildAgentHookContextChannelFields(params),
-        },
-        hookRunner,
+        hookCtx: promptBuildHookContext,
+        hookRunner: promptBuildHookRunner,
         bootstrapContextRunKind: params.bootstrapContextRunKind,
       });
     } catch (error) {
@@ -822,6 +843,8 @@ export async function prepareCliRunContext(
       provider: params.provider,
       modelProvider: backendResolved.modelProvider,
       model: contextModelId,
+      modelContextWindow: params.modelContextWindow,
+      modelContextTokens: params.modelContextTokens,
       allowAsyncLoad: false,
       allowUnscopedModelLookup,
     });
@@ -851,7 +874,6 @@ export async function prepareCliRunContext(
     provider: params.provider,
     modelId,
     modelContextTokens,
-    agentContextTokens,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
   // The generic guard rechecks the requested id in config. An alias target may
@@ -865,7 +887,7 @@ export async function prepareCliRunContext(
     : undefined;
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
-  const { bootstrapFiles, contextFiles: resolvedContextFiles } = isSideQuestion
+  const { bootstrapFiles, contextFiles: resolvedContextFiles } = skipsTurnPreparation
     ? { bootstrapFiles: [], contextFiles: [] }
     : await prepareDeps.resolveBootstrapContextForRun({
         workspaceDir,
@@ -896,7 +918,7 @@ export async function prepareCliRunContext(
     selectedNativeToolsProvideFileAccess &&
     params.disableTools !== true;
   const bootstrapRouting =
-    isSideQuestion || !canTransportSystemPrompt(backendResolved.config)
+    skipsTurnPreparation || !canTransportSystemPrompt(backendResolved.config)
       ? undefined
       : await resolveWorkspaceBootstrapRouting({
           isWorkspaceBootstrapPending: prepareDeps.isWorkspaceBootstrapPending,
@@ -941,7 +963,7 @@ export async function prepareCliRunContext(
     : undefined;
   const bundleMcpEnabled =
     !nodeClaudePlacement &&
-    !isSideQuestion &&
+    !skipsTurnPreparation &&
     !systemAgentMcpConfig &&
     backendResolved.bundleMcp &&
     params.disableTools !== true;
@@ -967,7 +989,7 @@ export async function prepareCliRunContext(
   const shouldMaterializeRuntimePolicy =
     runtimeToolsAllowPolicy !== undefined &&
     !nodeClaudePlacement &&
-    !isSideQuestion &&
+    !skipsTurnPreparation &&
     !systemAgentMcpConfig &&
     params.disableTools !== true;
   const mcpContextBase =
@@ -1063,6 +1085,38 @@ export async function prepareCliRunContext(
       )
     : hookFilteredProjectedTools;
   const promptTools = bundleMcpEnabled ? projectedTools : [];
+  const authorizedPromptBuildResult = await (async () => {
+    const toolAuthorityFingerprint = params.toolAuthorityFingerprint;
+    if (!promptBuildHookRunner || !toolAuthorityFingerprint) {
+      return undefined;
+    }
+    const admittedParams = await admitPreparedParams(params);
+    params = admittedParams;
+    const assertHostActive = resolveAdmittedRunActiveAssertion(
+      admittedParams.admittedRunContext,
+      admittedParams.abortSignal,
+    );
+    if (!assertHostActive) {
+      return undefined;
+    }
+    try {
+      return await promptBuildHookRunner.runAuthorizedPromptBuild(
+        {
+          prompt: params.prompt,
+          messages: await loadOpenClawHistoryMessages(),
+        },
+        promptBuildHookContext,
+        {
+          toolAuthorityFingerprint,
+          activeToolNames: promptTools.map((tool) => tool.name),
+          assertHostActive,
+        },
+      );
+    } catch (error) {
+      cliBackendLog.warn(`authorized CLI prompt-build hook failed: ${String(error)}`);
+      return undefined;
+    }
+  })();
   const messageToolAvailable = promptTools.some(
     (tool) => normalizeToolPolicyName(tool.name) === "message",
   );
@@ -1127,25 +1181,51 @@ export async function prepareCliRunContext(
     };
     const mcpClientGrantCapture =
       mcpClientGrant && mcpLoopbackRuntime
-        ? {
-            activate: (captureKey: string) => {
-              const activated = prepareDeps.activateMcpLoopbackClientGrantCapture({
-                token: mcpClientGrant.token,
-                runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
-                captureKey,
-              });
-              if (!activated) {
-                throw new Error("CLI MCP client grant is no longer valid for this Gateway runtime");
-              }
-            },
-            deactivate: (captureKey: string) => {
-              prepareDeps.deactivateMcpLoopbackClientGrantCapture({
-                token: mcpClientGrant.token,
-                runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
-                captureKey,
-              });
-            },
-          }
+        ? (() => {
+            let activeToken = mcpClientGrant.token;
+            return {
+              transportToken: mcpClientGrant.token,
+              adoptProcessToken: (processToken: string) => {
+                if (activeToken === processToken) {
+                  return;
+                }
+                if (
+                  !prepareDeps.transferMcpLoopbackClientGrant({
+                    sourceToken: mcpClientGrant.token,
+                    targetToken: processToken,
+                    runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
+                  })
+                ) {
+                  throw new Error(
+                    "CLI MCP client grant could not transfer onto the live process bearer",
+                  );
+                }
+                activeToken = processToken;
+              },
+              revokeProcessToken: () => {
+                prepareDeps.revokeMcpLoopbackClientGrant(activeToken);
+              },
+              activate: (captureKey: string) => {
+                const activated = prepareDeps.activateMcpLoopbackClientGrantCapture({
+                  token: activeToken,
+                  runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
+                  captureKey,
+                });
+                if (!activated) {
+                  throw new Error(
+                    "CLI MCP client grant is no longer valid for this Gateway runtime",
+                  );
+                }
+              },
+              deactivate: (captureKey: string) => {
+                prepareDeps.deactivateMcpLoopbackClientGrantCapture({
+                  token: activeToken,
+                  runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
+                  captureKey,
+                });
+              },
+            };
+          })()
         : undefined;
     let mcpClientGrantRevoked = false;
     const cleanupMcpClientGrant = mcpClientGrant
@@ -1204,6 +1284,7 @@ export async function prepareCliRunContext(
       provider: params.provider,
       modelId,
       contextTokenBudget: contextWindowInfo.tokens,
+      thinkingLevel: params.thinkLevel === "ultra" ? "max" : params.thinkLevel,
       authProfileId: effectiveAuthProfileId,
       executionMode,
       toolAvailability: params.cliToolAvailability
@@ -1311,7 +1392,7 @@ export async function prepareCliRunContext(
           }
         : undefined;
     const claudeSkillsPlugin =
-      isSideQuestion || nodeClaudePlacement
+      skipsTurnPreparation || nodeClaudePlacement
         ? { args: [], cleanup: async () => {} }
         : await prepareDeps.prepareClaudeCliSkillsPlugin({
             backendId: backendResolved.id,
@@ -1371,24 +1452,31 @@ export async function prepareCliRunContext(
     // returned nor previously stored id is authority for cross-process continuity.
     const ignoreCliSessionCandidate =
       isSideQuestion || preparedBackendFinal.backend.sessionMode === "none";
+    // Native controls target the already-owned transcript without rebuilding its turn-time MCP
+    // topology. Re-validating that topology here would discard the session being compacted.
+    const controlOperationCliSessionId = isControlOperation
+      ? params.cliSessionBinding?.sessionId.trim() || params.cliSessionId?.trim()
+      : undefined;
     const reusableCliSessionCandidate: CliReusableSession = ignoreCliSessionCandidate
       ? { mode: "none" }
-      : params.cliSessionBinding
-        ? resolveCliSessionReuse({
-            binding: params.cliSessionBinding,
-            authProfileId: effectiveAuthProfileId,
-            authEpoch,
-            authEpochVersion: CLI_AUTH_EPOCH_VERSION,
-            extraSystemPromptHash,
-            messageToolPolicyHash,
-            promptToolNamesHash,
-            cwdHash,
-            mcpConfigHash: preparedBackendFinal.mcpConfigHash,
-            mcpResumeHash: preparedBackendFinal.mcpResumeHash,
-          })
-        : params.cliSessionId
-          ? { mode: "reuse", sessionId: params.cliSessionId }
-          : { mode: "none" };
+      : controlOperationCliSessionId
+        ? { mode: "reuse", sessionId: controlOperationCliSessionId }
+        : params.cliSessionBinding
+          ? resolveCliSessionReuse({
+              binding: params.cliSessionBinding,
+              authProfileId: effectiveAuthProfileId,
+              authEpoch,
+              authEpochVersion: CLI_AUTH_EPOCH_VERSION,
+              extraSystemPromptHash,
+              messageToolPolicyHash,
+              promptToolNamesHash,
+              cwdHash,
+              mcpConfigHash: preparedBackendFinal.mcpConfigHash,
+              mcpResumeHash: preparedBackendFinal.mcpResumeHash,
+            })
+          : params.cliSessionId
+            ? { mode: "reuse", sessionId: params.cliSessionId }
+            : { mode: "none" };
     const backendReusableCliSession: CliReusableSession =
       reusableCliSessionCandidate.mode === "reuse-with-drift" &&
       !canTransportSystemPrompt(preparedBackendFinal.backend)
@@ -1396,7 +1484,10 @@ export async function prepareCliRunContext(
         : reusableCliSessionCandidate;
     const candidateClaudeCliSessionId =
       resolveReusableCliSessionId(backendReusableCliSession)?.trim() || undefined;
+    // Control operations must keep the exact native session they were asked to mutate.
+    // Ordinary-turn transcript recovery must not turn `/compact` into a fresh session.
     const hasClaudeCliCandidate =
+      !isControlOperation &&
       !nodeClaudePlacement &&
       candidateClaudeCliSessionId !== undefined &&
       isClaudeCliBackendId(params.provider);
@@ -1445,14 +1536,14 @@ export async function prepareCliRunContext(
         `cli session reset: provider=${params.provider} reason=${invalidatedReason}`,
       );
     }
-    const heartbeatPrompt = isSideQuestion
+    const heartbeatPrompt = skipsTurnPreparation
       ? undefined
       : resolveHeartbeatPromptForSystemPrompt({
           config: params.config,
           agentId: sessionAgentId,
           defaultAgentId,
         });
-    const openClawReferences = isSideQuestion
+    const openClawReferences = skipsTurnPreparation
       ? { docsPath: null, sourcePath: null }
       : await prepareDeps.resolveOpenClawReferencePaths({
           workspaceDir,
@@ -1461,7 +1552,7 @@ export async function prepareCliRunContext(
           moduleUrl: import.meta.url,
         });
     const systemPromptSkillsPrompt =
-      isSideQuestion || nodeClaudePlacement || claudeSkillsPlugin.args.length > 0
+      skipsTurnPreparation || nodeClaudePlacement || claudeSkillsPlugin.args.length > 0
         ? ""
         : await resolveCliSkillsPrompt({
             skillsSnapshot: params.skillsSnapshot,
@@ -1470,44 +1561,46 @@ export async function prepareCliRunContext(
             agentId: sessionAgentId,
             sessionKey: params.sessionKey?.trim() || params.sessionId,
           });
-    const runtimeChannel = isSideQuestion
+    const runtimeChannel = skipsTurnPreparation
       ? undefined
       : normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
-    const runtimeCapabilities = isSideQuestion
+    const runtimeCapabilities = skipsTurnPreparation
       ? undefined
       : collectRuntimeChannelCapabilities({
           cfg: params.config,
           channel: runtimeChannel,
           accountId: params.agentAccountId,
         });
-    const builtSystemPrompt = isSideQuestion
-      ? extraSystemPrompt
-      : buildCliAgentSystemPrompt({
-          workspaceDir,
-          cwd,
-          config: params.config,
-          defaultThinkLevel: params.thinkLevel,
-          extraSystemPrompt,
-          sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
-          requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
-          silentReplyPromptMode: params.silentReplyPromptMode,
-          runtimeChannel,
-          runtimeChatType,
-          runtimeCapabilities,
-          ownerNumbers: params.ownerNumbers,
-          heartbeatPrompt,
-          docsPath: openClawReferences.docsPath ?? undefined,
-          sourcePath: openClawReferences.sourcePath ?? undefined,
-          skillsPrompt: systemPromptSkillsPrompt,
-          tools: promptTools,
-          contextFiles,
-          bootstrapMode,
-          modelDisplay,
-          agentId: sessionAgentId,
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-        });
-    const transformedSystemPrompt = !isSideQuestion
+    const builtSystemPrompt = isControlOperation
+      ? ""
+      : isSideQuestion
+        ? extraSystemPrompt
+        : buildCliAgentSystemPrompt({
+            workspaceDir,
+            cwd,
+            config: params.config,
+            defaultThinkLevel: params.thinkLevel,
+            extraSystemPrompt,
+            sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
+            requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
+            silentReplyPromptMode: params.silentReplyPromptMode,
+            runtimeChannel,
+            runtimeChatType,
+            runtimeCapabilities,
+            ownerNumbers: params.ownerNumbers,
+            heartbeatPrompt,
+            docsPath: openClawReferences.docsPath ?? undefined,
+            sourcePath: openClawReferences.sourcePath ?? undefined,
+            skillsPrompt: systemPromptSkillsPrompt,
+            tools: promptTools,
+            contextFiles,
+            bootstrapMode,
+            modelDisplay,
+            agentId: sessionAgentId,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+          });
+    const transformedSystemPrompt = !skipsTurnPreparation
       ? (backendResolved.transformSystemPrompt?.({
           config: params.config,
           workspaceDir,
@@ -1523,19 +1616,32 @@ export async function prepareCliRunContext(
       params.finalizePromptForResolvedTools && params.transcriptPrompt === undefined
         ? params.prompt
         : params.transcriptPrompt;
-    let preparedPrompt =
-      params.finalizePromptForResolvedTools?.({
-        prompt: params.prompt,
-        messageToolAvailable,
-      }) ?? params.prompt;
-    if (!isSideQuestion) {
+    let preparedPrompt = isControlOperation
+      ? params.prompt
+      : (params.finalizePromptForResolvedTools?.({
+          prompt: params.prompt,
+          messageToolAvailable,
+        }) ?? params.prompt);
+    if (!skipsTurnPreparation) {
       try {
         const hookResult = promptBuildHookResult;
-        if (hookResult?.prependContext) {
-          preparedPrompt = `${hookResult.prependContext}\n\n${preparedPrompt}`;
+        const prependContext = [
+          hookResult?.prependContext,
+          authorizedPromptBuildResult?.prependContext,
+        ]
+          .filter((value): value is string => Boolean(value?.trim()))
+          .join("\n\n");
+        const appendContext = [
+          hookResult?.appendContext,
+          authorizedPromptBuildResult?.appendContext,
+        ]
+          .filter((value): value is string => Boolean(value?.trim()))
+          .join("\n\n");
+        if (prependContext) {
+          preparedPrompt = `${prependContext}\n\n${preparedPrompt}`;
         }
-        if (hookResult?.appendContext) {
-          preparedPrompt = `${preparedPrompt}\n\n${hookResult.appendContext}`;
+        if (appendContext) {
+          preparedPrompt = `${preparedPrompt}\n\n${appendContext}`;
         }
         const hookSystemPrompt = hookResult?.systemPrompt?.trim();
         if (hookSystemPrompt) {
@@ -1563,7 +1669,7 @@ export async function prepareCliRunContext(
       }
     }
     let historyPromptCurrentTurn = preparedPrompt;
-    if (!isSideQuestion) {
+    if (!skipsTurnPreparation) {
       const currentInboundContext = prependCliSessionDriftUserContext(
         params.currentInboundContext,
         reusableCliSession,
@@ -1594,7 +1700,7 @@ export async function prepareCliRunContext(
     // gateway-side OpenClaw transcript, so a fresh remote CLI session still
     // receives prior conversation context via stdin.
     const shouldPrepareOpenClawHistoryPrompt =
-      !isSideQuestion && (!reusableCliSessionId || allowRawTranscriptReseed);
+      !skipsTurnPreparation && (!reusableCliSessionId || allowRawTranscriptReseed);
     const openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt
       ? buildCliSessionHistoryPrompt({
           messages: await loadCliSessionReseedMessages({
@@ -1610,15 +1716,14 @@ export async function prepareCliRunContext(
           maxHistoryChars: autoReseedHistoryChars,
         })
       : undefined;
-    const systemPromptWithReplacements = applyPluginTextReplacements(
-      systemPrompt,
-      backendResolved.textTransforms?.input,
-    );
+    const systemPromptWithReplacements = skipsTurnPreparation
+      ? systemPrompt
+      : applyPluginTextReplacements(systemPrompt, backendResolved.textTransforms?.input);
     // Ensure the cache boundary before appending the model identity so the identity lands in the
     // dynamic suffix, not the cached prefix, for marker-free hook overrides — otherwise an idle
     // turn's prefix (O + identity) diverges from an active media turn's prefix (O) and breaks
     // prompt caching. Skip empty prompts and turns with no identity line, which need no boundary.
-    systemPrompt = isSideQuestion
+    systemPrompt = skipsTurnPreparation
       ? systemPromptWithReplacements
       : appendModelIdentitySystemPrompt({
           systemPrompt:
@@ -1656,7 +1761,7 @@ export async function prepareCliRunContext(
       },
     });
     const contextEngineConfig = params.config ?? getRuntimeConfig();
-    if (isSideQuestion) {
+    if (skipsTurnPreparation) {
       const preparedParams = await admitPreparedParams({
         ...params,
         config: contextEngineConfig,

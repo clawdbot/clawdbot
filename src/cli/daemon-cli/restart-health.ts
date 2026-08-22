@@ -100,6 +100,7 @@ export async function inspectGatewayRestart(params: {
     }));
   const expectedVersion = normalizeOptionalString(params.expectedVersion);
   let reachability: GatewayReachability | null = null;
+  let probeError: string | undefined;
   let activatedPluginErrors: PluginHealthErrorSummary[] = [];
   let channelProbeErrors: Array<{ id: string; error: string }> = [];
   const loadReachability = async () => {
@@ -110,6 +111,7 @@ export async function inspectGatewayRestart(params: {
         auth: params.probeAuth,
         env,
       });
+      probeError = reachability.probeError;
       activatedPluginErrors = reachability.activatedPluginErrors;
       channelProbeErrors = reachability.channelProbeErrors;
     }
@@ -138,32 +140,28 @@ export async function inspectGatewayRestart(params: {
   }
 
   if (portUsage.status === "busy" && runtime.status !== "running") {
-    try {
-      const reachable = await loadReachability();
-      if (reachable.reachable) {
-        return applyChannelProbeErrors(
-          applyActivatedPluginErrors(
-            applyExpectedVersion(
-              {
-                runtime,
-                portUsage,
-                healthy: true,
-                staleGatewayPids: [],
-                gatewayVersion: reachable.gatewayVersion,
-                ...(reachable.activatedPluginErrors.length > 0
-                  ? { activatedPluginErrors: reachable.activatedPluginErrors }
-                  : {}),
-                ...(reachable.channelProbeErrors.length > 0
-                  ? { channelProbeErrors: reachable.channelProbeErrors }
-                  : {}),
-              },
-              expectedVersion,
-            ),
+    const reachable = await loadReachability();
+    if (reachable.reachable) {
+      return applyChannelProbeErrors(
+        applyActivatedPluginErrors(
+          applyExpectedVersion(
+            {
+              runtime,
+              portUsage,
+              healthy: true,
+              staleGatewayPids: [],
+              gatewayVersion: reachable.gatewayVersion,
+              ...(reachable.activatedPluginErrors.length > 0
+                ? { activatedPluginErrors: reachable.activatedPluginErrors }
+                : {}),
+              ...(reachable.channelProbeErrors.length > 0
+                ? { channelProbeErrors: reachable.channelProbeErrors }
+                : {}),
+            },
+            expectedVersion,
           ),
-        );
-      }
-    } catch {
-      // Probe is best-effort; keep the ownership-based diagnostics.
+        ),
+      );
     }
   }
 
@@ -195,28 +193,20 @@ export async function inspectGatewayRestart(params: {
   let healthy = running && ownsPort;
   let gatewayVersion: string | null | undefined;
   if (expectedVersion && healthy && portUsage.status === "busy") {
-    try {
-      const reachable = await loadReachability();
-      healthy = reachable.reachable;
-      gatewayVersion = reachable.gatewayVersion;
-      if (reachable.activatedPluginErrors.length > 0) {
-        healthy = false;
-      }
-      if (reachable.channelProbeErrors.length > 0) {
-        healthy = false;
-      }
-    } catch {
+    const reachable = await loadReachability();
+    healthy = reachable.reachable;
+    gatewayVersion = reachable.gatewayVersion;
+    if (reachable.activatedPluginErrors.length > 0) {
+      healthy = false;
+    }
+    if (reachable.channelProbeErrors.length > 0) {
       healthy = false;
     }
   }
   if (!healthy && running && portUsage.status === "busy" && !expectedVersion) {
-    try {
-      const reachable = await loadReachability();
-      healthy = reachable.reachable;
-      gatewayVersion = reachable.gatewayVersion;
-    } catch {
-      // best-effort probe
-    }
+    const reachable = await loadReachability();
+    healthy = reachable.reachable;
+    gatewayVersion = reachable.gatewayVersion;
   }
   const staleGatewayPids = Array.from(
     new Set([
@@ -247,6 +237,7 @@ export async function inspectGatewayRestart(params: {
           healthy,
           staleGatewayPids,
           ...(gatewayVersion !== undefined ? { gatewayVersion } : {}),
+          ...(probeError ? { probeError } : {}),
           ...(activatedPluginErrors.length ? { activatedPluginErrors } : {}),
           ...(channelProbeErrors.length ? { channelProbeErrors } : {}),
         },

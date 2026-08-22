@@ -1,14 +1,22 @@
 import { expect, test } from "vitest";
+import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
+import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import {
+  resolveSessionMutationAuthorization,
+  SessionMutationAuthorizationChangedError,
+} from "./session-sharing.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   seedSessionTranscript,
   sessionStoreEntry,
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 test("sessions.recover rolls over one tombstone and returns its continuation outcome", async () => {
   const { storePath } = await createSessionStoreDir();
@@ -142,6 +150,107 @@ test("sessions.recover rejects a healthy session", async () => {
     ok: false,
     error: { code: "INVALID_REQUEST", message: expect.stringContaining("tombstoned") },
   });
+});
+
+test("sessions.recover revalidates participation at the recovery writer commit", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sourceKey = "agent:main:dashboard:recovery-participation-race";
+  const sourceSessionId = "recovery-participation-race-source";
+  await writeSessionStore({
+    entries: {
+      [sourceKey]: sessionStoreEntry(sourceSessionId, {
+        status: "failed",
+        abortedLastRun: true,
+        visibility: "read-only",
+        createdActor: { type: "human", id: "owner" },
+        mainRestartRecovery: {
+          cycleId: "cycle-recovery-participation-race",
+          revision: 1,
+          chargedAttempts: 3,
+          tombstone: { reason: "automatic recovery exhausted" },
+        },
+      }),
+    },
+  });
+  await seedSessionTranscript({
+    agentId: "main",
+    sessionId: sourceSessionId,
+    sessionKey: sourceKey,
+    storePath,
+    messages: [{ role: "user", content: "recover this private session" }],
+  });
+  addSessionMember(
+    { agentId: "main", sessionKey: sourceKey, storePath },
+    { identityId: "member", addedBy: "owner", expectedSessionId: sourceSessionId },
+  );
+  const client = {
+    authenticatedUserId: "member@example.com",
+    authenticatedUserProfile: {
+      profileId: "member",
+      displayName: "Member",
+      hasAvatar: false,
+      updatedAt: 1,
+    },
+    connect: { role: "operator", scopes: ["operator.write"] },
+  } as never;
+  // Use an already-registered single-key mutation to isolate handler/writer propagation from
+  // the separate sessions.recover registry regression covered at the router boundary.
+  const authorization = resolveSessionMutationAuthorization({
+    client,
+    method: "sessions.reset",
+    requestParams: { key: sourceKey, agentId: "main" },
+    context: { getRuntimeConfig } as never,
+  });
+  expect(authorization.error).toBeNull();
+  if (!authorization.authorization) {
+    throw new Error("failed to capture recovery source participation");
+  }
+
+  const mutationEntered = createDeferredCore();
+  const releaseMutation = createDeferredCore();
+  const heldMutation = runExclusiveSessionLifecycleMutation({
+    scope: storePath,
+    identities: [sourceKey, sourceSessionId],
+    run: async () => {
+      mutationEntered.resolve();
+      await releaseMutation.promise;
+    },
+  });
+  await mutationEntered.promise;
+  const requestStarted = createDeferredCore();
+  const recovering = directSessionReq(
+    "sessions.recover",
+    { agentId: "main", key: sourceKey },
+    {
+      client,
+      context: {
+        getRuntimeConfig: () => {
+          requestStarted.resolve();
+          return getRuntimeConfig();
+        },
+      },
+      sessionMutationAuthorization: authorization.authorization,
+    },
+  );
+
+  try {
+    await requestStarted.promise;
+    removeSessionMember(
+      { agentId: "main", sessionKey: sourceKey, storePath },
+      "member",
+      undefined,
+      sourceSessionId,
+    );
+  } finally {
+    releaseMutation.resolve();
+    await heldMutation;
+  }
+
+  await expect(recovering).rejects.toBeInstanceOf(SessionMutationAuthorizationChangedError);
+  const source = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
+  expect(source?.archivedAt).toBeUndefined();
+  expect(source?.mainRestartRecovery?.tombstone).not.toHaveProperty("recoveredSessionKey");
+  expect(source?.mainRestartRecovery?.tombstone).not.toHaveProperty("recoveredSessionId");
 });
 
 test("sessions.recover rejects continuation launch after runtime authority closes", async () => {

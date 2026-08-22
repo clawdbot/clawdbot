@@ -48,42 +48,6 @@ struct RootTabsSourceGuardTests {
         #expect(startupTask.contains("self.appDelegate.scenePhaseChanged(self.scenePhase)"))
     }
 
-    @Test func `hidden sidebar reveal uses destination header without reserved rail`() throws {
-        let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
-        let componentSource = try String(contentsOf: Self.proComponentsSourceURL(), encoding: .utf8)
-
-        #expect(source.contains("sidebarHeaderAction"))
-        #expect(source.contains("Hide Sidebar"))
-        #expect(source.contains("Show Sidebar"))
-        #expect(source.contains("shouldShowSidebarRevealInDestinationHeader"))
-        #expect(source.contains("layoutMode: self.isSidebarDrawerLayout ? .drawer : .split"))
-        #expect(componentSource.contains("OpenClawSidebarHeaderLeadingSlot"))
-        #expect(componentSource.contains(".frame(width: 44, height: 44)"))
-        #expect(source.contains(".safeAreaPadding(.top, 8)"))
-        #expect(source.contains("Self.sidebarShowButtonAccessibilityIdentifier"))
-        #expect(source.contains("Self.sidebarHideButtonAccessibilityIdentifier"))
-        #expect(source.contains("accessibilityLabel: .localized(\"Hide Sidebar\")"))
-        #expect(source.contains("accessibilityLabel: .localized(\"Show Sidebar\")"))
-        #expect(source.contains("action: { self.hideSidebar() }"))
-        #expect(source.contains("action: { self.showSidebar() }"))
-        #expect(!source.contains("private var collapsedSidebarRail: some View"))
-        #expect(!source.contains("Self.sidebarCollapsedRailWidth"))
-        #expect(source.contains("requestedInitialSidebarVisibility"))
-        #expect(!source.contains("@State private var splitColumnVisibility: NavigationSplitViewVisibility"))
-        #expect(!source.contains("NavigationSplitView(columnVisibility: self.$splitColumnVisibility)"))
-        #expect(source.contains("HStack(spacing: 0)"))
-        #expect(!source.contains("self.syncSidebarVisibility(from: visibility)"))
-        #expect(!source.contains("shouldReserveSidebarRevealInset"))
-        #expect(!source.contains("safeAreaInset(edge: .top"))
-        #expect(!source.contains("thinMaterial, in: Circle"))
-        #expect(!source.contains("sidebarRevealInset"))
-        #expect(source.contains(".background(OpenClawSidebarPalette.background)"))
-        #expect(!source.contains("Color.black.opacity(0.35)"))
-        #expect(!source.contains("sidebarRevealCornerButton"))
-        #expect(!source.contains("shouldShowSidebarRevealOverlay"))
-        #expect(!source.contains("shouldShowOverviewHeaderSidebarReveal"))
-    }
-
     @Test func `i pad split stays integrated while compact drawer uses one local shell`() throws {
         let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
         let splitContent = try Self.extract(
@@ -663,25 +627,6 @@ extension RootTabsSourceGuardTests {
         #expect(source.contains("private func proposals(forLaneStatus status: String)"))
     }
 
-    @Test func `routed feature screens reuse shared pro components`() throws {
-        let source = try Self.iPadTaskFeatureScreensSource()
-        let componentsSource = try String(contentsOf: Self.proComponentsSourceURL(), encoding: .utf8)
-        let channelsSource = try String(contentsOf: Self.channelsSourceURL(), encoding: .utf8)
-
-        #expect(source.contains("ProMetricGrid(metrics: self.metrics)"))
-        #expect(source.contains("ProPanelHeader("))
-        #expect(source.contains("ProStatusRow("))
-        #expect(!source.contains("private struct ProMetricGrid"))
-        #expect(!source.contains("private struct ProMetric"))
-        #expect(!source.contains("private struct ProPanelHeader"))
-        #expect(!source.contains("private struct ProStatusRow"))
-        #expect(!channelsSource.contains("private struct SettingsChannelPanelHeader"))
-        #expect(!channelsSource.contains("private struct SettingsChannelInfoRow"))
-        #expect(componentsSource.contains("struct ProMetricGrid"))
-        #expect(componentsSource.contains("struct ProPanelHeader"))
-        #expect(componentsSource.contains("struct ProStatusRow"))
-    }
-
     @Test func `activity screen stays split from task feature screens`() throws {
         let taskSource = try Self.iPadTaskFeatureScreensSource()
         let activitySource = try String(contentsOf: Self.iPadActivityScreenSourceURL(), encoding: .utf8)
@@ -697,18 +642,6 @@ extension RootTabsSourceGuardTests {
         #expect(!taskSource.contains("struct IPadActivityScreen"))
         #expect(!taskSource.contains("import OpenClawChatUI"))
         #expect(projectSource.contains("IPadActivityScreen.swift in Sources"))
-    }
-
-    @Test func `routed feature chrome stays split from task feature screens`() throws {
-        let taskSource = try Self.iPadTaskFeatureScreensSource()
-        let chromeSource = try String(contentsOf: Self.iPadSidebarScreenChromeSourceURL(), encoding: .utf8)
-        let projectSource = try String(contentsOf: Self.xcodeProjectSourceURL(), encoding: .utf8)
-
-        #expect(chromeSource.contains("struct IPadSidebarScreenChrome<Content: View>: View"))
-        #expect(chromeSource.contains("OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)"))
-        #expect(chromeSource.contains("OpenClawGatewayCompactPill()"))
-        #expect(!taskSource.contains("struct IPadSidebarScreenChrome"))
-        #expect(projectSource.contains("IPadSidebarScreenChrome.swift in Sources"))
     }
 
     @Test func `routed feature chrome keeps gateway pill actionable`() throws {

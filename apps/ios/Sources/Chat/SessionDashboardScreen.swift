@@ -54,9 +54,7 @@ struct SessionDashboardScreen: View {
             }
         }
         .navigationDestination(isPresented: self.$showsDesktop) {
-            // Session dashboard presentation currently carries only the session key,
-            // so the desktop document mode owns source selection.
-            DesktopHubScreen(source: nil, usesNativeNavigationChrome: true)
+            DesktopHubScreen(session: self.sessionKey, usesNativeNavigationChrome: true)
         }
     }
 

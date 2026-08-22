@@ -2,6 +2,7 @@ import { toStringifiedError as asError } from "openclaw/plugin-sdk/error-runtime
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import WebSocket from "ws";
 import { sha256Hex, signDeviceRequest, utf8 } from "../protocol/index.js";
 import type { Envelope, SignedReceipt } from "../protocol/index.js";
@@ -14,6 +15,7 @@ type FetchLike = typeof fetch;
 // force unbounded allocation through response.json().
 const REEF_RELAY_JSON_MAX_BYTES = 16 * 1024 * 1024;
 const REEF_RELAY_ERROR_JSON_MAX_BYTES = 64 * 1024;
+const REEF_RELAY_ERROR_CODE_PATTERN = /^[a-z][a-z0-9_]{0,127}$/;
 // Relay envelopes are capped at 48 KiB. Leave room for inbox metadata while
 // rejecting oversized or compressed frames before ws materializes the message.
 const REEF_RELAY_WEBSOCKET_MAX_PAYLOAD_BYTES = 64 * 1024;
@@ -42,9 +44,22 @@ export class ReefRelayError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly code?: string,
   ) {
     super(message);
     this.name = "ReefRelayError";
+  }
+}
+
+export class ReefProtocolCompatibilityError extends ReefRelayError {
+  constructor(
+    status: 400 | 409,
+    code: "invalid_request" | "client_upgrade_required",
+    readonly upgradeRequired: "reef-relay" | "openclaw-client",
+    message: string,
+  ) {
+    super(status, message, code);
+    this.name = "ReefProtocolCompatibilityError";
   }
 }
 
@@ -158,14 +173,51 @@ export class ReefTransportClient {
       code ? [code] : [],
     );
   }
-  respondFriend(friend: RelayFriend, accept: boolean): Promise<{ peer: string; status: string }> {
-    return this.signed("POST", "/v1/friends/respond", {
-      peer: friend.peer,
-      accept,
-      expected_key_epoch: friend.key_epoch,
-      expected_ed25519_pub: friend.ed25519_pub,
-      expected_x25519_pub: friend.x25519_pub,
-    });
+  async respondFriend(
+    friend: RelayFriend,
+    accept: boolean,
+  ): Promise<{ peer: string; status: "active" | "blocked" }> {
+    let result: unknown;
+    try {
+      result = await this.signed("POST", "/v1/friends/respond", {
+        peer: friend.peer,
+        accept,
+        expected_key_epoch: friend.key_epoch,
+        expected_ed25519_pub: friend.ed25519_pub,
+        expected_x25519_pub: friend.x25519_pub,
+      });
+    } catch (error) {
+      if (
+        error instanceof ReefRelayError &&
+        error.status === 400 &&
+        error.code === "invalid_request"
+      ) {
+        throw new ReefProtocolCompatibilityError(
+          400,
+          error.code,
+          "reef-relay",
+          "The Reef relay is likely incompatible or outdated. Update OpenClaw and the Reef relay together, then approve the fresh pairing challenge again.",
+        );
+      }
+      if (
+        error instanceof ReefRelayError &&
+        error.status === 409 &&
+        error.code === "client_upgrade_required"
+      ) {
+        throw new ReefProtocolCompatibilityError(
+          409,
+          error.code,
+          "openclaw-client",
+          "OpenClaw is outdated for this Reef relay. Update OpenClaw, then approve the fresh pairing challenge again.",
+        );
+      }
+      throw error;
+    }
+    const status = accept ? "active" : "blocked";
+    if (!isRecord(result) || result.peer !== friend.peer || result.status !== status) {
+      throw new Error("invalid Reef relay friendship response");
+    }
+    return { peer: friend.peer, status };
   }
   listFriends(): Promise<{ friendships: RelayFriend[] }> {
     return this.signed("GET", "/v1/friends");
@@ -275,14 +327,16 @@ export class ReefTransportClient {
       }
       if (!response.ok) {
         let message = `relay HTTP ${response.status}`;
+        let code: string | undefined;
         try {
-          const parsed = await readProviderJsonResponse<{ error?: string }>(
-            response,
-            "reef.relay.error",
-            { maxBytes: REEF_RELAY_ERROR_JSON_MAX_BYTES },
-          );
-          if (typeof parsed.error === "string" && parsed.error) {
+          const parsed = await readProviderJsonResponse<unknown>(response, "reef.relay.error", {
+            maxBytes: REEF_RELAY_ERROR_JSON_MAX_BYTES,
+          });
+          if (isRecord(parsed) && typeof parsed.error === "string" && parsed.error) {
             message = redactReefRelayErrorMessage(parsed.error, secrets);
+            if (REEF_RELAY_ERROR_CODE_PATTERN.test(parsed.error)) {
+              code = parsed.error;
+            }
           }
         } catch {
           if (timeout.signal?.aborted) {
@@ -291,7 +345,7 @@ export class ReefTransportClient {
           // Keep the status fallback when the error body is missing, malformed,
           // or oversized; callers still get a typed ReefRelayError.
         }
-        throw new ReefRelayError(response.status, message);
+        throw new ReefRelayError(response.status, message, code);
       }
       if (response.status === 204) {
         return undefined as T;

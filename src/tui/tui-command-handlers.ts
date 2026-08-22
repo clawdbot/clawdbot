@@ -304,7 +304,13 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   ) => {
     selector.onSelect = (item) => {
       void (async () => {
-        await onSelect(item.value);
+        try {
+          await onSelect(item.value);
+        } catch (err) {
+          // A rejected selection must not strand the overlay open with an
+          // unhandled rejection; close it and surface the cause in chat.
+          chatLog.addSystem(`selection failed: ${formatTuiErrorMessage(err)}`);
+        }
         closeOverlayAndRender(overlayHandle);
       })();
     };
@@ -318,7 +324,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     try {
       chatLog.addSystem("loading models...");
       tui.requestRender();
-      const models = await client.listModels();
+      const models = await client.listModels({ agentId: selection.agentId });
       if (!isCurrentSessionSelection(selection)) {
         return;
       }
@@ -674,11 +680,33 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         "reasoning failed",
       );
     },
-    usage: async (args) => {
+    usage: async (args, raw) => {
+      if (args.toLowerCase() === "cost") {
+        if (!opts.local) {
+          await sendMessage(raw);
+          return;
+        }
+        if (!client.runUsageCostCommand) {
+          addUnsupportedLocalCommand("usage cost");
+          return;
+        }
+        const selection = captureSessionSelection();
+        try {
+          const result = await client.runUsageCostCommand(selection);
+          if (isCurrentSessionSelection(selection)) {
+            chatLog.addSystem(result.text);
+          }
+        } catch (err) {
+          if (isCurrentSessionSelection(selection)) {
+            chatLog.addSystem(`usage cost failed: ${formatTuiErrorMessage(err)}`);
+          }
+        }
+        return;
+      }
       const isReset = args ? isSessionDefaultDirectiveValue(args) : false;
       const normalized = args && !isReset ? normalizeUsageDisplay(args) : undefined;
       if (args && !normalized && !isReset) {
-        chatLog.addSystem("usage: /usage <off|tokens|full|reset>");
+        chatLog.addSystem("usage: /usage <off|tokens|full|cost|reset>");
         return;
       }
       if (isReset) {

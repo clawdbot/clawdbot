@@ -36,29 +36,9 @@ import type {
   SessionEntryCreateWithTranscriptPrepareResult,
   SessionEntryCreateWithTranscriptOptions,
 } from "./session-accessor.types.js";
-import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
-import type { GroupKeyResolution, SessionEntry } from "./types.js";
-
-function projectSessionEntryForPersistenceRevision(params: {
-  storePath: string;
-  entry: SessionEntry;
-}): SessionEntry {
-  const snapshot = params.entry.skillsSnapshot;
-  const stripped =
-    snapshot?.resolvedSkills === undefined
-      ? params.entry
-      : {
-          ...params.entry,
-          skillsSnapshot: (({ resolvedSkills: _drop, ...rest }) => rest)(snapshot),
-        };
-  const projected = projectSessionStoreForPersistence({
-    storePath: params.storePath,
-    store: { entry: stripped },
-  });
-  return projected.store.entry ?? stripped;
-}
+import type { GroupKeyResolution, InternalSessionEntry as SessionEntry } from "./types.js";
 
 export async function forkSessionFromParentTranscript(
   params: ForkSessionFromParentTranscriptParams,
@@ -105,7 +85,6 @@ export async function createSessionEntryWithTranscript<TError = string>(
   }
 
   try {
-    options.commitGuard?.();
     await appendTranscriptEvent(
       {
         agentId,
@@ -114,8 +93,12 @@ export async function createSessionEntryWithTranscript<TError = string>(
         storePath,
       },
       createSessionTranscriptHeader({ cwd: options.cwd, sessionId: created.entry.sessionId }),
+      options.commitGuard ? { beforeCommitInTransaction: options.commitGuard } : undefined,
     );
   } catch (err) {
+    // Preserve authority errors from the commit guard instead of projecting
+    // them as transcript failures at the Gateway boundary.
+    options.commitGuard?.();
     return {
       ok: false,
       error: formatErrorMessage(err),
@@ -235,15 +218,14 @@ export function createReplySessionInitializationRevision(params: {
   entry: SessionEntry | undefined;
   storePath: string;
 }): string {
-  const { entry, storePath } = params;
+  const { entry } = params;
   if (!entry) {
     return JSON.stringify(null);
   }
   // The guard only rejects a true session-identity rebind. Same-session
   // activity/context writes are merged below; comparing them here would reject
   // before the merge can preserve the concurrent metadata.
-  const projected = projectSessionEntryForPersistenceRevision({ storePath, entry });
-  return JSON.stringify({ sessionId: projected.sessionId });
+  return JSON.stringify({ sessionId: entry.sessionId });
 }
 
 export function resolveInitializedReplySessionEntry(params: {
@@ -328,13 +310,13 @@ export async function markSessionAbortTarget(params: {
   scope: SessionAccessScope;
   now?: () => number;
 }): Promise<SessionAbortTargetResult | null> {
-  let resolvedTarget: SessionAbortTargetResult | null = null;
+  const resolution: { target: SessionAbortTargetResult | null } = { target: null };
   try {
     const sessionKey = normalizeStoreSessionKey(params.scope.sessionKey);
     const updated = await patchSessionEntryCore(
       params.scope,
       (currentEntry) => {
-        resolvedTarget = {
+        resolution.target = {
           entry: { ...currentEntry },
           persisted: false,
           sessionId: currentEntry.sessionId,
@@ -368,7 +350,7 @@ export async function markSessionAbortTarget(params: {
         }
       : null;
   } catch (error) {
-    const fallbackTarget = resolvedTarget as unknown as SessionAbortTargetResult | null;
+    const fallbackTarget = resolution.target;
     if (fallbackTarget) {
       return {
         entry: fallbackTarget.entry,

@@ -190,6 +190,7 @@ suite.define(() => {
         const activate = await gateway.waitForRequest("openclaw.setup.activate");
         expect(activate.params).toEqual({
           kind: "provider-auto:llama-cpp",
+          agentId: "main",
           modelRef,
         });
 

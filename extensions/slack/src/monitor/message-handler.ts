@@ -132,7 +132,9 @@ export function createSlackMessageHandler(params: {
     if (cached) {
       return cached;
     }
-    const runtimeContext = { ...ctx, cfg: runtimeConfig };
+    // Keep identity, allowlists, and other mutable monitor state live while pinning this config.
+    const runtimeContext = Object.create(ctx) as SlackMonitorContext;
+    runtimeContext.cfg = runtimeConfig;
     runtimeContexts.set(runtimeConfig, runtimeContext);
     return runtimeContext;
   };

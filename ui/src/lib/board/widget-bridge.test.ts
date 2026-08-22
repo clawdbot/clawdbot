@@ -199,11 +199,14 @@ describe("board widget bridge", () => {
     expect(client.request).toHaveBeenCalledTimes(13);
   });
 
-  it("maps read and cron requests to ticket-bound board RPCs", async () => {
+  it("maps read, action, and cron requests to ticket-bound board RPCs", async () => {
     const { controller, client } = setup();
 
     await controller.handle(
       request("data.read", { bindingId: "health", params: { probe: false } }),
+    );
+    await controller.handle(
+      request("action.run", { action: "example.resolve", params: { eventId: "event-1" } }),
     );
     await controller.handle(request("cron.trigger", { jobId: "job-1" }));
 
@@ -214,8 +217,22 @@ describe("board widget bridge", () => {
     });
     expect(client.request).toHaveBeenNthCalledWith(2, "board.action", {
       ticket: "ticket",
+      action: "example.resolve",
+      params: { eventId: "event-1" },
+    });
+    expect(client.request).toHaveBeenNthCalledWith(3, "board.action", {
+      ticket: "ticket",
       action: "cron.trigger",
       jobId: "job-1",
     });
+  });
+
+  it("rejects non-object action params", async () => {
+    const { controller, client } = setup();
+
+    await expect(
+      controller.handle(request("action.run", { action: "example.resolve", params: "bad" })),
+    ).rejects.toThrow("widget action params are invalid");
+    expect(client.request).not.toHaveBeenCalled();
   });
 });

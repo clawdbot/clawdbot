@@ -137,6 +137,8 @@ export type GatewayControlUiConfig = {
   basePath?: string;
   /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
   root?: string;
+  /** Optional service credential used only for Control UI GitHub previews and discovery. */
+  github?: { token?: SecretInput };
   /**
    * Opt-in AI purpose titles for tool calls in Control UI chat (default false).
    * When enabled, chat.toolTitles generates short titles through standard
@@ -157,6 +159,8 @@ export type GatewayControlUiConfig = {
    * Default off; prefer hosted /__openclaw__/canvas or /__openclaw__/a2ui content.
    */
   allowExternalEmbedUrls?: boolean;
+  /** Fetch public-site favicons through the Gateway for Control UI links (default true). */
+  automaticallyFetchFavicons?: boolean;
   /** Optional max-width for grouped Control UI chat messages (default: min(900px, 68%)). */
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];
@@ -254,15 +258,11 @@ export type GatewayTailscaleMode = "off" | "serve" | "funnel";
 export type GatewayTailscaleConfig = {
   /** Tailscale exposure mode for the Gateway control UI. */
   mode?: GatewayTailscaleMode;
-  /** Reset serve/funnel configuration on shutdown. */
-  resetOnExit?: boolean;
-  /** Optional Tailscale Service name, such as `svc:openclaw`, for Serve mode. */
-  serviceName?: string;
   /**
-   * When `mode="serve"` and an externally configured Tailscale Funnel route
-   * already covers the gateway port, skip re-applying `tailscale serve` on
-   * startup. Lets operators manage Funnel exposure outside OpenClaw without
-   * losing it across gateway restarts.
+   * Detect an external Funnel route left on the ordinary Gateway listener and
+   * leave exposure unchanged with migration guidance. Gateway-authenticated
+   * routes reject that ingress; plugin-authenticated webhooks keep their owner auth.
+   * @deprecated Migrate to `mode="funnel"`, which uses managed ingress.
    */
   preserveFunnel?: boolean;
 };
@@ -278,6 +278,8 @@ export type GatewayRemoteConfig = {
   token?: SecretInput;
   /** Password for remote auth (when the gateway requires password auth). */
   password?: SecretInput;
+  /** Headers presented to an identity-aware proxy in front of the Gateway (values are secrets). */
+  edgeAuth?: Record<string, SecretInput>;
   /** Expected TLS certificate fingerprint (sha256) for remote gateways. */
   tlsFingerprint?: string;
   /** SSH target for tunneling remote Gateway (user@host). */

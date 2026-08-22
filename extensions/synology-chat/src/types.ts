@@ -6,6 +6,7 @@ type SynologyChatConfigFields = {
   enabled?: boolean;
   token?: string;
   incomingUrl?: string;
+  webhookUrl?: string;
   nasHost?: string;
   webhookPath?: string;
   dangerouslyAllowNameMatching?: boolean;
@@ -33,6 +34,7 @@ export interface ResolvedSynologyChatAccount {
   enabled: boolean;
   token: string;
   incomingUrl: string;
+  webhookUrl: string;
   nasHost: string;
   webhookPath: string;
   webhookPathSource: SynologyWebhookPathSource;

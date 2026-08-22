@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-const cleanupReplacedPluginHostRegistry = vi.hoisted(() => vi.fn(async () => {}));
+const cleanupReplacedPluginHostRegistry = vi.hoisted(() =>
+  vi.fn(async () => ({ cleanupCount: 0, failures: [] })),
+);
 
 vi.mock("./host-hook-cleanup.js", () => ({ cleanupReplacedPluginHostRegistry }));
 
@@ -16,6 +18,7 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { markPluginRegistryRetired } from "./registry-lifecycle.js";
 import {
   clearActivePluginRegistry,
+  prepareActivePluginRegistryShutdown,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "./runtime.js";
@@ -71,6 +74,17 @@ afterEach(() => {
 });
 
 describe("plugin command runtime", () => {
+  it("prepares plugin host cleanup before gateway shutdown", async () => {
+    await prepareActivePluginRegistryShutdown();
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push({ status: "loaded" } as never);
+    setActivePluginRegistry(registry);
+
+    await clearActivePluginRegistry();
+
+    expect(cleanupReplacedPluginHostRegistry).toHaveBeenCalledOnce();
+  });
+
   it("binds the request-scoped registry and scopes provider aliases", async () => {
     const ambient = createEmptyPluginRegistry();
     const scoped = createEmptyPluginRegistry();
@@ -339,8 +353,8 @@ describe("plugin command runtime", () => {
     let releaseCleanup!: () => void;
     cleanupReplacedPluginHostRegistry.mockImplementationOnce(
       async () =>
-        await new Promise<void>((resolve) => {
-          releaseCleanup = resolve;
+        await new Promise<{ cleanupCount: number; failures: [] }>((resolve) => {
+          releaseCleanup = () => resolve({ cleanupCount: 0, failures: [] });
         }),
     );
     let detachedClear!: Promise<void>;

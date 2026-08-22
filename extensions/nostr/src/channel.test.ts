@@ -5,7 +5,8 @@ import {
   runSetupWizardConfigure,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { withEnv } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { nostrPlugin } from "./channel.js";
 import { normalizePubkey } from "./nostr-key-utils.js";
@@ -18,10 +19,6 @@ import {
   createConfiguredNostrCfg,
 } from "./test-fixtures.js";
 import { listNostrAccountIds, resolveDefaultNostrAccountId, resolveNostrAccount } from "./types.js";
-
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
 
 describe("nostr target classification", () => {
   it("accepts only valid direct-message public keys", () => {
@@ -114,6 +111,21 @@ const nostrTestPlugin = {
 
 const nostrConfigure = createPluginSetupWizardConfigure(nostrTestPlugin);
 
+function withoutNostrPrivateKey<T>(run: () => T): T {
+  const hadValue = Object.hasOwn(process.env, "NOSTR_PRIVATE_KEY");
+  const previous = process.env.NOSTR_PRIVATE_KEY;
+  delete process.env.NOSTR_PRIVATE_KEY;
+  try {
+    return run();
+  } finally {
+    if (hadValue && previous !== undefined) {
+      process.env.NOSTR_PRIVATE_KEY = previous;
+    } else {
+      delete process.env.NOSTR_PRIVATE_KEY;
+    }
+  }
+}
+
 function requireNostrLooksLikeId() {
   const looksLikeId = nostrTestPlugin.messaging?.targetResolver?.looksLikeId;
   if (!looksLikeId) {
@@ -146,10 +158,11 @@ function requireNostrResolveDmPolicy() {
   return resolveDmPolicy;
 }
 
-function createUnresolvedNostrPrivateKeyCfg() {
+function createUnresolvedNostrPrivateKeyCfg(defaultAccount?: string) {
   return {
     channels: {
       nostr: {
+        ...(defaultAccount ? { defaultAccount } : {}),
         privateKey: {
           source: "env" as const,
           provider: "default",
@@ -164,7 +177,7 @@ const unresolvedSecretRefPrivateKeyCases = [
   {
     name: "listNostrAccountIds",
     assert: (cfg: ReturnType<typeof createUnresolvedNostrPrivateKeyCfg>) => {
-      expect(listNostrAccountIds(cfg)).toStrictEqual([]);
+      expect(listNostrAccountIds(cfg)).toStrictEqual(["work"]);
     },
   },
   {
@@ -172,7 +185,8 @@ const unresolvedSecretRefPrivateKeyCases = [
     assert: (cfg: ReturnType<typeof createUnresolvedNostrPrivateKeyCfg>) => {
       const account = resolveNostrAccount({ cfg });
 
-      expect(account.configured).toBe(false);
+      expect(account.accountId).toBe("work");
+      expect(account.configured).toBe(true);
       expect(account.privateKey).toBe("");
       expect(account.publicKey).toBe("");
       expect(account.config.privateKey).toEqual(cfg.channels.nostr.privateKey);
@@ -210,7 +224,7 @@ describe("nostrPlugin", () => {
   describe("config adapter", () => {
     it("listAccountIds returns empty array for unconfigured", () => {
       const cfg = { channels: {} };
-      const ids = nostrTestPlugin.config.listAccountIds(cfg);
+      const ids = withoutNostrPrivateKey(() => nostrTestPlugin.config.listAccountIds(cfg));
       expect(ids).toStrictEqual([]);
     });
 
@@ -435,10 +449,11 @@ describe("nostr setup wizard", () => {
 
 describe("nostr unresolved SecretRef privateKey", () => {
   it.each(unresolvedSecretRefPrivateKeyCases)(
-    "$name does not treat unresolved SecretRef privateKey as configured",
+    "$name keeps an unresolved named SecretRef account configured without using ambient credentials",
     ({ assert }) => {
-      vi.stubEnv("NOSTR_PRIVATE_KEY", TEST_HEX_PRIVATE_KEY);
-      assert(createUnresolvedNostrPrivateKeyCfg());
+      withEnv({ NOSTR_PRIVATE_KEY: TEST_HEX_PRIVATE_KEY }, () => {
+        assert(createUnresolvedNostrPrivateKeyCfg("work"));
+      });
     },
   );
 });
@@ -447,12 +462,12 @@ describe("nostr account helpers", () => {
   describe("listNostrAccountIds", () => {
     it("returns empty array when not configured", () => {
       const cfg = { channels: {} };
-      expect(listNostrAccountIds(cfg)).toStrictEqual([]);
+      expect(withoutNostrPrivateKey(() => listNostrAccountIds(cfg))).toStrictEqual([]);
     });
 
     it("returns empty array when nostr section exists but no privateKey", () => {
       const cfg = { channels: { nostr: { enabled: true } } };
-      expect(listNostrAccountIds(cfg)).toStrictEqual([]);
+      expect(withoutNostrPrivateKey(() => listNostrAccountIds(cfg))).toStrictEqual([]);
     });
 
     it("returns default when privateKey is configured", () => {
@@ -503,7 +518,7 @@ describe("nostr account helpers", () => {
 
     it("resolves unconfigured account with defaults", () => {
       const cfg = { channels: {} };
-      const account = resolveNostrAccount({ cfg });
+      const account = withoutNostrPrivateKey(() => resolveNostrAccount({ cfg }));
 
       expect(account.accountId).toBe("default");
       expect(account.enabled).toBe(true);
@@ -515,13 +530,13 @@ describe("nostr account helpers", () => {
     });
 
     it("resolves the default account private key from NOSTR_PRIVATE_KEY", () => {
-      vi.stubEnv("NOSTR_PRIVATE_KEY", TEST_HEX_PRIVATE_KEY);
+      withEnv({ NOSTR_PRIVATE_KEY: TEST_HEX_PRIVATE_KEY }, () => {
+        const account = resolveNostrAccount({ cfg: { channels: { nostr: { enabled: true } } } });
 
-      const account = resolveNostrAccount({ cfg: { channels: { nostr: { enabled: true } } } });
-
-      expect(account.configured).toBe(true);
-      expect(account.privateKey).toBe(TEST_HEX_PRIVATE_KEY);
-      expect(account.publicKey).toMatch(/^[0-9a-f]{64}$/);
+        expect(account.configured).toBe(true);
+        expect(account.privateKey).toBe(TEST_HEX_PRIVATE_KEY);
+        expect(account.publicKey).toMatch(/^[0-9a-f]{64}$/);
+      });
     });
 
     it("handles disabled channel", () => {
@@ -584,7 +599,7 @@ describe("nostr account helpers", () => {
   });
 
   describe("setup wizard", () => {
-    it("keeps unresolved SecretRef privateKey visible without marking the account configured", () => {
+    it("keeps unresolved SecretRef privateKey configured without exposing a materialized value", () => {
       const secretRef = {
         source: "env" as const,
         provider: "default",
@@ -602,8 +617,10 @@ describe("nostr account helpers", () => {
         throw new Error("nostr setup credential inspect missing");
       }
 
-      expect(credential.inspect({ cfg, accountId: "default" })).toEqual({
-        accountConfigured: false,
+      expect(
+        withoutNostrPrivateKey(() => credential.inspect({ cfg, accountId: "default" })),
+      ).toEqual({
+        accountConfigured: true,
         hasConfiguredValue: true,
         resolvedValue: undefined,
         envValue: undefined,

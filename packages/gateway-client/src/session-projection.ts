@@ -1,5 +1,6 @@
 /** Browser-safe identity and replay rules shared by Gateway conversation clients. */
 
+import { asNullableRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { reduceSessionProjectionRunEventImpl } from "./session-projection-run-event.js";
 
 export type SessionMessageEnvelope = {
@@ -120,12 +121,6 @@ export type SessionProjectionEvent = ScopedSessionProjectionEvent &
     | { type: "reconnected" }
   );
 
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function readNonemptyString(value: unknown): string | null {
   return typeof value === "string" ? value.trim() || null : null;
 }
@@ -149,7 +144,7 @@ export function normalizeSessionProjectionRunId(value: unknown): string | null {
   return runId?.endsWith(":user") ? runId.slice(0, -":user".length) || null : runId;
 }
 
-/** Persisted transcript facts win over envelope projections and provider-local import IDs. */
+/** Persisted row facts win; assistant run ownership comes from its authoritative producer. */
 export function readSessionMessageIdentity(
   message: unknown,
   envelope?: SessionMessageEnvelope,
@@ -174,6 +169,7 @@ export function readSessionMessageIdentity(
     sequence: readSessionMessageSequence(message, envelope),
     idempotencyKey,
     runId:
+      (role === "assistant" ? normalizeSessionProjectionRunId(envelope?.runId) : null) ??
       normalizeSessionProjectionRunId(idempotencyKey) ??
       normalizeSessionProjectionRunId(envelope?.runId),
     isImported: Boolean(importedFrom || cliSessionId || externalId),
@@ -414,6 +410,11 @@ export function projectLiveSessionMessage(
   }
   const existing = state.entries[existingIndex];
   if (existing && existing.message === message && existing.live && !existing.pending) {
+    return state;
+  }
+  if (existing && !existing.pending && existing.identity?.id && !incoming.identity.id) {
+    // A terminal projection carries no transcript identity; adopting it over the
+    // durable row would lose the ID every later snapshot reconciles against.
     return state;
   }
   if (existing?.pending && incoming.identity.sequence !== null) {

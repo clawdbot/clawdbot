@@ -4,9 +4,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import "./test-helpers.mocks.js";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
@@ -25,11 +27,8 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import {
-  approveDevicePairing,
-  getPairedDevice,
-  requestDevicePairing,
-} from "../infra/device-pairing.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import { resetGatewaySuspendCoordinatorForLifecycleRestart } from "../infra/gateway-suspend-coordinator.js";
 import {
   resetGatewayRestartStateForInProcessRestart,
@@ -104,6 +103,7 @@ let tempControlUiRoot: string | undefined;
 let suiteConfigRootSeq = 0;
 let lastSyncedSessionStorePath: string | undefined;
 let lastSyncedSessionConfigJson: string | undefined;
+let gatewayReplyRuntimePrepared = false;
 let activeSuiteGatewayServerCount = 0;
 let activeSuiteHookScopeCount = 0;
 // Gateway tests exercise RPC/server behavior, not production bind auto-detection by default.
@@ -368,6 +368,7 @@ function resetGatewayMutableTestFixtures(): void {
   testState.migrationConfig = null;
   testState.migrationChanges = [];
   testState.cronEnabled = false;
+  testState.cronTriggersEnabled = undefined;
   testState.cronStorePath = undefined;
   testState.sessionConfig = undefined;
   testState.sessionStorePath = undefined;
@@ -478,6 +479,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   resetAgentEventsForTest();
   const mod = await getServerModule();
   await mod.resetPreparedModelCatalogForTest();
+  gatewayReplyRuntimePrepared = false;
   agentDiscoveryMock.enabled = false;
   agentDiscoveryMock.discoverCalls = 0;
   agentDiscoveryMock.models = [];
@@ -525,6 +527,28 @@ async function resetGatewayTestRuntimeOnly() {
     drainSystemEvents(sessionKey);
   }
   resetAgentEventsForTest({ preserveListeners: true });
+  gatewayReplyRuntimePrepared = false;
+}
+
+export async function prepareGatewayReplyRuntimeForTest(options?: {
+  force?: boolean;
+}): Promise<void> {
+  if (
+    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY !== "1" ||
+    (!options?.force && gatewayReplyRuntimePrepared)
+  ) {
+    return;
+  }
+  const [preparedRuntime, configRuntime] = await Promise.all([
+    import("../agents/prepared-model-runtime.js"),
+    import("../config/io.js"),
+  ]);
+  await preparedRuntime.refreshPreparedModelRuntimeSnapshots(configRuntime.getRuntimeConfig(), {
+    gatewayLifecycle: true,
+    catalogMode: agentDiscoveryMock.enabled ? "live" : "static",
+    allowGatewaySubagentBinding: true,
+  });
+  gatewayReplyRuntimePrepared = true;
 }
 
 export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) {
@@ -1229,6 +1253,9 @@ export async function rpcReq<T extends Record<string, unknown>>(
   // observes the updated test fixture state.
   resetConfigRuntimeState();
   clearSessionStoreCacheForTest();
+  if (method === "agent" || method === "chat.send") {
+    await prepareGatewayReplyRuntimeForTest();
+  }
   const { randomUUID } = await import("node:crypto");
   const id = randomUUID();
   const responsePromise = onceMessage<{

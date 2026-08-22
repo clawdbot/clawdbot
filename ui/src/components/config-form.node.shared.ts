@@ -4,10 +4,12 @@ import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { ConfigUiHints } from "../api/types.ts";
 import { icons } from "../components/icons.ts";
-import "../components/tooltip.ts";
 import { t } from "../i18n/index.ts";
+import "../components/tooltip.ts";
+import { REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
 import { formatUnknownText } from "../lib/format.ts";
-import { isSupportedConfigValueValid } from "./config-form.constraints.ts";
+import { configValuesEqual, isSupportedConfigValueValid } from "./config-form.constraints.ts";
+import { formatConfigFormNumber } from "./config-form.numeric.ts";
 import type { ConfigSearchCriteria } from "./config-form.search.ts";
 import {
   configFieldId,
@@ -64,6 +66,7 @@ type SensitiveRenderState = {
   isRedacted: boolean;
   isRevealed: boolean;
   canReveal: boolean;
+  sentinelRedacted: boolean;
 };
 
 export function isAnySchema(schema: JsonSchema): boolean {
@@ -80,6 +83,10 @@ export function jsonValue(value: unknown): string {
   } catch {
     return "";
   }
+}
+
+export function formatConfigValueText(value: unknown): string {
+  return typeof value === "number" ? formatConfigFormNumber(value) : formatUnknownText(value);
 }
 
 export function schemaWithDefault(schema: JsonSchema, value: unknown): JsonSchema {
@@ -130,14 +137,20 @@ export function getSensitiveRenderState(params: {
   isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
 }): SensitiveRenderState {
   const isSensitive = hasSensitiveConfigData(params.value, params.path, params.hints);
+  // The server never sends plaintext secrets: a stored secret arrives as the
+  // redaction sentinel. Revealing it would display the sentinel as an editable
+  // value; any edit then overwrites the real credential with mangled text.
+  const sentinel = params.value === REDACTED_SENTINEL;
   const isRevealed =
     isSensitive &&
+    !sentinel &&
     (params.revealSensitive || (params.isSensitivePathRevealed?.(params.path) ?? false));
   return {
     isSensitive,
     isRedacted: isSensitive && !isRevealed,
     isRevealed,
-    canReveal: isSensitive,
+    canReveal: isSensitive && !sentinel,
+    sentinelRedacted: sentinel,
   };
 }
 
@@ -155,7 +168,9 @@ export function renderSensitiveToggleButton(params: {
     ? state.isRevealed
       ? t("configForm.hideValue")
       : t("configForm.revealValue")
-    : t("configForm.disableStreamToReveal");
+    : state.sentinelRedacted
+      ? t("configForm.storedSecretNotRevealable")
+      : t("configForm.disableStreamToReveal");
   return html`
     <openclaw-tooltip .content=${label}>
       <button
@@ -305,7 +320,7 @@ export function renderSchemaDefaultDescription(
     return nothing;
   }
   return html`${t(value === undefined ? "configForm.usingDefault" : "configForm.defaultValue", {
-    value: formatUnknownText(schema.default),
+    value: formatConfigValueText(schema.default),
   })}`;
 }
 
@@ -374,7 +389,7 @@ export function renderSegmentedControl(params: {
 export function configEnumOptionLabel(option: unknown, options: readonly unknown[]): string {
   const presentsBooleanState = options.includes(true) && options.includes(false);
   if (!presentsBooleanState) {
-    return formatUnknownText(option);
+    return formatConfigValueText(option);
   }
   if (option === true) {
     return t("configForm.enumOn");
@@ -382,7 +397,7 @@ export function configEnumOptionLabel(option: unknown, options: readonly unknown
   if (option === false) {
     return t("configForm.enumOff");
   }
-  return option === "auto" ? t("configForm.enumAuto") : formatUnknownText(option);
+  return option === "auto" ? t("configForm.enumAuto") : formatConfigValueText(option);
 }
 
 export function renderJsonTextareaControl(params: {
@@ -450,7 +465,11 @@ export function renderJsonTextareaControl(params: {
         const previous = jsonTextareaState.get(element);
         if (
           previous &&
-          (!Object.is(previous.sourceValue, params.sourceValue) ||
+          // Content equality for the value: an autosave ack clones the form,
+          // so identity churn with identical bytes must not erase in-progress
+          // (possibly not-yet-valid) JSON the operator is typing.
+          ((!Object.is(previous.sourceValue, params.sourceValue) &&
+            !configValuesEqual(previous.sourceValue, params.sourceValue)) ||
             !Object.is(previous.rowIdentity, params.rowIdentity) ||
             previous.fallback !== renderedFallback ||
             previous.pathKey !== pathKey)

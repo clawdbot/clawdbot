@@ -8,6 +8,7 @@ import {
   type Part,
 } from "@google/genai";
 import { describe, expect, it, vi } from "vitest";
+import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { Model } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
@@ -590,6 +591,45 @@ describe("consumeGoogleGenerateContentStream", () => {
 });
 
 describe("runGoogleGenerateContentLifecycle", () => {
+  it("reports SDK stream acceptance without fabricated HTTP metadata", async () => {
+    const acceptanceObserver = vi.fn();
+    const options = withProviderAcceptanceObserver({}, acceptanceObserver);
+
+    const { result } = await runGoogleFixture(
+      [googleResponse({ parts: [{ text: "ok" }], finishReason: FinishReason.STOP })],
+      { options },
+    );
+
+    expect(result.stopReason).toBe("stop");
+    expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
+  });
+
+  it("closes an unread SDK stream without waiting when acceptance fails", async () => {
+    const close = vi.fn(() => new Promise<IteratorResult<GenerateContentResponse>>(() => {}));
+    const googleStream = {
+      next: vi.fn(),
+      return: close,
+      throw: vi.fn(),
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    } as unknown as AsyncGenerator<GenerateContentResponse>;
+
+    const options = withProviderAcceptanceObserver({}, () => {
+      throw new Error("acceptance observer failed");
+    });
+    const { result } = await runGoogleFixture([], {
+      options,
+      generateContentStream: async () => googleStream,
+    });
+
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "acceptance observer failed",
+    });
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it.each(["google-generative-ai", "google-vertex"] as const)(
     "rejects an unfinished %s stream instead of silently completing partial output",
     async (api) => {

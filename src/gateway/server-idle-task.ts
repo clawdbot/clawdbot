@@ -1,4 +1,7 @@
-import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  isGatewayRestartDrainError,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 
 type GatewayIdleTaskLogger = {
   warn: (message: string) => void;
@@ -44,7 +47,11 @@ export function scheduleGatewayIdleTask(params: {
           return;
         }
         await params.run();
-      }).catch((error: unknown) => params.log.warn(`${params.errorMessage}: ${String(error)}`));
+      }).catch((error: unknown) => {
+        if (!isGatewayRestartDrainError(error)) {
+          params.log.warn(`${params.errorMessage}: ${String(error)}`);
+        }
+      });
     }, delayMs);
     timer.unref?.();
   };

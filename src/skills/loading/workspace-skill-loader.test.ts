@@ -7,8 +7,6 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
-import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
-import { clearCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
 import type {
   PluginManifestRecord,
@@ -145,21 +143,6 @@ function createWorkspacePluginMetadataSnapshot(params: {
   };
 }
 
-function setWorkspacePluginMetadataSnapshot(workspaceDir: string, config?: OpenClawConfig): void {
-  const manifestRegistry = createWorkspacePluginRegistry(workspaceDir);
-  setCurrentPluginMetadataSnapshot(
-    createWorkspacePluginMetadataSnapshot({
-      workspaceDir,
-      manifestRegistry,
-      ...(config === undefined ? {} : { config }),
-    }),
-    {
-      workspaceDir,
-      ...(config === undefined ? {} : { config }),
-    },
-  );
-}
-
 async function expectMissingPath(pathToCheck: string) {
   let thrown: unknown;
   try {
@@ -192,12 +175,17 @@ function loadTestWorkspaceSkills(
   workspaceDir: string,
   opts?: Parameters<typeof loadWorkspaceSkills>[1],
 ) {
-  setWorkspacePluginMetadataSnapshot(workspaceDir, opts?.config);
+  const pluginMetadataSnapshot = createWorkspacePluginMetadataSnapshot({
+    workspaceDir,
+    manifestRegistry: createWorkspacePluginRegistry(workspaceDir),
+    ...(opts?.config === undefined ? {} : { config: opts.config }),
+  });
   return loadWorkspaceSkills(workspaceDir, {
     managedSkillsDir: path.join(workspaceDir, ".managed"),
     bundledSkillsDir: "",
     pluginSkillsDir: path.join(workspaceDir, ".plugin-skills"),
     ...opts,
+    pluginMetadataSnapshot: opts?.pluginMetadataSnapshot ?? pluginMetadataSnapshot,
   });
 }
 
@@ -209,7 +197,6 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
-  clearCurrentPluginMetadataSnapshot();
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
@@ -426,6 +413,38 @@ description: Broken skill
     expect(warningText).toContain(
       "invalid frontmatter: UNTERMINATED_FRONTMATTER: missing closing --- delimiter",
     );
+  });
+
+  it("warns for invalid configured-root skills while loading nested siblings", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const configuredRoot = path.join(workspaceDir, "configured-skills");
+    const invalidFile = path.join(configuredRoot, "group", "descriptionless", "SKILL.md");
+    const unreadableFile = path.join(configuredRoot, "group", "unreadable", "SKILL.md");
+    await fs.mkdir(path.dirname(invalidFile), { recursive: true });
+    await fs.writeFile(invalidFile, "---\nname: descriptionless\n---\n", "utf8");
+    if (process.platform !== "win32") {
+      await fs.mkdir(path.dirname(unreadableFile), { recursive: true });
+      await fs.symlink("SKILL.md", unreadableFile);
+    }
+    await writeSkill({
+      dir: path.join(configuredRoot, "skills", "valid"),
+      name: "valid",
+      description: "Valid nested sibling",
+    });
+    const warn = captureWarningLogger();
+
+    const entries = loadTestWorkspaceSkills(workspaceDir, {
+      config: { skills: { load: { extraDirs: [configuredRoot] } } },
+    });
+    const warningText = warn.mock.calls.flat().map(String).join("\n");
+
+    expect(entries.map((entry) => entry.skill.name)).toContain("valid");
+    expect(entries.map((entry) => entry.skill.name)).not.toContain("descriptionless");
+    expect(warningText).toContain(invalidFile);
+    expect(warningText).toContain("description is required");
+    if (process.platform !== "win32") {
+      expect(warningText).toContain(unreadableFile);
+    }
   });
 
   it("applies agent skill filters and replacement semantics", async () => {

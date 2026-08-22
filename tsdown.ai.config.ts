@@ -24,6 +24,8 @@ const config = {
     validation: "packages/ai/src/validation.ts",
     "internal/anthropic": "packages/ai/src/internal/anthropic.ts",
     "internal/openai": "packages/ai/src/internal/openai.ts",
+    "internal/openai-responses-payload-policy":
+      "packages/ai/src/internal/openai-responses-payload-policy.ts",
     "internal/retry-after": "packages/ai/src/internal/retry-after.ts",
     "internal/runtime": "packages/ai/src/internal/runtime.ts",
     "internal/shared": "packages/ai/src/internal/shared.ts",

@@ -322,7 +322,7 @@ suite.define(() => {
     expect(metrics).toEqual({ bodyScrollTop: 0, htmlScrollTop: 0, rootScrollY: 0 });
   });
 
-  it("moves drawer and search controls into the narrow chat title bar", async () => {
+  it("keeps drawer and search reachable from the narrow chat title bar", async () => {
     const page = await openPage({ nativeNav: false, width: 900 });
     const header = page.locator(".chat-pane__header").first();
     await expect
@@ -332,9 +332,10 @@ suite.define(() => {
     await expect
       .poll(() => header.getByRole("button", { name: "Expand sidebar" }).isVisible())
       .toBe(true);
-    await expect
-      .poll(() => header.getByRole("button", { name: "Open command palette" }).isVisible())
-      .toBe(true);
+    await expect.poll(() => header.locator(".chat-pane__palette-open").count()).toBe(0);
+    await header.locator(".chat-header-session-menu__trigger").click();
+    await page.getByText("Open command palette", { exact: true }).click();
+    await page.locator(".cmd-palette__input").waitFor({ state: "visible" });
   });
 
   it("keeps the mobile drawer modal, keyboard-contained, and focus-restoring", async () => {
@@ -476,6 +477,15 @@ suite.define(() => {
       }
       const handedOffToast = page.locator(".shell > openclaw-toast-host .app-toast");
       await expect.poll(() => handedOffToast.textContent()).toContain("Codex hidden");
+      const [toastBounds, composerBounds] = await Promise.all([
+        handedOffToast.boundingBox(),
+        page.locator(".agent-chat__composer-shell").boundingBox(),
+      ]);
+      if (!toastBounds || !composerBounds) {
+        throw new Error("expected the handed-off toast and chat composer to have layout boxes");
+      }
+      expect(Math.round(toastBounds.y)).toBe(20);
+      expect(toastBounds.y + toastBounds.height).toBeLessThan(composerBounds.y);
       await handedOffToast.getByRole("button", { name: "Dismiss" }).click();
       await expect.poll(() => handedOffToast.isVisible()).toBe(false);
     },

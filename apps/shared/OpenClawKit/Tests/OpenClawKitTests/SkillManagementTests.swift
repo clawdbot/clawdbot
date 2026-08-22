@@ -32,6 +32,61 @@ struct SkillManagementTests {
         #expect(search.results.map(\.id) == ["@alice/email", "@bob/email", "orphan"])
     }
 
+    @Test func `install-only results keep their source and expose no detail action`() throws {
+        let data = Data(
+            #"{"results":[{"slug":"pdf","installRef":"skills-sh:openai/skills/pdf","installOnly":true,"trustState":"not-scanned-by-clawhub","displayName":"Pdf"},{"slug":"pdf","installRef":"@awspace/pdf","displayName":"Pdf"}]}"#
+                .utf8)
+        let search = try JSONDecoder().decode(ClawHubSkillSearchResult.self, from: data)
+        let external = try #require(search.results.first)
+        let native = try #require(search.results.last)
+
+        // Rewriting the external reference to @openai/pdf would install a different skill.
+        #expect(external.reference == "skills-sh:openai/skills/pdf")
+        #expect(!external.canReadDetails)
+        #expect(external.isUnscannedSource)
+        #expect(native.canReadDetails)
+
+        let review = ClawHubSkillInstallReview(directInstall: external)
+        #expect(review.slug == "skills-sh:openai/skills/pdf")
+        // The Gateway pins external sources to a commit and rejects a version selector.
+        #expect(review.version == nil)
+        #expect(review.requestedReference == "skills-sh:openai/skills/pdf")
+    }
+
+    @Test func `results without the install-only flag keep the review flow`() throws {
+        // A Gateway released before the flag existed omits it from every row.
+        let data = Data(#"{"results":[{"slug":"email","installRef":"@alice/email","displayName":"Email"}]}"#.utf8)
+        let search = try JSONDecoder().decode(ClawHubSkillSearchResult.self, from: data)
+        let legacy = try #require(search.results.first)
+
+        // Treating omission as install-only would bypass the reviewed-version step those
+        // Gateways still expect.
+        #expect(legacy.canReadDetails)
+        #expect(!legacy.isUnscannedSource)
+        #expect(legacy.reference == "@alice/email")
+    }
+
+    @Test func `install-only readback matches the recorded reference`() throws {
+        let data = Data(
+            #"{"name":"pdf","description":"","source":"clawhub","filePath":"/s/pdf/SKILL.md","baseDir":"/s/pdf","skillKey":"pdf","primaryEnv":null,"emoji":null,"homepage":null,"always":false,"disabled":false,"eligible":true,"requirements":{"bins":[],"env":[],"config":[]},"missing":{"bins":[],"env":[],"config":[]},"configChecks":[],"install":[],"clawhub":{"status":"linked","valid":true,"slug":"pdf","requestedReference":"skills-sh:openai/skills/pdf","installedVersion":"0.0.0"}}"#
+                .utf8)
+        let installed = [try JSONDecoder().decode(SkillStatus.self, from: data)]
+
+        // The canonical slug is "pdf", so matching by the sent reference is the only readback that
+        // identifies this install without colliding with a registry skill of the same slug.
+        #expect(SkillManagementContract.installed(
+            installed,
+            requestedReference: "skills-sh:openai/skills/pdf"))
+        let external = try JSONDecoder().decode(
+            ClawHubSkillSummary.self,
+            from: Data(
+                #"{"slug":"pdf","installRef":"skills-sh:openai/skills/pdf","installOnly":true,"displayName":"Pdf"}"#.utf8))
+        #expect(SkillManagementContract.installed(installed, searchResult: external))
+        #expect(!SkillManagementContract.installed(
+            installed,
+            requestedReference: "skills-sh:someone-else/skills/pdf"))
+    }
+
     @Test func `risk acknowledgement stays bound to reviewed version`() {
         let matching = GatewayResponseError(
             method: "skills.install",
@@ -83,6 +138,7 @@ struct SkillManagementTests {
                 valid: true,
                 slug: "@molly/weather",
                 ownerHandle: "molly",
+                requestedReference: nil,
                 installedVersion: "2.0.0",
                 reason: nil))
         #expect(SkillManagementContract.installed([linked], slug: "weather", version: "2.0.0"))
@@ -97,6 +153,7 @@ struct SkillManagementTests {
                 valid: true,
                 slug: "weather",
                 ownerHandle: "molly",
+                requestedReference: nil,
                 installedVersion: "2.0.0",
                 reason: nil))
         #expect(SkillManagementContract.installed([linked], slug: "@molly/weather", version: "2.0.0"))

@@ -187,6 +187,8 @@ export async function startOrResumeThread(
         hostSystemAgentActive,
         restrictedToolSurface,
         restrictedToolSurfaceInheritedMcpServerNames,
+        shellEnvironment: params.shellEnvironment,
+        disableLoginShell: params.disableLoginShell,
         environmentSelection: params.environmentSelection,
         provisionalAppIds: pluginThreadConfig?.provisionalAppIds,
         signal: params.signal,
@@ -199,6 +201,7 @@ export async function startOrResumeThread(
           // Supervised threads stay on the native user-home connection. Never
           // persist an outer OpenClaw auth profile onto that private ownership.
           authProfileId: undefined,
+          agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
           preserveNativeModel: true,
           dynamicToolsFingerprint,
           dynamicToolsContainDeferred,
@@ -241,6 +244,13 @@ export async function startOrResumeThread(
       }
       binding = undefined;
     };
+    if (
+      binding?.threadId &&
+      !restrictedToolSurface &&
+      binding.nativeToolPolicyRestricted === true
+    ) {
+      await clearCurrentBinding("rotating a host-policy-restricted thread binding");
+    }
     if (
       binding?.threadId &&
       binding.nativeSkillIsolationFingerprint !== nativeSkillIsolationFingerprint
@@ -304,7 +314,7 @@ export async function startOrResumeThread(
     }
     const startModelSelection = resolveCodexAppServerThreadModelSelection({
       provider: params.params.provider,
-      model: params.params.modelId,
+      model: params.runtimeModelId ?? params.params.modelId,
       binding,
       authProfileId: params.params.authProfileId,
       authProfileStore: params.params.authProfileStore,
@@ -652,6 +662,7 @@ export async function startOrResumeThread(
           environmentSelectionFingerprint,
           hostSystemAgentActive,
           ringZeroActive,
+          restrictedToolSurface,
           restrictedToolSurfaceInheritedMcpServerNames,
           nativeSkillIsolation,
           lifecycleTiming,
@@ -687,6 +698,7 @@ export async function startOrResumeThread(
       environmentSelectionFingerprint,
       hostSystemAgentActive,
       ringZeroActive,
+      restrictedToolSurface,
       restrictedToolSurfaceInheritedMcpServerNames,
       nativeSkillIsolation,
       lifecycleTiming,

@@ -1,14 +1,18 @@
 import type { ConfigUiHints } from "../../api/types.ts";
-import { settingsSearchTextMatches, type SettingsSearchBlock } from "../../app-navigation.ts";
+import {
+  isSettingsNavigationRouteVisible,
+  settingsSearchTextMatches,
+  type SettingsSearchBlock,
+} from "../../app-navigation.ts";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
 import { SECTION_META } from "../../components/config-form.meta.ts";
 import {
   matchesConfigSectionSearch,
   parseConfigSearchQuery,
 } from "../../components/config-form.search.ts";
-import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
 import { splitConfigSchemaByTier } from "../../components/config-form.tiers.ts";
 import { t } from "../../i18n/index.ts";
+import { schemaType, type JsonSchema } from "../../lib/config-form-utils.ts";
 import { configPageForSection } from "./config-sections.ts";
 import { memoryVisibleSchemaKeys } from "./memory-schema.ts";
 import { SETTINGS_SEARCH_TARGETS, type SettingsSearchTarget } from "./settings-targets.ts";
@@ -31,15 +35,21 @@ function resolveStaticSettingsBlock(block: SettingsSearchTarget): StaticSettings
   };
 }
 
-/**
- * Search only the `memory.*` children surfaced by the dedicated Memory page.
- */
-function visibleMemorySchema(sectionSchema: JsonSchema): JsonSchema {
+// Curated pages render only a subset of their section's schema; search must
+// promise exactly what the destination page can edit, or the result is a
+// dead-end (e.g. update.checkOnStart matched search but was editable nowhere).
+const CURATED_ROUTE_VISIBLE_KEYS: Partial<Record<string, () => readonly string[]>> = {
+  memory: memoryVisibleSchemaKeys,
+  updates: () => ["channel", "auto"],
+};
+
+function visibleSectionSchema(routeId: string, sectionSchema: JsonSchema): JsonSchema {
+  const visibleKeys = CURATED_ROUTE_VISIBLE_KEYS[routeId];
   const properties = sectionSchema.properties;
-  if (!properties) {
+  if (!visibleKeys || !properties) {
     return sectionSchema;
   }
-  const visible = new Set(memoryVisibleSchemaKeys());
+  const visible = new Set(visibleKeys());
   return {
     ...sectionSchema,
     properties: Object.fromEntries(
@@ -55,6 +65,7 @@ export function findSettingsSearchBlocks(params: {
   uiHints: ConfigUiHints;
   identityAvailable?: boolean;
   basePath?: string;
+  canAdmin?: boolean;
 }): SettingsSearchBlock[] {
   if (!params.query.trim()) {
     return [];
@@ -63,7 +74,9 @@ export function findSettingsSearchBlocks(params: {
   const matches: SettingsSearchBlock[] =
     criteria.tags.length === 0 && criteria.text
       ? STATIC_SETTINGS_BLOCKS.filter(
-          (block) => params.identityAvailable || !block.requiresIdentity,
+          (block) =>
+            (params.identityAvailable || !block.requiresIdentity) &&
+            isSettingsNavigationRouteVisible(block.routeId, params.canAdmin !== false),
         )
           .map(resolveStaticSettingsBlock)
           .filter((block) => settingsSearchTextMatches(block.searchText, criteria.text))
@@ -78,8 +91,10 @@ export function findSettingsSearchBlocks(params: {
   const value = params.value ?? {};
   for (const [key, rawSectionSchema] of Object.entries(schema.properties)) {
     const routeId = configPageForSection(key);
-    const sectionSchema =
-      routeId === "memory" ? visibleMemorySchema(rawSectionSchema) : rawSectionSchema;
+    if (!isSettingsNavigationRouteVisible(routeId, params.canAdmin !== false)) {
+      continue;
+    }
+    const sectionSchema = visibleSectionSchema(routeId, rawSectionSchema);
     const meta = SECTION_META[key];
     const tierSplit = splitConfigSchemaByTier({
       schema: sectionSchema,

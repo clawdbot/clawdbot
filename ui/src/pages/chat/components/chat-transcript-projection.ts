@@ -1,6 +1,6 @@
 // Chat-item projection, expansion, reply hydration, and guarded row rendering.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { html, nothing, type TemplateResult } from "lit";
+import { nothing, type TemplateResult } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import { i18n } from "../../../i18n/index.ts";
@@ -56,6 +56,7 @@ import type {
   TranscriptAnnouncement,
   TranscriptRow,
 } from "./chat-transcript-controller.ts";
+import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
@@ -207,10 +208,11 @@ export function projectChatTranscript(
   const chatItems = buildCachedChatItems({
     paneId: props.paneId,
     sessionKey: props.sessionKey,
-    runId: props.runId === undefined ? (activeSession?.activeRunIds?.[0] ?? null) : props.runId,
+    runId: props.runId ?? null,
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,
+    guardianNotices: props.guardianNotices,
     streamSegments: props.streamSegments,
     stream: displayStream,
     streamStartedAt: props.streamStartedAt,
@@ -219,7 +221,6 @@ export function projectChatTranscript(
     persistCommentary: props.persistCommentary,
     runWorking: Boolean(props.runWorking),
     runActive: Boolean(props.runActive),
-    planStatus: props.planStatus,
     questionPrompts: props.questionPrompts,
     loading: props.loading,
     searchOpen: state.searchOpen,
@@ -237,21 +238,16 @@ export function projectChatTranscript(
   const questionPrompts = new Map(
     (props.questionPrompts ?? []).map((prompt) => [prompt.id, prompt]),
   );
-  const toggleToolCardExpanded = (toolCardId: string) => {
-    setExpansionState(expandedToolCards, toolCardId, !expandedToolCards.get(toolCardId));
+  const toggleToolCardExpanded = (toolCardId: string, expanded?: boolean) => {
+    setExpansionState(
+      expandedToolCards,
+      toolCardId,
+      !(expanded ?? expandedToolCards.get(toolCardId) ?? false),
+    );
     requestUpdate();
   };
   const toggleAssistantMessageExpanded = (messageId: string) => {
     const current = expandedAssistantMessages.get(messageId);
-    if (current?.status === "loaded") {
-      expandedAssistantMessages.set(messageId, {
-        ...current,
-        expanded: !current.expanded,
-        revision: current.revision + 1,
-      });
-      requestUpdate();
-      return;
-    }
     const loader = props.loadFullAssistantMessage;
     if (!loader || current?.status === "loading") {
       return;
@@ -278,7 +274,7 @@ export function projectChatTranscript(
           messageId,
           markdown === null
             ? { status: "error", revision: revision + 1 }
-            : { status: "loaded", expanded: true, markdown, revision: revision + 1 },
+            : { status: "loaded", markdown, revision: revision + 1 },
         );
         requestUpdate();
       },
@@ -293,7 +289,9 @@ export function projectChatTranscript(
     );
   };
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
-  const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
+  const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
+  const isEmpty =
+    chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation && !hasTypingActors;
   transcript.setContentReady(!props.loading);
   // 1:1 sessions drop the avatar gutter entirely; group threads keep avatars
   // as the always-visible identity marker. The canonical session kind decides;
@@ -316,7 +314,7 @@ export function projectChatTranscript(
   const isDirectThread =
     (sessionKind === "direct" || sessionKind === "cron" || sessionKind === "spawn-child") &&
     !props.userId;
-  const showLoadingSkeleton = props.loading && chatItems.length === 0;
+  const showLoadingSkeleton = props.loading && chatItems.length === 0 && !hasTypingActors;
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
   const activeContinuationByGroupKey = new Map<
@@ -347,7 +345,7 @@ export function projectChatTranscript(
     runActive: props.runActive,
     onOpenWorkspaceFile: props.onOpenWorkspaceFile,
     onRequestUpdate: requestUpdate,
-    basePath: props.basePath,
+    resourceBasePath: props.resourceBasePath,
     localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
     assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
     resolveArtifactDownload: props.resolveArtifactDownload,
@@ -357,6 +355,7 @@ export function projectChatTranscript(
     canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
     embedSandboxMode: props.embedSandboxMode ?? "scripts",
     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+    fetchLinkFavicon: props.fetchLinkFavicon,
     showAssistantAvatar: false,
   } satisfies StreamGroupOptions;
   const streamGroupOptions = {
@@ -457,8 +456,6 @@ export function projectChatTranscript(
       return renderStreamGroup(item.parts, {
         ...streamGroupOptions,
         questionPrompts,
-        planStatus: props.planStatus,
-        planActive: Boolean(props.runActive),
         startupPhase: props.startupStatus?.phase,
         waitingApproval: props.waitingApproval,
         runOutputTokens: props.runOutputTokens,
@@ -466,16 +463,13 @@ export function projectChatTranscript(
     }
     if (item.kind === "work-group") {
       const workExpanded = expandedToolCards.get(item.key) ?? false;
-      return html`
-        ${renderWorkGroupSummary(item, {
-          expanded: workExpanded,
-          onToggle: () => {
-            setExpansionState(expandedToolCards, item.key, !workExpanded);
-            requestUpdate();
-          },
-        })}
-        ${workExpanded ? item.groups.map((group) => renderGroupItem(group)) : nothing}
-      `;
+      return renderWorkGroupSummary(item, {
+        expanded: workExpanded,
+        onToggle: () => {
+          setExpansionState(expandedToolCards, item.key, !workExpanded);
+          requestUpdate();
+        },
+      });
     }
     if (item.kind === "activity-run") {
       const firstGroup = item.groups[0];
@@ -509,15 +503,20 @@ export function projectChatTranscript(
   // sends show the claw before the run starts, and the recap must never
   // stack under a visible working row.
   const workingIndicatorVisible = chatItems.some((item) => item.kind === "reading-indicator");
-  const turnRecap = resolveTurnRecap(props.sessionKey, workingIndicatorVisible, activeSession);
+  // runOutputTokens is the live usage-stream counter for the pane's own run;
+  // its map entry dies at lifecycle end, so the watch captures the max seen.
+  const turnRecap = resolveTurnRecap(
+    props.sessionKey,
+    workingIndicatorVisible,
+    activeSession,
+    props.runOutputTokens ?? null,
+  );
   const transcriptItems = collapsedItems.filter((item, index) => {
     if (item.kind !== "stream-run") {
       return true;
     }
     const previous = collapsedItems[index - 1];
-    const isActiveStatusRun =
-      item.parts.some((part) => part.kind === "reading-indicator") &&
-      item.parts.every((part) => part.kind === "reading-indicator" || part.kind === "plan");
+    const isActiveStatusRun = item.parts.every((part) => part.kind === "reading-indicator");
     if (
       previous?.kind !== "group" ||
       !isActiveStatusRun ||
@@ -531,8 +530,6 @@ export function projectChatTranscript(
       parts: item.parts,
       options: {
         ...streamGroupOptions,
-        planStatus: props.planStatus,
-        planActive: Boolean(props.runActive),
         startupPhase: props.startupStatus?.phase,
         waitingApproval: props.waitingApproval,
         runOutputTokens: props.runOutputTokens,
@@ -577,11 +574,19 @@ export function projectChatTranscript(
       turnRecapOwnerKey = lastItem.key;
     }
   }
-  const transcriptRows: TranscriptRow<ChatRenderItem>[] = transcriptItems.map((item) => ({
-    kind: "item",
-    key: item.key,
-    item,
-  }));
+  // New row keys measure expanded work immediately; existing keys keep their
+  // cached height until ResizeObserver reports the changed layout.
+  const transcriptRows = transcriptItems.flatMap((item): TranscriptRow<ChatRenderItem>[] =>
+    [{ kind: "item" as const, key: item.key, item }].concat(
+      item.kind === "work-group" && expandedToolCards.get(item.key)
+        ? item.groups.map((group) => ({
+            kind: "item" as const,
+            key: `${item.key}:${group.key}`,
+            item: group,
+          }))
+        : [],
+    ),
+  );
   const realtimeConversation = renderRealtimeTalkConversation(props);
   if (realtimeConversation !== nothing) {
     transcriptRows.push({
@@ -606,6 +611,14 @@ export function projectChatTranscript(
       kind: "content",
       key: "background-tasks",
       content: backgroundTasks,
+    });
+  }
+  const typingIndicator = renderChatTypingIndicator(props.typingActors);
+  if (typingIndicator) {
+    transcriptRows.push({
+      kind: "content",
+      key: "presence:typing",
+      content: typingIndicator,
     });
   }
   trackTranscriptRenderDependencies(state, [
@@ -633,7 +646,6 @@ export function projectChatTranscript(
     Boolean(props.runWorking),
     props.startupStatus?.phase,
     Boolean(props.waitingApproval),
-    props.planStatus,
     props.questionPrompts,
     Boolean(props.autoExpandToolCalls),
     props.assistantName,
@@ -641,12 +653,14 @@ export function projectChatTranscript(
     props.userId,
     props.userName,
     props.userAvatar,
-    props.basePath,
+    props.typingActors,
+    props.resourceBasePath,
     (props.localMediaPreviewRoots ?? []).join("\u0000"),
     props.assistantAttachmentAuthToken,
     props.canvasPluginSurfaceUrl,
     props.embedSandboxMode ?? "scripts",
     props.allowExternalEmbedUrls ?? false,
+    Boolean(props.fetchLinkFavicon),
     threadContextWindow,
     Boolean(props.onSetReply),
     props.replyMessageAccess?.revision ?? 0,

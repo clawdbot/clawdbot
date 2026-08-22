@@ -125,26 +125,28 @@ describe("createQaSmokeCiPart", () => {
     const primaryScenarioIds = parts.map(
       (part) => part.runs.find((run) => run.slug === "primary")?.scenario_ids ?? [],
     );
-    const primaryRunCosts = primaryScenarioIds.map((ids) =>
+    const scenarioIdsByPart = parts.map((part) => part.runs.flatMap((run) => run.scenario_ids));
+    const partCosts = scenarioIdsByPart.map((ids) =>
       ids.reduce(
         (cost, scenarioId) => cost + estimateScenarioCost(scenarioById.get(scenarioId)),
         0,
       ),
     );
-    const largestScenarioCost = Math.max(
-      ...primaryScenarioIds.flatMap((ids) =>
-        ids.map((scenarioId) => estimateScenarioCost(scenarioById.get(scenarioId))),
-      ),
+    const unitCostPartCosts = scenarioIdsByPart.flatMap((ids, index) =>
+      ids.every((scenarioId) => estimateScenarioCost(scenarioById.get(scenarioId)) === 1)
+        ? [expectDefined(partCosts[index], "unit-cost QA smoke part")]
+        : [],
     );
-    const heaviestRunCost = expectDefined(
-      primaryRunCosts.toSorted((left, right) => right - left)[0],
-      "heaviest QA smoke run cost",
+    const heaviestUnitCostPart = expectDefined(
+      unitCostPartCosts.toSorted((left, right) => right - left)[0],
+      "heaviest unit-cost QA smoke part",
     );
-    const lightestRunCost = expectDefined(
-      primaryRunCosts.toSorted((left, right) => left - right)[0],
-      "lightest QA smoke run cost",
+    const lightestUnitCostPart = expectDefined(
+      unitCostPartCosts.toSorted((left, right) => left - right)[0],
+      "lightest unit-cost QA smoke part",
     );
-    expect(heaviestRunCost - lightestRunCost).toBeLessThanOrEqual(largestScenarioCost);
+    expect(unitCostPartCosts.length).toBeGreaterThan(1);
+    expect(heaviestUnitCostPart - lightestUnitCostPart).toBeLessThanOrEqual(1);
     expect(primaryScenarioIds.every((ids) => ids.length > 0)).toBe(true);
   });
 

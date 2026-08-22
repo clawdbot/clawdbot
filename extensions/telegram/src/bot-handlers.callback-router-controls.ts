@@ -3,6 +3,7 @@ import {
   resolveApprovalOverGateway,
   type ApprovalResolveResult,
 } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -230,7 +231,7 @@ export function createTelegramCallbackApprovalRuntime(params: {
   const handleLegacy = async (approvalCallback: LegacyApprovalCallback): Promise<void> => {
     const { execApprovalAuthorizedSender, pluginApprovalAuthorizedSender } =
       resolveApprovalAuthorizations();
-    const approvalKinds: Array<"exec" | "plugin"> = [];
+    const approvalKinds: ChannelApprovalKind[] = [];
     if (execApprovalAuthorizedSender || pluginApprovalAuthorizedSender) {
       approvalKinds.push("exec");
     }
@@ -616,18 +617,15 @@ export async function handleTelegramInteractiveCallback(params: {
     return true;
   }
 
-  const managedSelectCallback = parseTelegramManagedSelectCallback(data);
-  if (!managedSelectCallback) {
+  const selectCallback = parseTelegramManagedSelectCallback(callback.data?.trimStart() ?? data);
+  if (!selectCallback) {
     return false;
   }
-  if (
-    managedSelectCallback.type === "multi-toggle" ||
-    managedSelectCallback.type === "multi-clear"
-  ) {
+  if (selectCallback.type === "multi-toggle" || selectCallback.type === "multi-clear") {
     const buttons = updateMultiSelectKeyboard(
       callbackMessage,
-      managedSelectCallback.type === "multi-clear" ? "clear" : "toggle",
-      managedSelectCallback.type === "multi-toggle" ? managedSelectCallback.value : "",
+      selectCallback.type === "multi-clear" ? "clear" : "toggle",
+      selectCallback.type === "multi-toggle" ? selectCallback.value : "",
     );
     if (buttons.length > 0) {
       try {
@@ -642,7 +640,7 @@ export async function handleTelegramInteractiveCallback(params: {
   }
 
   let text: string;
-  if (managedSelectCallback.type === "multi-submit") {
+  if (selectCallback.type === "multi-submit") {
     const selected = resolveMultiSelectedValues(cloneInlineKeyboardButtons(callbackMessage));
     text = `Multi-select submitted: ${selected.length > 0 ? selected.join(", ") : "none"}`;
   } else {
@@ -657,7 +655,7 @@ export async function handleTelegramInteractiveCallback(params: {
         throw new TelegramRetryableCallbackError(editErr);
       }
     }
-    text = `Single-select submitted: ${managedSelectCallback.value}`;
+    text = `Single-select submitted: ${selectCallback.value}`;
   }
   const synthetic = buildSynthetic(text);
   await processMessageWithReplyChain({

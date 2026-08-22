@@ -22,8 +22,12 @@ import { z } from "zod";
 import { slackChannelConfigUiHints } from "./config-ui-hints.js";
 
 const SecretInputSchema = buildSecretInputSchema();
+// Match the default per-file AGENTS.md bootstrap budget so one presence wake
+// cannot inject more operator guidance than a normal workspace instruction file.
+const SLACK_PRESENCE_EVENT_PROMPT_MAX_CHARS = 20_000;
 
 const SlackStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
+  style: z.enum(["card", "compact"]).optional(),
   nativeTaskCards: z.boolean().optional(),
 }).strict();
 const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
@@ -41,6 +45,7 @@ const SlackDmSchema = z
 const SlackPresenceEventsSchema = z
   .object({
     mode: z.enum(["off", "auto", "on"]).optional(),
+    prompt: z.string().max(SLACK_PRESENCE_EVENT_PROMPT_MAX_CHARS).optional(),
   })
   .strict();
 

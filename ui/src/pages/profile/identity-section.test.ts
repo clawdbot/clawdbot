@@ -16,6 +16,7 @@ const PROFILE: UserProfile = {
   createdAt: 1,
   updatedAt: 2,
   emails: ["ada@example.test", "ada@work.test"],
+  githubIdentity: null,
   hasAvatar: true,
 };
 
@@ -24,11 +25,13 @@ function createProps(overrides: Partial<IdentitySectionProps> = {}): IdentitySec
     profile: PROFILE,
     avatarUrl: "/api/users/profile-1/avatar?v=2",
     displayName: "Ada Lovelace",
+    gitCoauthorEnabled: false,
     busy: null,
     error: null,
     onDisplayNameInput: vi.fn(),
     onSaveDisplayName: vi.fn(),
     onAvatarSelect: vi.fn(),
+    onGitCoauthorChange: vi.fn(),
     ...overrides,
   };
 }
@@ -58,7 +61,13 @@ describe("renderIdentitySection", () => {
       [...container.querySelectorAll(".settings-row__title")].map((node) =>
         node.textContent?.trim(),
       ),
-    ).toEqual(["Avatar", "Display name", "Linked emails"]);
+    ).toEqual([
+      "Avatar",
+      "Display name",
+      "Linked emails",
+      "GitHub account",
+      "Git co-author credit",
+    ]);
     expect(container.textContent).toContain("ada@example.test, ada@work.test");
   });
 
@@ -123,6 +132,61 @@ describe("renderIdentitySection", () => {
     expect(input?.accept).toBe("image/png,image/jpeg,image/webp");
     expect(input?.value).toBe("");
     expect(onAvatarSelect).toHaveBeenCalledWith(file);
+  });
+
+  it("shows verified GitHub identity and explicit co-author credit", () => {
+    const onGitCoauthorChange = vi.fn();
+    const container = document.createElement("div");
+    render(
+      renderIdentitySection(
+        createProps({
+          gitCoauthorEnabled: true,
+          profile: {
+            ...PROFILE,
+            githubIdentity: {
+              login: "octocat",
+              profileUrl: "https://github.com/octocat",
+              avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
+            },
+          },
+          onGitCoauthorChange,
+        }),
+      ),
+      container,
+    );
+
+    const account = container.querySelector<HTMLAnchorElement>(".settings-account");
+    expect(account?.href).toBe("https://github.com/octocat");
+    expect(account?.target).toBe("_blank");
+    expect(account?.rel).toContain("noopener");
+    expect(account?.querySelector("img")?.src).toBe(
+      "https://avatars.githubusercontent.com/u/583231?v=4",
+    );
+    expect(container.querySelector(".identity-github-form")).toBeNull();
+    expect(container.textContent).toContain("Verified from your GitHub-backed sign-in");
+    expect(container.textContent).not.toContain("Disconnect");
+    expect(container.textContent).toContain("public GitHub noreply address");
+    expect(container.textContent).toContain("future commits only");
+    const toggle = container.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    expect(toggle?.checked).toBe(true);
+    expect(toggle?.hasAttribute("disabled")).toBe(false);
+    toggle!.checked = false;
+    toggle?.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onGitCoauthorChange).toHaveBeenCalledWith(false);
+  });
+
+  it("explains unavailable GitHub verification and disables co-author credit", () => {
+    const container = document.createElement("div");
+    render(renderIdentitySection(createProps()), container);
+
+    expect(container.querySelector(".settings-account")).toBeNull();
+    expect(container.textContent).toContain("Unavailable");
+    expect(container.textContent).toContain("GitHub-backed sign-in");
+    expect(container.textContent).toContain("Refresh to retry");
+    expect(container.querySelector(".identity-github-form")).toBeNull();
+    const toggle = container.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    expect(toggle?.checked).toBe(false);
+    expect(toggle?.hasAttribute("disabled")).toBe(true);
   });
 
   it("reports mutation errors without inventing another settings surface", () => {

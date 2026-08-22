@@ -9,6 +9,7 @@ import { buildChannelAccountSnapshotFromAccount } from "../../channels/plugins/s
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -20,6 +21,7 @@ import {
   toPublicPluginVerificationDiagnostic,
 } from "../../plugins/runtime-degraded-state.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { listPluginServiceHealthFailures } from "../../plugins/service-health.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
@@ -42,6 +44,7 @@ import type {
 } from "./types.js";
 
 const DEFAULT_HEALTH_TIMEOUT_MS = 10_000;
+const HEALTH_RECENT_SESSION_LIMIT = 5;
 const healthLog = createSubsystemLogger("health");
 
 type HealthSnapshotAudience = "public" | "admin";
@@ -58,6 +61,19 @@ const debugHealth = (
 
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
   resolveHeartbeatSummaryForAgent(cfg, agentId);
+
+function attachPluginActivation(
+  plugin: NonNullable<ReturnType<typeof getActivePluginRegistry>>["plugins"][number] | undefined,
+  error: PluginHealthErrorSummary,
+): PluginHealthErrorSummary {
+  if (plugin?.activationSource) {
+    error.activationSource = plugin.activationSource;
+  }
+  if (plugin?.activationReason) {
+    error.activationReason = plugin.activationReason;
+  }
+  return error;
+}
 
 export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
   const defaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
@@ -91,12 +107,15 @@ export function resolveHealthAgentOrder(cfg: OpenClawConfig) {
 }
 
 export async function buildHealthSessionSummary(storePath: string, agentId?: string) {
+  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path;
   const { listSessionEntriesReadOnly } = await import("../../config/sessions/session-accessor.js");
   const { isTransientSqliteError } = await import("../../infra/unhandled-rejections.js");
   let listed: ReturnType<typeof listSessionEntriesReadOnly>;
   try {
     listed = listSessionEntriesReadOnly({
       ...(agentId ? { agentId } : {}),
+      clone: false,
+      projection: "list",
       storePath,
     });
   } catch (error) {
@@ -106,18 +125,36 @@ export async function buildHealthSessionSummary(storePath: string, agentId?: str
     // Health is best-effort: an empty snapshot beats failing on a transient lock.
     listed = [];
   }
-  const sessions = listed
-    .filter(({ sessionKey }) => sessionKey !== "global" && sessionKey !== "unknown")
-    .map(({ sessionKey, entry }) => ({ key: sessionKey, updatedAt: entry?.updatedAt ?? 0 }))
-    .toSorted((a, b) => b.updatedAt - a.updatedAt);
-  const recent = sessions.slice(0, 5).map((session) => ({
+  const recentSessions: Array<{ key: string; updatedAt: number }> = [];
+  let sessionCount = 0;
+  for (const { sessionKey, entry } of listed) {
+    if (sessionKey === "global" || sessionKey === "unknown") {
+      continue;
+    }
+    sessionCount += 1;
+    const session = { key: sessionKey, updatedAt: entry?.updatedAt ?? 0 };
+    const insertAt = recentSessions.findIndex(
+      (recentSession) => session.updatedAt > recentSession.updatedAt,
+    );
+    // Health returns only five rows. Keep the projection bounded while scanning
+    // so refreshes never sort the complete session snapshot.
+    if (insertAt >= 0) {
+      recentSessions.splice(insertAt, 0, session);
+      if (recentSessions.length > HEALTH_RECENT_SESSION_LIMIT) {
+        recentSessions.pop();
+      }
+    } else if (recentSessions.length < HEALTH_RECENT_SESSION_LIMIT) {
+      recentSessions.push(session);
+    }
+  }
+  const recent = recentSessions.map((session) => ({
     key: session.key,
     updatedAt: session.updatedAt || null,
     age: session.updatedAt ? Date.now() - session.updatedAt : null,
   }));
   return {
-    path: storePath,
-    count: sessions.length,
+    path: databasePath,
+    count: sessionCount,
     recent,
   } satisfies HealthSummary["sessions"];
 }
@@ -136,7 +173,7 @@ function buildPluginHealthSummary(): PluginHealthSummary | undefined {
     .filter((plugin) => plugin.status === "loaded")
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
-  const errors = (registry?.plugins ?? [])
+  const loadErrors = (registry?.plugins ?? [])
     .filter(
       (plugin) =>
         plugin.status === "error" &&
@@ -149,25 +186,33 @@ function buildPluginHealthSummary(): PluginHealthSummary | undefined {
             degradedPluginMatchesRoot(degraded, plugin.rootDir ?? ""),
         ),
     )
-    .map((plugin) => {
-      const error: PluginHealthErrorSummary = {
+    .map((plugin) =>
+      attachPluginActivation(plugin, {
         id: plugin.id,
         origin: plugin.origin,
         activated: plugin.activated === true,
         error: plugin.error ?? "unknown plugin load error",
-      };
-      if (plugin.activationSource) {
-        error.activationSource = plugin.activationSource;
-      }
-      if (plugin.activationReason) {
-        error.activationReason = plugin.activationReason;
-      }
-      if (plugin.failurePhase) {
-        error.failurePhase = plugin.failurePhase;
-      }
-      return error;
-    })
-    .toSorted((left, right) => left.id.localeCompare(right.id));
+        ...(plugin.failurePhase ? { failurePhase: plugin.failurePhase } : {}),
+      }),
+    );
+  const serviceErrors = registry
+    ? listPluginServiceHealthFailures(registry).map((failure) =>
+        attachPluginActivation(
+          registry.plugins.find((entry) => entry.id === failure.pluginId),
+          {
+            id: failure.pluginId,
+            origin: failure.origin,
+            // Starting the registered service is the authoritative activation fact.
+            activated: true,
+            failurePhase: "service",
+            error: `service ${failure.serviceId}: ${failure.error}`,
+          },
+        ),
+      )
+    : [];
+  const errors = [...loadErrors, ...serviceErrors].toSorted(
+    (left, right) => left.id.localeCompare(right.id) || left.error.localeCompare(right.error),
+  );
   if (loaded.length === 0 && errors.length === 0 && unavailable.length === 0) {
     return undefined;
   }
@@ -208,7 +253,11 @@ export async function collectGatewayHealthSnapshot(params: {
   );
   const heartbeatSummaryAgent =
     (configuredHeartbeatAgentId
-      ? agents.find((agent) => agent.agentId === normalizeAgentId(configuredHeartbeatAgentId))
+      ? agents.find(
+          (agent) =>
+            agent.heartbeat.enabled &&
+            agent.agentId === normalizeAgentId(configuredHeartbeatAgentId),
+        )
       : undefined) ??
     agents.find((agent) => agent.heartbeat.enabled) ??
     summaryAgent;

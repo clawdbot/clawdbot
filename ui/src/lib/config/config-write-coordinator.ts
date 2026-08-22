@@ -18,6 +18,7 @@ import {
   executeConfigExternalMutation,
   loadConfig,
   patchConfig,
+  refreshDraft,
   saveConfig,
   teardownFlushConfigDraft,
   type ConfigPatchBuildResult,
@@ -48,6 +49,7 @@ type ConfigWriteCoordinatorContext = {
   trackLoad: (key: "config" | "schema", promise: Promise<unknown>) => Promise<void>;
   resetLoads: () => void;
   resetConfigLoad: () => void;
+  refreshConnectionState: () => Promise<boolean>;
   canCallConfigMethod: (
     method: ConfigMethod,
     options?: { requireAdvertisement?: boolean },
@@ -67,6 +69,7 @@ export function createConfigWriteCoordinator({
   trackLoad,
   resetLoads,
   resetConfigLoad,
+  refreshConnectionState,
   canCallConfigMethod,
   cancelAppliedRefresh,
   reconcileAppliedRefresh,
@@ -109,9 +112,20 @@ export function createConfigWriteCoordinator({
   // a post-apply write is meaningless while the gateway restarts, so the
   // teardown flush fail-closes on them).
   let manualFlightInfo: { raw: string; ackHash: string | null } | null = null;
+  const canDispatchConfigMutation = (method: ConfigMethod): boolean => {
+    const allowed = canCallConfigMethod(method);
+    if (!allowed && state.connected) {
+      state.lastError = t("configView.adminRequired");
+      publish();
+    }
+    return allowed;
+  };
   const clearAutoSaveDraftConnection = () => {
     autoSaveDraftConnection = null;
     autoSaveRequiresExplicitSubmit = false;
+    if (state.configAutoSaveStatus === "paused") {
+      state.configAutoSaveStatus = "idle";
+    }
   };
   const captureAutoSaveDraftConnection = () => {
     if (
@@ -138,6 +152,9 @@ export function createConfigWriteCoordinator({
       epoch: currentConfigConnectionEpoch(state),
     };
     autoSaveRequiresExplicitSubmit = false;
+    if (state.configAutoSaveStatus === "paused") {
+      state.configAutoSaveStatus = "idle";
+    }
   };
   const canAutoSaveDraftOnCurrentConnection = () =>
     !autoSaveRequiresExplicitSubmit &&
@@ -375,10 +392,9 @@ export function createConfigWriteCoordinator({
   };
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
-    const connected = snapshot.phase === "connected";
-    const connectionChanged = state.connected !== connected;
+    const connectionChanged = state.connected !== (snapshot.phase === "connected");
     state.client = snapshot.client;
-    state.connected = connected;
+    state.connected = snapshot.phase === "connected";
     state.applySessionKey = snapshot.sessionKey;
     if (clientChanged || connectionChanged) {
       const draftBelongsToPreviousConnection =
@@ -396,8 +412,14 @@ export function createConfigWriteCoordinator({
       if (draftBelongsToPreviousConnection) {
         // A retained draft belongs to the Gateway connection where the edit
         // began. Preserve it across replacement, but require an explicit
-        // Save/Apply or reload before the new Gateway may receive it.
+        // Save/Apply or reload before the new Gateway may receive it. The
+        // latch must be visible: without a rendered state the form looks
+        // normal while every subsequent edit silently never saves.
         autoSaveRequiresExplicitSubmit = true;
+        // Conflict outranks the latch: that snapshot is stale regardless.
+        if (state.configAutoSaveStatus !== "conflict") {
+          state.configAutoSaveStatus = "paused";
+        }
       }
       if (autoSaveInFlight !== null || manualSubmitInFlight !== null) {
         // The epoch guard already blocks these flights from mutating state;
@@ -440,8 +462,7 @@ export function createConfigWriteCoordinator({
               ? cloneConfigObject(state.configForm)
               : null;
           const draftRawBefore = draftFormBefore ? serializeConfigForm(draftFormBefore) : null;
-          const reconcile = run(() => loadConfig(state));
-          void trackLoad("config", reconcile);
+          const reconcile = refreshConnectionState();
           void reconcile.then((loaded) => {
             if (isDisposed()) {
               return;
@@ -497,7 +518,7 @@ export function createConfigWriteCoordinator({
             reconcileAppliedRefresh();
           });
         } else {
-          reconcileAppliedRefresh();
+          void refreshDraft(state, refreshConnectionState, publish, reconcileAppliedRefresh);
         }
       }
     }
@@ -546,7 +567,7 @@ export function createConfigWriteCoordinator({
       false,
       {
         flushScheduledDraft: true,
-        canDispatch: () => canCallConfigMethod("config.patch"),
+        canDispatch: () => canDispatchConfigMutation("config.patch"),
       },
     ).finally(() => {
       scheduleAutoSave();
@@ -630,7 +651,7 @@ export function createConfigWriteCoordinator({
     },
     save: (options = {}) => {
       const canDispatch = () =>
-        canCallConfigMethod("config.set") && (options.canDispatch?.() ?? true);
+        canDispatchConfigMutation("config.set") && (options.canDispatch?.() ?? true);
       return !canDispatch()
         ? Promise.resolve(false)
         : afterPendingWritesSettled(
@@ -656,7 +677,7 @@ export function createConfigWriteCoordinator({
           );
     },
     apply: () =>
-      !canCallConfigMethod("config.apply")
+      !canDispatchConfigMutation("config.apply")
         ? Promise.resolve(false)
         : afterPendingWritesSettled(
             async () => {
@@ -673,7 +694,9 @@ export function createConfigWriteCoordinator({
                 return false;
               }
               try {
-                const applied = await applyConfig(state, () => canCallConfigMethod("config.apply"));
+                const applied = await applyConfig(state, () =>
+                  canDispatchConfigMutation("config.apply"),
+                );
                 reconcileAutoSaveDraftConnection();
                 return applied;
               } finally {
@@ -681,10 +704,10 @@ export function createConfigWriteCoordinator({
               }
             },
             false,
-            { canDispatch: () => canCallConfigMethod("config.apply") },
+            { canDispatch: () => canDispatchConfigMutation("config.apply") },
           ),
     stageDefaultAgent: (agentId) => {
-      if (!canCallConfigMethod("config.set")) {
+      if (!canDispatchConfigMutation("config.set")) {
         return false;
       }
       const changed = stageDefaultAgentConfigEntry(state, agentId);
@@ -699,11 +722,11 @@ export function createConfigWriteCoordinator({
     // scheduled autosave into a flight first (the settle below drains it) and
     // re-arm the debounce after so a dirty form is never left timer-less.
     patch: (options) =>
-      canCallConfigMethod("config.patch") && (options.canDispatch?.() ?? true)
+      canDispatchConfigMutation("config.patch") && (options.canDispatch?.() ?? true)
         ? queueConfigPatch(() => ({ options }))
         : Promise.resolve(false),
     patchFromSnapshot: (build) =>
-      canCallConfigMethod("config.patch")
+      canDispatchConfigMutation("config.patch")
         ? queueConfigPatch(() => {
             const config = resolveEditableSnapshotConfig(state.configSnapshot);
             return config

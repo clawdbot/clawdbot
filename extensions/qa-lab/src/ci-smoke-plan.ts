@@ -13,6 +13,9 @@ const QA_SMOKE_PROFILE = "smoke-ci";
 const QA_SMOKE_CI_DEFAULT_PART_COUNT = 4;
 const QA_SMOKE_CI_PART_COUNTS = new Set([QA_SMOKE_CI_DEFAULT_PART_COUNT, 6]);
 const QA_SMOKE_CI_CHANNELS = ["telegram", "matrix"] as const;
+// Hosted timings show the separate Matrix run adds about two minutes, so
+// reserve three flow-cost points for its fixed part during primary packing.
+const QA_SMOKE_CI_MATRIX_RUN_COST = 3;
 
 type QaSmokeCiPartId = `profile-${number}`;
 type QaSmokeCiScenario = ReturnType<typeof readQaScenarioPack>["scenarios"][number];
@@ -51,16 +54,10 @@ function estimateScenarioCost(scenario: QaSmokeCiScenario) {
   return scenario.execution.kind === "flow" && scenario.execution.isolationReason ? 4 : 1;
 }
 
-function listQaSmokeCiDeclaredChannels(scenario: QaSmokeCiScenario): readonly string[] {
-  if (scenario.execution.channel) {
-    return [scenario.execution.channel];
-  }
-  return scenario.execution.kind === "flow" ? (scenario.execution.channels ?? []) : [];
-}
-
 export function selectQaSmokeCiEligibilityChannel(scenario: QaSmokeCiScenario): string | undefined {
-  const declaredChannels = listQaSmokeCiDeclaredChannels(scenario);
-  return QA_SMOKE_CI_CHANNELS.find((channel) => declaredChannels.includes(channel));
+  return QA_SMOKE_CI_CHANNELS.find(
+    (channel) => scenario.execution.channels?.includes(channel) === true,
+  );
 }
 
 export function createQaSmokeCiPart(
@@ -98,7 +95,7 @@ export function createQaSmokeCiPart(
   const supportedChannels = new Set<string>(QA_SMOKE_CI_CHANNELS);
   const unsupportedChannels = new Set(
     scenarios.flatMap((scenario) => {
-      const declaredChannels = listQaSmokeCiDeclaredChannels(scenario);
+      const declaredChannels = scenario.execution.channels ?? [];
       return declaredChannels.length > 0 && !selectQaSmokeCiEligibilityChannel(scenario)
         ? declaredChannels.filter((channel) => !supportedChannels.has(channel))
         : [];
@@ -167,8 +164,9 @@ export function createQaSmokeCiPart(
       (left, right) =>
         estimateScenarioCost(right) - estimateScenarioCost(left) || left.id.localeCompare(right.id),
     );
-  const partitions = Array.from({ length: partCount }, () => ({
-    cost: 0,
+  const matrixPartIndex = partCount - 1;
+  const partitions = Array.from({ length: partCount }, (_, index) => ({
+    cost: index === matrixPartIndex ? QA_SMOKE_CI_MATRIX_RUN_COST : 0,
     scenarios: [] as typeof scenarios,
   }));
   const firstPartition = partitions[0];
@@ -184,9 +182,8 @@ export function createQaSmokeCiPart(
     partition.cost += estimateScenarioCost(scenario);
   }
 
-  // The Matrix run rides on the last part so the greedy cost balance above
-  // stays undisturbed for scenarios that use the run-level channel driver.
-  const matrixPartIndex = partCount - 1;
+  // The Matrix run stays on the last part, whose reserved cost above reduces
+  // its primary share without mixing run-level channel drivers.
   const selectedPartition = partitions[partIndex];
   if (!selectedPartition) {
     throw new Error(`unknown QA smoke CI profile part: ${partId}`);

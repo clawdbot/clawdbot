@@ -1,6 +1,7 @@
 // Telegram plugin module implements monitor behavior.
 import type { RunOptions } from "@grammyjs/runner";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -175,6 +176,8 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         secret: opts.webhookSecret ?? account.config.webhookSecret,
         host: opts.webhookHost ?? account.config.webhookHost,
         runtime: opts.runtime as RuntimeEnv,
+        buildContext: (opts.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
+          .buildContext,
         fetch: proxyFetch,
         abortSignal: opts.abortSignal,
         publicUrl: opts.webhookUrl,
@@ -275,6 +278,8 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         accountId: account.accountId,
         ownerAgentId,
         runtime: opts.runtime,
+        buildContext: (opts.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
+          .buildContext,
         proxyFetch,
         botInfo: opts.botInfo,
         abortSignal: opts.abortSignal,

@@ -1,8 +1,15 @@
 // Setup gateway config tests cover gateway prompt choices and config output.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
+import {
+  withSecureTestNodeCommand,
+  withSecureTestNodeExecPath,
+} from "../secrets/test-node-command.test-support.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 
 const mocks = vi.hoisted(() => ({
@@ -70,7 +77,6 @@ describe("configureGatewayForSetup", () => {
       token: undefined,
       password: undefined,
       customBindHost: undefined,
-      tailscaleResetOnExit: false,
     };
   }
 
@@ -81,6 +87,7 @@ describe("configureGatewayForSetup", () => {
     tailscaleChoice?: "off" | "serve";
     textQueue?: Array<string | undefined>;
     nextConfig?: Record<string, unknown>;
+    secretInputMode?: "plaintext" | "ref";
   }) {
     const authChoice = params?.authChoice ?? "token";
     const prompter = createPrompter({
@@ -94,10 +101,45 @@ describe("configureGatewayForSetup", () => {
       nextConfig: params?.nextConfig ?? {},
       localPort: 18789,
       quickstartGateway: createQuickstartGateway(authChoice),
+      ...(params?.secretInputMode ? { secretInputMode: params.secretInputMode } : {}),
       prompter,
       runtime,
     });
   }
+
+  it("provisions a store ref when reference mode has no token to point at", async () => {
+    const stateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "wizard-gateway-ref-")));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+
+    try {
+      const result = await runGatewayConfig({ flow: "quickstart", secretInputMode: "ref" });
+
+      expect(result.nextConfig.gateway?.auth?.token).toEqual({
+        source: "store",
+        provider: "default",
+        id: "OPENCLAW_GATEWAY_TOKEN",
+      });
+      const { readSecretStoreValue } = await import("../secrets/store/secret-store.js");
+      const stored = readSecretStoreValue({
+        scope: { kind: "team" },
+        name: "OPENCLAW_GATEWAY_TOKEN",
+      });
+      expect(stored.ok && stored.value).toBe(result.settings.gatewayToken);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      if (previousToken !== undefined) {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
+      }
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
 
   it("generates a token when the prompt returns undefined", async () => {
     mocks.randomToken.mockReturnValue("generated-token");
@@ -220,7 +262,6 @@ describe("configureGatewayForSetup", () => {
           token: undefined,
           password: undefined,
           customBindHost: undefined,
-          tailscaleResetOnExit: false,
         },
         prompter,
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -306,6 +347,55 @@ describe("configureGatewayForSetup", () => {
         process.env.OPENCLAW_GATEWAY_PASSWORD = previous;
       }
     }
+  });
+
+  it("routes a seeded quickstart password through the configured SecretRef provider", async () => {
+    const password = "gateway-password-from-exec";
+    const quickstartGateway = resolveQuickstartGatewayDefaults(
+      {},
+      { gatewayAuth: "password", gatewayPassword: password },
+    );
+    const prompter = createPrompter({
+      selectQueue: ["provider", "gatewaypasswords"],
+      textQueue: ["gateway/auth/password"],
+    });
+
+    const result = await withSecureTestNodeCommand(async (command) =>
+      withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: undefined }, async () =>
+        configureGatewayForSetup({
+          flow: "quickstart",
+          baseConfig: {},
+          nextConfig: {
+            secrets: {
+              providers: {
+                gatewaypasswords: {
+                  source: "exec",
+                  command,
+                  args: [
+                    "-e",
+                    "let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',d=>input+=d);process.stdin.on('end',()=>{const req=JSON.parse(input||'{}');const values={};for(const id of req.ids||[]){values[id]='gateway-password-from-exec';}process.stdout.write(JSON.stringify({protocolVersion:1,values}));});",
+                  ],
+                },
+              },
+            },
+          },
+          localPort: 18789,
+          quickstartGateway,
+          secretInputMode: "ref",
+          prompter,
+          runtime: createRuntime(),
+        }),
+      ),
+    );
+
+    expect(result.nextConfig.gateway?.auth).toMatchObject({
+      mode: "password",
+      password: {
+        source: "exec",
+        provider: "gatewaypasswords",
+        id: "gateway/auth/password",
+      },
+    });
   });
 
   it("stores gateway token as SecretRef when secretInputMode=ref", async () => {
@@ -475,7 +565,6 @@ describe("configureGatewayForSetup", () => {
         gatewayToken: "unused-token",
         gatewayPassword: password,
         tailscale: "funnel",
-        tailscaleResetOnExit: true,
       },
     );
 
@@ -493,7 +582,7 @@ describe("configureGatewayForSetup", () => {
       port: 19001,
       bind: "loopback",
       auth: { mode: "password", password },
-      tailscale: { mode: "funnel", resetOnExit: true },
+      tailscale: { mode: "funnel" },
     });
     expect(result.nextConfig.gateway?.auth?.token).toBeUndefined();
     expect(JSON.stringify(note.mock.calls)).not.toContain(password);

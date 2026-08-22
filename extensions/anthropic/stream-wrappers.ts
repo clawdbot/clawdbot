@@ -29,6 +29,7 @@ import {
 const log = createSubsystemLogger("anthropic-stream");
 
 const ANTHROPIC_CONTEXT_1M_BETA_LEGACY = "context-1m-2025-08-07";
+const ANTHROPIC_COMPACTION_BETA = "compact-2026-01-12";
 const ANTHROPIC_FAST_MODE_BETA = "fast-mode-2026-02-01";
 const ANTHROPIC_FAST_MODE_COST_MULTIPLIER = 2;
 const OPENCLAW_DEFAULT_ANTHROPIC_BETAS = [
@@ -216,6 +217,39 @@ export function createAnthropicFastModeWrapper(
   };
 }
 
+/** Wrap a direct Anthropic API stream with opt-in server-side compaction. */
+function createAnthropicCompactionWrapper(
+  baseStreamFn: StreamFn | undefined,
+  extraParams: Record<string, unknown> | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  const payloadWrapper = createPayloadPatchStreamWrapper(underlying, ({ payload, model }) => {
+    const payloadPolicy = resolveAnthropicPayloadPolicy({
+      provider: readStringValue(model.provider),
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
+      contextWindow: model.contextWindow,
+      enableServerCompaction: true,
+      extraParams,
+    });
+    applyAnthropicPayloadPolicyToParams(payload, payloadPolicy, new Set());
+  });
+  return (model, context, options) => {
+    if (
+      extraParams?.anthropicServerCompaction !== true ||
+      isAnthropicOAuthApiKey(options?.apiKey) ||
+      !isDirectAnthropicApiModel(model)
+    ) {
+      return underlying(model, context, options);
+    }
+    return payloadWrapper(model, context, {
+      ...options,
+      anthropicServerCompaction: true,
+      headers: mergeAnthropicBetaHeader(options?.headers, [ANTHROPIC_COMPACTION_BETA]),
+    } as Parameters<StreamFn>[2]);
+  };
+}
+
 /** Wrap a stream function with an explicit Anthropic service tier when allowed. */
 export function createAnthropicServiceTierWrapper(
   baseStreamFn: StreamFn | undefined,
@@ -311,6 +345,9 @@ export function wrapAnthropicProviderStream(
     hasFastModeParam && serviceTier === undefined
       ? (streamFn) =>
           createAnthropicFastModeWrapper(streamFn, () => resolveAnthropicFastMode(ctx.extraParams))
+      : undefined,
+    ctx.extraParams?.anthropicServerCompaction === true
+      ? (streamFn) => createAnthropicCompactionWrapper(streamFn, ctx.extraParams)
       : undefined,
     (streamFn) => createAnthropicThinkingPrefillWrapper(streamFn),
   );

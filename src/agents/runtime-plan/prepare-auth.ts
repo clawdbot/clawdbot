@@ -7,6 +7,7 @@ import { resolveMergedModelProviderConfig } from "../../config/model-provider-co
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import type { ProviderRouteOverridePresence } from "../../plugin-sdk/provider-model-types.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   resolveAuthProfileEligibility,
   resolveAuthProfileOrderWithMetadata,
@@ -41,6 +42,7 @@ type PrepareAgentRuntimeAuthPlanParams = {
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
   workspaceDir?: string;
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   authProfileStore?: AuthProfileStore;
   sessionAuthProfileId?: string;
   sessionAuthProfileSource?: "auto" | "user";
@@ -465,6 +467,7 @@ export function prepareAgentRuntimeAuth(
         sessionAuthProfileCandidateIds: candidateIds.length > 0 ? candidateIds : undefined,
         config: params.config,
         workspaceDir: params.workspaceDir,
+        metadataSnapshot: params.metadataSnapshot,
         harnessId: params.harnessId,
         harnessRuntime: params.harnessRuntime,
         allowHarnessAuthProfileForwarding: harnessAllowsAuthProfileForwarding,
@@ -517,6 +520,9 @@ export function prepareAgentRuntimeAuth(
     sourcePlan,
     configuredAuthMode: automaticRouteAuthMode,
     ...(runtimeAuthOwner ? { runtimeAuthOwner } : {}),
+    ...(runtimeAuthOwner && configuredProvider === undefined
+      ? { allowNativeAuthOnSingleRoute: true }
+      : {}),
   });
   if (routeAuthDecision.kind === "deferred") {
     const plan = buildAgentRuntimeAuthPlan({
@@ -524,6 +530,7 @@ export function prepareAgentRuntimeAuth(
       modelId: params.modelId,
       config: params.config,
       workspaceDir: params.workspaceDir,
+      metadataSnapshot: params.metadataSnapshot,
       harnessId: params.harnessId,
       harnessRuntime: params.harnessRuntime,
       allowHarnessAuthProfileForwarding: harnessAllowsAuthProfileForwarding,
@@ -564,6 +571,7 @@ export function prepareAgentRuntimeAuth(
       modelRoute: toPreparedRoute(route),
       config: params.config,
       workspaceDir: params.workspaceDir,
+      metadataSnapshot: params.metadataSnapshot,
       harnessId: params.harnessId,
       harnessRuntime: params.harnessRuntime,
       allowHarnessAuthProfileForwarding: harnessAllowsAuthProfileForwarding,

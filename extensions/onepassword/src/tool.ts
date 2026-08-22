@@ -1,5 +1,6 @@
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import type {
   PluginHookToolResultPersistEvent,
@@ -35,7 +36,7 @@ const OnePasswordToolSchema = {
       description: "Internal. Injected by the gateway policy layer; never set this manually.",
     },
   },
-} as unknown as AnyAgentTool["parameters"];
+} satisfies AnyAgentTool["parameters"];
 
 function errorResult(error: unknown) {
   const code =
@@ -117,4 +118,3 @@ export function createOnePasswordTool(
     },
   };
 }
-import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";

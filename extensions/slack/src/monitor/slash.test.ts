@@ -1501,8 +1501,10 @@ function createPolicyHarness(overrides?: {
   resolveChannelName?: () => Promise<{ name?: string; type?: string }>;
 }) {
   const commands = new Map<unknown, (args: unknown) => Promise<void>>();
+  const postMessage = vi.fn().mockResolvedValue({ ok: true, ts: "123.456" });
   const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
-  const listenerClient = { chat: { postEphemeral } };
+  const listenerClient = { chat: { postMessage, postEphemeral } };
+  const runtimeError = vi.fn();
   const installationIdentity = overrides?.installationIdentity ?? {
     kind: "workspace" as const,
     teamId: overrides?.teamId ?? "T1",
@@ -1534,7 +1536,7 @@ function createPolicyHarness(overrides?: {
 
   const ctx = {
     cfg: { commands: { native: false } },
-    runtime: {},
+    runtime: { error: runtimeError },
     botToken: "bot-token",
     botUserId: "bot",
     teamId: installationIdentity.kind === "enterprise" ? "" : installationIdentity.teamId,
@@ -1566,12 +1568,22 @@ function createPolicyHarness(overrides?: {
 
   const account = { accountId: "acct", config: { commands: { native: false } } } as unknown;
 
-  return { commands, ctx, account, postEphemeral, channelId, channelName };
+  return {
+    commands,
+    ctx,
+    account,
+    postMessage,
+    postEphemeral,
+    runtimeError,
+    channelId,
+    channelName,
+  };
 }
 
 async function runSlashHandler(params: {
   commands: Map<unknown, (args: unknown) => Promise<void>>;
   body?: unknown;
+  respond?: ReturnType<typeof vi.fn>;
   command: Partial<{
     user_id: string;
     user_name: string;
@@ -1587,7 +1599,7 @@ async function runSlashHandler(params: {
     throw new Error("Missing slash handler");
   }
 
-  const respond = vi.fn().mockResolvedValue(undefined);
+  const respond = params.respond ?? vi.fn().mockResolvedValue(undefined);
   const ack = vi.fn().mockResolvedValue(undefined);
 
   await handler({
@@ -2035,6 +2047,56 @@ describe("slack slash command session metadata", () => {
         isGroup: true,
         groupId: harness.channelId,
       }),
+    );
+  });
+
+  it("fails a public Web API fallback that returns no message timestamp", async () => {
+    deliverSlackSlashRepliesMock.mockImplementation(async (params: unknown) => {
+      const responseBudget = (
+        params as {
+          responseBudget: {
+            respond: (payload: { text: string; response_type: "in_channel" }) => Promise<unknown>;
+          };
+        }
+      ).responseBudget;
+      await responseBudget.respond({ text: "public answer", response_type: "in_channel" });
+    });
+    const asyncDispatchMock = dispatchMock as unknown as {
+      mockImplementation: (
+        implementation: (params: unknown) => Promise<unknown>,
+      ) => typeof dispatchMock;
+    };
+    asyncDispatchMock.mockImplementation(async (params: unknown) => {
+      const deliver = (
+        params as {
+          dispatcherOptions: {
+            deliver: (payload: { text: string }, info: { kind: "final" }) => Promise<void>;
+          };
+        }
+      ).dispatcherOptions.deliver;
+      await deliver({ text: "public answer" }, { kind: "final" });
+      return { counts: { final: 1, tool: 0, block: 0 } };
+    });
+    const harness = createPolicyHarness({ groupPolicy: "open", slashEphemeral: false });
+    harness.postMessage.mockResolvedValueOnce({ ok: true, channel: harness.channelId });
+    const respondError = Object.assign(new Error("response URL expired"), {
+      code: "slack_bolt_respond_error",
+    });
+    const respond = vi.fn().mockRejectedValue(respondError);
+    await registerCommands(harness.ctx, harness.account);
+
+    await runSlashHandler({
+      commands: harness.commands,
+      command: {
+        channel_id: harness.channelId,
+        channel_name: harness.channelName,
+      },
+      respond,
+    });
+
+    expect(harness.postMessage).toHaveBeenCalledOnce();
+    expect(harness.runtimeError).toHaveBeenCalledWith(
+      expect.stringContaining("Slack chat.postMessage returned no message timestamp"),
     );
   });
 

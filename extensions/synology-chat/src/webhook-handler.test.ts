@@ -86,6 +86,7 @@ function makeAccount(
     enabled: true,
     token: "valid-token",
     incomingUrl: "https://nas.example.com/incoming",
+    webhookUrl: "https://gateway.example.com/webhook/synology",
     nasHost: "nas.example.com",
     webhookPath: "/webhook/synology",
     webhookPathSource: "default",

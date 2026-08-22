@@ -47,6 +47,8 @@ export type SystemAgentTuiOptions = Pick<
   welcomeVariant?: "onboarding";
   /** Workspace override for the proposed first-run setup (from --workspace). */
   setupWorkspace?: string;
+  /** Selected first-agent name for the proposed onboarding setup. */
+  setupAgentName?: string;
   runChannelsAdd?: (
     opts: ChannelsAddOptions,
     runtime: RuntimeEnv,
@@ -479,6 +481,7 @@ export async function runSystemAgentTui(
           engine,
           localRecovery: true,
           ...(boundOpts.setupWorkspace ? { workspace: boundOpts.setupWorkspace } : {}),
+          ...(boundOpts.setupAgentName ? { agentName: boundOpts.setupAgentName } : {}),
         })
       ).text;
     } else {

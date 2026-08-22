@@ -66,6 +66,7 @@ type DiscordSendOpts = {
   components?: DiscordSendComponents;
   embeds?: DiscordSendEmbeds;
   silent?: boolean;
+  threadId?: string | number;
   suppressEmbeds?: boolean;
   allowedMentions?: DiscordAllowedMentions;
   /** Persist each concrete platform send before any later chunk can fail. */
@@ -446,8 +447,8 @@ export async function sendStickerDiscord(
   stickerIds: string[],
   opts: DiscordSendOpts & { content?: string },
 ): Promise<DiscordSendResult> {
-  const { rest, request, channelId, rewrittenContent, suppressEmbeds } =
-    await resolveDiscordStructuredSendContext(to, opts);
+  const context = await resolveDiscordStructuredSendContext(to, opts);
+  const { rewrittenContent, suppressEmbeds } = context;
   const stickers = normalizeStickerIds(stickerIds);
   const flags = resolveDiscordMessageFlags({ suppressEmbeds });
   const body = {
@@ -457,13 +458,7 @@ export async function sendStickerDiscord(
     enforce_nonce: true,
     ...(flags ? { flags } : {}),
   };
-  await opts.onPlatformSendDispatch?.();
-  const res = (await request(
-    () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
-    "sticker",
-    { safety: "nonce-protected-create" },
-  )) as { id: string; channel_id: string };
-  return toDiscordSendResult(res, channelId, { kind: "card" });
+  return context.send("sticker", body);
 }
 
 export async function sendPollDiscord(
@@ -471,8 +466,8 @@ export async function sendPollDiscord(
   poll: PollInput,
   opts: DiscordSendOpts & { content?: string },
 ): Promise<DiscordSendResult> {
-  const { rest, request, channelId, rewrittenContent, suppressEmbeds } =
-    await resolveDiscordStructuredSendContext(to, opts);
+  const context = await resolveDiscordStructuredSendContext(to, opts);
+  const { rewrittenContent, suppressEmbeds } = context;
   if (poll.durationSeconds !== undefined) {
     throw new Error("Discord polls do not support durationSeconds; use durationHours");
   }
@@ -485,22 +480,14 @@ export async function sendPollDiscord(
     enforce_nonce: true,
     ...(flags ? { flags } : {}),
   };
-  await opts.onPlatformSendDispatch?.();
-  const res = (await request(
-    () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
-    "poll",
-    { safety: "nonce-protected-create" },
-  )) as { id: string; channel_id: string };
-  return toDiscordSendResult(res, channelId, { kind: "card" });
+  return context.send("poll", body);
 }
 
 async function resolveDiscordStructuredSendContext(
   to: string,
   opts: DiscordSendOpts & { content?: string },
 ): Promise<{
-  rest: RequestClient;
-  request: DiscordClientRequest;
-  channelId: string;
+  send: (kind: "poll" | "sticker", body: Record<string, unknown>) => Promise<DiscordSendResult>;
   rewrittenContent?: string;
   suppressEmbeds: boolean;
 }> {
@@ -518,9 +505,23 @@ async function resolveDiscordStructuredSendContext(
       })
     : undefined;
   return {
-    rest,
-    request,
-    channelId,
+    send: async (kind, body) => {
+      await opts.onPlatformSendDispatch?.();
+      const result = (await request(
+        () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
+        kind,
+        { safety: "nonce-protected-create" },
+      )) as { id: string; channel_id: string };
+      recordChannelActivity({
+        channel: "discord",
+        accountId: accountInfo.accountId,
+        direction: "outbound",
+      });
+      return toDiscordSendResult(result, channelId, {
+        kind: kind === "poll" ? "poll" : "card",
+        threadId: kind === "poll" ? opts.threadId : undefined,
+      });
+    },
     rewrittenContent,
     suppressEmbeds: resolveDiscordSuppressEmbeds({
       configured: accountInfo.config.suppressEmbeds,

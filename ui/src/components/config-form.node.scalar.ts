@@ -3,7 +3,6 @@ import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalizatio
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { i18n, t } from "../i18n/index.ts";
-import { formatUnknownText } from "../lib/format.ts";
 import {
   isSupportedConfigValueValid,
   normalizeNumericValue,
@@ -11,6 +10,7 @@ import {
 } from "./config-form.constraints.ts";
 import {
   configEnumOptionLabel,
+  formatConfigValueText,
   getSensitiveRenderState,
   isSecretRefObject,
   jsonValue,
@@ -21,8 +21,27 @@ import {
   wrapSensitiveControl,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.ts";
+import {
+  coerceConfigFormNumberString,
+  isConfigFormDecimalNumberString,
+  isConfigFormUnsafeIntegerString,
+} from "./config-form.numeric.ts";
+import {
+  beginScalarEdit,
+  finishScalarEdit,
+  finishScalarEditFromEvent,
+  scalarEditHintForInput,
+  scalarValueBranch,
+  syncScalarEditIdentity,
+  type ScalarEditHint,
+} from "./config-form.scalar-edit.ts";
 import { resolveConfigFieldMeta as resolveFieldMeta } from "./config-form.search.ts";
-import { configFieldId, hintForPath, redactedPlaceholder } from "./config-form.shared.ts";
+import {
+  configFieldId,
+  hintForPath,
+  redactedPlaceholder,
+  schemaType,
+} from "./config-form.shared.ts";
 
 const scalarInputState = new WeakMap<
   HTMLInputElement,
@@ -64,8 +83,17 @@ function syncScalarInputIdentity(
       previous.presentationIdentity !== presentationIdentity ||
       previous.renderedValue !== renderedValue
     ) {
-      element.value = renderedValue;
-      setControlValidity(element, "");
+      // A focused input whose DOM value drifted from the last render holds an
+      // in-flight edit the model has not committed yet (mid-keystroke or
+      // mid-automation fill). Resetting it here silently eats that input when
+      // a background config refresh lands; blurred fields keep the
+      // authoritative-reset contract.
+      if (element.matches(":focus") && element.value !== previous.renderedValue) {
+        revalidate(element);
+      } else {
+        element.value = renderedValue;
+        setControlValidity(element, "");
+      }
     } else if (!Object.is(previous.controlIdentity, controlIdentity)) {
       revalidate(element);
     }
@@ -80,20 +108,160 @@ function syncScalarInputIdentity(
   });
 }
 
-function stringConstraintMessage(value: string, schema: ConfigNodeRenderParams["schema"]): string {
-  return isSupportedConfigValueValid(schema, value) ? "" : t("configForm.invalidString");
+function coerceTextInputValue(
+  value: string,
+  schema: ConfigNodeRenderParams["schema"],
+  currentValue?: unknown,
+  editHint?: ScalarEditHint,
+): string | number | boolean | undefined {
+  const trimmed = value.trim();
+  const variants = schema.anyOf ?? schema.oneOf ?? [];
+  const stringCandidateValid = isSupportedConfigValueValid(schema, value);
+  const currentBranch = editHint ? editHint.branch : scalarValueBranch(currentValue);
+  const booleanCandidate = trimmed === "true" ? true : trimmed === "false" ? false : undefined;
+  if (booleanCandidate !== undefined && isSupportedConfigValueValid(schema, booleanCandidate)) {
+    let booleanBranchValid = false;
+    let explicitBooleanBranchValid = false;
+    for (const variant of variants) {
+      const booleanBranch =
+        schemaType(variant) === "boolean" ||
+        typeof variant.const === "boolean" ||
+        variant.enum?.some((entry) => typeof entry === "boolean");
+      if (!booleanBranch || !isSupportedConfigValueValid(variant, booleanCandidate)) {
+        continue;
+      }
+      booleanBranchValid = true;
+      explicitBooleanBranchValid ||=
+        Object.is(variant.const, booleanCandidate) ||
+        Boolean(variant.enum?.some((entry) => Object.is(entry, booleanCandidate)));
+    }
+    if (
+      booleanBranchValid &&
+      (currentBranch !== "string" || explicitBooleanBranchValid || !stringCandidateValid)
+    ) {
+      return booleanCandidate;
+    }
+  }
+  let numberCandidate: number | undefined;
+  for (const variant of variants) {
+    const type = schemaType(variant);
+    if (type !== "number" && type !== "integer") {
+      continue;
+    }
+    const candidate = coerceConfigFormNumberString(value, type === "integer");
+    if (typeof candidate === "number" && isSupportedConfigValueValid(schema, candidate)) {
+      numberCandidate = candidate;
+      break;
+    }
+  }
+  if (currentBranch === "number") {
+    if (numberCandidate !== undefined) {
+      return numberCandidate;
+    }
+    if (isConfigFormDecimalNumberString(value)) {
+      return stringCandidateValid && isConfigFormUnsafeIntegerString(trimmed) ? value : undefined;
+    }
+  }
+  if (currentBranch === "string" && stringCandidateValid) {
+    return value;
+  }
+  if (numberCandidate !== undefined) {
+    return numberCandidate;
+  }
+  if (stringCandidateValid) {
+    return value;
+  }
+  return value;
+}
+
+function stringConstraintMessage(
+  value: string,
+  schema: ConfigNodeRenderParams["schema"],
+  currentValue?: unknown,
+  editHint?: ScalarEditHint,
+): string {
+  return isSupportedConfigValueValid(
+    schema,
+    coerceTextInputValue(value, schema, currentValue, editHint),
+  )
+    ? ""
+    : t("configForm.invalidString");
 }
 
 function shouldClearOptionalEmpty(
   value: string,
   schema: ConfigNodeRenderParams["schema"],
   isRequired: boolean,
+  currentValue?: unknown,
+  editHint?: ScalarEditHint,
 ): boolean {
-  return value === "" && !isRequired && Boolean(stringConstraintMessage(value, schema));
+  return (
+    value === "" &&
+    !isRequired &&
+    Boolean(stringConstraintMessage(value, schema, currentValue, editHint))
+  );
 }
 
 function numericConstraintMessage(value: number, schema: ConfigNodeRenderParams["schema"]): string {
   return isSupportedConfigValueValid(schema, value) ? "" : t("configForm.invalidNumber");
+}
+
+type NumericInputState =
+  | { kind: "badInput" }
+  | { kind: "empty" }
+  | { kind: "invalid" }
+  | { kind: "value"; parsed: number; message: string };
+
+// Partial numeric text ("3.", "-", "1e") reports value === "" with
+// validity.badInput set. Treating it as an intentional clear committed
+// undefined mid-keystroke, wiping the stored value and the user's input.
+function resolveNumericInputState(
+  target: HTMLInputElement,
+  schema: ConfigNodeRenderParams["schema"],
+): NumericInputState {
+  const raw = target.value;
+  if (raw.trim() === "") {
+    return target.validity.badInput ? { kind: "badInput" } : { kind: "empty" };
+  }
+  const parsed = coerceConfigFormNumberString(raw, schemaType(schema) === "integer");
+  if (typeof parsed !== "number") {
+    return { kind: "invalid" };
+  }
+  return { kind: "value", parsed, message: numericConstraintMessage(parsed, schema) };
+}
+
+function numericStateMessage(state: NumericInputState, isRequired: boolean): string {
+  if (state.kind === "value") {
+    return state.message;
+  }
+  if (state.kind === "invalid") {
+    return t("configForm.invalidNumber");
+  }
+  return state.kind === "badInput" || isRequired ? t("configForm.invalidNumber") : "";
+}
+
+function applyNumericInputState(
+  target: HTMLInputElement,
+  state: NumericInputState,
+  params: { isRequired?: boolean },
+  commit: (candidate: unknown) => unknown,
+): void {
+  if (!setControlValidity(target, numericStateMessage(state, params.isRequired === true))) {
+    return;
+  }
+  if (state.kind === "empty") {
+    commit(undefined);
+  } else if (state.kind === "value") {
+    commit(state.parsed);
+  }
+}
+
+function numericRevalidateMessage(
+  target: HTMLInputElement,
+  schema: ConfigNodeRenderParams["schema"],
+  isRequired: boolean,
+): string {
+  return numericStateMessage(resolveNumericInputState(target, schema), isRequired);
 }
 
 export function renderTextInput(
@@ -124,13 +292,15 @@ export function renderTextInput(
       : redactedPlaceholder()
     : (hint?.placeholder ??
       (schema.default !== undefined
-        ? t("configForm.defaultValue", { value: formatUnknownText(schema.default) })
+        ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
         : ""));
   const displayValue = effectiveRedacted
     ? ""
     : isStructuredValue
       ? jsonValue(value)
       : (value ?? "");
+  const effectiveValue = value !== undefined ? value : schema.default;
+  const initialBranch = scalarValueBranch(effectiveValue);
   const effectiveInputType = sensitiveState.isSensitive && !effectiveRedacted ? "text" : inputType;
   const isPhonePresentation = hint?.presentation === "phone-number";
   const phonePresentation =
@@ -140,7 +310,7 @@ export function renderTextInput(
   const controlIdentity = params.controlIdentity ?? params.sourceIdentity ?? value;
   const sourceIdentity = params.sourceIdentity ?? value;
   const controlPathKey = configFieldId(path, "scalar-identity");
-  const renderedValue = formatUnknownText(displayValue);
+  const renderedValue = formatConfigValueText(displayValue);
   const presentationIdentity = [
     effectiveRedacted ? "redacted" : "visible",
     effectiveInputType,
@@ -153,20 +323,25 @@ export function renderTextInput(
       return;
     }
     if (inputType === "number") {
-      const raw = target.value;
       setControlValidity(
         target,
-        raw.trim() === ""
-          ? params.isRequired
-            ? t("configForm.invalidNumber")
-            : ""
-          : numericConstraintMessage(Number(raw), schema),
+        numericRevalidateMessage(target, schema, params.isRequired === true),
       );
       return;
     }
     const raw = target.value;
-    const optionalEmpty = shouldClearOptionalEmpty(raw, schema, params.isRequired === true);
-    setControlValidity(target, optionalEmpty ? "" : stringConstraintMessage(raw, schema));
+    const editHint = scalarEditHintForInput(target, initialBranch);
+    const optionalEmpty = shouldClearOptionalEmpty(
+      raw,
+      schema,
+      params.isRequired === true,
+      effectiveValue,
+      editHint,
+    );
+    setControlValidity(
+      target,
+      optionalEmpty ? "" : stringConstraintMessage(raw, schema, effectiveValue, editHint),
+    );
   };
   const commitScalarValue = (target: HTMLInputElement, candidate: unknown) => {
     if (onPatch(path, candidate) !== false) {
@@ -179,7 +354,8 @@ export function renderTextInput(
 
   const inputControl = html`
     <input
-      ${ref((element) =>
+      ${ref((element) => {
+        syncScalarEditIdentity(element, params.rowIdentity, controlPathKey, presentationIdentity);
         syncScalarInputIdentity(
           element,
           controlIdentity,
@@ -189,8 +365,8 @@ export function renderTextInput(
           presentationIdentity,
           renderedValue,
           revalidate,
-        ),
-      )}
+        );
+      })}
       type=${effectiveInputType}
       class="settings-input${effectiveRedacted ? " cfg-redacted" : ""}"
       aria-label=${label}
@@ -212,26 +388,30 @@ export function renderTextInput(
         const target = event.target as HTMLInputElement;
         const raw = target.value;
         if (inputType === "number") {
-          if (raw.trim() === "") {
-            if (params.isRequired) {
-              setControlValidity(target, t("configForm.invalidNumber"));
-            } else {
-              setControlValidity(target, "");
-              commitScalarValue(target, undefined);
-            }
-            return;
-          }
-          const parsed = Number(raw);
-          if (setControlValidity(target, numericConstraintMessage(parsed, schema))) {
-            commitScalarValue(target, Number.isNaN(parsed) ? raw : parsed);
-          }
+          applyNumericInputState(
+            target,
+            resolveNumericInputState(target, schema),
+            params,
+            (candidate) => commitScalarValue(target, candidate),
+          );
           return;
         }
-        if (shouldClearOptionalEmpty(raw, schema, params.isRequired === true)) {
+        const editHint = beginScalarEdit(target, initialBranch);
+        if (
+          shouldClearOptionalEmpty(
+            raw,
+            schema,
+            params.isRequired === true,
+            effectiveValue,
+            editHint,
+          )
+        ) {
           setControlValidity(target, "");
           commitScalarValue(target, undefined);
-        } else if (setControlValidity(target, stringConstraintMessage(raw, schema))) {
-          commitScalarValue(target, raw);
+        } else if (
+          setControlValidity(target, stringConstraintMessage(raw, schema, effectiveValue, editHint))
+        ) {
+          commitScalarValue(target, coerceTextInputValue(raw, schema, effectiveValue, editHint));
         }
       }}
       @change=${(event: Event) => {
@@ -239,29 +419,51 @@ export function renderTextInput(
           return;
         }
         const target = event.target as HTMLInputElement;
+        const editHint = beginScalarEdit(target, initialBranch);
         const raw = target.value;
-        const rawMessage = stringConstraintMessage(raw, schema);
+        const rawMessage = stringConstraintMessage(raw, schema, effectiveValue, editHint);
         if (!rawMessage && !isPhonePresentation) {
           setControlValidity(target, "");
-          commitScalarValue(target, raw);
+          commitScalarValue(target, coerceTextInputValue(raw, schema, effectiveValue, editHint));
+          finishScalarEdit(target);
           return;
         }
         const normalized = raw.trim();
-        if (shouldClearOptionalEmpty(normalized, schema, params.isRequired === true)) {
+        if (
+          shouldClearOptionalEmpty(
+            normalized,
+            schema,
+            params.isRequired === true,
+            effectiveValue,
+            editHint,
+          )
+        ) {
           target.value = normalized;
           setControlValidity(target, "");
           commitScalarValue(target, undefined);
+          finishScalarEdit(target);
           return;
         }
-        const normalizedMessage = stringConstraintMessage(normalized, schema);
+        const normalizedMessage = stringConstraintMessage(
+          normalized,
+          schema,
+          effectiveValue,
+          editHint,
+        );
         if (normalizedMessage) {
           setControlValidity(target, rawMessage);
+          finishScalarEdit(target);
           return;
         }
         target.value = normalized;
         setControlValidity(target, "");
-        commitScalarValue(target, normalized);
+        commitScalarValue(
+          target,
+          coerceTextInputValue(normalized, schema, effectiveValue, editHint),
+        );
+        finishScalarEdit(target);
       }}
+      @blur=${finishScalarEditFromEvent}
     />
   `;
   const revealToggle = isStructuredSecretRef
@@ -314,16 +516,11 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
   const controlIdentity = params.controlIdentity ?? params.sourceIdentity ?? value;
   const sourceIdentity = params.sourceIdentity ?? value;
   const controlPathKey = configFieldId(path, "scalar-identity");
-  const renderedValue = formatUnknownText(displayValue);
+  const renderedValue = formatConfigValueText(displayValue);
   const revalidate = (target: HTMLInputElement) => {
-    const raw = target.value;
     setControlValidity(
       target,
-      raw === ""
-        ? params.isRequired
-          ? t("configForm.invalidNumber")
-          : ""
-        : numericConstraintMessage(Number(raw), schema),
+      numericRevalidateMessage(target, schema, params.isRequired === true),
     );
   };
   const commitScalarValue = (target: HTMLInputElement, candidate: unknown) => {
@@ -377,7 +574,7 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
       aria-describedby=${helpId ?? nothing}
       aria-invalid="false"
       placeholder=${schema.default !== undefined
-        ? t("configForm.defaultValue", { value: formatUnknownText(schema.default) })
+        ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
         : nothing}
       min=${constraints.min ?? nothing}
       max=${constraints.max ?? nothing}
@@ -396,36 +593,22 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
       }}
       @input=${(event: Event) => {
         const target = event.target as HTMLInputElement;
-        const raw = target.value;
-        if (raw === "") {
-          if (params.isRequired) {
-            setControlValidity(target, t("configForm.invalidNumber"));
-          } else {
-            setControlValidity(target, "");
-            commitScalarValue(target, undefined);
-          }
-          return;
-        }
-        const parsed = raw === "" ? undefined : Number(raw);
-        if (
-          parsed !== undefined &&
-          setControlValidity(target, numericConstraintMessage(parsed, schema))
-        ) {
-          commitScalarValue(target, parsed);
-        }
+        applyNumericInputState(
+          target,
+          resolveNumericInputState(target, schema),
+          params,
+          (candidate) => commitScalarValue(target, candidate),
+        );
       }}
       @change=${(event: Event) => {
         const target = event.target as HTMLInputElement;
-        if (target.value === "") {
+        const state = resolveNumericInputState(target, schema);
+        if (state.kind !== "value") {
+          setControlValidity(target, numericStateMessage(state, params.isRequired === true));
           return;
         }
-        const parsed = Number(target.value);
-        if (!Number.isFinite(parsed)) {
-          setControlValidity(target, t("configForm.invalidNumber"));
-          return;
-        }
-        const normalized = normalizeNumericValue(parsed, schema);
-        target.value = formatUnknownText(normalized);
+        const normalized = normalizeNumericValue(state.parsed, schema);
+        target.value = formatConfigValueText(normalized);
         if (setControlValidity(target, numericConstraintMessage(normalized, schema))) {
           commitScalarValue(target, normalized);
         }
@@ -515,7 +698,7 @@ export function renderSelect(
         ?disabled=${params.isRequired && schema.default === undefined}
       >
         ${schema.default !== undefined
-          ? t("configForm.defaultValue", { value: formatUnknownText(schema.default) })
+          ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
           : t("configForm.select")}
       </option>
       ${canSelectNull

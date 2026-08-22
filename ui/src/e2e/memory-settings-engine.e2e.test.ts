@@ -206,7 +206,7 @@ suite.define(() => {
         await page.getByText("Needs attention", { exact: true }).first().waitFor();
         await page
           .getByText(
-            "Could not refresh Control UI configuration: GatewayRequestError: authoritative snapshot unavailable",
+            "Could not refresh Control UI configuration: authoritative snapshot unavailable",
           )
           .waitFor();
         expect(await page.getByText("Could not update Active memory").count()).toBe(0);

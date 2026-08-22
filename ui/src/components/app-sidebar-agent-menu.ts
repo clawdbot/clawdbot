@@ -12,6 +12,10 @@ import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import {
+  DEBUG_OVERLAY_SHORTCUT_LABEL,
+  requestDebugOverlayToggle,
+} from "../pages/debug/debug-overlay-contract.ts";
 import { renderAgentSelectAvatar, renderAgentSelectCopy } from "./agent-select.ts";
 import { icons, type IconName } from "./icons.ts";
 import "./sidebar-build-chip.ts";
@@ -55,6 +59,43 @@ function closeMenuAfterOwnDropdownHide(event: Event, onClose: (restoreFocus?: bo
     return;
   }
   onClose(consumeDropdownKeyboardDismissal(event));
+}
+
+function moveSidebarMenuFocus(event: KeyboardEvent): boolean {
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+    return false;
+  }
+  const dropdown = (event.currentTarget as HTMLElement).closest("wa-dropdown");
+  const items = [
+    ...(dropdown?.querySelectorAll<HTMLElement & { active: boolean }>(
+      ":scope > wa-dropdown-item:not([disabled])",
+    ) ?? []),
+  ];
+  const footer = dropdown?.querySelector<HTMLElement>(".sidebar-identity-menu__footer");
+  const controls = [
+    ...items,
+    ...(footer?.querySelectorAll<HTMLElement>("a[href], button:not([disabled])") ?? []),
+  ];
+  const current = event.target instanceof HTMLElement ? event.target : null;
+  const index = current ? controls.indexOf(current) : -1;
+  if (footer && index < 0) {
+    return false;
+  }
+  const direction = event.key === "ArrowDown" ? 1 : -1;
+  const target =
+    index < 0
+      ? items.at(direction === 1 ? 0 : -1)
+      : controls[(index + direction + controls.length) % controls.length];
+  if (!target || (footer && !footer.contains(current) && !footer.contains(target))) {
+    return false;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  // Native footer actions are outside Web Awesome's roving item list; reset
+  // its active row on both crossings so reverse navigation cannot skip one.
+  items.forEach((item) => (item.active = item === target));
+  target.focus({ preventScroll: true });
+  return true;
 }
 
 type AgentMenuAgent = {
@@ -216,6 +257,7 @@ function renderIdentityMenuHelpSubmenu() {
           slot="submenu"
           class="sidebar-customize-menu__item"
           value=${`${LINK_VALUE_PREFIX}${encodeURIComponent(link.href)}`}
+          data-new-tab-action
           @click=${(event: MouseEvent) => {
             if (event.target instanceof Element && event.target.closest("a")) {
               (event.currentTarget as HTMLElement).dataset.nativeNavigation = "true";
@@ -316,23 +358,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
                         @input=${(event: Event) =>
                           params.onFilterChange((event.target as HTMLInputElement).value)}
                         @keydown=${(event: KeyboardEvent) => {
-                          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            const dropdown = (event.currentTarget as HTMLElement).closest(
-                              "wa-dropdown",
-                            );
-                            const items = Array.from(dropdown?.children ?? []).filter(
-                              (child): child is HTMLElement & { active: boolean } =>
-                                child instanceof HTMLElement &&
-                                child.localName === "wa-dropdown-item" &&
-                                !child.hasAttribute("disabled"),
-                            );
-                            const target = event.key === "ArrowDown" ? items.at(0) : items.at(-1);
-                            if (target) {
-                              items.forEach((item) => (item.active = item === target));
-                              target.focus({ preventScroll: true });
-                            }
+                          if (moveSidebarMenuFocus(event)) {
                             return;
                           }
                           // Keep editing keys out of Web Awesome's document-level
@@ -425,13 +451,19 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
             case `${COMMAND_VALUE_PREFIX}apps`:
               params.onNavigate("apps");
               break;
+            case `${COMMAND_VALUE_PREFIX}debug-overlay`:
+              requestDebugOverlayToggle();
+              break;
             case `${COMMAND_VALUE_PREFIX}retry-connect`:
               params.onRetryConnect?.();
               break;
           }
         }}
-        @keydown=${(event: KeyboardEvent) =>
-          trackDropdownKeyboardDismissal(event, params.onTabAway)}
+        @keydown=${(event: KeyboardEvent) => {
+          if (!moveSidebarMenuFocus(event)) {
+            trackDropdownKeyboardDismissal(event, params.onTabAway);
+          }
+        }}
         @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
       >
         <button
@@ -471,6 +503,13 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
         <wa-dropdown-item class="sidebar-customize-menu__item" value="command:apps">
           <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.layoutGrid}</span>
           <span class="sidebar-customize-menu__text">${t("agentChip.getApps")}</span>
+        </wa-dropdown-item>
+        <wa-dropdown-item class="sidebar-customize-menu__item" value="command:debug-overlay">
+          <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.activity}</span>
+          <span class="sidebar-customize-menu__text">${t("debug.overlay.title")}</span>
+          <span slot="details" class="session-menu__shortcut" aria-hidden="true"
+            >${DEBUG_OVERLAY_SHORTCUT_LABEL}</span
+          >
         </wa-dropdown-item>
         <wa-dropdown-item
           class="sidebar-customize-menu__item sidebar-identity-menu__help"

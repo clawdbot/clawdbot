@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import { hasOperatorWriteAccess } from "../../../app/operator-access.ts";
 import { t } from "../../../i18n/index.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import type { SessionScopeHost } from "../../../lib/sessions/index.ts";
 import { canonicalUiSessionKeyForPersistence } from "../../../lib/sessions/session-key.ts";
 import {
@@ -286,10 +287,7 @@ function loadBackgroundTasks(
             observeTaskTerminal(current, task, "event");
           }
         }
-        current.error =
-          error instanceof Error && error.message.trim()
-            ? error.message.trim()
-            : t("tasksPage.loadFailed");
+        current.error = formatUiError(error, t("tasksPage.loadFailed"));
       }
     } finally {
       const current = getBackgroundTasksState(host);
@@ -465,10 +463,7 @@ async function loadBackgroundTaskDetail(
     }
   } catch (error) {
     if (getBackgroundTasksState(host) === state) {
-      const message =
-        error instanceof Error && error.message.trim()
-          ? error.message.trim()
-          : t("chat.backgroundTasks.detailFailed");
+      const message = formatUiError(error, t("chat.backgroundTasks.detailFailed"));
       state.taskDetailErrors = new Map(state.taskDetailErrors).set(rowId, message);
     }
   } finally {
@@ -516,14 +511,12 @@ async function cancelBackgroundTask(
     // Refusals (already terminal, stale id, no cancellation handle) are
     // successful responses with cancelled=false; surface them like errors.
     if (!result?.cancelled) {
-      state.error = result?.reason?.trim() || t("tasksPage.cancelFailed");
+      const reason = result?.reason?.trim();
+      state.error = reason ? formatUiError(reason) : t("tasksPage.cancelFailed");
     }
   } catch (error) {
     if (getBackgroundTasksState(host) === state) {
-      state.error =
-        error instanceof Error && error.message.trim()
-          ? error.message.trim()
-          : t("tasksPage.cancelFailed");
+      state.error = formatUiError(error, t("tasksPage.cancelFailed"));
     }
   } finally {
     if (getBackgroundTasksState(host) === state) {

@@ -62,7 +62,12 @@ describe("AppSidebar session delete access", () => {
     await sidebar.updateComplete;
     harness.deleteSession.mockResolvedValueOnce({
       deleted: true,
-      worktreePreserved: { id: "wt-1", branch: "feature", path: "/tmp/worktree" },
+      worktreePreserved: {
+        id: "wt-1",
+        branch: "feature",
+        path: "/tmp/worktree",
+        reason: "owner-mismatch",
+      },
     });
     const restoreDialogPolyfill = installDialogPolyfill();
     const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
@@ -72,6 +77,8 @@ describe("AppSidebar session delete access", () => {
       answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
       await waitForFast(() => expect(harness.deleteSession).toHaveBeenCalledOnce());
       await waitForFast(() => expect(alertSpy).toHaveBeenCalledOnce());
+
+      expect(alertSpy).toHaveBeenCalledWith("Managed Worktrees:\nfeature — owned elsewhere");
 
       expect(request).not.toHaveBeenCalledWith("worktrees.remove", expect.anything());
     } finally {

@@ -14,13 +14,21 @@ const MAX_ACTIVE_CAPABILITIES = 4096;
 const RUN_LIFETIME_EXPIRES_AT_MS = Number.MAX_SAFE_INTEGER;
 const CAPABILITY_COMPLETION_GRACE_MS = 60_000;
 
-type AgentRuntimeMessageActionContextBase = {
+type MessageActionRequesterIdentity = {
+  requesterAccountId?: string;
+  requesterSenderId?: string;
+  requesterSenderName?: string;
+  requesterSenderUsername?: string;
+  requesterSenderE164?: string;
+};
+
+type AgentRuntimeMessageActionContextBase = MessageActionRequesterIdentity & {
   expiresAtMs: number;
+  /** Process-local owner reference revalidated before privileged Gateway use. */
+  turnCapability?: string;
   sessionId?: string;
   /** Durable session entry that owns restart-recovery receipt state. */
   sourceReplySessionKey?: string;
-  requesterAccountId?: string;
-  requesterSenderId?: string;
   toolContext?: InternalChannelThreadingToolContext;
 };
 
@@ -35,6 +43,18 @@ export type AgentRuntimeMessageActionContext = AgentRuntimeMessageActionContextB
         sourceReplyToolCallId?: string;
       }
   );
+
+export function selectMessageActionRequesterIdentity(
+  context: MessageActionRequesterIdentity | undefined,
+): MessageActionRequesterIdentity {
+  return {
+    requesterAccountId: context?.requesterAccountId,
+    requesterSenderId: context?.requesterSenderId,
+    requesterSenderName: context?.requesterSenderName,
+    requesterSenderUsername: context?.requesterSenderUsername,
+    requesterSenderE164: context?.requesterSenderE164,
+  };
+}
 
 type MessageActionTurnCapability = AgentRuntimeMessageActionContext & {
   agentId: string;
@@ -112,6 +132,9 @@ export function mintMessageActionTurnCapability(params: {
   sessionId?: string;
   requesterAccountId?: string;
   requesterSenderId?: string;
+  requesterSenderName?: string;
+  requesterSenderUsername?: string;
+  requesterSenderE164?: string;
   toolContext?: InternalChannelThreadingToolContext;
   expiresWithRun?: boolean;
   ttlMs?: number;
@@ -140,6 +163,9 @@ export function mintMessageActionTurnCapability(params: {
     sourceReplySessionKey: normalizeOptionalString(params.sourceReplySessionKey),
     requesterAccountId: normalizeOptionalString(params.requesterAccountId),
     requesterSenderId: normalizeOptionalString(params.requesterSenderId),
+    requesterSenderName: normalizeOptionalString(params.requesterSenderName),
+    requesterSenderUsername: normalizeOptionalString(params.requesterSenderUsername),
+    requesterSenderE164: normalizeOptionalString(params.requesterSenderE164),
     toolContext: copyToolContext(params.toolContext),
   });
   return token;
@@ -180,6 +206,9 @@ export function resolveMessageActionTurnCapability(params: {
     sourceReplySessionKey: capability.sourceReplySessionKey,
     requesterAccountId: capability.requesterAccountId,
     requesterSenderId: capability.requesterSenderId,
+    requesterSenderName: capability.requesterSenderName,
+    requesterSenderUsername: capability.requesterSenderUsername,
+    requesterSenderE164: capability.requesterSenderE164,
     toolContext: copyToolContext(capability.toolContext),
   };
 }

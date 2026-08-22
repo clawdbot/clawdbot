@@ -1,15 +1,18 @@
 // Shares task audit classification helpers across registry audit modules.
 import type { TaskRecord } from "./task-registry.types.js";
 
-/** Severity used by task registry audit findings. */
-export type TaskAuditSeverity = "warn" | "error";
-export type TaskAuditCode =
-  | "stale_queued"
-  | "stale_running"
-  | "lost"
-  | "delivery_failed"
-  | "missing_cleanup"
-  | "inconsistent_timestamps";
+/** Canonical task registry audit vocabulary. */
+export const TASK_AUDIT_SEVERITIES = ["warn", "error"] as const;
+export const TASK_AUDIT_CODES = [
+  "stale_queued",
+  "stale_running",
+  "lost",
+  "delivery_failed",
+  "missing_cleanup",
+  "inconsistent_timestamps",
+] as const;
+export type TaskAuditSeverity = (typeof TASK_AUDIT_SEVERITIES)[number];
+export type TaskAuditCode = (typeof TASK_AUDIT_CODES)[number];
 
 export type TaskAuditFinding = {
   severity: TaskAuditSeverity;

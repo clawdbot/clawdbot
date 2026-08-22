@@ -143,8 +143,8 @@ function renderUsageEmptyState(onRefresh: () => void) {
 
 type ProviderUsageSnapshot = ProviderUsageSummary["providers"][number];
 
-function renderProviderUsage(providers: ProviderUsageSnapshot[]) {
-  if (providers.length === 0) {
+function renderProviderUsage(providers: ProviderUsageSnapshot[], unavailable: boolean) {
+  if (providers.length === 0 && !unavailable) {
     return nothing;
   }
   return renderSettingsSection(
@@ -154,6 +154,11 @@ function renderProviderUsage(providers: ProviderUsageSnapshot[]) {
       description: t("usage.providerUsage.subtitle"),
     },
     html`
+      ${unavailable
+        ? html`
+            <div class="callout warning usage-callout">${t("usage.providerUsage.unavailable")}</div>
+          `
+        : nothing}
       <div class="usage-panel provider-usage-section">
         <div class="provider-usage-grid">
           ${providers.map(
@@ -369,7 +374,14 @@ export function renderUsage(props: UsageProps) {
       : data.costDaily;
 
   const insightStats = buildUsageInsightStats(aggregateSessions, insightTotals, insightAggregates);
-  const isEmpty = !data.loading && !data.totals && data.sessions.length === 0;
+  // The gateway always returns a totals object (all-zero when idle), so key
+  // the empty state off content — and never render it under an error callout,
+  // where "no usage data yet" would misexplain the failure.
+  const isEmpty =
+    !data.loading &&
+    !data.error &&
+    data.sessions.length === 0 &&
+    (data.totals?.totalTokens ?? 0) === 0;
   const cacheStatusTitle = getUsageCacheRefreshTitle(data.cacheStatus);
   const hasMissingCost =
     (insightTotals?.missingCostEntries ?? 0) > 0 ||
@@ -791,7 +803,7 @@ export function renderUsage(props: UsageProps) {
           </div>
         </section>
 
-        ${renderProviderUsage(data.providerUsage)}
+        ${renderProviderUsage(data.providerUsage, data.providerUsageUnavailable)}
         ${isEmpty
           ? renderUsageEmptyState(filterActions.onRefresh)
           : html`

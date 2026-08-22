@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 type CliArgs = Record<string, string>;
 type LaneName = "baseline" | "candidate";
+type LaneStatus = "blocked" | "fail" | "pass";
 type SessionSummary = {
   artifacts?: Partial<
     Record<
@@ -18,6 +19,7 @@ type SessionSummary = {
   sutAttestation?: { lane?: string; sha?: string };
 };
 type LoadedLane = {
+  factsPath: string;
   outputDir: string;
   repoRoot: string;
   status: string;
@@ -29,7 +31,7 @@ type EvidenceArtifact = {
   inline?: boolean;
   kind: string;
   label: string;
-  lane: LaneName;
+  lane: LaneName | "run";
   path: string;
   required?: boolean;
   targetPath: string;
@@ -43,7 +45,8 @@ type TelegramDesktopProofManifest = {
   scenario: string;
   comparison: {
     baseline: { expected: string; status: string; ref?: string; sha?: string };
-    candidate: { expected: string; status: string; fixed: boolean; ref?: string; sha?: string };
+    candidate: { expected: string; status: string; ref?: string; sha?: string };
+    outcome: LaneStatus;
     pass: boolean;
   };
   artifacts: EvidenceArtifact[];
@@ -115,7 +118,9 @@ function copyArtifact({
   }
   const target = path.join(outputDir, targetPath);
   mkdirSync(path.dirname(target), { recursive: true });
-  copyFileSync(source, target);
+  if (path.resolve(source) !== path.resolve(target)) {
+    copyFileSync(source, target);
+  }
   return true;
 }
 
@@ -139,6 +144,7 @@ function loadLane({
   const summaryPath = path.join(outputDir, "telegram-user-crabbox-session-summary.json");
   const summary = readJson(summaryPath);
   return {
+    factsPath: path.join(outputDir, "mantis-lane-facts.json"),
     outputDir,
     repoRoot,
     status: status || summary.status || "unknown",
@@ -161,6 +167,7 @@ function copyLaneArtifacts({
     resolveSummaryArtifact(lane, "previewGifCropped") ?? resolveSummaryArtifact(lane, "previewGif");
   copyArtifact({
     outputDir,
+    required: laneStatus(lane) === "pass",
     source: gif,
     targetPath: `${prefix}/telegram-desktop-proof.gif`,
   });
@@ -185,6 +192,11 @@ function copyLaneArtifacts({
   });
   copyArtifact({
     outputDir,
+    source: lane.factsPath,
+    targetPath: `${prefix}/mantis-lane-facts.json`,
+  });
+  copyArtifact({
+    outputDir,
     required: false,
     source:
       typeof lane.summary.report === "string"
@@ -194,18 +206,28 @@ function copyLaneArtifacts({
   });
 }
 
-function laneStatus(lane: LoadedLane) {
-  return lane.status === "pass" ? "pass" : "fail";
+function laneStatus(lane: LoadedLane): LaneStatus {
+  return lane.status === "pass" || lane.status === "blocked" ? lane.status : "fail";
 }
 
 function requireLaneAttestation(lane: LoadedLane, expectedLane: LaneName, expectedSha: string) {
   const attestation = lane.summary.sutAttestation;
-  if (attestation?.lane !== expectedLane || attestation?.sha !== expectedSha) {
-    throw new Error(`SUT attestation mismatch for ${expectedLane}.`);
+  if (attestation?.lane === expectedLane && attestation.sha === expectedSha) {
+    return;
   }
+  if (
+    lane.status === "fail" &&
+    lane.summary.status === "infra-error" &&
+    attestation == null &&
+    Object.keys(lane.summary.artifacts ?? {}).length === 0 &&
+    lane.summary.report === undefined
+  ) {
+    return;
+  }
+  throw new Error(`SUT attestation mismatch for ${expectedLane}.`);
 }
 
-function laneArtifactEntries(): EvidenceArtifact[] {
+function laneArtifactEntries(statuses: Record<LaneName, LaneStatus>): EvidenceArtifact[] {
   return LANES.flatMap(({ altPrefix, label, lane }) => [
     {
       alt: `${altPrefix} native Telegram Desktop proof GIF`,
@@ -214,6 +236,7 @@ function laneArtifactEntries(): EvidenceArtifact[] {
       label,
       lane,
       path: `${lane}/telegram-desktop-proof.gif`,
+      required: statuses[lane] === "pass",
       targetPath: `${lane}/telegram-desktop-proof.gif`,
       width: 420,
     },
@@ -241,6 +264,13 @@ function laneArtifactEntries(): EvidenceArtifact[] {
       lane,
       path: `${lane}/summary.json`,
       targetPath: `${lane}/summary.json`,
+    },
+    {
+      kind: "metadata",
+      label: `${label} lane facts`,
+      lane,
+      path: `${lane}/mantis-lane-facts.json`,
+      targetPath: `${lane}/mantis-lane-facts.json`,
     },
     {
       kind: "report",
@@ -275,7 +305,12 @@ function buildTelegramDesktopProofManifest({
 }): TelegramDesktopProofManifest {
   const baselineStatus = laneStatus(baseline);
   const candidateStatus = laneStatus(candidate);
-  const pass = baselineStatus === "pass" && candidateStatus === "pass";
+  const outcome =
+    baselineStatus === "fail" || candidateStatus === "fail"
+      ? "fail"
+      : baselineStatus === "blocked" || candidateStatus === "blocked"
+        ? "blocked"
+        : "pass";
   return {
     schemaVersion: 1,
     id: "telegram-desktop-proof",
@@ -295,11 +330,22 @@ function buildTelegramDesktopProofManifest({
         ...(candidateRef ? { ref: candidateRef } : {}),
         expected: "candidate visual proof captured",
         status: candidateStatus,
-        fixed: candidateStatus === "pass",
       },
-      pass,
+      outcome,
+      pass: outcome === "pass",
     },
-    artifacts: laneArtifactEntries(),
+    artifacts: [
+      ...laneArtifactEntries({ baseline: baselineStatus, candidate: candidateStatus }),
+      {
+        inline: false,
+        kind: "attachment",
+        label: "Recipe suggestion",
+        lane: "run",
+        path: "recipe-suggestion.md",
+        required: false,
+        targetPath: "recipe-suggestion.md",
+      },
+    ],
   };
 }
 
@@ -332,6 +378,12 @@ export function writeTelegramDesktopProofEvidence(rawArgs: string[] = process.ar
   requireLaneAttestation(candidate, "candidate", candidateSha);
   copyLaneArtifacts({ lane: baseline, laneName: "baseline", outputDir });
   copyLaneArtifacts({ lane: candidate, laneName: "candidate", outputDir });
+  copyArtifact({
+    outputDir,
+    required: false,
+    source: path.join(outputDir, "recipe-suggestion.md"),
+    targetPath: "recipe-suggestion.md",
+  });
   const manifest = buildTelegramDesktopProofManifest({
     baseline,
     baselineRef: args.baseline_ref,

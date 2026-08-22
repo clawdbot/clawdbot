@@ -1,5 +1,3 @@
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { AgentsListResult } from "../../api/types.ts";
 import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
 import {
   dispatchCommandClientPresentation,
@@ -12,7 +10,6 @@ import {
   shouldAutoPromptNotificationsOnSend,
 } from "../../app/notifications-auto-prompt.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
-import { t } from "../../i18n/index.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import {
@@ -30,6 +27,7 @@ import {
 } from "./chat-send-actions.ts";
 import { setChatError } from "./chat-send-queue-state.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
+import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
@@ -37,7 +35,15 @@ import {
   handleChatInputHistoryKey,
   resetChatInputHistoryNavigation,
 } from "./input-history.ts";
-import { beginQueuedMessageEdit, cancelQueuedMessageEdit } from "./queued-message-edit.ts";
+import {
+  activeQueuedMessageEdit,
+  beginQueuedMessageEdit,
+  cancelQueuedMessageEdit,
+  isQueuedMessageRemovalBlocked,
+  QUEUED_MESSAGE_EDIT_CONFLICT_ERROR,
+  QUEUED_MESSAGE_REMOVAL_CONFLICT_ERROR,
+  updateQueuedMessageEdit,
+} from "./queued-message-edit.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import { handleAbortChat, hasAbortableSessionRun, isChatStopCommand } from "./run-lifecycle.ts";
 import { handleChatScroll, resetChatScroll, scheduleChatScroll } from "./scroll.ts";
@@ -152,6 +158,7 @@ export function createPageState(
     localMediaPreviewRoots: appConfig.localMediaPreviewRoots,
     embedSandboxMode: appConfig.embedSandboxMode,
     allowExternalEmbedUrls: appConfig.allowExternalEmbedUrls,
+    automaticallyFetchFavicons: appConfig.automaticallyFetchFavicons,
     client: null,
     connected: false,
     connectionEpoch: 0,
@@ -170,8 +177,8 @@ export function createPageState(
     chatBranches: [],
     chatBranchesSessionKey: null,
     chatBranchesConnectionEpoch: null,
-    chatBranchesLoading: false,
     chatToolMessages: [],
+    guardianNotices: [],
     chatThinkingLevel: null,
     chatVerboseLevel: null,
     chatQueueModeOverride: undefined,
@@ -190,7 +197,6 @@ export function createPageState(
     chatRunStatus: null,
     compactionStatus: null,
     fallbackStatus: null,
-    planStatus: null,
     observerDigest: null,
     knownAgentRunIds: new Set(),
     waitingApprovalStatuses: new Map(),
@@ -212,11 +218,9 @@ export function createPageState(
     sessionsError: null,
     sessionsArchivedFilter: "active",
     selectedChatSessionArchived: false,
+    selectedChatSessionIncognito: false,
     agentsList: context.agents.state.agentsList,
     agentsSelectedId: context.agentSelection.state.selectedId,
-    onAgentsList: (agentsList: AgentsListResult, client: GatewayBrowserClient) => {
-      context.agents.adoptList(agentsList, client);
-    },
     refreshSessionsAfterChat: new Map<string, { sessionKey: string; agentId?: string }>(),
     pendingAbort: null,
     pendingSessionMessageReloadSessionKey: null,
@@ -230,6 +234,7 @@ export function createPageState(
     dispatchClientPresentation: (action: CommandClientPresentationAction) =>
       dispatchCommandClientPresentation(context, action),
     basePath: context.basePath,
+    resourceBasePath: context.resourceBasePath,
     chatNewMessagesBelow: false,
     chatLocalInputHistoryBySession: {},
     chatInputHistorySessionKey: null,
@@ -262,13 +267,11 @@ export function createPageState(
     renderLifecycle,
     requestUpdate: () => renderLifecycle.invalidate(),
     sessionWorkspaceState: undefined,
-    sessionWorkspaceOpenRequest: undefined,
     backgroundTasksState: undefined,
     querySelector: page.querySelector.bind(page),
   } as unknown as ChatPageHost;
 
   state.resetToolStream = () => resetToolStream(state as never);
-  state.onModelChanged = () => undefined;
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
   state.resetChatScroll = () => resetChatScroll(state);
   state.scrollToBottom = (options) => {
@@ -290,7 +293,7 @@ export function createPageState(
   };
   attachChatRealtimeActions(state);
   state.loadAssistantIdentity = () => loadPageAssistantIdentity(state);
-  state.handleSendChat = (messageOverride, options) => {
+  state.handleSendChat = (messageOverride, options, submissionAction) => {
     const message = messageOverride ?? state.chatMessage;
     const isCommand =
       parseSlashCommand(message) !== null ||
@@ -309,15 +312,25 @@ export function createPageState(
     ) {
       autoPromptNotificationsOnSend(context);
     }
-    return handleSendChat(state, messageOverride, options as never);
+    return handleSendChat(state, messageOverride, options as never, submissionAction);
   };
   state.handleAbortChat = async (options) => {
     await handleAbortChat(state, options as never);
     renderLifecycle.invalidate();
   };
   state.removeQueuedMessage = (id) => {
-    removeQueuedMessage(state, id);
-    void resumeStoredChatOutboxes(state);
+    if (isQueuedMessageRemovalBlocked(state, id)) {
+      setChatError(state, QUEUED_MESSAGE_REMOVAL_CONFLICT_ERROR);
+      renderLifecycle.invalidate();
+      return;
+    }
+    const outcome = removeQueuedMessage(state, id);
+    if (outcome === "removed") {
+      setChatError(state, null);
+      void resumeStoredChatOutboxes(state);
+    } else if (outcome === "rejected") {
+      setChatError(state, OFFLINE_QUEUE_STORAGE_ERROR);
+    }
     renderLifecycle.invalidate();
   };
   state.retryQueuedChatMessage = async (id) => {
@@ -333,10 +346,29 @@ export function createPageState(
     renderLifecycle.invalidate();
   };
   state.editQueuedChatMessage = (id) => {
-    if (beginQueuedMessageEdit(state, id) === "composer-busy") {
-      setChatError(state, t("chat.queue.editNeedsEmptyComposer"));
+    if (beginQueuedMessageEdit(state, id) === "unavailable") {
+      setChatError(state, QUEUED_MESSAGE_EDIT_CONFLICT_ERROR);
     }
     renderLifecycle.invalidate();
+  };
+  state.updateQueuedChatMessageEdit = (draftText) => {
+    updateQueuedMessageEdit(state, draftText);
+    renderLifecycle.invalidate();
+  };
+  state.submitQueuedChatMessageEdit = () => {
+    const edit = activeQueuedMessageEdit(state);
+    if (!edit) {
+      return;
+    }
+    void state
+      .handleSendChat(edit.draftText, {
+        attachmentsOverride: [...edit.attachments],
+        resumeQueuedMessageEditId: edit.id,
+      })
+      .then(
+        () => renderLifecycle.invalidate(),
+        () => renderLifecycle.invalidate(),
+      );
   };
   state.cancelQueuedChatMessageEdit = () => {
     cancelQueuedMessageEdit(state);
@@ -371,20 +403,17 @@ export function createPageState(
     renderLifecycle.invalidate();
   };
   state.handleOpenSidebar = (content) => {
-    let opened = openSlot(state.sidebarLayout, "detail", "right");
+    let opened = openSlot(state.sidebarLayout, "detail");
     const detailPanel = opened.columns
       .flatMap((column) => column.panels)
       .find((panel) => panel.slot === "detail");
     if (detailPanel) {
       opened = activatePanel(opened, detailPanel.id);
     }
-    const newColumn = opened.columns.find(
-      (column) => !state.sidebarLayout.columns.some((current) => current.id === column.id),
-    );
     const availableWidth = page.getBoundingClientRect?.().width ?? 0;
     const fitted =
       availableWidth > 0 && availableWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
-        ? (fitSidebarLayout(opened, availableWidth, newColumn?.id) ?? opened)
+        ? (fitSidebarLayout(opened, availableWidth) ?? opened)
         : opened;
     state.sidebarContent = content;
     state.updateSidebarLayout(fitted);

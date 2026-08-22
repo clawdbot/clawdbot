@@ -82,6 +82,17 @@ describe("requireValidConfig", () => {
     expect(readConfigFileSnapshot).toHaveBeenCalledWith({ skipPluginValidation: true });
   });
 
+  it("can validate config without observing persistent health state", async () => {
+    createValidSnapshot();
+    const runtime = createRuntime();
+
+    await expect(requireValidConfig(runtime, { observe: false })).resolves.toEqual({
+      plugins: {},
+    });
+
+    expect(readConfigFileSnapshot).toHaveBeenCalledWith({ observe: false });
+  });
+
   it("emits a non-blocking compatibility advisory when explicitly requested", async () => {
     createValidSnapshot();
     const runtime = createRuntime();
@@ -104,8 +115,12 @@ describe("requireValidConfig", () => {
 
   it("blocks invalid config before emitting compatibility advice", async () => {
     readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
       exists: true,
       valid: false,
+      raw: "{}",
+      parsed: {},
+      sourceConfig: {},
       config: {},
       issues: [{ path: "routing.allowFrom", message: "Legacy key" }],
     });
@@ -123,8 +138,12 @@ describe("requireValidConfig", () => {
 
   it("replaces doctor fix advice for plugin packaging compiled-output failures", async () => {
     readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
       exists: true,
       valid: false,
+      raw: "{}",
+      parsed: {},
+      sourceConfig: {},
       config: {},
       issues: [
         {
@@ -156,8 +175,12 @@ describe("requireValidConfig", () => {
 
   it("keeps doctor fix advice for normal invalid config failures", async () => {
     readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/openclaw.json",
       exists: true,
       valid: false,
+      raw: "{}",
+      parsed: {},
+      sourceConfig: {},
       config: {},
       issues: [{ path: "gateway.mode", message: "Expected 'local' or 'remote'" }],
       legacyIssues: [],

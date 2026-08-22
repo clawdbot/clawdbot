@@ -48,9 +48,7 @@ internal fun SessionDashboardScreen(
     // The viewer replaces this screen in place rather than pushing a shell tab, so it must
     // claim System Back itself; the shell handler would otherwise pop the whole dashboard.
     BackHandler { showingDesktop = false }
-    // Session summaries do not advertise an environment id, so the viewer opens
-    // its source picker instead of guessing a gateway or node association.
-    DesktopScreen(viewModel = viewModel, source = null, onBack = { showingDesktop = false })
+    DesktopScreen(viewModel = viewModel, session = sessionKey, onBack = { showingDesktop = false })
     return
   }
   ClawScaffold(

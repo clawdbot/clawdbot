@@ -4,6 +4,15 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatGatewayRequestTests {
+    @Test func `models list scopes worker catalogs and preserves default scope`() {
+        let worker = OpenClawChatGatewayRequests.modelsList(agentID: " worker ")
+        let defaultAgent = OpenClawChatGatewayRequests.modelsList(agentID: nil)
+
+        #expect(worker.method == "models.list")
+        #expect(worker.params["agentId"]?.value as? String == "worker")
+        #expect(defaultAgent.params.isEmpty)
+    }
+
     @Test func `session observation requests encode global subscription and actual visibility`() {
         let subscribe = OpenClawChatGatewayRequests.subscribeSessions()
         let visible = OpenClawChatGatewayRequests.setSessionObserverVisibility(true)
@@ -158,6 +167,13 @@ struct ChatGatewayRequestTests {
         #expect(fork.params["parentSessionKey"]?.value as? String == "agent:reviewer:telegram:group:1")
         #expect(fork.params["agentId"]?.value as? String == "reviewer")
         #expect(fork.params["fork"]?.value as? Bool == true)
+        #expect(fork.params["forkFrom"] == nil)
+
+        let activeFork = OpenClawChatGatewayRequests.forkSession(
+            parentSessionKey: "agent:reviewer:telegram:group:1",
+            agentID: "reviewer",
+            fromLastCompleted: true)
+        #expect(activeFork.params["forkFrom"]?.value as? String == "last-completed")
 
         let create = OpenClawChatGatewayRequests.createSession(
             key: "agent:reviewer:new",
@@ -564,6 +580,22 @@ struct ChatGatewayPayloadCodecTests {
         #expect(summary.sessionkey == "agent:main:main")
         #expect(summary.lastactivity == "Editing ChatView.swift")
         #expect(summary.diffstat?["added"]?.intValue == 8)
+
+        let progressCard = EventFrame(
+            type: "event",
+            event: "progressCard.changed",
+            payload: AnyCodable([
+                "sessionKey": AnyCodable("agent:main:main"),
+                "revision": AnyCodable(7),
+            ]))
+        guard case let .progressCardChanged(event) = OpenClawChatGatewayPayloadCodec.event(
+            from: progressCard)
+        else {
+            Issue.record("expected progressCardChanged")
+            return
+        }
+        #expect(event.sessionkey == "agent:main:main")
+        #expect(event.revision.value as? Int == 7)
 
         #expect(OpenClawChatGatewayPayloadCodec.event(from: EventFrame(
             type: "event",

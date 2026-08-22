@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { property } from "lit/decorators.js";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
@@ -11,27 +11,22 @@ import "./tooltip.ts";
  * Desktop hides it entirely (layout.css) — the sidebar owns navigation there. */
 class AppTopbar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) navDrawerOpen = false;
-  @property({ attribute: false }) onboarding = false;
-  @property({ attribute: false }) basePath = "";
-  @property({ attribute: false }) onToggleDrawer?: (trigger: HTMLElement) => void;
-  @property({ attribute: false }) onOpenPalette?: () => void;
-  @property({ attribute: false }) searchDisabled = false;
+  @property({ attribute: false }) resourceBasePath = "";
+  @property({ attribute: false }) trailingActions: TemplateResult | typeof nothing = nothing;
+  @property({ attribute: false }) onToggleDrawer!: (trigger: HTMLElement) => void;
+  @property({ attribute: false }) onOpenPalette!: () => void;
 
   override render() {
     const drawerLabel = this.navDrawerOpen ? t("nav.collapse") : t("nav.expand");
     return html`
-      <header
-        class="topbar"
-        ?inert=${this.onboarding}
-        aria-hidden=${this.onboarding ? "true" : nothing}
-      >
+      <header class="topbar">
         <div class="topnav-shell">
           <openclaw-tooltip .content=${drawerLabel}>
             <button
               type="button"
               class="topbar-icon-btn topbar-nav-toggle"
               @click=${(event: MouseEvent) =>
-                this.onToggleDrawer?.(event.currentTarget as HTMLElement)}
+                this.onToggleDrawer(event.currentTarget as HTMLElement)}
               aria-label=${drawerLabel}
               aria-expanded=${String(this.navDrawerOpen)}
             >
@@ -44,7 +39,7 @@ class AppTopbar extends OpenClawLightDomContentsElement {
             <div class="topbar-brand" aria-label="OpenClaw">
               <img
                 class="topbar-brand__logo"
-                src=${controlUiPublicAssetPath("apple-touch-icon.png", this.basePath)}
+                src=${controlUiPublicAssetPath("apple-touch-icon.png", this.resourceBasePath)}
                 alt=""
                 aria-hidden="true"
               />
@@ -52,11 +47,11 @@ class AppTopbar extends OpenClawLightDomContentsElement {
             </div>
           </div>
           <div class="topnav-shell__actions">
+            ${this.trailingActions}
             <openclaw-tooltip .content=${t("chat.commandPaletteTitle")}>
               <button
                 class="topbar-search"
-                ?disabled=${this.searchDisabled || !this.onOpenPalette}
-                @click=${() => this.onOpenPalette?.()}
+                @click=${this.onOpenPalette}
                 aria-label=${t("chat.openCommandPalette")}
               >
                 ${icons.search}

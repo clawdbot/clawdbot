@@ -201,8 +201,8 @@ function loadPickerModelCatalog(
         ...(opts.workspaceDir !== undefined ? { workspaceDir: opts.workspaceDir } : {}),
         ...(opts.env !== undefined ? { env: opts.env } : {}),
       }).then((providerCatalog) => {
-        if (providerCatalog.length > 0) {
-          return snapshot(providerCatalog);
+        if (providerCatalog.entries.length > 0) {
+          return providerCatalog;
         }
         if (opts.allowStaticFallbackCatalog !== false) {
           const manifestRows = loadStaticManifestCatalogRowsForList({
@@ -411,6 +411,7 @@ async function resolveLiteralPrefixProviderIds(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  providerRefs?: readonly string[];
 }): Promise<Set<string>> {
   const { resolvePluginProviders } = await loadResolvedModelPickerRuntime();
   const providers = resolvePluginProviders({
@@ -420,6 +421,7 @@ async function resolveLiteralPrefixProviderIds(params: {
     activate: false,
     cache: false,
     includeUntrustedWorkspacePlugins: false,
+    ...(params.providerRefs?.length ? { providerRefs: params.providerRefs } : {}),
   });
   const ids = new Set<string>();
   for (const provider of providers) {
@@ -820,6 +822,7 @@ export async function promptDefaultModel(
   const preferredProvider = preferredProviderRaw
     ? normalizeProviderId(preferredProviderRaw)
     : undefined;
+  const providerScopedCatalog = Boolean(browseCatalogOnDemand && preferredProvider);
   const configuredRaw = resolveConfiguredModelRaw(pickerConfig);
   const useStaticModelNormalization = !loadCatalog || browseCatalogOnDemand;
   const resolved = resolveConfiguredModelRef({
@@ -837,6 +840,9 @@ export async function promptDefaultModel(
         cfg,
         workspaceDir: params.workspaceDir,
         env: params.env,
+        ...(providerScopedCatalog && preferredProvider
+          ? { providerRefs: [preferredProvider] }
+          : {}),
       });
     }
     return literalPrefixProvidersCache;
@@ -954,11 +960,10 @@ export async function promptDefaultModel(
   const catalogProgress = params.prompter.progress(t("wizard.model.loadingModels"));
   let catalogSnapshot: ModelCatalogSnapshot;
   try {
-    const providerScopedCatalog = browseCatalogOnDemand && preferredProvider;
     catalogSnapshot = await loadPickerModelCatalog(cfg, {
       preferredProvider: providerScopedCatalog ? preferredProvider : undefined,
-      preferLiveProviderCatalog: Boolean(providerScopedCatalog),
-      providerScoped: Boolean(providerScopedCatalog),
+      preferLiveProviderCatalog: providerScopedCatalog,
+      providerScoped: providerScopedCatalog,
       agentDir: pickerAgentDir,
       ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
       ...(params.env !== undefined ? { env: params.env } : {}),
@@ -1010,7 +1015,7 @@ export async function promptDefaultModel(
   const isVisibleProvider = createModelPickerVisibleProviderPredicate({
     config: cfg,
     env: params.env,
-    includeSetupRegistry: true,
+    includeSetupRegistry: !providerScopedCatalog,
   });
   const filteredModels = await maybeFilterModelsByProvider({
     models,
@@ -1061,7 +1066,7 @@ export async function promptDefaultModel(
   if (includeManual) {
     options.push({ value: MANUAL_VALUE, label: t("wizard.model.enterManually") });
   }
-  if (includeProviderPluginSetups && params.agentDir) {
+  if (includeProviderPluginSetups && params.agentDir && !providerScopedCatalog) {
     options.push(
       ...(await resolveProviderPluginSetupOptions({
         cfg,
@@ -1159,6 +1164,7 @@ export async function promptModelAllowlist(params: {
   config: OpenClawConfig;
   prompter: WizardPrompter;
   message?: string;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -1168,7 +1174,7 @@ export async function promptModelAllowlist(params: {
   loadCatalog?: boolean;
   providerScopedCatalog?: boolean;
 }): Promise<PromptModelAllowlistResult> {
-  const cfg = params.config;
+  const cfg = resolveModelPickerConfig(params.config, params.agentId);
   const pickerAgentDir = resolvePickerAgentDir({
     cfg,
     ...(params.agentDir !== undefined ? { agentDir: params.agentDir } : {}),

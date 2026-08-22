@@ -1230,7 +1230,6 @@ describe("config io write", () => {
         }
         if (activeConfigPath !== configPath) {
           throw new ConfigMutationConflictError("config path changed since last load", {
-            currentHash: null,
             retryable: false,
           });
         }

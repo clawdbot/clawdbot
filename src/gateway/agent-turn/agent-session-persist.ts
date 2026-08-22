@@ -18,12 +18,17 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeCronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
+import {
+  normalizeCronScheduledToolCallerOrigin,
+  normalizeCronScheduledToolPolicy,
+} from "../../cron/scheduled-tool-policy.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { recordSessionCreated } from "../../sessions/session-state-events.js";
 import { getGeneratedMediaTaskIdsForSessionKey } from "../../tasks/task-status-access.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { errorShapeFromError } from "../error-shape.js";
 import {
   assertExpectedExistingSession,
   ExpectedExistingSessionChangedError,
@@ -32,7 +37,6 @@ import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { AgentSessionPatchBuild } from "../server-methods/agent-session-patch.js";
 import type { TrustedSessionCreation } from "../server-methods/session-creation-provenance.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
-import { formatForLog } from "../ws-log.js";
 import {
   cronContinuationHasReusableRuntime,
   emitAgentSendSessionLifecycleTransition,
@@ -239,6 +243,13 @@ export async function persistAgentSessionPhase(params: {
                       ),
                     }
                   : {}),
+                ...(normalizeCronScheduledToolPolicy(marker.scheduledToolPolicy)?.mode === "account"
+                  ? {
+                      scheduledToolCallerOrigin: normalizeCronScheduledToolCallerOrigin(
+                        marker.scheduledToolCallerOrigin,
+                      ),
+                    }
+                  : {}),
                 ...(marker.cliSessionBindingFacts
                   ? { cliSessionBindingFacts: { ...marker.cliSessionBindingFacts } }
                   : {}),
@@ -362,7 +373,7 @@ export async function persistAgentSessionPhase(params: {
         return undefined;
       }
       if (deletedDuringStoreUpdateError) {
-        params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+        params.respond(false, undefined, errorShapeFromError(ErrorCodes.INVALID_REQUEST, err));
         return undefined;
       }
       if (err instanceof ExpectedExistingSessionChangedError) {
@@ -420,7 +431,7 @@ export async function persistAgentSessionPhase(params: {
     try {
       params.assertGatewayWorkAdmissionAllowed();
     } catch (err) {
-      params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+      params.respond(false, undefined, errorShapeFromError(ErrorCodes.INVALID_REQUEST, err));
       return undefined;
     }
     if (
@@ -452,6 +463,15 @@ export async function persistAgentSessionPhase(params: {
       sessionKey: params.canonicalSessionKey,
       agentId: params.sessionAgentId,
       entry: sessionEntry,
+    });
+  }
+  if (params.creation.actor?.type === "human" && params.creation.actor.id) {
+    recordSessionParticipantBestEffort({
+      actor: { type: "human", id: params.creation.actor.id },
+      agentId: params.sessionAgentId,
+      sessionKey: params.canonicalSessionKey,
+      source: "profile",
+      storePath: params.storePath,
     });
   }
   if (isNewSession && params.entry?.sessionId && resolvedSessionId !== params.entry.sessionId) {

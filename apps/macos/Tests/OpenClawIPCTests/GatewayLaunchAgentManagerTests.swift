@@ -4,6 +4,13 @@ import Testing
 
 @Suite(.serialized)
 struct GatewayLaunchAgentManagerTests {
+    @Test func `attach-only marker belongs to the selected state directory`() {
+        let stateDirectory = URL(fileURLWithPath: "/tmp/openclaw-elevation-state", isDirectory: true)
+
+        #expect(GatewayLaunchAgentManager.disableLaunchAgentMarkerURL(in: stateDirectory).path ==
+            "/tmp/openclaw-elevation-state/disable-launchagent")
+    }
+
     @Test func `gateway launchd artifacts follow default and named profile labels`() {
         let home = URL(fileURLWithPath: "/Users/test", isDirectory: true)
         let directory = URL(fileURLWithPath: "/state/service-env", isDirectory: true)
@@ -34,6 +41,7 @@ struct GatewayLaunchAgentManagerTests {
         let command = await CommandResolver.openclawCommand(
             subcommand: "gateway",
             extraArgs: ["status", "--json"],
+            configRoot: ["gateway": ["mode": "local"]],
             projectRoot: root,
             profile: AppProfile(environment: ["OPENCLAW_PROFILE": "work"]))
 
@@ -162,44 +170,48 @@ struct GatewayLaunchAgentManagerTests {
     }
 
     @Test func `attach only runtime override blocks gateway launch agent writes`() async throws {
-        let dir = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-attach-only-\(UUID().uuidString)", isDirectory: true)
-        let marker = dir.appendingPathComponent("disable-launchagent")
-        try FileManager().createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager().removeItem(at: dir) }
-        defer {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
-            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+        try await TestIsolation.withIsolatedState {
+            let dir = FileManager().temporaryDirectory
+                .appendingPathComponent("openclaw-attach-only-\(UUID().uuidString)", isDirectory: true)
+            let marker = dir.appendingPathComponent("disable-launchagent")
+            try FileManager().createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? FileManager().removeItem(at: dir) }
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
+
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+
+            let error = GatewayLaunchAgentManager.applyAttachOnlyRuntimeOverride()
+            let kickstartError = await GatewayLaunchAgentManager.kickstart()
+
+            #expect(error == nil)
+            #expect(kickstartError == nil)
+            #expect(FileManager().fileExists(atPath: marker.path))
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
         }
-
-        GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-        GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
-        GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
-
-        let error = GatewayLaunchAgentManager.applyAttachOnlyRuntimeOverride()
-        let kickstartError = await GatewayLaunchAgentManager.kickstart()
-
-        #expect(error == nil)
-        #expect(kickstartError == nil)
-        #expect(FileManager().fileExists(atPath: marker.path))
-        #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
     }
 
     @Test func `unintercepted daemon commands fail closed during tests`() async {
-        let marker = FileManager.default.temporaryDirectory
-            .appendingPathComponent("openclaw-no-disable-marker-\(UUID().uuidString)")
-        defer {
-            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+        await TestIsolation.withIsolatedState {
+            let marker = FileManager.default.temporaryDirectory
+                .appendingPathComponent("openclaw-no-disable-marker-\(UUID().uuidString)")
+            defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+            }
+
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+
+            let error = await GatewayLaunchAgentManager.kickstart()
+
+            #expect(error == "Gateway daemon commands require explicit interception during tests")
         }
-
-        GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
-        GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
-
-        let error = await GatewayLaunchAgentManager.kickstart()
-
-        #expect(error == "Gateway daemon commands require explicit interception during tests")
     }
 
     @Test func `launch agent plist snapshot parses args and env`() throws {

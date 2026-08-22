@@ -233,6 +233,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       dir: path.join(workspaceDir, "skills", "short-desc"),
       name: "short-desc",
       description: "Short description",
+      body: "# Short Description\n",
     });
     await writeSkill({
       dir: path.join(workspaceDir, "skills", "tool-dispatch"),
@@ -251,6 +252,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     const cmd = commands.find((entry) => entry.skillName === "tool-dispatch");
 
     expect(longCmd?.description).toBe(longDescription);
+    expect(shortCmd?.displayName).toBe("Short Description");
     expect(shortCmd?.description).toBe("Short description");
     expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
     expect(cmd?.skillSource).toBe("workspace");

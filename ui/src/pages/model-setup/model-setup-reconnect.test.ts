@@ -69,6 +69,10 @@ function createFixture() {
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   const context = {
     gateway,
+    agentSelection: {
+      state: { selectedId: "main", scopeId: "main" },
+      subscribe: () => () => undefined,
+    },
     basePath: "",
     navigate: vi.fn(),
     runtimeConfig,
@@ -95,7 +99,7 @@ async function mountPage(
   const page = document.createElement("openclaw-model-setup-page") as TestModelSetupPage;
   page.routeData = {
     state: { phase: "ready", result: detection },
-    connection: { client, hello },
+    connection: { client, hello, agentId: context.agentSelection.state.selectedId },
     firstRun: false,
   };
   provider.append(page);
@@ -116,6 +120,35 @@ describe("ModelSetupPage Gateway reconnect ownership", () => {
   afterEach(() => {
     document.body.replaceChildren();
     vi.restoreAllMocks();
+  });
+
+  it("recovers when stale route data settles after mounting under a connected gateway", async () => {
+    const { context, request, runtimeConfig } = createFixture();
+    request.mockImplementation(async (method) =>
+      method === "openclaw.setup.detect" ? detection : {},
+    );
+    const provider = createApplicationContextProvider(context);
+    const page = document.createElement("openclaw-model-setup-page") as TestModelSetupPage;
+    provider.append(page);
+    document.body.append(provider);
+    await page.updateComplete;
+
+    expect(request).not.toHaveBeenCalled();
+
+    page.routeData = {
+      state: { phase: "loading" },
+      connection: { client: null, hello: null, agentId: null },
+      firstRun: false,
+    };
+    await page.updateComplete;
+
+    await vi.waitFor(() => {
+      expect(
+        request.mock.calls.filter(([method]) => method === "openclaw.setup.detect"),
+      ).toHaveLength(1);
+      expect(page.querySelector('[data-auth-choice="provider-auth"]')).not.toBeNull();
+    });
+    runtimeConfig.dispose();
   });
 
   it("does not expose stale route data when the page mounts during reconnect", async () => {
