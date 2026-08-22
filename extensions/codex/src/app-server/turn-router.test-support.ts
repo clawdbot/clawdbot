@@ -1,7 +1,7 @@
 import { expect, vi } from "vitest";
 import type { createClientHarness } from "./test-support.js";
 
-type WireResponse = {
+export type WireResponse = {
   id: number | string;
   result?: unknown;
   error?: unknown;
