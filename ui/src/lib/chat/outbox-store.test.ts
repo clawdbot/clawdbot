@@ -56,6 +56,37 @@ describe("stored outbox summaries", () => {
     unsubscribe();
   });
 
+  it("refreshes a retained legacy projection after an external write", () => {
+    const unsubscribe = subscribeStoredChatOutboxChanges(() => undefined);
+    const gatewayUrl = "ws://gateway.test/control";
+    const legacyKey = `openclaw.control.chatComposer.v1:${encodeURIComponent(gatewayUrl)}`;
+    const stored = (ids: string[]) =>
+      JSON.stringify({
+        version: 1,
+        sessions: {
+          "thread\u0000agent:main": {
+            queue: ids.map((id, createdAt) => ({ id, text: id, createdAt })),
+            updatedAt: ids.length,
+          },
+        },
+      });
+    sessionStorage.setItem(legacyKey, stored(["first"]));
+    vi.spyOn(sessionStorage, "setItem").mockImplementationOnce(() => {
+      throw new DOMException("quota exceeded", "QuotaExceededError");
+    });
+    const state = { settings: { gatewayUrl } };
+    expect(summarizeStoredChatOutboxes(state).total).toBe(1);
+
+    sessionStorage.setItem(legacyKey, stored(["first", "second"]));
+    const storageEvent = new StorageEvent("storage", { key: legacyKey });
+    Object.defineProperty(storageEvent, "storageArea", { value: sessionStorage });
+    window.dispatchEvent(storageEvent);
+
+    const refreshedTotal = summarizeStoredChatOutboxes(state).total;
+    unsubscribe();
+    expect(refreshedTotal).toBe(2);
+  });
+
   it("keeps the exact aliased scope when sessionStorage retirement fails", () => {
     const gatewayUrl = "ws://gateway.test/control";
     const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`;

@@ -124,7 +124,10 @@ function handleStoredChatOutboxStorageChange(event: StorageEvent): void {
     event.key?.startsWith(LEGACY_STORAGE_KEY_PREFIX)
   ) {
     if (event.storageArea && event.key) {
-      projectedStoreByStorage.get(event.storageArea)?.delete(event.key);
+      const projectedKey = event.key.startsWith(LEGACY_STORAGE_KEY_PREFIX)
+        ? `${STORAGE_KEY_PREFIX}${event.key.slice(LEGACY_STORAGE_KEY_PREFIX.length)}`
+        : event.key;
+      projectedStoreByStorage.get(event.storageArea)?.delete(projectedKey);
     }
     notifyStoredChatOutboxChanges();
   }
