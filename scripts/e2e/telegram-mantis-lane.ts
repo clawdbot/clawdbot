@@ -577,20 +577,12 @@ function redact(value: unknown, secret: string): unknown {
 }
 
 function providerRequests(state: ActiveSession, secret: string): unknown[] {
-  if (!fs.existsSync(state.sut.requestLog)) {
-    return [];
-  }
-  return fs
-    .readFileSync(state.sut.requestLog, "utf8")
-    .split("\n")
-    .filter(Boolean)
-    .slice(0, 100)
-    .map((line, index) =>
-      Object.assign(
-        { index: index + 1 },
-        redact(JSON.parse(line), secret) as Record<string, unknown>,
-      ),
-    );
+  // Tail window, like botApiRequests: a long session must surface its newest
+  // provider turns. Entries carry a producer-stamped `seq` ordinal, so the
+  // window keeps absolute order without rereading the whole file.
+  return boundedNdjson(state.sut.requestLog, 128).map(
+    (entry) => redact(entry, secret) as Record<string, unknown>,
+  );
 }
 
 function boundedNdjson(file: string, limit: number): unknown[] {

@@ -820,6 +820,7 @@ describe("Telegram Mantis free-form lane", () => {
     fs.writeFileSync(
       harness.requestLog,
       `${JSON.stringify({
+        seq: 1,
         body: "credential=123456:secret-sut-token",
         contentFacts,
         path: "/v1/responses",
@@ -833,7 +834,7 @@ describe("Telegram Mantis free-form lane", () => {
         count: 1,
         requests: [
           {
-            index: 1,
+            seq: 1,
             body: "credential=[redacted]",
             contentFacts,
             path: "/v1/responses",
@@ -841,6 +842,33 @@ describe("Telegram Mantis free-form lane", () => {
         ],
       });
 
+      // Tail window: a session with more records than the window must expose
+      // its newest requests — the ones under proof — with their absolute seq.
+      fs.writeFileSync(
+        harness.requestLog,
+        Array.from(
+          { length: 130 },
+          (_, i) => `${JSON.stringify({ seq: i + 1, body: `turn ${i + 1}` })}\n`,
+        ).join(""),
+      );
+      const tail = JSON.parse(
+        (await runLane(harness.env, ["requests", "--lane", "candidate"])).stdout,
+      );
+      expect(tail.count).toBe(128);
+      expect(tail.requests[0]).toEqual({ seq: 3, body: "turn 3" });
+      expect(tail.requests.at(-1)).toEqual({ seq: 130, body: "turn 130" });
+
+      // Restore the single-record log so terminal lane facts mirror the
+      // requests assertion above.
+      fs.writeFileSync(
+        harness.requestLog,
+        `${JSON.stringify({
+          seq: 1,
+          body: "credential=123456:secret-sut-token",
+          contentFacts,
+          path: "/v1/responses",
+        })}\n`,
+      );
       await runLane(harness.env, ["send", "--lane", "candidate", "--text", "persist facts"]);
       await runLane(harness.env, ["finish", "--lane", "candidate"]);
       const facts = JSON.parse(

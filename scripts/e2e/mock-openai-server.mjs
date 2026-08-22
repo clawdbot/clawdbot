@@ -21,6 +21,10 @@ const port =
 const bindHost = process.env.MOCK_BIND_HOST ?? "127.0.0.1";
 const successMarker = process.env.SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const requestLog = process.env.MOCK_REQUEST_LOG;
+// Absolute record ordinal, stamped at the producer: consumers expose a bounded
+// tail of the log, so entries must carry their own position. The server starts
+// once per run, so the counter spans the whole session.
+let requestLogSeq = 0;
 const initialResponseChunkDelayMs = process.env.MOCK_RESPONSE_CHUNK_DELAY_MS
   ? readPositiveIntEnv("MOCK_RESPONSE_CHUNK_DELAY_MS", undefined)
   : 0;
@@ -822,6 +826,7 @@ const server = http.createServer((req, res) => {
       writeRequestLogEntryOrFail(res, {
         requestLog,
         entry: {
+          seq: (requestLogSeq += 1),
           method: req.method,
           path: url.pathname,
           body: boundedRequestLogBody(requestLogBody, requestLogBody),
