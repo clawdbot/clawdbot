@@ -3605,6 +3605,11 @@ openclaw-sidebar-attention {
   flex: 0 0 32px;
 }
 
+.sidebar-issues-panel__ask svg {
+  width: 20px;
+  height: 20px;
+}
+
 .sidebar-issues-panel__tabs {
   display: flex;
   flex: none;
