@@ -104,7 +104,7 @@ export function resolveManagedCodexNativeCommand(
   return undefined;
 }
 
-/** Returns whether a resolved managed command is owned by the macOS desktop app. */
+/** Returns whether a command is one of the standard macOS desktop app executables. */
 export function isManagedCodexDesktopCommand(
   command: string,
   platform: NodeJS.Platform = process.platform,

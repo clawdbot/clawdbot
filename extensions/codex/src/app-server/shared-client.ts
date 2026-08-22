@@ -165,6 +165,13 @@ export function readCodexAppServerClientProcessIdentity(
   };
 }
 
+/** Returns the lifecycle generation that owns a managed desktop client. */
+export function readCodexAppServerClientDesktopGenerationFingerprint(
+  client: CodexAppServerClient,
+): string | undefined {
+  return getCodexAppServerClientStartMetadata().get(client)?.desktopGeneration?.fingerprint;
+}
+
 /** Resolves non-secret spawn identity before startup; argv is represented only by its hash. */
 export function resolveCodexAppServerSpawnIdentity(
   startOptions: CodexAppServerStartOptions,

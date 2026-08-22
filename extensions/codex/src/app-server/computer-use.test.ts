@@ -1020,49 +1020,52 @@ describe("Codex Computer Use setup", () => {
     });
   });
 
-  it("provisions the managed wrapper and service for an explicit isolated-home install", async () => {
-    const root = tempDirs.make("openclaw-codex-explicit-install-");
-    const agentDir = path.join(root, "agent");
-    const codexHome = path.join(agentDir, "codex-home");
-    const managedMarketplacePath = path.join(
-      codexHome,
-      ".tmp",
-      "bundled-marketplaces",
-      "openai-bundled",
-    );
-    fs.mkdirSync(managedMarketplacePath, { recursive: true });
-    const harness = createClientHarness();
-    vi.spyOn(harness.client, "getRuntimeIdentity").mockReturnValue({
-      serverVersion: "0.148.0",
-      codexHome,
-    });
-    sharedClientMocks.readCodexAppServerClientProcessIdentity.mockReturnValue({
-      clientId: "client-explicit-install",
-      command: "/Applications/ChatGPT.app/Contents/Resources/codex",
-      nativeCommand: "/Applications/ChatGPT.app/Contents/Resources/codex",
-      argsFingerprint: "args",
-    });
-    const request = createBundledMarketplaceComputerUseRequest(managedMarketplacePath);
+  it.each(["config", "env"] as const)(
+    "provisions the managed wrapper and service for a %s-selected desktop install",
+    async (commandSource) => {
+      const root = tempDirs.make("openclaw-codex-explicit-install-");
+      const agentDir = path.join(root, "agent");
+      const codexHome = path.join(agentDir, "codex-home");
+      const managedMarketplacePath = path.join(
+        codexHome,
+        ".tmp",
+        "bundled-marketplaces",
+        "openai-bundled",
+      );
+      fs.mkdirSync(managedMarketplacePath, { recursive: true });
+      const harness = createClientHarness();
+      vi.spyOn(harness.client, "getRuntimeIdentity").mockReturnValue({
+        serverVersion: "0.148.0",
+        codexHome,
+      });
+      sharedClientMocks.readCodexAppServerClientProcessIdentity.mockReturnValue({
+        clientId: "client-explicit-install",
+        command: "/Applications/ChatGPT.app/Contents/Resources/codex",
+        commandSource,
+        argsFingerprint: "args",
+      });
+      const request = createBundledMarketplaceComputerUseRequest(managedMarketplacePath);
 
-    const status = await installCodexComputerUse({
-      agentDir,
-      client: harness.client,
-      request,
-      pluginConfig: { computerUse: { enabled: true, autoInstall: false } },
-    });
+      const status = await installCodexComputerUse({
+        agentDir,
+        client: harness.client,
+        request,
+        pluginConfig: { computerUse: { enabled: true, autoInstall: false } },
+      });
 
-    expect(status.ready).toBe(true);
-    expect(managedProvisioningMocks.ensureCodexManagedBundledMarketplace).toHaveBeenCalledWith({
-      codexHome,
-      ownershipRoot: agentDir,
-      appServerCommand: "/Applications/ChatGPT.app/Contents/Resources/codex",
-    });
-    expect(managedProvisioningMocks.ensureCodexComputerUseServiceApp).toHaveBeenCalledWith({
-      codexHome,
-      ownershipRoot: agentDir,
-      appServerCommand: "/Applications/ChatGPT.app/Contents/Resources/codex",
-    });
-  });
+      expect(status.ready).toBe(true);
+      expect(managedProvisioningMocks.ensureCodexManagedBundledMarketplace).toHaveBeenCalledWith({
+        codexHome,
+        ownershipRoot: agentDir,
+        appServerCommand: "/Applications/ChatGPT.app/Contents/Resources/codex",
+      });
+      expect(managedProvisioningMocks.ensureCodexComputerUseServiceApp).toHaveBeenCalledWith({
+        codexHome,
+        ownershipRoot: agentDir,
+        appServerCommand: "/Applications/ChatGPT.app/Contents/Resources/codex",
+      });
+    },
+  );
 
   it("allows auto-install from a configured local marketplace path", async () => {
     const request = createComputerUseRequest({ installed: false });

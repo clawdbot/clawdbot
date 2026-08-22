@@ -26,6 +26,7 @@ import {
   type ResolvedCodexComputerUseConfig,
 } from "./config.js";
 import { resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath } from "./desktop-app-paths.js";
+import { isManagedCodexDesktopCommand } from "./managed-binary.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import type {
   CodexListMcpServerStatusResponse,
@@ -448,7 +449,12 @@ async function prepareExplicitManagedComputerUseInstall(
     return;
   }
   const codexHome = params.client.getRuntimeIdentity()?.codexHome;
-  const command = readCodexAppServerClientProcessIdentity(params.client)?.nativeCommand;
+  const processIdentity = readCodexAppServerClientProcessIdentity(params.client);
+  const command =
+    processIdentity?.nativeCommand ??
+    (processIdentity && isManagedCodexDesktopCommand(processIdentity.command, "darwin")
+      ? processIdentity.command
+      : undefined);
   if (!codexHome || !command) {
     return;
   }
