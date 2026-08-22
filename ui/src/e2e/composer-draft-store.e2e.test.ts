@@ -96,13 +96,14 @@ suite.define(() => {
             IDBObjectStore.prototype,
             "openCursor",
           )?.value as IDBObjectStore["openCursor"];
-          IDBObjectStore.prototype.openCursor = function (...args) {
+          IDBObjectStore.prototype.openCursor = function (this: IDBObjectStore, ...args) {
             if (this.name === "composerDrafts") {
               blockedTransactions.add(this.transaction);
             }
             return originalOpenCursor.apply(this, args);
           };
           IDBTransaction.prototype.addEventListener = function (
+            this: IDBTransaction,
             type: string,
             listener: EventListenerOrEventListenerObject,
             options?: boolean | AddEventListenerOptions,
