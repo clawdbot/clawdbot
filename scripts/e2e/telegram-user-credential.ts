@@ -795,14 +795,12 @@ async function heartbeatTelegramUserLeaseLoop(opts: Map<string, string>) {
         await writePrivateJson(lostMarker, { code: error.code });
         return;
       }
-      if (
-        error instanceof TypeError ||
-        (error instanceof Error && "code" in error && error.code === "ETIMEDOUT")
-      ) {
-        console.error("Credential lease heartbeat transport failed; retrying.");
-      } else {
-        throw error;
-      }
+      // Heartbeats are idempotent, so all non-terminal failures are safe to retry. A lapsed
+      // lease returns LEASE_EXPIRED next time, making loss observable through the marker.
+      const code = error instanceof Error && "code" in error ? error.code : undefined;
+      const discriminator =
+        typeof code === "string" ? code : error instanceof Error ? error.name : "unknown";
+      console.error(`Credential lease heartbeat failed (${discriminator}); retrying.`);
     }
     await new Promise<void>((resolve) => {
       setTimeout(resolve, intervalMs);
