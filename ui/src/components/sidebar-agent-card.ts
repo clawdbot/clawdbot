@@ -23,6 +23,9 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   /** More than one agent is configured; labels the menu as a switcher. */
   @property({ attribute: false }) switcherAvailable = false;
   @property({ attribute: false }) onToggleMenu?: (trigger: HTMLElement) => void;
+  @property({ attribute: false })
+  onMenuPointerEnter?: (trigger: HTMLElement, event: PointerEvent) => void;
+  @property({ attribute: false }) onMenuPointerLeave?: () => void;
 
   private readonly avatarLoader = new AuthenticatedAvatarRouteLoader(() => {
     if (this.isConnected) {
@@ -62,7 +65,23 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
           aria-label="${this.agentName} · ${menuLabel}${this.approvalCount > 0
             ? ` · ${approvalLabel}`
             : ""}"
-          @click=${(event: MouseEvent) => this.onToggleMenu?.(event.currentTarget as HTMLElement)}
+          @pointerenter=${(event: PointerEvent) => {
+            if (this.switcherAvailable && event.currentTarget instanceof HTMLElement) {
+              this.onMenuPointerEnter?.(event.currentTarget, event);
+            }
+          }}
+          @pointerleave=${() => this.onMenuPointerLeave?.()}
+          @pointerdown=${(event: PointerEvent) => {
+            // The portaled menu has a hidden trigger; keep its outside-click
+            // handler from dismissing hover-open state before click can pin it.
+            event.stopPropagation();
+          }}
+          @click=${(event: MouseEvent) => {
+            event.stopPropagation();
+            if (event.currentTarget instanceof HTMLElement) {
+              this.onToggleMenu?.(event.currentTarget);
+            }
+          }}
         >
           <span class="sidebar-agent-card__avatar">
             ${avatarUrl

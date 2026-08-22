@@ -136,6 +136,9 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         .approvalCount=${approvalCount}
         .switcherAvailable=${cardAgents.length > 1}
         .onToggleMenu=${(trigger: HTMLElement) => host.sidebarMenus.toggleAgentMenu(trigger)}
+        .onMenuPointerEnter=${(trigger: HTMLElement, event: PointerEvent) =>
+          host.sidebarMenus.scheduleAgentMenuHoverOpen(trigger, event)}
+        .onMenuPointerLeave=${() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
         @contextmenu=${(event: MouseEvent) => {
           event.preventDefault();
           if (host.sidebarMenus.agentMenuPosition !== null) {

@@ -39,6 +39,12 @@ import type {
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
 
+const AGENT_MENU_HOVER_OPEN_DELAY_MS = 300;
+const AGENT_MENU_HOVER_CLOSE_DELAY_MS = 200;
+const AGENT_MENU_WIDTH_PX = 264;
+
+type AgentMenuInteractionState = "closed" | "hover-pending" | "open-hover" | "open-click";
+
 type SidebarMenuAgent = {
   id: string;
   name?: string;
@@ -54,6 +60,7 @@ interface SidebarMenusControllerState {
   sessionSortMenuPosition: { x: number; y: number } | null;
   catalogViewMenuPosition: { catalogId: string; x: number; y: number } | null;
   agentMenuPosition: { x: number; top: number } | null;
+  agentMenuInteractionState: AgentMenuInteractionState;
   agentMenuFilter: string;
   identityMenuPosition: { x: number; bottom: number; width: number } | null;
 }
@@ -167,7 +174,11 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   sessionSortMenuTrigger: HTMLElement | null = null;
   catalogViewMenuTrigger: HTMLElement | null = null;
   agentMenuTrigger: HTMLElement | null = null;
+  agentMenuInteractionState: AgentMenuInteractionState = "closed";
   identityMenuTrigger: HTMLElement | null = null;
+  private agentMenuHoverOpenTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private agentMenuHoverCloseTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private agentMenuFocusBeforeHover: HTMLElement | null = null;
   private readonly routePreloadTimers = new Map<
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
@@ -201,6 +212,7 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
 
   hostDisconnected(): void {
     this.menuRendererImport.dispose();
+    this.clearAgentMenuHoverTimers();
     for (const timer of this.routePreloadTimers.values()) {
       globalThis.clearTimeout(timer);
     }
@@ -485,12 +497,23 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
   }
 
   toggleAgentMenu(trigger: HTMLElement) {
-    if (this.agentMenuPosition) {
+    this.clearAgentMenuHoverTimers();
+    if (this.agentMenuInteractionState === "open-click") {
       this.closeAgentMenu();
       return;
     }
+    if (this.agentMenuInteractionState === "open-hover") {
+      this.agentMenuFocusBeforeHover = null;
+      this.updateState("agentMenuInteractionState", "open-click");
+      return;
+    }
+    this.openAgentMenu(trigger, "open-click");
+  }
+
+  private openAgentMenu(trigger: HTMLElement, interactionState: "open-hover" | "open-click") {
+    this.clearAgentMenuHoverTimers();
     this.loadMenuRenderer();
-    const menuWidth = 240;
+    const menuWidth = AGENT_MENU_WIDTH_PX;
     const rect = trigger.getBoundingClientRect();
     this.closeCustomizeMenu();
     this.closeMoreMenu();
@@ -500,6 +523,11 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     this.closeCatalogViewMenu();
     this.closeIdentityMenu();
     this.agentMenuTrigger = trigger;
+    this.agentMenuFocusBeforeHover =
+      interactionState === "open-hover" && document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    this.updateState("agentMenuInteractionState", interactionState);
     this.updateState("agentMenuFilter", "");
     // The agent card sits at the top of the sidebar, so the menu drops below it
     // and shares its left edge; anchoring above would cover the card you clicked.
@@ -509,14 +537,100 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     });
   }
 
+  scheduleAgentMenuHoverOpen(trigger: HTMLElement, event: PointerEvent) {
+    globalThis.clearTimeout(this.agentMenuHoverCloseTimer ?? undefined);
+    this.agentMenuHoverCloseTimer = null;
+    if (
+      this.agentMenuInteractionState === "open-hover" ||
+      this.agentMenuInteractionState === "open-click" ||
+      event.pointerType === "touch" ||
+      !globalThis.matchMedia("(hover: hover) and (pointer: fine)").matches
+    ) {
+      return;
+    }
+    this.loadMenuRenderer();
+    globalThis.clearTimeout(this.agentMenuHoverOpenTimer ?? undefined);
+    this.updateState("agentMenuInteractionState", "hover-pending");
+    this.agentMenuHoverOpenTimer = globalThis.setTimeout(() => {
+      this.agentMenuHoverOpenTimer = null;
+      if (this.agentMenuInteractionState === "hover-pending") {
+        this.openAgentMenu(trigger, "open-hover");
+      }
+    }, AGENT_MENU_HOVER_OPEN_DELAY_MS);
+  }
+
+  handleAgentMenuTriggerPointerLeave() {
+    globalThis.clearTimeout(this.agentMenuHoverOpenTimer ?? undefined);
+    this.agentMenuHoverOpenTimer = null;
+    if (this.agentMenuInteractionState === "hover-pending") {
+      this.updateState("agentMenuInteractionState", "closed");
+      return;
+    }
+    this.scheduleAgentMenuHoverClose();
+  }
+
+  handleAgentMenuPointerEnter() {
+    globalThis.clearTimeout(this.agentMenuHoverCloseTimer ?? undefined);
+    this.agentMenuHoverCloseTimer = null;
+  }
+
+  handleAgentMenuPointerLeave() {
+    this.scheduleAgentMenuHoverClose();
+  }
+
+  restoreFocusAfterAgentMenuHoverOpen() {
+    if (this.agentMenuInteractionState !== "open-hover") {
+      return;
+    }
+    const previous = this.agentMenuFocusBeforeHover;
+    this.agentMenuFocusBeforeHover = null;
+    if (previous && previous !== document.body && previous.isConnected) {
+      previous.focus({ preventScroll: true });
+    } else if (
+      document.activeElement instanceof HTMLElement &&
+      document.activeElement.closest(".sidebar-agent-menu")
+    ) {
+      document.activeElement.blur();
+    }
+  }
+
   closeAgentMenu(options: { restoreFocus?: boolean } = {}) {
     const trigger = this.agentMenuTrigger;
+    this.clearAgentMenuHoverTimers();
     this.agentMenuTrigger = null;
+    this.agentMenuFocusBeforeHover = null;
+    this.updateState("agentMenuInteractionState", "closed");
     this.updateState("agentMenuPosition", null);
     this.updateState("agentMenuFilter", "");
     if (options.restoreFocus) {
       trigger?.focus();
     }
+  }
+
+  private scheduleAgentMenuHoverClose() {
+    if (this.agentMenuInteractionState !== "open-hover") {
+      return;
+    }
+    globalThis.clearTimeout(this.agentMenuHoverCloseTimer ?? undefined);
+    // The menu is top-layer content separated from its trigger by a 4px gap.
+    // A short grace period keeps crossing that gap from collapsing the target.
+    this.agentMenuHoverCloseTimer = globalThis.setTimeout(() => {
+      this.agentMenuHoverCloseTimer = null;
+      if (this.agentMenuInteractionState !== "open-hover") {
+        return;
+      }
+      if (document.activeElement?.closest(".sidebar-agent-menu")) {
+        return;
+      }
+      this.closeAgentMenu();
+    }, AGENT_MENU_HOVER_CLOSE_DELAY_MS);
+  }
+
+  private clearAgentMenuHoverTimers() {
+    globalThis.clearTimeout(this.agentMenuHoverOpenTimer ?? undefined);
+    globalThis.clearTimeout(this.agentMenuHoverCloseTimer ?? undefined);
+    this.agentMenuHoverOpenTimer = null;
+    this.agentMenuHoverCloseTimer = null;
   }
 
   setAgentMenuFilter(next: string) {
