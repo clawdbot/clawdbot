@@ -6112,6 +6112,7 @@ export const en: TranslationMap = {
       document: "Document",
       download: "Download",
       expand: "Open {filename} in the side panel",
+      open: "Open",
       pdf: "PDF",
       previewUnavailable: "Preview unavailable",
       readFailed: "Could not attach: {names}{more}",

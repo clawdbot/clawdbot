@@ -343,7 +343,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       content: [documentAttachment("bundle.zip", "application/zip")],
       timestamp: baseTime + 12,
     },
-    sectionTitle("Unavailable example", baseTime + 13),
+    sectionTitle("Unavailable", baseTime + 13),
     {
       role: "assistant",
       content: [
@@ -351,9 +351,18 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
           type: "attachment",
           attachment: {
             kind: "document",
-            label: "unavailable-example.txt",
+            label: "download-failed.txt",
             mimeType: "text/plain",
-            url: fixtureUrl("unavailable-example.txt"),
+            url: fixtureUrl("download-failed.txt"),
+          },
+        },
+        {
+          type: "attachment",
+          attachment: {
+            kind: "document",
+            label: "removed-file.txt",
+            mimeType: "text/plain",
+            url: fixtureUrl("removed-file.txt"),
           },
         },
       ],
@@ -418,6 +427,7 @@ function serveAssistantMedia(
     return;
   }
   const source = requestUrl.searchParams.get("source") ?? "";
+  const fileName = decodeURIComponent(source).split("/").pop() ?? "";
   const asset = source.startsWith(CHAT_ATTACHMENT_FIXTURE_PATH)
     ? readFixtureAsset(source)
     : undefined;
@@ -426,15 +436,16 @@ function serveAssistantMedia(
     res.setHeader("content-type", "application/json");
     res.setHeader("cache-control", "no-store");
     if (!asset) {
+      const removed = fileName === "removed-file.txt";
       res.end(
         JSON.stringify({
           available: false,
-          reason: "This fixture intentionally demonstrates the unavailable state.",
+          reason: removed ? "file was removed" : "download failed",
+          retryable: !removed,
         }),
       );
       return;
     }
-    const fileName = decodeURIComponent(source).split("/").pop() ?? "";
     const mediaFacts =
       fileName === "sample-video.mp4"
         ? { durationMs: 1_500, width: 640, height: 360, playback: "native" }

@@ -1,4 +1,5 @@
 import type { SessionDiffFileTextLoader, SessionDiffLoader } from "./session-diff-panel.ts";
+import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 
 type DetailUnavailableReason = "not_found" | "oversized" | "not_visible";
 type DetailFullMessageResult = {
@@ -47,6 +48,12 @@ type AttachmentSidebarContent = {
   title: string;
   src: string;
   mimeType?: string | null;
+  sourceIdentity?: string;
+  playback?: ChatMediaPlaybackMode;
+  authToken?: string | null;
+  sizeBytes?: number;
+  durationMs?: number;
+  voiceNote?: boolean;
 };
 
 type SessionDiffSidebarContent = {

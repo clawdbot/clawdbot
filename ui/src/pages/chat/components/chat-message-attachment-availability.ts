@@ -27,7 +27,13 @@ type AssistantAttachmentAvailability =
       width?: number;
       height?: number;
     }
-  | { status: "unavailable"; reason: string; checkedAt: number; retryAttempted?: true };
+  | {
+      status: "unavailable";
+      reason: string;
+      checkedAt: number;
+      recoverable: boolean;
+      retryAttempted?: true;
+    };
 
 export type ManagedAttachmentAvailability =
   | { status: "checking"; refreshAfter?: number; refreshAttempts?: number }
@@ -64,6 +70,7 @@ export function resolveAssistantAttachmentAvailability(
       status: "unavailable",
       reason: t("chat.attachments.outsideAllowedFolders"),
       checkedAt: Date.now(),
+      recoverable: false,
     };
   }
   const normalizedAuthToken = authToken?.trim() ?? "";
@@ -83,6 +90,7 @@ export function resolveAssistantAttachmentAvailability(
     const now = Date.now();
     if (
       cached.status === "unavailable" &&
+      cached.recoverable &&
       !cached.retryAttempted &&
       now - cached.checkedAt >= ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS
     ) {
@@ -173,6 +181,7 @@ export function resolveAssistantAttachmentAvailability(
           width?: number;
           height?: number;
           reason?: string;
+          retryable?: boolean;
         } | null;
         if (payload?.available === true) {
           const mediaTicket = payload.mediaTicket?.trim();
@@ -207,6 +216,7 @@ export function resolveAssistantAttachmentAvailability(
         const unavailable = createUnavailableAssistantAttachment(
           formatUiExternalText(payload?.reason, t("chat.attachments.unavailable")),
           resource.retryAttempted,
+          payload?.retryable !== false,
         );
         setAssistantAttachmentAvailability(resource, unavailable);
         return unavailable;
@@ -269,11 +279,13 @@ export function retryAssistantAttachmentAvailability(
 function createUnavailableAssistantAttachment(
   reason: string,
   retryAttempted: boolean,
+  recoverable = true,
 ): Extract<AssistantAttachmentAvailability, { status: "unavailable" }> {
   return {
     status: "unavailable",
     reason,
     checkedAt: Date.now(),
+    recoverable,
     ...(retryAttempted ? { retryAttempted: true } : {}),
   };
 }
@@ -299,7 +311,9 @@ function scheduleAssistantAttachmentRefresh(
   availability: AssistantAttachmentAvailability,
 ): void {
   const refreshAt =
-    availability.status === "unavailable" && !availability.retryAttempted
+    availability.status === "unavailable" &&
+    availability.recoverable &&
+    !availability.retryAttempted
       ? availability.checkedAt + ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS
       : availability.status === "available" &&
           availability.mediaTicket &&

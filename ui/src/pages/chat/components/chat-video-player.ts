@@ -6,7 +6,10 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
-import { renderAttachmentCardHeader } from "./chat-attachment-card.ts";
+import {
+  openAttachmentCardFromClick,
+  renderAttachmentCardHeader,
+} from "./chat-attachment-card.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import { ChatMediaSourceController } from "./chat-media-source.ts";
 
@@ -101,6 +104,8 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
         class="chat-assistant-attachment-card chat-assistant-attachment-card--video"
         ?data-metadata-loaded=${this.metadataLoaded}
         ?data-unplayable=${this.sourceController.readiness === "unavailable"}
+        ?data-openable=${Boolean(this.onExpand)}
+        @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, this.onExpand)}
       >
         ${renderAttachmentCardHeader({
           kind: "video",
@@ -108,7 +113,6 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
           mimeType: this.mimeType,
           sizeBytes: this.sizeBytes,
           downloadHref,
-          showDownloadLabel: true,
           showExpandAction: true,
           onExpand: this.onExpand,
         })}

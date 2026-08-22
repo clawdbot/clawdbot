@@ -6,7 +6,10 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
-import { renderAttachmentCardHeader } from "./chat-attachment-card.ts";
+import {
+  openAttachmentCardFromClick,
+  renderAttachmentCardHeader,
+} from "./chat-attachment-card.ts";
 import {
   canResumeChatAudioPlayback,
   claimChatAudioPlayback,
@@ -441,11 +444,11 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
         ${this.waveformPeaks.map(
           (_peak, index) => svg`<rect
             class=${index / count < progress ? "is-played" : ""}
-            x=${String(index + 0.18)}
-            y="3"
-            width="0.64"
-            height="18"
-            rx="0.32"
+            x=${String(index + 0.26)}
+            y="2"
+            width="0.48"
+            height="20"
+            rx="0.24"
           ></rect>`,
         )}
       </svg>
@@ -458,14 +461,17 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     const downloadHref = safeAttachmentHref(this.src);
     const failed = this.sourceController.readiness === "unavailable";
     return html`
-      <div class="chat-assistant-attachment-card chat-assistant-attachment-card--audio">
+      <div
+        class="chat-assistant-attachment-card chat-assistant-attachment-card--audio"
+        ?data-openable=${Boolean(this.onExpand)}
+        @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, this.onExpand)}
+      >
         ${renderAttachmentCardHeader({
           kind: "audio",
           label: this.label,
           mimeType: this.mimeType,
           sizeBytes: this.sizeBytes,
           downloadHref,
-          showDownloadLabel: true,
           showExpandAction: true,
           onExpand: this.onExpand,
           voiceNote: this.voiceNote,

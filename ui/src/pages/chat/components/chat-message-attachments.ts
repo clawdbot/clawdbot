@@ -3,7 +3,10 @@ import { t } from "../../../i18n/index.ts";
 import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
-import { renderAttachmentCardHeader } from "./chat-attachment-card.ts";
+import {
+  openAttachmentCardFromClick,
+  renderAttachmentCardHeader,
+} from "./chat-attachment-card.ts";
 import {
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES,
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS,
@@ -365,6 +368,7 @@ function renderAttachmentDocumentPreview(
         title=${attachment.label}
         sandbox
         loading="lazy"
+        scrolling="no"
       ></iframe>
       <span class="chat-assistant-attachment-card__preview-fade" aria-hidden="true"></span>
     </div>`;
@@ -372,20 +376,10 @@ function renderAttachmentDocumentPreview(
   if (previewKind === "table") {
     return renderAttachmentTablePreview(previewText);
   }
-  const isPdf = attachment.mimeType?.split(";", 1)[0]?.trim().toLowerCase() === "application/pdf";
-  return isPdf
-    ? html`<div class="chat-assistant-attachment-card__page-preview">
-        <iframe src=${attachmentUrl} title=${attachment.label} loading="lazy"></iframe>
-      </div>`
-    : html`<div class="chat-assistant-attachment-card__page-preview">
-        <div class="chat-assistant-attachment-card__page-sheet" aria-label=${attachment.label}>
-          <span class="chat-assistant-attachment-card__page-line chat-assistant-attachment-card__page-line--wide"></span>
-          <span class="chat-assistant-attachment-card__page-line"></span>
-          <span class="chat-assistant-attachment-card__page-line chat-assistant-attachment-card__page-line--short"></span>
-          <span class="chat-assistant-attachment-card__page-line"></span>
-          <span class="chat-assistant-attachment-card__page-line chat-assistant-attachment-card__page-line--wide"></span>
-        </div>
-      </div>`;
+  const previewUrl = `${attachmentUrl.split("#", 1)[0]}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
+  return html`<div class="chat-assistant-attachment-card__page-preview">
+    <iframe src=${previewUrl} title=${attachment.label} loading="lazy"></iframe>
+  </div>`;
 }
 
 export function renderAssistantAttachments(
@@ -457,7 +451,8 @@ export function renderAssistantAttachments(
       ? (authToken ?? null)
       : null;
     const retryUnavailableAttachment =
-      availability.status === "unavailable"
+      availability.status === "unavailable" &&
+      (!("recoverable" in availability) || availability.recoverable)
         ? () =>
             retryAssistantAttachmentAvailability(
               attachment.url,
@@ -473,6 +468,12 @@ export function renderAssistantAttachments(
             title: attachment.label,
             src: attachmentUrl,
             mimeType: attachment.mimeType,
+            sourceIdentity: attachment.url,
+            playback,
+            authToken: playbackAuthToken,
+            sizeBytes,
+            durationMs: serverDurationMs,
+            voiceNote: attachment.isVoiceNote === true,
           })
       : undefined;
     if (attachment.kind === "image") {
@@ -594,6 +595,9 @@ export function renderAssistantAttachments(
             ? "chat-assistant-attachment-card--preview"
             : "chat-assistant-attachment-card--compact"
         }"
+        ?data-openable=${Boolean(openAttachmentSidebar)}
+        @click=${(event: MouseEvent) =>
+          openAttachmentCardFromClick(event, openAttachmentSidebar)}
       >
         ${renderAttachmentCardHeader({
           kind: "document",
@@ -601,7 +605,6 @@ export function renderAssistantAttachments(
           mimeType: attachment.mimeType,
           sizeBytes,
           downloadHref,
-          showDownloadLabel: true,
           showExpandAction: true,
           onExpand: openAttachmentSidebar,
           compact: previewKind === null,

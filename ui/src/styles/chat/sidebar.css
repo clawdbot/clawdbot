@@ -1902,10 +1902,6 @@ openclaw-session-discussion {
   object-fit: contain;
 }
 
-.sidebar-attachment-preview__audio {
-  width: 100%;
-}
-
 .sidebar-attachment-preview__unavailable {
   display: flex;
   min-height: 180px;

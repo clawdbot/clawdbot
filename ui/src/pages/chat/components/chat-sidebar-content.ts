@@ -31,6 +31,7 @@ import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
+import "./chat-audio-player.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
@@ -53,7 +54,17 @@ function renderSidebarAttachment(
     return html`<video class="sidebar-attachment-preview__media" src=${src} controls></video>`;
   }
   if (mimeType.startsWith("audio/")) {
-    return html`<audio class="sidebar-attachment-preview__audio" src=${src} controls></audio>`;
+    return html`<openclaw-chat-audio-player
+      .src=${src}
+      .sourceIdentity=${content.sourceIdentity ?? content.src}
+      .label=${content.title}
+      .mimeType=${content.mimeType ?? ""}
+      .playback=${content.playback ?? "native"}
+      .authToken=${content.authToken ?? null}
+      .sizeBytes=${content.sizeBytes}
+      .serverDurationMs=${content.durationMs}
+      .voiceNote=${content.voiceNote === true}
+    ></openclaw-chat-audio-player>`;
   }
   if (mimeType.startsWith("image/")) {
     return html`<img class="sidebar-attachment-preview__image" src=${src} alt=${content.title} />`;
@@ -74,7 +85,10 @@ function renderSidebarAttachment(
   return html`
     <div class="sidebar-attachment-preview__unavailable">
       <span>${t("chat.attachments.previewUnavailable")}</span>
-      <a class="btn btn--sm" href=${src} download=${content.title}
+      <a
+        class="chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled chat-assistant-attachment-card__download"
+        href=${src}
+        download=${content.title}
         >${icons.download} ${t("chat.attachments.download")}</a
       >
     </div>

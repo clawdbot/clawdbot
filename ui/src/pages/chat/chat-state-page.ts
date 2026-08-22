@@ -404,12 +404,17 @@ export function createPageState(
     renderLifecycle.invalidate();
   };
   state.handleOpenSidebar = (content) => {
+    const attachmentPreview = content?.kind === "attachment";
     let opened = openSlot(state.sidebarLayout, "detail");
-    const detailPanel = opened.columns
+    if (attachmentPreview) {
+      opened = openSlot(opened, "workspace");
+    }
+    const targetSlot = attachmentPreview ? "workspace" : "detail";
+    const targetPanel = opened.columns
       .flatMap((column) => column.panels)
-      .find((panel) => panel.slot === "detail");
-    if (detailPanel) {
-      opened = activatePanel(opened, detailPanel.id);
+      .find((panel) => panel.slot === targetSlot);
+    if (targetPanel) {
+      opened = activatePanel(opened, targetPanel.id);
     }
     const availableWidth = page.getBoundingClientRect?.().width ?? 0;
     const fitted =
@@ -418,8 +423,8 @@ export function createPageState(
         : opened;
     state.sidebarContent = content;
     state.updateSidebarLayout(fitted);
-    if (detailPanel) {
-      state.updateSidebarActivePanel(detailPanel.id);
+    if (targetPanel) {
+      state.updateSidebarActivePanel(targetPanel.id);
     }
   };
   state.handleCloseSidebar = () => {

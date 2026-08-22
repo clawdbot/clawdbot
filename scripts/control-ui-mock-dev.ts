@@ -3170,10 +3170,50 @@ function createStatefulMockInitScript(): string {
   return `(() => { const __name = (target) => target; (${installControlUiStatefulMocks.toString()})(${CUSTODIAN_CHAT_REPLY_DELAY_MS}, ${CHAT_SEND_REPLY_DELAY_MS}); })();`;
 }
 
-function createMockGatewayPlugin(scenario: ControlUiMockGatewayScenario): Plugin {
+function createMockGatewayPlugin(
+  scenario: ControlUiMockGatewayScenario,
+  fixture?: CliOptions["fixture"],
+): Plugin {
   const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(scenario));
   const statefulInitScript = escapeScriptContent(createStatefulMockInitScript());
   const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(scenario));
+  const attachmentThemeToggle =
+    fixture === "attachments"
+      ? `    <style data-openclaw-control-ui-mock-theme-toggle>
+      .control-ui-mock-theme-toggle { position: fixed; right: 16px; bottom: 16px; z-index: 1000; display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--card); box-shadow: var(--shadow-md); }
+      .control-ui-mock-theme-toggle button { min-height: 28px; padding: 0 10px; border: 0; border-radius: 999px; color: var(--muted); background: transparent; font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
+      .control-ui-mock-theme-toggle button[aria-pressed="true"] { color: var(--text); background: var(--bg-hover); }
+    </style>
+    <script data-openclaw-control-ui-mock-theme-toggle>
+      addEventListener("DOMContentLoaded", () => {
+        const control = document.createElement("div");
+        control.className = "control-ui-mock-theme-toggle";
+        control.setAttribute("aria-label", "Theme");
+        const apply = (mode) => {
+          const root = document.documentElement;
+          root.dataset.themeMode = mode;
+          root.dataset.themeResolved = mode;
+          root.classList.toggle("wa-light", mode === "light");
+          root.classList.toggle("wa-dark", mode === "dark");
+          root.style.colorScheme = mode;
+          for (const button of control.querySelectorAll("button")) {
+            button.setAttribute("aria-pressed", String(button.dataset.mode === mode));
+          }
+        };
+        for (const mode of ["dark", "light"]) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.dataset.mode = mode;
+          button.textContent = mode === "dark" ? "Dark" : "Light";
+          button.addEventListener("click", () => apply(mode));
+          control.append(button);
+        }
+        document.body.append(control);
+        apply(document.documentElement.dataset.themeMode === "light" ? "light" : "dark");
+      });
+    </script>
+`
+      : "";
   return {
     configureServer(server) {
       server.middlewares.use(CONTROL_UI_BOOTSTRAP_CONFIG_PATH, (_req, res) => {
@@ -3190,7 +3230,7 @@ function createMockGatewayPlugin(scenario: ControlUiMockGatewayScenario): Plugin
     transformIndexHtml(html) {
       return html.replace(
         "</head>",
-        `    <script data-openclaw-control-ui-mock-locale>\n      try { localStorage.setItem("openclaw.i18n.locale", "en"); } catch {}\n    </script>\n    <script data-openclaw-control-ui-mock-gateway>\n${initScript}\n${statefulInitScript}\n    </script>\n  </head>`,
+        `${attachmentThemeToggle}    <script data-openclaw-control-ui-mock-locale>\n      try { localStorage.setItem("openclaw.i18n.locale", "en"); } catch {}\n    </script>\n    <script data-openclaw-control-ui-mock-gateway>\n${initScript}\n${statefulInitScript}\n    </script>\n  </head>`,
       );
     },
   };
@@ -3271,7 +3311,7 @@ const server = await createServer({
     include: ["lit/directives/repeat.js"],
   },
   plugins: [
-    createMockGatewayPlugin(scenario),
+    createMockGatewayPlugin(scenario, options.fixture),
     createBoardFixturePlugin(),
     ...(options.fixture === "attachments" ? [createChatAttachmentFixturePlugin()] : []),
   ],

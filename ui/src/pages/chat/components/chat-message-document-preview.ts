@@ -61,22 +61,12 @@ export function resolveDocumentPreviewKind(
   if (
     extension === "csv" ||
     extension === "tsv" ||
-    extension === "xls" ||
-    extension === "xlsx" ||
     mimeType === "text/csv" ||
-    mimeType === "application/vnd.ms-excel" ||
-    mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    mimeType === "text/tab-separated-values"
   ) {
     return "table";
   }
-  if (
-    extension === "pdf" ||
-    extension === "doc" ||
-    extension === "docx" ||
-    mimeType === "application/pdf" ||
-    mimeType === "application/msword" ||
-    mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-  ) {
+  if (extension === "pdf" || mimeType === "application/pdf") {
     return "page";
   }
   return null;
