@@ -985,7 +985,7 @@ describe("tool-cards", () => {
     const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
     expect(sidebar).toEqual({
       kind: "markdown",
-      content: "### Tool output\nOpened page",
+      content: "## Browser.open\n\n**Tool:** `browser.open`\n\n### Tool output\nOpened page",
       rawText: "Opened page",
     });
   });
