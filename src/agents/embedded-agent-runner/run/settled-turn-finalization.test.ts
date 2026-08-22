@@ -113,6 +113,7 @@ function finalizationInput(attempt: ReturnType<typeof settledFailedAttempt>) {
         workspaceDir: "/tmp/openclaw-test",
         prompt: "finish the task",
         timeoutMs: 60_000,
+        model: {},
       },
       harness: {
         id: "test-harness",
@@ -155,6 +156,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       backendMocks.runSettledFinalization.mock.calls[0] ?? [];
     expect(preparedAttempt).toMatchObject({
       operation: "settled-tool-finalization",
+      model: { requestTimeoutMs: 300_000 },
       disableTools: true,
       skipPreparedUserTurnMessage: true,
       suppressNextUserMessagePersistence: true,
@@ -190,6 +192,25 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       code: "SYSTEM_RUN_DENIED",
       message: "post-processing error",
       fatalForCron: true,
+    });
+  });
+
+  it("preserves an explicit provider request timeout for finalization", async () => {
+    const attempt = settledFailedAttempt();
+    const input = finalizationInput(attempt);
+    input.finalization.preparedAttempt.model = { requestTimeoutMs: 45_000 } as never;
+    const finalAssistant = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: "Final answer." }],
+    });
+    backendMocks.runSettledFinalization.mockResolvedValueOnce({
+      outcome: "answered",
+      result: { assistant: finalAssistant, usage: finalAssistant.usage },
+    });
+
+    await prepareTerminalWithSettledTurnFinalization(input);
+
+    expect(backendMocks.runSettledFinalization.mock.calls[0]?.[0]).toMatchObject({
+      model: { requestTimeoutMs: 45_000 },
     });
   });
 

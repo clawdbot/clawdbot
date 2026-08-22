@@ -28,6 +28,9 @@ import {
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type TerminalPreparationInput = Parameters<typeof prepareEmbeddedRunTerminal>[0];
+// A tool-free finalizer may need to reread a large settled context before its first event.
+// Keep the parent run as the hard bound and never replace an operator-configured provider timeout.
+const DEFAULT_SETTLED_FINALIZATION_REQUEST_TIMEOUT_MS = 300_000;
 type TerminalPreparationBase = Omit<
   TerminalPreparationInput,
   | "attempt"
@@ -202,9 +205,17 @@ async function runPreparedSettledTurnFinalization(input: {
   noteLaneTaskProgress: () => void;
 }): Promise<{ outcome: "answered" | "empty"; attempt: EmbeddedRunAttemptWithReceiptEvidence }> {
   return await withEmbeddedRunLaneProgressHeartbeat(input.noteLaneTaskProgress, async () => {
+    const configuredRequestTimeoutMs = Reflect.get(input.attempt.model, "requestTimeoutMs");
+    const modelWithDefaultRequestTimeout = Object.assign({}, input.attempt.model, {
+      requestTimeoutMs: DEFAULT_SETTLED_FINALIZATION_REQUEST_TIMEOUT_MS,
+    });
     const finalization = await runEmbeddedSettledTurnFinalizationWithBackend(
       {
         ...input.attempt,
+        model:
+          configuredRequestTimeoutMs === undefined
+            ? modelWithDefaultRequestTimeout
+            : input.attempt.model,
         operation: "settled-tool-finalization",
         prompt: input.prompt,
         disableTools: true,
