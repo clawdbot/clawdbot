@@ -6194,9 +6194,17 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       runnerBackend: "",
       runAttempt: 1,
     } as const;
+    const sameRepositoryForkPullRequest = {
+      authorAssociation: "OWNER",
+      eventName: "pull_request",
+      headRepository: "pochinkovtrofim/arxi-openclaw",
+      repository: "pochinkovtrofim/arxi-openclaw",
+      runnerBackend: "",
+      runAttempt: 1,
+    } as const;
 
     expect(manifestStep.env.OPENCLAW_CI_RUNNER_BACKEND).toBe(
-      "${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND }}",
+      "${{ (github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)) && 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND }}",
     );
     expect(
       evaluateWorkflowExpression(
@@ -6206,6 +6214,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ).toBe("github");
     expect(
       evaluateWorkflowExpression(checkShardStep.env.RUNNER_BACKEND, untrustedForkPullRequest),
+    ).toBe("github");
+    expect(
+      evaluateWorkflowExpression(
+        manifestStep.env.OPENCLAW_CI_RUNNER_BACKEND,
+        sameRepositoryForkPullRequest,
+      ),
+    ).toBe("github");
+    expect(
+      evaluateWorkflowExpression(checkShardStep.env.RUNNER_BACKEND, sameRepositoryForkPullRequest),
     ).toBe("github");
     expect(manifestStep.run).toContain("runnerBackend: process.env.OPENCLAW_CI_RUNNER_BACKEND");
     expect(checkShardRun).toContain('if [ "$RUNNER_BACKEND" = "github" ]; then');
@@ -6222,6 +6239,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(hostedCoreLint.if).toContain(
       "github.event.pull_request.head.repo.full_name != github.repository",
     );
+    expect(hostedCoreLint.if).toContain("github.repository != 'openclaw/openclaw'");
     expect(workflow.jobs["check-test-types-hosted-core-shard"].if).toContain(
       "github.event.pull_request.head.repo.full_name != github.repository",
     );
