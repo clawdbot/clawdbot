@@ -80,7 +80,8 @@ Use `$OPENCLAW_TELEGRAM_MANTIS_LANE_CMD` with `--lane baseline|candidate`:
 [--until-provider-requests N]` (returns early when all supplied conditions hold;
   event/text conditions count only events after the cursor, provider count is
   cumulative for the lane)
-- `requests` (redacted provider requests; zero is a valid recorded fact)
+- `requests` (redacted provider requests; media/file items appear as structured
+  `contentFacts`; zero is a valid recorded fact)
 - `press --message-id ID --button INDEX`
 - `delete --message-id ID` (only user messages sent in this session)
 - `desktop --actions-file <public-json> [--timeout-seconds N]` (run an
@@ -126,10 +127,13 @@ baseline lane that reproduces the defect is a successful capture. A PR-level
 pass claim requires an observed, material baseline/candidate difference caused
 by the changed behavior. That difference may be trusted Bot API payload/status
 facts even when pixels are identical; screenshots remain comparison context.
-Provider request logs are diagnostic and pacing signals, not standalone
-comparison evidence. Identical pixels alone do not force `block` when the
-trusted recorded facts differ materially. If neither pixels nor trusted facts prove a
-difference, use `block`. When the expected result is silence, focus the
+Provider request facts are tamper-evident comparison evidence: the provider
+sidecar records them outside the candidate runtime, so candidate code cannot
+alter or remove a recorded request after the fact. Requests still originate
+inside the SUT, so the facts prove what the candidate runtime sent — the
+behavior under proof — not who sent it. Identical pixels alone do not force `block`
+when the recorded facts differ materially. If neither pixels nor recorded facts
+prove a difference, use `block`. When the expected result is silence, focus the
 session-owned user message that triggered the silent outcome.
 Decide before finalizing each lane. If its setup did not exercise the intended
 behavior, call `block`; do not call `finish` and describe the block only in prose.
@@ -139,7 +143,9 @@ behavior, call `block`; do not call `finish` and describe the block only in pros
 Inspect `mantis-lane-facts.json`, every returned event/request, the inspection
 PNG, final PNG, and cropped GIF. Confirm the evaluated message is fully visible
 near the bottom and the recording covers the behavior—not only its final state.
-Iterate as needed; all attempts remain recorded.
+Iteration is allowed, but if `start` reports `desktop-unavailable`, record that
+fact and use `block`; never retry that lane. Two non-advancing repeats of the
+same failing step mean classify and stop, not retry. All attempts remain recorded.
 
 If you design a novel working scenario worth reusing, optionally write
 `MANTIS_OUTPUT_DIR/recipe-suggestion.md` with its trigger, exact commands, and

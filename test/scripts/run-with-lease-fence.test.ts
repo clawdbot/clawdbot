@@ -72,4 +72,18 @@ describe("run-with-lease-fence", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toBe("");
   });
+
+  posixIt("passes the caller's stdin through to the fenced command", () => {
+    // The workflow pipes the agent prompt into the fenced Codex process; a
+    // backgrounded child otherwise defaults its stdin to /dev/null, which
+    // made the agent fail with an empty prompt.
+    const root = tempDirs.make("openclaw-lease-fence-stdin-");
+    const result = spawnSync(SCRIPT, [path.join(root, "lease.lost"), "--", "/bin/cat"], {
+      encoding: "utf8",
+      input: "prompt body\n",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("prompt body\n");
+  });
 });

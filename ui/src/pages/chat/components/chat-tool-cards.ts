@@ -326,26 +326,6 @@ export function syncToolDisclosureOverflow(event: Event): void {
   );
 }
 
-export function toggleToolDisclosureKeepingScroll(event: Event, toggle: () => void): void {
-  const target = event.currentTarget;
-  const row = target instanceof Element ? target.closest<HTMLElement>(".chat-virtual-row") : null;
-  const scroller = row?.closest<HTMLElement>(".chat-thread");
-  const rowTop = row?.getBoundingClientRect().top;
-  toggle();
-  if (!row || !scroller || rowTop === undefined) {
-    return;
-  }
-  requestAnimationFrame(() => {
-    // ResizeObserver runs after rAF. Wait one more frame so TanStack applies
-    // its end-anchor delta before we restore this disclosure row's position.
-    requestAnimationFrame(() => {
-      if (row.isConnected) {
-        scroller.scrollTop += row.getBoundingClientRect().top - rowTop;
-      }
-    });
-  });
-}
-
 function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolCardOutcome) {
   if (view.kind === "command" && view.command) {
     const commandPreview = firstCommandLine(view.command);
@@ -903,8 +883,7 @@ export function renderToolCard(
               type="button"
               aria-expanded=${String(expanded)}
               aria-label=${resolveToolRowText(card, opts.runActive)}
-              @click=${(event: MouseEvent) =>
-                toggleToolDisclosureKeepingScroll(event, () => opts.onToggleExpanded(card.id))}
+              @click=${() => opts.onToggleExpanded(card.id)}
             ></button>
             <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
             <span class="chat-tool-disclosure__content"
@@ -928,7 +907,7 @@ export function renderToolCard(
             @focus=${syncToolDisclosureOverflow}
             @click=${(event: MouseEvent) => {
               if (shouldToggleSelectableDisclosure(event)) {
-                toggleToolDisclosureKeepingScroll(event, () => opts.onToggleExpanded(card.id));
+                opts.onToggleExpanded(card.id);
               }
             }}
           >

@@ -183,6 +183,7 @@ export function writeSutConfig(params: {
   gatewayPort: number;
   groupId: string;
   mcpAppFixture?: boolean;
+  mockHost: string;
   mockPort: number;
   outputDir: string;
   repoRoot?: string;
@@ -278,7 +279,7 @@ export function writeSutConfig(params: {
         openai: {
           api: "openai-responses",
           apiKey: { id: "OPENAI_API_KEY", provider: "default", source: "env" },
-          baseUrl: `http://127.0.0.1:${params.mockPort}/v1`,
+          baseUrl: `http://${params.mockHost}:${params.mockPort}/v1`,
           models: [
             {
               api: "openai-responses",
@@ -569,15 +570,15 @@ export async function startMantisSut(params: {
   onRuntimeDisposed?: () => void;
 }): Promise<MantisSutRuntime> {
   const drained = await drainSutUpdates(params.sutToken);
-  const config = writeSutConfig(params);
+  const config = writeSutConfig({ ...params, mockHost: "mock-openai" });
   // The root wrapper relocates tempRoot into its bounded filesystem, then restores this
   // exact path as a symlink before Docker starts. Keep controller and claim paths anchored
   // here so live log reads, mock updates, stop, and destroy all share one runtime identity.
-  const requestLog = path.join(config.tempRoot, "mock-openai-requests.ndjson");
-  const mockLog = path.join(config.tempRoot, "mock-openai.log");
   const mockResponseControlDir = path.join(config.tempRoot, "mock-control");
   fs.mkdirSync(mockResponseControlDir, { mode: 0o700 });
   const mockResponseControl = path.join(mockResponseControlDir, "response.json");
+  const requestLog = path.join(mockResponseControlDir, "mock-openai-requests.ndjson");
+  const mockLog = path.join(mockResponseControlDir, "mock-openai.log");
   fs.writeFileSync(
     mockResponseControl,
     `${JSON.stringify({
@@ -586,6 +587,8 @@ export async function startMantisSut(params: {
     })}\n`,
     { mode: 0o600 },
   );
+  fs.writeFileSync(requestLog, "", { mode: 0o600 });
+  fs.writeFileSync(mockLog, "", { mode: 0o600 });
   const proxyControlDir = path.join(config.tempRoot, "proxy-control");
   fs.mkdirSync(proxyControlDir, { mode: 0o700 });
   const proxyControl = path.join(proxyControlDir, "control.json");

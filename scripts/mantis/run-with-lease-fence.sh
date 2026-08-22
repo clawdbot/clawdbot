@@ -12,7 +12,9 @@ shift 2
 # The marker records broker-confirmed loss of the shared-account lease; continuing
 # Telegram I/O would violate broker serialization. The <=10s poll window is accepted
 # against the 20-minute lease TTL.
-setsid "$@" &
+# <&0: a backgrounded command's stdin defaults to /dev/null, which silently
+# swallowed the piped agent prompt. The explicit redirect keeps the caller's stdin.
+setsid "$@" <&0 &
 command_pid=$!
 
 command_exit() {

@@ -29,5 +29,5 @@ $lane finish --lane baseline
 
 Repeat for `candidate`. Proof facts: session events and recorded Bot API
 messages show the slow first and distinct second outcomes without a
-control-file race. The provider request log (`scriptEntry` 0 then 1, turn
-order in bodies) is diagnostic context, not the comparison evidence.
+control-file race. The tamper-evident provider request facts (`scriptEntry` 0
+then 1, turn order in bodies) independently prove provider arrival order.
