@@ -919,12 +919,15 @@ from later tool events.
 The `codex` plugin registers `/codex` as a slash command on any channel that
 supports OpenClaw text commands.
 
-Native execution and control require an owner or an `operator.admin`
-Gateway client: binding or resuming threads, sending or stopping turns,
-changing model, fast-mode, or permission state, compacting or reviewing, and
-detaching a binding. Other authorized senders keep read-only status, help,
-account, model, thread, native goal, MCP server, skill, and binding inspection
-commands.
+Native execution, control, and host-wide inspection require an owner or an
+`operator.admin` Gateway client. This includes binding or resuming threads,
+sending or stopping turns, changing model, fast-mode, or permission state,
+compacting or reviewing, detaching a binding, and inspecting account details,
+host status, native threads, paired-node sessions, MCP servers, or skills.
+Other authorized senders retain help, model listings, and read-only inspection
+of their current conversation's binding, model, permissions, Fast mode, and
+native goal. Host-wide reads are restricted because they can expose other
+conversations, private workspaces, account identities, and connected services.
 
 Common forms:
 

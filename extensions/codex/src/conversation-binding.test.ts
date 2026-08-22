@@ -955,20 +955,17 @@ describe("codex conversation binding", () => {
     expect(requests[0]?.params.config).toMatchObject(NETWORK_PROXY_CONFIG_PATCH);
   });
 
-  it("starts a fresh proxy-backed thread when binding an explicit app-server thread id", async () => {
+  it("resumes the exact requested thread with its network-proxy permission profile", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
       request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
         requests.push({ method, params: requestParams });
-        if (method === "thread/resume") {
-          throw new Error("thread/resume should not receive network proxy config");
-        }
-        return conversationThreadStartResult("thread-new");
+        return conversationThreadStartResult("thread-old");
       }),
     });
 
-    await startCodexConversationThread({
+    const result = await startCodexConversationThread({
       pluginConfig: NETWORK_PROXY_PLUGIN_CONFIG,
       sessionFile,
       threadId: "thread-old",
@@ -977,14 +974,15 @@ describe("codex conversation binding", () => {
       modelProvider: "openai",
     });
 
-    expect(requests.map((request) => request.method)).toEqual(["thread/start"]);
-    expect(requests[0]?.params).not.toHaveProperty("threadId");
+    expect(result.source.threadId).toBe("thread-old");
+    expect(requests.map((request) => request.method)).toEqual(["thread/resume"]);
+    expect(requests[0]?.params.threadId).toBe("thread-old");
     expect(requests[0]?.params).not.toHaveProperty("sandbox");
     expect(requests[0]?.params.config).toMatchObject(NETWORK_PROXY_CONFIG_PATCH);
-    const bindingAfterStart = await readCodexAppServerBinding(sessionFile);
-    expect(bindingAfterStart?.threadId).toBe("thread-new");
-    expect(bindingAfterStart?.networkProxyProfileName).toBe(NETWORK_PROXY_PROFILE_NAME);
-    expect(bindingAfterStart?.networkProxyConfigFingerprint).toBe(NETWORK_PROXY_CONFIG_FINGERPRINT);
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.threadId).toBe("thread-old");
+    expect(binding?.networkProxyProfileName).toBe(NETWORK_PROXY_PROFILE_NAME);
+    expect(binding?.networkProxyConfigFingerprint).toBe(NETWORK_PROXY_CONFIG_FINGERPRINT);
   });
 
   it("drops a retained native child before applying bound-only apps and sandbox policy", async () => {

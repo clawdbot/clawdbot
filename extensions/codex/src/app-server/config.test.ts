@@ -2668,7 +2668,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
   });
 
   it.each(["always"] as const)(
-    "keeps legacy full exec security with ask=%s on prompting Codex policy",
+    "keeps legacy full exec security with ask=%s on per-command Codex policy",
     (ask) => {
       const config = {
         tools: {
@@ -2693,7 +2693,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           execPolicy,
         }),
         {
-          approvalPolicy: "on-request",
+          approvalPolicy: "untrusted",
           sandbox: "danger-full-access",
           approvalsReviewer: "user",
         },
@@ -2737,6 +2737,37 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     ).toThrow("legacy full exec security with ask requires Codex app-server danger-full-access");
   });
 
+  it("fails closed when managed policy forbids mandatory per-command approvals", () => {
+    const config = {
+      tools: { exec: { security: "full", ask: "always" } },
+    } satisfies OpenClawConfig;
+
+    expect(() =>
+      resolveRuntimeForTest({
+        execPolicy: resolveOpenClawExecPolicyForCodexAppServer({ config }),
+        requirementsToml: 'allowed_approval_policies = ["on-request", "never"]',
+      }),
+    ).toThrow("tools.exec.ask=always requires Codex app-server per-command approvals");
+  });
+
+  it("honors managed policy that permits mandatory per-command approvals", () => {
+    const config = {
+      tools: { exec: { security: "full", ask: "always" } },
+    } satisfies OpenClawConfig;
+
+    expectRuntimePolicy(
+      resolveRuntimeForTest({
+        execPolicy: resolveOpenClawExecPolicyForCodexAppServer({ config }),
+        requirementsToml: 'allowed_approval_policies = ["on-request", "untrusted"]',
+      }),
+      {
+        approvalPolicy: "untrusted",
+        sandbox: "danger-full-access",
+        approvalsReviewer: "user",
+      },
+    );
+  });
+
   it("clamps legacy full exec with ask when an OpenClaw sandbox is active", () => {
     const config = {
       tools: {
@@ -2754,7 +2785,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
         requirementsToml: 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n',
       }),
       {
-        approvalPolicy: "on-request",
+        approvalPolicy: "untrusted",
         sandbox: "workspace-write",
         approvalsReviewer: "user",
       },
@@ -2837,7 +2868,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
         execPolicy,
       }),
       {
-        approvalPolicy: "on-request",
+        approvalPolicy: "untrusted",
         sandbox: "danger-full-access",
         approvalsReviewer: "user",
       },
@@ -2898,7 +2929,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
         execPolicy,
       }),
       {
-        approvalPolicy: "on-request",
+        approvalPolicy: "untrusted",
         sandbox: "read-only",
         approvalsReviewer: "user",
       },
@@ -2982,7 +3013,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
         execPolicy,
       }),
       {
-        approvalPolicy: "on-request",
+        approvalPolicy: "untrusted",
         sandbox: "danger-full-access",
         approvalsReviewer: "user",
       },

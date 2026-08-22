@@ -44,6 +44,7 @@ const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
 const CODEX_APP_SERVER_OVERLOADED_ERROR_CODE = -32_001;
 const CODEX_APP_SERVER_OVERLOAD_MAX_RETRIES = 3;
 const CODEX_APP_SERVER_OVERLOAD_RETRY_BASE_MS = 50;
+const CODEX_APP_SERVER_PENDING_STARTUP_WARNINGS_MAX = 32;
 const CODEX_APP_SERVER_CLIENT_INSTANCE_IDS = new WeakMap<object, string>();
 const UNPAIRED_SURROGATE_RE =
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
@@ -200,6 +201,7 @@ export class CodexAppServerClient {
   private readonly pending = new Map<number | string, PendingRequest>();
   private readonly requestHandlers = new Set<CodexServerRequestHandler>();
   private readonly notificationHandlers = new Set<CodexServerNotificationHandler>();
+  private readonly pendingStartupWarnings: CodexServerNotification[] = [];
   private readonly closeHandlers = new Set<(client: CodexAppServerClient) => void>();
   private nextId = 1;
   private initialized = false;
@@ -296,6 +298,9 @@ export class CodexAppServerClient {
         extensions: {
           "openai/standard-form-input": {},
           "openai/form": {},
+          "io.modelcontextprotocol/ui": {
+            mimeTypes: ["text/html;profile=mcp-app"],
+          },
         },
       },
     } satisfies CodexInitializeParams);
@@ -657,6 +662,11 @@ export class CodexAppServerClient {
   /** Registers a notification handler and returns its disposer. */
   addNotificationHandler(handler: CodexServerNotificationHandler): () => void {
     this.notificationHandlers.add(handler);
+    // Codex sends configuration warnings immediately after initialize, before
+    // OpenClaw can reserve the first thread or install its shared turn router.
+    for (const notification of this.pendingStartupWarnings.splice(0)) {
+      this.handleNotification(notification);
+    }
     return () => this.notificationHandlers.delete(handler);
   }
 
@@ -895,6 +905,13 @@ export class CodexAppServerClient {
   }
 
   private handleNotification(notification: CodexServerNotification): void {
+    if (this.notificationHandlers.size === 0 && notification.method === "configWarning") {
+      if (this.pendingStartupWarnings.length === CODEX_APP_SERVER_PENDING_STARTUP_WARNINGS_MAX) {
+        this.pendingStartupWarnings.shift();
+      }
+      this.pendingStartupWarnings.push(notification);
+      return;
+    }
     for (const handler of this.notificationHandlers) {
       try {
         Promise.resolve(handler(notification)).catch((error: unknown) => {

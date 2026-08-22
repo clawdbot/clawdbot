@@ -467,8 +467,10 @@ export async function runCodexAppServerSideQuestion(
       modelProvider: reviewerPolicyContext.modelProvider,
       model: reviewerPolicyContext.model,
       config: params.cfg,
-      env: process.env,
+      env: { ...process.env, ...modelScopedAppServer.start.env },
       agentDir: params.agentDir,
+      homeScope: modelScopedAppServer.start.homeScope,
+      codexArgs: modelScopedAppServer.start.args,
     });
     const approvalPolicy = useModelScopedPolicy
       ? modelScopedAppServer.approvalPolicy

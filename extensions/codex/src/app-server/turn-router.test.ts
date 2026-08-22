@@ -48,6 +48,27 @@ describe("CodexAppServerTurnRouter", () => {
     expect(addCloseHandler).toHaveBeenCalledTimes(1);
   });
 
+  it("delivers global startup warnings to the next reserved thread", async () => {
+    const harness = createHarness();
+    const warning = {
+      method: "configWarning",
+      params: { summary: "Custom execution rules were not applied." },
+    };
+    harness.send(warning);
+    const notifications = vi.fn();
+
+    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
+      threadId: "thread-warnings",
+      onNotification: notifications,
+    });
+    route.armTurn();
+    await route.bindTurn("turn-warnings");
+
+    await vi.waitFor(() =>
+      expect(notifications).toHaveBeenCalledWith(warning, { threadId: "thread-warnings" }),
+    );
+  });
+
   it("does not dispatch a request that times out before route activation", async () => {
     vi.useFakeTimers();
     vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
@@ -171,12 +192,16 @@ describe("CodexAppServerTurnRouter", () => {
     harness.send({ method: "configWarning", params: { message: "global" } });
     await settleInput();
 
-    expect(notifications).toHaveBeenCalledOnce();
+    expect(notifications).toHaveBeenCalledTimes(2);
     expect(notifications).toHaveBeenCalledWith(
       {
         method: "thread/status/changed",
         params: { threadId: "thread-1", status: { type: "active" } },
       },
+      { threadId: "thread-1" },
+    );
+    expect(notifications).toHaveBeenCalledWith(
+      { method: "configWarning", params: { message: "global" } },
       { threadId: "thread-1" },
     );
     expect(warn).toHaveBeenCalledTimes(1);

@@ -531,8 +531,10 @@ async function resolveThreadBindingRuntime(
       modelProvider: reviewerModelProvider,
       model: params.model,
       config: params.config,
-      env: process.env,
+      env: { ...process.env, ...modelScopedRuntime.start.env },
       agentDir: params.agentDir,
+      homeScope: modelScopedRuntime.start.homeScope,
+      codexArgs: modelScopedRuntime.start.args,
     }),
   });
   const clientOptions = {
@@ -711,45 +713,41 @@ async function attachExistingThread(
       assertCodexBindingMayBeReplaced(current, "attaching a conversation-bound Codex thread");
       const resolved = await resolveThreadBindingRuntime(params);
       try {
-        // Codex applies network-proxy permission profiles at thread/start. Resuming
-        // an arbitrary existing thread cannot prove that profile is active.
-        const response: CodexThreadResumeResponse | CodexThreadStartResponse = resolved.runtime
-          .networkProxy
-          ? await requestNewConversationBindingThread(params, resolved)
-          : await withLeasedCodexAppServerClientStartSelectionRetry({
-              lease: resolved.clientLease,
-              options: resolved.clientOptions,
-              run: async (client, requestOptions) => {
-                if (isCodexAppServerLiveThreadClaimed(client, params.threadId)) {
-                  throw new Error(
-                    `Codex thread ${params.threadId} has an active run; stop it before binding its conversation.`,
-                  );
-                }
-                // Codex ignores resume config while any connection is still
-                // subscribed; completed native children otherwise inherit app permissions.
-                await releaseCodexAppServerLiveThread(client, params.threadId);
-                if (isCodexAppServerLiveThreadClaimed(client, params.threadId)) {
-                  throw new Error(
-                    `Codex thread ${params.threadId} has an active run; stop it before binding its conversation.`,
-                  );
-                }
-                return await client.request(
-                  CODEX_CONTROL_METHODS.resumeThread,
-                  {
-                    threadId: params.threadId,
-                    ...(resolved.model ? { model: resolved.model } : {}),
-                    ...(resolved.modelProvider ? { modelProvider: resolved.modelProvider } : {}),
-                    personality: CODEX_NATIVE_PERSONALITY_NONE,
-                    ...buildThreadRequestRuntimeOptions(params, resolved),
-                  },
-                  requestOptions,
+        const response: CodexThreadResumeResponse =
+          await withLeasedCodexAppServerClientStartSelectionRetry({
+            lease: resolved.clientLease,
+            options: resolved.clientOptions,
+            run: async (client, requestOptions) => {
+              if (isCodexAppServerLiveThreadClaimed(client, params.threadId)) {
+                throw new Error(
+                  `Codex thread ${params.threadId} has an active run; stop it before binding its conversation.`,
                 );
-              },
-              onClientChange: (client) => {
-                resolved.client = client;
-              },
-            });
-        if (!resolved.runtime.networkProxy && response.thread.id !== params.threadId) {
+              }
+              // Codex ignores resume config while any connection is still
+              // subscribed; completed native children otherwise inherit app permissions.
+              await releaseCodexAppServerLiveThread(client, params.threadId);
+              if (isCodexAppServerLiveThreadClaimed(client, params.threadId)) {
+                throw new Error(
+                  `Codex thread ${params.threadId} has an active run; stop it before binding its conversation.`,
+                );
+              }
+              return await client.request(
+                CODEX_CONTROL_METHODS.resumeThread,
+                {
+                  threadId: params.threadId,
+                  ...(resolved.model ? { model: resolved.model } : {}),
+                  ...(resolved.modelProvider ? { modelProvider: resolved.modelProvider } : {}),
+                  personality: CODEX_NATIVE_PERSONALITY_NONE,
+                  ...buildThreadRequestRuntimeOptions(params, resolved),
+                },
+                requestOptions,
+              );
+            },
+            onClientChange: (client) => {
+              resolved.client = client;
+            },
+          });
+        if (response.thread.id !== params.threadId) {
           throw new Error(
             `Codex conversation resume returned ${response.thread.id} for ${params.threadId}.`,
           );
@@ -821,8 +819,10 @@ async function runBoundTurn(params: {
     modelProvider: reviewerModelProvider,
     model: binding.model,
     config: params.config,
-    env: process.env,
+    env: { ...process.env, ...modelScopedRuntime.start.env },
     agentDir: params.data.agentDir,
+    homeScope: modelScopedRuntime.start.homeScope,
+    codexArgs: modelScopedRuntime.start.args,
   });
   const useModelScopedPolicy =
     execPolicy?.touched === true || modelBackedApprovalsReviewerUnavailable;

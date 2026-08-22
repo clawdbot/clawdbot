@@ -365,8 +365,6 @@ describe("Codex Computer Use setup", () => {
       {
         input: [],
         developerInstructions: "OpenClaw Computer Use readiness probe",
-        sandbox: "danger-full-access",
-        approvalPolicy: "never",
         ephemeral: true,
       },
       { timeoutMs: 60_000 },
@@ -398,42 +396,90 @@ describe("Codex Computer Use setup", () => {
     expectRequestMethodNotCalled(request, "plugin/install");
   });
 
-  it("repairs stale Computer Use MCP children and retries the live test once", async () => {
+  it("inherits managed security policy when starting a Computer Use readiness probe", async () => {
+    const request = createComputerUseRequest({ installed: true });
+    const managedRequest = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "thread/start") {
+        const threadParams = requireRecord(params, "managed readiness thread");
+        if ("sandbox" in threadParams || "approvalPolicy" in threadParams) {
+          throw new Error("enterprise policy does not permit thread security overrides");
+        }
+      }
+      return await request(method, params);
+    }) as CodexComputerUseRequest;
+
+    const status = await readCodexComputerUseStatus({
+      pluginConfig: {
+        computerUse: {
+          enabled: true,
+          marketplaceName: "desktop-tools",
+          strictReadiness: true,
+        },
+      },
+      request: managedRequest,
+    });
+
+    expect(status).toMatchObject({ ready: true, reason: "ready" });
+  });
+
+  it("repairs a failed probe through the owning MCP runtime without signaling sibling processes", async () => {
     const request = createComputerUseRequest({ installed: true, liveTestFailures: 1 });
-    const repairComputerUseMcpChildren = vi.fn(async () => ({
-      attempted: true,
-      killedPids: [1234],
-      warnings: [],
-      message: "Terminated 1 stale Computer Use MCP child process.",
-    }));
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      const status = await readCodexComputerUseStatus({
+        pluginConfig: {
+          computerUse: { enabled: true, marketplaceName: "desktop-tools", autoRepair: true },
+        },
+        request,
+      });
+
+      expect(status).toMatchObject({ ready: true, reason: "ready" });
+      expect(status.liveTest).toMatchObject({
+        status: "passed",
+        attempts: 2,
+        retried: true,
+        repaired: true,
+      });
+      expect(status.repair).toMatchObject({ attempted: true, killedPids: [], warnings: [] });
+      expect(request).toHaveBeenCalledWith("config/mcpServer/reload", undefined, {
+        timeoutMs: 60_000,
+      });
+      const methods = requestCalls(request).map(([method]) => method);
+      expect(methods.indexOf("thread/archive")).toBeLessThan(
+        methods.indexOf("config/mcpServer/reload"),
+      );
+      expect(
+        requestCalls(request).filter(([method]) => method === "mcpServer/tool/call"),
+      ).toHaveLength(2);
+      expect(killSpy).not.toHaveBeenCalled();
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it("reports an owner-managed MCP reload failure without preventing the bounded retry", async () => {
+    const request = createComputerUseRequest({
+      installed: true,
+      liveTestFailures: 1,
+      reloadFailures: 1,
+    });
 
     const status = await readCodexComputerUseStatus({
       pluginConfig: {
         computerUse: { enabled: true, marketplaceName: "desktop-tools", autoRepair: true },
       },
       request,
-      repairComputerUseMcpChildren,
     });
 
-    expectStatusFields(status, {
-      ready: true,
-      reason: "ready",
-      message: "Computer Use is ready.",
-    });
-    expect(status.liveTest).toMatchObject({
-      status: "passed",
-      attempts: 2,
-      retried: true,
-      repaired: true,
-    });
+    expect(status.liveTest).toMatchObject({ status: "passed", attempts: 2, repaired: false });
     expect(status.repair).toMatchObject({
       attempted: true,
-      killedPids: [1234],
+      killedPids: [],
+      warnings: ["Could not reload Computer Use MCP servers: MCP runtime reload failed"],
     });
-    expect(repairComputerUseMcpChildren).toHaveBeenCalledTimes(1);
-    expect(
-      requestCalls(request).filter(([method]) => method === "mcpServer/tool/call"),
-    ).toHaveLength(2);
+    expect(status.warnings).toContain(
+      "Could not reload Computer Use MCP servers: MCP runtime reload failed",
+    );
   });
 
   it("fails fast when the named MCP server exposes no tools", async () => {
@@ -478,19 +524,12 @@ describe("Codex Computer Use setup", () => {
     expectRequestMethodNotCalled(request, "thread/start");
   });
 
-  it("does not repair stale Computer Use MCP children unless autoRepair is enabled", async () => {
+  it("does not reload the Computer Use MCP runtime unless autoRepair is enabled", async () => {
     const request = createComputerUseRequest({ installed: true, liveTestFailures: 2 });
-    const repairComputerUseMcpChildren = vi.fn(async () => ({
-      attempted: true,
-      killedPids: [],
-      warnings: [],
-      message: "No stale Computer Use MCP children were found.",
-    }));
 
     const status = await readCodexComputerUseStatus({
       pluginConfig: { computerUse: { enabled: true, marketplaceName: "desktop-tools" } },
       request,
-      repairComputerUseMcpChildren,
     });
 
     expect(status.liveTest).toMatchObject({
@@ -514,17 +553,11 @@ describe("Codex Computer Use setup", () => {
       "Startup is allowed because computerUse.strictReadiness is false.",
     );
     expect(status.repair).toBeUndefined();
-    expect(repairComputerUseMcpChildren).not.toHaveBeenCalled();
+    expectRequestMethodNotCalled(request, "config/mcpServer/reload");
   });
 
   it("surfaces install, exposure, and live-test layers separately when the live test fails", async () => {
     const request = createComputerUseRequest({ installed: true, liveTestFailures: 2 });
-    const repairComputerUseMcpChildren = vi.fn(async () => ({
-      attempted: true,
-      killedPids: [],
-      warnings: [],
-      message: "No stale Computer Use MCP children were found.",
-    }));
 
     const status = await readCodexComputerUseStatus({
       pluginConfig: {
@@ -536,7 +569,6 @@ describe("Codex Computer Use setup", () => {
         },
       },
       request,
-      repairComputerUseMcpChildren,
     });
 
     expectStatusFields(status, {
@@ -559,7 +591,9 @@ describe("Codex Computer Use setup", () => {
       error: "list_apps timed out",
     });
     expect(status.message).toContain("Computer Use live test failed after 2 attempts");
-    expect(repairComputerUseMcpChildren).toHaveBeenCalledTimes(1);
+    expect(
+      requestCalls(request).filter(([method]) => method === "config/mcpServer/reload"),
+    ).toHaveLength(1);
   });
 
   it("keeps startup compatible by default when the live test fails", async () => {
@@ -573,12 +607,6 @@ describe("Codex Computer Use setup", () => {
         },
       },
       request,
-      repairComputerUseMcpChildren: vi.fn(async () => ({
-        attempted: true,
-        killedPids: [],
-        warnings: [],
-        message: "No stale Computer Use MCP children were found.",
-      })),
     });
 
     expectStatusFields(status, {
@@ -1319,6 +1347,7 @@ function createComputerUseRequest(params: {
   enabled?: boolean;
   marketplaceAvailableAfterListCalls?: number;
   liveTestFailures?: number;
+  reloadFailures?: number;
   mcpToolsAvailable?: boolean;
   remoteMarketplace?: {
     name: string;
@@ -1330,6 +1359,7 @@ function createComputerUseRequest(params: {
   let enabled = params.enabled ?? installed;
   let pluginListCalls = 0;
   let liveTestFailures = params.liveTestFailures ?? 0;
+  let reloadFailures = params.reloadFailures ?? 0;
   let threadStartCalls = 0;
   const marketplaceName = params.remoteMarketplace?.name ?? "desktop-tools";
   const marketplacePath = params.remoteMarketplace
@@ -1404,6 +1434,10 @@ function createComputerUseRequest(params: {
       return { authPolicy: "ON_INSTALL", appsNeedingAuth: [] };
     }
     if (method === "config/mcpServer/reload") {
+      if (reloadFailures > 0) {
+        reloadFailures -= 1;
+        throw new Error("MCP runtime reload failed");
+      }
       return undefined;
     }
     if (method === "mcpServerStatus/list") {

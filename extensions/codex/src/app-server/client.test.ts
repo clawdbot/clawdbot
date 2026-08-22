@@ -49,6 +49,24 @@ describe("CodexAppServerClient", () => {
     expect(outbound.method).toBe("model/list");
   });
 
+  it("replays configuration warnings emitted before their notification observer exists", () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const notification = {
+      method: "configWarning",
+      params: {
+        summary: "Error parsing rules; custom rules not applied.",
+        details: "rules.toml: unexpected token",
+      },
+    };
+
+    harness.send(notification);
+    const receiveNotification = vi.fn();
+    harness.client.addNotificationHandler(receiveNotification);
+
+    expect(receiveNotification).toHaveBeenCalledExactlyOnceWith(notification);
+  });
+
   it("isolates synchronous notification handler failures", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const harness = createClientHarness();
@@ -350,6 +368,9 @@ describe("CodexAppServerClient", () => {
           extensions: {
             "openai/standard-form-input": {},
             "openai/form": {},
+            "io.modelcontextprotocol/ui": {
+              mimeTypes: ["text/html;profile=mcp-app"],
+            },
           },
         },
       },

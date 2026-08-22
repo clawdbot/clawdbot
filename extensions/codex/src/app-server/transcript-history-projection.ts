@@ -153,6 +153,9 @@ function projectCodexThreadHistory(params: {
       if (!text || !role) {
         continue;
       }
+      const phase =
+        item.phase === "commentary" || item.phase === "final_answer" ? item.phase : undefined;
+      const asyncDelivery = item.delivery === "async";
       const message =
         role === "assistant"
           ? attachCodexMirrorIdentity(
@@ -175,13 +178,13 @@ function projectCodexThreadHistory(params: {
                 ...(turn.status === "failed" && turn.error?.message
                   ? { errorMessage: turn.error.message }
                   : {}),
+                ...(phase ? { phase } : {}),
+                ...(asyncDelivery && itemId ? { openclawAsyncDelivery: { itemId } } : {}),
                 timestamp,
               } satisfies AssistantMessage,
               identity,
             )
           : attachCodexMirrorIdentity({ role, content: text, timestamp } as AgentMessage, identity);
-      const phase =
-        item.phase === "commentary" || item.phase === "final_answer" ? item.phase : undefined;
       projected.push({
         message,
         responseItem: {
@@ -247,7 +250,9 @@ export function projectBoundedCodexThreadHistory(params: {
       .filter(
         ({ message }) =>
           message.role !== "assistant" ||
-          (message.stopReason !== "aborted" && message.stopReason !== "error"),
+          (message.stopReason !== "aborted" &&
+            message.stopReason !== "error" &&
+            !("openclawAsyncDelivery" in message)),
       )
       .map(({ responseItem }) => responseItem),
     transcriptMessages: selected.map(({ message }) => message),
@@ -265,8 +270,9 @@ export function projectBoundedCodexVisibleSessionHistory(
     }
     if (
       entry.role === "assistant" &&
-      "stopReason" in entry.message &&
-      (entry.message.stopReason === "aborted" || entry.message.stopReason === "error")
+      (("stopReason" in entry.message &&
+        (entry.message.stopReason === "aborted" || entry.message.stopReason === "error")) ||
+        "openclawAsyncDelivery" in entry.message)
     ) {
       continue;
     }

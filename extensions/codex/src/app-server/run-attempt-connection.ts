@@ -338,9 +338,10 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         modelProvider: selection.modelProvider,
         model: selection.model,
         config: params.config,
-        env: process.env,
+        env: { ...process.env, ...appServer.start.env, ...shellEnvironment },
         agentDir,
         homeScope: appServer.start.homeScope,
+        codexArgs: appServer.start.args,
       }),
       requirementsToml,
       policyLocked: startupBinding?.connectionScope === "supervision",
@@ -356,7 +357,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       provider: selection.modelProvider,
       model: selection.model,
       config: params.config,
-      env: process.env,
+      env: { ...process.env, ...session.start.env, ...shellEnvironment },
       agentDir,
     });
     return { session, appServer: withPreparedProcessEnv(trusted) };

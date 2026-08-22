@@ -84,6 +84,15 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     isRoutableChannel: routeReplyRuntime?.isRoutableChannel ?? (() => false),
   });
   const routeReplyTo = replyRoute.to;
+  // Durable intent identifies an outbound write; it never authorizes a new
+  // destination or bypasses private-webchat and parent-owned-session fences.
+  const canRouteDurableBlockReply = Boolean(
+    !suppressAcpChildUserDelivery &&
+    !isInternalWebchatTurn &&
+    routeReplyChannel &&
+    routeReplyTo &&
+    routeReplyChannel === normalizedCurrentSurface,
+  );
   const deliveryChannel = shouldRouteToOriginating ? routeReplyChannel : currentSurface;
   const replyContextAccountId = routeReplyChannel
     ? resolveReplyDeliveryAccountId(cfg, routeReplyChannel, replyRoute.accountId)
@@ -133,10 +142,12 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       deliveryIntentId?: string;
     },
   ) => {
+    const durableRouteAuthorized =
+      options?.deliveryIntentId !== undefined && canRouteDurableBlockReply;
     const runtime =
-      routeReplyRuntime ?? (options?.deliveryIntentId ? await loadRouteReplyRuntime() : undefined);
+      routeReplyRuntime ?? (durableRouteAuthorized ? await loadRouteReplyRuntime() : undefined);
     if (
-      (!shouldRouteToOriginating && !options?.deliveryIntentId) ||
+      (!shouldRouteToOriginating && !durableRouteAuthorized) ||
       !routeReplyChannel ||
       !routeReplyTo ||
       !runtime
@@ -281,6 +292,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     normalizedCurrentSurface,
     isInternalWebchatTurn,
     routeReplyChannel,
+    canRouteDurableBlockReply,
     shouldRouteToOriginating,
     shouldSuppressTyping,
     routeReplyTo,

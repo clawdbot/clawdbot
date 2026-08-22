@@ -49,6 +49,100 @@ describe("app-tool-stream run usage", () => {
     ]);
   });
 
+  it("projects provider-independent system warnings into the visible session transcript", () => {
+    const host = createHost({ chatRunId: "client-run" });
+
+    expect(
+      handleAgentEvent(
+        host,
+        agentEvent(
+          "client-run",
+          1,
+          "notice",
+          { phase: "warning", message: "Custom execution rules were not applied." },
+          "main",
+        ),
+      ),
+    ).toBe(true);
+    expect(host.guardianNotices).toMatchObject([
+      {
+        kind: "warning",
+        source: "system",
+        message: "Custom execution rules were not applied.",
+      },
+    ]);
+  });
+
+  it("replaces a pending targetless Guardian review with its terminal decision", () => {
+    const host = createHost({ chatRunId: "client-run" });
+    const review = {
+      reviewId: "network-review",
+      targetItemId: null,
+      command: "https://api.example.test:443",
+    };
+
+    handleAgentEvent(
+      host,
+      agentEvent(
+        "client-run",
+        1,
+        "codex_app_server.guardian",
+        { ...review, phase: "started", status: "inProgress" },
+        "main",
+      ),
+    );
+    expect(host.guardianNotices).toMatchObject([
+      { kind: "reviewing", command: "https://api.example.test:443" },
+    ]);
+
+    handleAgentEvent(
+      host,
+      agentEvent(
+        "client-run",
+        2,
+        "codex_app_server.guardian",
+        { ...review, phase: "completed", status: "denied" },
+        "main",
+      ),
+    );
+    expect(host.guardianNotices).toMatchObject([
+      { kind: "denied", command: "https://api.example.test:443" },
+    ]);
+  });
+
+  it("shows a targeted strict-review requirement only until its decision arrives", () => {
+    const host = createHost({ chatRunId: "client-run" });
+    const review = {
+      reviewId: "strict-review",
+      targetItemId: "command-1",
+      command: "printf hello",
+    };
+
+    handleAgentEvent(
+      host,
+      agentEvent(
+        "client-run",
+        1,
+        "codex_app_server.guardian",
+        { ...review, phase: "strict_review_required" },
+        "main",
+      ),
+    );
+    expect(host.guardianNotices).toMatchObject([{ kind: "reviewing", command: "printf hello" }]);
+
+    handleAgentEvent(
+      host,
+      agentEvent(
+        "client-run",
+        2,
+        "codex_app_server.guardian",
+        { ...review, phase: "completed", status: "approved" },
+        "main",
+      ),
+    );
+    expect(host.guardianNotices).toEqual([]);
+  });
+
   it("requires the local run id when an event has no session identity", () => {
     const host = createHost({ chatRunId: "client-run" });
 

@@ -367,6 +367,98 @@ describe("CodexAppServerEventProjector reasoning and guardian projection", () =>
     expect(warnings).toEqual(["Guardian rejection limit reached; ending turn as interrupted."]);
   });
 
+  it("describes targetless network reviews using the upstream network target", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification(
+      guardianReview({
+        id: "network-review",
+        status: "inProgress",
+        phase: "started",
+        target: null,
+        action: {
+          type: "networkAccess",
+          target: "https://api.example.test:443",
+          host: "api.example.test",
+          protocol: "https",
+          port: 443,
+        },
+      }),
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "codex_app_server.guardian",
+      data: expect.objectContaining({
+        phase: "started",
+        reviewId: "network-review",
+        targetItemId: null,
+        command: "https://api.example.test:443",
+      }),
+    });
+  });
+
+  it("preserves Codex 0.149 strict-review correlation for its active Guardian assessment", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification(
+      guardianReview({ id: "strict-review", status: "inProgress", phase: "started" }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("autoApprovalReview/strictReviewRequired", {
+        startedAtMs: 1_787_273_600_000,
+      }),
+    );
+
+    expect(
+      findAgentEvent(onAgentEvent, {
+        stream: "codex_app_server.guardian",
+        phase: "strict_review_required",
+      }).data,
+    ).toMatchObject({
+      reviewId: "strict-review",
+      targetItemId: "cmd-1",
+      command: "printf hello",
+      startedAtMs: 1_787_273_600_000,
+    });
+  });
+
+  it("surfaces startup and thread warnings without requiring an upstream turn id", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification({
+      method: "configWarning",
+      params: {
+        summary: "Error parsing rules; custom rules not applied.",
+        details: "rules.toml: unexpected token",
+      },
+    });
+    await projector.handleNotification({
+      method: "warning",
+      params: { threadId: THREAD_ID, message: "Project hooks were disabled." },
+    });
+    await projector.handleNotification({
+      method: "warning",
+      params: { threadId: "another-thread", message: "Other session warning." },
+    });
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual([
+      {
+        stream: "notice",
+        data: {
+          phase: "warning",
+          message: "Error parsing rules; custom rules not applied.\nrules.toml: unexpected token",
+        },
+      },
+      {
+        stream: "notice",
+        data: { phase: "warning", message: "Project hooks were disabled." },
+      },
+    ]);
+  });
+
   it("projects reasoning end, plan updates, compaction state, and tool metadata", async () => {
     const onReasoningStream = vi.fn();
     const onReasoningEnd = vi.fn();

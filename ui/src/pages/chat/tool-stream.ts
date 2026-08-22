@@ -969,8 +969,9 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
   return true;
 }
 
-function handleGuardianEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
-  if (payload.stream !== "codex_app_server.guardian") {
+function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  const systemNotice = payload.stream === "notice";
+  if (!systemNotice && payload.stream !== "codex_app_server.guardian") {
     return false;
   }
   const data = payload.data ?? {};
@@ -990,26 +991,33 @@ function handleGuardianEvent(host: ToolStreamHost, payload: AgentEventPayload): 
       : String(payload.seq));
   const noticeKey =
     phase === "warning"
-      ? `guardian:${payload.runId}:warning:${payload.seq}`
-      : `guardian:${payload.runId}:${threadId ?? "thread"}:${turnId ?? "turn"}:${correlationId}`;
+      ? `${systemNotice ? "system" : "guardian"}:${payload.runId}:warning:${payload.seq}`
+      : `${systemNotice ? "system" : "guardian"}:${payload.runId}:${threadId ?? "thread"}:${turnId ?? "turn"}:${correlationId}`;
   const current = host.guardianNotices ?? [];
   const kind =
     phase === "strict_review_required"
       ? "strict-review-required"
       : phase === "warning"
         ? "warning"
-        : phase === "completed" && status === "approved"
-          ? "approved"
-          : phase === "completed" && ["denied", "timedOut", "aborted"].includes(status ?? "")
-            ? "denied"
-            : null;
+        : phase === "started" && status === "inProgress"
+          ? "reviewing"
+          : phase === "completed" && status === "approved"
+            ? "approved"
+            : phase === "completed" && ["denied", "timedOut", "aborted"].includes(status ?? "")
+              ? "denied"
+              : null;
   if (!kind) {
     return true;
   }
   const targetItemId = toTrimmedString(data.targetItemId);
-  if (phase === "completed" && targetItemId) {
+  if ((phase === "started" || phase === "completed") && targetItemId) {
     // Targeted decisions arrive again as generic tool-review metadata. Keep
-    // vendor notices only as the compatibility fallback for targetless reviews.
+    // vendor notices only for strict-review requirements and targetless reviews.
+    if (phase === "completed") {
+      host.guardianNotices = (host.guardianNotices ?? []).filter(
+        (candidate) => candidate.key !== noticeKey,
+      );
+    }
     return true;
   }
   const command = toTrimmedString(data.command);
@@ -1021,6 +1029,7 @@ function handleGuardianEvent(host: ToolStreamHost, payload: AgentEventPayload): 
     runId: payload.runId,
     timestamp: typeof payload.ts === "number" ? payload.ts : Date.now(),
     kind,
+    ...(systemNotice ? { source: "system" as const } : {}),
     ...(command ? { command } : {}),
     ...(riskLevel ? { riskLevel } : {}),
     ...(rationale ? { rationale } : {}),
@@ -1109,7 +1118,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return true;
   }
 
-  if (handleGuardianEvent(host, payload)) {
+  if (handleNoticeEvent(host, payload)) {
     return true;
   }
 
