@@ -690,7 +690,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
             baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
             onSplit: ({ itemCount, splitAt }) => {
               log.warn(
-                `memory embeddings batch failed after retries; splitting ${label} of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
+                `memory embeddings batch failed; splitting ${label} of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
               );
             },
           }),

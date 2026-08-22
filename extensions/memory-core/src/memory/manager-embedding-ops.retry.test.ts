@@ -15,7 +15,7 @@ type EmbeddingBatchRetryHarness = {
   embedBatchWithRetry: (texts: string[]) => Promise<number[][]>;
   markLocalEmbeddingProviderDegraded: (error: unknown) => void;
   resolveEmbeddingTimeout: () => number;
-  waitForEmbeddingRetry: () => Promise<void>;
+  waitForEmbeddingRetry: ReturnType<typeof vi.fn>;
   withProviderUse: <T>(provider: EmbeddingProvider, run: () => Promise<T>) => Promise<T>;
 };
 
@@ -54,7 +54,7 @@ function createEmbeddingBatchRetryHarness(
     provider,
     resolveEmbeddingTimeout: () => 60_000,
     markLocalEmbeddingProviderDegraded: vi.fn(),
-    waitForEmbeddingRetry: async () => {},
+    waitForEmbeddingRetry: vi.fn(async () => {}),
     withProviderUse: async <T>(_provider: EmbeddingProvider, run: () => Promise<T>) => await run(),
   }) as EmbeddingBatchRetryHarness;
 }
@@ -159,6 +159,7 @@ describe("memory embedding batch retry boundary", () => {
     expect(embedBatch.mock.calls.map(([texts]) => texts.length)).toEqual([
       33, 17, 9, 8, 16, 8, 8,
     ]);
+    expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
     expect(manager.markLocalEmbeddingProviderDegraded).not.toHaveBeenCalled();
   });
 });
