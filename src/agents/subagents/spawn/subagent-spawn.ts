@@ -1,10 +1,4 @@
-/**
- * Subagent spawn executor.
- *
- * Validates spawn requests, prepares child sessions, stages attachments, binds delivery context, and registers runs.
- */
 import { promises as fs } from "node:fs";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { isExecutionIdentityCollectionEnabled } from "../../../audit/audit-config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
@@ -20,7 +14,6 @@ import {
   recordSubagentSpawned,
 } from "../../../sessions/session-state-events.js";
 import { resolveAgentExecutionPlacement } from "../../execution-backends.js";
-import { hasPromptUnsafeControlCharacter } from "../../sanitize-for-prompt.js";
 import {
   runSpawnPipeline,
   type SpawnBackendAdapter,
@@ -56,7 +49,7 @@ import type {
   SpawnSubagentParams,
   SpawnSubagentResult,
 } from "./subagent-spawn-contract.js";
-import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
+import { sanitizeSubagentMountPathHint } from "./subagent-spawn-deps.js";
 import {
   buildSubagentExecutionSessionSpawnContext,
   withSubagentGatewayExecutionIdentity,
@@ -80,20 +73,6 @@ import {
 } from "./subagent-spawn.runtime.js";
 
 export { SUBAGENT_SPAWN_CONTEXT_MODES, SUBAGENT_SPAWN_MODES } from "./subagent-spawn.types.js";
-
-function sanitizeMountPathHint(value?: string): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  if (hasPromptUnsafeControlCharacter(trimmed)) {
-    return undefined;
-  }
-  if (!/^[A-Za-z0-9._\-/:]+$/.test(trimmed)) {
-    return undefined;
-  }
-  return trimmed;
-}
 
 export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
@@ -283,7 +262,7 @@ export async function spawnSubagentDirect(
       childSessionOrigin =
         mergeDeliveryContext(bindResult.deliveryOrigin, childSessionOrigin) ?? childSessionOrigin;
     }
-    const mountPathHint = sanitizeMountPathHint(params.attachMountPath);
+    const mountPathHint = sanitizeSubagentMountPathHint(params.attachMountPath);
 
     let childSystemPrompt = buildSubagentSystemPrompt({
       requesterSessionKey,
@@ -718,14 +697,4 @@ export async function spawnSubagentDirect(
       removeQueuedSwarmRun(childRunId);
     }
   }
-}
-
-const testing = {
-  setDepsForTest(overrides?: Parameters<typeof setSubagentSpawnDepsForTest>[0]) {
-    setSubagentSpawnDepsForTest(overrides);
-  },
-};
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.subagentSpawnTestApi")] =
-    testing;
 }

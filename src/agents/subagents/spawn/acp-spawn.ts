@@ -71,6 +71,7 @@ import {
   type AcpSpawnParentRelayHandle,
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
+import { resolveAcpSpawnRuntimePolicyError } from "./acp-spawn-policy.js";
 import {
   resolveAcpSpawnRequesterState,
   resolveAcpSpawnStreamPlan,
@@ -190,8 +191,6 @@ const ACP_SPAWN_ACCEPTED_NOTE =
   "initial ACP task queued in isolated session; follow-ups continue in the bound thread.";
 const ACP_SPAWN_SESSION_ACCEPTED_NOTE =
   "thread-bound ACP session stays active after this task; continue in-thread for follow-ups.";
-
-import { resolveAcpSpawnRuntimePolicyError } from "./acp-spawn-policy.js";
 
 export { resolveAcpSpawnRuntimePolicyError } from "./acp-spawn-policy.js";
 

@@ -1,4 +1,6 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
+import { hasPromptUnsafeControlCharacter } from "../../sanitize-for-prompt.js";
 import {
   callGateway,
   dispatchGatewayMethodInProcess,
@@ -51,4 +53,26 @@ export function setSubagentSpawnDepsForTest(overrides?: Partial<SubagentSpawnDep
         ...overrides,
       }
     : defaultSubagentSpawnDeps;
+}
+
+export function sanitizeSubagentMountPathHint(value?: string): string | undefined {
+  const trimmed = normalizeOptionalString(value);
+  if (
+    !trimmed ||
+    hasPromptUnsafeControlCharacter(trimmed) ||
+    !/^[A-Za-z0-9._\-/:]+$/.test(trimmed)
+  ) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+const testing = {
+  setDepsForTest(overrides?: Partial<SubagentSpawnDeps>) {
+    setSubagentSpawnDepsForTest(overrides);
+  },
+};
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.subagentSpawnTestApi")] =
+    testing;
 }

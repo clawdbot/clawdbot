@@ -49,12 +49,6 @@ export function resolveAgentExecutionPlacement(params: {
   }
   const backendType: AgentExecutionBackendType = backendTypeRaw;
 
-  if (backendType !== "process") {
-    return err(
-      `execution backend "${requestedBackend}" has type "${backendType}", but only local process execution is supported in this release`,
-    );
-  }
-
   if (requestedProfile) {
     const profileNames = readProfileNames(configuredBackend ?? { type: "process" });
     if (profileNames.size === 0) {
