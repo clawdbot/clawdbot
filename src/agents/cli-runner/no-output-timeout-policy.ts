@@ -10,7 +10,8 @@ type CliNoOutputTimeoutPolicyParams = {
   useResume: boolean;
   hasReplayUnsafeActivity: boolean;
   allowResumeControlOnlyRetry?: boolean;
-  outstandingWorkGraceMs?: number;
+  activeToolGraceMs?: number;
+  backgroundTaskGraceMs?: number;
   /** Names of tool calls still reported in flight, for kill-message attribution. */
   activeToolNames?: readonly string[];
 };
@@ -21,10 +22,15 @@ export function resolveCliNoOutputTimeoutDecision(params: CliNoOutputTimeoutPoli
 } {
   const outstandingWork =
     params.cliTimeout.activeToolCount > 0 || params.cliTimeout.backgroundTaskCount > 0;
+  const activeToolGraceMs =
+    params.cliTimeout.activeToolCount > 0 ? params.activeToolGraceMs : undefined;
+  const backgroundTaskGraceMs =
+    params.cliTimeout.backgroundTaskCount > 0 ? params.backgroundTaskGraceMs : undefined;
+  const outstandingWorkGraceMs = Math.max(activeToolGraceMs ?? 0, backgroundTaskGraceMs ?? 0);
   // Live-only: tracked work may extend the watchdog; spawn has already terminated its child.
   const deferMs =
-    outstandingWork && params.outstandingWorkGraceMs !== undefined
-      ? Math.max(params.timeoutMs, params.outstandingWorkGraceMs) - params.quietDurationMs
+    outstandingWork && outstandingWorkGraceMs > 0
+      ? Math.max(params.timeoutMs, outstandingWorkGraceMs) - params.quietDurationMs
       : undefined;
   // Live-only: resume control traffic is distinguishable from replay-unsafe substantive output.
   const retryableResumeStall =
@@ -37,12 +43,17 @@ export function resolveCliNoOutputTimeoutDecision(params: CliNoOutputTimeoutPoli
     (!params.cliTimeout.observedActivity && !params.hasOutputText) || retryableResumeStall;
   // Attribute the kill to the in-flight tool(s): the model was not silent, a
   // tool call exceeded the tool-active allowance.
-  const activeToolNames =
-    params.cliTimeout.activeToolCount > 0 ? (params.activeToolNames ?? []) : [];
-  const messageOverride =
+  const activeToolNames = params.activeToolNames ?? [];
+  const activeToolDescription =
     activeToolNames.length > 0
-      ? `CLI produced no output for ${params.cliTimeout.timeoutSeconds}s while tool call(s) [${activeToolNames.join(", ")}] were still reported in flight and was terminated.`
-      : undefined;
+      ? `tool call(s) [${activeToolNames.join(", ")}]`
+      : `${params.cliTimeout.activeToolCount} tool call(s)`;
+  const messageOverride =
+    params.cliTimeout.activeToolCount > 0
+      ? `CLI produced no output for ${params.cliTimeout.timeoutSeconds}s while ${activeToolDescription} were still reported in flight and was terminated.`
+      : params.cliTimeout.backgroundTaskCount > 0
+        ? `CLI produced no output for ${params.cliTimeout.timeoutSeconds}s while ${params.cliTimeout.backgroundTaskCount} background task(s) were still reported in flight and was terminated.`
+        : undefined;
   return {
     ...(deferMs !== undefined && deferMs > 0 ? { deferMs } : {}),
     error: createCliTimeoutError(

@@ -84,7 +84,10 @@ export type CliBackendConfig = {
         /** Upper bound for computed watchdog timeout. */
         maxMs?: number;
       };
-      /** No-output allowance in ms while a CLI tool call is reported in flight. */
+    };
+    /** Reliability tuning that applies only to long-lived CLI sessions. */
+    liveSession?: {
+      /** No-output allowance in ms while a live-session tool call is reported in flight. */
       toolActiveNoOutputTimeoutMs?: number;
     };
   };

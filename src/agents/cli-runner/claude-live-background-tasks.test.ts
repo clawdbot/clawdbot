@@ -197,6 +197,7 @@ function startLiveTurn(params: {
   runId: string;
   timeoutMs?: number;
   noOutputTimeoutMs?: number;
+  toolActiveNoOutputTimeoutMs?: number;
   useResume?: boolean;
   onPhase?: (phase: "send" | "resolve") => void;
   credentialFingerprint?: string;
@@ -213,6 +214,7 @@ function startLiveTurn(params: {
     prompt: "hi",
     useResume: params.useResume ?? false,
     noOutputTimeoutMs: params.noOutputTimeoutMs ?? 5_000,
+    toolActiveNoOutputTimeoutMs: params.toolActiveNoOutputTimeoutMs,
     getProcessSupervisor: getProcessSupervisorForTest,
     onAssistantDelta: () => {},
     onPhase: params.onPhase,
@@ -471,6 +473,8 @@ describe("claude live session provisional results", () => {
       runId: "run-bg-quiet",
       timeoutMs: 3_600_000,
       noOutputTimeoutMs: 1_000,
+      // A shorter tool allowance must not replace the background-task floor.
+      toolActiveNoOutputTimeoutMs: 5_000,
     });
     await driver.stdout.waitReady();
 
@@ -525,6 +529,59 @@ describe("claude live session provisional results", () => {
     const result = await resultPromise;
     expect(result.output.text).toContain("done after wait");
     expect(driver.cancel).not.toHaveBeenCalled();
+  });
+
+  it("keeps the background-task floor separate and attributes its no-output abort", async () => {
+    const driver = installLiveStdoutDriver();
+    const resultPromise = startLiveTurn({
+      runId: "run-bg-floor",
+      timeoutMs: 3_600_000,
+      noOutputTimeoutMs: 1_000,
+      toolActiveNoOutputTimeoutMs: 5_000,
+    });
+    await driver.stdout.waitReady();
+
+    driver.stdout.emit(
+      jsonl([
+        { type: "system", subtype: "init", session_id: "live-bg-floor" },
+        {
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [{ task_id: "task-floor", task_type: "local_agent", description: "long work" }],
+        },
+        {
+          type: "result",
+          subtype: "success",
+          session_id: "live-bg-floor",
+          result: "started",
+          stop_reason: "end_turn",
+        },
+      ]),
+    );
+
+    await Promise.resolve();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    driver.stdout.emit(
+      `${JSON.stringify({
+        type: "system",
+        subtype: "task_progress",
+        task_id: "task-floor",
+        description: "still working",
+      })}\n`,
+    );
+
+    const rejection = expect(resultPromise).rejects.toMatchObject({
+      name: "FailoverError",
+      message: `CLI produced no output for ${BLOCKED_TOOL_CALL_ABORT_FLOOR_MS / 1_000}s while 1 background task(s) were still reported in flight and was terminated.`,
+      cliTimeout: {
+        mode: "no-output",
+        activeToolCount: 0,
+        backgroundTaskCount: 1,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(BLOCKED_TOOL_CALL_ABORT_FLOOR_MS);
+    await rejection;
+    expect(driver.cancel).toHaveBeenCalledWith("manual-cancel");
   });
 
   it("still aborts on overall turn timeout while waiting for a never-finishing background task", async () => {

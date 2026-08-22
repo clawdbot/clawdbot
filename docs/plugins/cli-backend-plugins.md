@@ -216,6 +216,7 @@ model-alias, session, image, and watchdog fields as the bundled
 | `serialize`                                               | Keep same-backend runs ordered                                                    |
 | `reseedFromRawTranscriptWhenUncompacted`                  | Opt in to bounded raw-transcript reseed before compaction for safe session resets |
 | `reliability.watchdog`                                    | No-output timeout tuning, separate for fresh vs resumed runs                      |
+| `reliability.liveSession.toolActiveNoOutputTimeoutMs`     | Live-session silence allowance while a tool call is in flight                     |
 
 Prefer the smallest static config that matches the CLI. Add plugin callbacks
 only for behavior that really belongs to the backend.

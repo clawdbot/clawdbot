@@ -55,7 +55,8 @@ function armNoOutputTimer(
       useResume: turn.useResume,
       hasReplayUnsafeActivity: turn.hasReplayUnsafeActivity,
       allowResumeControlOnlyRetry: true,
-      outstandingWorkGraceMs: host.toolActiveNoOutputTimeoutMs ?? BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
+      activeToolGraceMs: host.toolActiveNoOutputTimeoutMs ?? BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
+      backgroundTaskGraceMs: BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
       activeToolNames: [...turn.activeTools.values()].map((tool) => tool.toolName),
     });
     if (decision.deferMs !== undefined) {

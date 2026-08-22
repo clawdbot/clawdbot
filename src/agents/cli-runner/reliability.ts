@@ -109,7 +109,7 @@ export function resolveCliToolActiveNoOutputTimeoutMs(params: {
   timeoutMs: number;
   noOutputTimeoutMs: number;
 }): number {
-  const configured = params.backend.reliability?.watchdog?.toolActiveNoOutputTimeoutMs;
+  const configured = params.backend.reliability?.liveSession?.toolActiveNoOutputTimeoutMs;
   const base =
     typeof configured === "number" && Number.isFinite(configured) && configured > 0
       ? Math.max(CLI_WATCHDOG_MIN_TIMEOUT_MS, Math.floor(configured))

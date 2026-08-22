@@ -8,7 +8,7 @@ const baseBackend = { command: "claude" } as CliBackendConfig;
 function backendWith(toolActiveNoOutputTimeoutMs?: number): CliBackendConfig {
   return {
     ...baseBackend,
-    reliability: { watchdog: { toolActiveNoOutputTimeoutMs } },
+    reliability: { liveSession: { toolActiveNoOutputTimeoutMs } },
   } as CliBackendConfig;
 }
 
