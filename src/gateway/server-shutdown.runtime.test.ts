@@ -90,7 +90,10 @@ describe("gateway shutdown runtime", () => {
     expect(runtime.createGatewayCloseHandler).toBe(state.close);
     expect(runtime.flushPendingSessionsChangedEvents).toBe(state.flushSessionChanges);
     expect(runtime.runGlobalGatewayStopSafely).toBe(state.stopPlugins);
-    expect(runtime.clearActivePluginRegistry).toBe(state.clearPluginRegistry);
+    await runtime.clearActivePluginRegistry();
+    expect(state.clearPluginRegistry).toHaveBeenCalledWith({
+      preservePersistentSessionState: true,
+    });
     expect(state.preparePluginRegistryShutdown).toHaveBeenCalledOnce();
   });
 });

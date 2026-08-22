@@ -415,6 +415,7 @@ export async function cleanupReplacedPluginHostRegistry(params: {
   previousRegistry?: PluginRegistry | null;
   nextRegistry?: PluginRegistry | null;
   shouldCleanup?: () => boolean;
+  skipPersistentSessionState?: boolean;
 }): Promise<PluginHostCleanupResult> {
   const previousRegistry = params.previousRegistry;
   const shouldCleanup = params.shouldCleanup ?? (() => true);
@@ -445,6 +446,7 @@ export async function cleanupReplacedPluginHostRegistry(params: {
         ? collectSchedulerJobIds(params.nextRegistry, pluginId)
         : undefined,
       shouldCleanup,
+      skipPersistentSessionState: params.skipPersistentSessionState,
       restartPromotedSessionEntrySlotKeys: restarted
         ? collectRestartPromotedSessionEntrySlotKeys(
             previousRegistry,

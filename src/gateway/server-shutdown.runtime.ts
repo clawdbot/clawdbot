@@ -42,7 +42,8 @@ export async function prepareGatewayShutdownRuntime() {
     stopGmailWatcher,
     disposeAllCodeModeRuns,
     closeProviderTransportDispatcherPool,
-    clearActivePluginRegistry,
+    clearActivePluginRegistry: () =>
+      clearActivePluginRegistry({ preservePersistentSessionState: true }),
   };
 }
 
