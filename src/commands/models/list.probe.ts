@@ -58,7 +58,6 @@ import {
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  coerceSecretRef,
   hasConfiguredSecretInput,
   normalizeSecretInputString,
   resolveSecretInputRef,
