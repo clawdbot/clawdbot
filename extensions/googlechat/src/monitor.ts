@@ -307,7 +307,7 @@ async function processMessageWithPipeline(params: {
       );
     }
   }
-  const media = await toInboundMediaFactsWithMetadata(mediaInputs);
+  const media = mediaInputs.length === 0 ? [] : await toInboundMediaFactsWithMetadata(mediaInputs);
 
   const fromLabel = isGroup
     ? space.displayName || `space:${spaceId}`
