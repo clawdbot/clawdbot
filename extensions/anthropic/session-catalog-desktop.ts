@@ -11,6 +11,7 @@ import {
   childDirectories,
   desktopSessionsDir,
   readJsonFile,
+  reserveCatalogJsonFile,
   setBoundedCache,
   type CatalogJsonReadBudget,
 } from "./session-catalog-scan.js";
@@ -143,19 +144,29 @@ async function readDesktopMetadata(
   const active = new Map<string, DesktopSessionMetadata>();
   const archived = new Set<string>();
   const customGroups = await readClaudeDesktopCustomGroups(homeDir, forceRefresh);
-  for (const accountDir of await childDirectories(desktopSessionsDir(homeDir))) {
-    for (const workspaceDir of await childDirectories(accountDir)) {
+  for (const accountDir of (await childDirectories(desktopSessionsDir(homeDir))).toSorted()) {
+    for (const workspaceDir of (await childDirectories(accountDir)).toSorted()) {
       let entries: string[];
       try {
         entries = await fs.readdir(workspaceDir);
       } catch {
         continue;
       }
-      for (const name of entries) {
+      for (const name of entries.toSorted()) {
         if (!name.startsWith("local_") || !name.endsWith(".json")) {
           continue;
         }
-        const raw = await readJsonFile(path.join(workspaceDir, name), { budget });
+        const filePath = path.join(workspaceDir, name);
+        const reservedBytes = budget
+          ? await reserveCatalogJsonFile(filePath, budget)
+          : undefined;
+        if (budget && reservedBytes === undefined) {
+          continue;
+        }
+        const raw = await readJsonFile(filePath, {
+          budget,
+          ...(reservedBytes !== undefined ? { reservedBytes } : {}),
+        });
         if (!isRecord(raw)) {
           continue;
         }

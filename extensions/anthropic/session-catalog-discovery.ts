@@ -26,6 +26,7 @@ import {
   readClaudeCatalogMetadata,
   readJsonFile,
   readProjectsTreeSnapshot,
+  reserveCatalogJsonFile,
   safeSessionFileForScan,
   setBoundedCache,
 } from "./session-catalog-scan.js";
@@ -133,18 +134,42 @@ async function readIndexRecords(
   if (!context.resolvedRoot) {
     return { records, sidechainIds };
   }
-  const { results: indexes } = await runTasksWithConcurrency({
-    tasks: context.projectDirectories.map(({ directory, childNames, files }) => async () => ({
+  const indexReads = context.projectDirectories
+    .filter(({ childNames }) => childNames.includes("sessions-index.json"))
+    .map(({ directory, files }) => ({
       directory,
-      raw: childNames.includes("sessions-index.json")
-        ? await readJsonFile(path.join(directory, "sessions-index.json"), {
-            signature: files.get("sessions-index.json"),
-            budget,
-            onIoFailure: () => {
-              context.complete = false;
-            },
-          })
-        : undefined,
+      filePath: path.join(directory, "sessions-index.json"),
+      signature: files.get("sessions-index.json"),
+    }))
+    .toSorted((left, right) => left.filePath.localeCompare(right.filePath));
+  const admissions = [] as Array<{
+    directory: string;
+    filePath: string;
+    reservedBytes: number | undefined;
+  }>;
+  for (const { directory, filePath } of indexReads) {
+    admissions.push({
+      directory,
+      filePath,
+      reservedBytes: await reserveCatalogJsonFile(filePath, budget, () => {
+        context.complete = false;
+      }),
+    });
+  }
+  const { results: indexes } = await runTasksWithConcurrency({
+    tasks: admissions.map(({ directory, filePath, reservedBytes }, index) => async () => ({
+      directory,
+      raw:
+        reservedBytes === undefined
+          ? undefined
+          : await readJsonFile(filePath, {
+              signature: indexReads[index]?.signature,
+              budget,
+              reservedBytes,
+              onIoFailure: () => {
+                context.complete = false;
+              },
+            }),
     })),
     limit: CLAUDE_CATALOG_IO_CONCURRENCY,
     throwOnError: true,
@@ -546,14 +571,12 @@ export async function listClaudeSessions(
   options: { forceRefresh?: boolean; configDir?: string; includeDesktop?: boolean } = {},
 ): Promise<CatalogRecord[]> {
   const budget = createCatalogJsonReadBudget();
-  const [cli, desktop] = await Promise.all([
-    readProjectsTreeSnapshot(projectsDir(homeDir, options.configDir), options).then((snapshot) =>
-      readCliScan(snapshot, options.forceRefresh, budget),
-    ),
+  const snapshot = await readProjectsTreeSnapshot(projectsDir(homeDir, options.configDir), options);
+  const cli = await readCliScan(snapshot, options.forceRefresh, budget);
+  const desktop =
     options.includeDesktop !== false
-      ? readDesktopOverlay(homeDir, options.forceRefresh, budget)
-      : emptyDesktopOverlay,
-  ]);
+      ? await readDesktopOverlay(homeDir, options.forceRefresh, budget)
+      : emptyDesktopOverlay;
   let overlays = mergedScans.get(cli);
   if (!overlays) {
     overlays = new WeakMap();

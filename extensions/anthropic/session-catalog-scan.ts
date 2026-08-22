@@ -176,6 +176,30 @@ function reserveCatalogJsonBytes(
   return true;
 }
 
+export async function reserveCatalogJsonFile(
+  filePath: string,
+  budget: CatalogJsonReadBudget,
+  onIoFailure?: () => void,
+): Promise<number | undefined> {
+  const stat = await fs.stat(filePath).catch(() => {
+    onIoFailure?.();
+    return undefined;
+  });
+  if (!stat?.isFile()) {
+    deleteCatalogJsonCache(filePath);
+    return undefined;
+  }
+  if (stat.size > MAX_CATALOG_JSON_FILE_BYTES) {
+    deleteCatalogJsonCache(filePath);
+    onIoFailure?.();
+    return undefined;
+  }
+  if (!reserveCatalogJsonBytes(budget, stat.size)) {
+    return undefined;
+  }
+  return stat.size;
+}
+
 export function setBoundedCache<K, V>(
   cache: Map<K, V>,
   key: K,
@@ -264,6 +288,7 @@ export async function readJsonFile(
     onIoFailure?: () => void;
     signature?: { mtimeMs: number; size: number; ino?: number };
     budget?: CatalogJsonReadBudget;
+    reservedBytes?: number;
   } = {},
 ): Promise<unknown> {
   const stat =
@@ -284,6 +309,10 @@ export async function readJsonFile(
     options.onIoFailure?.();
     return undefined;
   }
+  if (options.reservedBytes !== undefined && stat.size !== options.reservedBytes) {
+    deleteCatalogJsonCache(filePath);
+    return undefined;
+  }
   const cached = catalogJsonCache.get(filePath);
   if (
     cached &&
@@ -291,7 +320,10 @@ export async function readJsonFile(
     cached.size === stat.size &&
     cached.ino === stat.ino
   ) {
-    if (!reserveCatalogJsonBytes(options.budget, cached.size)) {
+    if (
+      options.reservedBytes === undefined &&
+      !reserveCatalogJsonBytes(options.budget, cached.size)
+    ) {
       return undefined;
     }
     touchCatalogJsonCache(filePath, cached);
@@ -306,7 +338,12 @@ export async function readJsonFile(
       options.onIoFailure?.();
       return undefined;
     }
-    if (!reserveCatalogJsonBytes(options.budget, openedStat.size)) {
+    if (options.reservedBytes !== undefined) {
+      if (openedStat.size !== options.reservedBytes) {
+        deleteCatalogJsonCache(filePath);
+        return undefined;
+      }
+    } else if (!reserveCatalogJsonBytes(options.budget, openedStat.size)) {
       deleteCatalogJsonCache(filePath);
       return undefined;
     }

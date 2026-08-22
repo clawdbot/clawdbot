@@ -2770,9 +2770,11 @@ describe("Claude session catalog", () => {
         }),
       ]),
     );
-    expect(
-      refreshed.sessions.filter((session) => largeSessionIds.includes(session.threadId)),
-    ).toHaveLength(4);
+    const retainedLargeSessionIds = refreshed.sessions
+      .map((session) => session.threadId)
+      .filter((sessionId) => largeSessionIds.includes(sessionId))
+      .toSorted();
+    expect(retainedLargeSessionIds).toEqual(largeSessionIds.slice(0, 4).toSorted());
 
     const openSpy = vi.spyOn(fs, "open");
     for (const indexPath of largeIndexPaths) {
