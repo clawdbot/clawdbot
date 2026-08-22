@@ -769,7 +769,11 @@ describe("opencode provider plugin", () => {
       discoveryApiKey: "resolved-opencode-key",
       fetchGuard,
     });
-    expect(unknownOnly.models.map((model) => model.id)).toEqual(ACTIVE_MODEL_IDS);
+    // Shared projector templates bare unknown ids off the nearest active prefix
+    // (gpt-6-experimental ← gpt-*) instead of dropping them into static fallback.
+    expect(unknownOnly.models.map((model: { id: string }) => model.id)).toEqual([
+      "gpt-6-experimental",
+    ]);
 
     clearLiveCatalogCacheForTests();
     fetchGuard.mockRejectedValueOnce(new Error("network unavailable"));

@@ -250,11 +250,7 @@ export async function buildOpencodeGoLiveProviderConfig(
     timeoutMs: OPENCODE_GO_MODELS_TIMEOUT_MS,
     ttlMs: OPENCODE_GO_MODELS_CACHE_TTL_MS,
     auditContext: "opencode-go-model-discovery",
-    // SAFETY: buildOpenAICompatibleLiveModels returns ModelDefinitionConfig[] with
-    // opencode-go's discrete transport (api/baseUrl fixed in providerConfig) — safe
-    // to narrow to the provider-specific subtype for live discovery.
-    projectRows: (rows: readonly unknown[], fallback: ModelProviderConfig) =>
-      buildOpenAICompatibleLiveModels(rows, fallback) as OpencodeGoModelDefinition[],
+    projectRows: buildOpenAICompatibleLiveModels,
   });
 }
 
