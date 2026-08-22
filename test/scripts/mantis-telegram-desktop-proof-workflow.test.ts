@@ -8,6 +8,7 @@ const MANTIS_SUT_SCRIPT = "scripts/e2e/telegram-mantis-sut.ts";
 const MANTIS_LANE_SCRIPT = "scripts/e2e/telegram-mantis-lane.ts";
 const DESKTOP_CRABBOX_SCRIPT = "scripts/e2e/telegram-desktop-crabbox.ts";
 const SUT_CONTAINER_WRAPPER = "scripts/mantis/mantis-sut-container.sh";
+const STOP_LEASE_KEEPALIVE_SCRIPT = "scripts/mantis/stop-lease-keepalive.sh";
 const CREDENTIAL_SCRIPT = "scripts/e2e/telegram-user-credential.ts";
 const USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
 const QA_LAB_RUNTIME_API = "extensions/qa-lab/runtime-api.ts";
@@ -159,6 +160,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const abandoned = workflowStep("Clean up abandoned Mantis sessions").run ?? "";
     const release = workflowStep("Release Telegram QA user lease").run ?? "";
     const credentialScript = readFileSync(CREDENTIAL_SCRIPT, "utf8");
+    const stopKeepaliveScript = readFileSync(STOP_LEASE_KEEPALIVE_SCRIPT, "utf8");
 
     expect(credentialScript).toContain('command === "heartbeat"');
     expect(credentialScript).toContain('command === "heartbeat-loop"');
@@ -174,15 +176,33 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(acquire).toContain('echo "lease_lost_marker=$lease_lost_marker"');
 
     for (const cleanup of [abandoned, release]) {
+      expect(cleanup).toContain(STOP_LEASE_KEEPALIVE_SCRIPT);
       expect(cleanup).toContain("steps.telegram_credential.outputs.lease_keepalive_pid_file");
-      expect(cleanup).toContain('[[ "$keepalive_pid" =~ ^[1-9][0-9]*$ ]]');
-      expect(cleanup).toContain('[[ "$keepalive_exe" == /usr/local/lib/mantis-toolchain/node ]]');
-      expect(cleanup).toContain("telegram-user-credential.ts");
-      expect(cleanup).toContain("heartbeat-loop");
-      expect(cleanup).toContain('kill -TERM "$keepalive_pid"');
-      expect(cleanup).toContain('kill -KILL "$keepalive_pid"');
+      expect(cleanup).toContain("steps.telegram_credential.outputs.lease_file");
+      expect(cleanup).toContain('"$GITHUB_WORKSPACE"');
+      expect(cleanup).not.toContain("stop_lease_keepalive() {");
     }
-    expect(release.indexOf('kill -TERM "$keepalive_pid"')).toBeLessThan(
+    expect(stopKeepaliveScript).toContain('[[ "$keepalive_pid" =~ ^[1-9][0-9]*$ ]]');
+    expect(stopKeepaliveScript).toContain('[[ "$keepalive_uid" == "$(id -u)" ]]');
+    expect(stopKeepaliveScript).toContain('[[ "$keepalive_pgid" == "$keepalive_pid" ]]');
+    expect(stopKeepaliveScript).toContain(
+      '[[ "$keepalive_exe" == /usr/local/lib/mantis-toolchain/node ]]',
+    );
+    expect(stopKeepaliveScript).toContain('[[ "$keepalive_cwd" == "$expected_cwd" ]]');
+    expect(stopKeepaliveScript).toContain(
+      'grep -Fxq "scripts/e2e/telegram-user-credential.ts" <<<"$keepalive_args"',
+    );
+    expect(stopKeepaliveScript).toContain('grep -Fxq "heartbeat-loop" <<<"$keepalive_args"');
+    expect(stopKeepaliveScript).toContain('grep -Fxq "$lease_file" <<<"$keepalive_args"');
+    expect(stopKeepaliveScript).toContain('kill -TERM "$keepalive_pid"');
+    expect(stopKeepaliveScript).toContain('kill -KILL "$keepalive_pid"');
+    expect(release.indexOf(STOP_LEASE_KEEPALIVE_SCRIPT)).toBeLessThan(
+      release.indexOf('if [[ -z "$lease_file" ]]'),
+    );
+    expect(release.indexOf('if [[ -z "$lease_file" ]]')).toBeLessThan(
+      release.indexOf('sudo test -f "$lease_lost_marker"'),
+    );
+    expect(release.indexOf('sudo test -f "$lease_lost_marker"')).toBeLessThan(
       release.indexOf('telegram-user-credential.ts" release'),
     );
     expect(release).toContain("lease lost mid-run; nothing to release");
