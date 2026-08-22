@@ -10,13 +10,14 @@
   --shell-chrome-controls-inset: 10px;
   --shell-chrome-control-size: 32px;
   --shell-chrome-controls-gap: 4px;
+  --shell-chrome-controls-access-width: 0px;
   /* Four controls: the admin-gated Ask OpenClaw fallback joins the strip only
      while the nav is collapsed, which is exactly when this width applies. */
   --shell-chrome-controls-collapsed-width: calc(
     var(--shell-chrome-control-size) + var(--shell-chrome-control-size) +
       var(--shell-chrome-control-size) + var(--shell-chrome-control-size) +
       var(--shell-chrome-controls-gap) + var(--shell-chrome-controls-gap) +
-      var(--shell-chrome-controls-gap)
+      var(--shell-chrome-controls-gap) + var(--shell-chrome-controls-access-width)
   );
   --shell-chrome-safe-area-left: calc(
     var(--shell-chrome-controls-inset) + var(--shell-chrome-controls-collapsed-width) -
@@ -139,6 +140,51 @@
   stroke-linejoin: round;
 }
 
+.shell:has(.scope-upgrade-shell-status) {
+  --shell-chrome-controls-access-width: calc(
+    var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap)
+  );
+}
+
+.scope-upgrade-shell-status {
+  position: fixed;
+  top: 10px;
+  left: calc(
+    var(--shell-nav-width) + var(--shell-chrome-controls-inset) + 2 *
+      (var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap))
+  );
+  z-index: 45;
+}
+
+.shell--nav-collapsed .scope-upgrade-shell-status {
+  left: calc(
+    var(--shell-chrome-controls-inset) + 3 *
+      (var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap))
+  );
+}
+
+:is(.shell--settings, .shell--onboarding:not(.shell--mobile-nav)) .scope-upgrade-shell-status {
+  left: calc(var(--shell-nav-width) + var(--shell-chrome-controls-inset));
+}
+
+.shell--nav-collapsed:has(.scope-upgrade-shell-status) .shell-chrome-controls__custodian {
+  margin-left: calc(var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap));
+}
+
+.shell--mobile-nav .scope-upgrade-shell-status {
+  top: max(10px, env(safe-area-inset-top));
+  right: max(58px, env(safe-area-inset-right));
+  left: auto;
+  width: 40px;
+  height: 40px;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.shell--onboarding.shell--mobile-nav .scope-upgrade-shell-status {
+  right: max(12px, env(safe-area-inset-right));
+}
+
 .shell--mobile-nav .shell-chrome-controls {
   display: none;
 }
@@ -151,12 +197,18 @@
       .shell:not(.shell--mobile-nav, .shell--nav-collapsed, .shell--settings)
   )
   .content
-  > :is(openclaw-update-banner, openclaw-device-scope-upgrade-banner)
+  > openclaw-update-banner
   .callout {
   margin-left: var(--shell-chrome-safe-area-left);
 }
 
 html.openclaw-native-macos .shell-chrome-controls {
+  top: 52px;
+}
+
+html.openclaw-native-macos:not(.openclaw-native-web-chrome)
+  .shell:not(.shell--mobile-nav)
+  .scope-upgrade-shell-status {
   top: 52px;
 }
 
@@ -173,9 +225,31 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   display: none;
 }
 
+html.openclaw-native-nav:not(.openclaw-native-web-chrome)
+  .shell:not(.shell--mobile-nav)
+  .scope-upgrade-shell-status {
+  left: calc(
+    var(--shell-nav-width) + var(--shell-chrome-controls-inset) + var(--shell-chrome-control-size) +
+      var(--shell-chrome-controls-gap)
+  );
+}
+
+html.openclaw-native-nav:not(.openclaw-native-web-chrome)
+  .shell--nav-collapsed:not(.shell--mobile-nav)
+  .scope-upgrade-shell-status {
+  left: var(--shell-chrome-controls-inset);
+}
+
 /* Web-chrome hosts provide this entire cluster in the native titlebar. */
 html.openclaw-native-web-chrome .shell-chrome-controls {
   display: none;
+}
+
+html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .scope-upgrade-shell-status {
+  top: 11px;
+  left: 252px;
+  width: 28px;
+  height: 28px;
 }
 
 .macos-titlebar-controls {
@@ -189,7 +263,8 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   display: flex;
   align-items: center;
   gap: 4px;
-  width: 156px;
+  width: max-content;
+  min-width: 156px;
   height: var(--openclaw-native-titlebar-height, 50px);
 }
 
@@ -3921,10 +3996,6 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 
 .content > * + * {
   margin-top: 20px;
-}
-
-.content > openclaw-device-scope-upgrade-banner:has(.scope-upgrade-chip-row) + * {
-  margin-top: 8px;
 }
 
 .connection-action-block {

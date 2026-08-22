@@ -784,6 +784,24 @@ case "$command" in
       || die "mock response control mode mismatch"
     [[ "$(stat -c %h "$response_control")" == "1" ]] \
       || die "mock response control must not be hard-linked"
+    proxy_control_dir="$safe_runtime/proxy-control"
+    [[ -d "$proxy_control_dir" && ! -L "$proxy_control_dir" ]] \
+      || die "invalid Telegram proxy control directory"
+    [[ "$(stat -c %u "$proxy_control_dir")" == "$(id -u mantis-sut)" ]] \
+      || die "Telegram proxy control directory owner mismatch"
+    [[ "$(stat -c %a "$proxy_control_dir")" == "700" ]] \
+      || die "Telegram proxy control directory mode mismatch"
+    proxy_control="$proxy_control_dir/control.json"
+    proxy_record="$proxy_control_dir/requests.ndjson"
+    for file in "$proxy_control" "$proxy_record"; do
+      [[ -f "$file" && ! -L "$file" ]] || die "invalid Telegram proxy control file"
+      [[ "$(stat -c %u "$file")" == "$(id -u mantis-sut)" ]] \
+        || die "Telegram proxy control file owner mismatch"
+      [[ "$(stat -c %a "$file")" == "600" ]] \
+        || die "Telegram proxy control file mode mismatch"
+      [[ "$(stat -c %h "$file")" == "1" ]] \
+        || die "Telegram proxy control file must not be hard-linked"
+    done
     for name in gateway.log mock-openai.log mock-openai-requests.ndjson sut-attestation.json; do
       [[ ! -e "$safe_runtime/$name" && ! -L "$safe_runtime/$name" ]] \
         || die "runtime output was pre-created"
@@ -877,17 +895,25 @@ case "$command" in
     "$docker_bin" run --detach --name "$proxy_container_name" --network "$egress_network_name" \
       "${container_security_args[@]}" "${proxy_resource_args[@]}" \
       --mount "type=bind,src=$telegram_proxy_script,dst=/opt/mantis/telegram-bot-api-proxy.mjs,readonly" \
+      --mount "type=bind,src=$proxy_control_dir,dst=/opt/mantis/proxy-control" \
       --user "$(id -u mantis-sut):$(id -g mantis-sut)" \
       --env TELEGRAM_PROXY_ALIAS_TOKEN="$telegram_alias_token" \
+      --env TELEGRAM_PROXY_CONTROL=/opt/mantis/proxy-control/control.json \
+      --env TELEGRAM_PROXY_RECORD_FILE=/opt/mantis/proxy-control/requests.ndjson \
       --env TELEGRAM_PROXY_UPSTREAM_TOKEN="$telegram_bot_token" \
       "$image" node /opt/mantis/telegram-bot-api-proxy.mjs >/dev/null
     "$docker_bin" network connect --alias telegram-api-proxy "$network_name" "$proxy_container_name"
     require_runtime_claim_active "$container_name"
+    # proxy-control holds the proxy's fault rules and recorded Bot API facts.
+    # The SUT runs untrusted candidate code as the same mantis-sut UID, so an
+    # inaccessible tmpfs must shadow the directory inside the runtime mount;
+    # without it the lane under test could rewrite its own trusted evidence.
     "$docker_bin" run --rm --init --name "$container_name" --network "$network_name" \
       "${container_security_args[@]}" "${runtime_resource_args[@]}" \
       --mount "type=bind,src=$repo_root,dst=$repo_root,readonly" \
       --mount "type=bind,src=$mock_server_script,dst=/opt/mantis/mock-openai-server.mjs,readonly" \
       --mount "type=bind,src=$safe_runtime,dst=$runtime_source" \
+      --mount "type=tmpfs,dst=$runtime_source/proxy-control,tmpfs-size=65536,tmpfs-mode=0000" \
       --workdir "$repo_root" \
       --user "$(id -u mantis-sut):$(id -g mantis-sut)" \
       "${docker_env[@]}" \

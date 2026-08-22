@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -35,8 +36,12 @@ async function setupHarness(
   const screenshot = path.join(root, "proof.png");
   const previewGif = path.join(root, "proof.gif");
   const trimmedVideo = path.join(root, "proof.mp4");
+  const proxyControl = path.join(root, "proxy-control.json");
+  const proxyRequestLog = path.join(root, "proxy-requests.ndjson");
+  const requestLog = path.join(root, "requests.ndjson");
   fs.mkdirSync(outputRoot);
   fs.mkdirSync(sessionRoot);
+  fs.mkdirSync(path.join(sessionRoot, "attempt"));
   fs.mkdirSync(binDir);
   writeJson(credentialFile, {
     groupId: "-100123456789",
@@ -44,6 +49,9 @@ async function setupHarness(
     testerUserId: "77",
   });
   writeJson(path.join(root, "mock-response.json"), { chunkDelayMs: 0, text: "initial" });
+  writeJson(proxyControl, { rules: [] });
+  fs.writeFileSync(proxyRequestLog, "");
+  fs.writeFileSync(requestLog, "");
   fs.writeFileSync(
     screenshot,
     Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.alloc(10_001)]),
@@ -78,7 +86,9 @@ async function setupHarness(
       gatewayLog: path.join(root, "gateway.log"),
       mockLog: path.join(root, "mock.log"),
       mockResponseControl: path.join(root, "mock-response.json"),
-      requestLog: path.join(root, "requests.ndjson"),
+      proxyControl,
+      proxyRequestLog,
+      requestLog,
       sutAttestation: { lane: "candidate", sha: "a".repeat(40) },
       tempRoot: path.join(root, "sut"),
     },
@@ -149,8 +159,11 @@ async function setupHarness(
       PATH: `${binDir}:${process.env.PATH}`,
     },
     outputRoot,
+    proxyControl,
+    proxyRequestLog,
     recorderControlLog,
     recorderLog,
+    requestLog,
     requests,
     sessionRoot,
   };
@@ -221,6 +234,7 @@ describe("Telegram Mantis free-form lane", () => {
     expect(facts).toMatchObject({
       artifacts: {},
       attempt: 1,
+      botApiRequests: [],
       cleanupErrors: [],
       error: "desktop failed with [redacted]",
       invocations: [
@@ -515,6 +529,203 @@ describe("Telegram Mantis free-form lane", () => {
     }
   });
 
+  it("materializes a verified per-request provider script into private control", async () => {
+    const harness = await setupHarness();
+    const eventsFile = path.join(harness.outputRoot, "turn-events.json");
+    const scriptFile = path.join(harness.outputRoot, "provider-script.json");
+    fs.writeFileSync(eventsFile, JSON.stringify([{ type: "response.completed", response: {} }]));
+    fs.writeFileSync(
+      scriptFile,
+      JSON.stringify({
+        responses: [
+          { chunkDelayMs: 50, text: "first" },
+          { eventsFile: "turn-events.json" },
+          { fail: { status: 503 } },
+        ],
+        default: { fail: { mode: "drop" } },
+      }),
+    );
+    const sha256 = createHash("sha256").update(fs.readFileSync(scriptFile)).digest("hex");
+    try {
+      const result = await runLane(harness.env, [
+        "mock",
+        "--lane",
+        "candidate",
+        "--script",
+        scriptFile,
+        sha256,
+      ]);
+      expect(JSON.parse(result.stdout)).toEqual({
+        eventFiles: 1,
+        responses: 3,
+        scriptSha256: sha256,
+      });
+      const control = JSON.parse(
+        fs.readFileSync(path.join(path.dirname(harness.outputRoot), "mock-response.json"), "utf8"),
+      );
+      expect(control).toMatchObject({
+        default: { fail: { mode: "drop" } },
+        responses: [
+          { chunkDelayMs: 50, text: "first" },
+          { events: [{ type: "response.completed", response: {} }] },
+          { fail: { status: 503 } },
+        ],
+        scriptVersion: expect.stringContaining(sha256),
+      });
+      const state = JSON.parse(
+        fs.readFileSync(path.join(harness.sessionRoot, "candidate.active.json"), "utf8"),
+      );
+      expect(state.invocations.at(-1)).toMatchObject({
+        args: {
+          eventFiles: [
+            { file: "turn-events.json", sha256: expect.stringMatching(/^[0-9a-f]{64}$/u) },
+          ],
+          scriptFile: "provider-script.json",
+          scriptSha256: sha256,
+        },
+        command: "mock",
+      });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("rejects a provider script whose public bytes do not match its sha256", async () => {
+    const harness = await setupHarness();
+    const scriptFile = path.join(harness.outputRoot, "provider-script.json");
+    fs.writeFileSync(scriptFile, JSON.stringify({ responses: [{ text: "first" }] }));
+    try {
+      await expect(
+        runLane(harness.env, [
+          "mock",
+          "--lane",
+          "candidate",
+          "--script",
+          scriptFile,
+          "0".repeat(64),
+        ]),
+      ).rejects.toThrow("mock --script sha256 mismatch");
+      expect(
+        JSON.parse(
+          fs.readFileSync(
+            path.join(path.dirname(harness.outputRoot), "mock-response.json"),
+            "utf8",
+          ),
+        ),
+      ).toEqual({ chunkDelayMs: 0, text: "initial" });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("programs Bot API faults and reads bounded method-filtered request facts", async () => {
+    const harness = await setupHarness();
+    fs.writeFileSync(
+      harness.proxyRequestLog,
+      [
+        JSON.stringify({ method: "sendMessage", status: 429, injected: true }),
+        JSON.stringify({ method: "editMessageText", status: 200, injected: false }),
+        JSON.stringify({ method: "sendMessage", status: 200, injected: false }),
+      ].join("\n") + "\n",
+    );
+    try {
+      await runLane(harness.env, [
+        "botapi-fail",
+        "sendMessage",
+        "--lane",
+        "candidate",
+        "--times",
+        "2",
+        "--status",
+        "429",
+      ]);
+      expect(JSON.parse(fs.readFileSync(harness.proxyControl, "utf8"))).toEqual({
+        rules: [{ method: "sendMessage", status: 429, times: 2 }],
+      });
+      const requests = await runLane(harness.env, [
+        "botapi-requests",
+        "--lane",
+        "candidate",
+        "--method",
+        "sendMessage",
+        "--limit",
+        "1",
+      ]);
+      expect(JSON.parse(requests.stdout)).toEqual({
+        count: 1,
+        requests: [{ index: 1, injected: false, method: "sendMessage", status: 200 }],
+      });
+      await runLane(harness.env, ["botapi-clear", "--lane", "candidate"]);
+      expect(JSON.parse(fs.readFileSync(harness.proxyControl, "utf8"))).toEqual({ rules: [] });
+      const state = JSON.parse(
+        fs.readFileSync(path.join(harness.sessionRoot, "candidate.active.json"), "utf8"),
+      );
+      expect(
+        state.invocations.slice(-3).map((entry: { command: string }) => entry.command),
+      ).toEqual(["botapi-fail", "botapi-requests", "botapi-clear"]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("returns early when all observe fact conditions are satisfied", async () => {
+    const harness = await setupHarness();
+    fs.writeFileSync(harness.requestLog, `${JSON.stringify({ path: "/v1/responses" })}\n`);
+    try {
+      const startedAt = Date.now();
+      const result = await runLane(harness.env, [
+        "observe",
+        "--lane",
+        "candidate",
+        "--seconds",
+        "60",
+        "--since",
+        "0",
+        "--until-events",
+        "2",
+        "--until-text",
+        "final",
+        "--until-provider-requests",
+        "1",
+      ]);
+      expect(Date.now() - startedAt).toBeLessThan(5_000);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        cursor: 2,
+        events: [{ text: "draft" }, { text: "final" }],
+      });
+      expect(harness.requests).toEqual([{ command: "events", seconds: 0, since: 0 }]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("ignores stale pre-cursor events when evaluating observe conditions", async () => {
+    const harness = await setupHarness();
+    try {
+      const startedAt = Date.now();
+      // The mock observer timeline always holds two events ("draft", "final");
+      // with --since past them, a reused marker or count must not return early.
+      const result = await runLane(harness.env, [
+        "observe",
+        "--lane",
+        "candidate",
+        "--seconds",
+        "1",
+        "--since",
+        "2",
+        "--until-events",
+        "1",
+        "--until-text",
+        "final",
+      ]);
+      expect(Date.now() - startedAt).toBeGreaterThanOrEqual(1_000);
+      expect(JSON.parse(result.stdout)).toMatchObject({ events: [] });
+      expect(harness.requests.length).toBeGreaterThan(1);
+    } finally {
+      await harness.close();
+    }
+  });
+
   it("serializes commands across both lanes on the shared user session", async () => {
     const harness = await setupHarness();
     fs.writeFileSync(path.join(harness.sessionRoot, "harness.lock"), `${process.pid}\n`);
@@ -608,7 +819,12 @@ describe("Telegram Mantis free-form lane", () => {
       });
       expect(
         JSON.parse(fs.readFileSync(path.join(harness.sessionRoot, "candidate.json"), "utf8")),
-      ).toMatchObject({ focusMessageId: "101", sendCount: 1, status: "complete" });
+      ).toMatchObject({
+        botApiRequests: [],
+        focusMessageId: "101",
+        sendCount: 1,
+        status: "complete",
+      });
     } finally {
       await harness.close();
     }

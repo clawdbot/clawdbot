@@ -395,6 +395,8 @@ function toggleTouchMessageMeta(event: PointerEvent): void {
 export function handleTranscriptPointerUp(event: PointerEvent, props: TranscriptInteractionProps) {
   toggleTouchMessageMeta(event);
   if (
+    event.button !== 0 ||
+    event.ctrlKey ||
     typeof props.onCompanionQuestion !== "function" ||
     typeof props.onCompanionPrefill !== "function"
   ) {

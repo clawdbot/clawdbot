@@ -29,10 +29,6 @@ import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import {
-  hasDismissedScopeUpgradeBanner,
-  readScopeUpgradeAvailability,
-} from "./device-scope-upgrade.ts";
-import {
   DEBUG_OVERLAY_ELEMENT,
   isOptionalElementDefined,
   type LazyCustomElementRequestController,
@@ -55,43 +51,14 @@ const EMPTY_SESSION_HAS_DRAFT = () => false;
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
   : "Ctrl K";
-
-const SCOPE_UPGRADE_BANNER_ELEMENT = {
+const SCOPE_UPGRADE_SURFACE_ELEMENT = {
   tagName: "openclaw-device-scope-upgrade-banner",
-  label: "device scope upgrade banner",
-  loadModule: () => import("./device-scope-upgrade.runtime.ts"),
+  label: t("connection.scopeUpgrade.status"),
+  loadModule: () =>
+    import("./device-scope-upgrade.runtime.ts").catch(
+      () => import("./device-scope-upgrade-retry.runtime.ts"),
+    ),
 } satisfies OptionalCustomElement;
-
-function renderScopeUpgradeBanner(
-  host: ShellViewHost,
-  snapshot: ApplicationContext["gateway"]["snapshot"],
-  compact: boolean,
-) {
-  const state = readScopeUpgradeAvailability(snapshot);
-  if (
-    state.phase === "hidden" ||
-    (state.phase === "guidance" && hasDismissedScopeUpgradeBanner())
-  ) {
-    return nothing;
-  }
-  host.lazyCustomElements.preload(SCOPE_UPGRADE_BANNER_ELEMENT);
-  if (isOptionalElementDefined(SCOPE_UPGRADE_BANNER_ELEMENT)) {
-    return html`<openclaw-device-scope-upgrade-banner
-      .props=${{
-        snapshot,
-        compact,
-      }}
-    ></openclaw-device-scope-upgrade-banner>`;
-  }
-  return html`<openclaw-update-banner
-    .props=${{
-      statusBanner: {
-        tone: "warn",
-        text: t("connection.scopeUpgrade.guidance"),
-      },
-    }}
-  ></openclaw-update-banner>`;
-}
 
 export interface ShellViewHost {
   readonly context: ApplicationContext<RouteId> | undefined;
@@ -314,11 +281,28 @@ export function renderApplicationShell(host: ShellViewHost) {
   );
   const navDrawerOpen = host.navDrawerOpen && !onboarding;
   const mobileNavLayout = isMobileNavLayout();
+  const nativeWebChrome = isNativeWebChromeHost();
   const mergedChatChrome = shouldMergeChatChrome({
     mobileNavLayout,
     routeId: activeRoute,
     onboarding,
   });
+  const showScopeUpgradeStatus =
+    gatewayConnected &&
+    gatewaySnapshot.hello?.auth?.scopes !== undefined &&
+    !operatorAccess.canAdmin;
+  if (showScopeUpgradeStatus) {
+    host.lazyCustomElements.preload(SCOPE_UPGRADE_SURFACE_ELEMENT, { reportError: true });
+  }
+  const scopeUpgradeSurface = showScopeUpgradeStatus
+    ? html`<openclaw-device-scope-upgrade-banner
+        .props=${{
+          snapshot: gatewaySnapshot,
+          mobile: mobileNavLayout,
+          showTrigger: !mergedChatChrome,
+        }}
+      ></openclaw-device-scope-upgrade-banner>`
+    : null;
   // Drawer navigation always opens expanded; the desktop collapse preference
   // stays persisted for when the viewport returns to the desktop layout.
   // The settings sidebar has a fixed width, so the collapse state pauses too.
@@ -500,7 +484,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       @theme-change=${(event: CustomEvent<ThemeModeChangeDetail>) => host.handleThemeChange(event)}
     >
       <a class="shell-skip-link" href="#control-ui-main"> ${t("common.skipToMainContent")} </a>
-      ${isNativeWebChromeHost() && !onboarding
+      ${nativeWebChrome && !onboarding
         ? html`
             <openclaw-macos-titlebar-controls
               .navCollapsed=${host.nativeNavCollapsed()}
@@ -519,6 +503,9 @@ export function renderApplicationShell(host: ShellViewHost) {
       <openclaw-app-topbar
         .resourceBasePath=${context.resourceBasePath}
         .navDrawerOpen=${navDrawerOpen}
+        .trailingActions=${mobileNavLayout && !onboarding && !mergedChatChrome
+          ? scopeUpgradeSurface
+          : nothing}
         .onOpenPalette=${() => host.openPalette()}
         .onToggleDrawer=${(trigger: HTMLElement) => host.toggleNavigationSurface(trigger)}
       ></openclaw-app-topbar>
@@ -581,6 +568,7 @@ export function renderApplicationShell(host: ShellViewHost) {
             </div>
           `
         : nothing}
+      ${!mobileNavLayout || onboarding || mergedChatChrome ? scopeUpgradeSurface : nothing}
       <div class="shell-nav" ?inert=${navigationSurfaceHidden}>
         ${mobileNavLayout
           ? html`<openclaw-modal-dialog
@@ -617,7 +605,6 @@ export function renderApplicationShell(host: ShellViewHost) {
           : ""} ${activeRoute === "workboard" ? "content--workboard" : ""}"
         .tabIndex=${-1}
       >
-        ${renderScopeUpgradeBanner(host, gatewaySnapshot, mergedChatChrome)}
         ${renderFloatingUpdateCard({
           navigationSurfaceHidden,
           mobileNavLayout,

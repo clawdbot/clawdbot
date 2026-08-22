@@ -27,12 +27,56 @@ const configSchema = z.object({
   mockResponse: z.string().min(1).max(100_000),
   mockResponseChunkDelayMs: z.number().int().positive().max(MAX_MOCK_DELAY_MS).optional(),
 });
-const mockResponseControlSchema = z.object({
+const mockFailureSchema = z
+  .object({
+    mode: z.literal("drop").optional(),
+    status: z.number().int().min(400).max(599).optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.mode === "drop" && value.status !== undefined) {
+      context.addIssue({ code: "custom", message: "fail cannot combine status and drop" });
+    }
+  });
+const mockControlEntrySchema = z.object({
   chunkDelayMs: z.number().int().min(0).max(MAX_MOCK_DELAY_MS).optional(),
   events: z.array(z.record(z.string(), z.unknown())).min(1).optional(),
-  hold: z.boolean().optional(),
+  fail: mockFailureSchema.optional(),
   text: z.string().min(1).max(100_000).optional(),
 });
+const mockResponseControlSchema = z.object({
+  chunkDelayMs: z.number().int().min(0).max(MAX_MOCK_DELAY_MS).optional(),
+  default: mockControlEntrySchema.optional(),
+  events: z.array(z.record(z.string(), z.unknown())).min(1).optional(),
+  hold: z.boolean().optional(),
+  responses: z.array(mockControlEntrySchema).min(1).optional(),
+  scriptVersion: z.string().min(1).optional(),
+  text: z.string().min(1).max(100_000).optional(),
+});
+const mockScriptEntrySchema = z
+  .object({
+    chunkDelayMs: z.number().int().min(0).max(MAX_MOCK_DELAY_MS).optional(),
+    eventsFile: z.string().min(1).max(4_096).optional(),
+    fail: mockFailureSchema.optional(),
+    text: z.string().min(1).max(100_000).optional(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const variants = [value.eventsFile, value.fail, value.text].filter(
+      (entry) => entry !== undefined,
+    );
+    if (variants.length !== 1) {
+      context.addIssue({
+        code: "custom",
+        message: "each scripted response needs exactly one of text, eventsFile, or fail",
+      });
+    }
+  });
+const mockScriptSchema = z
+  .object({
+    default: mockScriptEntrySchema.optional(),
+    responses: z.array(mockScriptEntrySchema).min(1).max(100),
+  })
+  .strict();
 const credentialSchema = z.object({
   groupId: z.string().regex(/^-100\d+$/u),
   sutToken: z.string().min(1),
@@ -43,6 +87,8 @@ const sutRecoverySchema = z.object({
   gatewayLog: z.string(),
   mockLog: z.string(),
   mockResponseControl: z.string(),
+  proxyControl: z.string(),
+  proxyRequestLog: z.string(),
   requestLog: z.string(),
   tempRoot: z.string(),
 });
@@ -111,11 +157,28 @@ const MAX_RPC_BYTES = 4 * 1024 * 1024;
 const commandOptions: Record<string, readonly string[]> = {
   abort: ["--lane"],
   block: ["--lane", "--missing-primitive", "--reason"],
+  "botapi-clear": ["--lane"],
+  "botapi-fail": ["--lane", "--method", "--times", "--status", "--drop"],
+  "botapi-requests": ["--lane", "--method", "--limit"],
   delete: ["--lane", "--message-id"],
   desktop: ["--lane", "--actions-file", "--timeout-seconds"],
   finish: ["--lane", "--focus-message-id"],
-  mock: ["--lane", "--response-file", "--response-events-file", "--chunk-delay-ms"],
-  observe: ["--lane", "--seconds", "--since"],
+  mock: [
+    "--lane",
+    "--response-file",
+    "--response-events-file",
+    "--chunk-delay-ms",
+    "--script",
+    "--script-sha256",
+  ],
+  observe: [
+    "--lane",
+    "--seconds",
+    "--since",
+    "--until-events",
+    "--until-text",
+    "--until-provider-requests",
+  ],
   press: ["--lane", "--message-id", "--button"],
   requests: ["--lane"],
   screenshot: ["--lane"],
@@ -166,18 +229,42 @@ function recorderRelativePath(file: string): string {
 }
 
 function parseCli(argv: string[]): { command: string; values: Map<string, string> } {
-  const [command, ...args] = argv;
-  if (!command || command.startsWith("--") || args.length % 2 !== 0) {
+  const [command, ...rawArgs] = argv;
+  if (!command || command.startsWith("--")) {
     throw new Error(usageText());
   }
+  const args = [...rawArgs];
   const values = new Map<string, string>();
-  for (let index = 0; index < args.length; index += 2) {
+  if (command === "botapi-fail" && args[0] && !args[0].startsWith("--")) {
+    values.set("--method", args.shift() ?? "");
+  }
+  for (let index = 0; index < args.length;) {
     const name = args[index];
+    if (!name?.startsWith("--") || values.has(name)) {
+      throw new Error(usageText());
+    }
+    if (name === "--drop") {
+      values.set(name, "true");
+      index += 1;
+      continue;
+    }
+    if (command === "mock" && name === "--script") {
+      const file = args[index + 1];
+      const sha256 = args[index + 2];
+      if (!file || !sha256 || sha256.startsWith("--")) {
+        throw new Error("mock --script needs a file and sha256.");
+      }
+      values.set(name, file);
+      values.set("--script-sha256", sha256);
+      index += 3;
+      continue;
+    }
     const value = args[index + 1];
-    if (!name?.startsWith("--") || value === undefined || values.has(name)) {
+    if (value === undefined || value.startsWith("--")) {
       throw new Error(usageText());
     }
     values.set(name, value);
+    index += 2;
   }
   const allowed = commandOptions[command];
   if (!allowed) {
@@ -252,7 +339,7 @@ function readPublicFile(
   input: string,
   label: string,
   maxBytes: number,
-): { relative: string; text: string } {
+): { relative: string; resolved: string; text: string } {
   const resolved = fs.realpathSync(input);
   const descriptor = fs.openSync(resolved, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   try {
@@ -263,7 +350,7 @@ function readPublicFile(
     if (!stat.isFile() || stat.size > maxBytes) {
       throw new Error(`${label} must be a regular file no larger than ${maxBytes} bytes.`);
     }
-    return { relative, text: fs.readFileSync(descriptor, "utf8") };
+    return { relative, resolved, text: fs.readFileSync(descriptor, "utf8") };
   } finally {
     fs.closeSync(descriptor);
   }
@@ -506,6 +593,49 @@ function providerRequests(state: ActiveSession, secret: string): unknown[] {
     );
 }
 
+function boundedNdjson(file: string, limit: number): unknown[] {
+  if (!fs.existsSync(file)) {
+    return [];
+  }
+  const stat = fs.statSync(file);
+  const readBytes = Math.min(stat.size, MAX_RPC_BYTES);
+  const descriptor = fs.openSync(file, "r");
+  try {
+    const buffer = Buffer.alloc(readBytes);
+    fs.readSync(descriptor, buffer, 0, readBytes, stat.size - readBytes);
+    let text = buffer.toString("utf8");
+    if (readBytes < stat.size) {
+      text = text.slice(text.indexOf("\n") + 1);
+    }
+    return text
+      .split("\n")
+      .filter(Boolean)
+      .slice(-limit)
+      .map((line) => JSON.parse(line));
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+function botApiRequests(
+  state: ActiveSession,
+  secret: string,
+  options: { limit?: number; method?: string } = {},
+): unknown[] {
+  const method = options.method;
+  const limit = options.limit ?? 100;
+  const requests = boundedNdjson(state.sut.proxyRequestLog, 128).filter(
+    (entry) =>
+      !method ||
+      (entry !== null && typeof entry === "object" && "method" in entry && entry.method === method),
+  );
+  return requests
+    .slice(-limit)
+    .map((entry, index) =>
+      Object.assign({ index: index + 1 }, redact(entry, secret) as Record<string, unknown>),
+    );
+}
+
 function outputJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
 }
@@ -560,6 +690,7 @@ export function publishStartupFailure(params: {
     {
       artifacts: {},
       attempt: params.startup.attempt,
+      botApiRequests: [],
       cleanupErrors: params.cleanupErrors,
       completedAt: new Date().toISOString(),
       error: coerceErrorMessage(params.error),
@@ -962,10 +1093,93 @@ async function observe(
   const since = values.has("--since")
     ? numberOption(values, "--since", Number.MAX_SAFE_INTEGER)
     : state.lastCursor;
-  const response = await observerCall(state.observerSocket, { command: "events", seconds, since });
-  state.observeSeconds += seconds;
-  appendInvocation(state, "observe", { seconds, since }, response.cursor);
+  const untilEvents = values.has("--until-events")
+    ? numberOption(values, "--until-events", 500)
+    : undefined;
+  const untilProviderRequests = values.has("--until-provider-requests")
+    ? numberOption(values, "--until-provider-requests", 100)
+    : undefined;
+  const untilText = values.get("--until-text");
+  if (untilText !== undefined && (untilText.length < 1 || untilText.length > 1_000)) {
+    throw new Error("--until-text must contain 1 to 1000 characters.");
+  }
+  const conditions =
+    untilEvents !== undefined || untilProviderRequests !== undefined || untilText !== undefined;
+  if (!conditions) {
+    const response = await observerCall(state.observerSocket, {
+      command: "events",
+      seconds,
+      since,
+    });
+    state.observeSeconds += seconds;
+    appendInvocation(state, "observe", { seconds, since }, response.cursor);
+    return redact(response, secret) as ObserverResponse;
+  }
+
+  const startedAt = Date.now();
+  const deadline = startedAt + seconds * 1_000;
+  let timeline: ObserverResponse;
+  while (true) {
+    timeline = await observerCall(state.observerSocket, {
+      command: "events",
+      seconds: 0,
+      since: 0,
+    });
+    const events = Array.isArray(timeline.events) ? timeline.events : [];
+    // Event predicates scope to post-`since` events so stale timeline history
+    // (a reused marker, prior turns) cannot satisfy an early return before the
+    // observed action produces evidence. Provider counts stay cumulative: the
+    // provider log has no per-observe cursor and requests can land before the
+    // observe starts, so a relative baseline would miss them.
+    const newEvents = events.slice(since);
+    const textMatched =
+      untilText === undefined || newEvents.some((event) => valueContainsText(event, untilText));
+    const eventCountMatched = untilEvents === undefined || newEvents.length >= untilEvents;
+    const providerCountMatched =
+      untilProviderRequests === undefined ||
+      providerRequests(state, secret).length >= untilProviderRequests;
+    if (textMatched && eventCountMatched && providerCountMatched) {
+      break;
+    }
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      break;
+    }
+    await observerCall(state.observerSocket, {
+      command: "events",
+      seconds: Math.min(1.5, remainingMs / 1_000),
+      since: 0,
+    });
+  }
+  const cursor = timeline.cursor ?? 0;
+  if (since > cursor) {
+    throw new Error("Observation cursor is outside this session's timeline.");
+  }
+  const response = {
+    ...timeline,
+    events: Array.isArray(timeline.events) ? timeline.events.slice(since) : [],
+  };
+  state.observeSeconds += (Date.now() - startedAt) / 1_000;
+  appendInvocation(
+    state,
+    "observe",
+    { seconds, since, untilEvents, untilProviderRequests, untilText },
+    response.cursor,
+  );
   return redact(response, secret) as ObserverResponse;
+}
+
+function valueContainsText(value: unknown, text: string): boolean {
+  if (typeof value === "string") {
+    return value.includes(text);
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => valueContainsText(entry, text));
+  }
+  if (value && typeof value === "object") {
+    return Object.values(value).some((entry) => valueContainsText(entry, text));
+  }
+  return false;
 }
 
 function updateMockResponse(
@@ -973,7 +1187,83 @@ function updateMockResponse(
   values: Map<string, string>,
   outputRoot: string,
 ): Record<string, unknown> {
+  if (values.has("--script")) {
+    if (
+      values.has("--response-file") ||
+      values.has("--response-events-file") ||
+      values.has("--chunk-delay-ms")
+    ) {
+      throw new Error("mock --script cannot be combined with single-response options.");
+    }
+    const scriptFile = readPublicFile(
+      outputRoot,
+      required(values, "--script"),
+      "--script",
+      512 * 1024,
+    );
+    const expectedSha256 = required(values, "--script-sha256").toLowerCase();
+    if (!/^[0-9a-f]{64}$/u.test(expectedSha256)) {
+      throw new Error("mock --script sha256 must be 64 lowercase hexadecimal characters.");
+    }
+    const scriptSha256 = createHash("sha256").update(scriptFile.text).digest("hex");
+    if (scriptSha256 !== expectedSha256) {
+      throw new Error("mock --script sha256 mismatch.");
+    }
+    const script = mockScriptSchema.parse(JSON.parse(scriptFile.text));
+    const eventFiles: Array<{ bytes: number; file: string; sha256: string }> = [];
+    let eventFileBytes = 0;
+    const materialize = (entry: z.infer<typeof mockScriptEntrySchema>) => {
+      if (!entry.eventsFile) {
+        return {
+          ...(entry.chunkDelayMs === undefined ? {} : { chunkDelayMs: entry.chunkDelayMs }),
+          ...(entry.fail === undefined ? {} : { fail: entry.fail }),
+          ...(entry.text === undefined ? {} : { text: entry.text }),
+        };
+      }
+      const eventsPath = path.resolve(path.dirname(scriptFile.resolved), entry.eventsFile);
+      const eventsFile = readPublicFile(outputRoot, eventsPath, "script eventsFile", MAX_RPC_BYTES);
+      eventFileBytes += Buffer.byteLength(eventsFile.text);
+      if (eventFileBytes > MAX_RPC_BYTES) {
+        throw new Error("mock --script event files exceed 4 MiB in total.");
+      }
+      const events = z
+        .array(z.record(z.string(), z.unknown()))
+        .min(1)
+        .parse(JSON.parse(eventsFile.text));
+      eventFiles.push({
+        bytes: Buffer.byteLength(eventsFile.text),
+        file: eventsFile.relative,
+        sha256: createHash("sha256").update(eventsFile.text).digest("hex"),
+      });
+      return {
+        ...(entry.chunkDelayMs === undefined ? {} : { chunkDelayMs: entry.chunkDelayMs }),
+        events,
+      };
+    };
+    const current = readMockResponseControl(state);
+    writeJsonAtomic(state.sut.mockResponseControl, {
+      ...(script.default === undefined ? {} : { default: materialize(script.default) }),
+      hold: current.hold,
+      responses: script.responses.map(materialize),
+      scriptVersion: `${scriptSha256}:${state.invocations.length + 1}`,
+    });
+    appendInvocation(state, "mock", {
+      bytes: Buffer.byteLength(scriptFile.text),
+      eventFiles,
+      responses: script.responses.length,
+      scriptFile: scriptFile.relative,
+      scriptSha256,
+    });
+    return {
+      eventFiles: eventFiles.length,
+      responses: script.responses.length,
+      scriptSha256,
+    };
+  }
   if (values.has("--response-events-file")) {
+    if (values.has("--response-file") || values.has("--chunk-delay-ms")) {
+      throw new Error("Use one mock response form at a time.");
+    }
     const eventsFile = readPublicFile(
       outputRoot,
       required(values, "--response-events-file"),
@@ -1017,6 +1307,48 @@ function updateMockResponse(
     textSha256,
   });
   return { bytes: Buffer.byteLength(text), chunkDelayMs, textSha256 };
+}
+
+function requireBotApiMethod(value: string): string {
+  if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/u.test(value)) {
+    throw new Error("Bot API method is invalid.");
+  }
+  return value;
+}
+
+function validateProxyControlFile(state: ActiveSession): void {
+  const control = fs.lstatSync(state.sut.proxyControl);
+  if (!control.isFile() || control.nlink !== 1) {
+    throw new Error("The private Telegram proxy control is no longer a regular file.");
+  }
+}
+
+function updateBotApiFault(
+  state: ActiveSession,
+  values: Map<string, string>,
+): Record<string, unknown> {
+  validateProxyControlFile(state);
+  const method = requireBotApiMethod(required(values, "--method"));
+  if (values.has("--drop") && values.has("--status")) {
+    throw new Error("Use only one of --status or --drop.");
+  }
+  const times = values.has("--times") ? numberOption(values, "--times", 100, 1) : undefined;
+  const status = values.has("--status") ? numberOption(values, "--status", 599, 400) : undefined;
+  const rule = {
+    method,
+    ...(times === undefined ? {} : { times }),
+    ...(values.has("--drop") ? { mode: "drop" } : { status: status ?? 500 }),
+  };
+  writeJsonAtomic(state.sut.proxyControl, { rules: [rule] });
+  appendInvocation(state, "botapi-fail", rule);
+  return rule;
+}
+
+function clearBotApiFaults(state: ActiveSession): Record<string, unknown> {
+  validateProxyControlFile(state);
+  writeJsonAtomic(state.sut.proxyControl, { rules: [] });
+  appendInvocation(state, "botapi-clear", {});
+  return { rules: 0 };
 }
 
 function readMockResponseControl(state: ActiveSession): z.infer<typeof mockResponseControlSchema> {
@@ -1207,6 +1539,7 @@ async function stopActiveLane(
   secret: string,
   crop: boolean,
 ): Promise<{
+  botApiRequests: unknown[];
   cleanupErrors: string[];
   cursor?: number;
   events: unknown[];
@@ -1217,6 +1550,7 @@ async function stopActiveLane(
   const cleanupErrors: string[] = [];
   const evidenceErrors: unknown[] = [];
   let cursor: number | undefined;
+  let recordedBotApiRequests: unknown[] = [];
   let events: unknown[] = [];
   let requests: unknown[] = [];
   let truncated = false;
@@ -1250,6 +1584,11 @@ async function stopActiveLane(
   } catch (error) {
     evidenceErrors.push(error);
   }
+  try {
+    recordedBotApiRequests = botApiRequests(state, secret);
+  } catch (error) {
+    evidenceErrors.push(error);
+  }
   // Recorder export and SUT teardown are independent; start export before the
   // synchronous container calls so both cleanup paths make progress together.
   const recorderStop = runCommand(requiredEnv("OPENCLAW_TELEGRAM_DESKTOP_RECORDER_CMD"), [
@@ -1264,7 +1603,15 @@ async function stopActiveLane(
   } catch (error) {
     cleanupErrors.push(coerceErrorMessage(error));
   }
-  return { cleanupErrors, cursor, events, evidenceErrors, requests, truncated };
+  return {
+    botApiRequests: recordedBotApiRequests,
+    cleanupErrors,
+    cursor,
+    events,
+    evidenceErrors,
+    requests,
+    truncated,
+  };
 }
 
 async function finalize(
@@ -1355,6 +1702,7 @@ async function finalize(
   const factsRaw = {
     artifacts: artifactRecords,
     attempt: state.attempt,
+    botApiRequests: stopped.botApiRequests,
     blocked: options.blocked,
     cleanupErrors: cleanupErrors.map((entry) => redact(entry, secret)),
     completedAt: new Date().toISOString(),
@@ -1448,6 +1796,7 @@ async function abort(state: ActiveSession, roots: Roots): Promise<void> {
     {
       artifacts: artifactRecords,
       attempt: state.attempt,
+      botApiRequests: stopped.botApiRequests,
       cleanupErrors: errors,
       completedAt: new Date().toISOString(),
       invocations: state.invocations,
@@ -1516,6 +1865,18 @@ async function main(): Promise<void> {
     const credential = credentialSchema.parse(readJson(roots.credentialFile));
     if (cli.command === "mock") {
       outputJson(updateMockResponse(state, cli.values, roots.outputRoot));
+    } else if (cli.command === "botapi-fail") {
+      outputJson(updateBotApiFault(state, cli.values));
+    } else if (cli.command === "botapi-clear") {
+      outputJson(clearBotApiFaults(state));
+    } else if (cli.command === "botapi-requests") {
+      const method = cli.values.has("--method")
+        ? requireBotApiMethod(required(cli.values, "--method"))
+        : undefined;
+      const limit = cli.values.has("--limit") ? numberOption(cli.values, "--limit", 100, 1) : 100;
+      const requests = botApiRequests(state, credential.sutToken, { limit, method });
+      appendInvocation(state, "botapi-requests", { count: requests.length, limit, method });
+      outputJson({ count: requests.length, requests });
     } else if (cli.command === "desktop") {
       outputJson(await runDesktopActions(state, cli.values, roots));
     } else if (cli.command === "send") {

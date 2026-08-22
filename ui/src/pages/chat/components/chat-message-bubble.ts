@@ -642,6 +642,7 @@ export function renderGroupedMessage(
                         opts.assistantMessageDisclosure,
                         markdownRenderOptions,
                         duplicateSuffix,
+                        opts.isStreaming ? messageKey : undefined,
                       )
                     : renderMarkdownText(
                         bodyMarkdown,

@@ -68,19 +68,22 @@ describe("applyNonInteractiveAuthChoice", () => {
   it("rejects an unknown auth choice and lists the valid choices", async () => {
     const runtime = createRuntime();
     const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    const message =
+      'Unknown --auth-choice "definitely-not-a-provider". Valid choices: custom-api-key, skip, demo-provider-api-key.';
 
     const result = await applyNonInteractiveAuthChoice({
       nextConfig,
       authChoice: "definitely-not-a-provider",
-      opts: {} as never,
+      opts: { json: true },
       runtime: runtime as never,
       baseConfig: nextConfig,
       target,
     });
 
     expect(result).toBeNull();
-    expect(runtime.error).toHaveBeenCalledWith(
-      'Unknown --auth-choice "definitely-not-a-provider". Valid choices: custom-api-key, skip, demo-provider-api-key.',
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
+    expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+      JSON.stringify({ ok: false, phase: "options", message }, null, 2),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });

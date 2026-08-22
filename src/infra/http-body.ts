@@ -434,7 +434,13 @@ export async function readRequestBodyWithLimit(
 
     const onEnd = () => {
       ended = true;
-      finish(() => resolve(Buffer.concat(chunks).toString(encoding)));
+      finish(() =>
+        resolve(
+          chunks.length === 1
+            ? chunks[0]!.toString(encoding)
+            : Buffer.concat(chunks).toString(encoding),
+        ),
+      );
     };
 
     const onError = (error: Error) => {

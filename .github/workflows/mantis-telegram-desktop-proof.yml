@@ -181,7 +181,7 @@ jobs:
             setOutput("request_source", requestSource);
       - name: Create Mantis status token
         id: mantis_status_token
-        if: ${{ steps.resolve.outputs.request_source == 'issue_comment' }}
+        if: ${{ steps.resolve.outputs.pr_number != '' }}
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
@@ -201,12 +201,9 @@ jobs:
         with:
           github-token: ${{ steps.mantis_status_token.outputs.token }}
           script: |
-            const markerRoot = "<!-- mantis-telegram-desktop-proof:";
-            const runId = Number(process.env.GITHUB_RUN_ID);
-            const runAttempt = Number(process.env.GITHUB_RUN_ATTEMPT);
-            const marker = `${markerRoot}${runId}-${runAttempt} -->`;
+            const marker = `<!-- mantis-telegram-desktop-proof:${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT} -->`;
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
-            const body = `${marker}\nMantis started this proof. [Follow the active job](${runUrl}).`;
+            const body = `${marker}\n👀 Mantis started this proof. [Follow the active job](${runUrl}).`;
             const { owner, repo } = context.repo;
             const issueNumber = Number(process.env.TARGET_PR);
             await github.rest.issues.createComment({
@@ -248,7 +245,7 @@ jobs:
         if: >-
           ${{
             always() &&
-            steps.resolve.outputs.request_source == 'issue_comment' &&
+            steps.resolve.outputs.pr_number != '' &&
             (
               steps.mantis_status_token.outcome != 'success' ||
               steps.mantis_status_comment.outcome != 'success'
@@ -260,7 +257,7 @@ jobs:
         with:
           github-token: ${{ github.token }}
           script: |
-            const marker = "<!-- mantis-telegram-desktop-proof -->";
+            const marker = `<!-- mantis-telegram-desktop-proof:${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT} -->`;
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
             const { owner, repo } = context.repo;
             await github.rest.issues.createComment({
@@ -778,7 +775,7 @@ jobs:
           openai-api-key: ${{ secrets.OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           prompt-file: .github/codex/prompts/mantis-telegram-desktop-proof.md
           model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
-          effort: medium
+          effort: high
           sandbox: danger-full-access
           codex-args: '["-c","service_tier=\"fast\""]'
           codex-home: /tmp/mantis-codex-home-${{ github.run_id }}
@@ -897,6 +894,16 @@ jobs:
           sudo install -m 0400 -o root -g root "$agent_manifest" "$trusted_agent_manifest"
           agent_manifest="$trusted_agent_manifest"
           sudo install -d -m 0755 -o root -g root "$trusted_output"
+          recipe_suggestion="$quarantine/recipe-suggestion.md"
+          if sudo test -e "$recipe_suggestion" || sudo test -L "$recipe_suggestion"; then
+            sudo test -f "$recipe_suggestion"
+            sudo test ! -L "$recipe_suggestion"
+            test "$(sudo stat -c %h "$recipe_suggestion")" = 1
+            recipe_bytes="$(sudo stat -c %s "$recipe_suggestion")"
+            ((recipe_bytes > 0 && recipe_bytes <= 65536))
+            sudo install -m 0644 -o root -g root "$recipe_suggestion" \
+              "$trusted_output/recipe-suggestion.md"
+          fi
           manifest="$trusted_output/mantis-evidence.json"
           judgment="$RUNNER_TEMP/mantis-agent-judgment.json"
           sudo jq -e '
@@ -944,13 +951,14 @@ jobs:
                .lane == $lane and
                (if .sutAttestation == null then
                   .status == "infra-error" and .artifacts == {} and .sendCount == 0 and
-                  .providerRequests == [] and .observation.events == [] and
+                  .botApiRequests == [] and .providerRequests == [] and .observation.events == [] and
                   .observation.truncated == false and
                   (.invocations | length) == 1 and .invocations[0].command == "start"
                 else
                   .sutAttestation.lane == $lane and .sutAttestation.sha == $sha
                 end) and
                (.invocations | type == "array") and (.observation.events | type == "array") and
+               (.botApiRequests | type == "array") and
                (.providerRequests | type == "array") and
                (if .status == "complete" or .status == "blocked" then (.cleanupErrors | length) == 0 else true end)' \
               "$verdict" >/dev/null
@@ -1090,6 +1098,7 @@ jobs:
                 hasFocusMessage: (.focusMessageId != null),
                 invocationCount: (.invocations | length),
                 observedEventCount: (.observation.events | length),
+                botApiRequestCount: (.botApiRequests | length),
                 providerRequestCount: (.providerRequests | length),
                 artifactNames: (.artifacts | keys),
                 cleanupErrorCount: (.cleanupErrors | length)
@@ -1226,7 +1235,7 @@ jobs:
             --request-source "$REQUEST_SOURCE"
 
       - name: Report failed Mantis proof
-        if: ${{ always() && needs.resolve_request.outputs.request_source == 'issue_comment' && steps.publish_evidence.outcome != 'success' }}
+        if: ${{ always() && needs.resolve_request.outputs.pr_number != '' && steps.publish_evidence.outcome != 'success' }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           TARGET_PR: ${{ needs.resolve_request.outputs.pr_number }}
@@ -1355,7 +1364,8 @@ jobs:
             --manifest "$root/mantis-evidence.json" \
             --target-pr "$TARGET_PR" \
             --artifact-root "mantis/telegram-desktop/pr-${TARGET_PR}/published-${PUBLISH_RUN_ID}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --marker "<!-- mantis-telegram-desktop-proof -->" \
+            --marker "<!-- mantis-telegram-desktop-proof:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT} -->" \
+            --create-missing false \
             --artifact-url "$PUBLISH_ARTIFACT_URL" \
             --run-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${PUBLISH_RUN_ID}" \
             --request-source "$REQUEST_SOURCE"

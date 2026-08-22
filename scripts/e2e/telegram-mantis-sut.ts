@@ -50,6 +50,8 @@ type MantisSutRuntime = {
   gatewayPid: number;
   mockLog: string;
   mockResponseControl: string;
+  proxyControl: string;
+  proxyRequestLog: string;
   requestLog: string;
   stateDir: string;
   sutAttestation: { lane: MantisSutLane; sha: string };
@@ -59,7 +61,14 @@ type MantisSutRuntime = {
 
 export type MantisSutRecovery = Pick<
   MantisSutRuntime,
-  "containerName" | "gatewayLog" | "mockLog" | "mockResponseControl" | "requestLog" | "tempRoot"
+  | "containerName"
+  | "gatewayLog"
+  | "mockLog"
+  | "mockResponseControl"
+  | "proxyControl"
+  | "proxyRequestLog"
+  | "requestLog"
+  | "tempRoot"
 >;
 
 function childProcessBaseEnv(): NodeJS.ProcessEnv {
@@ -503,10 +512,15 @@ export function runSutContainerAction(
 }
 
 export function preserveMantisSutRuntimeArtifacts(
-  sut: Pick<MantisSutRuntime, "gatewayLog" | "mockLog" | "requestLog">,
+  sut: Pick<MantisSutRuntime, "gatewayLog" | "mockLog" | "requestLog"> & {
+    proxyRequestLog?: string;
+  },
   outputDir: string,
 ): void {
-  for (const source of [sut.gatewayLog, sut.mockLog, sut.requestLog]) {
+  for (const source of [sut.gatewayLog, sut.mockLog, sut.requestLog, sut.proxyRequestLog]) {
+    if (!source) {
+      continue;
+    }
     const target = path.join(outputDir, path.basename(source));
     if (path.resolve(source) !== path.resolve(target) && fs.existsSync(source)) {
       fs.copyFileSync(source, target);
@@ -562,6 +576,12 @@ export async function startMantisSut(params: {
     })}\n`,
     { mode: 0o600 },
   );
+  const proxyControlDir = path.join(config.tempRoot, "proxy-control");
+  fs.mkdirSync(proxyControlDir, { mode: 0o700 });
+  const proxyControl = path.join(proxyControlDir, "control.json");
+  const proxyRequestLog = path.join(proxyControlDir, "requests.ndjson");
+  fs.writeFileSync(proxyControl, '{"rules":[]}\n', { mode: 0o600 });
+  fs.writeFileSync(proxyRequestLog, "", { mode: 0o600 });
   const gatewayLog = path.join(config.tempRoot, "gateway.log");
   const gatewayEnv = createMantisGatewayEnv({ ...config, sutToken: params.sutToken });
   const containerName = `openclaw-telegram-sut-${randomUUID()}`;
@@ -581,6 +601,8 @@ export async function startMantisSut(params: {
     gatewayLog,
     mockLog,
     mockResponseControl,
+    proxyControl,
+    proxyRequestLog,
     requestLog,
     tempRoot: config.tempRoot,
   });
@@ -617,6 +639,8 @@ export async function startMantisSut(params: {
       gatewayPid,
       mockLog,
       mockResponseControl,
+      proxyControl,
+      proxyRequestLog,
       requestLog,
       sutAttestation,
     };
@@ -631,7 +655,10 @@ export async function startMantisSut(params: {
     }
     if (stopped) {
       try {
-        preserveMantisSutRuntimeArtifacts({ gatewayLog, mockLog, requestLog }, params.outputDir);
+        preserveMantisSutRuntimeArtifacts(
+          { gatewayLog, mockLog, proxyRequestLog, requestLog },
+          params.outputDir,
+        );
       } catch (cleanupError) {
         cleanupErrors.push(cleanupError);
       }
