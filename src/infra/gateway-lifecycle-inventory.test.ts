@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createGatewayActiveWorkSnapshot } from "./gateway-active-work.js";
 
@@ -42,12 +42,8 @@ describe("Arxi lifecycle upgrade inventory", () => {
   });
 
   it("fails an upstream upgrade until the producer inventory is reviewed", () => {
-    const reviewedParents = execFileSync(
-      "git",
-      ["log", "--first-parent", "--merges", "--grep=Merge pinned upstream", "--format=%P", "-1"],
-      { encoding: "utf8" },
-    ).trim();
-    const reviewedUpstreamCommit = reviewedParents.split(/\s+/u)[1];
-    expect(reviewedUpstreamCommit).toBe(ARXI_LIFECYCLE_REVIEWED_UPSTREAM_COMMIT);
+    expect(readFileSync("ARXI_UPSTREAM_PIN", "utf8").trim()).toBe(
+      ARXI_LIFECYCLE_REVIEWED_UPSTREAM_COMMIT,
+    );
   });
 });
