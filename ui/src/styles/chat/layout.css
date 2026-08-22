@@ -1459,6 +1459,15 @@ openclaw-chat-video-player {
   border: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
   border-radius: var(--radius-md);
   background: transparent;
+  transition: background-color 120ms ease;
+}
+
+.chat-assistant-attachment-card:hover {
+  background-color: color-mix(in srgb, var(--media-foreground) 4%, transparent);
+}
+
+:root[data-theme-mode="light"] .chat-assistant-attachment-card:hover {
+  background-color: color-mix(in srgb, var(--media-foreground) 3%, transparent);
 }
 
 .chat-assistant-attachment-card--audio,
@@ -1498,7 +1507,7 @@ openclaw-chat-video-player {
 
 .chat-assistant-attachment-card__identity {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   min-width: 0;
   flex: 1;
@@ -1552,7 +1561,7 @@ openclaw-chat-video-player {
   gap: 5px;
   padding: 0;
   border: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
-  border-radius: var(--radius-sm);
+  border-radius: 999px;
   color: var(--text);
   background: transparent;
   font: inherit;
@@ -1560,13 +1569,14 @@ openclaw-chat-video-player {
   cursor: var(--cursor-action);
   transition:
     color 120ms ease,
+    background-color 120ms ease,
     border-color 120ms ease;
 }
 
 .chat-assistant-attachment-card__download:hover {
-  color: var(--text);
+  color: var(--text-strong);
   border-color: color-mix(in srgb, var(--text) 38%, transparent);
-  background: transparent;
+  background: color-mix(in srgb, var(--media-foreground) 8%, transparent);
   text-decoration: none;
 }
 
@@ -1609,19 +1619,16 @@ openclaw-chat-video-player {
   height: 32px;
   flex: none;
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
+  border: 0;
   border-radius: 999px;
-  color: var(--text);
-  background: transparent;
+  color: var(--accent-foreground);
+  background: var(--accent);
   cursor: var(--cursor-action);
-  transition:
-    color 120ms ease,
-    border-color 120ms ease;
+  transition: background-color 120ms ease;
 }
 
 .chat-audio-player__toggle:hover {
-  border-color: color-mix(in srgb, var(--text) 38%, transparent);
-  background: transparent;
+  background: var(--accent-hover);
 }
 
 .chat-audio-player__toggle:focus-visible {
@@ -1634,9 +1641,14 @@ openclaw-chat-video-player {
   height: 16px;
 }
 
+.chat-audio-player__toggle svg :is(polygon, rect) {
+  fill: currentColor;
+}
+
 .chat-audio-player__timeline {
-  display: grid;
-  gap: 5px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   min-width: 0;
   flex: 1;
 }
@@ -1683,7 +1695,9 @@ openclaw-chat-video-player {
 
 .chat-audio-player__waveform {
   position: relative;
+  min-width: 0;
   height: 22px;
+  flex: 1;
 }
 
 .chat-audio-player__waveform svg {
@@ -1715,56 +1729,46 @@ openclaw-chat-video-player {
 }
 
 .chat-audio-player__time {
-  display: flex;
+  display: block;
+  flex: none;
   color: var(--muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   line-height: 1;
+  white-space: nowrap;
 }
 
 .chat-audio-player__volume {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
   flex: none;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
   color: var(--muted);
+  background: transparent;
+  cursor: var(--cursor-action);
+  transition:
+    color 120ms ease,
+    background-color 120ms ease;
 }
 
-.chat-audio-player__volume-icon {
-  display: inline-flex;
-  width: 15px;
-  height: 15px;
+.chat-audio-player__volume:hover {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--media-foreground) 10%, transparent);
 }
 
-.chat-audio-player__volume-icon svg {
-  width: 15px;
-  height: 15px;
+.chat-audio-player__volume:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
-.chat-audio-player__volume input {
-  width: 44px;
-  height: 3px;
-  margin: 0;
-  appearance: none;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--muted) 42%, transparent);
-}
-
-.chat-audio-player__volume input::-webkit-slider-thumb {
-  width: 8px;
-  height: 8px;
-  appearance: none;
-  border: 0;
-  border-radius: 999px;
-  background: var(--muted);
-}
-
-.chat-audio-player__volume input::-moz-range-thumb {
-  width: 8px;
-  height: 8px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--muted);
+.chat-audio-player__volume svg {
+  width: 17px;
+  height: 17px;
 }
 
 .chat-audio-player__media {

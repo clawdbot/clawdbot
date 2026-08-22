@@ -99,7 +99,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   @state() private duration = 0;
   @state() private buffered = 0;
   @state() private playing = false;
-  @state() private volume = 1;
+  @state() private muted = false;
   @state() private waveformPeaks: readonly number[] = createChatAudioWaveformPlaceholder();
 
   private media: HTMLAudioElement | null = null;
@@ -168,7 +168,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   private setMedia = (element: Element | undefined) => {
     this.media = element instanceof HTMLAudioElement ? element : null;
     if (this.media) {
-      this.media.volume = this.volume;
+      this.media.muted = this.muted;
     }
     this.syncSource();
   };
@@ -382,10 +382,10 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     }
   }
 
-  private setVolume(nextVolume: number): void {
-    this.volume = Math.max(0, Math.min(1, nextVolume));
+  private toggleMuted(): void {
+    this.muted = !this.muted;
     if (this.media) {
-      this.media.volume = this.volume;
+      this.media.muted = this.muted;
     }
   }
 
@@ -422,7 +422,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
       type="range"
       min="0"
       max=${String(this.duration || 0)}
-      step=${String(SEEK_STEP_SECONDS)}
+      step="0.01"
       .value=${String(Math.min(this.currentTime, this.duration || this.currentTime))}
       aria-label=${t("chat.mediaPlayer.seek")}
       style=${styleMap({
@@ -438,17 +438,16 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     const count = this.waveformPeaks.length;
     return html`<div class="chat-audio-player__waveform">
       <svg viewBox="0 0 ${count} 24" preserveAspectRatio="none" aria-hidden="true">
-        ${this.waveformPeaks.map((peak, index) => {
-          const height = Math.max(2, peak * 22);
-          return svg`<rect
+        ${this.waveformPeaks.map(
+          (_peak, index) => svg`<rect
             class=${index / count < progress ? "is-played" : ""}
             x=${String(index + 0.18)}
-            y=${String((24 - height) / 2)}
+            y="3"
             width="0.64"
-            height=${String(height)}
-            rx="0.3"
-          ></rect>`;
-        })}
+            height="18"
+            rx="0.32"
+          ></rect>`,
+        )}
       </svg>
       ${seek}
     </div>`;
@@ -504,19 +503,15 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
                     >
                   </div>
                 </div>
-                <label class="chat-audio-player__volume">
-                  <span class="chat-audio-player__volume-icon" aria-hidden="true">${icons.volume2}</span>
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.05"
-                    .value=${String(this.volume)}
-                    aria-label=${t("chat.mediaPlayer.volume")}
-                    @input=${(event: Event) =>
-                      this.setVolume(Number((event.currentTarget as HTMLInputElement).value))}
-                  />
-                </label>
+                <button
+                  type="button"
+                  class="chat-audio-player__volume"
+                  aria-label=${t(this.muted ? "chat.mediaPlayer.unmute" : "chat.mediaPlayer.mute")}
+                  aria-pressed=${this.muted ? "true" : "false"}
+                  @click=${() => this.toggleMuted()}
+                >
+                  ${this.muted ? icons.volumeX : icons.volume2}
+                </button>
               </div>`}
         <audio
           class="chat-audio-player__media"
