@@ -247,26 +247,30 @@ suite.define(() => {
         .poll(() => researchSwitch.locator("img.agent-select__avatar").getAttribute("src"))
         .toContain("data:image/png;base64,");
       await expect.poll(() => menu.getByText(/^New session —/).count()).toBe(0);
-      // The menu mixes avatar rows with command rows. They must share one
-      // leading column, or agent labels drift right of the command labels
-      // (Web Awesome's slotted-icon margin stacking on our own row gap).
-      const columns = await menu.evaluate((dropdown) => {
-        const left = (element: Element | null | undefined) =>
-          element ? Math.round(element.getBoundingClientRect().x) : Number.NaN;
-        const commandRow = dropdown.querySelector('wa-dropdown-item[value="command:new-agent"]');
-        const agentRow = dropdown.querySelector(
-          "wa-dropdown-item.sidebar-agent-menu__agent-switch",
-        );
+      const gridLayout = await menu.evaluate((dropdown) => {
+        const center = (element: Element | null | undefined) => {
+          const rect = element?.getBoundingClientRect();
+          return rect ? Math.round(rect.x + rect.width / 2) : Number.NaN;
+        };
+        const grid = dropdown.querySelector(".sidebar-agent-menu__agent-grid");
+        const agentRows = [
+          ...dropdown.querySelectorAll("wa-dropdown-item.sidebar-agent-menu__agent-switch"),
+        ].slice(0, 3);
         return {
-          agentLead: left(agentRow?.querySelector('[slot="icon"]')),
-          commandLead: left(commandRow?.querySelector('[slot="icon"]')),
-          agentLabel: left(agentRow?.querySelector(".agent-select__option-copy")),
-          commandLabel: left(commandRow?.querySelector(".sidebar-customize-menu__text")),
+          columns: grid ? getComputedStyle(grid).gridTemplateColumns.split(" ").length : 0,
+          widths: agentRows.map((row) => Math.round(row.getBoundingClientRect().width)),
+          avatarOffsets: agentRows.map(
+            (row) => center(row.querySelector(".sidebar-agent-menu__agent-avatar")) - center(row),
+          ),
+          labelOffsets: agentRows.map(
+            (row) => center(row.querySelector(".agent-select__option-copy")) - center(row),
+          ),
         };
       });
-      expect(columns.agentLead).toBeGreaterThan(0);
-      expect(columns.agentLead).toBe(columns.commandLead);
-      expect(columns.agentLabel).toBe(columns.commandLabel);
+      expect(gridLayout.columns).toBe(3);
+      expect(new Set(gridLayout.widths).size).toBe(1);
+      expect(gridLayout.avatarOffsets).toEqual([0, 0, 0]);
+      expect(gridLayout.labelOffsets).toEqual([0, 0, 0]);
       await expect
         .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
         .toBe(true);
