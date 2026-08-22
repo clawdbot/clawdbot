@@ -41,6 +41,7 @@ import {
   isCodexAppServerIndeterminateRequestCancellationError,
   type CodexAppServerClient,
 } from "./app-server/client.js";
+import type { CodexAppServerManagedApprovalPolicy } from "./app-server/config-contracts.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexSandboxPolicyForTurn,
@@ -516,6 +517,8 @@ type CodexThreadBindingParams = {
   model?: string;
   modelProvider?: string;
   authProfileId?: string;
+  approvalPolicy?: CodexAppServerManagedApprovalPolicy;
+  sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
   config?: CodexAppServerAuthProfileLookup["config"];
   agentId?: string;

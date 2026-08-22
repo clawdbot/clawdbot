@@ -17,6 +17,8 @@ export type BlockReplyContext = {
   timeoutMs?: number;
   /** Source assistant message index from the upstream stream, when available. */
   assistantMessageIndex?: number;
+  /** @internal Stable durable outbound intent owned by the producing runtime. */
+  deliveryIntentId?: string;
 };
 
 /** Context passed to onModelSelected callback with actual model used. */

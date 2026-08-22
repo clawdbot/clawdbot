@@ -2,8 +2,8 @@ import { hostname as readHostName } from "node:os";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import type {
-  CodexAppServerApprovalPolicy,
   CodexAppServerApprovalsReviewer,
+  CodexAppServerManagedApprovalPolicy,
   CodexAppServerRuntimeOptions,
   CodexAppServerSandboxMode,
   CodexPluginConfig,
@@ -36,7 +36,7 @@ export const CODEX_SESSION_PERMISSION_EXEC_MODES = {
 } satisfies Record<SessionPermissionMode, OpenClawExecMode>;
 
 type CodexSessionPermissionTuple = {
-  approvalPolicy: CodexAppServerApprovalPolicy;
+  approvalPolicy: CodexAppServerManagedApprovalPolicy;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
   sandbox: CodexAppServerSandboxMode;
 };
@@ -74,7 +74,7 @@ function requirementsAllowTuple(
   tuple: CodexSessionPermissionTuple,
   allowed: {
     sandboxes: Set<CodexAppServerSandboxMode> | undefined;
-    approvalPolicies: Set<CodexAppServerApprovalPolicy> | undefined;
+    approvalPolicies: Set<CodexAppServerManagedApprovalPolicy> | undefined;
     reviewers: Set<CodexAppServerApprovalsReviewer> | undefined;
   },
 ): boolean {

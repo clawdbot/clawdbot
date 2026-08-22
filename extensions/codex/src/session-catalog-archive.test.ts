@@ -440,7 +440,9 @@ describe("Codex supervision actions", () => {
 
   it("rejects archive when a spawned descendant is active", async () => {
     const control = createEligibleControl({
-      listDescendantPage: vi.fn(async () => ({ data: [{ id: "active-descendant" }] })),
+      listDescendantPage: vi.fn(async () => ({
+        data: [{ id: "active-descendant", projectId: null }],
+      })),
       readThread: vi.fn(async (threadId: string) =>
         idleThread({
           id: threadId,
@@ -470,7 +472,7 @@ describe("Codex supervision actions", () => {
     const listDescendantPage = vi.fn(async () => {
       validationReached();
       await validationReleased;
-      return { data: [{ id: "idle-descendant" }] };
+      return { data: [{ id: "idle-descendant", projectId: null }] };
     });
     const control = createEligibleControl({ listDescendantPage });
 

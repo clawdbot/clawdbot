@@ -5520,6 +5520,8 @@ export const en: TranslationMap = {
         deniedSummary: "{action} · risk: {risk}\n\n{rationale}",
         warningLabel: "Guardian warning",
         warningFallback: "Guardian stopped the requested action.",
+        strictReviewRequiredLabel: "Guardian review required",
+        strictReviewRequiredSummary: "Guardian is reviewing this action before it can continue.",
         requestedAction: "Requested action",
         unknownRisk: "unknown",
         noRationale: "No rationale was provided.",

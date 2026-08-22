@@ -371,28 +371,31 @@ describe("CodexAppServerClient", () => {
     expect(harness.writes).toHaveLength(1);
   });
 
-  it("blocks the previously bundled Codex app-server version", async () => {
-    const { harness, initializing, outbound } = startInitialize();
-    harness.send({
-      id: outbound.id,
-      result: { userAgent: "openclaw/0.146.0 (macOS; test)" },
-    });
+  it.each(["0.147.0", "0.148.0"])(
+    "blocks previously bundled Codex app-server version %s",
+    async (version) => {
+      const { harness, initializing, outbound } = startInitialize();
+      harness.send({
+        id: outbound.id,
+        result: { userAgent: `openclaw/${version} (macOS; test)` },
+      });
 
-    await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.146.0`,
-    );
-    expect(harness.writes).toHaveLength(1);
-  });
+      await expect(initializing).rejects.toThrow(
+        `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required, but detected ${version}`,
+      );
+      expect(harness.writes).toHaveLength(1);
+    },
+  );
 
   it("blocks Codex app-server prereleases of the exact supported version", async () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.147.0-alpha.2 (macOS; test)" },
+      result: { userAgent: "openclaw/0.149.0-alpha.2 (macOS; test)" },
     });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.147.0-alpha.2`,
+      `Codex app-server ${MIN_SUPPORTED_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.149.0-alpha.2`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -402,11 +405,11 @@ describe("CodexAppServerClient", () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.147.0+desktop (macOS; test)" },
+      result: { userAgent: "openclaw/0.149.0+desktop (macOS; test)" },
     });
 
     await expect(initializing).resolves.toBeUndefined();
-    expect(harness.client.getServerVersion()).toBe("0.147.0+desktop");
+    expect(harness.client.getServerVersion()).toBe("0.149.0+desktop");
     expect(JSON.parse(harness.writes[1] ?? "{}")).toEqual({ method: "initialized" });
     expect(warn).not.toHaveBeenCalled();
   });
@@ -438,8 +441,9 @@ describe("CodexAppServerClient", () => {
   });
 
   it.each([
-    ["0.148.0-alpha.23", 0],
-    ["0.148.0", 0],
+    ["0.149.0", 0],
+    ["0.150.0-alpha.1", 1],
+    ["0.150.0", 1],
     ["1.0.0", 1],
   ])("accepts app-server version %s for normal startup validation", async (version, warnings) => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
