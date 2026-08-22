@@ -37,7 +37,12 @@ class ApprovalCountdown extends OpenClawLightDomContentsElement {
   @property({ type: Number }) expiresAtMs = 0;
   @property({ type: Boolean }) compact = false;
 
-  private readonly polling = new PollController(this, 1_000, () => this.requestUpdate());
+  private readonly polling = new PollController(this, 1_000, () => this.requestUpdate(), false);
+
+  override connectedCallback() {
+    super.connectedCallback();
+    this.polling.start();
+  }
 
   override render() {
     const nowMs = Date.now();
