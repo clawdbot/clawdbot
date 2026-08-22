@@ -1189,6 +1189,107 @@ describe("agentLoop tool termination", () => {
     expect(skippedEnd).not.toHaveProperty("errorKind");
   });
 
+  it("requeues a drained steer when the run aborts before delivering it", async () => {
+    const firstReleased = createDeferred();
+    const firstStarted = createDeferred();
+    const secondExecute = vi.fn(async () => ({ content: [], details: {} }));
+    const requestMessages: Message[][] = [];
+    const agent = new Agent({
+      initialState: {
+        model,
+        tools: [
+          {
+            ...makeTool("first", []),
+            execute: async () => {
+              firstStarted.resolve();
+              await firstReleased.promise;
+              return { content: [{ type: "text", text: "first result" }], details: {} };
+            },
+          },
+          { ...makeTool("second", []), execute: secondExecute },
+        ],
+      },
+      streamFn: createTurnSequenceStream(
+        [
+          [
+            { type: "toolCall", id: "call-first", name: "first", arguments: {} },
+            { type: "toolCall", id: "call-second", name: "second", arguments: {} },
+          ],
+          [{ type: "text", text: "handled steer" }],
+        ],
+        requestMessages,
+      ),
+      toolExecution: "sequential",
+    });
+    agent.subscribe(async (event) => {
+      if (event.type === "turn_end" && event.toolResults.length > 0) {
+        await Promise.resolve();
+        agent.abort();
+      }
+    });
+    const steer = { role: "user" as const, content: "actually, stop", timestamp: 2 };
+
+    const run = agent.prompt("start");
+    await firstStarted.promise;
+    agent.steer(steer);
+    firstReleased.resolve();
+    await run;
+
+    expect(secondExecute).not.toHaveBeenCalled();
+    expect(agent.state.messages).not.toContain(steer);
+    expect(agent.hasQueuedMessages()).toBe(true);
+
+    await agent.prompt("again");
+
+    expect(requestMessages).toHaveLength(2);
+    expect(requestMessages[1]?.at(-1)).toBe(steer);
+    expect(agent.hasQueuedMessages()).toBe(false);
+  });
+
+  it("delivers a steer exactly once when the run is not aborted", async () => {
+    const firstReleased = createDeferred();
+    const firstStarted = createDeferred();
+    const requestMessages: Message[][] = [];
+    const agent = new Agent({
+      initialState: {
+        model,
+        tools: [
+          {
+            ...makeTool("first", []),
+            execute: async () => {
+              firstStarted.resolve();
+              await firstReleased.promise;
+              return { content: [{ type: "text", text: "first result" }], details: {} };
+            },
+          },
+          makeTool("second", []),
+        ],
+      },
+      streamFn: createTurnSequenceStream(
+        [
+          [
+            { type: "toolCall", id: "call-first", name: "first", arguments: {} },
+            { type: "toolCall", id: "call-second", name: "second", arguments: {} },
+          ],
+          [{ type: "text", text: "handled steer" }],
+        ],
+        requestMessages,
+      ),
+      toolExecution: "sequential",
+    });
+    const steer = { role: "user" as const, content: "one change", timestamp: 2 };
+
+    const run = agent.prompt("start");
+    await firstStarted.promise;
+    agent.steer(steer);
+    firstReleased.resolve();
+    await run;
+
+    expect(requestMessages).toHaveLength(2);
+    expect(agent.state.messages.filter((message) => message === steer)).toHaveLength(1);
+    expect(agent.hasQueuedMessages()).toBe(false);
+  });
+
   it("uses a private synchronous steer at the scheduler without invoking the public fallback", async () => {
     const steer = { role: "user" as const, content: "redirect", timestamp: 2 };
     let steerReady = false;

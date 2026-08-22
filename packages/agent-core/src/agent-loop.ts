@@ -321,6 +321,10 @@ async function runLoop(
     if (!signal?.aborted) {
       return false;
     }
+    if (pendingMessages.length > 0) {
+      config.restoreUndeliveredMessages?.(pendingMessages);
+      pendingMessages = [];
+    }
     // Persist an aborted assistant outcome so session post-processing does not
     // compact or continue from the preceding toolUse message.
     const abortedMessage = withAssistantTurnTaint(

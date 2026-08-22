@@ -320,6 +320,8 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
    */
   getFollowUpMessages?: () => Promise<AgentMessage[]>;
 
+  restoreUndeliveredMessages?: (messages: AgentMessage[]) => void;
+
   /**
    * Tool execution mode.
    * - "sequential": execute tool calls one by one, checking for steering before each starts

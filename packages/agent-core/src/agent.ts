@@ -194,6 +194,10 @@ class PendingMessageQueue {
     return [first];
   }
 
+  restore(messages: AgentMessage[]): void {
+    this.messages = [...messages, ...this.messages];
+  }
+
   clear(): void {
     this.messages = [];
   }
@@ -546,6 +550,7 @@ export class Agent {
       getApiKey: this.getApiKey,
       getSteeringMessages,
       getFollowUpMessages: async () => this.followUpQueue.drain(),
+      restoreUndeliveredMessages: (messages) => this.steeringQueue.restore(messages),
     };
   }
 
