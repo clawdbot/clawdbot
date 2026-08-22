@@ -264,7 +264,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "agents.executionBackends":
     'Named execution placement backends selectable through sessions_spawn.execution. Only local "process" execution is implemented; container and kubernetes configs are accepted but rejected at spawn time.',
   "agents.executionBackends.*.type": "Execution backend type; use process for the local backend.",
-  "agents.executionBackends.*.profiles": "Named backend profiles selectable through sessions_spawn.execution.profile.",
+  "agents.executionBackends.*.profiles":
+    "Named backend profiles selectable through sessions_spawn.execution.profile.",
   "agents.defaults":
     "Shared default settings inherited by agents unless overridden per entry in agents.entries. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
   "agents.defaults.skills":

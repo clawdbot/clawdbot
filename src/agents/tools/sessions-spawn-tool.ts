@@ -81,6 +81,10 @@ const acpSpawnModuleLoader = createLazyImportLoader<AcpSpawnModule>(
   () => import("../subagents/spawn/acp-spawn.js"),
 );
 
+function isToolParamRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 async function loadAcpSpawnModule(): Promise<AcpSpawnModule> {
   return await acpSpawnModuleLoader.load();
 }
@@ -173,8 +177,12 @@ function createSessionsSpawnToolSchema(params: {
     execution: Type.Optional(
       Type.Object(
         {
-          backend: Type.Optional(Type.String({ maxLength: 128, description: "Execution placement backend id." })),
-          profile: Type.Optional(Type.String({ maxLength: 128, description: "Optional execution profile id." })),
+          backend: Type.Optional(
+            Type.String({ maxLength: 128, description: "Execution placement backend id." }),
+          ),
+          profile: Type.Optional(
+            Type.String({ maxLength: 128, description: "Optional execution profile id." }),
+          ),
         },
         {
           description:
@@ -420,19 +428,12 @@ export function createSessionsSpawnTool(
         params.context === "fork" || params.context === "isolated" ? params.context : undefined;
       const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
-      const execution =
-        params.execution && typeof params.execution === "object" && !Array.isArray(params.execution)
-          ? {
-              backend: readToolStringParam(
-                params.execution as Record<string, unknown>,
-                "backend",
-              ),
-              profile: readToolStringParam(
-                params.execution as Record<string, unknown>,
-                "profile",
-              ),
-            }
-          : undefined;
+      const execution = isToolParamRecord(params.execution)
+        ? {
+            backend: readToolStringParam(params.execution, "backend"),
+            profile: readToolStringParam(params.execution, "profile"),
+          }
+        : undefined;
       if (params.visible === true && execution) {
         throw new ToolInputError('sessions_spawn "execution" is unavailable with visible=true.');
       }

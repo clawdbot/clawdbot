@@ -12,7 +12,10 @@ const ExecutionBackendProfileKeySchema = z
   .string()
   .min(1)
   .max(128)
-  .refine((value) => value === value.trim(), "execution profile keys must not have leading or trailing whitespace");
+  .refine(
+    (value) => value === value.trim(),
+    "execution profile keys must not have leading or trailing whitespace",
+  );
 const ExecutionBackendSchema = z
   .object({
     type: z.enum(["process", "container", "kubernetes"]),
