@@ -1,4 +1,3 @@
-import { computeBackoff } from "@openclaw/retry";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -19,6 +18,12 @@ import {
 } from "./chat-commands.ts";
 import { loadChatHistory, type ChatHistoryResult } from "./chat-history.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import {
+  consumeChatOutboxRetry,
+  retryableGatewayDelayMs,
+  scheduleChatOutboxRetry,
+  settleChatOutboxRetry,
+} from "./chat-outbox-retry.ts";
 import {
   anyChatOutboxPaneMatches,
   excludeComposerAttachments,
@@ -79,12 +84,9 @@ export type ChatOutboxDrainDependencies = {
   ) => void;
 };
 
-type StoredChatOutboxDrainResult = "blocked" | "empty";
 type StoredChatOutboxDrainLane = {
   freshAdmissions: Set<string>;
   host: ChatHost;
-  // A pre-request cancellation can remove its row; retain the direct outcome so
-  // the submitter never mistakes absence for a successful transport handoff.
   outcomes: Map<string, QueuedChatSendResult>;
   pendingOptions: Map<string, QueuedChatSendOptions>;
   promise: Promise<void>;
@@ -93,13 +95,9 @@ type StoredChatOutboxDrainLane = {
 
 type StoredChatOutboxClientState = {
   lanes: Map<string, StoredChatOutboxDrainLane>;
-  retryAttempts: Map<string, number>;
-  retryTimers: Map<string, { timer: ReturnType<typeof setTimeout>; suppressGenericWake: boolean }>;
 };
-
 const STORED_OUTBOX_CONFIRMATION_GRACE_MS = 5_000;
 const STORED_OUTBOX_RETRY_DEFAULT_MS = 500;
-const STORED_OUTBOX_RETRY_MAX_MS = 30_000;
 export const UNCONFIRMED_CHAT_SEND_ERROR =
   "Delivery could not be confirmed after reconnect. Check the conversation before retrying.";
 const UNCERTAIN_CLEAR_SUCCESSOR_ERROR =
@@ -108,25 +106,11 @@ const UNCERTAIN_CLEAR_SUCCESSOR_ERROR =
 const storedChatOutboxClients = new WeakMap<GatewayBrowserClient, StoredChatOutboxClientState>();
 
 function getStoredChatOutboxClientState(client: GatewayBrowserClient): StoredChatOutboxClientState {
-  const existing = storedChatOutboxClients.get(client);
-  if (existing) {
-    return existing;
-  }
-  const created: StoredChatOutboxClientState = {
+  const state = storedChatOutboxClients.get(client) ?? {
     lanes: new Map(),
-    retryAttempts: new Map(),
-    retryTimers: new Map(),
   };
-  storedChatOutboxClients.set(client, created);
-  return created;
-}
-
-export function retryableGatewayDelayMs(err: unknown): number | null {
-  if (!(err instanceof GatewayRequestError) || !err.retryable) {
-    return null;
-  }
-  const requested = err.retryAfterMs ?? STORED_OUTBOX_RETRY_DEFAULT_MS;
-  return Math.min(Math.max(requested, 100), STORED_OUTBOX_RETRY_MAX_MS);
+  storedChatOutboxClients.set(client, state);
+  return state;
 }
 
 export function scheduleStoredChatOutboxRetry(
@@ -136,39 +120,14 @@ export function scheduleStoredChatOutboxRetry(
   dependencies: ChatOutboxDrainDependencies,
   suppressGenericWake = true,
 ) {
-  const client = host.client;
-  if (!host.connected || !client) {
-    return;
-  }
-  const connectionEpoch = host.connectionEpoch;
-  const { retryAttempts, retryTimers } = getStoredChatOutboxClientState(client);
   const key = storedChatOutboxScopeKey(scope);
-  if (retryTimers.has(key)) {
-    return;
-  }
-  const retryDelayMs = suppressGenericWake
-    ? computeBackoff(
-        {
-          initialMs: delayMs,
-          maxMs: STORED_OUTBOX_RETRY_MAX_MS,
-          factor: 2,
-          jitter: 0,
-        },
-        (retryAttempts.get(key) ?? 0) + 1,
-      )
-    : delayMs;
-  if (suppressGenericWake) {
-    retryAttempts.set(key, (retryAttempts.get(key) ?? 0) + 1);
-  } else {
-    retryAttempts.delete(key);
-  }
-  const timer = setTimeout(() => {
-    retryTimers.delete(key);
-    if (host.connected && host.client === client && host.connectionEpoch === connectionEpoch) {
-      void scheduleStoredChatOutboxDrain(host, scope, dependencies);
-    }
-  }, retryDelayMs);
-  retryTimers.set(key, { timer, suppressGenericWake });
+  scheduleChatOutboxRetry(
+    host,
+    key,
+    delayMs,
+    (owner) => void scheduleStoredChatOutboxDrain(owner, scope, dependencies),
+    suppressGenericWake,
+  );
 }
 
 function readStoredChatOutbox(
@@ -387,7 +346,7 @@ async function drainStoredChatOutbox(
   lane: StoredChatOutboxDrainLane,
   scope: StoredChatOutboxScope,
   dependencies: ChatOutboxDrainDependencies,
-): Promise<StoredChatOutboxDrainResult> {
+): Promise<"blocked" | "empty"> {
   while (true) {
     const host = lane.host;
     if (!host.connected || !host.client) {
@@ -663,22 +622,14 @@ export async function scheduleStoredChatOutboxDrain(
     return undefined;
   }
   const key = storedChatOutboxScopeKey(scope);
-  const { lanes, retryAttempts, retryTimers } = getStoredChatOutboxClientState(client);
-  const retryTimer = retryTimers.get(key);
-  if (retryTimer !== undefined && itemId) {
-    clearTimeout(retryTimer.timer);
-    retryTimers.delete(key);
-    retryAttempts.delete(key);
-  } else if (retryTimer?.suppressGenericWake) {
+  const { lanes } = getStoredChatOutboxClientState(client);
+  const candidateOwnsScope = visibleSessionMatches(host, scope.sessionKey, scope.agentId);
+  if (consumeChatOutboxRetry(host, key, candidateOwnsScope, itemId)) {
     return undefined;
-  } else if (retryTimer !== undefined) {
-    clearTimeout(retryTimer.timer);
-    retryTimers.delete(key);
   }
   // Drain ownership follows the live client, never a disconnected pending RPC.
   const existing = lanes.get(key);
   if (existing) {
-    const candidateOwnsScope = visibleSessionMatches(host, scope.sessionKey, scope.agentId);
     // Keep a connected visible owner for local commands across split-pane reruns.
     if (
       !existing.host.connected ||
@@ -717,9 +668,7 @@ export async function scheduleStoredChatOutboxDrain(
   })();
   try {
     await lane.promise;
-    if (!retryTimers.has(key)) {
-      retryAttempts.delete(key);
-    }
+    settleChatOutboxRetry(client, key);
     return itemId ? lane.outcomes.get(itemId) : undefined;
   } finally {
     if (lanes.get(key) === lane) {

@@ -87,6 +87,52 @@ describe("stored outbox summaries", () => {
     expect(refreshedTotal).toBe(2);
   });
 
+  it("clears every retained projection after an external storage clear", () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeStoredChatOutboxChanges(listener);
+    const gatewayUrls = ["ws://first.test/control", "ws://second.test/control"];
+    for (const gatewayUrl of gatewayUrls) {
+      sessionStorage.setItem(
+        `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`,
+        JSON.stringify({
+          version: 2,
+          gatewayOwner: gatewayUrl,
+          mainAlias: { key: "workspace", agentId: "work" },
+          sessions: {
+            "thread\u0000agent:main": {
+              queue: [{ id: gatewayUrl, text: gatewayUrl, createdAt: 1 }],
+              updatedAt: 1,
+            },
+          },
+        }),
+      );
+      expect(summarizeStoredChatOutboxes({ settings: { gatewayUrl } }).total).toBe(1);
+      expect(
+        resolveStoredChatOutboxScope(
+          { settings: { gatewayUrl }, agentsList: null, hello: null },
+          "workspace",
+        ),
+      ).toEqual({ sessionKey: "global", agentId: "work" });
+    }
+
+    sessionStorage.clear();
+    const storageEvent = new StorageEvent("storage", { key: null });
+    Object.defineProperty(storageEvent, "storageArea", { value: sessionStorage });
+    window.dispatchEvent(storageEvent);
+    unsubscribe();
+
+    for (const gatewayUrl of gatewayUrls) {
+      expect(
+        resolveStoredChatOutboxScope(
+          { settings: { gatewayUrl }, agentsList: null, hello: null },
+          "workspace",
+        ),
+      ).toEqual({ sessionKey: "workspace" });
+      expect(summarizeStoredChatOutboxes({ settings: { gatewayUrl } }).total).toBe(0);
+    }
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
   it("keeps the exact aliased scope when sessionStorage retirement fails", () => {
     const gatewayUrl = "ws://gateway.test/control";
     const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`;

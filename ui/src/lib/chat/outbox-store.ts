@@ -88,7 +88,6 @@ const storedMainAliasByStorage = new WeakMap<
 // Projection reads share one normalized snapshot until a canonical write or
 // browser storage event invalidates it; mutation paths still reread for CAS.
 const projectedStoreByStorage = new WeakMap<Storage, Map<string, StoredComposerState>>();
-
 export function subscribeStoredChatOutboxChanges(listener: () => void): () => void {
   storedChatOutboxChangeListeners.add(listener);
   if (!storageChangeListenerInstalled && typeof window !== "undefined") {
@@ -119,11 +118,17 @@ export function notifyStoredChatOutboxChanges(): void {
 }
 
 function handleStoredChatOutboxStorageChange(event: StorageEvent): void {
+  if (event.key === null && event.storageArea) {
+    storedMainAliasByStorage.get(event.storageArea)?.clear();
+    projectedStoreByStorage.get(event.storageArea)?.clear();
+    notifyStoredChatOutboxChanges();
+    return;
+  }
   if (
     event.key?.startsWith(STORAGE_KEY_PREFIX) ||
     event.key?.startsWith(LEGACY_STORAGE_KEY_PREFIX)
   ) {
-    if (event.storageArea && event.key) {
+    if (event.storageArea) {
       const projectedKey = event.key.startsWith(LEGACY_STORAGE_KEY_PREFIX)
         ? `${STORAGE_KEY_PREFIX}${event.key.slice(LEGACY_STORAGE_KEY_PREFIX.length)}`
         : event.key;
@@ -614,11 +619,7 @@ export function writeStoredOutboxStore(
 export function retireStoredComposerDrafts(
   state: ChatComposerScope,
   targets: readonly StoredComposerRetirementTarget[],
-): {
-  gatewayOwner: string;
-  retirements: StoredComposerRetirement[];
-  storageFailed: boolean;
-} {
+) {
   const storageTarget = storageTargetForGateway(state.settings?.gatewayUrl);
   if (targets.length === 0) {
     return { gatewayOwner: storageTarget.gatewayOwner, retirements: [], storageFailed: false };
