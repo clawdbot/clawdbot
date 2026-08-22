@@ -105,14 +105,39 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
 /**
  * Hash a tool call for pattern matching.
  * Uses tool name + deterministic JSON serialization digest of params.
+ * Inter-agent session sends are normalized semantically first so reworded
+ * message bodies to the same session share one hash.
  */
 export function hashToolCall(toolName: string, params: unknown): string {
-  return `${toolName}:${digestStable(params)}`;
+  return `${toolName}:${digestStable(normalizeSessionsSendParamsForLoopHash(toolName, params))}`;
 }
 
 function digestStable(value: unknown): string {
   const serialized = stableStringify(value);
   return createHash("sha256").update(serialized).digest("hex");
+}
+
+/**
+ * Collapse free-text body keys for `sessions_send` so reworded sends to one session share a
+ * hash. `sessionKey` stays intact, so different targets remain distinct.
+ *
+ * Do not apply this to `conversations_send` or `conversations_turn`: they deliver directly to
+ * external conversations, where distinct text is legitimate and must stay text-sensitive.
+ */
+const SEMANTIC_SEND_TEXT_PLACEHOLDER = "semantic:send-text";
+
+function normalizeSessionsSendParamsForLoopHash(toolName: string, params: unknown): unknown {
+  if (toolName !== "sessions_send" || !isPlainObject(params)) {
+    return params;
+  }
+  return Object.fromEntries(
+    Object.entries(params).map(([key, value]) => [
+      key,
+      (key === "message" || key === "text") && typeof value === "string"
+        ? SEMANTIC_SEND_TEXT_PLACEHOLDER
+        : value,
+    ]),
+  );
 }
 
 function extractTextContent(result: unknown): string {
