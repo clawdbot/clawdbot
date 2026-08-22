@@ -59,7 +59,6 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     | { kind: "error"; message: string }
     | null = null;
 
-  private requestVersion = 0;
   private fileOperationVersion = 0;
   private showingRawText = false;
   private fileEditor: FileEditorViewHandle | null = null;
@@ -90,7 +89,6 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     if (!changed.has("content")) {
       return;
     }
-    this.requestVersion += 1;
     this.visibleContent = this.content;
     this.error = null;
     this.showingRawText = false;
@@ -570,7 +568,6 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     if (!rawContent) {
       return;
     }
-    this.requestVersion += 1;
     this.showingRawText = true;
     this.visibleContent = rawContent;
     this.error = null;
