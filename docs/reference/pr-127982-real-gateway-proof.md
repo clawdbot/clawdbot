@@ -51,3 +51,31 @@ cross-plugin isolation.
 
 This artifact proves behavior of the API through a real Gateway lifecycle. It
 does not authorize production installation or deployment.
+
+## Exact-head rerun after review corrections
+
+The proof was rerun on 2026-08-22 against behavior commit
+`a1562db1d62274cf55a2a56e705fd1fd76fcbf0b` using a new disposable state
+directory, a loopback-only Gateway, one synthetic session, and two locally
+linked proof plugins. The first run exposed that normal Gateway shutdown was
+incorrectly treating every loaded plugin as disabled and deleting its durable
+session extensions. The shutdown path was corrected to preserve persistent
+plugin session state while retaining normal in-process cleanup.
+
+```text
+[gateway] exact behavior commit: a1562db1d62274cf55a2a56e705fd1fd76fcbf0b
+[gateway] loaded proof-owner and proof-other from disposable paths
+[proof-owner] write {"checkpoint":"exact-head"}: PASS
+[proof-owner] exact readback: PASS
+[proof-other] same session and namespace returned no owner value: PASS
+[gateway] graceful stop: PASS
+[gateway] restart with same disposable state: PASS
+[proof-owner] persisted readback after restart: PASS
+[proof-owner] clear: PASS
+[proof-owner] empty readback after clear: PASS
+```
+
+Focused shutdown, registry, and persistent-state tests passed 73/73, formatting
+passed, and the full OpenClaw build passed. The disposable proof directory was
+moved to Trash after the run. No production profile, credential, session,
+connector, model call, message, or non-loopback endpoint was used.
