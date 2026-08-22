@@ -70,6 +70,20 @@ describe("publishSidebarSessionList", () => {
     ]);
   });
 
+  it("keeps cached agent order while an uncached agent has no result", () => {
+    const owner = createOwner();
+
+    publish(owner, "alpha", ["alpha-first", "alpha-second"]);
+    publishSidebarSessionList(owner, {
+      result: null,
+      agentId: "beta",
+      loading: true,
+      error: null,
+    });
+
+    expect([...owner.sessionCreatedOrder.keys()]).toEqual(["alpha-first", "alpha-second"]);
+  });
+
   it("preserves promoted order for an unscoped canonical result", () => {
     const owner = createOwner();
     owner.sessionCreatedOrder.set("first", 1);

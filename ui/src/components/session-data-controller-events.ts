@@ -42,7 +42,7 @@ export function publishSidebarSessionList(
   }
   const retainedResults = snapshot.result
     ? [snapshot.result, ...Object.values(owner.sessionResultsByAgent)]
-    : [];
+    : Object.values(owner.sessionResultsByAgent);
   const visibleKeys = new Set(
     retainedResults.flatMap((result) => result.sessions.map((row) => row.key).filter(Boolean)),
   );
