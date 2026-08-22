@@ -107,6 +107,28 @@ describe("scripts/plugin-release-pretag-pack-check.ts", () => {
     expect(clawHubOptions.env?.OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR).toContain("clawhub-0");
   });
 
+  it("gives each selected runtime build its own managed deadline", async () => {
+    const repoDir = createDualPublishPluginRepo();
+    writePublishablePluginFixture(repoDir, {
+      extensionId: "second-plugin",
+      version: "2026.4.11",
+      publishTo: "both",
+    });
+    runManagedCommandMock.mockResolvedValue(0);
+
+    await runPluginReleasePretagPackCheck(repoDir, { timeoutMs: 321 });
+
+    expect(runManagedCommandMock).toHaveBeenCalledTimes(6);
+    expect(runManagedCommandMock.mock.calls[0]?.[0]).toMatchObject({
+      args: expect.arrayContaining(["--package", "extensions/demo-plugin"]),
+      timeoutMs: 321,
+    });
+    expect(runManagedCommandMock.mock.calls[3]?.[0]).toMatchObject({
+      args: expect.arrayContaining(["--package", "extensions/second-plugin"]),
+      timeoutMs: 321,
+    });
+  });
+
   it("applies a caller-provided timeout to every managed command", async () => {
     const repoDir = createDualPublishPluginRepo();
     runManagedCommandMock.mockResolvedValue(0);
@@ -132,7 +154,7 @@ describe("scripts/plugin-release-pretag-pack-check.ts", () => {
 
     expect(thrown).toMatchObject({ code: 7 });
     expect((thrown as Error).message).toBe(
-      "plugin runtime build failed with exit code 7: node --import tsx scripts/check-plugin-npm-runtime-builds.mts",
+      "plugin runtime build for @openclaw/demo-plugin failed with exit code 7: node --import tsx scripts/check-plugin-npm-runtime-builds.mts --package extensions/demo-plugin",
     );
   });
 

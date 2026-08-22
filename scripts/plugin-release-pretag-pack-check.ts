@@ -125,22 +125,6 @@ export async function runPluginReleasePretagPackCheck(
   chmodSync(clawHubWrapper, 0o755);
 
   try {
-    await runCommand(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        "scripts/check-plugin-npm-runtime-builds.mts",
-        ...targets.flatMap((target) => ["--package", target.packageDir]),
-      ],
-      {
-        commandLabel: "node --import tsx scripts/check-plugin-npm-runtime-builds.mts",
-        cwd: rootDir,
-        stage: "plugin runtime build",
-        timeoutMs,
-      },
-    );
-
     const packEnv = {
       ...process.env,
       CLAWHUB_CLI_PACKAGE: process.env.CLAWHUB_CLI_PACKAGE?.trim() || DEFAULT_CLAWHUB_CLI_PACKAGE,
@@ -151,6 +135,23 @@ export async function runPluginReleasePretagPackCheck(
       OPENCLAW_PLUGIN_NPM_RUNTIME_BUILD: "0",
     };
     for (const [index, target] of targets.entries()) {
+      console.log(`plugin runtime build: ${target.packageName}`);
+      await runCommand(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "scripts/check-plugin-npm-runtime-builds.mts",
+          "--package",
+          target.packageDir,
+        ],
+        {
+          commandLabel: `node --import tsx scripts/check-plugin-npm-runtime-builds.mts --package ${target.packageDir}`,
+          cwd: rootDir,
+          stage: `plugin runtime build for ${target.packageName}`,
+          timeoutMs,
+        },
+      );
       if (target.packNpm) {
         console.log(`npm pack: ${target.packageName}`);
         await runCommand(

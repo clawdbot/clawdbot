@@ -123,6 +123,7 @@ setInterval(() => {}, 1000);
   );
   const clawHubCli = join(shimDir, "clawhub");
   chmodSync(clawHubCli, 0o755);
+  symlinkSync(clawHubCli, join(shimDir, "npm"));
   return { repoDir, packPidFile, descendantPidFile, clawHubCli };
 }
 
@@ -137,8 +138,7 @@ describe("scripts/plugin-release-pretag-pack-check.ts real behavior", () => {
       const originalDescendantPidFile = process.env.PROOF_DESCENDANT_PID_FILE;
       const originalSourceCommit = process.env.SOURCE_COMMIT;
       const originalSourceRef = process.env.SOURCE_REF;
-      if (originalPath === undefined) delete process.env.PATH;
-      else process.env.PATH = originalPath;
+      process.env.PATH = [join(repoDir, "bin"), originalPath].filter(Boolean).join(":");
       process.env.OPENCLAW_CLAWHUB_CLI = clawHubCli;
       process.env.PROOF_PACK_PID_FILE = packPidFile;
       process.env.PROOF_DESCENDANT_PID_FILE = descendantPidFile;
