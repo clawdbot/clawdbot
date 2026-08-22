@@ -23,6 +23,10 @@ import {
   type ChatSessionScrollPosition,
 } from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
+import {
+  reconcileChatTranscriptInteractionResize,
+  resolveChatTranscriptInteractionRow,
+} from "./chat-transcript-interaction-anchor.ts";
 import { extractTranscriptRange, previewTranscriptRowKeys } from "./chat-transcript-range.ts";
 
 export type TranscriptRow<T = unknown> =
@@ -142,18 +146,11 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
   private pendingRowMeasureFrame: number | null = null;
   private pendingInteractionRow: HTMLElement | null = null;
   private readonly captureInteractionResize = (event: Event) => {
-    const target = event.target;
-    const geometryControl =
-      target instanceof Element
-        ? target.closest("button[aria-expanded], button[aria-pressed], summary")
-        : null;
-    const row = geometryControl?.closest<HTMLElement>(".chat-virtual-row") ?? null;
+    const row = resolveChatTranscriptInteractionRow(event);
     if (!row) {
       return;
     }
     this.pendingInteractionRow = row;
-    // Direct-DOM controls do not otherwise enter the Lit update cycle.
-    // Schedule the owner reconciliation after their interaction handler commits.
     this.host.requestUpdate();
   };
   private measureConnectedRows(): void {
@@ -556,26 +553,17 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
   }
 
   private reconcileInteractionResize(sidebarCommitTarget?: EventTarget | null): void {
-    const row = this.pendingInteractionRow;
-    const sidebarRuntime = row?.closest(".sidebar-region__right-runtime");
-    if (
-      sidebarRuntime &&
-      !(sidebarCommitTarget instanceof Element && sidebarCommitTarget.contains(row))
-    ) {
-      return;
-    }
-    this.pendingInteractionRow = null;
-    if (!row?.isConnected || !this.scrollElement?.contains(row)) {
-      return;
-    }
     const virtualizer = this.virtualizerController.getVirtualizer();
-    const index = virtualizer.indexFromElement(row);
-    const options = virtualizer.options;
-    // The clicked row is the interaction anchor. Measure its committed height
-    // before paint without letting the transcript's ordinary end anchor compete.
-    virtualizer.setOptions({ ...options, anchorTo: "start" });
-    virtualizer.resizeItem(index, row.offsetHeight);
-    virtualizer.setOptions(options);
+    if (
+      reconcileChatTranscriptInteractionResize(
+        this.pendingInteractionRow,
+        sidebarCommitTarget,
+        this.scrollElement,
+        virtualizer,
+      )
+    ) {
+      this.pendingInteractionRow = null;
+    }
   }
 
   private rowKeyFromEvent(event: FocusEvent, target: EventTarget | null = event.target) {
