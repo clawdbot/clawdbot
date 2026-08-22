@@ -14,6 +14,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
+import { assignSessionOwner } from "./session-accessor.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
@@ -21,6 +22,11 @@ import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-tr
 import type { SessionEntry } from "./types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const humanOwner = {
+  actor: { type: "human", id: "alice" },
+  assignedBy: { type: "human", id: "bob" },
+  assignedAt: 123,
+} as const;
 
 type Fixture = {
   cfg: OpenClawConfig;
@@ -46,6 +52,19 @@ function createFixture(cfg: OpenClawConfig = { agents: { entries: { ops: {} } } 
 
 function databasePath(stateDir: string, agentId: string): string {
   return path.join(stateDir, "agents", agentId, "agent", "openclaw-agent.sqlite");
+}
+
+function assignHumanOwner(storePath: string): void {
+  expect(
+    assignSessionOwner(
+      { agentId: "main", sessionKey: "agent:main:chat", storePath },
+      {
+        owner: humanOwner.actor,
+        assignedBy: humanOwner.assignedBy,
+        assignedAt: humanOwner.assignedAt,
+      },
+    ),
+  ).toEqual(humanOwner);
 }
 
 function seedClaim(params: {
@@ -401,6 +420,41 @@ describe("legacy main session migration", () => {
   });
 
   it.each([
+    { kind: "migrated-in-place", sharedStore: true },
+    { kind: "migrated-cross-store", sharedStore: false },
+  ])("preserves the assigned human owner when $kind", async ({ kind, sharedStore }) => {
+    const storePath = sharedStore
+      ? path.join(tempDirs.make("owned-in-place-migration-"), "sessions.sqlite")
+      : undefined;
+    const fixture = createFixture({
+      agents: { entries: { ops: {} } },
+      ...(storePath ? { session: { store: storePath } } : {}),
+    });
+    const sourcePath = storePath ?? databasePath(fixture.stateDir, "main");
+    seedClaim({ databaseAgentId: "main", databasePath: sourcePath, key: "agent:main:chat" });
+    assignHumanOwner(sourcePath);
+
+    const result = await migrateLegacyMainSessionKeys({
+      cfg: fixture.cfg,
+      env: fixture.env,
+      mode: "automatic",
+    });
+
+    expect(result.complete).toBe(true);
+    expect(outcomeKinds(result)).toContain(kind);
+    expect(
+      readClaim({
+        databaseAgentId: sharedStore ? "main" : "ops",
+        databasePath: storePath ?? databasePath(fixture.stateDir, "ops"),
+        key: "agent:ops:chat",
+      })?.entry.owner,
+    ).toEqual(humanOwner);
+    expect(
+      readClaim({ databaseAgentId: "main", databasePath: sourcePath, key: "agent:main:chat" }),
+    ).toBeUndefined();
+  });
+
+  it.each([
     { copiedBeforeCrash: true, label: "copy committed before source cleanup" },
     { copiedBeforeCrash: false, label: "source cleanup committed before ledger" },
   ])("converges when $label", async ({ copiedBeforeCrash }) => {
@@ -452,47 +506,53 @@ describe("legacy main session migration", () => {
     ]);
   });
 
-  it("quarantines losing claims without overwriting existing quarantine keys", async () => {
-    const fixture = createFixture();
-    const mainPath = databasePath(fixture.stateDir, "main");
-    seedClaim({
-      databaseAgentId: "main",
-      databasePath: mainPath,
-      entry: { sessionId: "legacy", updatedAt: 100 },
-      key: "agent:main:chat",
-    });
-    seedClaim({
-      databaseAgentId: "main",
-      databasePath: mainPath,
-      entry: { sessionId: "occupied", updatedAt: 50 },
-      key: "agent:ops:legacy-main-conflict-1",
-    });
-    seedClaim({
-      databaseAgentId: "ops",
-      databasePath: databasePath(fixture.stateDir, "ops"),
-      entry: { sessionId: "canonical", updatedAt: 200 },
-      key: "agent:ops:chat",
-    });
+  it.each([false, true])(
+    "quarantines losing claims without overwriting existing quarantine keys (assigned owner: %s)",
+    async (hasHumanOwner) => {
+      const fixture = createFixture();
+      const mainPath = databasePath(fixture.stateDir, "main");
+      seedClaim({
+        databaseAgentId: "main",
+        databasePath: mainPath,
+        entry: { sessionId: "legacy", updatedAt: 100 },
+        key: "agent:main:chat",
+      });
+      if (hasHumanOwner) {
+        assignHumanOwner(mainPath);
+      }
+      seedClaim({
+        databaseAgentId: "main",
+        databasePath: mainPath,
+        entry: { sessionId: "occupied", updatedAt: 50 },
+        key: "agent:ops:legacy-main-conflict-1",
+      });
+      seedClaim({
+        databaseAgentId: "ops",
+        databasePath: databasePath(fixture.stateDir, "ops"),
+        entry: { sessionId: "canonical", updatedAt: 200 },
+        key: "agent:ops:chat",
+      });
 
-    const result = await migrateLegacyMainSessionKeys({
-      cfg: fixture.cfg,
-      env: fixture.env,
-      mode: "doctor-fix",
-    });
+      const result = await migrateLegacyMainSessionKeys({
+        cfg: fixture.cfg,
+        env: fixture.env,
+        mode: "doctor-fix",
+      });
 
-    const outcome = result.outcomes.find((entry) => entry.kind === "divergent-canonical");
-    expect(outcome?.quarantinedKeys).toEqual(["agent:ops:legacy-main-conflict-2"]);
-    expect(
-      readClaim({ databaseAgentId: "main", databasePath: mainPath, key: "agent:main:chat" }),
-    ).toBeUndefined();
-    expect(
-      readClaim({
+      const outcome = result.outcomes.find((entry) => entry.kind === "divergent-canonical");
+      expect(outcome?.quarantinedKeys).toEqual(["agent:ops:legacy-main-conflict-2"]);
+      expect(
+        readClaim({ databaseAgentId: "main", databasePath: mainPath, key: "agent:main:chat" }),
+      ).toBeUndefined();
+      const quarantined = readClaim({
         databaseAgentId: "main",
         databasePath: mainPath,
         key: "agent:ops:legacy-main-conflict-2",
-      })?.events,
-    ).toEqual(['{"type":"message","id":"event-1","text":"hello"}']);
-  });
+      });
+      expect(quarantined?.events).toEqual(['{"type":"message","id":"event-1","text":"hello"}']);
+      expect(quarantined?.entry.owner).toEqual(hasHumanOwner ? humanOwner : undefined);
+    },
+  );
 
   it("uses a completed ledger once and rearms when its identity changes", async () => {
     const fixture = createFixture();

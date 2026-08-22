@@ -4327,11 +4327,12 @@ describe("session accessor seam", () => {
     expect(target.sessionKey).toBe(canonicalScope.sessionKey);
   });
 
-  it("drops imported legacy session transcript paths from canonical rows", async () => {
+  it("drops imported legacy transcript paths and untrusted owners from canonical rows", async () => {
     const sessionKey = "agent:main:main";
     await importSqliteSessionRows({
       agentId: "main",
       entry: {
+        owner: { actor: { type: "human", id: "spoofed" } },
         sessionFile: path.join(tempDir, "legacy-transcript.jsonl"),
         sessionId: "session-1",
         updatedAt: 10,
@@ -4340,13 +4341,13 @@ describe("session accessor seam", () => {
       storePath,
     });
 
-    expect(
-      loadExactSessionEntry({
-        agentId: "main",
-        sessionKey,
-        storePath,
-      })?.entry,
-    ).not.toHaveProperty("sessionFile");
+    const entry = loadExactSessionEntry({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    })?.entry;
+    expect(entry).not.toHaveProperty("sessionFile");
+    expect(entry).not.toHaveProperty("owner");
   });
 
   it("reads imported transcripts before opening the SQLite transaction", async () => {
