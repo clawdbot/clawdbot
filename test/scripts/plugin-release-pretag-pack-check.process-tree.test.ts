@@ -99,21 +99,12 @@ function createProofRepo(): {
   mkdirSync(shimDir);
   writeFileSync(
     join(shimDir, "clawhub"),
-    `#!/usr/bin/env node
-import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
-
-const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-  stdio: "ignore",
-});
-const packPidFile = process.env.PROOF_PACK_PID_FILE;
-const descendantPidFile = process.env.PROOF_DESCENDANT_PID_FILE;
-if (!packPidFile || !descendantPidFile) {
-  throw new Error("proof PID paths are required");
-}
-writeFileSync(packPidFile, String(process.pid));
-writeFileSync(descendantPidFile, String(descendant.pid));
-setInterval(() => {}, 1000);
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$$" > "\${PROOF_PACK_PID_FILE:?proof PID paths are required}"
+node -e 'setInterval(() => {}, 1000)' &
+printf '%s\\n' "$!" > "\${PROOF_DESCENDANT_PID_FILE:?proof PID paths are required}"
+while :; do sleep 1; done
 `,
     "utf8",
   );
