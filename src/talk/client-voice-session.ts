@@ -1,5 +1,6 @@
 /** Durable per-agent voice-call records for Talk continuity and mutation evidence. */
 import { createHash, randomUUID } from "node:crypto";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
@@ -462,8 +463,13 @@ function appendVoiceTranscript(params: {
         throw new Error(`agent session not found (${normalized.sessionKey})`);
       }
       const observedAt = Date.now();
-      // STRICT session_nodes.updated_at accepts only integer epoch milliseconds.
-      const timestamp = Math.round(normalized.timestamp ?? observedAt);
+      const timestamp = normalized.timestamp ?? observedAt;
+      // Keep provider precision in the message while giving STRICT SQLite metadata
+      // a Date-valid integer clock.
+      const storageTimestamp =
+        Number.isInteger(timestamp) && asDateTimestampMs(timestamp) !== undefined
+          ? timestamp
+          : observedAt;
       // Reserve before the fallible append. A crash can leave a conservative
       // retry requirement, but can never let close skip an accepted entry.
       runOpenClawAgentWriteTransaction(
@@ -496,7 +502,7 @@ function appendVoiceTranscript(params: {
             timestamp,
             provider: record.provider ?? "realtime",
           }),
-          now: timestamp,
+          now: storageTimestamp,
         },
       );
       runOpenClawAgentWriteTransaction(

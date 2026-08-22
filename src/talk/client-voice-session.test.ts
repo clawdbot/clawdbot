@@ -648,7 +648,7 @@ describe("client voice session", () => {
     });
   });
 
-  it("ignores whitespace and rounds fractional transcripts", async () => {
+  it("ignores whitespace and preserves fractional transcript timestamps", async () => {
     await seedSession("agent:main:main");
     const voiceSessionId = createOrResumeClientVoiceSession({
       agentId: "main",
@@ -681,12 +681,11 @@ describe("client voice session", () => {
       timestamp: 1_770_000_000_000.5,
     });
     expect(sessionAccessorMocks.appendTranscriptMessage).toHaveBeenCalledOnce();
-    expect(sessionAccessorMocks.appendTranscriptMessage.mock.calls[0]?.[1].eventId).toBe(
-      `voice:${voiceSessionId}:real`,
-    );
-    expect(sessionAccessorMocks.appendTranscriptMessage.mock.calls[0]?.[1].now).toBe(
-      1_770_000_000_001,
-    );
+    expect(sessionAccessorMocks.appendTranscriptMessage.mock.calls[0]?.[1]).toMatchObject({
+      eventId: `voice:${voiceSessionId}:real`,
+      message: { timestamp: 1_770_000_000_000.5 },
+      now: expect.any(Number),
+    });
   });
 
   it("continues durable transcript operations after a persistence failure", async () => {

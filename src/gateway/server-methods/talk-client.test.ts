@@ -7,7 +7,10 @@ import {
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   authorizeClientVoiceConfirmation,
@@ -99,6 +102,45 @@ describe("talk.client.transcript", () => {
         provenance: { kind: "realtime_voice", sourceChannel: "talk" },
       },
     });
+  });
+
+  it("preserves source timestamps while writing integer STRICT-store metadata", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_770_000_000_100);
+    const voiceSessionId = createOrResumeClientVoiceSession({
+      agentId: "main",
+      sessionKey,
+      origin: "client",
+    });
+
+    for (const [entryId, timestamp] of [
+      ["fractional", 1_770_000_000_000.5],
+      ["out-of-range", 1e100],
+    ] as const) {
+      expect(
+        await invokeTranscript({
+          sessionKey,
+          voiceSessionId,
+          entryId,
+          role: "user",
+          text: entryId,
+          timestamp,
+        }),
+      ).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    }
+
+    const events = readSessionTranscriptMessageEvents({ agentId: "main", sessionId });
+    expect(
+      events.map(({ event }) => (event as { message?: { timestamp?: number } }).message?.timestamp),
+    ).toEqual([1_770_000_000_000.5, 1e100]);
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: process.env });
+    expect(
+      database.db
+        .prepare(
+          "SELECT typeof(updated_at) AS storage_type, updated_at FROM session_windows WHERE session_id = ?",
+        )
+        .get(sessionId),
+    ).toEqual({ storage_type: "integer", updated_at: 1_770_000_000_100 });
   });
 
   it("appends before the session has ever received a chat turn", async () => {
