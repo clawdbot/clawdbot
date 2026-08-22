@@ -255,6 +255,7 @@ suite.define(() => {
         frontSize: [frontBounds.width, frontBounds.height],
         overlap: backBounds.right - frontBounds.left,
         reveal: frontBounds.left - backBounds.left,
+        slotWidth: slotBounds.width,
         stackSize: [stackBounds.width, stackBounds.height],
         textGap: textBounds.left - stackBounds.right,
       };
@@ -265,6 +266,7 @@ suite.define(() => {
       frontSize: [18, 18],
       overlap: 8,
       reveal: 10,
+      slotWidth: 20,
       stackSize: [28, 20],
       textGap: 4,
     });
@@ -274,6 +276,14 @@ suite.define(() => {
       singleOwnerRow.evaluate((row) => row.getBoundingClientRect().height),
     ]);
     expect(rowHeights[0]).toBeCloseTo(rowHeights[1] ?? 0, 5);
+    const titleLefts = await Promise.all(
+      [collaborativeRow, singleOwnerRow].map((row) =>
+        row
+          .locator(".sidebar-recent-session__text")
+          .evaluate((text) => text.getBoundingClientRect().left),
+      ),
+    );
+    expect(titleLefts[0]).toBeCloseTo(titleLefts[1] ?? 0, 5);
 
     if (captureUiProofEnabled) {
       const legacyStyles = await currentPage.addStyleTag({
