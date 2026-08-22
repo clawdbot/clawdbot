@@ -130,9 +130,13 @@ describe("scripts/plugin-release-pretag-pack-check.ts real behavior", () => {
       const originalPath = process.env.PATH;
       const originalNpmPidFile = process.env.PROOF_NPM_PID_FILE;
       const originalDescendantPidFile = process.env.PROOF_DESCENDANT_PID_FILE;
+      const originalSourceCommit = process.env.SOURCE_COMMIT;
+      const originalSourceRef = process.env.SOURCE_REF;
       process.env.PATH = `${shimDir}:${originalPath ?? ""}`;
       process.env.PROOF_NPM_PID_FILE = npmPidFile;
       process.env.PROOF_DESCENDANT_PID_FILE = descendantPidFile;
+      process.env.SOURCE_COMMIT = "0000000000000000000000000000000000000000";
+      process.env.SOURCE_REF = "refs/heads/proof";
       let proofSucceeded = false;
       try {
         const startedAt = Date.now();
@@ -170,6 +174,10 @@ describe("scripts/plugin-release-pretag-pack-check.ts real behavior", () => {
         else process.env.PROOF_NPM_PID_FILE = originalNpmPidFile;
         if (originalDescendantPidFile === undefined) delete process.env.PROOF_DESCENDANT_PID_FILE;
         else process.env.PROOF_DESCENDANT_PID_FILE = originalDescendantPidFile;
+        if (originalSourceCommit === undefined) delete process.env.SOURCE_COMMIT;
+        else process.env.SOURCE_COMMIT = originalSourceCommit;
+        if (originalSourceRef === undefined) delete process.env.SOURCE_REF;
+        else process.env.SOURCE_REF = originalSourceRef;
         if (!proofSucceeded) {
           for (const pidFile of [npmPidFile, descendantPidFile]) {
             if (existsSync(pidFile)) {
