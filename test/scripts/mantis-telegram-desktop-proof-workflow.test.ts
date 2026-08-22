@@ -281,7 +281,15 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(abandoned.run).toContain('sudo kill -TERM -- "-$lane_pgid"');
     expect(abandoned.run).toContain('sudo kill -KILL -- "-$lane_pgid"');
     expect(abandoned.run).toContain('abort --lane "$lane"');
-    expect(abandoned.run).toContain("teardown --session desktop-recorder.json");
+    // Teardown must route through the public wrapper (Docker access lives with the
+    // recorder user); a direct mantis-sut invocation of the internal exec cannot
+    // stop the desktop container or read the recorder-owned session file.
+    expect(abandoned.run).toMatch(
+      /\/usr\/local\/bin\/openclaw-telegram-desktop-recorder \\\n\s*teardown --session desktop-recorder\.json/u,
+    );
+    expect(abandoned.run).not.toContain(
+      "sudo -u mantis-sut /usr/local/lib/mantis-toolchain/telegram-desktop-recorder",
+    );
     expect(abandoned.run?.indexOf("teardown --session desktop-recorder.json")).toBeLessThan(
       abandoned.run?.lastIndexOf('echo "safe_to_release=true"') ?? -1,
     );

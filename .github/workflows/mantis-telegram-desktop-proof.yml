@@ -934,7 +934,10 @@ jobs:
                 abort --lane "$lane" || result=1
             fi
           done
-          sudo -u mantis-sut /usr/local/lib/mantis-toolchain/telegram-desktop-recorder \
+          # Teardown goes through the public wrapper: this step already runs as the
+          # recorder user, and the internal exec shim cds into the session root where
+          # the recorder-owned session file lives. mantis-sut can do neither.
+          /usr/local/bin/openclaw-telegram-desktop-recorder \
             teardown --session desktop-recorder.json || result=1
           if sudo test -f "$lock"; then
             echo "Mantis harness lock remained after cleanup." >&2
