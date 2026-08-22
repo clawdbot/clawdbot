@@ -6,7 +6,13 @@
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
+import {
+  type Agent,
+  type AgentTool,
+  runAgentLoop,
+  type StreamFn,
+} from "openclaw/plugin-sdk/agent-core";
+import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -17,12 +23,85 @@ import {
   toToolDefinitions,
 } from "./agent-tool-definition-adapter.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { recordLoopWarningForToolCall } from "./agent-tools.before-tool-call.state.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
+import { installToolLoopWarningFinalizer } from "./embedded-agent-runner/run/tool-loop-recovery.js";
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
 const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
+const ZERO_USAGE = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+const FAUX_MODEL = {
+  id: "faux-1",
+  name: "Faux",
+  provider: "faux",
+  api: "faux",
+  baseUrl: "http://localhost:0",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 128_000,
+  maxTokens: 1024,
+} satisfies Model;
+
+async function runToolCallTranscript(params: {
+  tools: AgentTool[];
+  toolCall: { id: string; name: string; arguments: Record<string, unknown> };
+  afterToolCall?: Agent["afterToolCall"];
+  afterToolOutcome?: Agent["afterToolOutcome"];
+}) {
+  let streamCalls = 0;
+  const streamFn: StreamFn = () => {
+    const stream = createAssistantMessageEventStream();
+    queueMicrotask(() => {
+      streamCalls += 1;
+      const message =
+        streamCalls === 1
+          ? {
+              role: "assistant" as const,
+              content: [{ type: "toolCall" as const, ...params.toolCall }],
+              ...FAUX_MODEL,
+              model: FAUX_MODEL.id,
+              usage: ZERO_USAGE,
+              stopReason: "toolUse" as const,
+              timestamp: Date.now(),
+            }
+          : {
+              role: "assistant" as const,
+              content: [{ type: "text" as const, text: "done" }],
+              ...FAUX_MODEL,
+              model: FAUX_MODEL.id,
+              usage: ZERO_USAGE,
+              stopReason: "stop" as const,
+              timestamp: Date.now(),
+            };
+      stream.push({ type: "done", reason: message.stopReason, message });
+    });
+    return stream;
+  };
+
+  return await runAgentLoop(
+    [{ role: "user", content: "run the tool", timestamp: Date.now() }],
+    { systemPrompt: "test", messages: [], tools: params.tools },
+    {
+      model: FAUX_MODEL,
+      convertToLlm: (agentMessages) => agentMessages as never,
+      ...(params.afterToolCall ? { afterToolCall: params.afterToolCall } : {}),
+      ...(params.afterToolOutcome ? { afterToolOutcome: params.afterToolOutcome } : {}),
+    },
+    () => {},
+    undefined,
+    streamFn,
+  );
+}
 
 async function executeThrowingTool(name: string, callId: string) {
   const tool = {
@@ -84,6 +163,72 @@ describe("agent tool definition adapter", () => {
     expect(details?.tool).toBe("boom");
     expect(details?.error).toBe("nope");
     expect(JSON.stringify(result.details)).not.toContain("\n    at ");
+  });
+
+  it("surfaces and consumes a no-run loop warning when a tool throws", async () => {
+    recordLoopWarningForToolCall("call-warning-error", "Reassess before retrying.");
+
+    const warned = await executeThrowingTool("boom", "call-warning-error");
+    const next = await executeThrowingTool("boom", "call-warning-error");
+
+    expect(warned.content).toContainEqual({
+      type: "text",
+      text: "Tool loop warning: Reassess before retrying.",
+    });
+    expect(JSON.stringify(next)).not.toContain("Tool loop warning:");
+  });
+
+  it("clears a pending loop warning when an aborted tool has no result", async () => {
+    const controller = new AbortController();
+    const abortReason = new Error("cancelled");
+    const abortingTool = {
+      name: "abort_tool",
+      label: "Abort Tool",
+      description: "aborts",
+      parameters: Type.Object({}),
+      execute: async () => {
+        controller.abort(abortReason);
+        throw abortReason;
+      },
+    } satisfies AgentTool;
+    const [definition] = toToolDefinitions([abortingTool]);
+    recordLoopWarningForToolCall("call-warning-abort", "Reassess before retrying.");
+
+    await expect(
+      expectDefined(definition, "abort tool definition").execute(
+        "call-warning-abort",
+        {},
+        controller.signal,
+        undefined,
+        extensionContext,
+      ),
+    ).rejects.toBe(abortReason);
+
+    const next = await executeThrowingTool("boom", "call-warning-abort");
+    expect(JSON.stringify(next)).not.toContain("Tool loop warning:");
+  });
+
+  it("does not mask a frozen tool error while appending a loop warning", async () => {
+    const toolCallId = "call-warning-frozen-error";
+    const frozenError = new TypeError("immutable failure");
+    Object.freeze(frozenError);
+    const tool = wrapToolWithBeforeToolCallHook({
+      name: "frozen_error_tool",
+      label: "Frozen Error Tool",
+      description: "throws an immutable error",
+      parameters: Type.Object({}),
+      execute: async () => {
+        throw frozenError;
+      },
+    } satisfies AgentTool);
+    recordLoopWarningForToolCall(toolCallId, "Reassess before retrying.");
+
+    const result = await executeTool(tool, toolCallId);
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "immutable failure\n\nTool loop warning: Reassess before retrying.",
+    });
   });
 
   it("normalizes exec tool aliases in error results", async () => {
@@ -380,6 +525,186 @@ async function executeClientTool(params: unknown): Promise<{
 }
 
 describe("toClientToolDefinitions – param coercion", () => {
+  it("includes a pending loop warning in the client tool result", async () => {
+    const [tool] = toClientToolDefinitions([makeClientTool("update_plan")], undefined, {
+      runId: "run-warning",
+    });
+    if (!tool) {
+      throw new Error("missing client tool definition");
+    }
+    recordLoopWarningForToolCall("call-warning", "Reassess before retrying.", "run-warning");
+
+    const result = await tool.execute(
+      "call-warning",
+      { query: "same plan" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.content).toContainEqual({
+      type: "text",
+      text: "Tool loop warning: Reassess before retrying.",
+    });
+  });
+
+  it("preserves a client tool loop warning in the session transcript", async () => {
+    const runId = "run-transcript-warning";
+    const toolCallId = "call-transcript-warning";
+    const clientTools = toClientToolDefinitions([makeClientTool("update_plan")], undefined, {
+      runId,
+    });
+    const tools: AgentTool[] = clientTools.map((tool) => ({
+      name: tool.name,
+      label: tool.label,
+      description: tool.description,
+      parameters: tool.parameters,
+      execute: async (callId, params, signal, onUpdate) =>
+        await tool.execute(callId, params, signal, onUpdate, extensionContext),
+    }));
+    recordLoopWarningForToolCall(toolCallId, "Reassess before retrying.", runId);
+    const messages = await runToolCallTranscript({
+      tools,
+      toolCall: {
+        id: toolCallId,
+        name: "update_plan",
+        arguments: { query: "same plan" },
+      },
+    });
+
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId,
+        content: expect.arrayContaining([
+          { type: "text", text: "Tool loop warning: Reassess before retrying." },
+        ]),
+      }),
+    );
+  });
+
+  it("preserves a thrown server tool loop warning in the session transcript", async () => {
+    const runId = "run-error-warning";
+    const toolCallId = "call-error-warning";
+    const tool = wrapToolWithBeforeToolCallHook(
+      {
+        name: "failing_tool",
+        label: "Failing Tool",
+        description: "fails",
+        parameters: Type.Object({}),
+        execute: async () => {
+          throw new Error("tool failed");
+        },
+      } satisfies AgentTool,
+      { runId },
+    );
+    recordLoopWarningForToolCall(toolCallId, "Reassess before retrying.", runId);
+
+    const messages = await runToolCallTranscript({
+      tools: [tool],
+      toolCall: { id: toolCallId, name: "failing_tool", arguments: {} },
+    });
+
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId,
+        isError: true,
+        content: expect.arrayContaining([
+          {
+            type: "text",
+            text: "tool failed\n\nTool loop warning: Reassess before retrying.",
+          },
+        ]),
+      }),
+    );
+  });
+
+  it("preserves a loop warning after afterToolCall replaces transcript content", async () => {
+    const runId = "run-after-call-replacement";
+    const toolCallId = "call-after-call-replacement";
+    const tool = wrapToolWithBeforeToolCallHook(
+      {
+        name: "read",
+        label: "Read",
+        description: "reads",
+        parameters: Type.Object({}),
+        execute: async () => ({
+          content: [{ type: "text", text: "tool output" }],
+          details: {},
+        }),
+      } satisfies AgentTool,
+      { runId },
+    );
+    const agent = {
+      afterToolCall: async () => ({
+        content: [{ type: "text" as const, text: "afterToolCall replacement" }],
+      }),
+    } as unknown as Agent;
+    installToolLoopWarningFinalizer({ agent, runId });
+    recordLoopWarningForToolCall(toolCallId, "Reassess before retrying.", runId);
+
+    const messages = await runToolCallTranscript({
+      tools: [tool],
+      toolCall: { id: toolCallId, name: "read", arguments: {} },
+      afterToolCall: agent.afterToolCall,
+      afterToolOutcome: agent.afterToolOutcome,
+    });
+
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId,
+        content: [
+          { type: "text", text: "afterToolCall replacement" },
+          { type: "text", text: "Tool loop warning: Reassess before retrying." },
+        ],
+      }),
+    );
+  });
+
+  it("preserves a loop warning after afterToolOutcome replaces transcript content", async () => {
+    const runId = "run-after-outcome-replacement";
+    const toolCallId = "call-after-outcome-replacement";
+    const tool = wrapToolWithBeforeToolCallHook(
+      {
+        name: "read",
+        label: "Read",
+        description: "reads",
+        parameters: Type.Object({}),
+        execute: async () => ({
+          content: [{ type: "text", text: "tool output" }],
+          details: {},
+        }),
+      } satisfies AgentTool,
+      { runId },
+    );
+    const agent = {
+      afterToolOutcome: async () => ({
+        content: [{ type: "text" as const, text: "afterToolOutcome replacement" }],
+      }),
+    } as unknown as Agent;
+    installToolLoopWarningFinalizer({ agent, runId });
+    recordLoopWarningForToolCall(toolCallId, "Reassess before retrying.", runId);
+
+    const messages = await runToolCallTranscript({
+      tools: [tool],
+      toolCall: { id: toolCallId, name: "read", arguments: {} },
+      afterToolOutcome: agent.afterToolOutcome,
+    });
+
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolCallId,
+        content: [
+          { type: "text", text: "afterToolOutcome replacement" },
+          { type: "text", text: "Tool loop warning: Reassess before retrying." },
+        ],
+      }),
+    );
+  });
+
   it("returns terminal pending results for each client tool in a batch", async () => {
     const completed: Array<{ id: string; name: string; params: Record<string, unknown> }> = [];
     const defs = toClientToolDefinitions([makeClientTool("search"), makeClientTool("lookup")], {

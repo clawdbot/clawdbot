@@ -3,12 +3,18 @@
  * The adapter and wrapper both consult this map so later execution can use the
  * normalized payload selected by hook processing.
  */
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import type { AgentToolResult } from "./runtime/index.js";
+
 export const adjustedParamsByToolCallId = new Map<string, unknown>();
-export const preExecutionBlockedToolCallIds = new Set<string>();
+const preExecutionBlockedToolCallIds = new Set<string>();
 export const structuredReplaySafeToolCallIds = new Set<string>();
 const startedToolCallIds = new Set<string>();
 const trackedToolCallIds = new Set<string>();
 const batchAdmittedToolCallIds = new Set<string>();
+const loopWarningsByToolCallId = new Map<string, { warning: string; carried: boolean }>();
+const MAX_TRACKED_TOOL_CALLS = 1024;
+const MAX_PENDING_LOOP_WARNINGS = 1024;
 
 export function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
   if (params.runId && params.runId.trim()) {
@@ -38,6 +44,20 @@ export function consumePreExecutionBlockedToolCall(toolCallId: string, runId?: s
   const blocked = preExecutionBlockedToolCallIds.has(key);
   preExecutionBlockedToolCallIds.delete(key);
   return blocked;
+}
+
+export function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string): void {
+  if (!toolCallId) {
+    return;
+  }
+  preExecutionBlockedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
+  while (preExecutionBlockedToolCallIds.size > MAX_TRACKED_TOOL_CALLS) {
+    const oldest = preExecutionBlockedToolCallIds.values().next().value;
+    if (!oldest) {
+      break;
+    }
+    preExecutionBlockedToolCallIds.delete(oldest);
+  }
 }
 
 /** Snapshot whether policy prevented execution without stealing cleanup from the tool owner. */
@@ -102,22 +122,141 @@ export function consumeBatchAdmittedToolCall(toolCallId: string, runId?: string)
   return admitted;
 }
 
-/** Release exact batch-admission markers for prepared calls suppressed by steering. */
+/** Attach bounded loop guidance to the model-visible outcome of an admitted call. */
+export function recordLoopWarningForToolCall(
+  toolCallId: string,
+  warning: string,
+  runId?: string,
+): void {
+  loopWarningsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), {
+    warning,
+    carried: false,
+  });
+  pruneMapToMaxSize(loopWarningsByToolCallId, MAX_PENDING_LOOP_WARNINGS);
+}
+
+/** Consume pending guidance when no model-visible result can be emitted. */
+export function consumeLoopWarningForToolCall(
+  toolCallId: string,
+  runId?: string,
+): string | undefined {
+  const key = buildAdjustedParamsKey({ runId, toolCallId });
+  const warning = loopWarningsByToolCallId.get(key)?.warning;
+  loopWarningsByToolCallId.delete(key);
+  return warning;
+}
+
+function claimLoopWarningForTransport(toolCallId: string, runId?: string): string | undefined {
+  const pending = loopWarningsByToolCallId.get(buildAdjustedParamsKey({ runId, toolCallId }));
+  if (!pending || pending.carried) {
+    return undefined;
+  }
+  pending.carried = true;
+  return pending.warning;
+}
+
+function appendWarningTextToToolResult(
+  result: AgentToolResult<unknown>,
+  warning: string,
+): AgentToolResult<unknown> {
+  const text = `Tool loop warning: ${warning}`;
+  const alreadyPresent = result.content?.some(
+    (block) => block.type === "text" && block.text.includes(text),
+  );
+  if (alreadyPresent) {
+    return result;
+  }
+  return {
+    ...result,
+    content: [...(result.content ?? []), { type: "text", text }],
+  };
+}
+
+/** Carry guidance through tool execution while retaining it for final outcome hooks. */
+export function carryLoopWarningToToolResult(
+  result: AgentToolResult<unknown>,
+  toolCallId: string,
+  runId?: string,
+): AgentToolResult<unknown> {
+  const warning = claimLoopWarningForTransport(toolCallId, runId);
+  return warning ? appendWarningTextToToolResult(result, warning) : result;
+}
+
+export function appendLoopWarningToToolResult(
+  result: AgentToolResult<unknown>,
+  toolCallId: string,
+  runId?: string,
+): AgentToolResult<unknown> {
+  const warning = consumeLoopWarningForToolCall(toolCallId, runId);
+  if (!warning) {
+    return result;
+  }
+  return appendWarningTextToToolResult(result, warning);
+}
+
+function appendWarningTextToError(error: unknown, warning: string): unknown {
+  const originalMessage = error instanceof Error ? error.message : String(error);
+  const message = `${originalMessage}\n\nTool loop warning: ${warning}`;
+  if (error instanceof Error) {
+    try {
+      error.message = message;
+      return error;
+    } catch {
+      const wrapped = new Error(message, { cause: error });
+      wrapped.name = error.name;
+      return wrapped;
+    }
+  }
+  return new Error(message);
+}
+
+/** Carry guidance through a failed call while retaining it for final outcome hooks. */
+export function carryLoopWarningToError(
+  error: unknown,
+  toolCallId: string,
+  runId?: string,
+): unknown {
+  const warning = claimLoopWarningForTransport(toolCallId, runId);
+  return warning ? appendWarningTextToError(error, warning) : error;
+}
+
+/** Carry warning guidance unless an aborted call cannot emit a model-visible result. */
+export function resolveLoopWarningError(
+  error: unknown,
+  toolCallId: string,
+  runId: string | undefined,
+  signal?: AbortSignal,
+): unknown {
+  if (signal?.aborted) {
+    consumeLoopWarningForToolCall(toolCallId, runId);
+    return error;
+  }
+  return carryLoopWarningToError(error, toolCallId, runId);
+}
+
+/** Release admission and warning state for prepared calls suppressed by steering. */
 export function releaseBatchAdmittedToolCalls(
   toolCallIds: readonly string[],
   runId?: string,
 ): void {
   for (const toolCallId of toolCallIds) {
-    batchAdmittedToolCallIds.delete(buildAdjustedParamsKey({ runId, toolCallId }));
+    const key = buildAdjustedParamsKey({ runId, toolCallId });
+    batchAdmittedToolCallIds.delete(key);
+    loopWarningsByToolCallId.delete(key);
   }
 }
 
-/** Remove unused batch-admission markers when their embedded run ends. */
+/** Remove unused admission and warning state when an embedded run ends. */
 export function clearBatchAdmittedToolCallsForRun(runId: string): void {
   const prefix = `${runId}:`;
   for (const key of batchAdmittedToolCallIds) {
     if (key.startsWith(prefix)) {
       batchAdmittedToolCallIds.delete(key);
+    }
+  }
+  for (const key of loopWarningsByToolCallId.keys()) {
+    if (key.startsWith(prefix)) {
+      loopWarningsByToolCallId.delete(key);
     }
   }
 }
@@ -130,4 +269,5 @@ export function resetAdjustedParamsByToolCallIdForTests(): void {
   startedToolCallIds.clear();
   structuredReplaySafeToolCallIds.clear();
   batchAdmittedToolCallIds.clear();
+  loopWarningsByToolCallId.clear();
 }

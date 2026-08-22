@@ -99,12 +99,17 @@ async function loadFreshAfterToolCallModulesForTest() {
     emitAgentItemEvent: vi.fn(),
   }));
   vi.doMock("./agent-tools.before-tool-call.state.js", () => ({
+    carryLoopWarningToError: (error: unknown) => error,
+    carryLoopWarningToToolResult: (result: unknown) => result,
+    resolveLoopWarningError: (error: unknown) => error,
     consumeAdjustedParamsForToolCall: beforeToolCallMocks.consumeAdjustedParamsForToolCall,
+    consumeLoopWarningForToolCall: vi.fn(() => undefined),
     consumePreExecutionBlockedToolCall: vi.fn(() => false),
     consumeTrackedToolExecutionStarted: vi.fn(() => undefined),
     consumeStructuredReplaySafeToolCall: vi.fn(() => false),
     peekAdjustedParamsForToolCall: vi.fn(() => undefined),
     peekPreExecutionBlockedToolCall: vi.fn(() => false),
+    recordPreExecutionBlockedToolCall: vi.fn(),
   }));
   vi.doMock("./agent-tools.before-tool-call.js", () => ({
     BeforeToolCallBlockedError: beforeToolCallMocks.BeforeToolCallBlockedError,

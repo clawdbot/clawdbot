@@ -18,6 +18,11 @@ import {
 } from "./agent-tools.before-tool-call.js";
 import { consumeFinalClientVoiceToolConfirmation } from "./agent-tools.before-tool-call.policy.js";
 import {
+  carryLoopWarningToError,
+  carryLoopWarningToToolResult,
+  consumeLoopWarningForToolCall,
+} from "./agent-tools.before-tool-call.state.js";
+import {
   finalizeBeforeToolCallExecutionParams,
   prepareBeforeToolCallExecutionParams,
 } from "./agent-tools.before-tool-call.wrapper.js";
@@ -273,22 +278,29 @@ async function executeAdaptedToolOperation(params: {
   run: () => Promise<unknown>;
   hookContext: HookContext | undefined;
 }): Promise<AgentToolResult<unknown>> {
+  const withLoopWarning = (result: AgentToolResult<unknown>) =>
+    carryLoopWarningToToolResult(result, params.toolCallId, params.hookContext?.runId);
   try {
-    return normalizeToolExecutionResult({
-      toolName: params.normalizedToolName,
-      result: await params.run(),
-    });
+    return withLoopWarning(
+      normalizeToolExecutionResult({
+        toolName: params.normalizedToolName,
+        result: await params.run(),
+      }),
+    );
   } catch (err) {
     if (params.signal?.aborted) {
+      consumeLoopWarningForToolCall(params.toolCallId, params.hookContext?.runId);
       throw err;
     }
     if (isBeforeToolCallBlockedError(err)) {
       logDebug(`tools: ${params.normalizedToolName} blocked by before_tool_call: ${err.reason}`);
-      return buildBlockedToolResult({
-        reason: err.reason,
-        toolCallId: params.toolCallId,
-        runId: params.hookContext?.runId,
-      });
+      return withLoopWarning(
+        buildBlockedToolResult({
+          reason: err.reason,
+          toolCallId: params.toolCallId,
+          runId: params.hookContext?.runId,
+        }),
+      );
     }
     const described = describeToolExecutionError(err);
     if (described.stack && described.stack !== described.message) {
@@ -300,10 +312,12 @@ async function executeAdaptedToolOperation(params: {
       effectiveParams: params.getEffectiveParams(),
     });
     logError(`[tools] ${params.normalizedToolName} failed: ${described.message} ${inputPreview}`);
-    return buildToolExecutionErrorResult({
-      toolName: params.normalizedToolName,
-      message: described.message,
-    });
+    return withLoopWarning(
+      buildToolExecutionErrorResult({
+        toolName: params.normalizedToolName,
+        message: described.message,
+      }),
+    );
   }
 }
 
@@ -469,6 +483,7 @@ export function toToolDefinitions(
               });
               const decision = control ? await control.pause(executeParams) : undefined;
               if (decision && !decision.launch) {
+                consumeLoopWarningForToolCall(toolCallId, hookContext?.runId);
                 return { content: [], details: { status: "skipped" } };
               }
               // A voice grant binds the post-finalizer execution shape. Consuming it
@@ -624,6 +639,8 @@ export function toClientToolDefinitions(
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, signal } = splitToolExecuteArgs(args);
         const control = readInternalExecutionControl(args[4]);
+        const withLoopWarning = (result: AgentToolResult<unknown>) =>
+          carryLoopWarningToToolResult(result, toolCallId, hookContext?.runId);
         if (onClientToolCall && typeof onClientToolCall !== "function") {
           onClientToolCall.reserve?.(toolCallId, func.name);
         }
@@ -641,12 +658,14 @@ export function toClientToolDefinitions(
               onClientToolCall.discard?.(toolCallId, func.name);
             }
             if (outcome.kind === "veto") {
-              return buildBlockedToolResult({
-                reason: outcome.reason,
-                deniedReason: outcome.deniedReason,
-                toolCallId,
-                runId: hookContext?.runId,
-              });
+              return withLoopWarning(
+                buildBlockedToolResult({
+                  reason: outcome.reason,
+                  deniedReason: outcome.deniedReason,
+                  toolCallId,
+                  runId: hookContext?.runId,
+                }),
+              );
             }
             throw new Error(outcome.reason);
           }
@@ -659,6 +678,7 @@ export function toClientToolDefinitions(
             if (onClientToolCall && typeof onClientToolCall !== "function") {
               onClientToolCall.discard?.(toolCallId, func.name);
             }
+            consumeLoopWarningForToolCall(toolCallId, hookContext?.runId);
             return { content: [], details: { status: "skipped" } };
           }
           const voiceConfirmation = consumeFinalClientVoiceToolConfirmation({
@@ -670,12 +690,14 @@ export function toClientToolDefinitions(
             if (onClientToolCall && typeof onClientToolCall !== "function") {
               onClientToolCall.discard?.(toolCallId, func.name);
             }
-            return buildBlockedToolResult({
-              reason: voiceConfirmation.reason,
-              deniedReason: "client-voice-confirmation",
-              toolCallId,
-              runId: hookContext?.runId,
-            });
+            return withLoopWarning(
+              buildBlockedToolResult({
+                reason: voiceConfirmation.reason,
+                deniedReason: "client-voice-confirmation",
+                toolCallId,
+                runId: hookContext?.runId,
+              }),
+            );
           }
           decision?.start?.();
           // Notify handler that a client tool was called.
@@ -691,22 +713,28 @@ export function toClientToolDefinitions(
             onClientToolCall.discard?.(toolCallId, func.name);
           }
           if (err instanceof ToolInputError) {
-            return buildToolExecutionErrorResult({
-              toolName: func.name,
-              message: err.message,
-            });
+            return withLoopWarning(
+              buildToolExecutionErrorResult({
+                toolName: func.name,
+                message: err.message,
+              }),
+            );
           }
-          throw err;
+          if (signal?.aborted) {
+            consumeLoopWarningForToolCall(toolCallId, hookContext?.runId);
+            throw err;
+          }
+          throw carryLoopWarningToError(err, toolCallId, hookContext?.runId);
         }
         // Return a terminal pending result; the client will execute the tool.
-        return {
+        return withLoopWarning({
           ...jsonResult({
             status: "pending",
             tool: func.name,
             message: "Tool execution delegated to client",
           }),
           terminate: true,
-        };
+        });
       },
     } satisfies ToolDefinition;
     return attachAdapterExecutionPreparer(definition);

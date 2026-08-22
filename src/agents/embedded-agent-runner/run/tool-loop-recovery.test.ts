@@ -1,8 +1,13 @@
 import type { InternalToolBatchCall } from "@openclaw/agent-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import {
+  carryLoopWarningToToolResult,
+  consumeLoopWarningForToolCall,
+  recordLoopWarningForToolCall,
+} from "../../agent-tools.before-tool-call.state.js";
 import { markCodeModeControlTool } from "../../code-mode-control-tools.js";
-import type { AgentTool } from "../../runtime/index.js";
+import type { Agent, AgentTool, AgentToolResult } from "../../runtime/index.js";
 
 const mocks = vi.hoisted(() => ({
   attachedLifecycles: [] as Array<{
@@ -34,7 +39,10 @@ vi.mock("../../runtime/internal-hooks.js", () => ({
   },
 }));
 
-import { createToolLoopBatchAdmission } from "./tool-loop-recovery.js";
+import {
+  createToolLoopBatchAdmission,
+  installToolLoopWarningFinalizer,
+} from "./tool-loop-recovery.js";
 
 function codeModeExecTool(): AgentTool {
   return markCodeModeControlTool({
@@ -52,6 +60,18 @@ function batchCall(id: string, args: Record<string, unknown>): InternalToolBatch
     args,
     tool: codeModeExecTool(),
   };
+}
+
+function outcomeContext(toolCallId: string, result: AgentToolResult<unknown>) {
+  return {
+    assistantMessage: {},
+    toolCall: { type: "toolCall", id: toolCallId, name: "read", arguments: {} },
+    args: {},
+    result,
+    isError: false,
+    executionStarted: true,
+    context: { systemPrompt: "", messages: [] },
+  } as unknown as Parameters<NonNullable<Agent["afterToolOutcome"]>>[0];
 }
 
 describe("tool-loop recovery batch admission", () => {
@@ -133,5 +153,26 @@ describe("tool-loop recovery batch admission", () => {
     expect(second).toEqual({});
     expect(firstLifecycle?.commitReadyCalls).not.toBe(secondLifecycle?.commitReadyCalls);
     expect(mocks.attachedLifecycles).toHaveLength(2);
+  });
+});
+
+describe("tool-loop warning finalization", () => {
+  it("consumes already-carried guidance without duplicating it", async () => {
+    const runId = "run-preserved-warning";
+    const toolCallId = "call-preserved-warning";
+    recordLoopWarningForToolCall(toolCallId, "Choose a different action.", runId);
+    const carried = carryLoopWarningToToolResult(
+      { content: [{ type: "text", text: "tool output" }], details: {} },
+      toolCallId,
+      runId,
+    );
+    const agent = {} as Agent;
+    installToolLoopWarningFinalizer({ agent, runId });
+
+    const finalized = await agent.afterToolOutcome?.(outcomeContext(toolCallId, carried));
+
+    expect(finalized).toBeUndefined();
+    expect(JSON.stringify(carried).match(/Tool loop warning:/gu)).toHaveLength(1);
+    expect(consumeLoopWarningForToolCall(toolCallId, runId)).toBeUndefined();
   });
 });

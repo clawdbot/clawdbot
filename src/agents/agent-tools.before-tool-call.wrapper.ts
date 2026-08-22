@@ -19,6 +19,7 @@ import {
   copyAgentToolSourceExecutionGuard,
   runAgentToolSourceExecutionGuard,
 } from "./agent-tool-source-execution-guard.js";
+import { buildBlockedToolResult } from "./agent-tools.before-tool-call.blocked-result.js";
 import {
   buildToolContentPrivateData,
   emitSkillUsedDiagnostic,
@@ -40,9 +41,12 @@ import {
 import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
+  carryLoopWarningToToolResult,
   clearTrackedToolExecution,
-  preExecutionBlockedToolCallIds,
+  consumeLoopWarningForToolCall,
+  recordPreExecutionBlockedToolCall,
   recordStructuredReplaySafeToolCall,
+  resolveLoopWarningError,
   recordToolExecutionStarted,
   recordToolExecutionTracked,
   structuredReplaySafeToolCallIds,
@@ -252,34 +256,6 @@ export function isBeforeToolCallBlockedError(err: unknown): err is BeforeToolCal
   return err instanceof BeforeToolCallBlockedError;
 }
 
-const preExecutionBlockedToolResults = new WeakSet<object>();
-
-export function isPreExecutionBlockedToolResult(result: unknown): boolean {
-  return (
-    result !== null && typeof result === "object" && preExecutionBlockedToolResults.has(result)
-  );
-}
-
-/** Build the standard terminal result for vetoed tool calls. */
-export function buildBlockedToolResult(params: {
-  reason: string;
-  deniedReason?: HookBlockedReason;
-  toolCallId?: string;
-  runId?: string;
-}) {
-  recordPreExecutionBlockedToolCall(params.toolCallId, params.runId);
-  const result = {
-    content: [{ type: "text" as const, text: params.reason }],
-    details: {
-      status: "blocked",
-      deniedReason: params.deniedReason ?? "plugin-before-tool-call",
-      reason: params.reason,
-    },
-  };
-  preExecutionBlockedToolResults.add(result);
-  return result;
-}
-
 // Build the private (trusted-listener-only) tool content payload for a tool
 // execution diagnostic event. Raw args/results never ride the public event bus;
 // consumers (e.g. diagnostics-otel) bound and redact before export.
@@ -414,7 +390,7 @@ export function wrapToolWithBeforeToolCallHook(
           result: blockedResult,
           toolCallOrdinal,
         });
-        return blockedResult;
+        return carryLoopWarningToToolResult(blockedResult, toolCallId, ctx?.runId);
       };
       let preparedParams: unknown;
       try {
@@ -427,7 +403,12 @@ export function wrapToolWithBeforeToolCallHook(
         });
       } catch (error) {
         recordPreExecutionError(error, params, "tool_preparation");
-        throw tagBeforeToolCallFailure(error, signal);
+        throw resolveLoopWarningError(
+          tagBeforeToolCallFailure(error, signal),
+          toolCallId,
+          ctx?.runId,
+          signal,
+        );
       }
       const hookParams = normalizeCodeModeExecBeforeHookParams({ tool, params: preparedParams });
       const hookMetadata = getCodeModeExecBeforeHookMetadata({ tool, params: preparedParams });
@@ -444,7 +425,12 @@ export function wrapToolWithBeforeToolCallHook(
         });
       } catch (error) {
         recordPreExecutionError(error, hookParams, "before_tool_call");
-        throw tagBeforeToolCallFailure(error, signal);
+        throw resolveLoopWarningError(
+          tagBeforeToolCallFailure(error, signal),
+          toolCallId,
+          ctx?.runId,
+          signal,
+        );
       }
       if (outcome.blocked) {
         if (outcome.kind !== "veto") {
@@ -454,7 +440,12 @@ export function wrapToolWithBeforeToolCallHook(
             outcome.deniedReason === "plugin-approval" ? "plugin_approval" : "before_tool_call",
             outcome.deniedReason,
           );
-          throw new BeforeToolCallFailureError(outcome.reason, outcome.disposition);
+          throw resolveLoopWarningError(
+            new BeforeToolCallFailureError(outcome.reason, outcome.disposition),
+            toolCallId,
+            ctx?.runId,
+            signal,
+          );
         }
         return await blockToolCall({
           reason: outcome.reason,
@@ -487,15 +478,25 @@ export function wrapToolWithBeforeToolCallHook(
         });
       } catch (error) {
         recordPreExecutionError(error, outcome.params ?? hookParams, "tool_preparation");
-        throw tagBeforeToolCallFailure(error, signal);
+        throw resolveLoopWarningError(
+          tagBeforeToolCallFailure(error, signal),
+          toolCallId,
+          ctx?.runId,
+          signal,
+        );
       }
       let onImplementationStart: (() => void) | undefined;
       if (prepareControl) {
-        const decision = await prepareControl.pause(executeParams);
-        if (!decision.launch) {
-          return INTERNAL_DISPOSED_RESULT;
+        try {
+          const decision = await prepareControl.pause(executeParams);
+          if (!decision.launch) {
+            consumeLoopWarningForToolCall(toolCallId, ctx?.runId);
+            return INTERNAL_DISPOSED_RESULT;
+          }
+          onImplementationStart = decision.start;
+        } catch (error) {
+          throw resolveLoopWarningError(error, toolCallId, ctx?.runId, signal);
         }
-        onImplementationStart = decision.start;
       }
       // A voice grant binds the post-finalizer execution shape. Consume it only
       // after steering can no longer suppress the prepared call.
@@ -511,10 +512,14 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
         });
       }
-      // Host capabilities can close while hooks, approval, validation, or
-      // steering awaits. Recheck at the final synchronous source boundary.
-      runAgentToolSourceExecutionGuard(tool);
-      onImplementationStart?.();
+      try {
+        // Host capabilities can close while hooks, approval, validation, or
+        // steering awaits. Recheck at the final synchronous source boundary.
+        runAgentToolSourceExecutionGuard(tool);
+        onImplementationStart?.();
+      } catch (error) {
+        throw resolveLoopWarningError(error, toolCallId, ctx?.runId, signal);
+      }
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
       recordToolExecutionStarted(toolCallId, ctx?.runId);
@@ -600,7 +605,7 @@ export function wrapToolWithBeforeToolCallHook(
             }),
           );
         }
-        return result;
+        return carryLoopWarningToToolResult(result, toolCallId, ctx?.runId);
       } catch (err) {
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEventWithPrivateData(
@@ -628,7 +633,7 @@ export function wrapToolWithBeforeToolCallHook(
               : tool.resultContentSource,
           toolCallOrdinal,
         });
-        throw err;
+        throw resolveLoopWarningError(err, toolCallId, ctx?.runId, signal);
       }
     },
   };
@@ -720,18 +725,4 @@ export function rewrapToolWithBeforeToolCallHook(
   copyToolTerminalPresentation(tool, rewrapSource);
   copyAgentToolSourceExecutionGuard(tool, rewrapSource);
   return wrapToolWithBeforeToolCallHook(rewrapSource, ctx ?? preservedContext, options);
-}
-
-function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string): void {
-  if (!toolCallId) {
-    return;
-  }
-  preExecutionBlockedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
-  while (preExecutionBlockedToolCallIds.size > MAX_TRACKED_ADJUSTED_PARAMS) {
-    const oldest = preExecutionBlockedToolCallIds.values().next().value;
-    if (!oldest) {
-      break;
-    }
-    preExecutionBlockedToolCallIds.delete(oldest);
-  }
 }
