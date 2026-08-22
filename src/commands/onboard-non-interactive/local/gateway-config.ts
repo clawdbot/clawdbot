@@ -4,6 +4,7 @@
  * This module owns port/bind/auth validation and existing-setting preservation
  * before the final config write happens.
  */
+import { validateDottedDecimalIPv4Input } from "@openclaw/net-policy/ipv4";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import { formatInvalidPortOption } from "../../../cli/error-format.js";
@@ -96,6 +97,24 @@ export function applyNonInteractiveGatewayConfig(params: {
   const changesBindOrTailscale = opts.gatewayBind !== undefined || opts.tailscale !== undefined;
   if (changesBindOrTailscale && tailscaleMode !== "off" && bind !== "loopback") {
     bind = "loopback";
+  }
+
+  // bind=custom is only startable alongside a valid gateway.customBindHost, and the non-interactive
+  // path has no prompt to collect one. Checked after the Tailscale normalization above so a bind
+  // forced back to loopback never trips it. Without this, setup writes a config the Gateway refuses.
+  if (bind === "custom") {
+    const customBindHostIssue = validateDottedDecimalIPv4Input(
+      normalizeOptionalString(existingGateway?.customBindHost ?? ""),
+    );
+    if (customBindHostIssue) {
+      const setCommand = formatCliCommand("openclaw config set gateway.customBindHost <ipv4>");
+      const interactiveCommand = formatCliCommand("openclaw onboard");
+      runtime.error(
+        `--gateway-bind custom requires gateway.customBindHost: ${customBindHostIssue}. Set it with ${setCommand} and rerun, or run ${interactiveCommand} interactively to be prompted for it.`,
+      );
+      runtime.exit(1);
+      return null;
+    }
   }
   const changesAuthOrTailscale =
     explicitAuthMode !== undefined || hasExplicitTokenAuthInput || opts.tailscale !== undefined;
