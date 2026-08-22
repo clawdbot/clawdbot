@@ -272,7 +272,16 @@ export async function runRemoteGatewayInferenceOnboarding(
           payload: {},
           timeoutMs: GATEWAY_SETUP_VERIFY_TIMEOUT_MS,
         });
-        break;
+        const retryableResult =
+          activation.gatewayRestartRequired === true &&
+          !verification.ok &&
+          verification.status === "unavailable";
+        const remainingMs = restartDeadline - Date.now();
+        if (!retryableResult || remainingMs <= 0) {
+          break;
+        }
+        await delay(Math.min(retryDelayMs, remainingMs));
+        retryDelayMs = Math.min(retryDelayMs * 2, 2_000);
       } catch (error) {
         const retryable =
           activation.gatewayRestartRequired === true &&

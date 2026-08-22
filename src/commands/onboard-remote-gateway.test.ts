@@ -238,7 +238,25 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
     },
   );
 
-  it("waits for a declared Gateway restart before accepting remote activation", async () => {
+  it.each([
+    {
+      label: "request rejection",
+      firstVerification: () =>
+        Promise.reject(
+          Object.assign(new Error("gateway restarting"), {
+            name: "GatewayClientRequestError",
+            gatewayCode: "UNAVAILABLE",
+            retryable: true,
+            retryAfterMs: 0,
+          }),
+        ),
+    },
+    {
+      label: "typed unavailable result",
+      firstVerification: () =>
+        Promise.resolve({ ok: false, status: "unavailable", error: "gateway restarting" }),
+    },
+  ])("waits for a declared Gateway restart after $label", async ({ firstVerification }) => {
     const methods: string[] = [];
     let verifyAttempts = 0;
     const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
@@ -256,12 +274,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
         };
       }
       if (options.method === "openclaw.setup.verify" && verifyAttempts++ === 0) {
-        throw Object.assign(new Error("gateway restarting"), {
-          name: "GatewayClientRequestError",
-          gatewayCode: "UNAVAILABLE",
-          retryable: true,
-          retryAfterMs: 0,
-        });
+        return await firstVerification();
       }
       if (options.method === "openclaw.setup.verify") {
         return { ok: true, modelRef: "openai/gpt-5.5", latencyMs: 100 };

@@ -905,24 +905,7 @@ extension OnboardingAISetupModel {
                 context: context)
             let result = try JSONDecoder().decode(ActivateResult.self, from: data)
             guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
-            guard await self.gateway.isCurrentServerLease(lease) else {
-                if result.ok,
-                   OnboardingSystemAgentResumeStore.markCompleted(
-                       ifOwnedBy: context.routeIdentity,
-                       activationOwner: activationOwner,
-                       defaults: self.defaults)
-                {
-                    self.pendingActivationVerification = true
-                    self.phase = .detecting
-                    _ = await self.verifyPendingConfiguredInference()
-                } else {
-                    self.pendingActivationVerification = false
-                    self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
-                    requireFreshDetection(after: Self.transportFailure(
-                        "The Gateway connection changed while AI setup was finishing. Check again."))
-                }
-                return
-            }
+            let originalLeaseIsCurrent = await self.gateway.isCurrentServerLease(lease)
             guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
             if result.ok {
                 if let failure = await finishSuccessfulActivation(
@@ -932,12 +915,19 @@ extension OnboardingAISetupModel {
                     activationOwner: activationOwner,
                     before: persistedStateBeforeActivation,
                     originalServerLease: lease,
-                    gatewayRestartRequired: result.gatewayRestartRequired == true)
+                    gatewayRestartRequired: result.gatewayRestartRequired == true || !originalLeaseIsCurrent)
                 {
                     self.statuses[kind] = .failed(failure)
                     self.exposeActivationFailure(failure, whenTerminal: !tryNextCandidateOnFailure)
                 }
             } else {
+                guard originalLeaseIsCurrent else {
+                    self.pendingActivationVerification = false
+                    self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
+                    requireFreshDetection(after: Self.transportFailure(
+                        "The Gateway connection changed while AI setup was finishing. Check again."))
+                    return
+                }
                 self.pendingActivationVerification = false
                 self.clearPendingHandoff(ifOwnedBy: context, activationOwner: activationOwner)
                 let failure = Self.failure(

@@ -720,7 +720,7 @@ private func successfulActivationResponse(
     gatewayRestartRequired: Bool = false) -> Data
 {
     let restartField = gatewayRestartRequired ? ",\"gatewayRestartRequired\":true" : ""
-    Data(
+    return Data(
         """
         {"type":"res","id":"\(id)","ok":true,"payload":{
           "ok":true,"modelRef":"\(modelRef)","latencyMs":\(latencyMs),"lines":["Model ready"]\(restartField)}}
@@ -1287,13 +1287,13 @@ struct OnboardingAISetupTests {
                             kind: "codex-cli",
                             modelRef: "openai/gpt-5.5")))
                     case "openclaw.setup.activate":
-                        task.emitReceiveSuccess(.data(successfulActivationResponse(
-                            id: request.id,
-                            modelRef: "openai/gpt-5.5",
-                            latencyMs: 42,
-                            gatewayRestartRequired: true)))
                         Task {
                             await restartGate.wait()
+                            task.emitReceiveSuccess(.data(successfulActivationResponse(
+                                id: request.id,
+                                modelRef: "openai/gpt-5.5",
+                                latencyMs: 42,
+                                gatewayRestartRequired: true)))
                             task.emitReceiveFailure()
                         }
                     default:
@@ -1313,16 +1313,23 @@ struct OnboardingAISetupTests {
         })
         let url = try #require(URL(string: "ws://example.invalid"))
         let gateway = makeAISetupGateway(url: url, session: session)
-        let model = makeAISetupModel(gateway: gateway, defaults: defaults)
-        var handoffCount = 0
-        model.onConnected = { handoffCount += 1 }
+        let appState = AppState(preview: true)
+        appState.connectionMode = .local
+        var handoffs: [OnboardingDashboardHandoff] = []
+        let view = OnboardingView(
+            state: appState,
+            aiSetupGateway: gateway,
+            systemAgentDefaults: defaults,
+            aiSetupRouteIdentityProvider: { "local" },
+            dashboardHandoffOpener: { handoffs.append($0) })
+        view.prepareSystemAgentHandoff()
 
-        let activation = Task { await model.detectAndAutoConnect() }
+        let activation = Task { await view.aiSetup.detectAndAutoConnect() }
         await restartGate.waitUntilStarted()
         await settleQueuedAISetupTasks()
 
-        #expect(!model.connected)
-        #expect(handoffCount == 0)
+        #expect(!view.aiSetup.connected)
+        #expect(handoffs.isEmpty)
 
         await restartGate.release()
         await activation.value
@@ -1333,8 +1340,10 @@ struct OnboardingAISetupTests {
             "openclaw.setup.detect",
             "openclaw.setup.verify",
         ])
-        #expect(model.connected)
-        #expect(handoffCount == 1)
+        #expect(view.aiSetup.connected)
+        #expect(view.aiSetup.selectedKind == "codex-cli")
+        #expect(view.finishState.didFinish)
+        #expect(handoffs == [.custodianOnboarding])
     }
 
     @Test func `adopts pending activation stored under the retired crestodian key`() throws {
