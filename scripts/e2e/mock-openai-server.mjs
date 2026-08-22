@@ -807,13 +807,17 @@ const server = http.createServer((req, res) => {
       }
       throw error;
     }
-    let body;
+    let body = {};
+    let requestLogBody;
     try {
       body = bodyText ? JSON.parse(bodyText) : {};
+      requestLogBody = redactRequestLogMedia(body, bodyText);
     } catch {
-      body = {};
+      // Redaction walks the parsed JSON, so an unparseable body would bypass it
+      // and leak raw base64 media into the provider record. Log a bounded
+      // marker instead of the text.
+      requestLogBody = `[unparseable request body redacted: ${Buffer.byteLength(bodyText)} bytes]`;
     }
-    const requestLogBody = redactRequestLogMedia(body, bodyText);
     if (
       writeRequestLogEntryOrFail(res, {
         requestLog,

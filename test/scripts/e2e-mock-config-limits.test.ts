@@ -448,6 +448,26 @@ describe("mock OpenAI response markers", () => {
         ]);
         expect(recorded).not.toContain(pdfBase64);
         expect(entries[0]?.body).toContain("data:application/pdf;base64,[redacted:17 bytes]");
+
+        // Redaction walks parsed JSON, so an unparseable body must never be
+        // logged as raw text — that path would leak the base64 payload.
+        const malformed = `{"input": "data:application/pdf;base64,${pdfBase64}"`;
+        const response = await fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: malformed,
+        });
+        expect(response.status).toBe(200);
+        const withMalformed = await readFile(requestLog, "utf8");
+        expect(withMalformed).not.toContain(pdfBase64);
+        const malformedEntry = withMalformed
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+          .at(-1);
+        expect(malformedEntry?.body).toBe(
+          `[unparseable request body redacted: ${Buffer.byteLength(malformed)} bytes]`,
+        );
       });
     } finally {
       await rm(root, { force: true, recursive: true });
