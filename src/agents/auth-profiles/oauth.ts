@@ -39,6 +39,7 @@ import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
 import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
+import { isAuthProfileConfigCompatible } from "./profile-config-compat.js";
 import { clearLastGoodProfileWithLock } from "./profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import {
@@ -80,37 +81,6 @@ const isOAuthProvider = (provider: string): provider is OAuthProviderId =>
 
 const resolveOAuthProvider = (provider: string): OAuthProviderId | null =>
   isOAuthProvider(provider) ? provider : null;
-
-/** Bearer-token auth modes that are interchangeable (oauth tokens and raw tokens). */
-const BEARER_AUTH_MODES = new Set(["oauth", "token"]);
-
-const isCompatibleModeType = (mode: string | undefined, type: string | undefined): boolean => {
-  if (!mode || !type) {
-    return false;
-  }
-  if (mode === type) {
-    return true;
-  }
-  // Both token and oauth represent bearer-token auth paths — allow bidirectional compat.
-  return BEARER_AUTH_MODES.has(mode) && BEARER_AUTH_MODES.has(type);
-};
-
-function isProfileConfigCompatible(params: {
-  cfg?: OpenClawConfig;
-  profileId: string;
-  provider: string;
-  mode: "api_key" | "token" | "oauth";
-  allowOAuthTokenCompatibility?: boolean;
-}): boolean {
-  const profileConfig = params.cfg?.auth?.profiles?.[params.profileId];
-  if (profileConfig && profileConfig.provider !== params.provider) {
-    return false;
-  }
-  if (profileConfig && !isCompatibleModeType(profileConfig.mode, params.mode)) {
-    return false;
-  }
-  return true;
-}
 
 async function buildOAuthApiKey(
   provider: string,
@@ -267,7 +237,7 @@ async function tryResolveOAuthProfile(
     return null;
   }
   if (
-    !isProfileConfigCompatible({
+    !isAuthProfileConfigCompatible({
       cfg,
       profileId,
       provider: cred.provider,
@@ -408,13 +378,11 @@ export async function resolveApiKeyForProfile(
   });
   const cred = runtimeProfile.profile;
   if (
-    !isProfileConfigCompatible({
+    !isAuthProfileConfigCompatible({
       cfg,
       profileId,
       provider: cred.provider,
       mode: cred.type,
-      // Compatibility: treat "oauth" config as compatible with stored token profiles.
-      allowOAuthTokenCompatibility: true,
     })
   ) {
     return null;

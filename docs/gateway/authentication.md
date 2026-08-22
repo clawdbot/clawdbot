@@ -66,11 +66,21 @@ nonstandard executable path, register a wrapper through a
 
 ## Manual token entry
 
-Works for any provider; writes the per-agent SQLite auth store and updates config:
+Works for any provider; writes the per-agent SQLite auth store:
 
 ```bash
 openclaw models auth paste-token --provider openrouter
+openclaw models auth paste-api-key --provider openrouter
 ```
+
+`paste-api-key` and `paste-token` store a portable profile in the targeted
+agent's store only. Credentials stay agent-scoped: pasting into
+`--agent <non-default>` does not copy or overwrite the default agent's key,
+and it does not write global `auth.profiles`/`auth.order` metadata, so a
+secondary-agent paste cannot declare a profile the default agent cannot
+resolve. A paste also does not copy `auth.order` into a stored per-agent
+override; later global-order edits still apply. Use
+`openclaw models auth order set` when an agent should diverge.
 
 OpenClaw reads auth profiles from each agent's `openclaw-agent.sqlite`. Endpoint details (`baseUrl`, `api`, model ids, headers, timeouts) belong under `models.providers.<id>` in `openclaw.json` or `models.json`, not in auth profiles.
 

@@ -627,6 +627,16 @@ describe("models cli", () => {
     },
   );
 
+  it("describes paste auth commands as agent-scoped SQLite storage", () => {
+    const auth = requireCommand(requireCommand(createProgram(), "models"), "auth");
+    for (const name of ["paste-token", "paste-api-key"] as const) {
+      const description = requireCommand(auth, name).description();
+      expect(description.toLowerCase()).toContain("sqlite");
+      expect(description.toLowerCase()).not.toContain("update config");
+      expect(description.toLowerCase()).not.toContain("auth-profiles.json");
+    }
+  });
+
   it("shows help for models auth without error exit", async () => {
     const program = new Command();
     program.exitOverride();

@@ -1269,6 +1269,42 @@ describe("resolveApiKeyForProviderCore", () => {
     expect(looksLikeSecretSentinel(resolved.apiKey ?? "")).toBe(false);
   });
 
+  it("fails closed on missing profile ids even when environment credentials exist", async () => {
+    // Declared-but-unresolvable profiles must never silently fall through to
+    // ambient env credentials: the operator declared a profile, so an
+    // undeclared env key could bill a different account. Fail closed instead
+    // (regression for the unlocked missing-profile fallback).
+    await withEnv("OPENAI_API_KEY", "sk-env-should-not-win", async () => {
+      await expect(
+        resolveApiKeyForProviderCore({
+          provider: "openai",
+          profileId: "openai:missing",
+          cfg: {
+            auth: {
+              profiles: {
+                "openai:missing": { provider: "openai", mode: "api_key" },
+              },
+            },
+          },
+          store: { version: 1, profiles: {} },
+        }),
+      ).rejects.toThrow('No credentials found for profile "openai:missing"');
+    });
+  });
+
+  it("keeps locked missing profile ids from falling through to environment credentials", async () => {
+    await withEnv("OPENAI_API_KEY", "sk-env-should-not-win", async () => {
+      await expect(
+        resolveApiKeyForProviderCore({
+          provider: "openai",
+          profileId: "openai:missing",
+          lockedProfile: true,
+          store: { version: 1, profiles: {} },
+        }),
+      ).rejects.toThrow('No credentials found for profile "openai:missing"');
+    });
+  });
+
   it("sentinelizes credentials resolved from auth-profile SecretRefs", async () => {
     const profileId = "openai:secretref";
     const agentDir = "/tmp/openclaw-agent-secretref-sentinel";
