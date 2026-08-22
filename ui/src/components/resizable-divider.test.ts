@@ -233,14 +233,18 @@ describe("resizable-divider", () => {
     expect([...divider.classList]).toEqual(["dragging"]);
 
     dispatchPointer(document, "pointermove", 220, 7);
-    expectLastResizeRatio(resized, 0.7);
+    dispatchPointer(document, "pointermove", 120, 7);
+    expect(resized).not.toHaveBeenCalled();
+    await nextFrame();
+    expectLastResizeRatio(resized, 0.65);
+    expect(resized).toHaveBeenCalledTimes(1);
     expect(resizeEnded).not.toHaveBeenCalled();
 
     dispatchPointer(document, "pointerup", 220, 7);
     const endEvent = resizeEnded.mock.lastCall?.[0] as
       | CustomEvent<{ splitRatio: number }>
       | undefined;
-    expect(endEvent?.detail).toEqual({ splitRatio: 0.7 });
+    expect(endEvent?.detail).toEqual({ splitRatio: 0.65 });
     expect(resizeEnded).toHaveBeenCalledTimes(1);
     expect([...divider.classList]).toEqual([]);
     expect(releasePointerCapture).toHaveBeenCalledWith(7);

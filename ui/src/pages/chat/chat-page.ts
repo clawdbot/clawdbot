@@ -51,7 +51,6 @@ import {
   splitRatio,
   splitWeight,
 } from "./split-layout.ts";
-
 type DropIndicator = { paneId: string; zone: SplitDropZone; rect: SplitDropRect };
 
 export class ChatPage extends OpenClawLightDomElement {
@@ -94,12 +93,10 @@ export class ChatPage extends OpenClawLightDomElement {
       this.handlePaneSessionChange(paneId, sourceSessionKey, sessionKey);
     },
   });
-
   constructor() {
     super();
     installSessionPrefetch(this, this.messageCache, this.snapshotStore, () => this.context);
   }
-
   override connectedCallback() {
     super.connectedCallback();
     this.snapshotStore.connect();
@@ -164,7 +161,6 @@ export class ChatPage extends OpenClawLightDomElement {
         data?.canonicalLocation &&
         stillOwnsCanonicalLocation(data.canonicalLocationSource, this.consumedDraftData === data)
       ) {
-        // Move a route matched under the wrong namespace to its resolved board face.
         this.context.replace(data.face ?? "chat", data.canonicalLocation);
         return;
       }
@@ -546,7 +542,6 @@ export class ChatPage extends OpenClawLightDomElement {
 
   private readonly handleSplitRight = (paneId: string) => this.handleSplit(paneId, "right");
   private readonly handleSplitDown = (paneId: string) => this.handleSplit(paneId, "down");
-
   private closeSplitPane(layout: ChatSplitLayout, paneId: string): void {
     const survivingPane = closeStagedPane(this.context, this, layout, paneId);
     this.retainedSessions.discardPane(paneId);
@@ -570,7 +565,6 @@ export class ChatPage extends OpenClawLightDomElement {
       this.closeSplitPane(this.layout, paneId);
     }
   };
-
   private classicLayout(sessionKey = this.data?.sessionKey?.trim() ?? ""): ChatSplitLayout {
     return singlePaneLayout(this.classicColumnId, this.classicPaneId, sessionKey);
   }
@@ -647,13 +641,16 @@ export class ChatPage extends OpenClawLightDomElement {
                           .maxRatio=${0.85}
                           .label=${t("nav.resize")}
                           @resize=${(event: CustomEvent<{ splitRatio: number }>) => {
-                            const current = this.layout;
-                            if (current) {
-                              this.persistLayout(
-                                resizePanes(current, column.id, paneIndex, event.detail.splitRatio),
-                              );
-                            }
+                            this.layout = this.layout
+                              ? resizePanes(
+                                  this.layout,
+                                  column.id,
+                                  paneIndex,
+                                  event.detail.splitRatio,
+                                )
+                              : undefined;
                           }}
+                          @resize-end=${() => this.persistLayout(this.layout)}
                         ></resizable-divider>
                       `
                     : nothing}
@@ -672,13 +669,11 @@ export class ChatPage extends OpenClawLightDomElement {
                     .maxRatio=${0.85}
                     .label=${t("nav.resize")}
                     @resize=${(event: CustomEvent<{ splitRatio: number }>) => {
-                      const current = this.layout;
-                      if (current) {
-                        this.persistLayout(
-                          resizeColumns(current, columnIndex, event.detail.splitRatio),
-                        );
-                      }
+                      this.layout = this.layout
+                        ? resizeColumns(this.layout, columnIndex, event.detail.splitRatio)
+                        : undefined;
                     }}
+                    @resize-end=${() => this.persistLayout(this.layout)}
                   ></resizable-divider>
                 `
               : nothing}
