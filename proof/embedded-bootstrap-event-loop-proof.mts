@@ -387,8 +387,15 @@ async function main(): Promise<void> {
     // OUTSIDE the measured window, so any stall we then attribute to the large
     // load is the load itself, not first-touch init. No agent:bootstrap handlers
     // are registered yet, so warmup only primes runtime state.
+    // Current main's automatic-memory provenance classification
+    // (resolveIneligibleAutomaticMemoryFiles -> classifyActiveMemoryWorkspacePaths)
+    // lazily loads the memory-runtime plugin registry on first use, which is a
+    // large one-time cost; the warmup workspace therefore includes MEMORY.md and
+    // USER.md so that first-touch happens here, outside the measured window.
     const warmupDir = fs.mkdtempSync(path.join(tmpBase, "openclaw-bootstrap-warmup-"));
     fs.writeFileSync(path.join(warmupDir, "AGENTS.md"), "# warmup\n");
+    fs.writeFileSync(path.join(warmupDir, "MEMORY.md"), "# warmup memory\n");
+    fs.writeFileSync(path.join(warmupDir, "USER.md"), "# warmup user\n");
     await resolveBootstrapContextForRun({
       workspaceDir: warmupDir,
       config,
@@ -397,7 +404,7 @@ async function main(): Promise<void> {
       agentId: "warmup-agent",
     });
     await fsp.rm(warmupDir, { recursive: true, force: true });
-    process.stdout.write("warmup done (state-DB + JIT primed)\n");
+    process.stdout.write("warmup done (state-DB + JIT + memory-runtime registry primed)\n");
 
     // -------- Async run: the CHANGED bootstrap-context assembly (post-warmup) --------
     // Drive the exact two calls the embedded runner makes, capturing per-substage
