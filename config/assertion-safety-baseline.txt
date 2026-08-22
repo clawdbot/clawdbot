@@ -1416,8 +1416,8 @@ extensions/whatsapp/src/inbound/extract.ts	10
 extensions/whatsapp/src/inbound/group-metadata-cache.ts	7
 extensions/whatsapp/src/inbound/ingress-lifecycle.ts	2
 extensions/whatsapp/src/inbound/media.ts	4
-extensions/whatsapp/src/inbound/message-delivery.ts	2
-extensions/whatsapp/src/inbound/message-enrichment.ts	4
+extensions/whatsapp/src/inbound/message-delivery.ts	1
+extensions/whatsapp/src/inbound/message-enrichment.ts	3
 extensions/whatsapp/src/inbound/outbound-mentions.ts	1
 extensions/whatsapp/src/inbound/send-api.ts	5
 extensions/whatsapp/src/inbound/socket-session.ts	5
