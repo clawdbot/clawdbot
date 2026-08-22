@@ -1990,19 +1990,22 @@ public struct GatewaySuspendPrepareReadyResult: Codable, Sendable {
     public let expiresatms: Int
     public let activecount: Int
     public let blockers: [GatewaySuspendBlocker]
+    public let wakerequirement: GatewaySuspendWakeRequirement
 
     public init(
         status: String,
         suspensionid: String,
         expiresatms: Int,
         activecount: Int,
-        blockers: [GatewaySuspendBlocker])
+        blockers: [GatewaySuspendBlocker],
+        wakerequirement: GatewaySuspendWakeRequirement)
     {
         self.status = status
         self.suspensionid = suspensionid
         self.expiresatms = expiresatms
         self.activecount = activecount
         self.blockers = blockers
+        self.wakerequirement = wakerequirement
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2011,6 +2014,7 @@ public struct GatewaySuspendPrepareReadyResult: Codable, Sendable {
         case expiresatms = "expiresAtMs"
         case activecount = "activeCount"
         case blockers
+        case wakerequirement = "wakeRequirement"
     }
 }
 
@@ -2045,18 +2049,22 @@ public struct GatewaySuspendStatusRunningResult: Codable, Sendable {
 public struct GatewaySuspendStatusReadyResult: Codable, Sendable {
     public let status: String
     public let expiresatms: Int
+    public let wakerequirement: GatewaySuspendWakeRequirement
 
     public init(
         status: String,
-        expiresatms: Int)
+        expiresatms: Int,
+        wakerequirement: GatewaySuspendWakeRequirement)
     {
         self.status = status
         self.expiresatms = expiresatms
+        self.wakerequirement = wakerequirement
     }
 
     private enum CodingKeys: String, CodingKey {
         case status
         case expiresatms = "expiresAtMs"
+        case wakerequirement = "wakeRequirement"
     }
 }
 
