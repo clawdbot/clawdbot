@@ -315,6 +315,12 @@ masked before the line or message is written to disk. Redaction is best-effort:
 it applies to text-bearing message content and log strings, not every
 identifier or binary payload field.
 
+Model-visible tool-result text uses narrower assignment matching so source code
+remains intact. Registered secrets and explicit credential forms, including
+structured fields, environment entries, authorization headers, URL credentials,
+and known token formats, remain masked. Bare source assignments such as
+`token = timeObserverToken` remain unchanged in tool results.
+
 The built-in defaults cover common API credentials and payment-credential field
 names such as card number, CVC/CVV, shared payment token, and payment credential
 when they appear as JSON fields, URL parameters, CLI flags, or assignments.
