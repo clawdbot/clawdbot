@@ -33,7 +33,6 @@ import {
   resolveSessionCreateModelSelection as resolveCreateTitleEntry,
 } from "../session-create-service.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
-import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
 import {
   loadGatewaySessionEntryReadOnly,
@@ -104,8 +103,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const explicitlyRequestedAgent = resolveRequestedGlobalAgentId(
       cfg,
       agentSelectionKey,
-      explicitlyRequestedAgentId,
-      { allowUnconfiguredExplicitAgent: true },
+      p.agentId ?? parseAgentSessionKey(explicitlyRequestedKey)?.agentId,
     );
     if (!explicitlyRequestedAgent.ok) {
       respond(false, undefined, explicitlyRequestedAgent.error);
@@ -224,7 +222,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       return;
     }
     const explicitSessionLabel = normalizeOptionalString(p.label);
-    const titleAgentId = normalizeAgentId(explicitlyRequestedAgent.agentId);
+    const titleAgentId = explicitlyRequestedAgent.agentId;
     const shouldPrepareWorktreeTitle =
       p.worktree === true && !requestedWorktreeName && !explicitSessionLabel;
     const deferWorktreeTitle =
@@ -280,11 +278,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       }
     }
     let sessionKey = p.key;
-    let sessionAgentId =
-      catalogAgentId ??
-      explicitlyRequestedAgent.agentId ??
-      p.agentId ??
-      parseAgentSessionKey(explicitlyRequestedKey)?.agentId;
+    let sessionAgentId = catalogAgentId ?? explicitlyRequestedAgent.agentId;
     let sessionWorktree: Awaited<ReturnType<typeof managedWorktrees.create>> | undefined;
     const sessionExecCwd = requestedExecNode ? requestedCwd : undefined;
     let sessionCwd = requestedExecNode ? undefined : (projectRoot ?? requestedCwd);
@@ -298,11 +292,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       requestedProjectId,
       sessionCwd,
       sessionKey,
-      targetAgentId: normalizeAgentId(
-        sessionAgentId ??
-          parseAgentSessionKey(sessionKey ?? "")?.agentId ??
-          explicitlyRequestedAgent.agentId,
-      ),
+      targetAgentId: sessionAgentId,
     });
     if (!preparedRoot.ok) {
       respond(false, undefined, preparedRoot.error);
@@ -314,11 +304,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       // Workspace-contained cwd and registry-authorized projects stay at operator.write;
       // arbitrary host paths still require operator.admin before reaching this block.
       const explicitKey = explicitlyRequestedKey;
-      const agentId = normalizeAgentId(
-        explicitlyRequestedAgent.agentId ??
-          normalizeOptionalString(p.agentId) ??
-          parseAgentSessionKey(explicitKey)?.agentId,
-      );
+      const agentId = explicitlyRequestedAgent.agentId;
       let targetKey = explicitKey;
       let preservesUnspecifiedKey = false;
       if (
@@ -336,9 +322,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         const parent = loadGatewaySessionEntryReadOnly(parentSessionKey, {
           agentId: parentRequestedAgent.agentId,
         });
-        const parentAgentId = normalizeAgentId(
-          parentRequestedAgent.agentId ?? resolveSessionStoreAgentId(cfg, parent.canonicalKey),
-        );
+        const parentAgentId = parentRequestedAgent.agentId;
         if (
           parent.entry?.sessionId &&
           parent.canonicalKey === resolveAgentMainSessionKey({ cfg, agentId: parentAgentId })
@@ -518,11 +502,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       ADMIN_SCOPE,
       clientScopes,
     ).allowed;
-    const modelCatalogAgentId = normalizeAgentId(
-      sessionAgentId ??
-        parseAgentSessionKey(sessionKey ?? "")?.agentId ??
-        explicitlyRequestedAgent.agentId,
-    );
+    const modelCatalogAgentId = sessionAgentId;
     if (!authority.ensureActive()) {
       return;
     }
@@ -533,6 +513,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       label: p.label,
       category: p.category,
       ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: requestedModel }),
+      contextWindow: p.contextWindow,
       thinkingLevel: p.thinkingLevel,
       projectId: requestedProjectId,
       incognito: p.incognito,

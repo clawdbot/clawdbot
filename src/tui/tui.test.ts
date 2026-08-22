@@ -984,13 +984,13 @@ describe("TUI shutdown safety", () => {
     vi.useFakeTimers();
     const calls: string[] = [];
     const forceExit = vi.fn();
+    const recordPhase = (phase: string) => async () => {
+      calls.push(phase);
+    };
     beginTestShutdown({
-      stopClient: async () => {
-        calls.push("client");
-      },
-      stopTui: async () => {
-        calls.push("tui");
-      },
+      stopCommandScopes: recordPhase("scopes"),
+      stopClient: recordPhase("client"),
+      stopTui: recordPhase("tui"),
       disposeStatus: () => {
         calls.push("status");
       },
@@ -1001,7 +1001,7 @@ describe("TUI shutdown safety", () => {
     });
 
     await vi.advanceTimersByTimeAsync(0);
-    expect(calls).toEqual(["status", "client", "tui", "status", "finish"]);
+    expect(calls).toEqual(["status", "scopes", "client", "tui", "status", "finish"]);
     expect(forceExit).not.toHaveBeenCalled();
   });
 
@@ -1052,12 +1052,16 @@ describe("TUI shutdown safety", () => {
 
   it("reports transport and terminal shutdown errors in phase order", async () => {
     vi.useFakeTimers();
+    const scopeError = new Error("command scope stop failed");
     const transportError = new Error("transport stop failed");
     const terminalError = new Error("terminal stop failed");
     const onError = vi.fn();
     const requestFinish = vi.fn();
 
     beginTestShutdown({
+      stopCommandScopes: async () => {
+        throw scopeError;
+      },
       stopClient: async () => {
         throw transportError;
       },
@@ -1072,7 +1076,7 @@ describe("TUI shutdown safety", () => {
     expect(onError).toHaveBeenCalledOnce();
     const error = onError.mock.calls[0]?.[0];
     expect(error).toBeInstanceOf(AggregateError);
-    expect((error as AggregateError).errors).toEqual([transportError, terminalError]);
+    expect((error as AggregateError).errors).toEqual([scopeError, transportError, terminalError]);
     expect(requestFinish).toHaveBeenCalledOnce();
   });
 

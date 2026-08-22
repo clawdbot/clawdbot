@@ -172,6 +172,18 @@ export class BoardWidgetBridgeController {
           ...(bindingParams ? { params: bindingParams as Record<string, unknown> } : {}),
         });
       }
+      case "action.run": {
+        const action = requiredString(params, "action");
+        const actionParams = params.params;
+        if (actionParams !== undefined && !isRecord(actionParams)) {
+          throw new Error("widget action params are invalid");
+        }
+        return await this.client.request("board.action", {
+          ticket: this.ticket,
+          action,
+          params: actionParams ?? {},
+        });
+      }
       case "cron.trigger":
         return await this.client.request("board.action", {
           ticket: this.ticket,

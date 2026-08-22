@@ -45,6 +45,7 @@ export function resolveEmbeddedRunEffectiveModel(
     modelId: params.modelId,
     runtimeModel: params.runtimeModel,
     nativeModelOwned: params.nativeModelOwned,
+    ...(params.runParams.contextWindow ? { contextWindow: params.runParams.contextWindow } : {}),
   });
   const authoredContextTokenCap =
     params.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID

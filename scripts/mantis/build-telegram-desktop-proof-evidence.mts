@@ -19,6 +19,7 @@ type SessionSummary = {
   sutAttestation?: { lane?: string; sha?: string };
 };
 type LoadedLane = {
+  factsPath: string;
   outputDir: string;
   repoRoot: string;
   status: string;
@@ -30,7 +31,7 @@ type EvidenceArtifact = {
   inline?: boolean;
   kind: string;
   label: string;
-  lane: LaneName;
+  lane: LaneName | "run";
   path: string;
   required?: boolean;
   targetPath: string;
@@ -59,7 +60,7 @@ const LANES = [
   },
   {
     altPrefix: "Candidate",
-    label: "This PR",
+    label: "This PR merged onto main",
     lane: "candidate",
   },
 ] satisfies ReadonlyArray<{
@@ -117,7 +118,9 @@ function copyArtifact({
   }
   const target = path.join(outputDir, targetPath);
   mkdirSync(path.dirname(target), { recursive: true });
-  copyFileSync(source, target);
+  if (path.resolve(source) !== path.resolve(target)) {
+    copyFileSync(source, target);
+  }
   return true;
 }
 
@@ -141,6 +144,7 @@ function loadLane({
   const summaryPath = path.join(outputDir, "telegram-user-crabbox-session-summary.json");
   const summary = readJson(summaryPath);
   return {
+    factsPath: path.join(outputDir, "mantis-lane-facts.json"),
     outputDir,
     repoRoot,
     status: status || summary.status || "unknown",
@@ -185,6 +189,11 @@ function copyLaneArtifacts({
     outputDir,
     source: lane.summaryPath,
     targetPath: `${prefix}/summary.json`,
+  });
+  copyArtifact({
+    outputDir,
+    source: lane.factsPath,
+    targetPath: `${prefix}/mantis-lane-facts.json`,
   });
   copyArtifact({
     outputDir,
@@ -257,6 +266,13 @@ function laneArtifactEntries(statuses: Record<LaneName, LaneStatus>): EvidenceAr
       targetPath: `${lane}/summary.json`,
     },
     {
+      kind: "metadata",
+      label: `${label} lane facts`,
+      lane,
+      path: `${lane}/mantis-lane-facts.json`,
+      targetPath: `${lane}/mantis-lane-facts.json`,
+    },
+    {
       kind: "report",
       label: `${label} session report`,
       lane,
@@ -318,7 +334,18 @@ function buildTelegramDesktopProofManifest({
       outcome,
       pass: outcome === "pass",
     },
-    artifacts: laneArtifactEntries({ baseline: baselineStatus, candidate: candidateStatus }),
+    artifacts: [
+      ...laneArtifactEntries({ baseline: baselineStatus, candidate: candidateStatus }),
+      {
+        inline: false,
+        kind: "attachment",
+        label: "Recipe suggestion",
+        lane: "run",
+        path: "recipe-suggestion.md",
+        required: false,
+        targetPath: "recipe-suggestion.md",
+      },
+    ],
   };
 }
 
@@ -351,6 +378,12 @@ export function writeTelegramDesktopProofEvidence(rawArgs: string[] = process.ar
   requireLaneAttestation(candidate, "candidate", candidateSha);
   copyLaneArtifacts({ lane: baseline, laneName: "baseline", outputDir });
   copyLaneArtifacts({ lane: candidate, laneName: "candidate", outputDir });
+  copyArtifact({
+    outputDir,
+    required: false,
+    source: path.join(outputDir, "recipe-suggestion.md"),
+    targetPath: "recipe-suggestion.md",
+  });
   const manifest = buildTelegramDesktopProofManifest({
     baseline,
     baselineRef: args.baseline_ref,

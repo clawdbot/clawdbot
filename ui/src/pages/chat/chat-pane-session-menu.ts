@@ -113,9 +113,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       };
       switch (action.kind) {
         case "assign-owner":
-          await scope.sessions.assignOwner(row.key, action.owner, {
-            agentId: parseAgentSessionKey(row.key)?.agentId ?? scope.selectedAgentId,
-          });
+          await operations.assignSessionOwner(host, session, action.owner, scope);
           break;
         case "fork":
           await operations.forkSession(host, session, scope);

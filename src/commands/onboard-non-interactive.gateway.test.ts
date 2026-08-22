@@ -41,6 +41,72 @@ import type {
   OnboardGatewayHealthCall,
   OnboardHealthCommandCall,
 } from "./onboard-non-interactive.test-helpers.js";
+import { logNonInteractiveOnboardingFailure } from "./onboard-non-interactive/local/output.js";
+
+describe("logNonInteractiveOnboardingFailure", () => {
+  const callerFix = "Fix: use the phase-specific recovery path.";
+  const failure = {
+    mode: "local" as const,
+    phase: "gateway-health",
+    message: "Gateway did not become reachable.",
+    detail: "connect ECONNREFUSED 127.0.0.1:18997",
+    hints: ["Phase-specific context.", callerFix],
+  };
+
+  it("uses a caller-supplied Fix hint in human and JSON output", () => {
+    const error = vi.fn();
+    logNonInteractiveOnboardingFailure({
+      ...failure,
+      opts: {},
+      runtime: { ...runtime, error },
+    });
+
+    const humanLines = String(error.mock.calls[0]?.[0]).split("\n");
+    expect(humanLines.filter((line) => line.startsWith("Fix:"))).toEqual([callerFix]);
+
+    const { runtimeWithCapture, readCapturedJson } = createOnboardJsonCaptureRuntime();
+    logNonInteractiveOnboardingFailure({
+      ...failure,
+      opts: { json: true },
+      runtime: runtimeWithCapture,
+    });
+
+    const parsed = JSON.parse(readCapturedJson()) as { hints: string[] };
+    expect(parsed.hints.filter((hint) => hint.startsWith("Fix:"))).toEqual([callerFix]);
+  });
+
+  it("keeps the classification recovery hint when the caller supplies no hints", () => {
+    const { runtimeWithCapture, readCapturedJson } = createOnboardJsonCaptureRuntime();
+    logNonInteractiveOnboardingFailure({
+      ...failure,
+      hints: undefined,
+      opts: { json: true },
+      runtime: runtimeWithCapture,
+    });
+
+    const parsed = JSON.parse(readCapturedJson()) as { hints: string[] };
+    expect(parsed.hints).toEqual([
+      "Fix: start `openclaw gateway run`, or run `openclaw gateway restart` for a managed gateway.",
+    ]);
+  });
+
+  it("leaves hints for a non-gateway-health phase unchanged", () => {
+    const hints = [callerFix, "Keep the configured environment available."];
+    const { runtimeWithCapture, readCapturedJson } = createOnboardJsonCaptureRuntime();
+    logNonInteractiveOnboardingFailure({
+      opts: { json: true },
+      runtime: runtimeWithCapture,
+      mode: "local",
+      phase: "daemon-install",
+      message: "Gateway service install did not complete successfully.",
+      hints,
+    });
+
+    const parsed = JSON.parse(readCapturedJson()) as { classification?: string; hints: string[] };
+    expect(parsed.classification).toBeUndefined();
+    expect(parsed.hints).toEqual(hints);
+  });
+});
 
 describe("onboard (non-interactive): gateway and remote auth", () => {
   let envSnapshot: ReturnType<typeof prepareOnboardGatewayTestEnv>;

@@ -61,6 +61,19 @@ function makeLane(
       ...(options.diagnosticOnly ? {} : { sutAttestation: { lane: name, sha } }),
     }),
   );
+  writeFileSync(
+    path.join(outputDir, "mantis-lane-facts.json"),
+    JSON.stringify({
+      botApiRequests: [{ injected: true, method: "sendMessage", status: 429 }],
+      invocations: [
+        { command: "botapi-fail" },
+        { args: { scriptFile: "provider-script.json" }, command: "mock" },
+      ],
+      lane: name,
+      providerRequests: [],
+      schemaVersion: 2,
+    }),
+  );
   return { outputDir, repo };
 }
 
@@ -89,7 +102,7 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
       "--candidate-output-dir",
       candidate.outputDir,
       "--candidate-ref",
-      "refs/pull/1/head",
+      candidateSha,
       "--candidate-sha",
       candidateSha,
       "--scenario-label",
@@ -101,10 +114,32 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
     ).toBe("baseline gif");
     const manifest = loadEvidenceManifest(result.manifestPath);
     expect(manifest.comparison.pass).toBe(true);
+    expect(manifest.comparison.candidate).toMatchObject({
+      expected: "candidate visual proof captured",
+      ref: candidateSha,
+      sha: candidateSha,
+    });
     expect(manifest.comparison.candidate).not.toHaveProperty("fixed");
     expect(manifest.artifacts.map((artifact) => artifact.targetPath)).toContain(
       "candidate/telegram-desktop-proof.gif",
     );
+    expect(manifest.artifacts.map((artifact) => artifact.targetPath)).toContain(
+      "candidate/mantis-lane-facts.json",
+    );
+    expect(manifest.artifacts).toContainEqual(
+      expect.objectContaining({
+        alt: "Candidate native Telegram Desktop proof GIF",
+        kind: "motionPreview",
+        label: "This PR merged onto main",
+        lane: "candidate",
+      }),
+    );
+    expect(
+      JSON.parse(readFileSync(path.join(outputDir, "candidate", "mantis-lane-facts.json"), "utf8")),
+    ).toMatchObject({
+      botApiRequests: [{ injected: true, method: "sendMessage", status: 429 }],
+      invocations: [{ command: "botapi-fail" }, { command: "mock" }],
+    });
     const artifactUrl = "https://github.com/openclaw/openclaw/actions/runs/1/artifacts/2";
     const body = renderEvidenceComment({
       artifactUrl,
@@ -122,7 +157,7 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
       `- Baseline: \`pass\` at \`${baselineSha}\`, expected baseline visual proof captured`,
     );
     expect(body).toContain(
-      `- Candidate: \`pass\` at \`${candidateSha}\`, expected candidate visual proof captured`,
+      `- Candidate (PR merged onto main): \`pass\` at \`${candidateSha}\`, expected candidate visual proof captured`,
     );
     expect(body).toContain(`- Artifact: ${artifactUrl}`);
     expect(body).toContain('<table width="100%">');
@@ -130,8 +165,9 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
       '<img src="https://qa.openclaw.ai/mantis/telegram-desktop/pr-1/run-1/baseline/telegram-desktop-proof.gif" width="100%"',
     );
     expect(body).toContain(
-      '<img src="https://qa.openclaw.ai/mantis/telegram-desktop/pr-1/run-1/candidate/telegram-desktop-proof.gif" width="100%"',
+      '<img src="https://qa.openclaw.ai/mantis/telegram-desktop/pr-1/run-1/candidate/telegram-desktop-proof.gif" width="100%" alt="Candidate native Telegram Desktop proof GIF">',
     );
+    expect(body).toContain('<th width="50%">This PR merged onto main</th>');
     expect(body).toContain(
       "Raw QA files: https://qa.openclaw.ai/mantis/telegram-desktop/pr-1/run-1/index.json",
     );
@@ -278,5 +314,45 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
     expect(
       JSON.parse(readFileSync(path.join(outputDir, "baseline", "summary.json"), "utf8")),
     ).toEqual({ artifacts: {}, status: "infra-error" });
+  });
+
+  it("publishes an optional recipe suggestion as a non-inline attachment", () => {
+    const baselineSha = "a".repeat(40);
+    const candidateSha = "b".repeat(40);
+    const baseline = makeLane("baseline", baselineSha);
+    const candidate = makeLane("candidate", candidateSha);
+    const outputDir = mkdtempSync(path.join(tmpdir(), "mantis-telegram-recipe-proof-"));
+    tempDirs.push(outputDir);
+    writeFileSync(path.join(outputDir, "recipe-suggestion.md"), "# Reusable proof\n");
+
+    const result = writeTelegramDesktopProofEvidence([
+      "--output-dir",
+      outputDir,
+      "--baseline-repo-root",
+      baseline.repo,
+      "--baseline-output-dir",
+      baseline.outputDir,
+      "--baseline-sha",
+      baselineSha,
+      "--candidate-repo-root",
+      candidate.repo,
+      "--candidate-output-dir",
+      candidate.outputDir,
+      "--candidate-sha",
+      candidateSha,
+    ]);
+
+    const manifest = loadEvidenceManifest(result.manifestPath);
+    expect(manifest.artifacts).toContainEqual(
+      expect.objectContaining({
+        inline: false,
+        kind: "attachment",
+        lane: "run",
+        targetPath: "recipe-suggestion.md",
+      }),
+    );
+    expect(readFileSync(path.join(outputDir, "recipe-suggestion.md"), "utf8")).toBe(
+      "# Reusable proof\n",
+    );
   });
 });

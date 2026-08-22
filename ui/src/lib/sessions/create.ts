@@ -21,6 +21,7 @@ export type SessionCreateParams = {
   label?: string;
   category?: string;
   model?: string;
+  contextWindow?: string;
   thinkingLevel?: string;
   incognito?: boolean;
   worktree?: boolean;

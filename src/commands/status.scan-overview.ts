@@ -1,6 +1,7 @@
 // Shared status scan overview used by compact status, status --json, and status --all.
 // It collects config, update, gateway, channel, and local agent state before specialized callers add details.
 
+import type { BestEffortConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { collectChannelStatusIssues as collectChannelStatusIssuesFn } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
@@ -76,6 +77,7 @@ export type StatusScanOverviewResult = {
   skipColdStartNetworkChecks: boolean;
   cfg: OpenClawConfig;
   sourceConfig: OpenClawConfig;
+  configDiagnostics: BestEffortConfigSnapshot["configDiagnostics"];
   secretDiagnostics: string[];
   osSummary: ReturnType<typeof resolveOsSummary>;
   tailscaleMode: string;
@@ -149,6 +151,7 @@ export async function collectStatusScanOverview(params: {
     coldStart,
     sourceConfig,
     resolvedConfig: cfg,
+    configDiagnostics,
     secretDiagnostics,
   } = await loadStatusScanCommandConfig({
     env,
@@ -326,6 +329,7 @@ export async function collectStatusScanOverview(params: {
     skipColdStartNetworkChecks: bootstrap.skipColdStartNetworkChecks,
     cfg,
     sourceConfig,
+    configDiagnostics,
     secretDiagnostics,
     osSummary,
     tailscaleMode: bootstrap.tailscaleMode,

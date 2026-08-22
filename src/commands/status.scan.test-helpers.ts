@@ -13,6 +13,7 @@ type StatusScanSharedMocks = {
   hasConfiguredChannels: UnknownMock;
   hasConfiguredChannelsForReadOnlyScope: UnknownMock;
   readBestEffortConfig: UnknownMock;
+  readBestEffortConfigSnapshot: UnknownMock;
   resolveCommandSecretRefsViaGateway: UnknownMock;
   getUpdateCheckResult: UnknownMock;
   getAgentLocalStatuses: UnknownMock;
@@ -33,6 +34,7 @@ export function createStatusScanSharedMocks(configPathLabel: string): StatusScan
     hasConfiguredChannels: vi.fn(),
     hasConfiguredChannelsForReadOnlyScope: vi.fn(),
     readBestEffortConfig: vi.fn(),
+    readBestEffortConfigSnapshot: vi.fn(),
     resolveCommandSecretRefsViaGateway: vi.fn(),
     getUpdateCheckResult: vi.fn(),
     getAgentLocalStatuses: vi.fn(),
@@ -208,17 +210,11 @@ export async function loadStatusScanModuleForTest(
 
   vi.doMock("../config/io.js", () => ({
     readBestEffortConfig: mocks.readBestEffortConfig,
-    readBestEffortConfigSnapshot: async () => {
-      const config = await mocks.readBestEffortConfig();
-      return { config, sourceConfig: config };
-    },
+    readBestEffortConfigSnapshot: mocks.readBestEffortConfigSnapshot,
   }));
   vi.doMock("../config/config.js", () => ({
     readBestEffortConfig: mocks.readBestEffortConfig,
-    readBestEffortConfigSnapshot: async () => {
-      const config = await mocks.readBestEffortConfig();
-      return { config, sourceConfig: config };
-    },
+    readBestEffortConfigSnapshot: mocks.readBestEffortConfigSnapshot,
     resolveGatewayPort: mocks.resolveGatewayPort,
   }));
   vi.doMock("../cli/command-secret-targets.js", () => ({
@@ -424,6 +420,11 @@ export function applyStatusScanDefaults(
     );
   });
   mocks.readBestEffortConfig.mockResolvedValue(sourceConfig);
+  mocks.readBestEffortConfigSnapshot.mockResolvedValue({
+    config: sourceConfig,
+    sourceConfig,
+    configDiagnostics: null,
+  });
   mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
     resolvedConfig,
     diagnostics: [],

@@ -139,6 +139,11 @@ describe("anthropic provider replay hooks", () => {
       id,
       name: `Claude ${family} 5 (Claude CLI)`,
       contextWindow: 1_000_000,
+      contextWindows: [
+        { id: "200k", label: "200K", contextWindow: 200_000 },
+        { id: "1m", label: "1M", contextWindow: 1_000_000 },
+      ],
+      contextWindowDefault: "1m",
       maxTokens: 128_000,
       mediaInput: {
         image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },

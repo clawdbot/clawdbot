@@ -1,109 +1,90 @@
-import type { AutocompleteItem, AutocompleteProvider } from "@earendil-works/pi-tui";
-import { describe, expect, it, vi } from "vitest";
-import { sanitizeAutocompleteProvider } from "./tui-autocomplete.js";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { createTuiAutocompleteProvider } from "./tui-autocomplete.js";
 
-describe("sanitizeAutocompleteProvider", () => {
-  it("omits unsafe values while sanitizing safe display copies", async () => {
-    const safe: AutocompleteItem = {
-      value: "safe-value",
-      label: `label\x1b]52;c;Y2xpcGJvYXJk\x07\r\nمرحبا`,
-      description: "description\u009b31munsafe\u009b0m\tשלום",
-    };
-    const unsafe: AutocompleteItem = { value: "raw\x1b[31m-value", label: "unsafe" };
-    const applyCompletion = vi.fn(() => ({
-      lines: [safe.value],
-      cursorLine: 0,
-      cursorCol: safe.value.length,
-    }));
-    const inner: AutocompleteProvider = {
-      getSuggestions: vi.fn(async () => ({ items: [unsafe, safe], prefix: "/" })),
-      applyCompletion,
-    };
-    const provider = sanitizeAutocompleteProvider(inner);
-
-    const suggestions = await provider.getSuggestions(["/"], 0, 1, {
-      signal: new AbortController().signal,
-    });
-    const displayItem = suggestions?.items[0];
-
-    expect(displayItem).toEqual({
-      value: safe.value,
-      label: "\u2067label مرحبا\u2069",
-      description: "\u2067descriptionunsafe שלום\u2069",
-    });
-    expect(suggestions?.items).toHaveLength(1);
-
-    provider.applyCompletion(["/"], 0, 1, displayItem!, "/");
-    expect(applyCompletion).toHaveBeenCalledWith(["/"], 0, 1, safe, "/");
-  });
-
-  it("preserves exact safe RTL paths and delegates file-completion triggers", async () => {
-    const value = "/tmp/مرحبا-東京/";
-    const original = { value, label: value };
-    const applyCompletion = vi.fn(() => ({
-      lines: [value],
-      cursorLine: 0,
-      cursorCol: value.length,
-    }));
-    const inner: AutocompleteProvider = {
-      triggerCharacters: ["@"],
-      getSuggestions: vi.fn(async () => ({
-        items: [original],
-        prefix: "@",
-      })),
-      applyCompletion,
-      shouldTriggerFileCompletion: vi.fn(() => true),
-    };
-    const provider = sanitizeAutocompleteProvider(inner);
-
-    const suggestions = await provider.getSuggestions(["@"], 0, 1, {
+describe("createTuiAutocompleteProvider", () => {
+  it("only scans ordinary paths after explicit completion", async () => {
+    const provider = createTuiAutocompleteProvider([], process.cwd());
+    const natural = provider.getSuggestions(["./src/"], 0, 6, {
       signal: new AbortController().signal,
     });
 
-    expect(suggestions?.items[0]).toEqual({
-      value,
-      label: `\u2067${value}\u2069`,
-    });
-    provider.applyCompletion(["@"], 0, 1, suggestions!.items[0]!, "@");
-    expect(applyCompletion).toHaveBeenCalledWith(["@"], 0, 1, original, "@");
-    expect(provider.triggerCharacters).toEqual(["@"]);
-    expect(provider.shouldTriggerFileCompletion?.(["@"], 0, 1)).toBe(true);
-  });
-
-  it("returns null when every completion value is unsafe", async () => {
-    const inner: AutocompleteProvider = {
-      getSuggestions: vi.fn(async () => ({
-        items: [{ value: "bad\tvalue", label: "bad" }],
-        prefix: "/",
-      })),
-      applyCompletion: vi.fn(() => ({ lines: [], cursorLine: 0, cursorCol: 0 })),
-    };
-    const provider = sanitizeAutocompleteProvider(inner);
-
+    await expect(natural).resolves.toBeNull();
     await expect(
-      provider.getSuggestions(["/"], 0, 1, { signal: new AbortController().signal }),
-    ).resolves.toBeNull();
+      provider.getSuggestions(["./src/"], 0, 6, {
+        force: true,
+        signal: new AbortController().signal,
+      }),
+    ).resolves.not.toBeNull();
   });
 
-  it("falls back to a visible sanitized value and omits empty descriptions", async () => {
-    const original: AutocompleteItem = {
-      value: "fallback-value",
-      label: "\x1b]0;hidden\x07",
-      description: "\u009b31m\u009b0m",
-    };
-    const inner: AutocompleteProvider = {
-      getSuggestions: vi.fn(async () => ({ items: [original], prefix: "/" })),
-      applyCompletion: vi.fn(() => ({ lines: [original.value], cursorLine: 0, cursorCol: 0 })),
-    };
-    const provider = sanitizeAutocompleteProvider(inner);
+  it("uses the provisioned file finder for attachment completion", async () => {
+    const fixture = await mkdtemp(join(tmpdir(), "openclaw-tui-autocomplete-"));
+    const fdPath = join(fixture, "fd");
+    await writeFile(fdPath, "#!/bin/sh\nprintf 'nested/needle.txt\\n'\n");
+    await chmod(fdPath, 0o755);
 
-    const suggestions = await provider.getSuggestions(["/"], 0, 1, {
-      signal: new AbortController().signal,
-    });
+    try {
+      const provider = createTuiAutocompleteProvider([], fixture, fdPath);
+      const suggestions = await provider.getSuggestions(["@needle"], 0, 7, {
+        signal: new AbortController().signal,
+      });
 
-    expect(suggestions?.items[0]).toEqual({
-      value: original.value,
-      label: "fallback-value",
-    });
+      expect(suggestions).toMatchObject({
+        items: [{ label: "needle.txt", value: "@nested/needle.txt" }],
+        prefix: "@needle",
+      });
+    } finally {
+      await rm(fixture, { recursive: true, force: true });
+    }
+  });
+
+  it("supports quoted attachment prefixes", async () => {
+    const fixture = await mkdtemp(join(tmpdir(), "openclaw-tui-autocomplete-"));
+    const fdPath = join(fixture, "fd");
+    await writeFile(fdPath, "#!/bin/sh\nprintf 'needle file.txt\\n'\n");
+    await chmod(fdPath, 0o755);
+
+    try {
+      const provider = createTuiAutocompleteProvider([], fixture, fdPath);
+      const suggestions = await provider.getSuggestions(['@"needle'], 0, 8, {
+        signal: new AbortController().signal,
+      });
+
+      expect(suggestions?.items[0]?.value).toBe('@"needle file.txt"');
+    } finally {
+      await rm(fixture, { recursive: true, force: true });
+    }
+  });
+
+  it("omits terminal-unsafe paths while preserving safe Unicode paths", async () => {
+    const fixture = await mkdtemp(join(tmpdir(), "openclaw-tui-autocomplete-"));
+    const fdPath = join(fixture, "fd");
+    await writeFile(fdPath, "#!/bin/sh\nprintf 'raw\\033value.txt\\nمرحبا-東京.txt\\n'\n");
+    await chmod(fdPath, 0o755);
+
+    try {
+      const provider = createTuiAutocompleteProvider([], fixture, fdPath);
+      const suggestions = await provider.getSuggestions(["@"], 0, 1, {
+        signal: new AbortController().signal,
+      });
+
+      expect(suggestions?.items).toEqual([
+        {
+          description: "\u2067مرحبا-東京.txt\u2069",
+          label: "\u2067مرحبا-東京.txt\u2069",
+          value: "@مرحبا-東京.txt",
+        },
+      ]);
+      expect(provider.applyCompletion(["@"], 0, 1, suggestions!.items[0]!, "@")).toEqual({
+        cursorCol: "@مرحبا-東京.txt ".length,
+        cursorLine: 0,
+        lines: ["@مرحبا-東京.txt "],
+      });
+    } finally {
+      await rm(fixture, { recursive: true, force: true });
+    }
   });
 });

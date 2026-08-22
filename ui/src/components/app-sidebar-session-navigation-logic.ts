@@ -308,18 +308,16 @@ export function partitionSidebarVisibleSections(input: {
   rows: SidebarRecentSession[];
   grouping: SidebarSessionsGrouping;
   knownGroups: string[] | undefined;
+  selfOwnerId?: string | null;
   catalogIds?: readonly string[];
   sectionOrder?: readonly string[];
   collapsedSections: ReadonlySet<string>;
   hideEmptyOwnerFilteredGroup: (category: string | undefined, rowCount: number) => boolean;
   visibleSessionLimits: ReadonlyMap<string, number>;
 }): SidebarVisibleSections {
-  const sections = groupSidebarSessionRows(input.rows, {
-    grouping: input.grouping,
-    knownGroups: input.knownGroups,
-    sectionOrder: input.sectionOrder,
-    catalogIds: input.catalogIds,
-  }).filter(
+  const { grouping, knownGroups, selfOwnerId, sectionOrder, catalogIds } = input;
+  const sectionOptions = { grouping, knownGroups, selfOwnerId, sectionOrder, catalogIds };
+  const sections = groupSidebarSessionRows(input.rows, sectionOptions).filter(
     (section) =>
       section.id !== "pinned" &&
       !input.hideEmptyOwnerFilteredGroup(section.category, section.rows.length),

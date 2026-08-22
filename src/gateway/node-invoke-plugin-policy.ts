@@ -7,6 +7,7 @@ import {
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
 } from "../infra/exec-approval-command-display.js";
+import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -144,6 +145,13 @@ function createApprovalRuntime(params: {
           256,
         ),
         severity: input.severity ?? "warning",
+        ...(input.allowedDecisions === undefined
+          ? {}
+          : {
+              allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions({
+                allowedDecisions: input.allowedDecisions,
+              }),
+            }),
         // toolName/agentId are interpolated into channel approval text; only
         // host-minted runtime identity values skip the display escape.
         toolName: sanitizeOptionalMeta(input.toolName),
@@ -232,6 +240,7 @@ export async function applyPluginNodeInvokePolicy(params: {
   nodeSession: NodeSession;
   command: string;
   params: unknown;
+  sessionKey?: string;
   turnSource?: {
     channel?: unknown;
     to?: unknown;
@@ -395,6 +404,7 @@ export async function applyPluginNodeInvokePolicy(params: {
       params: override.params ?? params.params,
       timeoutMs,
       ...(params.signal ? { signal: params.signal } : {}),
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       idempotencyKey: override.idempotencyKey ?? params.idempotencyKey,
       ...(params.nodeInvokeStream && {
         onProgress: params.nodeInvokeStream.onProgress,

@@ -51,6 +51,10 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db-contract.js";
 import {
+  assertCurrentStateRuntimeSchema,
+  isOpenClawStateSchemaFastPathEligible,
+} from "./openclaw-state-db-fast-path.js";
+import {
   assertOpenClawStateDatabaseForMaintenance,
   assertOpenClawStateDatabaseV5ForMigration,
   assertOpenClawStateDatabaseV6ForMigration,
@@ -375,6 +379,16 @@ function ensureSchema(
   env: NodeJS.ProcessEnv,
   busyTimeoutMs = OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
 ): void {
+  try {
+    if (isOpenClawStateSchemaFastPathEligible(db, pathname)) {
+      // Recheck ownership so a claim made during validation cannot retain a writable handle.
+      assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
+      return;
+    }
+  } catch {
+    // Preserve the existing transactional repair and its diagnostics for drift or corruption.
+  }
+
   const now = Date.now();
   const kysely = getNodeSqliteKysely<OpenClawStateMetadataDatabase>(db);
   // Rebuilding referenced tables requires disabling FK enforcement before BEGIN.
@@ -541,11 +555,6 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
   };
 }
 
-function assertCurrentStateRuntimeSchema(database: DatabaseSync, pathname: string): void {
-  assertCanonicalStateSchemaShape(database, pathname);
-  assertOpenClawStateDatabaseForMaintenance(database, { pathname });
-}
-
 /** Open or return a cached shared state database after schema and migration checks. */
 
 function openOpenClawStateDatabaseWithBusyTimeout(
@@ -598,6 +607,11 @@ function openOpenClawStateDatabaseWithBusyTimeout(
           busyTimeoutMs,
           lockFailureReporting,
           ensureSchema: (database) => ensureSchema(database, pathname, env, busyTimeoutMs),
+          onWalSplitBrain: () => {
+            if (unpublished) {
+              stateDbCache.evictCachedOpenClawStateDatabase(unpublished);
+            }
+          },
           recordOpenFailure: recordOpenClawStateDatabaseOpenFailure,
         }));
       },

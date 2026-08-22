@@ -77,7 +77,7 @@ type CrabboxProfile = ReturnType<typeof parseCrabboxProfile>;
 
 type LeaseCommandContext = { binary: string; id: string; provider: string };
 type LeaseHeartbeatContext = LeaseCommandContext &
-  Pick<CrabboxProfile, "heartbeatIntervalMs" | "idleTimeout">;
+  Pick<CrabboxProfile, "heartbeatIntervalMs" | "heartbeatTimeoutMs" | "idleTimeout">;
 type ProvisionInspectContext = Omit<LeaseCommandContext, "id"> & {
   deadline: number;
   inspect: ParsedInspect;
@@ -433,7 +433,7 @@ export function createCrabboxWorkerProvider(
         binary: context.binary,
         runCommand,
         signal,
-        timeoutMs: Math.min(CRABBOX_LIFECYCLE_TIMEOUT_MS, context.heartbeatIntervalMs),
+        timeoutMs: context.heartbeatTimeoutMs,
       }),
     warn,
   });
@@ -466,6 +466,7 @@ export function createCrabboxWorkerProvider(
     return {
       binary: resolveBinary(parsed.binary),
       heartbeatIntervalMs: parsed.heartbeatIntervalMs,
+      heartbeatTimeoutMs: parsed.heartbeatTimeoutMs,
       id: lease.leaseId,
       idleTimeout: parsed.idleTimeout,
       provider: parsed.provider,
@@ -637,6 +638,7 @@ export function createCrabboxWorkerProvider(
       heartbeats.start({
         binary,
         heartbeatIntervalMs: parsed.heartbeatIntervalMs,
+        heartbeatTimeoutMs: parsed.heartbeatTimeoutMs,
         id: leaseId,
         idleTimeout: parsed.idleTimeout,
         provider: parsed.provider,

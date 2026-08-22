@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { listSetupMigrationOptions } from "./setup.migration-import.js";
+import type { OnboardOptions } from "../commands/onboard-types.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { WizardPrompter } from "./prompts.js";
+import { listSetupMigrationOptions, runSetupMigrationImport } from "./setup.migration-import.js";
 import {
   assertFreshSetupMigrationTarget,
   buildSetupMigrationTargetSnapshot,
@@ -173,5 +176,27 @@ describe("setup migration import options", () => {
         process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = previousDisableBundled;
       }
     }
+  });
+});
+
+describe("setup migration import provider selection", () => {
+  function runImportWith(importFrom: string) {
+    return runSetupMigrationImport({
+      opts: { importFrom } as OnboardOptions,
+      baseConfig: {},
+      detections: [],
+      prompter: {} as WizardPrompter,
+      runtime: { log: () => {}, error: () => {}, exit: () => {} } as unknown as RuntimeEnv,
+      readConfigFile: async () => ({}),
+      commitConfigFile: async (config) => config,
+    });
+  }
+
+  it("names the available providers when --import-from does not match one", async () => {
+    // The bundled ids come from the same listing the picker renders, so assert the shape and one
+    // known bundled id rather than pinning the full set, which grows with every bundled provider.
+    await expect(runImportWith("bogus")).rejects.toThrow(
+      /^Unknown migration provider "bogus"\. Available providers: .*codex.*\. Run .*openclaw migrate list.* to see the current list\.$/,
+    );
   });
 });

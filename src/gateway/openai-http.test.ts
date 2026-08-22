@@ -6,7 +6,12 @@ import path from "node:path";
 import OpenAI from "openai";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  buildAgentRunTerminalOutcome,
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+} from "../agents/agent-run-terminal-outcome.js";
 import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
+import { createAgentCommandLifecycle } from "../agents/command/lifecycle.js";
 import {
   createStubSessionHarness,
   emitAssistantTextDelta,
@@ -17,7 +22,11 @@ import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  getAgentEventLifecycleGeneration,
+  onAgentEvent,
+} from "../infra/agent-events.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -2030,6 +2039,101 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     });
     expect(res.status).toBe(500);
   });
+
+  it.each(
+    [
+      {
+        label: "terminal metadata",
+        meta: { error: { kind: "incomplete_turn" as const, message: "private provider failure" } },
+        expectedPhase: "error" as const,
+      },
+      {
+        label: "an error stop reason",
+        meta: { stopReason: "error" },
+        expectedPhase: "end" as const,
+      },
+    ].flatMap((failure) =>
+      [false, true].map((producerTerminal) => ({
+        meta: failure.meta,
+        expectedPhase: failure.expectedPhase,
+        producerTerminal,
+        label: `${failure.label} ${producerTerminal ? "after" : "without"} a producer terminal`,
+      })),
+    ),
+  )(
+    "rejects resolved streaming agent failures from $label",
+    async ({ meta, expectedPhase, producerTerminal }) => {
+      let runId: string | undefined;
+      const terminals: Array<{ phase: "end" | "error"; status: string }> = [];
+      const unsubscribe = onAgentEvent((event) => {
+        if (event.runId === runId && event.stream === "lifecycle") {
+          const phase = event.data?.phase;
+          if (phase === "end" || phase === "error") {
+            terminals.push({
+              phase,
+              status: buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase, data: event.data })
+                .status,
+            });
+          }
+        }
+      });
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (options: unknown) => {
+        runId = (options as { runId?: string }).runId;
+        if (!runId) {
+          throw new Error("expected a streaming chat-completion run ID");
+        }
+        const result = {
+          payloads: [{ text: "Command may have changed state", isError: true }],
+          meta: { durationMs: 0, ...meta },
+        };
+        if (producerTerminal) {
+          const lifecycle = createAgentCommandLifecycle({
+            runId,
+            lifecycleGeneration: getAgentEventLifecycleGeneration,
+            startedAt: Date.now(),
+            state: {
+              currentTurnUserMessagePersisted: true,
+              lifecycleFinishing: false,
+              lifecycleEnded: false,
+            },
+          });
+          const terminal = {
+            metadata: {},
+            outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
+          };
+          if (lifecycle.resolveResultError(result, false)) {
+            lifecycle.emitResultError(result, false, terminal);
+          } else {
+            lifecycle.emitEnd(terminal);
+          }
+        }
+        return result;
+      }) as never);
+
+      try {
+        const stream = await createOpenAiChatClient(enabledPort).chat.completions.create({
+          model: "openclaw",
+          messages: [{ role: "user", content: "hi" }],
+          stream: true,
+        });
+        const finishReasons: Array<string | null> = [];
+        await expect(async () => {
+          for await (const chunk of stream) {
+            finishReasons.push(...chunk.choices.map((choice) => choice.finish_reason));
+          }
+        }).rejects.toMatchObject({
+          error: { message: "internal error", type: "api_error" },
+        });
+        expect(finishReasons).not.toContain("stop");
+        expect(terminals).toEqual([
+          { phase: producerTerminal ? expectedPhase : "error", status: "error" },
+        ]);
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
 
   it("forwards response_format into streamParams", async () => {
     const port = enabledPort;

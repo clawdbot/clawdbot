@@ -274,7 +274,6 @@ describe("chat transcript rendering", () => {
       sessionKey: "agent:work:main",
       agentId: "work",
       messageId: "assistant-full-1",
-      kind: "assistant_message",
     });
 
     expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();

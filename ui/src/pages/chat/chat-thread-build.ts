@@ -714,7 +714,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       const liveProgress = resolveProgress();
       const liveStreamItem: ChatItem = {
         kind: "stream",
-        key: liveProgress.key,
+        key: latestBoundaryRunId
+          ? `${liveProgress.key}:after:${latestBoundaryRunId}`
+          : liveProgress.key,
         text: visibleText,
         startedAt: timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now()),
         isStreaming: true,

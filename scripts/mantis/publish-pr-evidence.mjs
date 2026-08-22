@@ -451,7 +451,7 @@ export function renderEvidenceComment({
   if (baselineLine) {
     lines.push(baselineLine);
   }
-  const candidateLine = laneLine("Candidate", candidate);
+  const candidateLine = laneLine("Candidate (PR merged onto main)", candidate);
   if (candidateLine) {
     lines.push(candidateLine);
   }
@@ -631,7 +631,7 @@ function upsertPrComment({ body, createMissing, marker, prNumber, repo }) {
       } catch {
         if (!createMissing) {
           console.log(
-            "Skipped stale Mantis QA evidence comment because its status is no longer active.",
+            `Could not update existing Mantis QA evidence comment ${commentId}; create-missing is false.`,
           );
           return;
         }
@@ -641,9 +641,7 @@ function upsertPrComment({ body, createMissing, marker, prNumber, repo }) {
       }
     }
     if (!createMissing) {
-      console.log(
-        "Skipped stale Mantis QA evidence comment because its status is no longer active.",
-      );
+      console.log("No existing Mantis QA evidence comment found and create-missing is false.");
       return;
     }
     run("gh", ["pr", "comment", prNumber, "--body-file", bodyFile], { stdio: "inherit" });

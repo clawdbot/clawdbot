@@ -184,6 +184,12 @@ export const healthHandlers: GatewayRequestHandlers = {
     if (context.getEventLoopHealth) {
       status.eventLoop = context.getEventLoopHealth();
     }
+    const memory = process.memoryUsage();
+    status.processMemory = {
+      rssBytes: memory.rss,
+      heapUsedBytes: memory.heapUsed,
+      heapTotalBytes: memory.heapTotal,
+    };
     respond(true, status, undefined);
   },
 };

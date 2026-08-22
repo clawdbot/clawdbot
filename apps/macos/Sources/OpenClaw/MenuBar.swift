@@ -652,7 +652,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         Task { PresenceReporter.shared.start() }
         Task { await HealthStore.shared.refresh(onDemand: true) }
-        Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
+        Task { await PortGuardian.shared.reapOrphanedTunnels() }
         AppStateStore.shared.applyComputerControlHostState()
         if launchPlan.allowsAutomaticPresentation {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {

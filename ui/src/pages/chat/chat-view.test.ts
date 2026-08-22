@@ -843,6 +843,7 @@ function createBackgroundTasks(
     loading: false,
     error: null,
     tasks: [],
+    activeCount: 0,
     subagentActivity: {
       rows: [],
       overflowWorking: 0,
@@ -5447,6 +5448,126 @@ describe("chat model controls", () => {
     modelOption?.click();
 
     expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main");
+  });
+
+  it("renders and applies selectable context windows inside the model picker", () => {
+    const { state } = createChatHeaderState({
+      model: "claude-fable-5",
+      modelProvider: "claude-cli",
+      models: [
+        {
+          id: "claude-fable-5",
+          name: "Claude Fable 5",
+          provider: "claude-cli",
+          contextWindow: 1_000_000,
+          contextWindows: [
+            { id: "200k", label: "200K", contextWindow: 200_000 },
+            { id: "1m", label: "1M", contextWindow: 1_000_000 },
+          ],
+          contextWindowDefault: "1m",
+        },
+      ],
+    });
+    const session = state.sessionsResult?.sessions[0];
+    if (!state.sessionsResult || !session) {
+      throw new Error("Expected session fixture");
+    }
+    state.sessionsResult = {
+      ...state.sessionsResult,
+      defaults: {
+        ...state.sessionsResult.defaults,
+        contextWindow: "1m",
+        contextWindowDefault: "1m",
+        contextWindows: state.chatModelCatalog[0]?.contextWindows,
+      },
+      sessions: [
+        {
+          ...session,
+          contextWindow: "1m",
+          contextWindowDefault: "1m",
+          contextWindows: state.chatModelCatalog[0]?.contextWindows,
+        },
+      ],
+    };
+    const onContextWindowSelect = vi.fn(async () => true);
+    const container = renderModelControls(state, { onContextWindowSelect });
+    const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
+    expect(picker).toBeInstanceOf(HTMLDetailsElement);
+    if (!picker) {
+      throw new Error("Expected model picker");
+    }
+    picker.open = true;
+    picker.dispatchEvent(new Event("toggle"));
+
+    const toggle = container.querySelector<HTMLButtonElement>("[data-chat-context-window-toggle]");
+    expect(toggle).toBeInstanceOf(HTMLButtonElement);
+    expect(toggle?.getAttribute("aria-checked")).toBe("true");
+    expect(toggle?.dataset.chatContextWindowToggle).toBe("200k");
+    expect(container.querySelector("[data-chat-model-context-badge]")).toBeNull();
+    toggle?.click();
+    expect(onContextWindowSelect).toHaveBeenCalledWith("200k", "main");
+    expect(picker.open).toBe(true);
+
+    const activeRow = expectDefined(state.sessionsResult.sessions[0], "active session");
+    state.sessionsResult.sessions[0] = { ...activeRow, contextWindow: "200k" };
+    renderModelControls(state, { onContextWindowSelect }, container);
+    expect(container.querySelector("[data-chat-model-context-badge]")?.textContent?.trim()).toBe(
+      "200K",
+    );
+    expect(
+      container.querySelector("[data-chat-context-window-toggle]")?.getAttribute("aria-checked"),
+    ).toBe("false");
+
+    const { state: unsupportedState } = createOpenAiHeaderState();
+    renderModelControls(unsupportedState, {}, container);
+    expect(container.querySelector("[data-chat-context-window-toggle]")).toBeNull();
+  });
+
+  it("hides the context-window switch when the active session's model declares none", () => {
+    const { state } = createChatHeaderState({
+      model: "claude-fable-5",
+      modelProvider: "claude-cli",
+      models: [
+        {
+          id: "claude-fable-5",
+          name: "Claude Fable 5",
+          provider: "claude-cli",
+          contextWindow: 1_000_000,
+          contextWindows: [
+            { id: "200k", label: "200K", contextWindow: 200_000 },
+            { id: "1m", label: "1M", contextWindow: 1_000_000 },
+          ],
+          contextWindowDefault: "1m",
+        },
+      ],
+    });
+    const session = state.sessionsResult?.sessions[0];
+    if (!state.sessionsResult || !session) {
+      throw new Error("Expected session fixture");
+    }
+    // Defaults row advertises selectable windows, but the active session runs an
+    // override model without any: the switch must not fall back field-by-field
+    // to the defaults row and offer options the session's model cannot honor.
+    state.sessionsResult = {
+      ...state.sessionsResult,
+      defaults: {
+        ...state.sessionsResult.defaults,
+        contextWindow: "1m",
+        contextWindowDefault: "1m",
+        contextWindows: state.chatModelCatalog[0]?.contextWindows,
+      },
+      sessions: [{ ...session, model: "gpt-5.6-luna", modelProvider: "openai" }],
+    };
+    const container = renderModelControls(state, {});
+    const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
+    if (!picker) {
+      throw new Error("Expected model picker");
+    }
+    picker.open = true;
+    picker.dispatchEvent(new Event("toggle"));
+
+    expect(container.querySelector("[data-chat-context-window-toggle]")).toBeNull();
+    expect(container.querySelector("[data-chat-model-context-badge]")).toBeNull();
   });
 
   it("requests live wildcard discovery when the model picker opens", () => {

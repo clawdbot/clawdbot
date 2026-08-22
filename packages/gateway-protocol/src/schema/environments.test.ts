@@ -176,6 +176,31 @@ describe("worker environment protocol schemas", () => {
     ).toBe(false);
   });
 
+  it("accepts only bounded, unique effective node command authority", () => {
+    const node = {
+      id: "node:build-mac",
+      type: "node",
+      status: "available",
+    };
+
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        invocableCommands: ["codex.exec-server.stdio.v1", "system.run"],
+      }),
+    ).toBe(true);
+    expect(Value.Check(EnvironmentSummarySchema, { ...node, invocableCommands: [] })).toBe(true);
+
+    for (const invocableCommands of [
+      [""],
+      ["system.run", "system.run"],
+      ["x".repeat(129)],
+      Array.from({ length: 129 }, (_, index) => `command.${index}`),
+    ]) {
+      expect(Value.Check(EnvironmentSummarySchema, { ...node, invocableCommands })).toBe(false);
+    }
+  });
+
   it("accepts bounded node lifecycle history and rejects malformed timestamps", () => {
     const node = {
       id: "node:build-mac",

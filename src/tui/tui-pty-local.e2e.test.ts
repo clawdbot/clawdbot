@@ -11,6 +11,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
+import { isProcessAlive, waitForPidFile } from "../../test/helpers/process-wait.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -18,6 +19,7 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { connectGatewayClient } from "../gateway/test-helpers.e2e.js";
 import { runExec } from "../process/exec.js";
+import { killPidIfAlive } from "../test-utils/process-tree.js";
 import { sleep } from "../utils/sleep.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { extractTextFromMessage } from "./tui-formatters.js";
@@ -1352,10 +1354,30 @@ describe("TUI PTY real backends", () => {
   );
 
   it(
-    "confirms and renders local shell output and environment through a real local PTY",
+    "confirms and renders local shell output, then extinguishes descendants before TUI exit",
     async ({ onTestFinished }) => {
       const fixture = await startLocalModeTui(onTestFinished);
+      const rootPath = path.join(fixture.stateDir, "tui-local-owned-root.cjs");
+      const pidPath = path.join(fixture.stateDir, "tui-local-owned-descendant.pid");
+      let descendantPid: number | undefined;
       try {
+        await writeFile(
+          rootPath,
+          `
+            const { spawn } = require("node:child_process");
+            const { writeFileSync } = require("node:fs");
+            const stdio = process.platform === "win32"
+              ? ["ignore", "ignore", "ignore"]
+              : ["ignore", "ignore", "ignore", 3];
+            const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+              stdio,
+              detached: process.platform === "win32",
+            });
+            child.unref();
+            writeFileSync(${JSON.stringify(pidPath)}, String(child.pid));
+          `,
+          "utf8",
+        );
         await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
         await fixture.run.write(
           "!node -e \"console.log('T06_STDOUT'); console.error('T06_STDERR'); console.log('T06_ENV='+process.env.OPENCLAW_SHELL); process.exitCode=7\"\r",
@@ -1372,9 +1394,17 @@ describe("TUI PTY real backends", () => {
         await fixture.run.waitForOutput("[local] T06_ENV=tui-local");
         await fixture.run.waitForOutput("[local] exit 7");
 
+        const descendantCommandOffset = fixture.run.visibleOutput().length;
+        await fixture.run.write(`!node ${JSON.stringify(rootPath)}\r`);
+        await waitForOutputAfter(fixture.run, "[local] exit 0", descendantCommandOffset);
+        descendantPid = await waitForPidFile(pidPath, LOCAL_OUTPUT_TIMEOUT_MS);
+        expect(isProcessAlive(descendantPid)).toBe(true);
+
         await fixture.run.write("/exit\r", { delay: false });
         expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+        expect(isProcessAlive(descendantPid)).toBe(false);
       } finally {
+        killPidIfAlive(descendantPid);
         await fixture.cleanup();
       }
     },

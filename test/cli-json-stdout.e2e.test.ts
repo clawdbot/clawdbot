@@ -276,6 +276,61 @@ describe("cli json stdout contract", () => {
     );
   });
 
+  it.each([
+    {
+      name: "routed status with JSON before its timeout",
+      args: ["status", "--json", "--timeout", "nope"],
+    },
+    {
+      name: "routed health with JSON after its timeout",
+      args: ["health", "--timeout", "0", "--json"],
+    },
+    {
+      name: "Commander status with JSON after its timeout",
+      args: ["status", "--timeout", "nope", "--json"],
+      commander: true,
+    },
+    {
+      name: "Commander health with JSON before its timeout",
+      args: ["health", "--json", "--timeout", "0"],
+      commander: true,
+    },
+    {
+      name: "routed status through dual-TTY finalization",
+      args: ["status", "--json", "--timeout", "nope"],
+      tty: true,
+    },
+  ])("renders invalid status/health timeouts as canonical JSON for $name", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const preload = `data:text/javascript,${encodeURIComponent(
+          'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true }); Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
+        )}`;
+        const result = runBuiltCli(tempHome, testCase.args, {
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+          OPENCLAW_GATEWAY_PORT: "29791",
+          ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+          ...("tty" in testCase ? { NODE_OPTIONS: `--import=${preload}`, FORCE_COLOR: "1" } : {}),
+        });
+        const message = "--timeout must be a positive integer (milliseconds)";
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stdout, result.stderr).not.toContain("\u001B");
+        expect(result.stdout, result.stderr).not.toContain("\u0007");
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: { type: "cli_error", message },
+        });
+        expect(result.stderr).toContain(message);
+        if ("tty" in testCase) {
+          expect(result.stderr).toContain("\u001B[?25h");
+        }
+      },
+      { prefix: "openclaw-status-health-json-timeout-e2e-" },
+    );
+  });
+
   it("returns one canonical document for a command that previously failed on stderr only", async () => {
     await withTempHome(
       async (tempHome) => {
@@ -471,6 +526,74 @@ describe("cli json stdout contract", () => {
         expect(result.stderr).not.toContain("AUTOQA_NETWORK_FORBIDDEN");
       },
       { prefix: "openclaw-nodes-json-failure-e2e-" },
+    );
+  });
+
+  it.each([
+    {
+      name: "the search query is missing",
+      args: ["plugins", "search", "--json"],
+      message: "Usage: openclaw plugins search <query>",
+    },
+    {
+      name: "ClawHub transport fails",
+      args: ["plugins", "search", "fixture", "--json"],
+      message: "offline fixture",
+    },
+  ])("returns one canonical JSON document when plugins $name", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const preload = `data:text/javascript,${encodeURIComponent(
+          'globalThis.fetch = async () => { throw new Error("offline fixture"); };',
+        )}`;
+        const result = runBuiltCli(tempHome, testCase.args, {
+          NODE_OPTIONS: `--import=${preload}`,
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+          CLAWHUB_CONFIG_PATH: path.join(tempHome, "missing-clawhub.json"),
+          CLAWHUB_TOKEN: "",
+          CLAWHUB_AUTH_TOKEN: "",
+        });
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stdout, result.stderr).not.toBe("");
+        expect(result.stdout).not.toMatch(/[\u001B\u0007]/u);
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: testCase.message,
+          },
+        });
+        expect(result.stderr).toContain(testCase.message);
+      },
+      { prefix: "openclaw-plugins-json-failure-e2e-" },
+    );
+  });
+
+  it("keeps plugins search JSON failures clean through dual-TTY finalization", async () => {
+    await withTempHome(
+      async (tempHome) => {
+        const preload = `data:text/javascript,${encodeURIComponent(
+          'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true }); Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
+        )}`;
+        const result = runBuiltCli(tempHome, ["plugins", "search", "--json"], {
+          NODE_OPTIONS: `--import=${preload}`,
+        });
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: "Usage: openclaw plugins search <query>",
+          },
+        });
+        expect(result.stdout).not.toMatch(/[\u001B\u0007]/u);
+        expect(result.stderr).toContain("Usage: openclaw plugins search <query>");
+        expect(result.stderr).toContain("\u001B[?25h");
+      },
+      { prefix: "openclaw-plugins-json-tty-failure-e2e-" },
     );
   });
 

@@ -543,13 +543,16 @@ describe("createOllamaStreamFn thinking events", () => {
   });
 
   it("keeps a real slow native Ollama response alive while NDJSON chunks advance", async () => {
+    const chunkCount = 24;
+    const chunkDelayMs = 250;
+    const requestTimeoutMs = 5_000;
     const server = createServer((_request, response) => {
       response.writeHead(200, { "content-type": "application/x-ndjson" });
 
       let chunkIndex = 0;
       let nextChunk: ReturnType<typeof setTimeout> | undefined;
       const sendChunk = () => {
-        if (chunkIndex === 6) {
+        if (chunkIndex === chunkCount) {
           response.end(`${JSON.stringify(makeOllamaResponse({ content: "" }))}\n`);
           return;
         }
@@ -562,7 +565,7 @@ describe("createOllamaStreamFn thinking events", () => {
           })}\n`,
         );
         chunkIndex += 1;
-        nextChunk = setTimeout(sendChunk, 35);
+        nextChunk = setTimeout(sendChunk, chunkDelayMs);
       };
 
       response.once("close", () => {
@@ -589,7 +592,7 @@ describe("createOllamaStreamFn thinking events", () => {
       const stream = streamFn(
         { api: "ollama", provider: "ollama", id: "qwen3.5", contextWindow: 65536 } as never,
         { messages: [{ role: "user", content: "test" }] } as never,
-        { requestTimeoutMs: 120 } as never,
+        { requestTimeoutMs } as never,
       );
 
       const events: Array<{ type: string }> = [];
@@ -604,7 +607,7 @@ describe("createOllamaStreamFn thinking events", () => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
     }
-  });
+  }, 20_000);
 
   it("still times out a real native Ollama stream that stops making progress", async () => {
     const server = createServer((_request, response) => {

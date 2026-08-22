@@ -366,9 +366,8 @@ class UsagePage extends OpenClawLightDomElement {
       this.refreshPolicy.markLoadDeferred();
       return Promise.resolve();
     }
-    if (this.usageLoading) {
-      return Promise.resolve();
-    }
+    // Filter changes must supersede active work; Task.run fences the old result
+    // so it cannot publish under the newly rendered query controls.
     this.routeDataEnabled = false;
     this.usageLoadStartDate = this.usageStartDate;
     this.usageLoadEndDate = this.usageEndDate;

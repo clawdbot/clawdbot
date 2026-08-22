@@ -152,6 +152,43 @@ describe("runSetupModelAuthStep", () => {
     });
   });
 
+  it("stages provider auth on the pending named agent without nesting its workspace", async () => {
+    const workspaceDir = "/tmp/robby-workspace";
+    const config: OpenClawConfig = { agents: { defaults: { workspace: workspaceDir } } };
+    promptAuthChoiceGrouped.mockResolvedValueOnce("anthropic-cli");
+    applyAuthChoice.mockResolvedValueOnce({
+      config,
+      authProfiles: [],
+      persistAuthProfiles: async () => {},
+    });
+
+    await runSetupModelAuthStep({
+      config,
+      opts: {},
+      pendingAgent: { name: "Robby!", workspaceDir },
+      prompter: createPrompter(),
+      runtime: createRuntime(),
+    });
+
+    const agentDir = expect.stringMatching(/[/\\]agents[/\\]robby[/\\]agent$/);
+    expect(ensureAuthProfileStore).toHaveBeenCalledWith(agentDir, {
+      allowKeychainPrompt: false,
+      readOnly: true,
+    });
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(expect.objectContaining({ workspaceDir }));
+    expect(applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "robby", agentDir, workspaceDir }),
+    );
+    expect(promptDefaultModel).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "robby", agentDir, workspaceDir }),
+    );
+    expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ agentId: "robby", agentDir }),
+    );
+  });
+
   it("targets the system agent when an explicit fleet selects Claude CLI", async () => {
     const config: OpenClawConfig = {
       agents: {
