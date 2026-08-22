@@ -781,6 +781,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("not who sent it");
     expect(prompt).not.toContain("trusted, tamper-protected");
     expect(prompt).not.toContain("Provider request logs are diagnostic and pacing signals");
+    expect(prompt).toContain("Script catalog-tool turns as an `exec` function");
     expect(prompt).toContain("mantis-recipes/");
     expect(prompt).toContain("recipe-suggestion.md");
     expect(prompt).toContain("do not call `finish` and describe the block only in prose");

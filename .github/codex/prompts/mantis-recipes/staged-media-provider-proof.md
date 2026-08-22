@@ -11,8 +11,10 @@ $lane observe --lane baseline --seconds 60 --until-provider-requests 1
 requests="$($lane requests --lane baseline)"
 jq -e '[.requests[].contentFacts[]? | select(.type == "legacy_media")] | length > 0' \
   <<<"$requests"
-$lane finish --lane baseline --focus-message-id "$message_id"
 ```
+
+With no tool round trip, finish now using `message_id`. Otherwise continue below;
+`finish` stops the lane.
 
 For a reply-mention turn, first `send --media "$media"` without text, capture its
 `.sent.messageId`, then `send --reply-to "$message_id" --text '@{sut} inspect this document'`.
@@ -22,9 +24,88 @@ Repeat for `candidate` with its returned message id, selecting `type == "input_f
 Assert the complete selected facts: `filename`, `mimeType`, and `byteLength` when present.
 The structured facts are comparison evidence; never scrape `body` strings.
 
-If baseline needs a tool round trip, take the tool argument from the recorded
-`legacy_media.filename`. Build a complete response-events JSON array from
-`toolCallEvents()` in `scripts/e2e/mock-openai-server.mjs`
-(`response.output_item.added`, `response.function_call_arguments.delta`,
-`response.output_item.done`, `response.completed`), then install it before the
-next turn with `mock --lane baseline --response-events-file <public-json>`.
+For a PDF tool round trip, start each lane with this patch. `pdf` is already in
+the Code Mode catalog; `document-extract` lets the mock OpenAI route execute it.
+
+```json
+{ "configPatch": { "plugins": { "allow": ["telegram", "openai", "document-extract"] } } }
+```
+
+Replace `<legacy_media.filename>` below with the recorded value and save the
+array as `pdf-exec-events.json` under `MANTIS_OUTPUT_DIR`:
+
+```json
+[
+  {
+    "type": "response.output_item.added",
+    "item": {
+      "type": "function_call",
+      "id": "fc_mantis_pdf_exec",
+      "call_id": "call_mantis_pdf_exec",
+      "name": "exec",
+      "arguments": ""
+    }
+  },
+  {
+    "type": "response.function_call_arguments.delta",
+    "delta": "{\"language\":\"javascript\",\"code\":\"return await pdf({ pdf: \\\"<legacy_media.filename>\\\", prompt: \\\"Inspect this PDF.\\\" });\"}"
+  },
+  {
+    "type": "response.output_item.done",
+    "item": {
+      "type": "function_call",
+      "id": "fc_mantis_pdf_exec",
+      "call_id": "call_mantis_pdf_exec",
+      "name": "exec",
+      "arguments": "{\"language\":\"javascript\",\"code\":\"return await pdf({ pdf: \\\"<legacy_media.filename>\\\", prompt: \\\"Inspect this PDF.\\\" });\"}"
+    }
+  },
+  {
+    "type": "response.completed",
+    "response": {
+      "id": "resp_mantis_pdf_exec",
+      "status": "completed",
+      "output": [
+        {
+          "type": "function_call",
+          "id": "fc_mantis_pdf_exec",
+          "call_id": "call_mantis_pdf_exec",
+          "name": "exec",
+          "arguments": "{\"language\":\"javascript\",\"code\":\"return await pdf({ pdf: \\\"<legacy_media.filename>\\\", prompt: \\\"Inspect this PDF.\\\" });\"}"
+        }
+      ],
+      "usage": {
+        "input_tokens": 64,
+        "output_tokens": 16,
+        "total_tokens": 80,
+        "input_tokens_details": { "cached_tokens": 0 }
+      }
+    }
+  }
+]
+```
+
+Save this beside it as `pdf-exec-script.json`, install the two-response script,
+then send the tool-driven turn:
+
+```json
+{
+  "responses": [
+    { "eventsFile": "pdf-exec-events.json" },
+    { "text": "PDF tool round trip complete." }
+  ]
+}
+```
+
+```bash
+script="$MANTIS_OUTPUT_DIR/pdf-exec-script.json"
+sha256="$(sha256sum "$script" | cut -d ' ' -f 1)"
+$lane mock --lane baseline --script "$script" "$sha256"
+tool_sent="$($lane send --lane baseline --text '@{sut} inspect the staged PDF with the pdf tool')"
+tool_message_id="$(jq -er '.sent.messageId' <<<"$tool_sent")"
+$lane finish --lane baseline --focus-message-id "$tool_message_id"
+```
+
+The follow-up provider request carries
+`{"type":"function_call_output","call_id":"call_mantis_pdf_exec","output":"<serialized exec result>"}`.
+Repeat the same script, turn, and finish for `candidate`.
