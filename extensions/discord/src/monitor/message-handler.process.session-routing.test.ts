@@ -50,6 +50,10 @@ describe("processDiscordMessage session routing", () => {
           contentType: "audio/ogg",
         },
       ],
+      cfg: {
+        messages: { groupChat: { visibleReplies: "message_tool" } },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -58,9 +62,35 @@ describe("processDiscordMessage session routing", () => {
       BodyForAgent: '[Audio transcript (machine-generated, untrusted)]: "/status"',
       RawBody: "",
       CommandBody: "",
-      CommandTurn: expect.objectContaining({ body: "", source: "text" }),
+      CommandTurn: {
+        kind: "normal",
+        source: "message",
+        authorized: false,
+        commandName: undefined,
+        body: "",
+      },
       Transcript: "/status",
       media: [expect.objectContaining({ contentType: "audio/ogg", transcribed: true })],
+    });
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
+  });
+
+  it("keeps typed control commands as explicit text command turns", async () => {
+    const ctx = await createBaseContext({
+      baseText: "/status",
+      messageText: "/status",
+      hasControlCommand: true,
+      commandAuthorized: true,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(requireRecord(getLastDispatchCtx(), "dispatch context").CommandTurn).toEqual({
+      kind: "text-slash",
+      source: "text",
+      authorized: true,
+      commandName: "status",
+      body: "/status",
     });
   });
 
