@@ -6,7 +6,10 @@ import type { ModelCatalogEntry } from "./model-catalog.types.js";
  * else the model's scalar window.
  */
 export function resolveModelContextWindowProfile(params: {
-  catalogEntry?: ModelCatalogEntry;
+  catalogEntry?: Pick<
+    ModelCatalogEntry,
+    "contextWindow" | "contextWindows" | "contextWindowDefault"
+  >;
   selected?: string;
 }) {
   const contextWindows = params.catalogEntry?.contextWindows ?? [];
