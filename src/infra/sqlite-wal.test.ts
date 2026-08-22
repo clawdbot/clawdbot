@@ -622,6 +622,54 @@ describe("sqlite WAL maintenance", () => {
     },
   );
 
+  it.runIf(process.platform === "linux")(
+    "disables split-brain detection after an unexpected scan error",
+    () => {
+      vi.useFakeTimers();
+      const tempDir = tempDirs.make("openclaw-sqlite-wal-tripwire-error-");
+      const databasePath = path.join(tempDir, "state.sqlite");
+      const { DatabaseSync } = requireNodeSqlite();
+      const writer = new DatabaseSync(databasePath);
+      const events: unknown[] = [];
+      const maintenance = configureSqliteWalMaintenance(writer, {
+        checkpointIntervalMs: 100,
+        databasePath,
+        onWalSplitBrain: (event) => events.push(event),
+      });
+      const prepare = vi.spyOn(writer, "prepare");
+      const readdir = vi.spyOn(fs, "readdirSync").mockImplementationOnce(() => {
+        const error = new Error("restricted procfs");
+        (error as NodeJS.ErrnoException).code = "EPERM";
+        throw error;
+      });
+      try {
+        writer.exec("CREATE TABLE events (value TEXT NOT NULL);");
+
+        expect(() => vi.advanceTimersByTime(100)).not.toThrow();
+        expect(readdir).toHaveBeenCalledTimes(1);
+        expect(() =>
+          writer.prepare("INSERT INTO events VALUES (?)").run("still-open"),
+        ).not.toThrow();
+
+        fs.unlinkSync(`${databasePath}-wal`);
+        fs.unlinkSync(`${databasePath}-shm`);
+        expect(() => vi.advanceTimersByTime(100)).not.toThrow();
+
+        expect(readdir).toHaveBeenCalledTimes(1);
+        expect(events).toEqual([]);
+        expect(
+          prepare.mock.calls.filter(([sql]) => sql === "PRAGMA wal_checkpoint(PASSIVE);"),
+        ).toHaveLength(2);
+        expect(writer.isOpen).toBe(true);
+      } finally {
+        maintenance.close();
+        if (writer.isOpen) {
+          writer.close();
+        }
+      }
+    },
+  );
+
   it("clamps oversized checkpoint intervals before arming timers", () => {
     vi.useFakeTimers();
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");

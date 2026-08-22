@@ -579,6 +579,8 @@ export function configureSqliteWalMaintenance(
       ? fs.realpathSync.native(options.databasePath)
       : undefined;
   let invalidated = false;
+  let splitBrainDetectionEnabled = Boolean(tripwireDatabasePath);
+  let splitBrainDetectionWarningLogged = false;
 
   const runCheckpoint = (mode: SqliteWalCheckpointMode): boolean => {
     try {
@@ -612,27 +614,52 @@ export function configureSqliteWalMaintenance(
   let timer: IntervalHandle | null = null;
   if (timerIntervalMs > 0) {
     timer = setInterval(() => {
-      const splitBrain = tripwireDatabasePath
-        ? detectSqliteWalSplitBrain(tripwireDatabasePath)
-        : undefined;
-      if (splitBrain) {
-        invalidated = true;
-        if (timer) {
-          clearInterval(timer);
-          timer = null;
-        }
-        log.error("SQLite WAL sidecar identity mismatch", {
-          ...splitBrain,
-          databaseLabel: options.databaseLabel,
-        });
+      if (tripwireDatabasePath && splitBrainDetectionEnabled) {
         try {
-          options.onWalSplitBrain?.(splitBrain);
-        } finally {
-          if (db.isOpen) {
-            db.close();
+          const splitBrain = detectSqliteWalSplitBrain(tripwireDatabasePath);
+          if (splitBrain) {
+            invalidated = true;
+            if (timer) {
+              clearInterval(timer);
+              timer = null;
+            }
+            log.error("SQLite WAL sidecar identity mismatch", {
+              ...splitBrain,
+              databaseLabel: options.databaseLabel,
+            });
+            try {
+              options.onWalSplitBrain?.(splitBrain);
+            } catch (error) {
+              log.error("SQLite WAL split-brain hook failed", {
+                databaseLabel: options.databaseLabel,
+                databasePath: tripwireDatabasePath,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+            try {
+              if (db.isOpen) {
+                db.close();
+              }
+            } catch (error) {
+              log.error("SQLite WAL split-brain close failed", {
+                databaseLabel: options.databaseLabel,
+                databasePath: tripwireDatabasePath,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+            return;
+          }
+        } catch (error) {
+          splitBrainDetectionEnabled = false;
+          if (!splitBrainDetectionWarningLogged) {
+            splitBrainDetectionWarningLogged = true;
+            log.warn("SQLite WAL split-brain detection disabled", {
+              databaseLabel: options.databaseLabel,
+              databasePath: tripwireDatabasePath,
+              error: error instanceof Error ? error.message : String(error),
+            });
           }
         }
-        return;
       }
       runCheckpoint(periodicCheckpointMode);
       runIncrementalVacuum();

@@ -1,8 +1,7 @@
 // Prepares consistent private SQLite read-only snapshots.
-import { fork, spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import {
   openNodeSqliteDatabase,
@@ -22,8 +21,9 @@ const SQLITE_HEADER_BYTES = 20;
 const SQLITE_READONLY_RESULT_CODE = 8;
 const SQLITE_RESULT_CODE_MASK = 0xff;
 const SQLITE_JOURNAL_MAGIC = Buffer.from([0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]);
-const SQLITE_READONLY_ASYNC_CHILD_ARG = "--openclaw-sqlite-readonly-async-child";
-const SQLITE_READONLY_SYNC_CHILD_ARG = "--openclaw-sqlite-readonly-sync-child";
+export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
+const SQLITE_READONLY_CHILD_TIMEOUT_MS = 60_000;
+const SQLITE_READONLY_STDERR_TAIL_CHARS = 4_000;
 const pendingTempDirectoryCleanup = new Set<string>();
 let cleanupExitHandlerInstalled = false;
 
@@ -46,7 +46,7 @@ type PreparedSqliteReadOnlyLocation = {
   location: string;
 };
 
-type SqliteReadOnlyWorkerResult = { location: string } | { error: string };
+type SqliteReadOnlyWorkerResult = { ok: true; location: string } | { ok: false; message: string };
 
 class SqliteSourceChangedError extends Error {}
 
@@ -592,78 +592,82 @@ function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteReadOnlyWo
   const result = value as Record<string, unknown>;
   const keys = Object.keys(result);
   return (
-    (keys.length === 1 && typeof result.location === "string") ||
-    (keys.length === 1 && typeof result.error === "string")
+    (keys.length === 2 && result.ok === true && typeof result.location === "string") ||
+    (keys.length === 2 && result.ok === false && typeof result.message === "string")
   );
+}
+
+function createSqliteReadOnlyWorkerError(message: string, stderr: string): Error {
+  const stderrTail = stderr.trim().slice(-SQLITE_READONLY_STDERR_TAIL_CHARS);
+  return new Error(
+    `SQLite read-only worker ${message}${stderrTail ? `\nstderr (tail): ${stderrTail}` : ""}`,
+  );
+}
+
+function parseSqliteReadOnlyWorkerResult(
+  stdout: string,
+  stderr: string,
+): SqliteReadOnlyWorkerResult {
+  if (!stdout.trim()) {
+    throw createSqliteReadOnlyWorkerError("returned no JSON result", stderr);
+  }
+  let message: unknown;
+  try {
+    message = JSON.parse(stdout);
+  } catch {
+    throw createSqliteReadOnlyWorkerError("returned invalid JSON", stderr);
+  }
+  if (!isSqliteReadOnlyWorkerResult(message)) {
+    throw createSqliteReadOnlyWorkerError("returned an invalid result", stderr);
+  }
+  return message;
+}
+
+function adoptSqliteReadOnlyWorkerResult(params: {
+  failure?: string;
+  stderr: string;
+  stdout: string;
+}): PreparedSqliteReadOnlyLocation {
+  let result: SqliteReadOnlyWorkerResult;
+  try {
+    result = parseSqliteReadOnlyWorkerResult(params.stdout, params.stderr);
+  } catch (error) {
+    if (params.failure) {
+      throw createSqliteReadOnlyWorkerError(params.failure, params.stderr);
+    }
+    throw error;
+  }
+  if (params.failure || !result.ok) {
+    throw createSqliteReadOnlyWorkerError(
+      !result.ok ? result.message : (params.failure ?? "failed"),
+      params.stderr,
+    );
+  }
+  return adoptPreparedLocation(result.location);
 }
 
 export async function prepareSqliteReadOnlyLocation(
   pathname: string,
 ): Promise<PreparedSqliteReadOnlyLocation> {
   const workerUrl = resolveSqliteReadOnlyWorkerUrl();
-  const worker = fork(fileURLToPath(workerUrl), [SQLITE_READONLY_ASYNC_CHILD_ARG], {
-    execArgv: workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined,
-    stdio: ["ignore", "ignore", "ignore", "ipc"],
-  });
-
   return await new Promise((resolve, reject) => {
-    let settled = false;
-    let result: SqliteReadOnlyWorkerResult | undefined;
-    let exit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
-    let disconnected = !worker.connected;
-    const settle = (finish: () => void) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      worker.removeAllListeners();
-      finish();
-    };
-    const settleAfterExitAndDisconnect = () => {
-      if (!exit || !disconnected) {
-        return;
-      }
-      settle(() => {
-        if (exit?.code !== 0) {
-          reject(
-            new Error(
-              `SQLite read-only worker exited with ${exit?.signal ? `signal ${exit.signal}` : `code ${exit?.code}`}`,
-            ),
-          );
-        } else if (!result) {
-          reject(new Error("SQLite read-only worker exited without a result"));
-        } else if ("error" in result) {
-          reject(new Error(result.error));
-        } else {
-          resolve(adoptPreparedLocation(result.location));
+    execFile(
+      process.execPath,
+      [...resolveRuntimeWorkerArgv(workerUrl), SQLITE_READONLY_CHILD_ARG, path.resolve(pathname)],
+      { encoding: "utf8", timeout: SQLITE_READONLY_CHILD_TIMEOUT_MS },
+      (error, stdout, stderr) => {
+        try {
+          const failure = error
+            ? error.killed
+              ? `timed out after ${SQLITE_READONLY_CHILD_TIMEOUT_MS}ms`
+              : `exited unsuccessfully: ${error.message}`
+            : undefined;
+          resolve(adoptSqliteReadOnlyWorkerResult({ failure, stderr, stdout }));
+        } catch (workerError) {
+          reject(workerError instanceof Error ? workerError : new Error(String(workerError)));
         }
-      });
-    };
-    worker.once("message", (message: unknown) => {
-      if (!isSqliteReadOnlyWorkerResult(message)) {
-        worker.kill();
-        settle(() => reject(new Error("SQLite read-only worker returned an invalid result")));
-        return;
-      }
-      result = message;
-    });
-    worker.once("error", (error) => settle(() => reject(error)));
-    worker.once("disconnect", () => {
-      disconnected = true;
-      settleAfterExitAndDisconnect();
-    });
-    worker.once("exit", (code, signal) => {
-      exit = { code, signal };
-      disconnected ||= !worker.connected;
-      settleAfterExitAndDisconnect();
-    });
-    worker.send(pathname, (error) => {
-      if (!error) {
-        return;
-      }
-      worker.kill();
-      settle(() => reject(error));
-    });
+      },
+    );
   });
 }
 
@@ -673,35 +677,17 @@ export function prepareSqliteReadOnlyLocationSync(
   const workerUrl = resolveSqliteReadOnlyWorkerUrl();
   const result = spawnSync(
     process.execPath,
-    [
-      ...resolveRuntimeWorkerArgv(workerUrl),
-      SQLITE_READONLY_SYNC_CHILD_ARG,
-      path.resolve(pathname),
-    ],
-    { encoding: "utf8" },
+    [...resolveRuntimeWorkerArgv(workerUrl), SQLITE_READONLY_CHILD_ARG, path.resolve(pathname)],
+    { encoding: "utf8", timeout: SQLITE_READONLY_CHILD_TIMEOUT_MS },
   );
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    throw new Error(
-      result.stderr.trim() ||
-        `SQLite read-only worker exited with ${result.signal ? `signal ${result.signal}` : `code ${result.status}`}`,
-    );
-  }
-  let message: unknown;
-  try {
-    message = JSON.parse(result.stdout);
-  } catch {
-    throw new Error("SQLite read-only worker returned invalid JSON");
-  }
-  if (!isSqliteReadOnlyWorkerResult(message)) {
-    throw new Error("SQLite read-only worker returned an invalid result");
-  }
-  if ("error" in message) {
-    throw new Error(message.error);
-  }
-  return adoptPreparedLocation(message.location);
+  const failure = result.error
+    ? "code" in result.error && result.error.code === "ETIMEDOUT"
+      ? `timed out after ${SQLITE_READONLY_CHILD_TIMEOUT_MS}ms`
+      : `failed to start: ${result.error.message}`
+    : result.status === 0
+      ? undefined
+      : `exited with ${result.signal ? `signal ${result.signal}` : `code ${result.status}`}`;
+  return adoptSqliteReadOnlyWorkerResult({ failure, stderr: result.stderr, stdout: result.stdout });
 }
 
 async function prepareSqliteSnapshotSource(
