@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -5,7 +6,12 @@ import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { prepareSqliteReadOnlyLocation } from "./sqlite-readonly-location.js";
+import {
+  prepareSqliteReadOnlyLocation as prepareSqliteReadOnlyLocationIsolated,
+  prepareSqliteReadOnlyLocationInProcess as prepareSqliteReadOnlyLocation,
+  prepareSqliteReadOnlyLocationSync,
+  prepareSqliteReadOnlyLocationSyncInProcess,
+} from "./sqlite-readonly-location.js";
 
 const workers: Worker[] = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -56,7 +62,83 @@ function waitForWorkerMessage(worker: Worker, expected: string): Promise<void> {
   });
 }
 
+type PosixLock = {
+  length: number;
+  pid: number;
+  start: number;
+  type: string;
+};
+
+function readMainDatabasePosixLocks(pathname: string): PosixLock[] {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      `
+import fcntl, json, os, struct, sys
+layout = struct.Struct("hhqqi4x")
+request = layout.pack(fcntl.F_WRLCK, os.SEEK_SET, 1073741826, 510, 0)
+with open(sys.argv[1], "rb") as database:
+    result = layout.unpack(fcntl.fcntl(database.fileno(), fcntl.F_GETLK, request))
+lock_type, _, start, length, pid = result
+locks = [] if lock_type == fcntl.F_UNLCK else [{
+    "length": length,
+    "pid": pid,
+    "start": start,
+    "type": "read" if lock_type == fcntl.F_RDLCK else "write",
+}]
+print(json.dumps(locks))
+`,
+      pathname,
+    ],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0) {
+    throw new Error(result.stderr || "POSIX lock probe failed");
+  }
+  return JSON.parse(result.stdout) as PosixLock[];
+}
+
 describe("prepareSqliteReadOnlyLocation", () => {
+  it.runIf(process.platform === "linux")(
+    "keeps a live WAL connection's POSIX locks in the owning process",
+    async () => {
+      const sqlite = requireNodeSqlite();
+      const databasePath = createTempDatabasePath();
+      const writer = new sqlite.DatabaseSync(databasePath);
+      writer.exec(`
+        PRAGMA journal_mode = WAL;
+        CREATE TABLE writes (id INTEGER PRIMARY KEY);
+        INSERT INTO writes DEFAULT VALUES;
+      `);
+      const locksBefore = readMainDatabasePosixLocks(databasePath);
+      const cleanups: Array<() => boolean> = [];
+      try {
+        expect(locksBefore).toHaveLength(1);
+
+        const preparedAsync = await prepareSqliteReadOnlyLocationIsolated(databasePath);
+        cleanups.push(preparedAsync.cleanup);
+        expect(readMainDatabasePosixLocks(databasePath)).toEqual(locksBefore);
+        expect(preparedAsync.cleanup()).toBe(true);
+
+        const preparedSync = prepareSqliteReadOnlyLocationSync(databasePath);
+        cleanups.push(preparedSync.cleanup);
+        expect(readMainDatabasePosixLocks(databasePath)).toEqual(locksBefore);
+        expect(preparedSync.cleanup()).toBe(true);
+
+        const characterized = prepareSqliteReadOnlyLocationSyncInProcess(databasePath);
+        cleanups.push(characterized.cleanup);
+        expect(readMainDatabasePosixLocks(databasePath)).toEqual([]);
+        expect(characterized.cleanup()).toBe(true);
+      } finally {
+        for (const cleanup of cleanups) {
+          cleanup();
+        }
+        writer.close();
+      }
+    },
+  );
+
   it("retries a same-size WAL reset instead of accepting an impossible pair", async () => {
     const sqlite = requireNodeSqlite();
     const livePath = createTempDatabasePath();

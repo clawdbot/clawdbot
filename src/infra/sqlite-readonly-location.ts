@@ -1,12 +1,15 @@
 // Prepares consistent private SQLite read-only snapshots.
+import { fork, spawnSync } from "node:child_process";
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import {
   openNodeSqliteDatabase,
   requireNodeSqlite,
   resolveSqliteFilesystemPath,
 } from "./node-sqlite.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   createPrivateSqliteTempDirectory,
   createPrivateSqliteTempDirectorySync,
@@ -19,6 +22,8 @@ const SQLITE_HEADER_BYTES = 20;
 const SQLITE_READONLY_RESULT_CODE = 8;
 const SQLITE_RESULT_CODE_MASK = 0xff;
 const SQLITE_JOURNAL_MAGIC = Buffer.from([0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]);
+const SQLITE_READONLY_ASYNC_CHILD_ARG = "--openclaw-sqlite-readonly-async-child";
+const SQLITE_READONLY_SYNC_CHILD_ARG = "--openclaw-sqlite-readonly-sync-child";
 const pendingTempDirectoryCleanup = new Set<string>();
 let cleanupExitHandlerInstalled = false;
 
@@ -40,6 +45,8 @@ type PreparedSqliteReadOnlyLocation = {
   cleanup: () => boolean;
   location: string;
 };
+
+type SqliteReadOnlyWorkerResult = { location: string } | { error: string };
 
 class SqliteSourceChangedError extends Error {}
 
@@ -281,6 +288,24 @@ function removeTempDirectory(tempDir: string): boolean {
   }
 }
 
+function adoptPreparedLocation(location: string): PreparedSqliteReadOnlyLocation {
+  const tempDir = path.dirname(location);
+  let active = true;
+  return {
+    location,
+    cleanup: () => {
+      if (!active) {
+        return true;
+      }
+      const removed = removeTempDirectory(tempDir);
+      if (removed) {
+        active = false;
+      }
+      return removed;
+    },
+  };
+}
+
 function recoverPrivateRollbackCopy(snapshotPath: string): void {
   if (rollbackJournalReferencesSuperJournal(`${snapshotPath}-journal`)) {
     throw new Error(
@@ -355,20 +380,7 @@ function createStableReadOnlyCopyInTempDirectory(
       // a later writable open can perform SQLite's normal crash recovery.
       recoverPrivateRollbackCopy(snapshotPath);
     }
-    let active = true;
-    return {
-      location: snapshotPath,
-      cleanup: () => {
-        if (!active) {
-          return true;
-        }
-        const removed = removeTempDirectory(tempDir);
-        if (removed) {
-          active = false;
-        }
-        return removed;
-      },
-    };
+    return adoptPreparedLocation(snapshotPath);
   } catch (error) {
     removeTempDirectory(tempDir);
     throw error;
@@ -435,20 +447,7 @@ async function createOnlineReadOnlyBackup(
     } finally {
       fs.closeSync(descriptor);
     }
-    let active = true;
-    return {
-      location: snapshotPath,
-      cleanup: () => {
-        if (!active) {
-          return true;
-        }
-        const removed = removeTempDirectory(tempDir);
-        if (removed) {
-          active = false;
-        }
-        return removed;
-      },
-    };
+    return adoptPreparedLocation(snapshotPath);
   } catch (error) {
     removeTempDirectory(tempDir);
     throw error;
@@ -459,8 +458,10 @@ async function createOnlineReadOnlyBackup(
  * Active rollback and WAL state use SQLite's locking and backup protocol.
  * Crash residue that cannot be opened read-only is copied and recovered
  * privately so inspection never mutates coordination files beside the source.
+ * The InProcess exports are child-only: POSIX close() can release every lock
+ * the calling process holds on the same source inode.
  */
-export async function prepareSqliteReadOnlyLocation(
+export async function prepareSqliteReadOnlyLocationInProcess(
   pathname: string,
 ): Promise<PreparedSqliteReadOnlyLocation> {
   const canonicalPath = fs.realpathSync.native(pathname);
@@ -540,8 +541,7 @@ export async function prepareSqliteReadOnlyLocation(
   });
 }
 
-/** Synchronously prepares a stable private family for lock-free public inspection. */
-export function prepareSqliteReadOnlyLocationSync(
+export function prepareSqliteReadOnlyLocationSyncInProcess(
   pathname: string,
 ): PreparedSqliteReadOnlyLocation {
   const canonicalPath = fs.realpathSync.native(pathname);
@@ -577,6 +577,133 @@ export function prepareSqliteReadOnlyLocationSync(
   });
 }
 
+function resolveSqliteReadOnlyWorkerUrl(): URL {
+  return resolveRuntimeWorkerUrl({
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "sqlite-readonly-location.worker",
+    distWorkerPath: "infra/sqlite-readonly-location.worker.js",
+  });
+}
+
+function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteReadOnlyWorkerResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const result = value as Record<string, unknown>;
+  const keys = Object.keys(result);
+  return (
+    (keys.length === 1 && typeof result.location === "string") ||
+    (keys.length === 1 && typeof result.error === "string")
+  );
+}
+
+export async function prepareSqliteReadOnlyLocation(
+  pathname: string,
+): Promise<PreparedSqliteReadOnlyLocation> {
+  const workerUrl = resolveSqliteReadOnlyWorkerUrl();
+  const worker = fork(fileURLToPath(workerUrl), [SQLITE_READONLY_ASYNC_CHILD_ARG], {
+    execArgv: workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined,
+    stdio: ["ignore", "ignore", "ignore", "ipc"],
+  });
+
+  return await new Promise((resolve, reject) => {
+    let settled = false;
+    let result: SqliteReadOnlyWorkerResult | undefined;
+    let exit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+    let disconnected = !worker.connected;
+    const settle = (finish: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      worker.removeAllListeners();
+      finish();
+    };
+    const settleAfterExitAndDisconnect = () => {
+      if (!exit || !disconnected) {
+        return;
+      }
+      settle(() => {
+        if (exit?.code !== 0) {
+          reject(
+            new Error(
+              `SQLite read-only worker exited with ${exit?.signal ? `signal ${exit.signal}` : `code ${exit?.code}`}`,
+            ),
+          );
+        } else if (!result) {
+          reject(new Error("SQLite read-only worker exited without a result"));
+        } else if ("error" in result) {
+          reject(new Error(result.error));
+        } else {
+          resolve(adoptPreparedLocation(result.location));
+        }
+      });
+    };
+    worker.once("message", (message: unknown) => {
+      if (!isSqliteReadOnlyWorkerResult(message)) {
+        worker.kill();
+        settle(() => reject(new Error("SQLite read-only worker returned an invalid result")));
+        return;
+      }
+      result = message;
+    });
+    worker.once("error", (error) => settle(() => reject(error)));
+    worker.once("disconnect", () => {
+      disconnected = true;
+      settleAfterExitAndDisconnect();
+    });
+    worker.once("exit", (code, signal) => {
+      exit = { code, signal };
+      disconnected ||= !worker.connected;
+      settleAfterExitAndDisconnect();
+    });
+    worker.send(pathname, (error) => {
+      if (!error) {
+        return;
+      }
+      worker.kill();
+      settle(() => reject(error));
+    });
+  });
+}
+
+export function prepareSqliteReadOnlyLocationSync(
+  pathname: string,
+): PreparedSqliteReadOnlyLocation {
+  const workerUrl = resolveSqliteReadOnlyWorkerUrl();
+  const result = spawnSync(
+    process.execPath,
+    [
+      ...resolveRuntimeWorkerArgv(workerUrl),
+      SQLITE_READONLY_SYNC_CHILD_ARG,
+      path.resolve(pathname),
+    ],
+    { encoding: "utf8" },
+  );
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      result.stderr.trim() ||
+        `SQLite read-only worker exited with ${result.signal ? `signal ${result.signal}` : `code ${result.status}`}`,
+    );
+  }
+  let message: unknown;
+  try {
+    message = JSON.parse(result.stdout);
+  } catch {
+    throw new Error("SQLite read-only worker returned invalid JSON");
+  }
+  if (!isSqliteReadOnlyWorkerResult(message)) {
+    throw new Error("SQLite read-only worker returned an invalid result");
+  }
+  if ("error" in message) {
+    throw new Error(message.error);
+  }
+  return adoptPreparedLocation(message.location);
+}
+
 async function prepareSqliteSnapshotSource(
   pathname: string,
 ): Promise<PreparedSqliteReadOnlyLocation | undefined> {
@@ -594,7 +721,7 @@ async function prepareSqliteSnapshotSource(
   if (!journal.isFile()) {
     throw new Error(`SQLite rollback journal must be a regular file: ${journalPath}`);
   }
-  return await prepareSqliteReadOnlyLocation(canonicalPath);
+  return await prepareSqliteReadOnlyLocationInProcess(canonicalPath);
 }
 
 export async function withSqliteSnapshotSource<T>(
