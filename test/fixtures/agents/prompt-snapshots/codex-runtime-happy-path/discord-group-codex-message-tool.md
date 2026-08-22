@@ -649,17 +649,6 @@ Full tool overrides: `codex-dynamic-tools.discord-group.json` (base: `codex-dyna
           "description": "Media URL/path. data: use buffer.",
           "type": "string"
         },
-        "mediaUrl": {
-          "description": "Alias for media.",
-          "type": "string"
-        },
-        "mediaUrls": {
-          "description": "Multiple media URLs/paths.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "message": {
           "description": "Text for action=\"send\". A send needs message or another send payload such as media, attachments, or presentation.",
           "type": "string"
