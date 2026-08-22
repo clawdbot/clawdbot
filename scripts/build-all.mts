@@ -349,7 +349,6 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
     "build-stamp",
     "runtime-postbuild-stamp",
     "write-build-info",
-    "write-cli-startup-metadata",
   ],
   cliStartup: [
     "tsdown",
@@ -397,7 +396,6 @@ export const BUILD_ALL_PROFILE_STEP_ENV: Record<string, Record<string, NodeJS.Pr
   sourcePerformance: {
     tsdown: {
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
-      OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
     },
   },
   cliStartup: {

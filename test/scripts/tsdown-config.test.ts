@@ -8,7 +8,10 @@ import {
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
-import { WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID } from "../../scripts/lib/worker-deploy-build-plugin.mts";
+import {
+  WORKER_DEPLOY_CLOSURE_PLUGIN_NAME,
+  WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+} from "../../scripts/lib/worker-deploy-build-plugin.mts";
 import config from "../../tsdown.config.ts";
 
 const configs = Array.isArray(config) ? config : [config];
@@ -137,13 +140,19 @@ describe("tsdown config", () => {
     expect(workerConfig?.plugins).toEqual(
       expect.arrayContaining([expect.objectContaining({ name: "openclaw:worker-deploy" })]),
     );
+    for (const config of [workerConfig, receiverConfig]) {
+      expect(config?.plugins).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: WORKER_DEPLOY_CLOSURE_PLUGIN_NAME }),
+        ]),
+      );
+    }
     expect(workerConfig?.outputOptions).toMatchObject({
       codeSplitting: false,
       assetFileNames: "worker/[name][extname]",
     });
     expect(receiverConfig?.define).toBeUndefined();
     expect(receiverConfig?.alias).toBeUndefined();
-    expect(receiverConfig?.plugins).toBeUndefined();
     expect(receiverConfig?.outputOptions).toEqual({ codeSplitting: false });
 
     const context = {

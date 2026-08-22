@@ -1,5 +1,6 @@
 // Check Cli Bootstrap Imports tests cover check cli bootstrap imports script behavior.
-import { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import fs, { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -36,6 +37,24 @@ function writeGatewayRunChunk(root: string, source = ""): void {
       "function addGatewayRunCommand(cmd) { return cmd; }",
       source,
     ].join("\n"),
+  );
+}
+
+function writeWorkerClosureAttestation(
+  root: string,
+  artifactName: string,
+  source: string,
+  runtimeImports: string[],
+): void {
+  writeFixture(
+    root,
+    `dist/worker/${artifactName}.closure.json`,
+    `${JSON.stringify({
+      version: 1,
+      artifact: artifactName,
+      sha256: createHash("sha256").update(source).digest("hex"),
+      runtimeImports,
+    })}\n`,
   );
 }
 
@@ -96,6 +115,31 @@ describe("check-cli-bootstrap-imports", () => {
     ]);
   });
 
+  it("discovers the gateway run chunk without reading unrelated build output", () => {
+    const root = makeTempRoot();
+    writeFixture(root, "dist/cli/run-main.js", 'await import("../run-gateway-facade.js");');
+    writeFixture(root, "dist/run-gateway-facade.js", 'import "./run-gateway.js";');
+    writeGatewayRunChunk(root);
+    const unrelatedPath = join(root, "dist", "extensions", "unrelated.js");
+    writeFixture(root, "dist/extensions/unrelated.js", "export const unrelated = true;");
+
+    const readPaths: string[] = [];
+    const observedFs = new Proxy(fs, {
+      get(target, property, receiver) {
+        if (property !== "readFileSync") {
+          return Reflect.get(target, property, receiver);
+        }
+        return (filePath: Parameters<typeof fs.readFileSync>[0], ...args: unknown[]) => {
+          readPaths.push(String(filePath));
+          return Reflect.apply(target.readFileSync, target, [filePath, ...args]);
+        };
+      },
+    });
+
+    expect(collectGatewayRunChunkBudgetErrors({ rootDir: root, fs: observedFs })).toEqual([]);
+    expect(readPaths).not.toContain(unrelatedPath);
+  });
+
   it("reports cold static imports in the gateway run chunk", () => {
     const root = makeTempRoot();
     writeGatewayRunChunk(root, 'import "./restart-sentinel-abc123.js";');
@@ -143,6 +187,32 @@ describe("check-cli-bootstrap-imports", () => {
     );
 
     expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([]);
+  });
+
+  it("uses build-owned closure attestations for worker deploy artifacts", () => {
+    const root = makeTempRoot();
+    const workerSource = "this source is intentionally not reparsed";
+    const receiverSource = "export {};\n";
+    writeFixture(root, "dist/worker/worker.mjs", workerSource);
+    writeFixture(root, "dist/worker/workspace-rsync-receiver.mjs", receiverSource);
+    writeWorkerClosureAttestation(root, "worker.mjs", workerSource, ["node:fs"]);
+    writeWorkerClosureAttestation(root, "workspace-rsync-receiver.mjs", receiverSource, [
+      "node:path",
+    ]);
+
+    expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([]);
+  });
+
+  it("rejects worker deploy artifacts that do not match their closure attestation", () => {
+    const root = makeTempRoot();
+    const workerSource = "export {};\n";
+    writeFixture(root, "dist/worker/worker.mjs", `${workerSource}// changed\n`);
+    writeFixture(root, "dist/worker/workspace-rsync-receiver.mjs", "export {};\n");
+    writeWorkerClosureAttestation(root, "worker.mjs", workerSource, []);
+
+    expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toContain(
+      "Worker deploy artifact dist/worker/worker.mjs does not match its closure attestation. Run pnpm build again.",
+    );
   });
 
   it("rejects worker package imports and dependency manifests", () => {

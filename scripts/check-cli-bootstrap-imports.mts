@@ -10,6 +10,12 @@ import {
   WORKER_BUNDLE_ENTRY_PATH,
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
 } from "../src/shared/worker-bundle-hash.js";
+import {
+  hashWorkerDeployArtifactSource,
+  WORKER_DEPLOY_CLOSURE_ATTESTATION_SUFFIX,
+  WORKER_DEPLOY_CLOSURE_ATTESTATION_VERSION,
+  type WorkerDeployClosureAttestation,
+} from "./lib/worker-deploy-build-plugin.mts";
 
 const DEFAULT_ENTRYPOINTS = ["dist/entry.js", "dist/cli/run-main.js"];
 const WORKER_DEPLOY_ENTRYPOINTS = [
@@ -17,6 +23,10 @@ const WORKER_DEPLOY_ENTRYPOINTS = [
   `dist/worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
 ] as const;
 const DEFAULT_GATEWAY_RUN_CHUNK_MAX_BYTES = 70 * 1024;
+const DEFAULT_GATEWAY_RUN_ENTRYPOINT = "dist/cli/run-main.js";
+const GATEWAY_RUN_DISCOVERY_MAX_FILES = 256;
+const GATEWAY_RUN_DISCOVERY_MAX_BYTES = 4 * 1024 * 1024;
+const WORKER_DEPLOY_LEGACY_PARSE_MAX_BYTES = 1024 * 1024;
 const GATEWAY_RUN_CHUNK_MARKER_SETS = [
   ["const GATEWAY_AUTH_MODES", "function addGatewayRunCommand"],
   ["const GATEWAY_RUN_VALUE_KEYS", "function addGatewayRunCommand"],
@@ -281,6 +291,78 @@ function listJsFiles(dirPath: string, fsImpl: typeof fs = fs): string[] {
   return files;
 }
 
+function isGatewayRunChunk(source: string) {
+  return GATEWAY_RUN_CHUNK_MARKER_SETS.some((markers) =>
+    markers.every((marker) => source.includes(marker)),
+  );
+}
+
+function discoverGatewayRunChunk(
+  rootDir: string,
+  fsImpl: typeof fs,
+): { filePath: string; source: string } | undefined {
+  const entrypoint = path.resolve(rootDir, DEFAULT_GATEWAY_RUN_ENTRYPOINT);
+  let entrypointSource: string;
+  try {
+    entrypointSource = fsImpl.readFileSync(entrypoint, "utf8");
+  } catch {
+    return undefined;
+  }
+
+  let specifiers: string[];
+  try {
+    specifiers = listRuntimeImportSpecifiers(entrypointSource);
+  } catch {
+    return undefined;
+  }
+  const roots = specifiers
+    .filter((specifier) => isRelativeSpecifier(specifier))
+    .map((specifier) => resolveRelativeImport(entrypoint, specifier, fsImpl))
+    .filter((filePath): filePath is string => Boolean(filePath))
+    .toSorted((left, right) => {
+      const leftIsRunCommand = path.basename(left).startsWith("run-command-");
+      const rightIsRunCommand = path.basename(right).startsWith("run-command-");
+      return Number(rightIsRunCommand) - Number(leftIsRunCommand) || left.localeCompare(right);
+    });
+  const queue = [...roots].reverse();
+  const visited = new Set<string>();
+  let sourceBytes = 0;
+
+  while (queue.length > 0 && visited.size < GATEWAY_RUN_DISCOVERY_MAX_FILES) {
+    const filePath = queue.pop();
+    if (!filePath || visited.has(filePath)) {
+      continue;
+    }
+    visited.add(filePath);
+
+    let source: string;
+    try {
+      source = fsImpl.readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    sourceBytes += Buffer.byteLength(source, "utf8");
+    if (sourceBytes > GATEWAY_RUN_DISCOVERY_MAX_BYTES) {
+      return undefined;
+    }
+    if (isGatewayRunChunk(source)) {
+      return { filePath, source };
+    }
+
+    for (const specifier of listStaticImportSpecifiers(source).toReversed()) {
+      if (!isRelativeSpecifier(specifier)) {
+        continue;
+      }
+      const resolved = resolveRelativeImport(filePath, specifier, fsImpl);
+      if (resolved && !visited.has(resolved)) {
+        queue.push(resolved);
+      }
+    }
+  }
+
+  return undefined;
+}
+
 /**
  * Collects gateway-run chunk budget errors from built CLI output.
  */
@@ -289,21 +371,20 @@ export function collectGatewayRunChunkBudgetErrors(params: CliBootstrapCheckPara
   const fsImpl = params.fs ?? fs;
   const distDir = path.resolve(rootDir, params.distDir ?? "dist");
   const maxBytes = params.gatewayRunChunkMaxBytes ?? DEFAULT_GATEWAY_RUN_CHUNK_MAX_BYTES;
-  const chunks = [];
+  const discoveredChunk = discoverGatewayRunChunk(rootDir, fsImpl);
+  const chunks = discoveredChunk ? [discoveredChunk] : [];
 
-  for (const filePath of listJsFiles(distDir, fsImpl)) {
-    let source;
-    try {
-      source = fsImpl.readFileSync(filePath, "utf8");
-    } catch {
-      continue;
-    }
-    if (
-      GATEWAY_RUN_CHUNK_MARKER_SETS.some((markers) =>
-        markers.every((marker) => source.includes(marker)),
-      )
-    ) {
-      chunks.push({ filePath, source });
+  if (!discoveredChunk) {
+    for (const filePath of listJsFiles(distDir, fsImpl)) {
+      let source;
+      try {
+        source = fsImpl.readFileSync(filePath, "utf8");
+      } catch {
+        continue;
+      }
+      if (isGatewayRunChunk(source)) {
+        chunks.push({ filePath, source });
+      }
     }
   }
 
@@ -363,11 +444,11 @@ export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParam
   const artifactNames = new Set(
     entrypoints.flatMap((entrypoint) => {
       const name = path.basename(entrypoint);
-      return [name, `${name}.map`];
+      return [name, `${name}.map`, `${name}${WORKER_DEPLOY_CLOSURE_ATTESTATION_SUFFIX}`];
     }),
   );
   const errors: string[] = [];
-  const sources: Array<{ relativeEntrypoint: string; source: string }> = [];
+  const sources: Array<{ entrypoint: string; relativeEntrypoint: string; source: string }> = [];
   for (const entrypoint of entrypoints) {
     const relativeEntrypoint = path.relative(rootDir, entrypoint) || entrypoint;
     try {
@@ -376,6 +457,7 @@ export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParam
         return [`Worker deploy artifact ${relativeEntrypoint} must be a regular file.`];
       }
       sources.push({
+        entrypoint,
         relativeEntrypoint,
         source: fsImpl.readFileSync(entrypoint, "utf8"),
       });
@@ -408,7 +490,65 @@ export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParam
       `Worker deploy artifact directory ${path.relative(rootDir, artifactDir)} is unreadable.`,
     );
   }
-  for (const { relativeEntrypoint, source } of sources) {
+  for (const { entrypoint, relativeEntrypoint, source } of sources) {
+    const attestationPath = `${entrypoint}${WORKER_DEPLOY_CLOSURE_ATTESTATION_SUFFIX}`;
+    let attestationSource: string | undefined;
+    try {
+      const stats = fsImpl.lstatSync(attestationPath);
+      if (stats.isSymbolicLink() || !stats.isFile()) {
+        errors.push(
+          `Worker deploy artifact ${relativeEntrypoint} closure attestation must be a regular file.`,
+        );
+        continue;
+      }
+      attestationSource = fsImpl.readFileSync(attestationPath, "utf8");
+    } catch {
+      if (Buffer.byteLength(source, "utf8") > WORKER_DEPLOY_LEGACY_PARSE_MAX_BYTES) {
+        errors.push(
+          `Worker deploy artifact ${relativeEntrypoint} closure attestation is missing. Run pnpm build first.`,
+        );
+        continue;
+      }
+    }
+
+    if (attestationSource !== undefined) {
+      let attestation: WorkerDeployClosureAttestation;
+      try {
+        const parsed = JSON.parse(attestationSource) as Partial<WorkerDeployClosureAttestation>;
+        if (
+          parsed.version !== WORKER_DEPLOY_CLOSURE_ATTESTATION_VERSION ||
+          parsed.artifact !== path.basename(entrypoint) ||
+          typeof parsed.sha256 !== "string" ||
+          !Array.isArray(parsed.runtimeImports) ||
+          parsed.runtimeImports.some((specifier) => typeof specifier !== "string")
+        ) {
+          throw new Error("unexpected schema");
+        }
+        attestation = parsed as WorkerDeployClosureAttestation;
+      } catch (error) {
+        errors.push(
+          `Worker deploy artifact ${relativeEntrypoint} closure attestation is invalid: ${
+            error instanceof Error ? error.message : String(error)
+          }.`,
+        );
+        continue;
+      }
+      if (attestation.sha256 !== hashWorkerDeployArtifactSource(source)) {
+        errors.push(
+          `Worker deploy artifact ${relativeEntrypoint} does not match its closure attestation. Run pnpm build again.`,
+        );
+        continue;
+      }
+      for (const specifier of attestation.runtimeImports) {
+        if (!isBuiltinSpecifier(specifier)) {
+          errors.push(
+            `Worker deploy artifact ${relativeEntrypoint} retains runtime import "${specifier}" instead of bundling it.`,
+          );
+        }
+      }
+      continue;
+    }
+
     try {
       for (const specifier of listRuntimeImportSpecifiers(source)) {
         if (isBuiltinSpecifier(specifier)) {

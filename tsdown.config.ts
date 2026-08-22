@@ -25,6 +25,7 @@ import {
 import { tsdownPackageOutputRoot } from "./scripts/lib/tsdown-output-roots.mts";
 import {
   createWorkerDeployBuildPlugin,
+  createWorkerDeployClosurePlugin,
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
 } from "./scripts/lib/worker-deploy-build-plugin.mts";
 
@@ -198,7 +199,11 @@ function workerDeployBuildConfig(): UserConfig {
     fixedExtension: false,
     outExtensions: () => ({ js: ".mjs", dts: ".d.ts" }),
     outputOptions: { codeSplitting: false, assetFileNames: "worker/[name][extname]" },
-    plugins: [createStateSchemaInlinePlugin(), createWorkerDeployBuildPlugin()],
+    plugins: [
+      createStateSchemaInlinePlugin(),
+      createWorkerDeployBuildPlugin(),
+      createWorkerDeployClosurePlugin(),
+    ],
     shims: true,
     sourcemap: OUTPUT_SOURCE_MAPS,
     inputOptions: (options) => buildInputOptions(options, { bundleAllDependencies: true }),
@@ -219,6 +224,7 @@ function workerRsyncReceiverBuildConfig(): UserConfig {
     fixedExtension: false,
     outExtensions: () => ({ js: ".mjs", dts: ".d.ts" }),
     outputOptions: { codeSplitting: false },
+    plugins: [createWorkerDeployClosurePlugin()],
     shims: true,
     sourcemap: OUTPUT_SOURCE_MAPS,
     inputOptions: (options) => buildInputOptions(options, { bundleAllDependencies: true }),

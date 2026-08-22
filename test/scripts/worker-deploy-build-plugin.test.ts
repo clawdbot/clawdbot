@@ -3,6 +3,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createWorkerDeployBuildPlugin,
+  createWorkerDeployClosurePlugin,
+  hashWorkerDeployArtifactSource,
+  WORKER_DEPLOY_CLOSURE_ATTESTATION_SUFFIX,
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
 } from "../../scripts/lib/worker-deploy-build-plugin.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -119,5 +122,62 @@ describe("worker deploy build plugin", () => {
     expect(() =>
       plugin.transform.call({ error: fail }, "changed upstream source", coreBundlePath),
     ).toThrow("playwright-core package bootstrap changed");
+  });
+
+  it("attests final worker closure from bundle-owned import metadata", () => {
+    const plugin = createWorkerDeployClosurePlugin();
+    const emitted: Array<{ type: "asset"; fileName: string; source: string }> = [];
+    const code = 'import fs from "node:fs";\nvoid fs;\n';
+
+    plugin.generateBundle.call(
+      {
+        emitFile(file) {
+          emitted.push(file);
+          return "closure-attestation";
+        },
+        error: fail,
+      },
+      {},
+      {
+        "worker/worker.mjs": {
+          type: "chunk",
+          fileName: "worker/worker.mjs",
+          code,
+          imports: ["node:fs", "node:fs"],
+          dynamicImports: ["worker/worker.mjs", "node:path"],
+        },
+      },
+    );
+
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]?.fileName).toBe(
+      `worker/worker.mjs${WORKER_DEPLOY_CLOSURE_ATTESTATION_SUFFIX}`,
+    );
+    expect(JSON.parse(emitted[0]?.source ?? "null")).toEqual({
+      version: 1,
+      artifact: "worker.mjs",
+      sha256: hashWorkerDeployArtifactSource(code),
+      runtimeImports: ["node:fs", "node:path"],
+    });
+  });
+
+  it("rejects non-builtin worker imports before emitting closure evidence", () => {
+    const plugin = createWorkerDeployClosurePlugin();
+
+    expect(() =>
+      plugin.generateBundle.call(
+        { emitFile: () => "unused", error: fail },
+        {},
+        {
+          "worker/worker.mjs": {
+            type: "chunk",
+            fileName: "worker/worker.mjs",
+            code: 'import "left-pad";\n',
+            imports: ["left-pad"],
+            dynamicImports: [],
+          },
+        },
+      ),
+    ).toThrow('retains runtime import "left-pad"');
   });
 });
