@@ -12,11 +12,7 @@ import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { redactCodeModeCatalogIds, type CodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { boundCodeModeValue } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
-import {
-  resolveCodeModeConfig,
-  type PendingBridgeRequest,
-  type SettledBridgeRequest,
-} from "./code-mode-runtime.js";
+import type { PendingBridgeRequest, SettledBridgeRequest } from "./code-mode-runtime.js";
 import { readCodeModeSkill } from "./code-mode-skills.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
@@ -384,6 +380,7 @@ export async function runBridgeRequest(params: {
   parentToolCallId: string;
   codeModeRunId: string;
   maxOutputBytes: number;
+  remainingMs: number;
   ctx: ToolSearchToolContext;
   request: PendingBridgeRequest;
   signal?: AbortSignal;
@@ -452,13 +449,13 @@ export async function runBridgeRequest(params: {
           input.background !== true &&
           input.yieldMs === undefined
         ) {
-          const timeoutMs = resolveCodeModeConfig(
-            params.ctx.runtimeConfig ?? params.ctx.config,
-            params.ctx.agentId,
-          ).timeoutMs;
           // The shell's 10s default equals Code Mode's default budget. Yield
-          // earlier so the guest can receive the process handle inline.
-          input = { ...input, yieldMs: Math.max(10, Math.min(1_000, Math.floor(timeoutMs / 4))) };
+          // within the remaining shared deadline so late sequential calls can
+          // still return their process handle and resume the guest inline.
+          input = {
+            ...input,
+            yieldMs: Math.max(1, Math.min(1_000, Math.floor(params.remainingMs / 4))),
+          };
         }
         const called = await params.runtime.callExactId(binding.id, input, {
           parentToolCallId: params.parentToolCallId,
