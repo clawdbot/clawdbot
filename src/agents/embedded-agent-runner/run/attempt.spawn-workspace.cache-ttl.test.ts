@@ -35,7 +35,7 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
     expect(sessionManager.appendCustomEntry).not.toHaveBeenCalled();
   });
 
-  it("appends cache-ttl when no compaction completed during the attempt", () => {
+  it("appends cache-ttl for a direct OpenAI attempt when no compaction completed", () => {
     const sessionManager = {
       appendCustomEntry: vi.fn(),
     };
@@ -52,9 +52,9 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
           },
         },
       },
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-20250514",
-      modelApi: "anthropic-messages",
+      provider: "openai",
+      modelId: "gpt-4o",
+      modelApi: "openai-responses",
       isCacheTtlEligibleProvider: () => true,
       now: 123,
     });
@@ -62,8 +62,8 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
     expect(appended).toBe(true);
     expect(sessionManager.appendCustomEntry).toHaveBeenCalledWith(ATTEMPT_CACHE_TTL_CUSTOM_TYPE, {
       timestamp: 123,
-      provider: "anthropic",
-      modelId: "claude-sonnet-4-20250514",
+      provider: "openai",
+      modelId: "gpt-4o",
     });
   });
 });

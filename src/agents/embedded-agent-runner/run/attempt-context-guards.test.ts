@@ -214,9 +214,9 @@ describe("installEmbeddedAttemptContextGuards", () => {
     input.attempt = {
       ...input.attempt,
       config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } } as never,
-      model: { api: "anthropic-messages", contextWindow: 2_048 },
-      modelId: "claude-sonnet-4-6",
-      provider: "anthropic",
+      model: { api: "openai-responses", contextWindow: 2_048 },
+      modelId: "gpt-4o",
+      provider: "openai",
     };
     const originalTransform = vi.fn(async (messages: AgentMessage[]) => messages);
     input.activeSession.agent.transformContext = originalTransform;
@@ -249,15 +249,15 @@ describe("installEmbeddedAttemptContextGuards", () => {
 
     const guards = installEmbeddedAttemptContextGuards(input as never);
     expect(hoisted.isCacheTtlEligibleProvider).toHaveBeenCalledExactlyOnceWith(
-      "anthropic",
-      "claude-sonnet-4-6",
-      "anthropic-messages",
+      "openai",
+      "gpt-4o",
+      "openai-responses",
     );
     expect(hoisted.readLastCacheTtlTimestamp).toHaveBeenCalledExactlyOnceWith(
       input.sessionManager,
       {
-        provider: "anthropic",
-        modelId: "claude-sonnet-4-6",
+        provider: "openai",
+        modelId: "gpt-4o",
       },
     );
     await input.activeSession.agent.transformContext?.(messages, new AbortController().signal);

@@ -494,6 +494,19 @@ describe("openai plugin", () => {
     ).toStrictEqual([]);
   });
 
+  it("registers direct OpenAI cache-TTL eligibility", async () => {
+    const { providers } = await registerOpenAIPluginWithHook();
+    const openaiProvider = requireRegisteredProvider(providers, "openai");
+
+    expect(
+      openaiProvider.isCacheTtlEligible?.({
+        provider: "openai",
+        modelId: "gpt-4o",
+        modelApi: "openai-responses",
+      }),
+    ).toBe(true);
+  });
+
   it("registers GPT-5 system prompt contributions when the friendly overlay is enabled", async () => {
     const { on, providers } = await registerOpenAIPluginWithHook({
       pluginConfig: { personality: "friendly" },

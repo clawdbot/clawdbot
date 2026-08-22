@@ -15,6 +15,9 @@ vi.mock("../../plugins/provider-runtime.js", async () => {
       if (params.context.provider === "anthropic") {
         return true;
       }
+      if (params.context.provider === "openai") {
+        return true;
+      }
       if (params.context.provider === "moonshot" || params.context.provider === "zai") {
         return true;
       }
@@ -53,8 +56,8 @@ describe("isCacheTtlEligibleProvider", () => {
     expect(isCacheTtlEligibleProvider("openrouter", "zai/glm-5")).toBe(true);
   });
 
-  it("rejects unsupported providers and models", () => {
-    expect(isCacheTtlEligibleProvider("openai", "gpt-4o")).toBe(false);
+  it("uses the direct OpenAI provider hook without widening OpenRouter", () => {
+    expect(isCacheTtlEligibleProvider("openai", "gpt-4o", "openai-responses")).toBe(true);
     expect(isCacheTtlEligibleProvider("openrouter", "openai/gpt-4o")).toBe(false);
   });
 
