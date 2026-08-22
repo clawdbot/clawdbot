@@ -1,6 +1,6 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { selectPreferredLocalModelId } from "openclaw/plugin-sdk/provider-model-shared";
-import { OLLAMA_CLOUD_DEFAULT_MODELS } from "./defaults.js";
+import { normalizeOllamaCloudModelId, OLLAMA_CLOUD_DEFAULT_MODELS } from "./defaults.js";
 import {
   buildDefaultOllamaCloudModelDefinition,
   buildOllamaModelDefinition,
@@ -126,8 +126,13 @@ export function buildOllamaModelsConfig(
 ) {
   return modelNames.map((name) => {
     const discovered = discoveredModelsByName?.get(name);
-    const defaultModel = defaultModels.find((model) => model.id === name);
-    if (defaultModel && !discovered) {
+    // Cloud suggestions arrive suffixed (`kimi-k3:cloud`); the default table is keyed bare.
+    // Match through the suffix for context/capabilities, but keep the requested id: the
+    // suffixed spelling is what gets written into config.
+    const defaultModel = defaultModels.find(
+      (model) => model.id === normalizeOllamaCloudModelId(name),
+    );
+    if (defaultModel && !discovered && defaultModel.id === name) {
       return buildDefaultOllamaCloudModelDefinition(defaultModel);
     }
     const capabilities =

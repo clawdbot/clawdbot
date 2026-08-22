@@ -61,6 +61,43 @@ function closeMenuAfterOwnDropdownHide(event: Event, onClose: (restoreFocus?: bo
   onClose(consumeDropdownKeyboardDismissal(event));
 }
 
+function moveSidebarMenuFocus(event: KeyboardEvent): boolean {
+  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+    return false;
+  }
+  const dropdown = (event.currentTarget as HTMLElement).closest("wa-dropdown");
+  const items = [
+    ...(dropdown?.querySelectorAll<HTMLElement & { active: boolean }>(
+      ":scope > wa-dropdown-item:not([disabled])",
+    ) ?? []),
+  ];
+  const footer = dropdown?.querySelector<HTMLElement>(".sidebar-identity-menu__footer");
+  const controls = [
+    ...items,
+    ...(footer?.querySelectorAll<HTMLElement>("a[href], button:not([disabled])") ?? []),
+  ];
+  const current = event.target instanceof HTMLElement ? event.target : null;
+  const index = current ? controls.indexOf(current) : -1;
+  if (footer && index < 0) {
+    return false;
+  }
+  const direction = event.key === "ArrowDown" ? 1 : -1;
+  const target =
+    index < 0
+      ? items.at(direction === 1 ? 0 : -1)
+      : controls[(index + direction + controls.length) % controls.length];
+  if (!target || (footer && !footer.contains(current) && !footer.contains(target))) {
+    return false;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  // Native footer actions are outside Web Awesome's roving item list; reset
+  // its active row on both crossings so reverse navigation cannot skip one.
+  items.forEach((item) => (item.active = item === target));
+  target.focus({ preventScroll: true });
+  return true;
+}
+
 type AgentMenuAgent = {
   id: string;
   name?: string;
@@ -321,23 +358,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
                         @input=${(event: Event) =>
                           params.onFilterChange((event.target as HTMLInputElement).value)}
                         @keydown=${(event: KeyboardEvent) => {
-                          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            const dropdown = (event.currentTarget as HTMLElement).closest(
-                              "wa-dropdown",
-                            );
-                            const items = Array.from(dropdown?.children ?? []).filter(
-                              (child): child is HTMLElement & { active: boolean } =>
-                                child instanceof HTMLElement &&
-                                child.localName === "wa-dropdown-item" &&
-                                !child.hasAttribute("disabled"),
-                            );
-                            const target = event.key === "ArrowDown" ? items.at(0) : items.at(-1);
-                            if (target) {
-                              items.forEach((item) => (item.active = item === target));
-                              target.focus({ preventScroll: true });
-                            }
+                          if (moveSidebarMenuFocus(event)) {
                             return;
                           }
                           // Keep editing keys out of Web Awesome's document-level
@@ -438,8 +459,11 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
               break;
           }
         }}
-        @keydown=${(event: KeyboardEvent) =>
-          trackDropdownKeyboardDismissal(event, params.onTabAway)}
+        @keydown=${(event: KeyboardEvent) => {
+          if (!moveSidebarMenuFocus(event)) {
+            trackDropdownKeyboardDismissal(event, params.onTabAway);
+          }
+        }}
         @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
       >
         <button

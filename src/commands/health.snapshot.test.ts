@@ -1032,8 +1032,8 @@ describe("collectGatewayHealthSnapshot", () => {
     await getHealthSnapshot({ timeoutMs: 10, probe: false });
 
     expect(listHealthSessionEntriesCalls).toEqual([
-      { agentId: "main", storePath: "/tmp/sessions.json" },
-      { agentId: "ops", storePath: "/tmp/sessions.json" },
+      { agentId: "main", clone: false, projection: "list", storePath: "/tmp/sessions.json" },
+      { agentId: "ops", clone: false, projection: "list", storePath: "/tmp/sessions.json" },
     ]);
   });
 });

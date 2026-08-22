@@ -1,17 +1,16 @@
 // Gateway auth token resolution applies explicit/config/SecretRef/env
 // precedence with caller-controlled env fallback behavior.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { trimToUndefined } from "./credentials.js";
 import {
-  resolveConfiguredSecretInputString,
+  resolveConfiguredSecretInputWithFallback,
   type SecretInputUnresolvedReasonStyle,
 } from "./resolve-configured-secret-input-string.js";
 
 // Single-token resolver for local gateway auth consumers that need to know
 // whether the winning token came from explicit args, config, SecretRef, or env.
 type GatewayAuthTokenResolutionSource = "explicit" | "config" | "secretRef" | "env";
-type GatewayAuthTokenEnvFallback = "never" | "no-secret-ref" | "always";
+type GatewayAuthTokenEnvFallback = "never" | "no-secret-ref";
 
 /** Resolves gateway.auth.token with configurable env fallback and SecretRef diagnostics. */
 export async function resolveGatewayAuthToken(params: {
@@ -35,58 +34,22 @@ export async function resolveGatewayAuthToken(params: {
     };
   }
 
-  const tokenInput = params.cfg.gateway?.auth?.token;
-  const tokenRef = resolveSecretInputRef({
-    value: tokenInput,
-    defaults: params.cfg.secrets?.defaults,
-  }).ref;
-  const envFallback = params.envFallback ?? "always";
-  const envToken = trimToUndefined(params.env.OPENCLAW_GATEWAY_TOKEN);
-
-  if (!tokenRef) {
-    const configToken = trimToUndefined(tokenInput);
-    if (configToken) {
-      return {
-        token: configToken,
-        source: "config",
-        secretRefConfigured: false,
-      };
-    }
-    if (envFallback !== "never" && envToken) {
-      return {
-        token: envToken,
-        source: "env",
-        secretRefConfigured: false,
-      };
-    }
-    return { secretRefConfigured: false };
-  }
-
-  const resolved = await resolveConfiguredSecretInputString({
+  const resolved = await resolveConfiguredSecretInputWithFallback({
     config: params.cfg,
     env: params.env,
-    value: tokenInput,
+    value: params.cfg.gateway?.auth?.token,
     path: "gateway.auth.token",
     unresolvedReasonStyle: params.unresolvedReasonStyle,
+    ...(params.envFallback !== "never"
+      ? { readFallback: () => params.env.OPENCLAW_GATEWAY_TOKEN }
+      : {}),
   });
-  if (resolved.value) {
-    return {
-      token: resolved.value,
-      source: "secretRef",
-      secretRefConfigured: true,
-    };
-  }
-  // Env fallback after a configured SecretRef is intentionally opt-in so
-  // callers can fail closed when unresolved secrets should block startup.
-  if (envFallback === "always" && envToken) {
-    return {
-      token: envToken,
-      source: "env",
-      secretRefConfigured: true,
-    };
-  }
   return {
-    secretRefConfigured: true,
-    unresolvedRefReason: resolved.unresolvedRefReason,
+    ...(resolved.value ? { token: resolved.value } : {}),
+    ...(resolved.source
+      ? { source: resolved.source === "fallback" ? ("env" as const) : resolved.source }
+      : {}),
+    secretRefConfigured: resolved.secretRefConfigured,
+    ...(resolved.unresolvedRefReason ? { unresolvedRefReason: resolved.unresolvedRefReason } : {}),
   };
 }

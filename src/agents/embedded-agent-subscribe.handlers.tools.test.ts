@@ -1415,7 +1415,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     });
   });
 
-  it("preserves an unresolved mutation across a later read failure", async () => {
+  it("records the latest failure regardless of mutation classification", async () => {
     const { ctx } = createTestContext();
 
     await executeTool(ctx, {
@@ -1435,9 +1435,9 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     });
 
     expect(ctx.state.lastToolError).toMatchObject({
-      toolName: "write",
-      error: "permission denied",
-      mutatingAction: true,
+      toolName: "read",
+      error: "file not found",
+      mutatingAction: false,
     });
   });
 
@@ -1466,46 +1466,6 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
         oldText: "beta",
         newText: "beta fixed",
       },
-      isError: false,
-      result: { ok: true },
-    });
-
-    expect(ctx.state.lastToolError).toBeUndefined();
-  });
-
-  it("clears a failed multi-file patch after every target is recovered", async () => {
-    const { ctx } = createTestContext();
-
-    await executeTool(ctx, {
-      toolName: "apply_patch",
-      toolCallId: "tool-patch-failed",
-      args: {
-        input: [
-          " *** Begin Patch",
-          " *** Add File: /tmp/day-1.md",
-          "+new",
-          " *** Add File: /tmp/day-2.md",
-          "+new",
-          " *** End Patch",
-        ].join("\n"),
-      },
-      isError: true,
-      result: { error: "Path escapes sandbox root" },
-    });
-
-    await executeTool(ctx, {
-      toolName: "write",
-      toolCallId: "tool-write-recovery",
-      args: { path: "/tmp/day-2.md", content: "new" },
-      isError: false,
-      result: { ok: true },
-    });
-    expect(ctx.state.lastToolError?.toolName).toBe("apply_patch");
-
-    await executeTool(ctx, {
-      toolName: "edit",
-      toolCallId: "tool-edit-recovery",
-      args: { path: "/tmp/day-1.md", edits: [{ oldText: "old", newText: "new" }] },
       isError: false,
       result: { ok: true },
     });
@@ -2058,9 +2018,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
 
     expect(ctx.state.lastToolError).toMatchObject({
       toolName: "memory_store",
-      ownerKey,
       mutatingAction: true,
-      actionFingerprint: expect.stringContaining(`owner=${ownerKey}|args=`),
     });
   });
 

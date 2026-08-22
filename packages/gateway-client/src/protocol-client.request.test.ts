@@ -23,7 +23,7 @@ type RequestConnection = {
 function createRequestHarness(options?: {
   createRequestId?: () => string;
   requestTimeoutMs?: number;
-  onRequestTiming?: (timing: GatewayProtocolRequestTiming) => void;
+  onRequestTiming?: (this: unknown, timing: GatewayProtocolRequestTiming) => void;
   onCallbackError?: (label: string, error: unknown) => void;
   send?: (frame: RequestFrame) => void;
   nowMs?: () => number;
@@ -279,8 +279,33 @@ describe("GatewayProtocolClient requests", () => {
 
   it("isolates callbacks while preserving accepted/final settlement and timing", async () => {
     let nowMs = 10;
-    const onRequestTiming = vi.fn<(timing: GatewayProtocolRequestTiming) => void>();
-    const onCallbackError = vi.fn<(label: string, error: unknown) => void>();
+    const trace: string[] = [];
+    const sentError = new Error("sent callback failed");
+    const acceptedError = new Error("accepted callback failed");
+    const timingError = new Error("timing callback failed");
+    const timingReceivers: unknown[] = [];
+    let timing: GatewayProtocolRequestTiming | undefined;
+    let callPropertyReads = 0;
+    const onRequestTiming = new Proxy(
+      function (this: unknown, value: GatewayProtocolRequestTiming) {
+        trace.push("timing");
+        timingReceivers.push(this);
+        timing = value;
+        throw timingError;
+      },
+      {
+        get(target, property, receiver) {
+          if (property === "call") {
+            callPropertyReads += 1;
+            throw new Error("timing callback .call must not be read");
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+    const onCallbackError = vi.fn<(label: string, error: unknown) => void>((label) => {
+      trace.push(`error:${label}`);
+    });
     const { client, connections } = createRequestHarness({
       nowMs: () => nowMs,
       onRequestTiming,
@@ -297,10 +322,12 @@ describe("GatewayProtocolClient requests", () => {
         timeoutMs: null,
         expectFinal: true,
         onSent: () => {
-          throw new Error("sent callback failed");
+          trace.push("sent");
+          throw sentError;
         },
         onAccepted: () => {
-          throw new Error("accepted callback failed");
+          trace.push("accepted");
+          throw acceptedError;
         },
       },
     );
@@ -311,8 +338,25 @@ describe("GatewayProtocolClient requests", () => {
     respond(connection, frame.id, { status: "ok" });
 
     await expect(request).resolves.toEqual({ status: "ok" });
-    expect(onCallbackError.mock.calls.map(([label]) => label)).toEqual(["sent", "accepted"]);
-    expect(onRequestTiming).toHaveBeenCalledExactlyOnceWith({
+    trace.push("resolved");
+    expect(trace).toEqual([
+      "sent",
+      "error:sent",
+      "accepted",
+      "error:accepted",
+      "timing",
+      "error:request timing",
+      "resolved",
+    ]);
+    expect(onCallbackError.mock.calls).toEqual([
+      ["sent", sentError],
+      ["accepted", acceptedError],
+      ["request timing", timingError],
+    ]);
+    expect(callPropertyReads).toBe(0);
+    expect(timingReceivers).toHaveLength(1);
+    expect(timingReceivers[0]).toMatchObject({ onTiming: onRequestTiming });
+    expect(timing).toEqual({
       id: frame.id,
       method: "agent",
       ok: true,
@@ -320,6 +364,102 @@ describe("GatewayProtocolClient requests", () => {
       startedAtMs: 10,
       endedAtMs: 25,
     });
+    client.stop();
+  });
+
+  it("isolates a timing accessor installed through the callback receiver", async () => {
+    const timingAccessorError = new Error("timing accessor failed");
+    const trace: string[] = [];
+    const timingReceivers: unknown[] = [];
+    const onRequestTiming = function (this: unknown, timing: GatewayProtocolRequestTiming) {
+      trace.push(`timing:${timing.method}`);
+      timingReceivers.push(this);
+    };
+    const onCallbackError = vi.fn<(label: string, error: unknown) => void>((label) => {
+      trace.push(`error:${label}`);
+    });
+    const { client, connections } = createRequestHarness({ onRequestTiming, onCallbackError });
+    const connection = connections[0];
+    if (!connection) {
+      throw new Error("expected request connection");
+    }
+
+    const first = client.request("first", {}, { timeoutMs: null });
+    respond(connection, latestFrame(connection).id, { first: true });
+    await expect(first).resolves.toEqual({ first: true });
+    trace.push("resolved:first");
+    const timingReceiver = timingReceivers[0];
+    if (!timingReceiver || typeof timingReceiver !== "object") {
+      throw new Error("expected timing callback receiver");
+    }
+    Object.defineProperty(timingReceiver, "onTiming", {
+      configurable: true,
+      get: () => {
+        trace.push("get:onTiming");
+        throw timingAccessorError;
+      },
+    });
+
+    const second = client.request("second", {}, { timeoutMs: null });
+    respond(connection, latestFrame(connection).id, { second: true });
+    await expect(second).resolves.toEqual({ second: true });
+    trace.push("resolved:second");
+
+    expect(trace).toEqual([
+      "timing:first",
+      "resolved:first",
+      "get:onTiming",
+      "error:request timing",
+      "resolved:second",
+    ]);
+    expect(onCallbackError).toHaveBeenCalledExactlyOnceWith("request timing", timingAccessorError);
+    expect(client.hasPendingRequests).toBe(false);
+    client.stop();
+  });
+
+  it("isolates a falsy timing callback installed through the callback receiver", async () => {
+    const trace: string[] = [];
+    const callbackErrors: unknown[] = [];
+    const onRequestTiming = function (this: unknown, timing: GatewayProtocolRequestTiming) {
+      trace.push(`timing:${timing.method}`);
+      if (!this || typeof this !== "object") {
+        throw new Error("expected timing callback receiver");
+      }
+      Object.defineProperty(this, "onTiming", { configurable: true, value: false });
+    };
+    const onCallbackError = vi.fn<(label: string, error: unknown) => void>((label, error) => {
+      trace.push(`error:${label}`);
+      callbackErrors.push(error);
+    });
+    const { client, connections } = createRequestHarness({ onRequestTiming, onCallbackError });
+    const connection = connections[0];
+    if (!connection) {
+      throw new Error("expected request connection");
+    }
+
+    const firstPayload = { first: true };
+    const first = client.request("first", {}, { timeoutMs: null });
+    respond(connection, latestFrame(connection).id, firstPayload);
+    await expect(first).resolves.toEqual(firstPayload);
+    trace.push("resolved:first");
+
+    const secondPayload = { second: true };
+    const second = client.request("second", {}, { timeoutMs: null });
+    respond(connection, latestFrame(connection).id, secondPayload);
+    await expect(second).resolves.toEqual(secondPayload);
+    trace.push("resolved:second");
+
+    expect(trace).toEqual([
+      "timing:first",
+      "resolved:first",
+      "error:request timing",
+      "resolved:second",
+    ]);
+    expect(callbackErrors).toHaveLength(1);
+    const callbackError = callbackErrors[0];
+    expect(callbackError).toBeInstanceOf(TypeError);
+    expect(onCallbackError).toHaveBeenCalledExactlyOnceWith("request timing", callbackError);
+    expect(client.hasPendingRequests).toBe(false);
     client.stop();
   });
 

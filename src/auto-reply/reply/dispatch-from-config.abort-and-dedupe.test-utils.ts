@@ -1338,6 +1338,119 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).toHaveBeenCalledTimes(1);
   });
 
+  it("releases inbound dedupe when durable ingress aborts before adoption", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "before_dispatch") as () => boolean,
+    );
+    let markHookStarted!: () => void;
+    const hookStarted = new Promise<void>((resolve) => {
+      markHookStarted = resolve;
+    });
+    let releaseHook!: () => void;
+    const hookRelease = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
+    hookMocks.runner.runBeforeDispatch
+      .mockImplementationOnce(async () => {
+        markHookStarted();
+        await hookRelease;
+        return undefined;
+      })
+      .mockResolvedValue(undefined);
+
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "user:1",
+      SessionKey: "agent:main:telegram:direct:1",
+      MessageSid: "pre-adoption-retry",
+      BodyForAgent: "retry me",
+    });
+    const abortController = new AbortController();
+    const replyResolver = vi.fn(async () => ({ text: "retried" }) satisfies ReplyPayload);
+    const turnAdoptionLifecycle = {
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onSettled: vi.fn(),
+    };
+
+    const firstDispatch = dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyOptions: {
+        abortSignal: abortController.signal,
+        turnAdoptionLifecycle,
+      },
+      replyResolver,
+    });
+    await hookStarted;
+    abortController.abort(new Error("handler-timeout"));
+    releaseHook();
+    await expect(firstDispatch).resolves.toMatchObject({ queuedFinal: false });
+    expect(replyResolver).not.toHaveBeenCalled();
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyOptions: { turnAdoptionLifecycle },
+      replyResolver,
+    });
+    expect(replyResolver).toHaveBeenCalledOnce();
+  });
+
+  it("retains inbound dedupe when durable ingress aborts after adoption", async () => {
+    setNoAbort();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "user:1",
+      SessionKey: "agent:main:telegram:direct:1",
+      MessageSid: "post-adoption-abort",
+      BodyForAgent: "run once",
+    });
+    const turnAdoptionLifecycle = {
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onSettled: vi.fn(),
+    };
+    const firstReplyResolver = vi.fn(
+      async (_ctx: MsgContext, opts?: GetReplyOptions): Promise<ReplyPayload | undefined> => {
+        await opts?.turnAdoptionLifecycle?.onAdopted();
+        const operation = (
+          opts as { replyOperation?: { abortForRestart: () => boolean } } | undefined
+        )?.replyOperation;
+        expect(operation?.abortForRestart()).toBe(true);
+        return await new Promise<never>(() => {});
+      },
+    );
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyOptions: { turnAdoptionLifecycle },
+      replyResolver: firstReplyResolver,
+    });
+    expect(turnAdoptionLifecycle.onAdopted).toHaveBeenCalledOnce();
+
+    const duplicateReplyResolver = vi.fn(
+      async () => ({ text: "duplicate" }) satisfies ReplyPayload,
+    );
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyOptions: { turnAdoptionLifecycle },
+      replyResolver: duplicateReplyResolver,
+    });
+    expect(duplicateReplyResolver).not.toHaveBeenCalled();
+  });
+
   it("keeps message-tool-only delivery mode on duplicate inbound returns", async () => {
     setNoAbort();
     const cfg = {

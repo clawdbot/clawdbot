@@ -118,7 +118,7 @@ describe("Where chip", () => {
       cloudProfiles: [],
       cloudProfileId: "",
       deviceId: "",
-      deviceDisabledReason: "Needs the embedded runtime",
+      deviceDisabledReason: "This runtime does not support paired devices",
     });
     const container = document.createElement("div");
     render(
@@ -146,7 +146,90 @@ describe("Where chip", () => {
 
     const device = container.querySelector<HTMLButtonElement>('[data-value="device:macbook"]');
     expect(device?.disabled).toBe(true);
-    expect(device?.textContent).toContain("Needs the embedded runtime");
-    expect(device?.title).toBe("Needs the embedded runtime");
+    expect(device?.textContent).toContain("This runtime does not support paired devices");
+    expect(device?.title).toBe("This runtime does not support paired devices");
   });
+
+  it.each([
+    {
+      name: "allows enabled remote execution without a free worker slot",
+      devicePlacement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+      workerSlots: { total: 1, available: 0 },
+      invocableCommands: ["codex.exec-server.stdio.v1"],
+      disabled: false,
+    },
+    {
+      name: "keeps worker execution capacity-gated",
+      devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+      workerSlots: { total: 1, available: 0 },
+      invocableCommands: [],
+      disabled: true,
+      reason: /worker slots/i,
+    },
+    {
+      name: "disables a declared remote command that the Gateway has not enabled",
+      devicePlacement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+      workerSlots: { total: 1, available: 1 },
+      invocableCommands: [],
+      disabled: true,
+      reason: /enable|approv/i,
+    },
+  ])(
+    "$name in the New Session picker",
+    ({ devicePlacement, workerSlots, invocableCommands, disabled, reason }) => {
+      const state = resolveWhereChip({
+        environments: [
+          {
+            id: "node:runner",
+            type: "node",
+            label: "Build runner",
+            status: "available",
+            sessionHost: true,
+            workerSlots,
+            capabilities: ["codex.exec-server.stdio.v1"],
+            invocableCommands,
+          },
+        ],
+        cloudProfiles: [],
+        cloudProfileId: "",
+        deviceId: "",
+        devicePlacement,
+      });
+      const container = document.createElement("div");
+      render(
+        renderWhereChip({
+          state,
+          gatewayName: "",
+          cloudProfileId: "",
+          deviceId: "",
+          worktreeAvailable: true,
+          submitting: false,
+          pendingPlacement: false,
+          popoverOpen: true,
+          popoverHiding: false,
+          isAdmin: true,
+          onGuardTransition: vi.fn(),
+          onPopoverShow: vi.fn(),
+          onPopoverHide: vi.fn(),
+          onPopoverAfterHide: vi.fn(),
+          onSelectDevice: vi.fn(),
+          onSelectCloudProfile: vi.fn(),
+          onConnectMachine: vi.fn(),
+        }),
+        container,
+      );
+
+      const device = container.querySelector<HTMLButtonElement>('[data-value="device:runner"]');
+      expect(device?.disabled).toBe(disabled);
+      if (reason) {
+        expect(device?.title).toMatch(reason);
+      }
+    },
+  );
 });

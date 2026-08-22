@@ -514,6 +514,7 @@ export function reconcileSessionHistory(
   row: GatewaySessionRow | undefined,
   defaults: SessionsListResult["defaults"] | undefined,
   options: SessionReconcileOptions = {},
+  preserveMatchingExistingRow = false,
 ): SessionsListResult | null {
   if (!row?.key) {
     return result;
@@ -553,12 +554,15 @@ export function reconcileSessionHistory(
   const existing = result.sessions.find((candidate) =>
     matchesExistingSession(candidate, session, selectedGlobalAgentId),
   );
-  if (isOlderSessionSnapshot(session, existing)) {
-    return result;
-  }
   const nextDefaults = defaults
     ? preserveRicherThinkingMetadata(defaults, result.defaults)
     : result.defaults;
+  if (preserveMatchingExistingRow && existing) {
+    return defaults ? { ...result, defaults: nextDefaults } : result;
+  }
+  if (isOlderSessionSnapshot(session, existing)) {
+    return result;
+  }
   if (isOutsideResultScope || (!existing && !isPersistedSessionRow(session))) {
     return defaults ? { ...result, defaults: nextDefaults } : result;
   }

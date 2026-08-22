@@ -291,6 +291,7 @@ actor GatewayConnection {
         do {
             return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
         } catch {
+            try Task.checkCancellation()
             if allowTLSRepair,
                let tlsError = error as? GatewayTLSValidationError,
                await GatewayTLSRepairCoordinator.shared.repair(
@@ -771,8 +772,7 @@ extension GatewayConnection {
               self.serverLeaseMatchesCurrentState(lease),
               let snapshot = lastSnapshot
         else { return nil }
-        let methods = snapshot.features["methods"]?.value as? [AnyCodable] ?? []
-        return methods.contains { ($0.value as? String) == method }
+        return snapshot.advertisedServerMethods()?.contains(method)
     }
 
     func isCurrentServerLease(_ lease: ServerLease) async -> Bool {

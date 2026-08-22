@@ -146,7 +146,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.codeMode.snapshotTtlSeconds":
     "How long suspended code-mode snapshots can be resumed with `wait` before they expire.",
   "tools.codeMode.searchDefaultLimit":
-    "Default number of hidden catalog search results returned by `tools.search` inside code mode.",
+    "Default number of hidden catalog search results returned by `catalog.search` inside code mode.",
   "tools.codeMode.maxSearchLimit":
     "Maximum number of hidden catalog search results a code-mode program can request.",
   "tools.swarm":

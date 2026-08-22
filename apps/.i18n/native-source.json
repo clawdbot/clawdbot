@@ -962,6 +962,17 @@
       ]
     },
     {
+      "id": "native.android.adedee12882a5e48",
+      "source": "%1$s: %2$s",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
+        }
+      ]
+    },
+    {
       "id": "native.android.5b1f512f56214522",
       "source": "+${diff.added}",
       "surface": "android",
@@ -1430,6 +1441,17 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt"
+        }
+      ]
+    },
+    {
+      "id": "native.android.4e2d71e58e9b5d58",
+      "source": "Active on phone",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -3558,6 +3580,10 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt"
+        },
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -6480,6 +6506,28 @@
       ]
     },
     {
+      "id": "native.android.df6908aa0d65572b",
+      "source": "Find a model",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
+        }
+      ]
+    },
+    {
+      "id": "native.android.98780014fd21c179",
+      "source": "Find a session",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
+        }
+      ]
+    },
+    {
       "id": "native.android.e889efed8c081333",
       "source": "Find on ClawHub",
       "surface": "android",
@@ -8338,6 +8386,10 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/WorkspaceFilesScreen.kt"
+        },
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -9345,17 +9397,6 @@
       ]
     },
     {
-      "id": "native.android.2e7778c3617afdb8",
-      "source": "Next %1$s",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "resource-string",
-          "path": "apps/android/wear/src/main/res/values/strings.xml"
-        }
-      ]
-    },
-    {
       "id": "native.android.56de778dd64c4cba",
       "source": "Next Cycle",
       "surface": "android",
@@ -9697,6 +9738,10 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatDictation.kt"
+        },
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -10917,6 +10962,17 @@
     {
       "id": "native.android.d4d86d62e27cead6",
       "source": "Open notification settings",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
+        }
+      ]
+    },
+    {
+      "id": "native.android.86743582a5bdbdca",
+      "source": "Open on watch",
       "surface": "android",
       "sites": [
         {
@@ -12288,17 +12344,6 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt"
-        }
-      ]
-    },
-    {
-      "id": "native.android.ab710f2d490e510d",
-      "source": "Previous %1$s",
-      "surface": "android",
-      "sites": [
-        {
-          "kind": "resource-string",
-          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -14411,6 +14456,10 @@
         {
           "kind": "ui-named-argument",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawComponents.kt"
+        },
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -14470,6 +14519,17 @@
       ]
     },
     {
+      "id": "native.android.bcab8e57d5c3490d",
+      "source": "Search models",
+      "surface": "android",
+      "sites": [
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
+        }
+      ]
+    },
+    {
       "id": "native.android.8263e0efaec65c14",
       "source": "Search proposals",
       "surface": "android",
@@ -14499,6 +14559,10 @@
         {
           "kind": "ui-call",
           "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarComponents.kt"
+        },
+        {
+          "kind": "resource-string",
+          "path": "apps/android/wear/src/main/res/values/strings.xml"
         }
       ]
     },
@@ -40330,10 +40394,6 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+Attachments.swift"
-        },
-        {
-          "kind": "ui-localized-call",
-          "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel+SessionActions.swift"
         }
       ]
     },

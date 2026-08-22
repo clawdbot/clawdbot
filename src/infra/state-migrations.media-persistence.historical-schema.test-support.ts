@@ -43,6 +43,7 @@ export function historicalV15AgentSchemaSql(): string {
   let sql = restoreHistoricalAgentLeaseSchema(OPENCLAW_AGENT_SCHEMA_SQL)
     .replace("  entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1)),\n", "")
     .replace("  project_id TEXT,\n", "")
+    .replace("  route_context_json TEXT,\n", "")
     .replace(
       "  owner_actor_type TEXT,\n  owner_actor_id TEXT,\n  owner_assigned_by_type TEXT,\n  owner_assigned_by_id TEXT,\n  owner_assigned_at INTEGER,\n",
       "",
@@ -56,6 +57,11 @@ export function historicalV15AgentSchemaSql(): string {
     sql,
     "CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_entry_valid_pending",
     "CREATE TABLE IF NOT EXISTS session_windows (",
+  );
+  sql = removeSchemaRange(
+    sql,
+    "-- Older same-version writers preserve the envelope while updating the association.",
+    "CREATE INDEX IF NOT EXISTS idx_agent_session_conversations_conversation",
   );
   sql = removeSchemaRange(
     sql,

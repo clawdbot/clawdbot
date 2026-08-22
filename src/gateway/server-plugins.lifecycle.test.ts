@@ -5,7 +5,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import {
   connectWebchatClient,
@@ -30,9 +32,14 @@ type InstanceBindingProbeCoordinator = {
   identify: (value: object) => number;
   nextRegistryId: number;
   runtimes: PluginRuntime[];
+  serviceStarts: number;
+  serviceStops: number;
+  serviceStopFailure?: "rejection" | "timeout";
 };
 
-function installInstanceBindingProbeCoordinator(): InstanceBindingProbeCoordinator {
+function installInstanceBindingProbeCoordinator(options?: {
+  serviceStopFailure?: InstanceBindingProbeCoordinator["serviceStopFailure"];
+}): InstanceBindingProbeCoordinator {
   const ids = new WeakMap<object, number>();
   let nextId = 1;
   const coordinator: InstanceBindingProbeCoordinator = {
@@ -47,6 +54,9 @@ function installInstanceBindingProbeCoordinator(): InstanceBindingProbeCoordinat
     },
     nextRegistryId: 1,
     runtimes: [],
+    serviceStarts: 0,
+    serviceStops: 0,
+    ...(options?.serviceStopFailure ? { serviceStopFailure: options.serviceStopFailure } : {}),
   };
   (globalThis as Record<PropertyKey, unknown>)[INSTANCE_BINDING_PROBE_KEY] = coordinator;
   return coordinator;
@@ -104,6 +114,23 @@ async function writeInstanceBindingProbePlugin(): Promise<{ bundledRoot: string 
     const coordinator = globalThis[Symbol.for("openclaw.test.gatewayInstanceBindingProbe")];
     const registryId = coordinator.nextRegistryId++;
     coordinator.runtimes.push(api.runtime);
+    if (coordinator.serviceStopFailure) {
+      api.registerService({
+        id: "instance-binding-service",
+        start() {
+          coordinator.serviceStarts += 1;
+        },
+        stop() {
+          coordinator.serviceStops += 1;
+          if (coordinator.serviceStopFailure === "rejection") {
+            return Promise.reject(new Error("instance-binding service cleanup rejected"));
+          }
+          if (coordinator.serviceStopFailure === "timeout") {
+            return new Promise(() => {});
+          }
+        },
+      });
+    }
     api.registerGatewayMethod("${INSTANCE_BINDING_PROBE_METHOD}", ({ context, respond }) => {
       respond(true, {
         registryId,
@@ -118,8 +145,10 @@ async function writeInstanceBindingProbePlugin(): Promise<{ bundledRoot: string 
   return { bundledRoot };
 }
 
-async function prepareInstanceBindingTest() {
-  const coordinator = installInstanceBindingProbeCoordinator();
+async function prepareInstanceBindingTest(options?: {
+  serviceStopFailure?: InstanceBindingProbeCoordinator["serviceStopFailure"];
+}) {
+  const coordinator = installInstanceBindingProbeCoordinator(options);
   const plugin = await writeInstanceBindingProbePlugin();
   process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
   delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
@@ -282,6 +311,61 @@ describe("gateway plugin instance bindings", () => {
           limit: 1,
         }),
       ).resolves.toEqual({ messages: [] });
+    },
+  );
+
+  it.each(["rejection", "timeout"] as const)(
+    "keeps the active Gateway runtime when real plugin replacement cleanup fails by %s",
+    { timeout: 600_000 },
+    async (serviceStopFailure) => {
+      const { coordinator } = await prepareInstanceBindingTest({ serviceStopFailure });
+      const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
+      const port = await getFreePort();
+      const server = await startTestGatewayServer(port, {
+        auth: { mode: "none" },
+        controlUiEnabled: false,
+        hotReloadRecovery,
+        sidecarStartup: "start",
+      });
+      started.push(server);
+      await server.startupSettled;
+
+      const initialRegistry = getActivePluginRegistry();
+      const initialRuntimeConfig = getActiveSecretsRuntimeConfigSnapshot()?.config;
+      const initialRegistrationCount = coordinator.runtimes.length;
+      const initialHandler = initialRegistry?.gatewayHandlers[INSTANCE_BINDING_PROBE_METHOD];
+      expect(initialRegistry).toBeDefined();
+      expect(initialRuntimeConfig).toBeDefined();
+      expect(initialHandler).toBeTypeOf("function");
+      expect(coordinator.serviceStarts).toBe(1);
+
+      const socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
+      sockets.push(socket);
+      const currentConfig = await rpcReq<{ hash?: string }>(socket, "config.get", {});
+      expect(currentConfig.ok).toBe(true);
+      const reload = await rpcReq(socket, "config.patch", {
+        raw: JSON.stringify({
+          plugins: {
+            entries: {
+              "instance-binding-probe": {
+                subagent: { allowModelOverride: true },
+              },
+            },
+          },
+        }),
+        baseHash: currentConfig.payload?.hash,
+      });
+      expect(reload.ok, reload.error?.message).toBe(true);
+
+      await expect.poll(() => hotReloadRecovery.mock.calls.length, { timeout: 30_000 }).toBe(1);
+      expect(coordinator.serviceStops).toBe(1);
+      expect(coordinator.serviceStarts).toBe(1);
+      expect(coordinator.runtimes).toHaveLength(initialRegistrationCount);
+      expect(getActiveSecretsRuntimeConfigSnapshot()?.config).toBe(initialRuntimeConfig);
+      expect(getActivePluginRegistry()).toBe(initialRegistry);
+      expect(getActivePluginRegistry()?.gatewayHandlers[INSTANCE_BINDING_PROBE_METHOD]).toBe(
+        initialHandler,
+      );
     },
   );
 });

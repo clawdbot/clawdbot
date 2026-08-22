@@ -28,6 +28,11 @@ import type { PreparedOutboundBatch } from "./prepared-batch.js";
 import type { OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
 
+type ConversationDeliveryAttemptAuthority = Omit<
+  Extract<DurableDeliveryCompletion, { kind: "conversation" }>,
+  "kind"
+>;
+
 export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
 
 export type OutboundDeliveryIntent = {
@@ -145,6 +150,7 @@ export type ChannelHandlerParams = {
   preparedMessageId?: string;
   requiredUnknownSendReconciliation?: boolean;
   onPlatformSendStart?: (route: PlatformSendRoute) => Promise<void>;
+  onDirectAdapterHandoff?: () => Promise<void>;
   onPlatformSendDispatch?: () => Promise<void>;
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
 };
@@ -195,12 +201,18 @@ export type DeliverOutboundPayloadsCoreParams = {
   reusePendingDeliveryIntent?: boolean;
   /** @internal Serializable owner state finalized after live or recovered delivery. */
   deliveryCompletion?: DurableDeliveryCompletion;
+  /** @internal Ephemeral route authority for a recovered attempt; never owns completion. */
+  conversationDeliveryAttemptAuthority?: ConversationDeliveryAttemptAuthority;
+  /** @internal Revalidates authority once per durable queue execution, before adapter fanout. */
+  onDeliveryAttempt?: () => Promise<void>;
   /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
   preparedMessageId?: string;
   /** @internal Recheck the concrete post-hook send shape before platform I/O. */
   requiredUnknownSendReconciliation?: boolean;
   /** @internal Caller preflight explicitly required provider unknown-send reconciliation. */
   requireUnknownSendReconciliation?: boolean;
+  /** @internal Revalidate caller authority before direct adapter code can run. */
+  onDirectAdapterHandoff?: () => Promise<void>;
   /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
   /** Session/agent context used for hooks and media local-root scoping. */

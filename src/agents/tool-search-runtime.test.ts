@@ -21,6 +21,7 @@ import {
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import {
   formatToolSearchControlError,
   formatToolSearchControlResult,
@@ -29,6 +30,8 @@ import {
 } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
 import {
+  addClientToolsToToolCatalog,
+  compactToolSearchCatalogEntry,
   createToolSearchCatalogRef,
   createToolSearchTools,
   registerHeadlessToolSearchCatalog,
@@ -760,6 +763,50 @@ describe("Tool Search catalog indexing", () => {
     await expect(runtime.search("orchard", { limit: 2 })).resolves.toEqual([
       expect.objectContaining({ name: "orchard" }),
       expect.objectContaining({ name: "orchard_records" }),
+    ]);
+  });
+
+  it("ranks only effective entries before applying the limit without poisoning other search indexes", async () => {
+    const shadowed = fakeTool("shared_harvest");
+    shadowed.description = "Harvest harvest harvest harvest harvest harvest harvest harvest";
+    const visible = fakeTool("harvest_records");
+    visible.description = "Inspect harvesting records";
+    const client = fakeTool("shared_harvest");
+    client.description = "Choose an operator action";
+    const { catalogRef, runtime } = createRuntime([shadowed, visible]);
+    addClientToolsToToolCatalog({ tools: [client], enabled: true, catalogRef });
+    const projection = createCodeModeCatalogProjection(
+      catalogRef.current!.entries.map(compactToolSearchCatalogEntry),
+    );
+    const effectiveOptions = { limit: 1, allowedIds: projection.byId };
+
+    await expect(runtime.search("harvesting", { limit: 1 })).resolves.toEqual([
+      expect.objectContaining({ name: shadowed.name, source: "openclaw" }),
+    ]);
+    const matches = await runtime.search("harvesting", effectiveOptions);
+
+    expect(matches).toEqual([expect.objectContaining({ name: visible.name })]);
+    await expect(
+      runtime.callExactId(matches[0]!.id, { request: "visible" }),
+    ).resolves.toMatchObject({ result: { details: { input: { request: "visible" } } } });
+    expect(visible.execute).toHaveBeenCalledOnce();
+    expect(shadowed.execute).not.toHaveBeenCalled();
+    expect(client.execute).not.toHaveBeenCalled();
+
+    const clientOptions = {
+      limit: 1,
+      allowedIds: new Set(
+        projection.bindings.filter((binding) => binding.source === "client").map(({ id }) => id),
+      ),
+    };
+    await expect(runtime.search("harvesting", clientOptions)).resolves.toEqual([
+      expect.objectContaining({ name: client.name, source: "client" }),
+    ]);
+    await expect(runtime.search("harvesting", effectiveOptions)).resolves.toEqual([
+      expect.objectContaining({ name: visible.name }),
+    ]);
+    await expect(runtime.search("harvesting", { limit: 1 })).resolves.toEqual([
+      expect.objectContaining({ name: shadowed.name, source: "openclaw" }),
     ]);
   });
 

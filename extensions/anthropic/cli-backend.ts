@@ -21,6 +21,7 @@ import {
   normalizeClaudeBackendConfig,
   resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
+  resolveClaudeCliThinkingEnv,
 } from "./cli-shared.js";
 
 type ClaudeCliAuthCredential =
@@ -262,6 +263,7 @@ export function buildAnthropicCliBackend(
         const isolatedCompletion = credentialContext.isolatedCompletionPrompt !== undefined;
         const env = {
           ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
+          ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),
           ...authInput?.env,
         };
         return Object.keys(env).length > 0 || isolatedCompletion

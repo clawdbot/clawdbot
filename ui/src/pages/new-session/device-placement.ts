@@ -12,7 +12,20 @@ export type DevicePlacementOption = Readonly<{
   disabledReason?: string;
 }>;
 
-function unavailableReason(environment: DraftEnvironment): string | undefined {
+export type DevicePlacementRequirement = Readonly<{
+  requiredNodeCommands: readonly string[];
+  consumesWorkerSlot: boolean;
+}>;
+
+const DEFAULT_DEVICE_PLACEMENT: DevicePlacementRequirement = {
+  requiredNodeCommands: [],
+  consumesWorkerSlot: true,
+};
+
+function unavailableReason(
+  environment: DraftEnvironment,
+  requirement: DevicePlacementRequirement,
+): string | undefined {
   const updateIssue = environment.issues?.find((issue) => issue.code === "update-required");
   if (updateIssue) {
     return t("newSession.nodeUpdateRequired", {
@@ -26,6 +39,15 @@ function unavailableReason(environment: DraftEnvironment): string | undefined {
   if (environment.sessionHost !== true) {
     return t("newSession.sessionHostingDisabled");
   }
+  const unavailableCommand = requirement.requiredNodeCommands.find(
+    (command) => !environment.invocableCommands?.includes(command),
+  );
+  if (unavailableCommand) {
+    return `${t("pluginsPage.enableAction")} ${unavailableCommand}: gateway.nodes.commands.allow.`;
+  }
+  if (!requirement.consumesWorkerSlot) {
+    return undefined;
+  }
   if (!environment.workerSlots) {
     return t("newSession.deviceCapacityUnavailable");
   }
@@ -35,6 +57,7 @@ function unavailableReason(environment: DraftEnvironment): string | undefined {
 /** One projection owns device presentation, restore eligibility, and submit eligibility. */
 export function projectDevicePlacements(
   environments: readonly DraftEnvironment[] | null,
+  requirement: DevicePlacementRequirement = DEFAULT_DEVICE_PLACEMENT,
 ): DevicePlacementOption[] {
   const devices = (environments ?? [])
     .flatMap<DevicePlacementOption>((environment) => {
@@ -45,7 +68,7 @@ export function projectDevicePlacements(
       if (!deviceId) {
         return [];
       }
-      const disabledReason = unavailableReason(environment);
+      const disabledReason = unavailableReason(environment, requirement);
       const facts = environmentMenuFacts(environment, {
         connected: environment.status === "available",
       });
@@ -85,6 +108,9 @@ export function projectDevicePlacements(
 export function findDevicePlacement(
   environments: readonly DraftEnvironment[] | null,
   deviceId: string,
+  requirement?: DevicePlacementRequirement,
 ): DevicePlacementOption | undefined {
-  return projectDevicePlacements(environments).find((device) => device.deviceId === deviceId);
+  return projectDevicePlacements(environments, requirement).find(
+    (device) => device.deviceId === deviceId,
+  );
 }

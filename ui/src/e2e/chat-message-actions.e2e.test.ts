@@ -358,7 +358,26 @@ describeControlUiE2e("Control UI chat message actions", () => {
         "Reply",
         "Copy as markdown",
       ]);
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            window.setTimeout(resolve, 0);
+          }),
+      );
+      expect(await page.locator(".chat-selection-popup").count()).toBe(0);
       await screenshot(page, "04-selected-text-context-menu.png");
+      await bubble.dispatchEvent("pointerup", {
+        button: 0,
+        ctrlKey: true,
+        pointerType: "mouse",
+      });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            window.setTimeout(resolve, 0);
+          }),
+      );
+      expect(await page.locator(".chat-selection-popup").count()).toBe(0);
       await menu.getByRole("menuitem", { name: "Copy", exact: true }).click();
       await expect
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))

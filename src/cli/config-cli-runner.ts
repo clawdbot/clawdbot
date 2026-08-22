@@ -3,6 +3,7 @@ import { uniqueValues } from "@openclaw/normalization-core/string-normalization"
 import { replaceConfigFile } from "../config/config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -513,7 +514,11 @@ export function handleConfigMutationError(params: {
   runtime: RuntimeEnv;
   options: ConfigMutationOptions;
 }) {
-  const message = formatErrorMessage(params.err);
+  const isConflict = params.err instanceof ConfigMutationConflictError;
+  const detail = formatErrorMessage(params.err);
+  const message = isConflict
+    ? `The config file changed while this command was writing (${detail}), so nothing was changed. Re-run the same command to pick up the new file and try again.`
+    : detail;
   if (params.options.dryRun && params.options.json) {
     if (params.err instanceof ConfigSetDryRunValidationError) {
       writeRuntimeJson(params.runtime, params.err.result);
@@ -528,7 +533,7 @@ export function handleConfigMutationError(params: {
       checks: { schema: false, resolvability: false, resolvabilityComplete: false },
       refsChecked: 0,
       skippedExecRefs: 0,
-      errors: [{ kind: "schema", message }],
+      errors: [{ kind: isConflict ? "conflict" : "schema", message }],
     };
     writeRuntimeJson(params.runtime, result);
     params.runtime.error(danger(message));

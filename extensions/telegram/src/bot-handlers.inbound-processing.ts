@@ -246,6 +246,13 @@ export function createTelegramInboundProcessing({
         maxBytes: mediaMaxBytes,
         ...mediaRuntime,
       });
+      if (mediaRuntime.abortSignal?.aborted) {
+        const abortError =
+          mediaRuntime.abortSignal.reason ?? new Error("telegram media hydration owner aborted");
+        recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: abortError });
+        releaseDispatchDedupeClaims(dispatchDedupeClaims, abortError);
+        return { kind: "ignored" };
+      }
       if (media) {
         await recordMessageResolvedMedia({ msg, media, botUserId: ctx.me?.id });
       }

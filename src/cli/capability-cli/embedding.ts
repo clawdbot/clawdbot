@@ -17,6 +17,7 @@ import {
   providerHasGenericConfig,
   providerSummaryText,
   requireProviderModelOverride,
+  resolveCapabilityAgentOption,
   resolveCapabilityProviderAgentId,
   resolveLocalCapabilityRuntimeConfig,
 } from "./shared.js";
@@ -102,7 +103,10 @@ async function runMemoryEmbeddingCreate(params: {
 }
 
 export function registerEmbeddingCapabilityCommands(capability: Command): void {
-  const embedding = capability.command("embedding").description("Embedding providers");
+  const embedding = capability
+    .command("embedding")
+    .description("Embedding providers")
+    .option("--agent <id>", "Agent whose model and auth state should be used");
 
   embedding
     .command("create")
@@ -115,13 +119,13 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
       "Agent whose saved provider auth is used (default: agents.defaults.systemAgent.agentId, then the sole agent)",
     )
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const result = await runMemoryEmbeddingCreate({
           texts: opts.text as string[],
+          agent: resolveCapabilityAgentOption(command, opts.agent),
           provider: opts.provider as string | undefined,
           model: opts.model as string | undefined,
-          agent: typeof opts.agent === "string" ? opts.agent : undefined,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });
@@ -132,10 +136,13 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
     .description("List embedding providers")
     .option("--agent <id>", "Agent whose provider state should be inspected")
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const cfg = getRuntimeConfig();
-        const agentId = resolveCapabilityProviderAgentId(cfg, opts.agent as string | undefined);
+        const agentId = resolveCapabilityProviderAgentId(
+          cfg,
+          resolveCapabilityAgentOption(command, opts.agent),
+        );
         const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);
         const selectedProvider = resolvedMemory?.provider;
         const providers = new Map(

@@ -720,6 +720,62 @@ describe("createModelAuthAvailabilityResolver", () => {
     });
   });
 
+  it("does not grant refresh authority to an unsupported external CLI id", () => {
+    const resolver = createModelAuthAvailabilityResolver({
+      cfg: {} as OpenClawConfig,
+      authStore: authStore({
+        "acme:cli": {
+          type: "oauth",
+          provider: "acme-cli",
+          access: "expired-access",
+          refresh: "stored-refresh",
+          expires: Date.now() - 60_000,
+        },
+      }),
+      env: {},
+      externalCliProviderIds: ["acme-cli"],
+      routeResolverFactory: routeResolverFactory(null),
+    });
+
+    expect(resolver.resolveProviderAuthAvailability("acme-cli")).toBeUndefined();
+  });
+
+  it("does not grant CLI refresh authority to an unowned sibling profile", () => {
+    const cliProfileId = "anthropic:claude-cli";
+    const manualProfileId = "anthropic:manual";
+    const store = authStore({
+      [cliProfileId]: {
+        type: "oauth",
+        provider: "claude-cli",
+        access: "expired-cli-access",
+        refresh: "cli-owned-refresh",
+        expires: Date.now() - 60_000,
+      },
+      [manualProfileId]: {
+        type: "oauth",
+        provider: "claude-cli",
+        access: "expired-manual-access",
+        refresh: "manual-refresh",
+        expires: Date.now() - 60_000,
+      },
+    });
+    const resolver = createModelAuthAvailabilityResolver({
+      cfg: { auth: { order: { "claude-cli": [manualProfileId] } } } as OpenClawConfig,
+      authStore: store,
+      preparedRuntimeAuthStore: Object.assign({}, store, {
+        runtimeExternalCliProfileIds: [cliProfileId],
+      }),
+      env: {},
+      routeResolverFactory: routeResolverFactory(null),
+    });
+
+    expect(
+      resolver.resolveProviderAuthAvailability("claude-cli", {
+        lockedProfileId: manualProfileId,
+      }),
+    ).toBeUndefined();
+  });
+
   it("does not borrow usable auth from a later sibling route after an unresolved ordered profile", () => {
     const result = evaluate({
       cfg: { auth: { order: { openai: ["openai:unknown", "openai:chatgpt"] } } },
@@ -817,6 +873,15 @@ describe("createModelAuthAvailabilityResolver", () => {
     });
     expect(result).not.toHaveProperty("selectedAuthMode");
     expect(result).not.toHaveProperty("selectedRoute");
+  });
+
+  it("keeps one unconfigured Codex route indeterminate until native account validation", () => {
+    expect(
+      evaluate({
+        resolution: { ...dualRoutes, routes: [subscriptionRoute] },
+        syntheticAuthProviderRefs: ["codex"],
+      }),
+    ).toMatchObject({ availability: undefined, evidence: "synthetic" });
   });
 
   it("does not let invalid automatic profile evidence block synthetic Codex ownership", () => {

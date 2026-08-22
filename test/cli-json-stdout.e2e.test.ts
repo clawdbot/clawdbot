@@ -276,6 +276,61 @@ describe("cli json stdout contract", () => {
     );
   });
 
+  it.each([
+    {
+      name: "routed status with JSON before its timeout",
+      args: ["status", "--json", "--timeout", "nope"],
+    },
+    {
+      name: "routed health with JSON after its timeout",
+      args: ["health", "--timeout", "0", "--json"],
+    },
+    {
+      name: "Commander status with JSON after its timeout",
+      args: ["status", "--timeout", "nope", "--json"],
+      commander: true,
+    },
+    {
+      name: "Commander health with JSON before its timeout",
+      args: ["health", "--json", "--timeout", "0"],
+      commander: true,
+    },
+    {
+      name: "routed status through dual-TTY finalization",
+      args: ["status", "--json", "--timeout", "nope"],
+      tty: true,
+    },
+  ])("renders invalid status/health timeouts as canonical JSON for $name", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const preload = `data:text/javascript,${encodeURIComponent(
+          'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true }); Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
+        )}`;
+        const result = runBuiltCli(tempHome, testCase.args, {
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+          OPENCLAW_GATEWAY_PORT: "29791",
+          ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+          ...("tty" in testCase ? { NODE_OPTIONS: `--import=${preload}`, FORCE_COLOR: "1" } : {}),
+        });
+        const message = "--timeout must be a positive integer (milliseconds)";
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stdout, result.stderr).not.toContain("\u001B");
+        expect(result.stdout, result.stderr).not.toContain("\u0007");
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: { type: "cli_error", message },
+        });
+        expect(result.stderr).toContain(message);
+        if ("tty" in testCase) {
+          expect(result.stderr).toContain("\u001B[?25h");
+        }
+      },
+      { prefix: "openclaw-status-health-json-timeout-e2e-" },
+    );
+  });
+
   it("returns one canonical document for a command that previously failed on stderr only", async () => {
     await withTempHome(
       async (tempHome) => {
@@ -292,6 +347,356 @@ describe("cli json stdout contract", () => {
         });
       },
       { prefix: "openclaw-json-failure-e2e-" },
+    );
+  });
+
+  it("renders a missing TaskFlow as one canonical JSON document without stderr", async () => {
+    await withTempHome(
+      async (tempHome) => {
+        const result = runBuiltCli(tempHome, ["tasks", "flow", "show", "missing-flow", "--json"]);
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stdout, result.stderr).not.toBe("");
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message:
+              "TaskFlow not found: missing-flow. Run openclaw tasks flow list to see recent flow ids.",
+          },
+        });
+        expect(result.stderr).toBe("");
+      },
+      { prefix: "openclaw-task-flow-json-failure-e2e-" },
+    );
+  });
+
+  it.each([
+    { name: "qr", command: ["qr"] },
+    { name: "clawbot qr", command: ["clawbot", "qr"] },
+  ])("renders conflicting $name options as one canonical JSON document", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        for (const conflict of [
+          {
+            args: ["--limited", "--voice-node"],
+            message: "Use either --limited or --voice-node, not both.",
+          },
+          {
+            args: ["--token", "test-token", "--password", "test-password"],
+            message: "Use either --token or --password, not both.",
+          },
+        ]) {
+          const result = runBuiltCli(tempHome, [...testCase.command, "--json", ...conflict.args], {
+            OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          });
+
+          expect(result.status, result.stderr).toBe(1);
+          expect(JSON.parse(result.stdout)).toEqual({
+            ok: false,
+            error: { type: "cli_error", message: conflict.message },
+          });
+          expect(result.stdout).not.toContain("[openclaw]");
+          expect(result.stderr).toContain(conflict.message);
+        }
+      },
+      { prefix: "openclaw-qr-json-failure-e2e-" },
+    );
+  });
+
+  it("renders sandbox explain validation failures as one canonical JSON document", async () => {
+    await withTempHome(
+      async (tempHome) => {
+        const result = runBuiltCli(tempHome, [
+          "sandbox",
+          "explain",
+          "--json",
+          "--agent",
+          "alpha",
+          "--session",
+          "agent:beta:main",
+        ]);
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: 'Sandbox explain agent "alpha" does not match session agent "beta".',
+          },
+        });
+        expect(result.stderr).toContain(
+          'Sandbox explain agent "alpha" does not match session agent "beta".',
+        );
+      },
+      { prefix: "openclaw-sandbox-json-failure-e2e-" },
+    );
+  });
+
+  it.each([
+    {
+      name: "status with an invalid duration in human mode",
+      args: ["nodes", "status", "--last-connected", "not-a-duration"],
+      message: "Invalid --last-connected: Invalid duration",
+      human: true,
+    },
+    {
+      name: "status with JSON before its invalid duration",
+      args: ["nodes", "status", "--json", "--last-connected", "not-a-duration"],
+      message: "Invalid --last-connected: Invalid duration",
+    },
+    {
+      name: "status with JSON after its invalid duration",
+      args: ["nodes", "status", "--last-connected", "not-a-duration", "--json"],
+      message: "Invalid --last-connected: Invalid duration",
+    },
+    {
+      name: "list with an invalid duration in human mode",
+      args: ["nodes", "list", "--last-connected", "not-a-duration"],
+      message: "Invalid --last-connected: Invalid duration",
+      human: true,
+    },
+    {
+      name: "list with JSON before its invalid duration",
+      args: ["nodes", "list", "--json", "--last-connected", "not-a-duration"],
+      message: "Invalid --last-connected: Invalid duration",
+    },
+    {
+      name: "list with JSON after its invalid duration",
+      args: ["nodes", "list", "--last-connected", "not-a-duration", "--json"],
+      message: "Invalid --last-connected: Invalid duration",
+    },
+    {
+      name: "invoke with an explicitly JSON blank node",
+      args: ["nodes", "invoke", "--node", "   ", "--command", "canvas.eval", "--json"],
+      message: "--node and --command required",
+    },
+    {
+      name: "invoke with an implicitly JSON blank node",
+      args: ["nodes", "invoke", "--node", "   ", "--command", "canvas.eval"],
+      message: "--node and --command required",
+    },
+    {
+      name: "invoke with an explicitly JSON blank command",
+      args: ["nodes", "invoke", "--node", "mac-1", "--command", "   ", "--json"],
+      message: "--node and --command required",
+    },
+    {
+      name: "invoke with an implicitly JSON blank command",
+      args: ["nodes", "invoke", "--node", "mac-1", "--command", "   "],
+      message: "--node and --command required",
+    },
+    {
+      name: "rename with a blank name",
+      args: ["nodes", "rename", "--node", "mac-1", "--name", "   ", "--json"],
+      message: "--name must not be empty",
+    },
+  ])("renders nodes $name through the shared validation owner", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const denyNetwork = Buffer.from(
+          `import net from "node:net";
+           net.Socket.prototype.connect = function () { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };
+           globalThis.fetch = async () => { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };`,
+        ).toString("base64");
+        const result = runBuiltCli(tempHome, testCase.args, {
+          NODE_OPTIONS: `--permission --allow-fs-read=* --import=data:text/javascript;base64,${denyNetwork}`,
+          NODE_DISABLE_COMPILE_CACHE: "1",
+          OPENCLAW_NO_RESPAWN: "1",
+          OPENCLAW_LOG_LEVEL: "silent",
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+        });
+
+        expect(result.status, result.stderr).toBe(1);
+        if ("human" in testCase && testCase.human) {
+          expect(result.stdout).toBe("");
+          expect(result.stderr).toContain(`nodes ${testCase.args[1]} failed:`);
+        } else {
+          expect(JSON.parse(result.stdout)).toEqual({
+            ok: false,
+            error: {
+              type: "cli_error",
+              message: expect.stringContaining(testCase.message),
+            },
+          });
+        }
+        expect(result.stderr).toContain(testCase.message);
+        expect(result.stderr).not.toContain("AUTOQA_NETWORK_FORBIDDEN");
+      },
+      { prefix: "openclaw-nodes-json-failure-e2e-" },
+    );
+  });
+
+  it.each([
+    {
+      name: "the search query is missing",
+      args: ["plugins", "search", "--json"],
+      message: "Usage: openclaw plugins search <query>",
+    },
+    {
+      name: "ClawHub transport fails",
+      args: ["plugins", "search", "fixture", "--json"],
+      message: "offline fixture",
+    },
+  ])("returns one canonical JSON document when plugins $name", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const preload = `data:text/javascript,${encodeURIComponent(
+          'globalThis.fetch = async () => { throw new Error("offline fixture"); };',
+        )}`;
+        const result = runBuiltCli(tempHome, testCase.args, {
+          NODE_OPTIONS: `--import=${preload}`,
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+          CLAWHUB_CONFIG_PATH: path.join(tempHome, "missing-clawhub.json"),
+          CLAWHUB_TOKEN: "",
+          CLAWHUB_AUTH_TOKEN: "",
+        });
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stdout, result.stderr).not.toBe("");
+        expect(result.stdout).not.toMatch(/[\u001B\u0007]/u);
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: testCase.message,
+          },
+        });
+        expect(result.stderr).toContain(testCase.message);
+      },
+      { prefix: "openclaw-plugins-json-failure-e2e-" },
+    );
+  });
+
+  it("keeps plugins search JSON failures clean through dual-TTY finalization", async () => {
+    await withTempHome(
+      async (tempHome) => {
+        const preload = `data:text/javascript,${encodeURIComponent(
+          'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true }); Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
+        )}`;
+        const result = runBuiltCli(tempHome, ["plugins", "search", "--json"], {
+          NODE_OPTIONS: `--import=${preload}`,
+        });
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: "Usage: openclaw plugins search <query>",
+          },
+        });
+        expect(result.stdout).not.toMatch(/[\u001B\u0007]/u);
+        expect(result.stderr).toContain("Usage: openclaw plugins search <query>");
+        expect(result.stderr).toContain("\u001B[?25h");
+      },
+      { prefix: "openclaw-plugins-json-tty-failure-e2e-" },
+    );
+  });
+
+  it.each([
+    {
+      name: "search with a leaf JSON flag",
+      args: ["skills", "search", "fixture", "--json"],
+      message: "ClawHub /api/v1/search failed (400): offline fixture",
+    },
+    {
+      name: "search with a parent JSON flag",
+      args: ["skills", "--json", "search", "fixture"],
+      message: "ClawHub /api/v1/search failed (400): offline fixture",
+    },
+    {
+      name: "list with a leaf JSON flag",
+      args: ["skills", "list", "--agent", "", "--json"],
+      message: "--agent must not be blank",
+    },
+    {
+      name: "list with a parent JSON flag",
+      args: ["skills", "--json", "list", "--agent", ""],
+      message: "--agent must not be blank",
+    },
+    {
+      name: "info with a leaf JSON flag",
+      args: ["skills", "info", "fixture", "--agent", "", "--json"],
+      message: "--agent must not be blank",
+    },
+    {
+      name: "info with a parent JSON flag",
+      args: ["skills", "--json", "info", "fixture", "--agent", ""],
+      message: "--agent must not be blank",
+    },
+    {
+      name: "check with a leaf JSON flag",
+      args: ["skills", "check", "--agent", "", "--json"],
+      message: "--agent must not be blank",
+    },
+    {
+      name: "check with a parent JSON flag",
+      args: ["skills", "--json", "check", "--agent", ""],
+      message: "--agent must not be blank",
+    },
+    {
+      name: "the default report after its agent flag",
+      args: ["skills", "--agent", "", "--json"],
+      message: "--agent must not be blank",
+    },
+    {
+      name: "the default report before its agent flag",
+      args: ["skills", "--json", "--agent", ""],
+      message: "--agent must not be blank",
+    },
+  ])("returns one canonical JSON document when skills $name fails", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const preload = `data:text/javascript,${encodeURIComponent(
+          'globalThis.fetch = async () => new Response("offline fixture", { status: 400 });',
+        )}`;
+        const result = runBuiltCli(tempHome, testCase.args, {
+          NODE_OPTIONS: `--import=${preload}`,
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+        });
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: testCase.message,
+          },
+        });
+        expect(result.stderr).toContain(testCase.message);
+        expect(result.stderr.length).toBeLessThan(2_048);
+      },
+      { prefix: "openclaw-skills-json-failure-e2e-" },
+    );
+  });
+
+  it.each([
+    { name: "off", debug: "0", includesCause: false },
+    { name: "on", debug: "1", includesCause: true },
+  ])("keeps skills search nested causes behind debug mode ($name)", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const preload = `data:text/javascript,${encodeURIComponent(
+          'globalThis.fetch = async () => new Response("not-json", { status: 200 });',
+        )}`;
+        const result = runBuiltCli(tempHome, ["skills", "search", "fixture"], {
+          NODE_OPTIONS: `--import=${preload}`,
+          OPENCLAW_DEBUG: testCase.debug,
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+        });
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain("ClawHub /api/v1/search returned malformed JSON");
+        expect(result.stderr.includes("Unexpected token")).toBe(testCase.includesCause);
+      },
+      { prefix: "openclaw-skills-human-failure-e2e-" },
     );
   });
 

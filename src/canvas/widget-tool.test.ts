@@ -210,6 +210,9 @@ describe("show_widget", () => {
       callGateway,
     });
 
+    expect(tool.description).toContain(
+      "Inline hosting is disabled; set pin=true to place it on this session's dashboard",
+    );
     await expect(
       tool.execute("unpinned", {
         title: "Diagram",
@@ -242,15 +245,12 @@ describe("show_widget", () => {
     await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
   });
 
-  it("tells the agent to use widgets proactively", () => {
-    expect(createShowWidgetTool().description).toMatch(
-      /^Visual helps\? Make widget\. Do not wait for ask\./,
-    );
-  });
-
   it("keeps widget documents from duplicating host-owned metadata and controls", () => {
     const description = createShowWidgetTool().description;
 
+    expect(description).toContain("openclaw.host.controlUiBaseUrl");
+    expect(description).toContain("read it at click time");
+    expect(description).toContain('target="_blank" and rel="noopener noreferrer"');
     expect(description).toContain("`title` is host metadata");
     expect(description).toContain("Start directly with content");
     expect(description).toContain("do not repeat the title");
@@ -544,16 +544,19 @@ describe("show_widget", () => {
       '<SvG viewBox="0 0 10 10"><circle r="4" /></SvG>',
     );
 
-    expect(Buffer.byteLength(html)).toBe(13075);
+    expect(Buffer.byteLength(html)).toBe(13859);
     expect(createHash("sha256").update(html).digest("hex")).toBe(
-      "3dd21b774b05d53d12088018babfc82604cc098fcacb1cca48dff5be7e7f8812",
+      "a3d6c52c6b19498b1041a3e2c0feac20b234f6497cf3d41c8783feba3ae47dcf",
     );
     expect(html).toContain("openclaw:widget-host-init-ack");
+    expect(html).toContain("controlUiBaseUrl");
+    expect(html).toContain('define(host,"controlUiBaseUrl"');
     expect(html).toContain("else push.call(waiting,{send,reject})");
     expect(html).toContain("else push.call(promptWaiting,{send,inline,reject})");
     expect(html).toContain("openclaw:widget-prompt-host-ready");
     expect(html).toContain("widget host capabilities unavailable");
     expect(html).toContain("widget prompt host unavailable");
+    expect(html).toContain("openclaw:widget-chat-host");
     expect(html).not.toContain("widget is not hosted on a board");
   });
 
@@ -1021,6 +1024,7 @@ describe("show_widget", () => {
     expect(html).toContain("prompt:freeze({send:sendPrompt})");
     expect(html).toContain('state:freeze({emit:payload=>request("state.emit"');
     expect(html).toContain('data:freeze({read:(bindingId,params)=>request("data.read"');
+    expect(html).toContain('action:freeze({run:(action,params)=>request("action.run"');
     expect(html).toContain('cron:freeze({trigger:jobId=>request("cron.trigger"');
     expect(html).toContain("navigator.userActivation");
     expect(html).toContain("c.port1.postMessage.bind(c.port1)");

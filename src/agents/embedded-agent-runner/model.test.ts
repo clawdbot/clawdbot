@@ -582,6 +582,127 @@ function makeVllmQwenConfig(
 }
 
 describe("resolveModel", () => {
+  it("consumes a directly prepared model through configured overrides and normalization", async () => {
+    const preparedModel = {
+      ...makeModel("prepared-model"),
+      provider: "acme",
+      name: "Prepared Model",
+      api: "openai-completions" as const,
+      baseUrl: "https://discovered.example/v1",
+      input: ["text" as const],
+      contextWindow: 65_536,
+      maxTokens: 8_192,
+    };
+    const prepareProviderDynamicModel = vi.fn(async () => preparedModel);
+    const runProviderDynamicModel = vi.fn(() => undefined);
+    const normalizeProviderResolvedModelWithPlugin = vi.fn(
+      ({ context }: { context: { model: Model } }) => ({
+        ...context.model,
+        name: "Normalized Prepared Model",
+      }),
+    );
+    const cfg = makeProviderConfig("acme", {
+      api: "openai-responses",
+      baseUrl: "https://configured.example/v1",
+      headers: { "X-Tenant": "tenant-a" },
+    });
+
+    const result = await resolveModelAsync("acme", "prepared-model", "/tmp/agent", cfg, {
+      runtimeHooks: {
+        ...createRuntimeHooks(),
+        prepareProviderDynamicModel,
+        runProviderDynamicModel,
+        normalizeProviderResolvedModelWithPlugin,
+      },
+      skipAgentDiscovery: true,
+    });
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "acme",
+      id: "prepared-model",
+      name: "Normalized Prepared Model",
+      api: "openai-responses",
+      baseUrl: "https://configured.example/v1",
+      contextWindow: 65_536,
+      maxTokens: 8_192,
+    });
+    expect(expectResolvedModel(result).headers).toEqual(
+      expect.objectContaining({ "X-Tenant": "tenant-a" }),
+    );
+    expect(prepareProviderDynamicModel).toHaveBeenCalledOnce();
+    expect(normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledOnce();
+    expect(runProviderDynamicModel).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      description: "keeps explicit configured models ahead of prepared models",
+      preferRuntime: false,
+      expectedName: "Configured Model",
+      expectedPreparationCount: 0,
+    },
+    {
+      description: "preserves manually configured limits during runtime comparison",
+      preferRuntime: true,
+      expectedName: "Prepared Model",
+      expectedPreparationCount: 1,
+    },
+    {
+      description: "replaces models-add metadata with a preferred prepared model",
+      preferRuntime: true,
+      metadataSource: "models-add" as const,
+      expectedName: "Prepared Model",
+      expectedPreparationCount: 1,
+    },
+  ])(
+    "$description",
+    async ({ preferRuntime, metadataSource, expectedName, expectedPreparationCount }) => {
+      const prepareProviderDynamicModel = vi.fn(async () => ({
+        ...makeModel("prepared-model"),
+        provider: "acme",
+        name: "Prepared Model",
+        api: "openai-completions" as const,
+        baseUrl: "https://discovered.example/v1",
+        input: ["text" as const],
+        contextWindow: 65_536,
+        maxTokens: 8_192,
+      }));
+      const runProviderDynamicModel = vi.fn(() => undefined);
+      const cfg = makeProviderConfig("acme", {
+        api: "openai-responses",
+        baseUrl: "https://configured.example/v1",
+        models: [
+          {
+            ...makeModel("prepared-model"),
+            name: "Configured Model",
+            contextWindow: 32_768,
+            maxTokens: 4_096,
+            ...(metadataSource ? { metadataSource } : {}),
+          },
+        ],
+      });
+
+      const result = await resolveModelAsync("acme", "prepared-model", "/tmp/agent", cfg, {
+        runtimeHooks: {
+          ...createRuntimeHooks(),
+          prepareProviderDynamicModel,
+          runProviderDynamicModel,
+          shouldPreferProviderRuntimeResolvedModel: () => preferRuntime,
+        },
+        skipAgentDiscovery: true,
+      });
+
+      expectRecordFields(expectResolvedModel(result), {
+        name: expectedName,
+        api: "openai-responses",
+        baseUrl: "https://configured.example/v1",
+        contextWindow: metadataSource ? 65_536 : 32_768,
+      });
+      expect(prepareProviderDynamicModel).toHaveBeenCalledTimes(expectedPreparationCount);
+      expect(runProviderDynamicModel).not.toHaveBeenCalled();
+    },
+  );
+
   it("reuses agent discovery stores while the agent model files are unchanged", async () => {
     mockModelDiscovery();
 

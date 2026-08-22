@@ -90,11 +90,23 @@ struct GatewayProtocolGeneratedModelsTests {
         #expect(params.expected.generation == 4)
         #expect(params.expected.environmentid == "environment-1")
         #expect(params.expected.ownerepoch == 7)
+        #expect(params.abandonsource == nil)
         guard case let .profile(profile) = params.target else {
             Issue.record("Expected the generated profile move target")
             return
         }
         #expect(profile.profileid == "development")
+
+        let abandonment = try JSONDecoder().decode(
+            SessionsMoveParams.self,
+            from: Data(
+                #"{"key":"agent:main:move","expected":{"generation":4,"environmentId":"environment-1","ownerEpoch":7},"target":{"kind":"gateway"},"abandonSource":true}"#
+                    .utf8))
+        #expect(abandonment.abandonsource == true)
+        guard case .gateway = abandonment.target else {
+            Issue.record("Expected the generated abandonment move to target the Gateway")
+            return
+        }
 
         let gateway = try JSONDecoder().decode(
             SessionMoveTarget.self,

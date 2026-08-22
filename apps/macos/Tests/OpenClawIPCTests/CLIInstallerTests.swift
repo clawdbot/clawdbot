@@ -504,4 +504,15 @@ struct CLIInstallerTests {
         #expect(!didWait)
         #expect(activation == .deferred)
     }
+
+    @Test func `failed CLI setup binds the reason to this activation attempt`() async {
+        let activation = await CLIInstaller.activateLocalGateway(
+            mode: .local,
+            paused: false,
+            start: {},
+            waitUntilReady: { false },
+            failureReason: { "launchd disabled" })
+
+        #expect(activation == .failed(reason: "launchd disabled"))
+    }
 }

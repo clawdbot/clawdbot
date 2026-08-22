@@ -25,7 +25,10 @@ import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
 } from "../embedded-agent-runner/run-state.js";
-import { isMainRestartRecoveryCandidate } from "./main-session-recovery-state.js";
+import {
+  isMainRestartRecoveryAggregateTerminalOnly,
+  isMainRestartRecoveryCandidate,
+} from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import {
   hasRestartRecoveryMessageActionAuthority,
@@ -286,7 +289,10 @@ export async function recoverStore(params: {
       return result;
     }
     let entry = loadedEntry;
-    if (!entry || entry.status !== "running" || entry.abortedLastRun !== true) {
+    const hasRecoveryStateToObserve =
+      entry?.abortedLastRun === true ||
+      (entry !== undefined && isMainRestartRecoveryAggregateTerminalOnly(entry));
+    if (!entry || entry.status !== "running" || !hasRecoveryStateToObserve) {
       continue;
     }
     if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {

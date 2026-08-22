@@ -79,7 +79,10 @@ import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
-import { hasActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
+import {
+  createAgentRuntimeAuthorityGuard,
+  hasActiveAgentRuntimeAuthority,
+} from "./agent-runtime-authority.js";
 import {
   resolveGatewayInflightRequest as resolveIdempotentGatewayRequest,
   runGatewayInflightWork,
@@ -1186,6 +1189,12 @@ export const sendHandlers: GatewayRequestHandlers = {
     const requestedAccountId = normalizeOptionalString(request.accountId);
     const replyToId = normalizeOptionalString(request.replyToId);
     const threadId = normalizeOptionalString(request.threadId);
+    const agentRuntimeAuthority = createAgentRuntimeAuthorityGuard(client, context, respond);
+    const hasAgentRuntimeAuthority = client?.internal?.agentRuntimeIdentity !== undefined;
+    const commitAgentRuntimeAuthority = agentRuntimeAuthority.commitGuard;
+    const onPlatformSendDispatch = commitAgentRuntimeAuthority
+      ? async () => commitAgentRuntimeAuthority()
+      : undefined;
     await withMessageOperationRoute({
       context,
       prefix: "send",
@@ -1195,7 +1204,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       bindingAccountIds: [request.accountId],
       routeAccountIds: (binding) => [requestedAccountId, binding?.reservedRoute?.accountId],
       conflictMessage: "send account selections do not match",
-      authorize: () => hasActiveAgentRuntimeAuthority(client, context),
+      authorize: agentRuntimeAuthority.hasActive,
       resolveChannel: async (requestChannel) => {
         const resolved = await resolveInternalDeliveryChannel(requestChannel, context);
         if (resolved.kind !== "ready") {
@@ -1396,6 +1405,10 @@ export const sendHandlers: GatewayRequestHandlers = {
             silent: request.silent,
             formatting: request.parseMode ? { parseMode: request.parseMode } : undefined,
             onDeliveryResult: commitOutboundSessionRoute,
+            // Runtime-bound sends cannot outlive their operational run. Keep
+            // recovery from replaying them after the live authority closes.
+            onPlatformSendDispatch,
+            skipQueue: hasAgentRuntimeAuthority,
             mirror: outboundSessionKey
               ? {
                   sessionKey: outboundSessionKey,
@@ -1428,6 +1441,9 @@ export const sendHandlers: GatewayRequestHandlers = {
             channel,
           });
         } catch (err) {
+          if (hasAgentRuntimeAuthority && !agentRuntimeAuthority.hasActive()) {
+            return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
+          }
           return createGatewayInflightUnavailableFailure({ context, dedupeKey, channel, err });
         }
       },

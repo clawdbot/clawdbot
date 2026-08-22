@@ -270,6 +270,7 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
   maxRetries?: number;
   shouldContinue?: () => boolean;
   stateDir?: string;
+  startupCheckedStorePaths?: Set<string>;
   waitForStart?: () => Promise<void>;
   gatewayRuntime: GatewayRecoveryRuntime;
 }): { stop: () => Promise<void> } {
@@ -282,7 +283,7 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
     params.shouldContinue?.() !== false &&
     isAgentEventLifecycleGenerationCurrent(lifecycleGeneration);
   const startupRecoveryCutoffMs = Date.now();
-  const startupCheckedStorePaths = new Set<string>();
+  const startupCheckedStorePaths = params.startupCheckedStorePaths ?? new Set<string>();
   const runRecoveryAttempt = async (
     exhaustedTargets: Map<string, ExhaustedRestartRecoveryTarget>,
   ): Promise<RecoveryCounts> => {

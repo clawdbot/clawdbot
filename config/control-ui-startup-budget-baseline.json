@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 347023,
-  "reason": "GitHub device authorization Settings status and recovery copy",
-  "updatedAt": "2026-08-19"
+  "startupJsGzipBytes": 345049,
+  "reason": "streamed-markdown highlighting changes (#127749, #127754) consumed the ratchet",
+  "updatedAt": "2026-08-22"
 }

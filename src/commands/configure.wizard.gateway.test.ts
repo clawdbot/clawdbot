@@ -2,7 +2,7 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   createWizardTestRuntime,
@@ -166,7 +166,7 @@ vi.mock("./onboard-helpers.js", () => ({
 }));
 
 vi.mock("./health.js", () => ({
-  healthCommand: mocks.healthCommand,
+  healthCommandNonExiting: mocks.healthCommand,
 }));
 
 vi.mock("./health-format.js", () => ({
@@ -225,6 +225,7 @@ vi.mock("../config/mutate.js", async () => {
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { maybeInstallDaemon } from "./configure.daemon.js";
 import { runConfigureWizard } from "./configure.wizard.js";
+import { formatHealthCheckFailure } from "./health-format.js";
 
 const createRuntime = createWizardTestRuntime;
 
@@ -411,15 +412,23 @@ describe("runConfigureWizard", () => {
     );
   });
 
-  it.each([false, true])("reports failed remote health checks (reachable: %s)", async (probeOk) => {
+  it.each([
+    ["unreachable gateway", false, new Error("health request failed")],
+    ["health request failure", true, new Error("health request failed")],
+    ["trapped health CLI exit", true, new ExitError(1)],
+  ])("reports failed remote health checks (%s)", async (_reason, probeOk, error) => {
     setupBaseWizardState();
     queueWizardPrompts({ select: ["remote"], confirm: [] });
     mocks.waitForGatewayReachable.mockResolvedValueOnce({ ok: probeOk });
-    mocks.healthCommand.mockRejectedValueOnce(new Error("health request failed"));
+    mocks.healthCommand.mockRejectedValueOnce(error);
 
     await runConfigureWizard({ command: "configure", sections: ["health"] }, createRuntime());
 
     expect(mocks.clackOutro).toHaveBeenCalledWith(expect.stringContaining("health check failed"));
+    if (error instanceof ExitError) {
+      // healthCommand already printed its diagnostic before the trapped exit.
+      expect(formatHealthCheckFailure).not.toHaveBeenCalled();
+    }
   });
 
   it("skips remote health when a configured SecretRef is unresolved", async () => {
@@ -551,6 +560,106 @@ describe("runConfigureWizard", () => {
     const localProbe = probeRequests.find((request) => request.url === "ws://127.0.0.1:18789");
     expect(localProbe?.token).toBe("configured-token");
     expect(localProbe?.password).toBe("configured-password");
+  });
+
+  it("uses resolved SecretRef auth for local gateway and health probes", async () => {
+    setupBaseWizardState({
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "WIZARD_GATEWAY_TOKEN" },
+        },
+      },
+    });
+    queueWizardPrompts({ select: ["local"], confirm: [] });
+
+    await withEnvAsync(
+      { OPENCLAW_GATEWAY_TOKEN: "ambient-token", WIZARD_GATEWAY_TOKEN: "configured-token" },
+      () =>
+        runConfigureWizard(
+          { command: "configure", sections: ["gateway", "health"] },
+          createRuntime(),
+        ),
+    );
+
+    expect(mocks.probeGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({ token: "configured-token", timeoutMs: 300 }),
+    );
+    expect(mocks.waitForGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({ token: "configured-token" }),
+    );
+    expect(mocks.healthCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ token: "configured-token" }),
+      expect.anything(),
+    );
+  });
+
+  it("visibly skips local probes when a configured SecretRef is unavailable", async () => {
+    setupBaseWizardState({
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "password",
+          password: { source: "env", provider: "default", id: "MISSING_WIZARD_PASSWORD" },
+        },
+      },
+    });
+    queueWizardPrompts({ select: ["local"], confirm: [] });
+
+    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "ambient-password" }, () =>
+      runConfigureWizard(
+        { command: "configure", sections: ["gateway", "health"] },
+        createRuntime(),
+      ),
+    );
+
+    expect(mocks.probeGatewayReachable).not.toHaveBeenCalled();
+    expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
+    expect(mocks.healthCommand).not.toHaveBeenCalled();
+    expect(mocks.clackSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.arrayContaining([
+          expect.objectContaining({
+            hint: expect.stringContaining("auth unavailable; probe skipped"),
+          }),
+        ]),
+      }),
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway: auth unavailable (probe skipped)"),
+      "Control UI",
+    );
+  });
+
+  it("never retries an old password after the newly configured SecretRef fails", async () => {
+    setupBaseWizardState({
+      gateway: { mode: "local", auth: { mode: "password", password: "previous-password" } },
+    });
+    queueWizardPrompts({ select: ["local"], confirm: [] });
+    mocks.promptGatewayConfig.mockImplementationOnce(async (cfg: OpenClawConfig) => ({
+      config: {
+        ...cfg,
+        gateway: {
+          ...cfg.gateway,
+          auth: {
+            mode: "password",
+            password: { source: "env", provider: "default", id: "MISSING_WIZARD_PASSWORD" },
+          },
+        },
+      },
+      port: 18789,
+    }));
+
+    await withEnvAsync({ OPENCLAW_GATEWAY_PASSWORD: "ambient-password" }, () =>
+      runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime()),
+    );
+
+    expect(mocks.probeGatewayReachable).toHaveBeenCalledOnce();
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway: auth unavailable (probe skipped)"),
+      "Control UI",
+    );
   });
 
   it("uses the resolved configured port for the local gateway startup hint", async () => {

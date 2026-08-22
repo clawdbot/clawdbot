@@ -79,7 +79,11 @@ describe("hasAuthProfileStoreSourceForProvider", () => {
     writePersistedAuthProfileStoreRaw(unreadableStore, agentDir);
     const updater = vi.fn(() => true);
 
-    await expect(updateAuthProfileStoreWithLock({ agentDir, updater })).resolves.toBeNull();
+    // The unreadable store names its own remediation; a null return would make
+    // callers report generic lock contention instead.
+    await expect(updateAuthProfileStoreWithLock({ agentDir, updater })).rejects.toThrow(
+      "is unreadable; run openclaw doctor --fix",
+    );
     expect(updater).not.toHaveBeenCalled();
     expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual(unreadableStore);
   });

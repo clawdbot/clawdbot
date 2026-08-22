@@ -16,6 +16,7 @@ import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
 import {
   isSkillCollectionReviewDue,
+  recordSkillCollectionReviewFailure,
   recordSkillCollectionReviewSuccess,
 } from "./collection-review-state.js";
 import { runScheduledSkillCollectionReviews } from "./collection-review.js";
@@ -214,6 +215,77 @@ describe("skill collection review", () => {
         )
         .get(path.resolve(workspaceDir)),
     ).toEqual({ count: 90, oldest: 1 });
+  });
+
+  it("backs failed reviews off for one hour without delaying a later success", async () => {
+    const workspaceDir = await makeWorkspaceDir("openclaw-collection-review-backoff-");
+    const otherWorkspaceDir = await makeWorkspaceDir("openclaw-collection-review-other-");
+    const nowMs = Date.UTC(2026, 7, 10);
+    const database = openOpenClawStateDatabase({ env: testState.env }).db;
+
+    recordSkillCollectionReviewSuccess(
+      otherWorkspaceDir,
+      nowMs - 1,
+      { backupId: "other-workspace-backup", kept: [], written: [], dropped: [] },
+      { env: testState.env },
+    );
+    const otherWorkspaceState = database
+      .prepare("SELECT last_result_json FROM skill_curator_state WHERE id = 1")
+      .get() as { last_result_json: string };
+    database.prepare("UPDATE skill_curator_state SET last_result_json = ? WHERE id = 1").run(
+      JSON.stringify({
+        ...JSON.parse(otherWorkspaceState.last_result_json),
+        unrelated: { preserved: true },
+      }),
+    );
+
+    recordSkillCollectionReviewFailure(workspaceDir, nowMs, new Error("x".repeat(2_000)), {
+      env: testState.env,
+    });
+    const failedState = database
+      .prepare("SELECT * FROM skill_curator_state WHERE id = 1")
+      .get() as {
+      last_attempt_at_ms: number;
+      last_error: string;
+      last_result_json: string;
+      last_success_at_ms: number;
+    };
+    expect(failedState.last_attempt_at_ms).toBe(nowMs);
+    expect(failedState.last_success_at_ms).toBe(nowMs - 1);
+    expect(failedState.last_error).toHaveLength(2_000);
+    expect(JSON.parse(failedState.last_result_json)).toMatchObject({
+      unrelated: { preserved: true },
+      collectionReviewSuccess: JSON.parse(otherWorkspaceState.last_result_json)
+        .collectionReviewSuccess,
+    });
+    expect(
+      isSkillCollectionReviewDue(workspaceDir, nowMs + 59 * 60_000, { env: testState.env }),
+    ).toBe(false);
+    expect(
+      isSkillCollectionReviewDue(workspaceDir, nowMs + 60 * 60_000, { env: testState.env }),
+    ).toBe(true);
+    expect(
+      isSkillCollectionReviewDue(otherWorkspaceDir, nowMs + 60 * 60_000, { env: testState.env }),
+    ).toBe(false);
+
+    recordSkillCollectionReviewSuccess(
+      workspaceDir,
+      nowMs + 60 * 60_000,
+      { backupId: "backup-after-retry", kept: [], written: [], dropped: [] },
+      { env: testState.env },
+    );
+    expect(
+      isSkillCollectionReviewDue(workspaceDir, nowMs + 24 * 60 * 60_000, {
+        env: testState.env,
+      }),
+    ).toBe(false);
+    const successfulState = database
+      .prepare("SELECT last_error, last_result_json FROM skill_curator_state WHERE id = 1")
+      .get() as { last_error: string | null; last_result_json: string };
+    expect(successfulState.last_error).toBeNull();
+    expect(JSON.parse(successfulState.last_result_json)).toMatchObject({
+      unrelated: { preserved: true },
+    });
   });
 
   it("leaves disabled and agent-filtered skills outside the editable collection", async () => {
@@ -465,7 +537,7 @@ describe("skill collection review", () => {
     });
 
     expect(String(onError.mock.calls[0]?.[0])).toContain("different collection-review identities");
-    expect(runWithGatewayIndependentRootWorkAdmission).not.toHaveBeenCalled();
+    expect(runWithGatewayIndependentRootWorkAdmission).toHaveBeenCalledOnce();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
@@ -505,13 +577,29 @@ describe("skill collection review", () => {
     });
 
     expect(onError).toHaveBeenCalledWith(expect.any(Error), workspaceDir);
-    expect(runWithGatewayIndependentRootWorkAdmission).not.toHaveBeenCalled();
+    expect(runWithGatewayIndependentRootWorkAdmission).toHaveBeenCalledOnce();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it("claims a due workspace before dispatching the model", async () => {
     const workspaceDir = await makeWorkspaceDir("openclaw-collection-review-claim-");
     await writeWorkspaceSkills(workspaceDir, [{ name: "useful", description: "Useful procedure" }]);
+    const database = openOpenClawStateDatabase({ env: testState.env }).db;
+    database
+      .prepare(
+        "INSERT INTO skill_curator_state (id, last_attempt_at_ms, last_success_at_ms, last_error, last_result_json) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(
+        1,
+        41,
+        23,
+        null,
+        JSON.stringify({
+          unrelated: { preserved: true },
+          collectionReviewAttempts: { "other-workspace": 41 },
+          collectionReviewSuccess: { "other-workspace": 23 },
+        }),
+      );
     let releaseReview: (() => void) | undefined;
     let markStarted: (() => void) | undefined;
     const started = new Promise<void>((resolve) => {
@@ -543,13 +631,33 @@ describe("skill collection review", () => {
     const first = runScheduledSkillCollectionReviews({ config, env: testState.env });
     await started;
     const secondError = vi.fn();
+    const reviewStateBeforeContention = database
+      .prepare("SELECT * FROM skill_curator_state WHERE id = 1")
+      .get();
 
-    await runScheduledSkillCollectionReviews({ config, env: testState.env, onError: secondError });
+    try {
+      await runScheduledSkillCollectionReviews({
+        config,
+        env: testState.env,
+        onError: secondError,
+      });
 
-    expect(secondError).toHaveBeenCalledOnce();
-    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
-    releaseReview?.();
-    await first;
+      expect(secondError).toHaveBeenCalledWith(
+        expect.objectContaining({ code: "OPENCLAW_STATE_LEASE_TIMEOUT" }),
+        workspaceDir,
+      );
+      expect(runWithGatewayIndependentRootWorkAdmission).toHaveBeenCalledTimes(2);
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      expect(database.prepare("SELECT * FROM skill_curator_state WHERE id = 1").get()).toEqual(
+        reviewStateBeforeContention,
+      );
+      expect(isSkillCollectionReviewDue(workspaceDir, Date.now(), { env: testState.env })).toBe(
+        true,
+      );
+    } finally {
+      releaseReview?.();
+      await first;
+    }
   });
 
   it("admits and reports each workspace independently", async () => {
@@ -608,6 +716,39 @@ describe("skill collection review", () => {
     ]);
 
     const onError = vi.fn();
+    const params = {
+      config: {
+        agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+        skills: { workshop: { autonomous: { mode: "auto" as const } } },
+      },
+      env: testState.env,
+      onError,
+    };
+    await runScheduledSkillCollectionReviews(params);
+    await runScheduledSkillCollectionReviews(params);
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("review limit") }),
+      workspaceDir,
+    );
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("reports both a review failure and a failed attempt-state write", async () => {
+    const workspaceDir = await makeWorkspaceDir("openclaw-collection-review-state-failure-");
+    await writeWorkspaceSkills(workspaceDir, [
+      { name: "oversized", description: "Oversized procedure", body: "x".repeat(240_001) },
+    ]);
+    openOpenClawStateDatabase({ env: testState.env }).db.exec(`
+      CREATE TRIGGER reject_collection_review_state
+      BEFORE INSERT ON skill_curator_state
+      BEGIN
+        SELECT RAISE(FAIL, 'collection review state unavailable');
+      END
+    `);
+    const onError = vi.fn();
+
     await runScheduledSkillCollectionReviews({
       config: {
         agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
@@ -617,10 +758,14 @@ describe("skill collection review", () => {
       onError,
     });
 
-    expect(onError).toHaveBeenCalledWith(
+    expect(onError).toHaveBeenCalledOnce();
+    const [error, failedWorkspaceDir] = onError.mock.calls[0]!;
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error.errors).toEqual([
       expect.objectContaining({ message: expect.stringContaining("review limit") }),
-      workspaceDir,
-    );
+      expect.objectContaining({ message: expect.stringContaining("state unavailable") }),
+    ]);
+    expect(failedWorkspaceDir).toBe(workspaceDir);
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 });

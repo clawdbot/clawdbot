@@ -69,6 +69,29 @@ async function writeExportHtmlBuildFixture(rootDir: string): Promise<void> {
 }
 
 describe("runtime postbuild static assets", () => {
+  it("copies bundled hook metadata without replacing compiled handlers", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-hooks-");
+    const sourceHookDir = path.join(rootDir, "src", "hooks", "bundled", "session-memory");
+    const distHookDir = path.join(rootDir, "dist", "bundled", "session-memory");
+    await fs.mkdir(sourceHookDir, { recursive: true });
+    await fs.mkdir(distHookDir, { recursive: true });
+    await fs.writeFile(path.join(sourceHookDir, "HOOK.md"), "---\nname: session-memory\n---\n");
+    await fs.writeFile(path.join(distHookDir, "handler.js"), "export default () => {};\n");
+
+    runRuntimePostBuild({
+      rootDir,
+      env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" },
+      timings: false,
+    });
+
+    await expect(fs.readFile(path.join(distHookDir, "HOOK.md"), "utf8")).resolves.toContain(
+      "name: session-memory",
+    );
+    await expect(fs.readFile(path.join(distHookDir, "handler.js"), "utf8")).resolves.toBe(
+      "export default () => {};\n",
+    );
+  });
+
   it("discovers repo static asset metadata without scanning extension directories", () => {
     const payload = expectNoNodeFsScans<{
       outputs: string[];

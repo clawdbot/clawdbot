@@ -3,8 +3,11 @@ import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts"
 import "../components/app-topbar.ts";
 import "../components/macos-titlebar-controls.ts";
 import "../components/modal-dialog.ts";
-import { formatDocumentTitle, titleForRoute } from "../app-navigation.ts";
-import "../components/onboarding-memory-import.ts";
+import {
+  formatDocumentTitle,
+  isSettingsNavigationRoute,
+  titleForRoute,
+} from "../app-navigation.ts";
 import "../components/resizable-divider.ts";
 import "../components/sidebar-update-card.ts";
 import "../components/update-banner.ts";
@@ -68,6 +71,7 @@ import {
   DESKTOP_PANEL_ELEMENT,
   EXEC_APPROVAL_ELEMENT,
   LazyCustomElementRequestController,
+  type OptionalCustomElement,
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
 import { hasStoredLazyShellAction } from "./lazy-shell-action.ts";
@@ -90,9 +94,15 @@ type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
 };
 
+const APP_SIDEBAR_TAG = "openclaw-app-sidebar";
 // Stable references so the sidebar's enabledRouteIds property does not churn
 // on every shell render.
 const ROUTE_IDS_WITHOUT_WORKBOARD = APP_ROUTE_IDS.filter((routeId) => routeId !== "workboard");
+const APP_SIDEBAR_ELEMENT = {
+  tagName: APP_SIDEBAR_TAG,
+  label: APP_SIDEBAR_TAG,
+  loadModule: () => import("../components/app-sidebar.ts"),
+} satisfies OptionalCustomElement;
 
 i18n.setLocaleLoadRecovery({
   isUnrecoverableError: isStaleChunkImportError,
@@ -142,6 +152,11 @@ class OpenClawShell
   readonly desktopPanelElement = DESKTOP_PANEL_ELEMENT;
   readonly custodianPanelElement = CUSTODIAN_PANEL_ELEMENT;
   readonly execApprovalElement = EXEC_APPROVAL_ELEMENT;
+  readonly onboardingMemoryImportElement = {
+    tagName: "openclaw-onboarding-memory-import",
+    label: t("onboarding.memoryImport.title"),
+    loadModule: () => import("../components/onboarding-memory-import.ts"),
+  } satisfies OptionalCustomElement;
   readonly lazyCustomElements = new LazyCustomElementRequestController(
     this,
     () => this.shellChrome.cancelPendingLazyAction(),
@@ -156,7 +171,7 @@ class OpenClawShell
   // Desktop and modal navigation are two slots for the same live sidebar.
   // Moving its element preserves session controllers and the resident pet
   // instead of resetting their lifecycle at every responsive breakpoint.
-  readonly navigationSidebar = document.createElement("openclaw-app-sidebar") as AppSidebarElement;
+  readonly navigationSidebar = document.createElement(APP_SIDEBAR_TAG) as AppSidebarElement;
   // Where "Back to app" / Escape leaves the settings takeover; falls back to
   // chat (the app default route) when settings was the entry point.
   lastWorkspaceLocation: { routeId: RouteId; pathname: string; search: string } | null = null;
@@ -258,6 +273,12 @@ class OpenClawShell
   get onboardingMode(): boolean {
     const routeSearch = this.routeState.location?.search;
     return routeSearch === undefined ? this.onboarding : resolveOnboardingMode(routeSearch);
+  }
+
+  private get workspaceChromeVisible(): boolean {
+    const routeId = this.routeState.routeId;
+    // Hidden workspace chrome must not preload its sidebar and panel graphs.
+    return routeId !== undefined && !isSettingsNavigationRoute(routeId) && !this.onboardingMode;
   }
 
   storedOutboxScopeHost(context: ApplicationContext<RouteId>): StoredOutboxScopeHost {
@@ -628,7 +649,7 @@ class OpenClawShell
       return;
     }
     const gatewaySnapshot = context.gateway?.snapshot;
-    if (gatewaySnapshot) {
+    if (gatewaySnapshot && this.workspaceChromeVisible) {
       const desktopAvailable = isDesktopPanelAvailable(gatewaySnapshot);
       // Scope-aware: openclaw.chat is operator.admin; advertisement alone would
       // show read-scoped clients a control the store then refuses to use.
@@ -722,6 +743,9 @@ class OpenClawShell
   }
 
   override render() {
+    if (this.workspaceChromeVisible) {
+      this.lazyCustomElements.preload(APP_SIDEBAR_ELEMENT);
+    }
     return renderApplicationShell(this);
   }
 }

@@ -391,11 +391,17 @@ export class MediaAttachmentCache {
       prefix: "openclaw-media",
       extension,
     });
-    await fs.writeFile(tmpPath, bufferResult.buffer);
-    entry.tempPath = tmpPath;
+    // Keep failed staging owned when model fallback retries the same attachment.
+    const previousCleanup = entry.tempCleanup;
     entry.tempCleanup = async () => {
+      await previousCleanup?.();
       await fs.unlink(tmpPath).catch(() => {});
     };
+    await fs.writeFile(tmpPath, bufferResult.buffer).catch(async (error: unknown) => {
+      await entry.tempCleanup?.();
+      throw error;
+    });
+    entry.tempPath = tmpPath;
     return { path: tmpPath, cleanup: entry.tempCleanup };
   }
 

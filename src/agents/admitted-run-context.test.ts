@@ -12,6 +12,7 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
   retainAdmittedRunBeforeToolCallRecovery,
+  resolveAdmittedRunActiveAssertion,
   resolvePreparedRunAdmission,
 } from "./admitted-run-context.js";
 
@@ -239,6 +240,25 @@ describe("prepared run admission", () => {
     expect(validateAgentRunDelegatedAuthority(first)).toBe(false);
     expect(closeAdmittedRunDelegatedAuthority(admitted)).toBe(false);
     await expect(prepared.admit(runtime.kind)).rejects.toThrow("already closed");
+  });
+
+  it("invalidates an admitted-run assertion on abort and outer close", async () => {
+    const { runtime, ...admissionFacts } = facts;
+    const prepared = prepareAgentRunAdmission({
+      cfg: {},
+      facts: { ...admissionFacts, runId: "run-assertion" },
+      operationalRunInstance: createOperationalRunInstanceRef("run-assertion"),
+    });
+    const admitted = await prepared.admit(runtime.kind);
+    const abort = new AbortController();
+    const assertActive = resolveAdmittedRunActiveAssertion(admitted, abort.signal);
+
+    expect(assertActive).toBeDefined();
+    expect(() => assertActive?.()).not.toThrow();
+    abort.abort();
+    expect(() => assertActive?.()).toThrow("no longer active");
+    prepared.close();
+    expect(() => assertActive?.()).toThrow("no longer active");
   });
 
   it("closes generic authority while keeping a recovery-only lease active", async () => {

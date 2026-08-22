@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   externalCliDiscoveryForProviderAuth: vi.fn(() => ({ kind: "none" })),
   loadModelsConfig: vi.fn(),
   resolveAuthProfileDisplayLabel: vi.fn(({ profileId }: { profileId: string }) => profileId),
+  resolveAuthStatePathForDisplay: vi.fn((agentDir: string) => `${agentDir}/openclaw-agent.sqlite`),
   resolveModelsTargetAgent: vi.fn((_cfg: OpenClawConfig, rawAgentId?: string) => {
     const agentId = rawAgentId ?? "main";
     return { agentDir: `/tmp/openclaw/agents/${agentId}`, agentId };
@@ -25,7 +26,7 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore: mocks.ensureAuthProfileStore,
   externalCliDiscoveryForProviderAuth: mocks.externalCliDiscoveryForProviderAuth,
   resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
-  resolveAuthStatePathForDisplay: (agentDir: string) => `${agentDir}/openclaw-agent.sqlite`,
+  resolveAuthStatePathForDisplay: mocks.resolveAuthStatePathForDisplay,
 }));
 
 vi.mock("./load-config.js", () => ({
@@ -62,6 +63,9 @@ describe("modelsAuthListCommand", () => {
     mocks.ensureAuthProfileStore.mockReset();
     mocks.externalCliDiscoveryForProviderAuth.mockClear();
     mocks.resolveAuthProfileDisplayLabel.mockClear();
+    mocks.resolveAuthStatePathForDisplay
+      .mockReset()
+      .mockImplementation((agentDir: string) => `${agentDir}/openclaw-agent.sqlite`);
     mocks.resolveModelsTargetAgent.mockClear();
   });
 
@@ -296,15 +300,19 @@ describe("modelsAuthListCommand", () => {
     expect(JSON.stringify(runtime.jsonPayloads[0])).not.toContain("secret");
   });
 
-  it("prints an empty profile list without failing", async () => {
+  it.each([
+    ["agent-local", "/tmp/openclaw/agents/main/openclaw-agent.sqlite"],
+    ["shared", "/tmp/openclaw/state/openclaw.sqlite"],
+  ])("prints an empty profile list with the %s auth path", async (_shape, authStatePath) => {
     mocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
+    mocks.resolveAuthStatePathForDisplay.mockReturnValue(authStatePath);
     const runtime = createRuntime();
 
     await modelsAuthListCommand({}, runtime);
 
     expect(runtime.logs).toEqual([
       "Agent: main",
-      "Auth state store: /tmp/openclaw/agents/main/openclaw-agent.sqlite",
+      `Auth state store: ${authStatePath}`,
       "Profiles: (none)",
     ]);
   });

@@ -125,6 +125,7 @@ function turnClaim() {
 
 function transport(): NodeWorkerSupervisorTransport {
   return {
+    hasCurrentRunner: () => true,
     listCurrentNodes: async () => [
       {
         nodeId: "node-1",

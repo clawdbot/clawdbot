@@ -507,6 +507,101 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     in-flight requests and release local resources. Existing calls that omit the
     signal retain their previous behavior.
 
+    Gateway-loaded plugins can open a connection-scoped binary channel to a
+    registered node-host command with `nodes.openDuplex(...)`:
+
+    ```typescript
+    const controller = new AbortController();
+    const channel = await api.runtime.nodes.openDuplex({
+      nodeId: "paired-node",
+      command: "my-plugin.image-bridge",
+      params: { format: "png" },
+      timeoutMs: 30000,
+      maxMessageBytes: 4 * 1024 * 1024,
+      signal: controller.signal,
+    });
+
+    const unsubscribe = channel.onMessage((message: Uint8Array) => {
+      console.log("Received one complete binary message:", message.byteLength);
+    });
+
+    try {
+      await channel.send(Uint8Array.of(1, 2, 3));
+      const result = await channel.closed;
+    } finally {
+      unsubscribe();
+      channel.close();
+    }
+    ```
+
+    `openDuplex` accepts the same node, command, parameters, timeout,
+    idempotency key, session key, caller signal, and requested scopes as
+    `nodes.invoke`, plus optional `maxMessageBytes` and
+    `maxOutstandingDeliveryBytes` limits. The per-message limit defaults to
+    100 MiB and can be reduced, but never increased beyond 100 MiB.
+    `maxOutstandingDeliveryBytes` bounds the combined size of complete messages
+    whose asynchronous listener callbacks have not settled; it defaults to
+    `maxMessageBytes`, cannot be smaller than that limit, and cannot exceed
+    100 MiB. A protocol that can follow a maximum-sized response with a bounded
+    asynchronous notification may request a larger outstanding-delivery budget
+    without raising its per-message ceiling. OpenClaw splits each binary message
+    into ordered 8 KiB payload fragments that fit the existing 16 KiB
+    transport-frame limit; callers always send and receive complete
+    `Uint8Array` messages. Concurrent sends preserve message boundaries.
+
+    Register the channel's single message listener immediately after
+    `openDuplex` resolves. Before a listener is registered, OpenClaw buffers at
+    most eight complete messages and 1 MiB total; exceeding either limit closes
+    the invocation. The unsubscribe callback removes that listener. Listeners
+    may return `Promise<void>`; a thrown error or rejected promise, caller
+    abort, `close()`, node disconnect, pairing change, plugin reload or
+    retirement, or Gateway shutdown closes the channel and cancels outstanding
+    node work. Successful node command completion and `channel.closed` wait
+    for asynchronous message listeners already in progress. `close()` is
+    idempotent, and retained channel methods reject after closure.
+    `channel.closed` resolves with the successful command result or rejects
+    with the node, authorization, transport, or cancellation error. Channels
+    cannot reconnect or survive a node disconnection.
+
+    The node plugin declares `duplex: true` and registers a message listener
+    through the optional framed command I/O capability:
+
+    ```typescript
+    api.registerNodeHostCommand({
+      command: "my-plugin.image-bridge",
+      duplex: true,
+      async handle(_paramsJSON, io) {
+        if (!io?.frames) {
+          throw new Error("Framed node command I/O is unavailable.");
+        }
+
+        const frames = io.frames;
+        return await new Promise<string>((resolve, reject) => {
+          frames.onMessage((message) => {
+            void frames.send(message).then(() => resolve('{"ok":true}'), reject);
+          });
+          io.signal.addEventListener(
+            "abort",
+            () => reject(new Error("Node command was canceled.")),
+            { once: true },
+          );
+        });
+      },
+    });
+    ```
+
+    Register `frames.onMessage(...)` before sending: the node announces framed
+    readiness only after the listener exists, and `openDuplex` resolves only
+    after both command dispatch and framed readiness. This prevents input from
+    arriving before the plugin can consume it. The existing raw `emitChunk`
+    and `onInput` helpers remain available to terminal-style commands.
+
+    `openDuplex` is available only to a current, trusted in-process Gateway
+    plugin runtime. Plugin CLI runtimes reject it with an actionable error;
+    there is no remote polling or local fallback. Every invocation uses the
+    same pairing, declared-command allowlist, plugin policy, approval,
+    authorization, and connection-ownership checks as `nodes.invoke`.
+
     `nodes.list(...)` includes each connected node's advertised
     `nodePluginTools` descriptors when that node exposes plugin or MCP-backed
     tools to the agent. Those descriptors are live connection state: the Gateway
@@ -518,7 +613,7 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     Plugins that expose node-hosted agent tools can set `agentTool.defaultPlatforms` for non-dangerous commands that should be allowlisted by default. Omit it when operators must opt in with `gateway.nodes.commands.allow`. Dangerous node-host commands should register a node-invoke policy with `api.registerNodeInvokePolicy(...)`; the policy runs in the Gateway after command allowlist checks and before the command is forwarded to the node, so direct `node.invoke` calls, node-hosted plugin tools, and higher-level plugin tools share the same enforcement path.
 
     <Warning>
-    The optional `scopes` field requests Gateway operator scopes for the invocation. OpenClaw honors it only for bundled plugins and trusted official plugin installations; requests from other plugins do not elevate the call. Use it only when a trusted plugin must invoke a node command with a stricter Gateway scope, such as `operator.admin`.
+    The optional `scopes` field requests Gateway operator scopes for the invocation. OpenClaw honors it only for bundled plugins and trusted official plugin installations; requests from other plugins do not elevate the call. When `openDuplex` runs inside an authenticated Gateway request, its effective scopes never exceed that authenticated caller's actual scopes, even if a trusted plugin requests stronger scopes. Without an authenticated incoming client, existing trusted-plugin scope behavior applies. Use requested scopes only when a trusted plugin must invoke a node command with a stricter Gateway scope, such as `operator.admin`.
     </Warning>
 
   </Accordion>

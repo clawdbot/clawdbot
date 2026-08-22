@@ -2290,6 +2290,9 @@ CREATE TABLE IF NOT EXISTS worker_session_placement_moves (
   -- Keep this nullable column constraint-free so lazy ALTER TABLE produces the
   -- same shape as fresh databases; placement-move code validates its value.
   target_machine_class TEXT,
+  -- Explicit source abandonment is a durable operator decision. Keep the bit
+  -- bare and nullable so same-version older readers can safely omit it.
+  abandon_source INTEGER,
   last_error TEXT,
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,

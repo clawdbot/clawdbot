@@ -380,7 +380,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
   return renderSidebarSessionSortMenu({
     position,
     trigger: controller.sessionSortMenuTrigger,
-    grouping: host.sessionsGrouping,
+    grouping: host.effectiveSessionsGrouping(),
     sortMode: host.effectiveSessionSortMode(),
     peopleSortAvailable: host.sessionPeopleSortAvailable(),
     statusFilter: host.sessionsStatusFilter,

@@ -64,15 +64,33 @@ export async function gatherDispatchRequest(
   const ctx = isFinalizedInboundContext(params.ctx)
     ? params.ctx
     : finalizeInboundContext(params.ctx);
+  const turnAdoptionLifecycle = params.replyOptions?.turnAdoptionLifecycle;
+  const turnAdoptionState = { adopted: false };
   const normalizedParams: DispatchFromConfigParams = {
     ...params,
     ctx,
-    replyOptions: { ...params.replyOptions },
+    replyOptions: {
+      ...params.replyOptions,
+      ...(turnAdoptionLifecycle
+        ? {
+            turnAdoptionLifecycle: {
+              ...turnAdoptionLifecycle,
+              onAdopted: async () => {
+                // The upstream owner is durable only after its callback commits.
+                // A rejected callback must leave replay dedupe releasable.
+                await turnAdoptionLifecycle.onAdopted();
+                turnAdoptionState.adopted = true;
+              },
+            },
+          }
+        : {}),
+    },
   };
   const state = {
     params: normalizedParams,
     messageAuditTerminal,
     inboundDedupeReplayUnsafe: false,
+    turnAdoptionState: turnAdoptionLifecycle ? turnAdoptionState : undefined,
   };
   const { cfg, dispatcher } = normalizedParams;
   const replyOperationRunState: ReplyOperationRunState =

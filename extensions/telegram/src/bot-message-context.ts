@@ -54,8 +54,8 @@ import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 import {
   buildTelegramStatusReactionVariants,
   type TelegramReactionEmoji,
-  isTelegramSupportedReactionEmoji,
   resolveTelegramAllowedEmojiReactions,
+  resolveTelegramReactionEmoji,
   resolveTelegramReactionVariant,
   resolveTelegramStatusReactionEmojis,
 } from "./status-reaction-variants.js";
@@ -434,8 +434,6 @@ export const buildTelegramMessageContext = async ({
     }),
   };
   const activationOverride = resolveGroupActivation({
-    chatId,
-    messageThreadId: resolvedThreadId,
     sessionKey,
     agentId: route.agentId,
     cfg,
@@ -554,8 +552,7 @@ export const buildTelegramMessageContext = async ({
     channel: "telegram",
     accountId: account.accountId,
   });
-  const ackReactionEmoji =
-    ackReaction && isTelegramSupportedReactionEmoji(ackReaction) ? ackReaction : undefined;
+  const ackReactionEmoji = ackReaction ? resolveTelegramReactionEmoji(ackReaction) : undefined;
   const shouldSendAckReaction = Boolean(
     ackReaction &&
     shouldAckReactionGate({

@@ -57,31 +57,53 @@ describe("AppSidebar context menu boundary", () => {
 });
 
 describe("AppSidebar multi-select", () => {
-  it("names each session's pin and menu buttons after their owning session", async () => {
+  it("names session actions and routes menu hints through the shared tooltip", async () => {
     const { sidebar } = await mountMultiSelect();
 
     for (const key of ["agent:main:a", "agent:main:b"]) {
       const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key}"]`);
       const label = row?.querySelector(".sidebar-recent-session__name")?.textContent?.trim();
+      const menu = row?.querySelector<HTMLElement>("[data-session-menu]");
+      const tooltip = menu?.closest("openclaw-tooltip") as
+        | (HTMLElement & { content: string; describe: boolean })
+        | null;
       expect(label).toBeTruthy();
       expect(row?.querySelector("[data-sidebar-session-pin]")?.getAttribute("aria-label")).toBe(
         `Pin session: ${label}`,
       );
-      expect(row?.querySelector("[data-session-menu]")?.getAttribute("aria-label")).toBe(
-        `Open session menu: ${label}`,
-      );
+      expect(menu?.getAttribute("aria-label")).toBe(`Open session menu: ${label}`);
+      expect(menu?.hasAttribute("title")).toBe(false);
+      expect(tooltip?.content).toBe("Open session menu");
+      expect(tooltip?.describe).toBe(false);
     }
   });
 
   it("restores the thread action anchor when Tab exits its keyboard context menu", async () => {
     const { sidebar } = await mountMultiSelect();
-    const link = rowLink(sidebar, "agent:main:a");
     const trigger = sidebar.querySelector<HTMLElement>(
       '[data-session-key="agent:main:a"] [data-session-menu]',
     );
-    link.focus();
-    link.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    const tooltip = trigger?.closest("openclaw-tooltip") as
+      | (HTMLElement & {
+          disabled: boolean;
+          renderRoot: ShadowRoot;
+          updateComplete: Promise<unknown>;
+        })
+      | null;
+    if (!trigger || !tooltip) {
+      throw new Error("expected session menu tooltip");
+    }
+    const popup = tooltip.renderRoot.querySelector("wa-tooltip") as
+      | (HTMLElement & { open: boolean })
+      | null;
+    trigger.focus();
+    expect(popup?.open).toBe(true);
+
+    trigger.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     await sidebar.updateComplete;
+    await tooltip.updateComplete;
+    expect(tooltip.disabled).toBe(true);
+    expect(popup?.open).toBe(false);
 
     const menu = await sessionMenu(sidebar);
     const item = menu.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])");

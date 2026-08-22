@@ -264,7 +264,7 @@ export async function appendAssistantTranscriptMessage(params: {
   idempotencyKey?: string;
   abortMeta?: {
     aborted: true;
-    origin: "rpc" | "stop-command";
+    origin: "rpc" | "stop-command" | "placement-abandon";
     runId: string;
   };
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;

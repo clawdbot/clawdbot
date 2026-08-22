@@ -23,7 +23,6 @@ export function createEmbeddedAgentSubscribeState(
     itemCompletedCount: 0,
     assistantTurnCount: 0,
     lastToolError: undefined,
-    lastToolRecovery: undefined,
     blockReplyBreak: params.blockReplyBreak ?? "text_end",
     reasoningMode,
     includeReasoning: reasoningMode === "on" && canShowReasoning,
@@ -36,6 +35,8 @@ export function createEmbeddedAgentSubscribeState(
       typeof params.onReasoningStream === "function",
     deltaBuffer: "",
     thinkingTagStream: createThinkingTagStreamState(),
+    deltaBufferIsCommentary: false,
+    hasFlushedPartialText: false,
     blockBuffer: "",
     // Track if a streamed chunk opened a <think> block (stateful across chunks).
     blockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },

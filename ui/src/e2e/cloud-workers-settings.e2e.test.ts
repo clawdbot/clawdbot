@@ -278,6 +278,114 @@ suite.define(() => {
     }
   });
 
+  it("releases a retired profile save after reconnect while preserving the draft", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1_000, width: 1_440 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["config.patch", "environments.list"],
+      methodResponses: {
+        "config.get": configResponse({}, "cloud-workers-reconnect-1"),
+        "environments.list": { environments: [], profiles: [] },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+      await page.getByRole("button", { name: "Add profile" }).click();
+      const editor = page.locator(".settings-section", {
+        has: page.getByRole("heading", { name: "Add profile", exact: true }),
+      });
+      const profileId = page.getByLabel("Profile ID");
+      const backend = page.getByLabel("Crabbox backend");
+      await profileId.fill("reconnect-proof");
+      await backend.fill("hetzner");
+      await waitForSettledFormControls(page, [
+        { locator: profileId, value: "reconnect-proof" },
+        { locator: backend, value: "hetzner" },
+      ]);
+
+      await gateway.deferNext("config.patch");
+      await editor.getByRole("button", { name: "Save" }).click();
+      await gateway.waitForRequest("config.patch");
+      await expect.poll(() => profileId.isDisabled()).toBe(true);
+
+      const socketCount = await gateway.getSocketCount();
+      const configGetCount = (await gateway.getRequests("config.get")).length;
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse({}, "cloud-workers-reconnect-2"),
+      );
+      await gateway.closeLatest(1012, "cloud worker save reconnect proof");
+      await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+      await expect
+        .poll(async () => (await gateway.getRequests("config.get")).length)
+        .toBeGreaterThan(configGetCount);
+
+      await expect.poll(() => profileId.isEnabled()).toBe(true);
+      await expect.poll(() => backend.isEnabled()).toBe(true);
+      await expect.poll(() => profileId.inputValue()).toBe("reconnect-proof");
+      await expect.poll(() => backend.inputValue()).toBe("hetzner");
+      await expect.poll(() => editor.getByRole("button", { name: "Save" }).isEnabled()).toBe(true);
+      await expect
+        .poll(() => editor.getByRole("button", { name: "Cancel" }).isEnabled())
+        .toBe(true);
+
+      await gateway.resolveDeferred("config.patch", {
+        ok: true,
+        hash: "retired-cloud-workers-save",
+        config: {},
+      });
+      await expect.poll(() => profileId.inputValue()).toBe("reconnect-proof");
+      await expect.poll(() => page.getByText("Gateway restart required.").count()).toBe(0);
+      await expect.poll(() => page.getByRole("alert").count()).toBe(0);
+
+      await gateway.deferNext("config.patch");
+      const retryRequestCount = (await gateway.getRequests("config.patch")).length;
+      await editor.getByRole("button", { name: "Save" }).click();
+      const retryPatch = await waitForConfigPatch(gateway, retryRequestCount);
+      expect(retryPatch).toMatchObject({
+        cloudWorkers: {
+          profiles: {
+            "reconnect-proof": {
+              provider: "crabbox",
+              settings: { provider: "hetzner" },
+            },
+          },
+        },
+      });
+      const savedProfile = {
+        provider: "crabbox",
+        install: "bundle",
+        settings: {
+          provider: "hetzner",
+          class: "standard",
+          ttl: "8h",
+          idleTimeout: "45m",
+        },
+      };
+      await gateway.setMethodResponse(
+        "config.get",
+        configResponse(
+          { cloudWorkers: { profiles: { "reconnect-proof": savedProfile } } },
+          "cloud-workers-reconnect-3",
+        ),
+      );
+      await gateway.resolveDeferred("config.patch", {
+        ok: true,
+        hash: "cloud-workers-reconnect-3",
+        config: { cloudWorkers: { profiles: { "reconnect-proof": savedProfile } } },
+      });
+      await page.getByText("Gateway restart required.", { exact: true }).waitFor();
+      await expect.poll(() => page.getByLabel("Profile ID").count()).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("deletes a profile only after confirmation", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();

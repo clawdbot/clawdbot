@@ -573,6 +573,8 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         return;
       }
       if (params.useManagedClaudeLiveSession) {
+        // The child still holds the process-env capture key. If drain cannot
+        // prove idle, kill it so a stale key cannot admit later sends.
         await closeClaudeSession(context, "mcp-capture-rotation");
       }
       const internalStates = await Promise.all(
@@ -599,7 +601,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   };
 
   const finalizeCapture = (finalizeParsedTools: () => void) => {
-    // Captured MCP calls may settle after the CLI process exits. Drain first so
+    // Captured MCP calls may settle after the attempt returns. Drain first so
     // finalization can use their trusted terminal outcomes.
     try {
       finalizeParsedTools();

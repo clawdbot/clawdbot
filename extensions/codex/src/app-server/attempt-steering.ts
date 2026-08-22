@@ -33,6 +33,11 @@ export type CodexSteeringQueueOptions = {
   userTurnTranscriptRecorder?: AgentHarnessQueueMessageOptions["userTurnTranscriptRecorder"];
 };
 
+type CodexSteeringCommitItem = Pick<
+  CodexSteeringQueueOptions,
+  "isInboundUserMessage" | "userTurnTranscriptRecorder"
+>;
+
 /**
  * Creates a queue that batches steer messages while still serializing
  * app-server `turn/steer` requests.
@@ -43,15 +48,18 @@ export function createCodexSteeringQueue(params: {
   turnId: string;
   requestTimeoutMs: number;
   signal: AbortSignal;
+  beforeConfirmConsumed?: (items: readonly CodexSteeringCommitItem[]) => Promise<void>;
 }) {
   type PendingSteerMessage = {
     acceptance: "open" | "accepted" | "rejected";
     text: string;
     images?: EmbeddedRunAttemptParams["images"];
+    isInboundUserMessage?: boolean;
     onQueueAccepted?: (accepted: boolean) => void;
     resolve: () => void;
     reject: (error: unknown) => void;
     settled: boolean;
+    userTurnTranscriptRecorder?: CodexSteeringQueueOptions["userTurnTranscriptRecorder"];
   };
   type PendingSteerBatch = {
     items: PendingSteerMessage[];
@@ -245,10 +253,12 @@ export function createCodexSteeringQueue(params: {
       acceptance: "open" as const,
       text,
       images: options?.images,
+      isInboundUserMessage: options?.isInboundUserMessage,
       onQueueAccepted: options?.onQueueAccepted,
       resolve: resolveDelivery,
       reject: rejectDelivery,
       settled: false,
+      userTurnTranscriptRecorder: options?.userTurnTranscriptRecorder,
     };
     pendingMessages.add(item);
     return { item, delivery };
@@ -290,9 +300,28 @@ export function createCodexSteeringQueue(params: {
       }
       dispatchedBatches.delete(clientUserMessageId);
       for (const item of batch.items) {
-        resolveItem(item);
+        reportItemAcceptance(item, true);
       }
-      return true;
+      const resolveBatch = () => {
+        for (const item of batch.items) {
+          resolveItem(item);
+        }
+        return true;
+      };
+      const rejectBatch = (error: unknown) => {
+        for (const item of batch.items) {
+          rejectItem(item, error);
+        }
+        return true;
+      };
+      if (!params.beforeConfirmConsumed) {
+        return resolveBatch();
+      }
+      try {
+        return params.beforeConfirmConsumed(batch.items).then(resolveBatch, rejectBatch);
+      } catch (error) {
+        return rejectBatch(error);
+      }
     },
     sealAdmission: sealQueueAdmission,
     cancel: cancelQueue,

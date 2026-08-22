@@ -59,6 +59,7 @@ describe("Skill Workshop SQLite store", () => {
       commitPendingSkillProposalTransition({
         expected: proposal.record,
         record: applied,
+        event,
         operationLabel: "skill-workshop.test.conflict",
       }),
     ).toMatchObject({ state: "conflict", current: { status: "applied" } });

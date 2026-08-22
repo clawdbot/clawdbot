@@ -4,40 +4,51 @@ import {
   appendTranscriptMessage,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+// Force the mocked module to load here: the factory below captures the real reader as a
+// side effect, and beforeEach needs that capture. Without this import the factory only ran
+// if some other module in the graph pulled it in first, which is not guaranteed once a
+// shard shares a worker (--isolate=false).
+import "../config/sessions/session-accessor.sqlite-read.js";
 import { rpcReq } from "./test-helpers.js";
 import {
   sessionStoreEntry,
   setupGatewaySessionsTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
+vi.hoisted(() => {
+  // Earlier Gateway suites may have already loaded the unmocked accessor graph.
+  vi.resetModules();
+});
+
 type LoadTranscriptEvents =
   (typeof import("../config/sessions/session-accessor.sqlite-read.js"))["loadTranscriptEvents"];
 
 const transcriptReads = vi.hoisted(() => ({
-  actual: undefined as LoadTranscriptEvents | undefined,
   load: vi.fn<LoadTranscriptEvents>(),
 }));
 
 vi.mock("../config/sessions/session-accessor.sqlite-read.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../config/sessions/session-accessor.sqlite-read.js")>();
-  transcriptReads.actual = actual.loadTranscriptEvents;
-  transcriptReads.load.mockImplementation(actual.loadTranscriptEvents);
   return { ...actual, loadTranscriptEvents: transcriptReads.load };
 });
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
-function requireTranscriptReader(): LoadTranscriptEvents {
-  if (!transcriptReads.actual) {
-    throw new Error("transcript reader mock was not initialized");
-  }
-  return transcriptReads.actual;
+// Read the real implementation back here rather than capturing it inside the mock
+// factory: Vitest runs that factory on first import of the mocked module, and this
+// project is `isolate: false`, so on a warm module graph the factory can still be
+// unrun when the first `beforeEach` fires.
+async function actualTranscriptReader(): Promise<LoadTranscriptEvents> {
+  const actual = await vi.importActual<
+    typeof import("../config/sessions/session-accessor.sqlite-read.js")
+  >("../config/sessions/session-accessor.sqlite-read.js");
+  return actual.loadTranscriptEvents;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   transcriptReads.load.mockReset();
-  transcriptReads.load.mockImplementation(requireTranscriptReader());
+  transcriptReads.load.mockImplementation(await actualTranscriptReader());
 });
 
 async function seedCompactionSession(params: {
@@ -86,10 +97,35 @@ async function seedCompactionSession(params: {
 const transcriptReadError = () =>
   new Error("SQLITE_IOERR: failed to read session transcript storage");
 
+/**
+ * Injects the read failure for one seeded session instead of the next global call.
+ * `--isolate=false` shares a worker, so any sibling transcript read can consume a
+ * `*Once` mock before the compaction RPC issues its own and the failure silently
+ * disappears. Keying on sessionId makes the injection independent of call order.
+ */
+function failTranscriptReadsForSession(
+  sessionId: string,
+  options?: { succeedFirstWith: Awaited<ReturnType<LoadTranscriptEvents>> },
+): void {
+  let sessionReads = 0;
+  transcriptReads.load.mockImplementation(async (scope, ...rest) => {
+    if (scope.sessionId !== sessionId) {
+      return await (
+        await actualTranscriptReader()
+      )(scope, ...rest);
+    }
+    sessionReads += 1;
+    if (options && sessionReads === 1) {
+      return options.succeedFirstWith;
+    }
+    throw transcriptReadError();
+  });
+}
+
 test("sessions.compact reports initial transcript read failures as unavailable", async () => {
   const { storePath } = await createSessionStoreDir();
   await seedCompactionSession({ sessionId: "sess-read-failure", storePath });
-  transcriptReads.load.mockRejectedValueOnce(transcriptReadError());
+  failTranscriptReadsForSession("sess-read-failure");
 
   const { ws } = await openClient();
   try {
@@ -112,8 +148,8 @@ test("sessions.compact reports model compaction transcript re-read failures as u
     storePath,
     nativeHarness: true,
   });
-  const events = await requireTranscriptReader()(scope);
-  transcriptReads.load.mockResolvedValueOnce(events).mockRejectedValueOnce(transcriptReadError());
+  const events = await (await actualTranscriptReader())(scope);
+  failTranscriptReadsForSession("sess-model-read-failure", { succeedFirstWith: events });
 
   const { ws } = await openClient();
   try {
@@ -132,7 +168,7 @@ test("sessions.compact reports model compaction transcript re-read failures as u
 test("sessions.compact maxLines reports transcript preflight read failures as unavailable", async () => {
   const { storePath } = await createSessionStoreDir();
   await seedCompactionSession({ sessionId: "sess-max-lines-read-failure", storePath });
-  transcriptReads.load.mockRejectedValueOnce(transcriptReadError());
+  failTranscriptReadsForSession("sess-max-lines-read-failure");
 
   const { ws } = await openClient();
   try {

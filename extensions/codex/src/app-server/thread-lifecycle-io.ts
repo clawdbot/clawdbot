@@ -1,5 +1,7 @@
 import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveAgentDir, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { codexCatalogHomeId } from "../session-catalog-home-id.js";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
@@ -7,12 +9,14 @@ import {
   isCodexAppServerUnsafeSubscriptionError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
+import { resolveCodexAppServerLocalHomeDir } from "./auth-start-options.js";
 import {
   CodexAppServerRpcError,
   isCodexAppServerConnectionClosedError,
   resolveCodexAppServerClientInstanceId,
 } from "./client.js";
 import { isMessageOnlyCodexSourceReply } from "./dynamic-tool-profile.js";
+import { markStartedCodexManagedThread } from "./managed-thread-store.js";
 import {
   applyCodexNativeSkillIsolation,
   type CodexNativeSkillIsolation,
@@ -45,6 +49,7 @@ import {
   CodexThreadBindingConflictError,
   CodexThreadStartRequestError,
 } from "./thread-lifecycle-errors.js";
+import { buildStartedCodexThreadBinding } from "./thread-lifecycle-result.js";
 import type { CodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timing.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
@@ -105,6 +110,19 @@ type StartThreadContext = ThreadRequestContext & {
   rotatedContextEngineBinding: boolean;
   replacementPredecessor?: CodexAppServerThreadBinding;
 };
+
+function resolveManagedThreadSourceHomeId(params: CodexStartOrResumeThreadParams): string {
+  const agentId = resolveSessionAgentIds({
+    config: params.params.config,
+    sessionKey: params.params.sessionKey,
+    agentId: params.agentId ?? params.params.agentId,
+  }).sessionAgentId;
+  const agentDir =
+    params.agentDir ??
+    params.params.agentDir ??
+    resolveAgentDir(params.params.config ?? {}, agentId);
+  return codexCatalogHomeId(resolveCodexAppServerLocalHomeDir(params.appServer.start, agentDir));
+}
 
 function resolveCodexThreadRolloutPath(thread: CodexThread): string | undefined {
   const rolloutPath = thread.path?.trim();
@@ -624,6 +642,14 @@ export async function startFreshCodexThread(
         );
       }
     };
+    const managedSourceHomeId = resolveManagedThreadSourceHomeId(params);
+    await lifecycleTiming.measure("thread-start-mark-managed", () =>
+      markStartedCodexManagedThread(params.bindingStore.managedThreads, {
+        sourceHomeId: managedSourceHomeId,
+        threadId: response.thread.id,
+        ...(rolloutPath ? { rolloutPath } : {}),
+      }),
+    );
     let committed: boolean;
     try {
       committed = await lifecycleTiming.measure("thread-start-write-binding", () =>
@@ -673,53 +699,18 @@ export async function startFreshCodexThread(
     threadId: response.thread.id,
     action: rotatedContextEngineBinding ? "rotated" : "started",
   });
-  return {
-    threadId: response.thread.id,
-    ...(clientId ? { clientId } : {}),
-    cwd: params.cwd,
-    ...(rolloutPath ? { rolloutPath } : {}),
-    authProfileId: params.params.authProfileId,
-    agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
-    model: response.model ?? startParams.model ?? params.params.modelId,
-    modelProvider:
-      response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
-    dynamicToolsFingerprint,
-    dynamicToolsContainDeferred,
-    nativeSkillIsolationFingerprint,
-    userMcpServersFingerprint,
-    mcpServersFingerprint: nextMcpServersFingerprint,
-    configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,
-    ringZeroConfigFingerprint,
-    ringZeroClientInstanceId,
-    networkProxyProfileName: params.appServer.networkProxy?.profileName,
-    networkProxyConfigFingerprint,
-    nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
-    appServerRuntimeFingerprint: params.appServerRuntimeFingerprint,
-    pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
-    pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
-    pluginAppPolicyContext: pluginThreadConfig?.policyContext,
-    contextEngine: contextEngineBinding,
-    environmentSelectionFingerprint,
-    // Transient starts do not own the persisted binding, so their native
-    // subscriptions must be released instead of entering the warm cache.
-    ...(!preserveExistingBinding
-      ? {
-          liveThreadConfigFingerprint: fingerprintCodexThreadConfig(
-            {
-              ...startParams,
-              model: response.model ?? startParams.model ?? null,
-              requestedModel: startParams.model ?? null,
-              modelProvider: bindingModelProvider ?? null,
-              requestedModelProvider: startParams.modelProvider ?? bindingModelProvider ?? null,
-            },
-            params.params.authProfileId,
-            dynamicToolsFingerprint,
-          ),
-        }
-      : {}),
-    lifecycle: {
-      action: "started",
-      ...(rotatedContextEngineBinding ? { rotatedContextEngineBinding } : {}),
-    },
-  };
+  return buildStartedCodexThreadBinding({
+    bindingModelProvider,
+    clientId,
+    context,
+    finalConfigPatch,
+    nextMcpServersFingerprint,
+    params,
+    pluginThreadConfig,
+    response,
+    rolloutPath,
+    startModelProvider: requestModelProvider ?? startModelProvider,
+    startParams,
+    modelProvider,
+  });
 }

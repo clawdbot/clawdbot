@@ -93,6 +93,8 @@ jobs:
       kova_ref: ${{ steps.resolve.outputs.kova_ref }}
       kova_config_contract: ${{ steps.resolve.outputs.kova_config_contract }}
       kova_ref_trusted_for_live: ${{ steps.resolve.outputs.kova_ref_trusted_for_live }}
+      secret_eligible: ${{ steps.candidate_trust.outputs.secret_eligible }}
+      cache_write_allowed: ${{ steps.candidate_trust.outputs.cache_write_allowed }}
     steps:
       - name: Checkout target metadata
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -177,6 +179,34 @@ jobs:
             echo "kova_ref_trusted_for_live=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Classify performance candidate trust
+        id: candidate_trust
+        env:
+          CANDIDATE_SHA: ${{ steps.resolve.outputs.tested_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          secret_eligible=false
+          cache_write_allowed=false
+          if [[
+            "$GITHUB_EVENT_NAME" == "schedule" ||
+            "$GITHUB_EVENT_NAME" == "workflow_dispatch"
+          ]] && [[
+            "$GITHUB_REF" == "refs/heads/${DEFAULT_BRANCH}" &&
+            "$CANDIDATE_SHA" == "$WORKFLOW_SHA"
+          ]]; then
+            secret_eligible=true
+            cache_write_allowed=true
+          fi
+
+          {
+            echo "secret_eligible=$secret_eligible"
+            echo "cache_write_allowed=$cache_write_allowed"
+          } >> "$GITHUB_OUTPUT"
+
   kova:
     name: ${{ matrix.title }}
     needs: resolve_target
@@ -234,6 +264,7 @@ jobs:
       MATRIX_DEEP_PROFILE: ${{ matrix.deep_profile }}
       MATRIX_LIVE: ${{ matrix.live }}
       KOVA_REF_TRUSTED_FOR_LIVE: ${{ needs.resolve_target.outputs.kova_ref_trusted_for_live }}
+      SECRET_ELIGIBLE: ${{ needs.resolve_target.outputs.secret_eligible }}
     steps:
       - name: Decide lane
         id: lane
@@ -249,6 +280,10 @@ jobs:
           if [[ "$LANE_ID" == "live-openai-candidate" && "${{ github.event_name }}" != "schedule" && "${{ inputs.live_openai_candidate || 'false' }}" != "true" ]]; then
             run_lane=false
             reason="live_openai_candidate input is false"
+          fi
+          if [[ "$LANE_ID" == "live-openai-candidate" && "$run_lane" == "true" && "$SECRET_ELIGIBLE" != "true" ]]; then
+            run_lane=false
+            reason="candidate is not eligible for live credentials"
           fi
           if [[ "$LANE_ID" == "live-openai-candidate" && "$run_lane" == "true" && "$KOVA_REF_TRUSTED_FOR_LIVE" != "true" ]]; then
             echo "::error::The live OpenAI lane only executes a reviewed immutable Kova default. Omit kova_ref or update the pinned workflow defaults after review."
@@ -271,7 +306,7 @@ jobs:
         if: steps.lane.outputs.run == 'true'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.workflow_sha }}
           path: .artifacts/performance-workflow
           fetch-depth: 1
           persist-credentials: false
@@ -295,10 +330,35 @@ jobs:
             echo "Workflow SHA: ${GITHUB_SHA}"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Stage trusted setup action graph
+        if: steps.lane.outputs.run == 'true'
+        shell: bash
+        run: &stage_trusted_performance_setup |
+          set -euo pipefail
+          github_dir="$GITHUB_WORKSPACE/.github"
+          actions_dir="$github_dir/actions"
+          trusted_action="$PERFORMANCE_HELPER_DIR/.github/actions/setup-pnpm-store-cache"
+
+          test -f "$trusted_action/action.yml"
+          test -f "$trusted_action/ensure-node.sh"
+          if [[ -L "$github_dir" || ( -e "$github_dir" && ! -d "$github_dir" ) ]]; then
+            rm -rf -- "$github_dir"
+          fi
+          mkdir -p "$github_dir"
+          if [[ -L "$actions_dir" || ( -e "$actions_dir" && ! -d "$actions_dir" ) ]]; then
+            rm -rf -- "$actions_dir"
+          fi
+          mkdir -p "$actions_dir"
+          rm -rf -- "$actions_dir/setup-pnpm-store-cache"
+          cp -R -- "$trusted_action" "$actions_dir/setup-pnpm-store-cache"
+          cmp "$trusted_action/action.yml" "$actions_dir/setup-pnpm-store-cache/action.yml"
+          cmp "$trusted_action/ensure-node.sh" "$actions_dir/setup-pnpm-store-cache/ensure-node.sh"
+
       - name: Set up Node environment
         if: steps.lane.outputs.run == 'true'
-        uses: ./.github/actions/setup-node-env
+        uses: ./.artifacts/performance-workflow/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.resolve_target.outputs.cache_write_allowed == 'true' && 'restore' || 'off' }}
           install-bun: "false"
 
       - name: Prepare systemd user session
@@ -447,7 +507,7 @@ jobs:
           echo "KOVA_LANE_REPEAT=$repeat" >> "$GITHUB_ENV"
 
       - name: Configure live OpenAI auth
-        if: ${{ steps.lane.outputs.run == 'true' && matrix.live == 'true' }}
+        if: ${{ steps.lane.outputs.run == 'true' && matrix.live == 'true' && needs.resolve_target.outputs.secret_eligible == 'true' }}
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -465,8 +525,8 @@ jobs:
         id: kova
         if: steps.lane.outputs.run == 'true'
         env:
-          OPENAI_API_KEY: ${{ matrix.live == 'true' && secrets.OPENAI_API_KEY || '' }}
-          OPENAI_BASE_URL: ${{ matrix.live == 'true' && secrets.OPENAI_BASE_URL || '' }}
+          OPENAI_API_KEY: ${{ matrix.live == 'true' && needs.resolve_target.outputs.secret_eligible == 'true' && secrets.OPENAI_API_KEY || '' }}
+          OPENAI_BASE_URL: ${{ matrix.live == 'true' && needs.resolve_target.outputs.secret_eligible == 'true' && secrets.OPENAI_BASE_URL || '' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -645,7 +705,7 @@ jobs:
       - name: Checkout source performance helpers
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.workflow_sha }}
           path: .artifacts/performance-workflow
           fetch-depth: 1
           persist-credentials: false
@@ -666,9 +726,14 @@ jobs:
             echo "Workflow SHA: ${GITHUB_SHA}"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Stage trusted source setup action graph
+        shell: bash
+        run: *stage_trusted_performance_setup
+
       - name: Set up source performance environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.artifacts/performance-workflow/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.resolve_target.outputs.cache_write_allowed == 'true' && 'restore' || 'off' }}
           install-bun: "false"
 
       - name: Fetch previous source performance baseline
@@ -923,7 +988,7 @@ jobs:
   publish:
     name: Publish ${{ matrix.title }} report
     needs: [resolve_target, kova, source_performance]
-    if: ${{ always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}
+    if: ${{ always() && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -964,7 +1029,7 @@ jobs:
         if: steps.lane.outputs.run == 'true'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.workflow_sha }}
           path: .artifacts/performance-publisher
           sparse-checkout: |
             scripts/lib/kova-report-publish-files.mjs
@@ -1244,7 +1309,7 @@ jobs:
 
       - name: Create clawgrit reports app token
         id: clawgrit_app_token
-        if: ${{ steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' }}
+        if: ${{ needs.resolve_target.outputs.secret_eligible == 'true' && steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' }}
         continue-on-error: ${{ env.REPORT_PUBLISH_REQUIRED != 'true' }}
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
@@ -1255,7 +1320,7 @@ jobs:
           permission-contents: write
 
       - name: Publish to clawgrit reports
-        if: ${{ steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' }}
+        if: ${{ needs.resolve_target.outputs.secret_eligible == 'true' && steps.prepare.outputs.ready == 'true' && steps.prepare.outputs.already_published != 'true' }}
         continue-on-error: ${{ env.REPORT_PUBLISH_REQUIRED != 'true' }}
         env:
           CLAWGRIT_REPORTS_APP_TOKEN: ${{ steps.clawgrit_app_token.outputs.token }}

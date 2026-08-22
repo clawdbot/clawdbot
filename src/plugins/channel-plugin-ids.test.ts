@@ -115,7 +115,7 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
     {
       id: "microsoft",
       enabledByDefault: true,
-      contracts: { speechProviders: ["microsoft"] },
+      contracts: { speechProviders: ["microsoft", "edge"] },
     },
     {
       id: "tts-local-cli",
@@ -143,6 +143,11 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         videoGenerationProviders: ["openai"],
         embeddingProviders: ["openai"],
       },
+    },
+    {
+      id: "xai",
+      enabledByDefault: true,
+      contracts: { realtimeVoiceProviders: ["xai", "grok-voice"] },
     },
     {
       id: "ollama",
@@ -589,6 +594,16 @@ describe("resolveGatewayStartupPluginIdsFromRegistry", () => {
         tts: { provider: "microsoft" },
       } as OpenClawConfig,
       ["browser", "microsoft", "memory-core"],
+    ],
+    [
+      "activates the sole Talk speech provider from its capability alias",
+      { channels: {}, talk: { providers: { edge: {} } } } as OpenClawConfig,
+      ["browser", "microsoft", "memory-core"],
+    ],
+    [
+      "activates the selected Talk realtime capability alias",
+      { channels: {}, talk: { realtime: { provider: "grok-voice" } } } as OpenClawConfig,
+      ["browser", "xai", "memory-core"],
     ],
     [
       "includes bundled speech providers configured by provider block",

@@ -126,7 +126,7 @@ class ResizableDivider extends OpenClawLitElement {
   }
 
   private handlePointerDown = (e: PointerEvent) => {
-    if (e.button !== 0) {
+    if (e.button !== 0 || this.activePointerId !== null) {
       return;
     }
     this.startPosition = this.orientation === "horizontal" ? e.clientY : e.clientX;
@@ -144,7 +144,7 @@ class ResizableDivider extends OpenClawLitElement {
   };
 
   private handlePointerMove = (e: PointerEvent) => {
-    if (this.activePointerId === null) {
+    if (e.pointerId !== this.activePointerId) {
       return;
     }
 
@@ -205,7 +205,10 @@ class ResizableDivider extends OpenClawLitElement {
     this.emitResizeEnd(nextRatio);
   };
 
-  private readonly finishDragging = () => {
+  private readonly finishDragging = (event: Event) => {
+    if ("pointerId" in event && event.pointerId !== this.activePointerId) {
+      return;
+    }
     if (this.activePointerId !== null) {
       this.emitResizeEnd(this.dragRatio);
     }
@@ -213,11 +216,12 @@ class ResizableDivider extends OpenClawLitElement {
   };
 
   private stopDragging() {
-    if (this.activePointerId === null) {
+    const pointerId = this.activePointerId;
+    if (pointerId === null) {
       return;
     }
     this.classList.remove("dragging");
-    this.releaseActivePointer();
+    this.releaseActivePointer(pointerId);
 
     window.removeEventListener("pointermove", this.handlePointerMove);
     for (const type of DRAG_END_EVENTS) {
@@ -281,10 +285,9 @@ class ResizableDivider extends OpenClawLitElement {
     this.setPointerCapture(pointerId);
   }
 
-  private releaseActivePointer() {
-    const pointerId = this.activePointerId;
+  private releaseActivePointer(pointerId: number) {
     this.activePointerId = null;
-    if (pointerId == null || typeof this.releasePointerCapture !== "function") {
+    if (typeof this.releasePointerCapture !== "function") {
       return;
     }
     if (typeof this.hasPointerCapture === "function" && !this.hasPointerCapture(pointerId)) {

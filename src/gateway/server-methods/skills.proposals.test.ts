@@ -41,7 +41,10 @@ vi.mock("../../agents/agent-scope.js", () => ({
 
 vi.mock("../../skills/lifecycle/clawhub.js", () => ({
   installSkillFromClawHub: vi.fn(),
+  readClawHubSkillsLockfileStatusSync: vi.fn(() => ({ kind: "missing" })),
   readLocalSkillCardContentSync: vi.fn(),
+  resolveClawHubSkillStatusLinkSync: vi.fn(),
+  resolveLocalSkillCardStatusSync: vi.fn(),
   searchSkillsFromClawHub: vi.fn(),
   updateSkillsFromClawHub: vi.fn(),
 }));
@@ -120,7 +123,11 @@ describe("skills proposal gateway handlers", () => {
       outcomes: [],
     };
     mocks.evaluateSkillProposal.mockResolvedValue({
-      record: { id: "proposal-1", evaluation },
+      record: {
+        id: "proposal-1",
+        draftFile: "generations/123e4567-e89b-42d3-a456-426614174000/PROPOSAL.md",
+        evaluation,
+      },
       evaluation,
     });
     mocks.listSkillProposalEvents.mockReset();
@@ -151,9 +158,10 @@ describe("skills proposal gateway handlers", () => {
     });
     expect(create.ok).toBe(true);
     const created = create.response as {
-      record: { id: string; supportFiles?: Array<{ path: string }> };
+      record: { id: string; draftFile: string; supportFiles?: Array<{ path: string }> };
     };
     expect(created.record.id).toMatch(/^weather-planner-/);
+    expect(created.record.draftFile).toBe("PROPOSAL.md");
     expect(created.record.supportFiles?.[0]?.path).toBe("references/weather.md");
     expect(
       readSkillProposalEvents({
@@ -174,6 +182,9 @@ describe("skills proposal gateway handlers", () => {
     expect(inspect.ok).toBe(true);
     const reviewedRevisionHash = (inspect.response as { revisionHash: string }).revisionHash;
     expect((inspect.response as { content: string }).content).toContain("status: proposal");
+    expect((inspect.response as { record: { draftFile: string } }).record.draftFile).toBe(
+      "PROPOSAL.md",
+    );
     expect(
       (
         inspect.response as {
@@ -196,10 +207,15 @@ describe("skills proposal gateway handlers", () => {
     expect(revise.ok).toBe(true);
     const revisedRevisionHash = (revise.response as { revisionHash: string }).revisionHash;
     expect(
-      (revise.response as { record: { id: string; proposedVersion: string } }).record,
+      (
+        revise.response as {
+          record: { id: string; proposedVersion: string; draftFile: string };
+        }
+      ).record,
     ).toMatchObject({
       id: created.record.id,
       proposedVersion: "v2",
+      draftFile: "PROPOSAL.md",
     });
 
     const apply = await callHandler("skills.proposals.apply", {
@@ -207,6 +223,9 @@ describe("skills proposal gateway handlers", () => {
       expectedRevisionHash: revisedRevisionHash,
     });
     expect(apply.ok).toBe(true);
+    expect((apply.response as { record: { draftFile: string } }).record.draftFile).toBe(
+      "PROPOSAL.md",
+    );
     await expect(
       fs.readFile(path.join(mocks.workspaceDir, "skills", "weather-planner", "SKILL.md"), "utf8"),
     ).resolves.toContain("Use current weather and alerts.");
@@ -216,6 +235,16 @@ describe("skills proposal gateway handlers", () => {
         "utf8",
       ),
     ).resolves.toContain("Use current weather");
+
+    const update = await callHandler("skills.proposals.update", {
+      skillName: "weather-planner",
+      content: "# Weather Planner\n\nUse weather, alerts, and timing.\n",
+    });
+    expect(update.error).toBeUndefined();
+    expect(update.ok).toBe(true);
+    expect((update.response as { record: { draftFile: string } }).record.draftFile).toBe(
+      "PROPOSAL.md",
+    );
   });
 
   it("marks manually created create targets stale before list and inspect responses", async () => {
@@ -318,7 +347,10 @@ describe("skills proposal gateway handlers", () => {
     });
     expect(evaluate).toMatchObject({
       ok: true,
-      response: { evaluation: { id: "evaluation-1", trigger: "manual" } },
+      response: {
+        record: { draftFile: "PROPOSAL.md" },
+        evaluation: { id: "evaluation-1", trigger: "manual" },
+      },
     });
     expect(mocks.evaluateSkillProposal).toHaveBeenCalledWith({
       workspaceDir: mocks.workspaceDir,
@@ -351,7 +383,11 @@ describe("skills proposal gateway handlers", () => {
   it("passes expected revision hashes through proposal mutations", async () => {
     const expectedRevisionHash = "e".repeat(64);
     const correlationId = "correlation-mutation-1";
-    const record = { id: "proposal-1", draftHash: "d".repeat(64) };
+    const record = {
+      id: "proposal-1",
+      draftFile: "generations/123e4567-e89b-42d3-a456-426614174000/PROPOSAL.md",
+      draftHash: "d".repeat(64),
+    };
     mocks.reviseSkillProposal.mockResolvedValueOnce({
       record,
       revisionHash: expectedRevisionHash,
@@ -361,23 +397,23 @@ describe("skills proposal gateway handlers", () => {
     mocks.rejectSkillProposal.mockResolvedValueOnce(record);
     mocks.quarantineSkillProposal.mockResolvedValueOnce(record);
 
-    await callHandler("skills.proposals.revise", {
+    const revise = await callHandler("skills.proposals.revise", {
       proposalId: "proposal-1",
       expectedRevisionHash,
       correlationId,
       supportFiles: [{ path: "references/example.md", content: "Updated example.\n" }],
     });
-    await callHandler("skills.proposals.apply", {
+    const apply = await callHandler("skills.proposals.apply", {
       proposalId: "proposal-1",
       expectedRevisionHash,
       correlationId,
     });
-    await callHandler("skills.proposals.reject", {
+    const reject = await callHandler("skills.proposals.reject", {
       proposalId: "proposal-1",
       expectedRevisionHash,
       correlationId,
     });
-    await callHandler("skills.proposals.quarantine", {
+    const quarantine = await callHandler("skills.proposals.quarantine", {
       proposalId: "proposal-1",
       expectedRevisionHash,
       correlationId,
@@ -398,6 +434,10 @@ describe("skills proposal gateway handlers", () => {
         }),
       );
     }
+    expect(revise.response).toMatchObject({ record: { draftFile: "PROPOSAL.md" } });
+    expect(apply.response).toMatchObject({ record: { draftFile: "PROPOSAL.md" } });
+    expect(reject.response).toMatchObject({ draftFile: "PROPOSAL.md" });
+    expect(quarantine.response).toMatchObject({ draftFile: "PROPOSAL.md" });
   });
 
   it.each([

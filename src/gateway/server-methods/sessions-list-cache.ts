@@ -29,6 +29,7 @@ type SessionListFence = {
   sessionTranscriptUpdateVersion: number;
   titleProjectionUnavailableVersion: number;
   workerPlacementDiskSpaceVersion: number;
+  workerPlacementRunnerAvailabilityVersion: number;
 };
 type SessionListOperation = SessionListFence & { promise: Promise<SessionsListResult> };
 type SessionListCompleted = SessionListFence & { expiresAt?: number; result: SessionsListResult };
@@ -91,6 +92,8 @@ function readSessionListFence(
     sessionTranscriptUpdateVersion: readSessionTranscriptUpdateVersion(),
     titleProjectionUnavailableVersion: readSessionTitleProjectionUnavailableVersion(),
     workerPlacementDiskSpaceVersion: context.workerPlacementDiskSpaceReader?.version() ?? 0,
+    workerPlacementRunnerAvailabilityVersion:
+      context.workerPlacementRunnerAvailabilityReader?.version() ?? 0,
   };
 }
 
@@ -106,7 +109,9 @@ function matchesSessionListFence(value: SessionListFence, fence: SessionListFenc
     value.sessionsMutationVersion === fence.sessionsMutationVersion &&
     value.sessionTranscriptUpdateVersion === fence.sessionTranscriptUpdateVersion &&
     value.titleProjectionUnavailableVersion === fence.titleProjectionUnavailableVersion &&
-    value.workerPlacementDiskSpaceVersion === fence.workerPlacementDiskSpaceVersion
+    value.workerPlacementDiskSpaceVersion === fence.workerPlacementDiskSpaceVersion &&
+    value.workerPlacementRunnerAvailabilityVersion ===
+      fence.workerPlacementRunnerAvailabilityVersion
   );
 }
 
