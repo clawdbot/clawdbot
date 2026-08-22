@@ -7,7 +7,9 @@ describe("Claude CLI context-window selection", () => {
     const resolveModelId = backend.resolveModelId;
     const prepareExecution = backend.prepareExecution;
 
-    expect(resolveModelId?.({ modelId: "claude-fable-5" })).toBe("claude-fable-5[1m]");
+    // Omitted selection must stay on the bare id: the CLI already defaults
+    // Claude 5 to 1M, and suffixed argv would regress CLIs without [1m] support.
+    expect(resolveModelId?.({ modelId: "claude-fable-5" })).toBe("claude-fable-5");
     expect(resolveModelId?.({ modelId: "claude-fable-5", contextWindow: "200k" })).toBe(
       "claude-fable-5",
     );

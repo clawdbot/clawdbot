@@ -20,13 +20,16 @@ const CLAUDE_CLI_CONTEXT_WINDOW_OPTIONS = [
   { id: "1m", label: "1M", contextWindow: 1_000_000 },
 ] satisfies NonNullable<ModelCatalogEntry["contextWindows"]>;
 
+// Omitted selection spawns the bare id: Claude 5 already defaults to 1M on the
+// CLI, so suffixing the default path would change shipped argv (and break CLIs
+// predating the [1m] syntax) for zero gain. An explicit "1m" selection keeps
+// the suffix because it is the only lever that outranks an operator's
+// settings.json CLAUDE_CODE_DISABLE_1M_CONTEXT block; 200K maps to env only.
 export function resolveClaudeCliContextWindowModelId(
   modelId: string,
   contextWindow: string | undefined,
 ): string {
-  const effective =
-    contextWindow ?? (CLAUDE_CLI_SELECTABLE_CONTEXT_WINDOW_MODELS.has(modelId) ? "1m" : undefined);
-  return effective === "1m" ? `${modelId}[1m]` : modelId;
+  return contextWindow === "1m" ? `${modelId}[1m]` : modelId;
 }
 const CLAUDE_CLI_DEFAULT_MAX_OUTPUT_TOKENS = 64_000;
 const CLAUDE_CLI_MAX_OUTPUT_TOKENS: Record<string, number> = {
