@@ -35,6 +35,17 @@ describe("agent exec configless workspace ownership", () => {
     expect(config.tools?.alsoAllow).toEqual(["read", "browser"]);
   });
 
+  it("extends a strict allowlist without creating an additive allowlist", () => {
+    const config = buildExecRunConfig({
+      base: { tools: { allow: ["read"] } },
+      cwd: "/run/here",
+      opts: { alsoAllowTool: [" browser ", "read"] },
+    });
+
+    expect(config.tools?.allow).toEqual(["read", "browser"]);
+    expect(config.tools?.alsoAllow).toBeUndefined();
+  });
+
   it("rejects empty one-shot tool names", () => {
     expect(() =>
       buildExecRunConfig({

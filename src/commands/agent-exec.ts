@@ -336,10 +336,14 @@ function buildExecRunOverlay(params: {
   if (requestedTools.some((value) => !value)) {
     throw new Error("--also-allow-tool requires a non-empty tool name.");
   }
-  const alsoAllow =
-    requestedTools.length > 0
-      ? [...new Set([...(params.base.tools?.alsoAllow ?? []), ...requestedTools])]
-      : undefined;
+  const requestedToolPolicy =
+    requestedTools.length === 0
+      ? undefined
+      : params.base.tools?.allow !== undefined
+        ? { allow: [...new Set([...params.base.tools.allow, ...requestedTools])] }
+        : {
+            alsoAllow: [...new Set([...(params.base.tools?.alsoAllow ?? []), ...requestedTools])],
+          };
   // A per-agent `workspace` outranks `agents.defaults`, so pinning only the
   // defaults would let an inherited entry silently run the turn against a
   // different repository. Override every configured entry as well.
@@ -358,11 +362,11 @@ function buildExecRunOverlay(params: {
     // This process exits after one turn, so live skill invalidation cannot be
     // observed and would leave Chokidar retaining the otherwise-finished CLI.
     skills: { load: { watch: false } },
-    ...(codeMode !== undefined || alsoAllow
+    ...(codeMode !== undefined || requestedToolPolicy
       ? {
           tools: {
             ...(codeMode !== undefined ? { codeMode } : {}),
-            ...(alsoAllow ? { alsoAllow } : {}),
+            ...requestedToolPolicy,
           },
         }
       : {}),
