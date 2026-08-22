@@ -1,6 +1,7 @@
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../app/user-profile.ts";
+import type { AgentCapability } from "../lib/agents/index.ts";
 import type { SessionCapability, SessionListSnapshot } from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
@@ -19,6 +20,63 @@ type SidebarSessionListOwner = {
   expandedAgentId(): string;
   requestSessionDataUpdate(): void;
 };
+
+function pruneSidebarSessionOrder(
+  owner: SidebarSessionListOwner,
+  retainedResults: readonly NonNullable<SessionListSnapshot["result"]>[],
+): void {
+  const visibleKeys = new Set(
+    retainedResults.flatMap((result) => result.sessions.map((row) => row.key).filter(Boolean)),
+  );
+  for (const key of owner.sessionCreatedOrder.keys()) {
+    if (!visibleKeys.has(key)) {
+      owner.sessionCreatedOrder.delete(key);
+    }
+  }
+}
+
+function pruneSidebarAgentSessionCaches(
+  owner: SidebarSessionListOwner,
+  agentIds: readonly string[],
+): void {
+  const retainedAgentIds = new Set(agentIds.map(normalizeAgentId));
+  for (const agentId of Object.keys(owner.sessionResultsByAgent)) {
+    if (!retainedAgentIds.has(agentId)) {
+      delete owner.sessionResultsByAgent[agentId];
+    }
+  }
+  if (owner.sessionsAgentId && !retainedAgentIds.has(normalizeAgentId(owner.sessionsAgentId))) {
+    owner.sessionsResult = null;
+    owner.sessionsAgentId = null;
+  }
+  const retainedResults = Object.values(owner.sessionResultsByAgent);
+  if (owner.sessionsResult && !owner.sessionsAgentId) {
+    retainedResults.push(owner.sessionsResult);
+  }
+  pruneSidebarSessionOrder(owner, retainedResults);
+}
+
+export function subscribeSidebarAgentSessionCaches(
+  agents: AgentCapability,
+  owner: SidebarSessionListOwner,
+  notify: () => void,
+): () => void {
+  const synchronize = () => {
+    const roster = agents.state.agentsList;
+    // A null roster is transient during reconnect; only a concrete list can evict agent caches.
+    if (roster) {
+      pruneSidebarAgentSessionCaches(
+        owner,
+        roster.agents.map((agent) => agent.id),
+      );
+    }
+  };
+  synchronize();
+  return agents.subscribe(() => {
+    synchronize();
+    notify();
+  });
+}
 
 function filteredSidebarSessionQuery(agentId: string, archivedFilter: SidebarSessionStatusFilter) {
   return {
@@ -43,16 +101,10 @@ export function publishSidebarSessionList(
   const retainedResults = snapshot.result
     ? [snapshot.result, ...Object.values(owner.sessionResultsByAgent)]
     : Object.values(owner.sessionResultsByAgent);
-  const visibleKeys = new Set(
-    retainedResults.flatMap((result) => result.sessions.map((row) => row.key).filter(Boolean)),
-  );
+  pruneSidebarSessionOrder(owner, retainedResults);
   let nextCreatedOrder = 0;
-  for (const [key, order] of owner.sessionCreatedOrder) {
-    if (!visibleKeys.has(key)) {
-      owner.sessionCreatedOrder.delete(key);
-    } else {
-      nextCreatedOrder = Math.max(nextCreatedOrder, order + 1);
-    }
+  for (const order of owner.sessionCreatedOrder.values()) {
+    nextCreatedOrder = Math.max(nextCreatedOrder, order + 1);
   }
   for (const row of sessions) {
     if (row.key && !owner.sessionCreatedOrder.has(row.key)) {
