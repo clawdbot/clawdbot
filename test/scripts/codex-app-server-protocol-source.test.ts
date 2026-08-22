@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 // Codex App Server Protocol Source tests cover codex app server protocol source script behavior.
 import fs from "node:fs";
 import path from "node:path";
@@ -136,6 +137,89 @@ version = "9.9.9"
 
     await expect(validateCodexProtocolSourceVersion({ codexRepo, repoRoot })).rejects.toThrow(
       /0\.142\.4 does not match @openai\/codex 0\.142\.5/,
+    );
+  });
+
+  it("requires HEAD to equal the peeled exact-version tag", async () => {
+    const repoRoot = createTempDir("openclaw-protocol-version-root-");
+    const codexRepo = createTempDir("openclaw-protocol-version-codex-");
+    fs.mkdirSync(path.join(repoRoot, "extensions/codex"), { recursive: true });
+    fs.mkdirSync(path.join(codexRepo, "codex-rs"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, "extensions/codex/package.json"),
+      JSON.stringify({ dependencies: { "@openai/codex": "0.149.0" } }),
+    );
+    fs.writeFileSync(
+      path.join(codexRepo, "codex-rs/Cargo.toml"),
+      '[workspace.package]\nversion = "0.149.0"\n',
+    );
+    for (const args of [
+      ["init"],
+      ["config", "user.name", "OpenClaw Test"],
+      ["config", "user.email", "test@example.invalid"],
+      ["add", "codex-rs/Cargo.toml"],
+      ["commit", "-m", "tagged source"],
+      ["tag", "rust-v0.149.0"],
+    ]) {
+      expect(spawnSync("git", args, { cwd: codexRepo }).status).toBe(0);
+    }
+
+    await expect(
+      validateCodexProtocolSourceVersion({ codexRepo, repoRoot }),
+    ).resolves.toBeUndefined();
+
+    fs.writeFileSync(path.join(codexRepo, "README.md"), "later commit\n");
+    expect(spawnSync("git", ["add", "README.md"], { cwd: codexRepo }).status).toBe(0);
+    expect(spawnSync("git", ["commit", "-m", "later source"], { cwd: codexRepo }).status).toBe(0);
+    await expect(validateCodexProtocolSourceVersion({ codexRepo, repoRoot })).rejects.toThrow(
+      /does not match peeled rust-v0\.149\.0 commit/,
+    );
+  });
+
+  it("rejects a matching-version checkout without the exact version tag", async () => {
+    const repoRoot = createTempDir("openclaw-protocol-version-root-");
+    const codexRepo = createTempDir("openclaw-protocol-version-codex-");
+    fs.mkdirSync(path.join(repoRoot, "extensions/codex"), { recursive: true });
+    fs.mkdirSync(path.join(codexRepo, "codex-rs"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, "extensions/codex/package.json"),
+      JSON.stringify({ dependencies: { "@openai/codex": "0.149.0" } }),
+    );
+    fs.writeFileSync(
+      path.join(codexRepo, "codex-rs/Cargo.toml"),
+      '[workspace.package]\nversion = "0.149.0"\n',
+    );
+    for (const args of [
+      ["init"],
+      ["config", "user.name", "OpenClaw Test"],
+      ["config", "user.email", "test@example.invalid"],
+      ["add", "codex-rs/Cargo.toml"],
+      ["commit", "-m", "untagged source"],
+    ]) {
+      expect(spawnSync("git", args, { cwd: codexRepo }).status).toBe(0);
+    }
+
+    await expect(validateCodexProtocolSourceVersion({ codexRepo, repoRoot })).rejects.toThrow(
+      /Could not resolve Codex protocol source refs\/tags\/rust-v0\.149\.0/,
+    );
+  });
+
+  it("reports git command failure for a matching-version non-repository", async () => {
+    const repoRoot = createTempDir("openclaw-protocol-version-root-");
+    const codexRepo = createTempDir("openclaw-protocol-version-codex-");
+    fs.mkdirSync(path.join(repoRoot, "extensions/codex"), { recursive: true });
+    fs.mkdirSync(path.join(codexRepo, "codex-rs"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, "extensions/codex/package.json"),
+      JSON.stringify({ dependencies: { "@openai/codex": "0.149.0" } }),
+    );
+    fs.writeFileSync(
+      path.join(codexRepo, "codex-rs/Cargo.toml"),
+      '[workspace.package]\nversion = "0.149.0"\n',
+    );
+
+    await expect(validateCodexProtocolSourceVersion({ codexRepo, repoRoot })).rejects.toThrow(
+      /Could not resolve Codex protocol source HEAD/,
     );
   });
 

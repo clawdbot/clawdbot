@@ -104,6 +104,14 @@ export function projectNormalizedToolItem(params: {
 export class CodexEventProjection {
   private reviewCount = 0;
   private pendingGuardianWarning: string | undefined;
+  private activeGuardianReview:
+    | {
+        reviewId?: string;
+        targetItemId?: string | null;
+        threadId: string;
+        turnId: string;
+      }
+    | undefined;
 
   constructor(
     private readonly threadId: string,
@@ -147,11 +155,18 @@ export class CodexEventProjection {
     } else {
       this.flushPendingGuardianWarning();
     }
+    const threadId = readString(params, "threadId") ?? this.threadId;
+    const turnId = readString(params, "turnId") ?? this.turnId;
+    if (method.endsWith("/started")) {
+      this.activeGuardianReview = { reviewId, targetItemId, threadId, turnId };
+    }
     this.emitAgentEvent({
       stream: "codex_app_server.guardian",
       data: {
         method,
         phase: method.endsWith("/started") ? "started" : "completed",
+        threadId,
+        turnId,
         reviewId,
         targetItemId,
         decisionSource: readString(params, "decisionSource"),
@@ -189,6 +204,9 @@ export class CodexEventProjection {
         },
       });
     }
+    if (method.endsWith("/completed")) {
+      this.activeGuardianReview = undefined;
+    }
   }
 
   handleGuardianWarning(params: JsonObject): void {
@@ -213,6 +231,22 @@ export class CodexEventProjection {
     this.emitAgentEvent({
       stream: "codex_app_server.guardian",
       data: { phase: "warning", message: pending },
+    });
+  }
+
+  handleStrictReviewRequired(params: JsonObject): void {
+    this.emitAgentEvent({
+      stream: "codex_app_server.guardian",
+      data: {
+        method: "autoApprovalReview/strictReviewRequired",
+        phase: "strict_review_required",
+        threadId:
+          readString(params, "threadId") ?? this.activeGuardianReview?.threadId ?? this.threadId,
+        turnId: readString(params, "turnId") ?? this.activeGuardianReview?.turnId ?? this.turnId,
+        reviewId: this.activeGuardianReview?.reviewId,
+        targetItemId: this.activeGuardianReview?.targetItemId,
+        startedAtMs: asFiniteNumber(params.startedAtMs),
+      },
     });
   }
 

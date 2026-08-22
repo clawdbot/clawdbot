@@ -98,6 +98,36 @@ describe("Codex session permission policy", () => {
     });
   });
 
+  it.each([
+    {
+      mode: "guarded" as const,
+      policies: ["untrusted"],
+      approvalsReviewer: "user",
+    },
+    {
+      mode: "workspace" as const,
+      policies: ["untrusted", "never"],
+      approvalsReviewer: "auto_review",
+    },
+  ])("preserves managed prompting approval for a $mode session", (expected) => {
+    const resolved = applyCodexSessionPermissionPolicy({
+      appServer: appServer(),
+      permissionMode: expected.mode,
+      sessionRoot: "/workspace/project",
+      pluginConfig,
+      canUseAutoReview: true,
+      requirementsToml: `allowed_approval_policies = [${expected.policies
+        .map((policy) => `"${policy}"`)
+        .join(", ")}]`,
+    });
+
+    expect(resolved).toMatchObject({
+      sandbox: "workspace-write",
+      approvalPolicy: "untrusted",
+      approvalsReviewer: expected.approvalsReviewer,
+    });
+  });
+
   it("lets a deny exec floor tighten a guarded tuple", () => {
     const resolved = applyCodexSessionPermissionPolicy({
       appServer: appServer(),

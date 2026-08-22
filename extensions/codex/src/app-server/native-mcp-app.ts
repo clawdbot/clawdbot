@@ -9,6 +9,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getCodexAppServerClientInstanceId, type CodexAppServerClient } from "./client.js";
+import type { ResourceReadResult } from "./protocol-mcp.js";
 import type { CodexMcpServerStatus, CodexThreadItem, JsonObject, JsonValue } from "./protocol.js";
 import { retainSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 
@@ -25,6 +26,10 @@ function readMcpAppResourceUri(item: CodexThreadItem): string | undefined {
     normalizeOptionalString(appContext?.resourceUri) ??
     normalizeOptionalString(item.mcpAppResourceUri);
   return uri?.startsWith("ui://") ? uri : undefined;
+}
+
+function readMcpAppConnectorId(item: CodexThreadItem): string | undefined {
+  return normalizeOptionalString(asOptionalRecord(item.appContext)?.connectorId);
 }
 
 function readMcpToolResult(item: CodexThreadItem): NativeMcpCallToolResult | undefined {
@@ -56,6 +61,8 @@ function createNativeMcpRuntime(params: {
   client: CodexAppServerClient;
   threadId: string;
   attempt: EmbeddedRunAttemptParams;
+  originCallId: string;
+  connectorId?: string;
 }): SessionMcpRuntime {
   // App interactions must stay on the thread-owned Codex MCP connection; opening
   // a second client here would lose server-local state between render and click.
@@ -130,12 +137,21 @@ function createNativeMcpRuntime(params: {
       const status = (await loadStatuses()).find((entry) => entry.name === serverName);
       return { tools: status ? statusTools(status) : [] } as never;
     },
-    readResource: async (serverName, uri) =>
-      await params.client.request("mcpServer/resource/read", {
+    readResource: async (serverName, uri) => {
+      // Codex scopes and echoes originCallId only for its shared codex_apps server.
+      // Ordinary MCP servers intentionally return no origin correlation.
+      const isCodexAppsServer = serverName === "codex_apps";
+      const response = params.client.request("mcpServer/resource/read", {
         threadId: params.threadId,
+        ...(isCodexAppsServer ? { originCallId: params.originCallId } : {}),
         server: serverName,
         uri,
-      }),
+        ...(params.connectorId ? { connectorId: params.connectorId } : {}),
+      });
+      return isCodexAppsServer
+        ? await readCorrelatedMcpResource(params.originCallId, response)
+        : await response;
+    },
     listResources: async (serverName) => {
       const status = (await loadStatuses()).find((entry) => entry.name === serverName);
       return { resources: status?.resources ?? [] };
@@ -149,6 +165,19 @@ function createNativeMcpRuntime(params: {
   return runtime;
 }
 
+async function readCorrelatedMcpResource(
+  originCallId: string,
+  responsePromise: Promise<ResourceReadResult>,
+): Promise<ResourceReadResult> {
+  const response = await responsePromise;
+  if (response.originCallId !== originCallId) {
+    throw new Error(
+      `Codex MCP resource response originCallId mismatch: expected ${originCallId}, received ${response.originCallId}`,
+    );
+  }
+  return response;
+}
+
 export function createCodexNativeMcpAppResultDetailsPreparer(params: {
   client: CodexAppServerClient;
   threadId: string;
@@ -157,15 +186,20 @@ export function createCodexNativeMcpAppResultDetailsPreparer(params: {
   if (params.attempt.config?.mcp?.apps?.enabled !== true) {
     return undefined;
   }
-  const runtime = createNativeMcpRuntime(params);
   return async (item) => {
     const serverName = normalizeOptionalString(item.server);
     const toolName = normalizeOptionalString(item.tool);
     const uiResourceUri = readMcpAppResourceUri(item);
+    const connectorId = readMcpAppConnectorId(item);
     const toolResult = readMcpToolResult(item);
     if (!serverName || !toolName || !uiResourceUri || !toolResult) {
       return undefined;
     }
+    const runtime = createNativeMcpRuntime({
+      ...params,
+      originCallId: item.id,
+      ...(connectorId ? { connectorId } : {}),
+    });
     const allowedAppToolNames = new Set(
       (await runtime.getCatalog()).tools
         .filter((tool) => tool.serverName === serverName)

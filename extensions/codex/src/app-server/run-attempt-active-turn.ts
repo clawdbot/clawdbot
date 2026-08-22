@@ -104,6 +104,15 @@ export async function activateCodexAttemptTurn(
       nativePostToolUseRelayEnabled:
         resourceState.nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
         resourceState.nativeHookRelay.shouldRelayEvent("post_tool_use"),
+      onAsyncDelivery: async (delivery) => {
+        return await codexTranscriptMirrorRuntime.deliverAsyncMessageBestEffort({
+          params: dynamicToolParams,
+          cwd: effectiveCwd,
+          threadId: resourceState.thread.threadId,
+          turnId: activeTurnId,
+          ...delivery,
+        });
+      },
       readRecentRateLimits: () => readRecentCodexRateLimits(resourceState.client),
       runAbortSignal: runAbortController.signal,
       remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,

@@ -976,18 +976,36 @@ function handleGuardianEvent(host: ToolStreamHost, payload: AgentEventPayload): 
   const data = payload.data ?? {};
   const phase = toTrimmedString(data.phase);
   const status = toTrimmedString(data.status);
-  const kind =
+  const reviewId = toTrimmedString(data.reviewId);
+  const threadId = toTrimmedString(data.threadId);
+  const turnId = toTrimmedString(data.turnId);
+  const startedAtMs =
+    typeof data.startedAtMs === "number" && Number.isFinite(data.startedAtMs)
+      ? data.startedAtMs
+      : undefined;
+  const correlationId =
+    reviewId ??
+    (threadId && turnId && startedAtMs !== undefined
+      ? `${threadId}:${turnId}:${startedAtMs}`
+      : String(payload.seq));
+  const noticeKey =
     phase === "warning"
-      ? "warning"
-      : phase === "completed" && status === "approved"
-        ? "approved"
-        : phase === "completed" && ["denied", "timedOut", "aborted"].includes(status ?? "")
-          ? "denied"
-          : null;
+      ? `guardian:${payload.runId}:warning:${payload.seq}`
+      : `guardian:${payload.runId}:${threadId ?? "thread"}:${turnId ?? "turn"}:${correlationId}`;
+  const current = host.guardianNotices ?? [];
+  const kind =
+    phase === "strict_review_required"
+      ? "strict-review-required"
+      : phase === "warning"
+        ? "warning"
+        : phase === "completed" && status === "approved"
+          ? "approved"
+          : phase === "completed" && ["denied", "timedOut", "aborted"].includes(status ?? "")
+            ? "denied"
+            : null;
   if (!kind) {
     return true;
   }
-  const reviewId = toTrimmedString(data.reviewId) ?? String(payload.seq);
   const targetItemId = toTrimmedString(data.targetItemId);
   if (phase === "completed" && targetItemId) {
     // Targeted decisions arrive again as generic tool-review metadata. Keep
@@ -999,7 +1017,7 @@ function handleGuardianEvent(host: ToolStreamHost, payload: AgentEventPayload): 
   const rationale = toTrimmedString(data.rationale);
   const message = toTrimmedString(data.message);
   const notice: ChatGuardianNotice = {
-    key: `guardian:${payload.runId}:${reviewId}:${kind}`,
+    key: noticeKey,
     runId: payload.runId,
     timestamp: typeof payload.ts === "number" ? payload.ts : Date.now(),
     kind,
@@ -1008,7 +1026,6 @@ function handleGuardianEvent(host: ToolStreamHost, payload: AgentEventPayload): 
     ...(rationale ? { rationale } : {}),
     ...(message ? { message } : {}),
   };
-  const current = host.guardianNotices ?? [];
   const existingIndex = current.findIndex((candidate) => candidate.key === notice.key);
   host.guardianNotices =
     existingIndex === -1

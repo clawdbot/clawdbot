@@ -16,10 +16,8 @@ import {
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
-import {
-  type InternalReplyResolverOptions,
-  createReplyDispatchEvent,
-} from "./dispatch-from-config.events.js";
+import { createReplyDispatchEvent } from "./dispatch-from-config.events.js";
+import type { InternalReplyResolverOptions } from "./dispatch-from-config.events.js";
 import {
   hasAskUserPayload,
   prepareReplyPayloadForSideEffects as preparePayload,
@@ -73,8 +71,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     waitForPendingDirectBlockReplyDelivery,
     wrapProgressCallback,
   } = state;
-  // Bind at the invocation boundary so every public three-argument resolver consumes the same
-  // request-scoped generation without widening its Plugin SDK contract.
+  // Bind at invocation so every public resolver consumes the request generation without widening its Plugin SDK contract.
   const replyResolver = bindPreparedReplyDispatchRuntime(
     params.configOverride ? undefined : state.preparedReplyDispatchRuntime,
     state.replyResolver,
@@ -202,8 +199,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     markInboundDedupeReplayUnsafe();
                     // Buffered commentary preceded this tool; land it before the summary.
                     await flushPendingCommentaryProgress();
-                    // Tool-error suppression covers visible progress as well as warning text,
-                    // regardless of source delivery mode.
+                    // Tool-error suppression covers visible progress and warnings regardless of source delivery mode.
                     if (
                       payload.isError === true &&
                       replyConfig.messages?.suppressToolErrors === true
@@ -541,12 +537,13 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     if (isDispatchOperationAborted()) {
                       return;
                     }
-                    if (shouldRouteToOriginating) {
+                    if (context?.deliveryIntentId || shouldRouteToOriginating) {
                       const result = await sendPayloadAsync(
                         normalizedPayload,
                         context?.abortSignal,
                         false,
                         "block",
+                        context?.deliveryIntentId,
                       );
                       state.recordRoutedBlockReplyDelivery(normalizedPayload, result);
                       if (result?.delivered === true && !state.suppressAutomaticSourceDelivery) {

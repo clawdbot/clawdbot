@@ -43,7 +43,7 @@ export type ChatGuardianNotice = {
   key: string;
   runId: string;
   timestamp: number;
-  kind: "approved" | "denied" | "warning";
+  kind: "approved" | "denied" | "strict-review-required" | "warning";
   command?: string;
   riskLevel?: string;
   rationale?: string;

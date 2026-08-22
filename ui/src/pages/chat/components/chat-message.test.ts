@@ -2100,6 +2100,12 @@ describe("grouped chat rendering", () => {
         message: "Guardian stopped after too many rejected actions.",
       }),
     );
+    handleAgentEvent(
+      host,
+      agentEvent("run-guardian", 4, "codex_app_server.guardian", {
+        phase: "strict_review_required",
+      }),
+    );
     const items = buildCachedChatItems({
       paneId: "guardian-render-test",
       sessionKey: "main",
@@ -2118,7 +2124,7 @@ describe("grouped chat rendering", () => {
     render(html`${items.map((item) => renderChatNotice(item))}`, container);
 
     const notices = [...container.querySelectorAll<HTMLElement>(".chat-notice")];
-    expect(notices).toHaveLength(3);
+    expect(notices).toHaveLength(4);
     expect(notices[0]?.textContent).toContain("Guardian approved git status --short.");
     expect(notices[0]?.classList.contains("danger")).toBe(false);
     expect(notices[1]?.classList.contains("callout")).toBe(true);
@@ -2129,7 +2135,96 @@ describe("grouped chat rendering", () => {
     expect(notices[1]?.textContent).toContain("Command reaches the network.");
     expect(notices[2]?.textContent).toContain("Guardian warning");
     expect(notices[2]?.textContent).toContain("Guardian stopped after too many rejected actions.");
+    expect(notices[3]?.classList.contains("callout")).toBe(true);
+    expect(notices[3]?.classList.contains("danger")).toBe(true);
+    expect(notices[3]?.getAttribute("role")).toBe("alert");
+    expect(notices[3]?.textContent).toContain("Guardian review required");
+    expect(notices[3]?.textContent).toContain(
+      "Guardian is reviewing this action before it can continue.",
+    );
   });
+
+  it("correlates strict review replay and terminal decisions by thread and turn", () => {
+    const host = createHost();
+    const strictReview = (seq: number, turnId: string) =>
+      handleAgentEvent(
+        host,
+        agentEvent("run-guardian", seq, "codex_app_server.guardian", {
+          phase: "strict_review_required",
+          threadId: "thread-guardian",
+          turnId,
+          reviewId: "review-shared",
+          startedAtMs: 1_787_273_600_000,
+        }),
+      );
+
+    strictReview(1, "turn-1");
+    strictReview(2, "turn-1");
+    strictReview(3, "turn-2");
+    expect(host.guardianNotices).toHaveLength(2);
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-guardian", 4, "codex_app_server.guardian", {
+        phase: "completed",
+        threadId: "thread-guardian",
+        turnId: "turn-1",
+        reviewId: "review-shared",
+        status: "approved",
+      }),
+    );
+    expect(host.guardianNotices).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "approved" }),
+        expect.objectContaining({ kind: "strict-review-required" }),
+      ]),
+    );
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-guardian", 5, "codex_app_server.guardian", {
+        phase: "completed",
+        threadId: "thread-guardian",
+        turnId: "turn-2",
+        reviewId: "review-shared",
+        status: "aborted",
+      }),
+    );
+    expect(host.guardianNotices).toEqual([
+      expect.objectContaining({ kind: "approved" }),
+      expect.objectContaining({ kind: "denied" }),
+    ]);
+  });
+
+  it.each(["aborted", "timedOut"])(
+    "replaces strict review with a visible denial on %s terminal status",
+    (status) => {
+      const host = createHost();
+      const correlation = {
+        threadId: "thread-guardian",
+        turnId: `turn-${status}`,
+        reviewId: `review-${status}`,
+      };
+      handleAgentEvent(
+        host,
+        agentEvent("run-guardian", 1, "codex_app_server.guardian", {
+          phase: "strict_review_required",
+          ...correlation,
+          startedAtMs: 1_787_273_600_000,
+        }),
+      );
+      handleAgentEvent(
+        host,
+        agentEvent("run-guardian", 2, "codex_app_server.guardian", {
+          phase: "completed",
+          ...correlation,
+          status,
+        }),
+      );
+
+      expect(host.guardianNotices).toEqual([expect.objectContaining({ kind: "denied" })]);
+    },
+  );
 
   it("uses the current profile display name for the signed-in user's historical messages", () => {
     const container = document.createElement("div");

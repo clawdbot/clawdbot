@@ -28,8 +28,9 @@ function hasLegacyPluginDestructivePolicy(value: unknown): boolean {
   );
 }
 
-function hasRetiredOnFailureApprovalPolicy(value: unknown): boolean {
-  return asNullableRecord(value)?.approvalPolicy === "on-failure";
+function hasRetiredApprovalPolicy(value: unknown): boolean {
+  const approvalPolicy = asNullableRecord(value)?.approvalPolicy;
+  return approvalPolicy === "on-failure" || approvalPolicy === "untrusted";
 }
 
 /** Legacy Codex config keys that doctor should report or repair. */
@@ -49,8 +50,8 @@ export const legacyConfigRules: LegacyConfigRule[] = [
   {
     path: ["plugins", "entries", "codex", "config", "appServer"],
     message:
-      'plugins.entries.codex.config.appServer.approvalPolicy="on-failure" was retired by Codex 0.143; use "on-request". Run "openclaw doctor --fix".',
-    match: hasRetiredOnFailureApprovalPolicy,
+      'plugins.entries.codex.config.appServer.approvalPolicy values "on-failure" and "untrusted" are retired; use "on-request". Run "openclaw doctor --fix".',
+    match: hasRetiredApprovalPolicy,
   },
 ];
 
@@ -68,7 +69,7 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   const shouldRemoveDynamicToolsProfile =
     rawPluginConfig !== null && hasRetiredDynamicToolsProfile(rawPluginConfig);
   const shouldRewriteDestructivePolicy = hasLegacyPluginDestructivePolicy(rawCodexPlugins);
-  const shouldRewriteApprovalPolicy = hasRetiredOnFailureApprovalPolicy(rawAppServer);
+  const shouldRewriteApprovalPolicy = hasRetiredApprovalPolicy(rawAppServer);
   if (
     !rawPluginConfig ||
     (!shouldRemoveDynamicToolsProfile &&
@@ -116,11 +117,14 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
 
   if (shouldRewriteApprovalPolicy) {
     const nextAppServer = asNullableRecord(nextPluginConfig.appServer);
-    if (nextAppServer?.approvalPolicy === "on-failure") {
+    if (
+      nextAppServer?.approvalPolicy === "on-failure" ||
+      nextAppServer?.approvalPolicy === "untrusted"
+    ) {
       nextAppServer.approvalPolicy = "on-request";
     }
     changes.push(
-      'Renamed plugins.entries.codex.config.appServer.approvalPolicy="on-failure" to "on-request".',
+      'Renamed retired plugins.entries.codex.config.appServer.approvalPolicy to "on-request".',
     );
   }
 

@@ -267,6 +267,7 @@ async function readNodeCodexHistory(params: {
     id: params.record.threadId,
     createdAt: params.record.createdAt ?? 0,
     modelProvider: params.record.modelProvider ?? "openai",
+    projectId: null,
     turns: page.data.toReversed(),
   };
   return {
