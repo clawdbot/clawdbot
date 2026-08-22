@@ -1,14 +1,17 @@
 #!/usr/bin/env -S node --import tsx
 
-import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { collectClawHubPublishablePluginPackages } from "./lib/plugin-clawhub-release.ts";
 import { collectPublishablePluginPackages } from "./lib/plugin-npm-release.ts";
 
 const DEFAULT_CLAWHUB_CLI_PACKAGE = "clawhub@0.23.3";
+// Match the existing npm release-check and shrinkwrap command 10-minute ceilings: complete
+// plugin builds and packs retain their normal budget while lifecycle or registry stalls stop.
+const PLUGIN_RELEASE_PRETAG_COMMAND_TIMEOUT_MS = 10 * 60_000;
 
 type PluginReleasePretagPackTarget = {
   packageDir: string;
@@ -45,19 +48,51 @@ export function collectPluginReleasePretagPackTargets(
   );
 }
 
-function runCommand(
+async function runCommand(
   command: string,
   args: string[],
-  params: { cwd: string; env?: NodeJS.ProcessEnv; quietStdout?: boolean },
-) {
-  execFileSync(command, args, {
-    cwd: params.cwd,
-    env: params.env ?? process.env,
-    stdio: params.quietStdout ? ["inherit", "ignore", "inherit"] : "inherit",
-  });
+  params: {
+    commandLabel: string;
+    cwd: string;
+    env?: NodeJS.ProcessEnv;
+    quietStdout?: boolean;
+    stage: string;
+    timeoutMs: number;
+  },
+): Promise<void> {
+  let status: number;
+  try {
+    status = await runManagedCommand({
+      args,
+      bin: command,
+      cwd: params.cwd,
+      env: params.env,
+      shell: false,
+      stdio: params.quietStdout ? ["inherit", "ignore", "inherit"] : "inherit",
+      timeoutMs: params.timeoutMs,
+    });
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ETIMEDOUT")) {
+      throw error;
+    }
+    throw Object.assign(
+      new Error(`${params.stage} timed out after ${params.timeoutMs}ms: ${params.commandLabel}`),
+      { code: "ETIMEDOUT" as const },
+    );
+  }
+  if (status !== 0) {
+    throw Object.assign(
+      new Error(`${params.stage} failed with exit code ${status}: ${params.commandLabel}`),
+      { code: status },
+    );
+  }
 }
 
-export function runPluginReleasePretagPackCheck(rootDir = resolve(".")) {
+export async function runPluginReleasePretagPackCheck(
+  rootDir = resolve("."),
+  options: { timeoutMs?: number } = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? PLUGIN_RELEASE_PRETAG_COMMAND_TIMEOUT_MS;
   const targets = collectPluginReleasePretagPackTargets(rootDir);
   const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-plugin-pretag-pack-"));
   const wrapperDir = join(tempRoot, "bin");
@@ -75,7 +110,7 @@ export function runPluginReleasePretagPackCheck(rootDir = resolve(".")) {
   chmodSync(clawHubWrapper, 0o755);
 
   try {
-    runCommand(
+    await runCommand(
       process.execPath,
       [
         "--import",
@@ -84,7 +119,10 @@ export function runPluginReleasePretagPackCheck(rootDir = resolve(".")) {
         ...targets.flatMap((target) => ["--package", target.packageDir]),
       ],
       {
+        commandLabel: "node --import tsx scripts/check-plugin-npm-runtime-builds.mts",
         cwd: rootDir,
+        stage: "plugin runtime build",
+        timeoutMs,
       },
     );
 
@@ -100,23 +138,37 @@ export function runPluginReleasePretagPackCheck(rootDir = resolve(".")) {
     for (const [index, target] of targets.entries()) {
       if (target.packNpm) {
         console.log(`npm pack: ${target.packageName}`);
-        runCommand("bash", ["scripts/plugin-npm-publish.sh", "--pack-dry-run", target.packageDir], {
-          cwd: rootDir,
-          env: prebuiltPackEnv,
-          quietStdout: true,
-        });
+        await runCommand(
+          "bash",
+          ["scripts/plugin-npm-publish.sh", "--pack-dry-run", target.packageDir],
+          {
+            commandLabel: `bash scripts/plugin-npm-publish.sh --pack-dry-run ${target.packageDir}`,
+            cwd: rootDir,
+            env: prebuiltPackEnv,
+            quietStdout: true,
+            stage: `npm pack for ${target.packageName}`,
+            timeoutMs,
+          },
+        );
       }
       if (target.packClawHub) {
         const outputDir = join(tempRoot, `clawhub-${index}`);
         console.log(`ClawHub pack: ${target.packageName}`);
-        runCommand("bash", ["scripts/plugin-clawhub-publish.sh", "--pack", target.packageDir], {
-          cwd: rootDir,
-          env: {
-            ...prebuiltPackEnv,
-            OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR: outputDir,
+        await runCommand(
+          "bash",
+          ["scripts/plugin-clawhub-publish.sh", "--pack", target.packageDir],
+          {
+            commandLabel: `bash scripts/plugin-clawhub-publish.sh --pack ${target.packageDir}`,
+            cwd: rootDir,
+            env: {
+              ...prebuiltPackEnv,
+              OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR: outputDir,
+            },
+            quietStdout: true,
+            stage: `ClawHub pack for ${target.packageName}`,
+            timeoutMs,
           },
-          quietStdout: true,
-        });
+        );
       }
     }
   } finally {
@@ -127,5 +179,5 @@ export function runPluginReleasePretagPackCheck(rootDir = resolve(".")) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  runPluginReleasePretagPackCheck();
+  await runPluginReleasePretagPackCheck();
 }
