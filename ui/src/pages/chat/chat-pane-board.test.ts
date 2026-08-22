@@ -29,8 +29,8 @@ const swarmModuleImport = vi.hoisted(() => {
     pending: new Promise<void>((resolve) => {
       release = resolve;
     }),
-    markStarted: () => markStarted(),
-    release: () => release(),
+    markStarted,
+    release,
   };
 });
 

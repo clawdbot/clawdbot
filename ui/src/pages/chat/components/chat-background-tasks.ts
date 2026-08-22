@@ -345,7 +345,11 @@ function bufferBackgroundTaskEvent(
 
 /** Apply a gateway `task` event to the pane's snapshot. Events for other
  * sessions are ignored; a registry restore forces a refetch. */
-export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: unknown) {
+export function handleBackgroundTasksEvent(
+  host: BackgroundTasksHost,
+  payload: unknown,
+  presented = true,
+) {
   const state = host.backgroundTasksState;
   if (
     !state ||
@@ -373,10 +377,23 @@ export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: u
         }
       : normalizedEvent;
   const bufferedEvent = bufferBackgroundTaskEvent(host, state, event);
+  if (event.action === "restored" && !presented) {
+    // Restore replaces the registry snapshot. Retire any older page without
+    // issuing hidden work; presentation will start the authoritative reload.
+    state.requestId += 1;
+    state.pendingTaskEvents = null;
+    state.pendingReload = false;
+    state.loading = false;
+    state.tasks = null;
+    state.loadedClient = null;
+    state.error = null;
+    host.requestUpdate?.();
+    return;
+  }
   if (state.tasks === null) {
     // The exact in-flight snapshot already replays its buffered events; a
     // redundant stale reload would immediately undo that initial-load replay.
-    if (!bufferedEvent) {
+    if (presented && !bufferedEvent) {
       loadBackgroundTasks(host, state, true);
     }
     return;

@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
-import { controlUiSessionPath, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionPath,
+  installMockGateway,
+  type MockGatewayRequest,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -7,7 +11,15 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-const sessionKeys = ["agent:main:perf-a", "agent:main:perf-b", "agent:main:perf-c"];
+const sessionKeys = ["agent:main:perf-a", "agent:main:perf-b", "agent:main:perf-c"] as const;
+const hydrationMethods = new Set(["tasks.list", "sessions.files.list", "artifacts.list"]);
+
+function countSessionHydrationRequests(requests: MockGatewayRequest[], sessionKey: string): number {
+  return requests.filter((request) => {
+    const params = request.params as { sessionKey?: unknown } | undefined;
+    return params?.sessionKey === sessionKey && hydrationMethods.has(request.method);
+  }).length;
+}
 
 function sessionsResponse() {
   return {
@@ -53,7 +65,7 @@ suite.define(() => {
         sessionKey: sessionKeys[0],
       });
       try {
-        await page.goto(new URL(controlUiSessionPath(sessionKeys[0]!), suite.server.baseUrl).href);
+        await page.goto(new URL(controlUiSessionPath(sessionKeys[0]), suite.server.baseUrl).href);
         for (const key of sessionKeys.slice(1)) {
           await page.locator(`.sidebar-recent-session[data-session-key="${key}"] a`).click();
           await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(key));
@@ -71,32 +83,63 @@ suite.define(() => {
         const requests = (await gateway.getRequests()).slice(before);
         const counts: Record<string, number> = {};
         for (const key of sessionKeys) {
-          counts[key] = requests.filter((request) => {
-            const params = request.params as { sessionKey?: unknown } | undefined;
-            return (
-              params?.sessionKey === key &&
-              ["tasks.list", "sessions.files.list", "artifacts.list"].includes(request.method)
-            );
-          }).length;
+          counts[key] = countSessionHydrationRequests(requests, key);
         }
         rounds.push(counts);
+        const beforeEvents = (await gateway.getRequests()).length;
+        const sessionListCount = (await gateway.getRequests("sessions.list")).length;
+        const branchListCount = (await gateway.getRequests("sessions.branches.list")).length;
+        const hiddenSessionKey = sessionKeys[0];
+        await gateway.emitGatewayEvent("task", {
+          action: "upserted",
+          task: {
+            id: "task-hidden",
+            taskId: "task-hidden",
+            kind: "subagent",
+            runtime: "subagent",
+            status: "running",
+            title: "Hidden retained task",
+            agentId: "main",
+            sessionKey: hiddenSessionKey,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        });
+        await gateway.emitGatewayEvent("sessions.changed", {
+          sessionKey: hiddenSessionKey,
+          agentId: "main",
+          reason: "branch-switch",
+        });
+        await gateway.emitGatewayEvent("chat", {
+          sessionKey: hiddenSessionKey,
+          runId: "run-hidden",
+          state: "final",
+          message: { role: "assistant", content: [{ type: "text", text: "Done." }] },
+        });
+        await page.waitForFunction((sessionKey) => {
+          const pane = [...document.querySelectorAll("openclaw-chat-pane")].find(
+            (element) =>
+              (element as HTMLElement & { sessionKey?: string }).sessionKey === sessionKey,
+          ) as (HTMLElement & { state?: { chatMessages?: unknown[] } }) | undefined;
+          return JSON.stringify(pane?.state?.chatMessages ?? []).includes("Done.");
+        }, hiddenSessionKey);
+        await expect
+          .poll(async () => (await gateway.getRequests("sessions.list")).length)
+          .toBeGreaterThan(sessionListCount);
+        expect(await gateway.getRequests("sessions.branches.list")).toHaveLength(branchListCount);
+        const afterEvents = (await gateway.getRequests()).slice(beforeEvents);
+        expect(countSessionHydrationRequests(afterEvents, hiddenSessionKey)).toBe(0);
         const hiddenLink = page.locator(
-          `.sidebar-recent-session[data-session-key="${sessionKeys[0]}"] a`,
+          `.sidebar-recent-session[data-session-key="${hiddenSessionKey}"] a`,
         );
         await hiddenLink.click();
         await expect
           .poll(() => new URL(page.url()).pathname)
-          .toBe(controlUiSessionPath(sessionKeys[0]!));
+          .toBe(controlUiSessionPath(hiddenSessionKey));
         await expect
           .poll(async () => {
             const later = (await gateway.getRequests()).slice(before + requests.length);
-            return later.filter((request) => {
-              const params = request.params as { sessionKey?: unknown } | undefined;
-              return (
-                params?.sessionKey === sessionKeys[0] &&
-                ["tasks.list", "sessions.files.list", "artifacts.list"].includes(request.method)
-              );
-            }).length;
+            return countSessionHydrationRequests(later, hiddenSessionKey);
           })
           .toBe(4);
       } finally {
@@ -105,9 +148,9 @@ suite.define(() => {
     }
     expect(rounds).toEqual(
       Array.from({ length: 5 }, () => ({
-        [sessionKeys[0]!]: 0,
-        [sessionKeys[1]!]: 0,
-        [sessionKeys[2]!]: 4,
+        [sessionKeys[0]]: 0,
+        [sessionKeys[1]]: 0,
+        [sessionKeys[2]]: 4,
       })),
     );
   });
