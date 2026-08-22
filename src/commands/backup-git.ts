@@ -85,7 +85,13 @@ async function resolveCreateDatabases(runtime: RuntimeEnv, options: BackupGitCre
   // canonical database under the current state dir and skips absent files
   // instead of aborting the whole scheduled run on one dead registration.
   const allAgentIds = options.all
-    ? [...new Set(listOpenClawRegisteredAgentDatabases().map((entry) => entry.agentId))].toSorted()
+    ? [
+        ...new Set(
+          listOpenClawRegisteredAgentDatabases({ includeIncompatibleSchemaVersions: true }).map(
+            (entry) => entry.agentId,
+          ),
+        ),
+      ].toSorted()
     : agents;
   for (const agentId of allAgentIds) {
     const canonicalPath = resolveOpenClawAgentSqlitePath({ agentId });

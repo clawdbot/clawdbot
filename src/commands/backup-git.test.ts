@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -111,6 +112,45 @@ describe("Git backup command agent selection", () => {
 
     expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
     expect(mocks.createGitBackup).toHaveBeenCalledOnce();
+  });
+
+  it("keeps agents with a lagging registry schema version in the --all scope", async () => {
+    const registered = [
+      {
+        agentId: "main",
+        path: "/tmp/state/agents/main/agent/openclaw-agent.sqlite",
+        schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+      },
+      {
+        agentId: "legacy",
+        path: "/tmp/state/agents/legacy/agent/openclaw-agent.sqlite",
+        schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION - 1,
+      },
+    ];
+    mocks.listRegisteredAgentDatabases.mockImplementation(
+      (options?: { includeIncompatibleSchemaVersions?: boolean }) =>
+        registered.filter(
+          (entry) =>
+            options?.includeIncompatibleSchemaVersions === true ||
+            entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION,
+        ),
+    );
+
+    await backupGitCreateCommand(createTestRuntime(), {
+      repository: "/tmp/repository",
+      all: true,
+    });
+
+    expect(mocks.createGitBackup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        all: true,
+        databases: [
+          expect.objectContaining({ identity: { role: "global" } }),
+          expect.objectContaining({ identity: { role: "agent", agentId: "legacy" } }),
+          expect.objectContaining({ identity: { role: "agent", agentId: "main" } }),
+        ],
+      }),
+    );
   });
 
   it("keeps the --all plus explicit-scope conflict ahead of agent validation", async () => {
