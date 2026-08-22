@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
+import {
+  createCodeModeCatalogProjection,
+  type CodeModeCatalogProjection,
+} from "./code-mode-catalog.js";
 import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
 import { boundCodeModeResult } from "./code-mode-json.js";
 import {
@@ -86,7 +90,6 @@ export async function runCodeModeExec(params: {
     };
   }
   const deadlineMs = Date.now() + config.timeoutMs;
-  const catalog = runtime.all({ includeMcp: false });
   const namespaceCatalog = runtime.namespaceEntries();
   const swarmEnabled = resolveSwarmConfig(
     params.ctx.runtimeConfig ?? params.ctx.config,
@@ -99,6 +102,9 @@ export async function runCodeModeExec(params: {
     params.assistantTurnId,
   );
   const namespaceRuntime = createCodeModeNamespaceRuntime(namespaceCatalog);
+  const catalogProjection = createCodeModeCatalogProjection(runtime.all({ includeMcp: false }), {
+    reservedNames: namespaceRuntime.descriptors.map((descriptor) => descriptor.globalName),
+  });
   const apiFiles = createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled);
   try {
     const source = await awaitCodeModeDeadline({
@@ -118,7 +124,7 @@ export async function runCodeModeExec(params: {
           kind: "exec",
           source,
           config: { ...config, timeoutMs: remainingMs },
-          catalog,
+          catalog: catalogProjection.guestBindings,
           apiFiles,
           namespaces: namespaceRuntime.descriptors,
           swarmEnabled,
@@ -138,6 +144,7 @@ export async function runCodeModeExec(params: {
       ctx: params.ctx,
       config,
       runtime,
+      catalogProjection,
       namespaceRuntime,
       bridgeDispatch,
       signal: params.signal,
@@ -227,6 +234,7 @@ async function settleCodeModeResult(params: {
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
   runtime: ToolSearchRuntime;
+  catalogProjection: CodeModeCatalogProjection;
   namespaceRuntime: CodeModeNamespaceRuntime;
   deadlineMs: number;
   deliveredOutputCount?: number;
@@ -322,6 +330,7 @@ async function settleCodeModeResult(params: {
           pendingRequests: newPendingRequests,
           config: params.config,
           runtime: params.runtime,
+          catalogProjection: params.catalogProjection,
           namespaceRuntime: params.namespaceRuntime,
           parentToolCallId: params.parentToolCallId,
           codeModeRunId: params.codeModeReplayId,
@@ -361,6 +370,7 @@ async function settleCodeModeResult(params: {
           ctx: params.ctx,
           config: params.config,
           runtime: params.runtime,
+          catalogProjection: params.catalogProjection,
           namespaceRuntime: params.namespaceRuntime,
           output,
           deliveredOutputCount,
@@ -413,6 +423,7 @@ async function settleCodeModeResult(params: {
     const pendingReplaySafe = pendingBridgeRequestsReplaySafe(
       result.pendingRequests,
       params.runtime,
+      params.catalogProjection,
     );
     if (params.replaySafe && !pendingReplaySafe) {
       cancelPendingBridgeStates(pending);
@@ -454,6 +465,7 @@ async function settleCodeModeResult(params: {
             pendingRequests: newPendingRequests,
             config: params.config,
             runtime: params.runtime,
+            catalogProjection: params.catalogProjection,
             namespaceRuntime: params.namespaceRuntime,
             parentToolCallId: params.parentToolCallId,
             codeModeRunId: params.codeModeReplayId,
@@ -474,6 +486,7 @@ async function settleCodeModeResult(params: {
           ctx: params.ctx,
           config: params.config,
           runtime: params.runtime,
+          catalogProjection: params.catalogProjection,
           namespaceRuntime: params.namespaceRuntime,
           output,
           deliveredOutputCount,
@@ -496,6 +509,7 @@ async function settleCodeModeResult(params: {
       ctx: params.ctx,
       config: params.config,
       runtime: params.runtime,
+      catalogProjection: params.catalogProjection,
       namespaceRuntime: params.namespaceRuntime,
       output,
       deliveredOutputCount,
@@ -638,6 +652,7 @@ export async function runWait(params: {
       ctx: state.ctx,
       config: state.config,
       runtime: state.runtime,
+      catalogProjection: state.catalogProjection,
       namespaceRuntime: state.namespaceRuntime,
       bridgeDispatch: { started: true },
       deliveredOutputCount: outputTruncated ? 0 : state.deliveredOutputCount,

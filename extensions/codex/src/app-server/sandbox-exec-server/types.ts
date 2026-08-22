@@ -1,17 +1,29 @@
 /**
  * Shared protocol and runtime state types for the Codex sandbox exec-server
- * WebSocket bridge.
+ * transport-neutral execution session.
  */
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
-import type { WebSocketServer } from "ws";
 import type { JsonObject, JsonValue } from "../protocol.js";
+import type { SandboxChildOwner } from "./sandbox-child.js";
 
 /** Minimal JSON-RPC request shape accepted by the sandbox exec-server. */
 export type JsonRpcRequest = {
   id?: string | number;
   method?: string;
   params?: JsonValue;
+};
+
+/** Narrow JSON-RPC message sink for one connection-owned execution session. */
+export type CodexSandboxExecMessageTransport = {
+  send: (message: JsonObject) => void;
+  isOpen: () => boolean;
+};
+
+/** Notification delivery and lifetime owned by one execution session. */
+export type CodexSandboxExecSessionNotifications = {
+  send: (method: string, params: JsonObject) => void;
+  isOpen: () => boolean;
+  signal: AbortSignal;
 };
 
 /** Buffered process output chunk retained for polling and stream replay. */
@@ -70,11 +82,9 @@ export type ManagedProcess = {
   failure: string | null;
   tty: boolean;
   pipeStdin: boolean;
-  abortController: AbortController;
-  child: ChildProcessWithoutNullStreams | null;
-  finalizeToken?: unknown;
-  finalizeExec?: NonNullable<SandboxContext["backend"]>["finalizeExec"];
-  finalized: boolean;
+  terminationRequested: boolean;
+  child: SandboxChildOwner | null;
+  startPromise?: Promise<void>;
   evictionTimer?: ReturnType<typeof setTimeout>;
   waiters: Array<() => void>;
   emitNotification: (method: string, params: JsonObject) => void;
@@ -89,5 +99,12 @@ export type OpenClawExecServer = {
   closed: boolean;
   url: string;
   sandbox: SandboxContext;
-  server: WebSocketServer;
+  backend: NonNullable<SandboxContext["backend"]>;
+  fsBridge: NonNullable<SandboxContext["fsBridge"]>;
+  server: {
+    clients: Iterable<{ close: (code?: number, reason?: string) => void }>;
+    close: (callback: (error?: Error) => void) => void;
+  };
+  children: Set<SandboxChildOwner>;
+  cleanupTasks: Set<Promise<void>>;
 };

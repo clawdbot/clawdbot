@@ -49,6 +49,67 @@ function applyCustomModelConfigWithContextWindow(contextWindow?: number) {
   });
 }
 
+it("keeps explicit custom-provider model state on the authored agent entry", () => {
+  const result = applyCustomApiConfig({
+    config: {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { main: {}, OPS: {} },
+      },
+    },
+    baseUrl: "https://llm.example.com/v1",
+    modelId: "foo-large",
+    compatibility: "openai",
+    providerId: "custom",
+    alias: "Custom",
+    target: { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" },
+  });
+
+  expect(result.config.agents?.entries?.OPS?.model).toEqual({ primary: "custom/foo-large" });
+  expect(result.config.agents?.entries?.OPS?.models).toEqual({
+    "custom/foo-large": { alias: "Custom" },
+  });
+  expect(result.config.agents?.defaults?.model).toBeUndefined();
+  expect(result.config.models?.providers?.custom?.models?.map((model) => model.id)).toEqual([
+    "foo-large",
+  ]);
+});
+
+it("preserves a list-form roster when applying custom-provider model state", () => {
+  const result = applyCustomApiConfig({
+    config: {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
+        list: [
+          { id: "main", name: "Main" },
+          { id: "ops", name: "Operations" },
+        ],
+      },
+    },
+    baseUrl: "https://llm.example.com/v1",
+    modelId: "foo-large",
+    compatibility: "openai",
+    providerId: "custom",
+    alias: "Custom",
+    target: { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" },
+  });
+
+  expect(result.config.agents?.list).toBeUndefined();
+  expect(result.config.agents?.entries).toEqual({
+    main: { name: "Main" },
+    ops: {
+      name: "Operations",
+      model: { primary: "custom/foo-large" },
+      models: { "custom/foo-large": { alias: "Custom" } },
+    },
+  });
+  expect(result.config.models?.providers?.custom?.models?.map((model) => model.id)).toEqual([
+    "foo-large",
+  ]);
+});
+
 it("uses expanded max_tokens for openai verification probes", () => {
   const request = buildOpenAiVerificationProbeRequest({
     baseUrl: "https://example.com/v1",
@@ -125,6 +186,32 @@ it("uses expanded max_tokens for anthropic verification probes", () => {
 });
 
 describe("applyCustomApiConfig", () => {
+  it.each([
+    { setAsPrimary: undefined, expectedPrimary: "custom/foo-large" },
+    { setAsPrimary: false, expectedPrimary: "anthropic/sonnet-4.6" },
+  ])(
+    "respects custom-provider primary selection ($setAsPrimary)",
+    ({ setAsPrimary, expectedPrimary }) => {
+      const result = applyCustomApiConfig({
+        config: {
+          agents: {
+            defaults: { model: { primary: "anthropic/sonnet-4.6" } },
+          },
+        },
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
+        compatibility: "openai",
+        providerId: "custom",
+        setAsPrimary,
+      });
+
+      expect(result.config.agents?.defaults?.model).toEqual({ primary: expectedPrimary });
+      expect(result.config.models?.providers?.custom?.models?.map((model) => model.id)).toEqual([
+        "foo-large",
+      ]);
+    },
+  );
+
   it.each([
     {
       name: "uses stable default context window for newly added custom models",

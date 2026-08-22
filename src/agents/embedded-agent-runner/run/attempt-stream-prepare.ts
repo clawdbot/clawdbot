@@ -95,6 +95,7 @@ export function prepareEmbeddedAttemptStream(input: {
   sandboxSessionKey: string;
   subscriptionToolTrust: {
     builtinToolNames: ReadonlySet<string>;
+    coreBuiltinToolNames?: ReadonlySet<string>;
     replaySafeToolNames: ReadonlySet<string>;
     trustedLocalMediaToolNames: ReadonlySet<string>;
   };

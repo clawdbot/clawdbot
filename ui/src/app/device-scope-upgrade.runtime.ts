@@ -9,6 +9,7 @@ import {
   dismissScopeUpgradeBanner,
   hasDismissedScopeUpgradeBanner,
   readScopeUpgradeAvailability,
+  SCOPE_UPGRADE_DETAILS_EVENT,
   type ScopeUpgradeState,
 } from "./device-scope-upgrade.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
@@ -136,12 +137,25 @@ export class ScopeUpgradeController {
 
 type ScopeUpgradeBannerProps = {
   snapshot: ApplicationGatewaySnapshot;
+  compact: boolean;
 };
 
 class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: ScopeUpgradeBannerProps;
   private controller?: ScopeUpgradeController;
   private expanded = !hasDismissedScopeUpgradeBanner();
+  private compactExpanded = false;
+
+  private readonly showDetails = () => {
+    this.expanded = true;
+    this.compactExpanded = true;
+    this.requestUpdate();
+  };
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    window.addEventListener(SCOPE_UPGRADE_DETAILS_EVENT, this.showDetails);
+  }
 
   protected override updated(): void {
     const snapshot = this.props?.snapshot;
@@ -157,6 +171,7 @@ class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
   }
 
   override disconnectedCallback(): void {
+    window.removeEventListener(SCOPE_UPGRADE_DETAILS_EVENT, this.showDetails);
     this.controller?.dispose();
     this.controller = undefined;
     super.disconnectedCallback();
@@ -167,23 +182,31 @@ class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
     const state =
       this.controller?.state ??
       (props ? readScopeUpgradeAvailability(props.snapshot) : { phase: "hidden" as const });
-    if (!props || state.phase === "hidden") {
+    if (
+      !props ||
+      state.phase === "hidden" ||
+      (state.phase === "guidance" && hasDismissedScopeUpgradeBanner())
+    ) {
       return nothing;
     }
-    if (!this.expanded && (state.phase === "available" || state.phase === "guidance")) {
+    if (!this.expanded && state.phase === "guidance") {
+      return nothing;
+    }
+    const compactAvailable = props.compact && !this.compactExpanded;
+    if (compactAvailable && state.phase === "available") {
+      return nothing;
+    }
+    if (!this.expanded && state.phase === "available") {
       return html`<div class="scope-upgrade-chip-row">
         <button
           class="scope-upgrade-chip"
           type="button"
           aria-expanded="false"
           aria-label=${t("connection.scopeUpgrade.showDetails")}
-          @click=${() => {
-            this.expanded = true;
-            this.requestUpdate();
-          }}
+          @click=${this.showDetails}
         >
           <span class="scope-upgrade-chip__dot" aria-hidden="true"></span>
-          ${t("connection.scopeUpgrade.status")}
+          <span class="scope-upgrade-chip__text">${t("connection.scopeUpgrade.status")}</span>
         </button>
       </div>`;
     }
@@ -240,6 +263,7 @@ class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
               @click=${() => {
                 dismissScopeUpgradeBanner();
                 this.expanded = false;
+                this.compactExpanded = false;
                 this.requestUpdate();
               }}
             >

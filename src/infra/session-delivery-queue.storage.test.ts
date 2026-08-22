@@ -3,99 +3,27 @@ import { describe, expect, it } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
-  completeSessionDelivery,
+  advanceSessionDeliveryAgentRun,
+  deferSessionDelivery,
   enqueueClaimedSessionDelivery,
   enqueuePostCompactionDelegateDelivery,
   enqueueSessionDelivery,
   failSessionDelivery,
   loadPendingSessionDelivery,
   loadPendingSessionDeliveries,
-  markSessionDeliverySettlement,
+  mergeSessionDeliveryPreparedMediaBlocks,
   moveSessionDeliveryToFailed,
   releaseSessionDeliveryClaim,
   type QueuedSessionDeliveryPayload,
 } from "./session-delivery-queue-storage.js";
+import {
+  readSessionQueueRow,
+  readSessionQueueStatus,
+  rewriteSessionQueueEntry,
+  settleSessionDelivery,
+} from "./session-delivery-queue.storage.test-support.js";
 
 describe("session-delivery queue storage", () => {
-  async function settleSessionDelivery(id: string, stateDir: string): Promise<void> {
-    const entry = await loadPendingSessionDelivery(id, stateDir);
-    if (!entry) {
-      throw new Error(`Expected pending session delivery ${id}`);
-    }
-    await markSessionDeliverySettlement(entry, "recovered", stateDir);
-    await completeSessionDelivery(id, stateDir);
-  }
-
-  function readSessionQueueStatus(tempDir: string, id: string): string | undefined {
-    const { db } = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
-    });
-    const row = db
-      .prepare("SELECT status FROM delivery_queue_entries WHERE queue_name = 'session' AND id = ?")
-      .get(id) as { status?: string } | undefined;
-    return row?.status;
-  }
-
-  function readSessionQueueRow(
-    tempDir: string,
-    id: string,
-  ):
-    | {
-        status: string;
-        entry_json: string;
-        last_error: string | null;
-        entry_kind: string | null;
-        session_key: string | null;
-        channel: string | null;
-        target: string | null;
-        account_id: string | null;
-      }
-    | undefined {
-    const { db } = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
-    });
-    return db
-      .prepare(
-        `SELECT status, entry_json, last_error,
-                entry_kind, session_key, channel, target, account_id
-           FROM delivery_queue_entries
-          WHERE queue_name = 'session' AND id = ?`,
-      )
-      .get(id) as
-      | {
-          status: string;
-          entry_json: string;
-          last_error: string | null;
-          entry_kind: string | null;
-          session_key: string | null;
-          channel: string | null;
-          target: string | null;
-          account_id: string | null;
-        }
-      | undefined;
-  }
-
-  function rewriteSessionQueueEntry(
-    tempDir: string,
-    id: string,
-    update: (entry: Record<string, unknown>) => void,
-  ): void {
-    const current = readSessionQueueRow(tempDir, id);
-    if (!current) {
-      throw new Error(`Expected session delivery row ${id}`);
-    }
-    const entry = JSON.parse(current.entry_json) as Record<string, unknown>;
-    update(entry);
-    const { db } = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
-    });
-    db.prepare(
-      `UPDATE delivery_queue_entries
-          SET entry_json = ?
-        WHERE queue_name = 'session' AND id = ?`,
-    ).run(JSON.stringify(entry), id);
-  }
-
   function rewriteSessionQueueEntryKind(
     tempDir: string,
     id: string,
@@ -618,6 +546,79 @@ describe("session-delivery queue storage", () => {
       const entry = await loadPendingSessionDelivery(id, tempDir);
       expect(entry).not.toHaveProperty("attachments");
       expect(entry).not.toHaveProperty("attachAs");
+    });
+  });
+
+  it("advances only the agent run attempt and can focus its retry media", async () => {
+    await withTestDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      const id = await enqueueSessionDelivery(
+        {
+          kind: "agentTurn",
+          sessionKey: "agent:main:main",
+          message: "all generated media",
+          messageId: "image:task-retry:agent-loop",
+          expectedMediaUrls: ["/tmp/one.png", "/tmp/two.png"],
+          expectedMediaAttachments: {
+            "/tmp/one.png": { type: "image", path: "/tmp/one.png", mimeType: "image/png" },
+            "/tmp/two.png": { type: "image", path: "/tmp/two.png", mimeType: "image/png" },
+          },
+        },
+        tempDir,
+      );
+
+      await failSessionDelivery(id, "ambiguous timeout", tempDir);
+      await deferSessionDelivery(id, 1_000, tempDir);
+      let [entry] = await loadPendingSessionDeliveries(tempDir);
+      expect(entry).toMatchObject({ retryCount: 1 });
+      expect(entry?.agentRunAttempt).toBeUndefined();
+      expect(entry?.availableAt).toBeGreaterThan(Date.now());
+
+      await mergeSessionDeliveryPreparedMediaBlocks(
+        id,
+        "/tmp/one.png",
+        [{ type: "image", artifactId: "artifact-one" }],
+        tempDir,
+      );
+      await expect(
+        mergeSessionDeliveryPreparedMediaBlocks(
+          id,
+          "/tmp/one.png",
+          [{ type: "image", artifactId: "replacement-must-not-win" }],
+          tempDir,
+        ),
+      ).resolves.toEqual([{ type: "image", artifactId: "artifact-one" }]);
+      await mergeSessionDeliveryPreparedMediaBlocks(
+        id,
+        "/tmp/two.png",
+        [{ type: "image", artifactId: "artifact-two" }],
+        tempDir,
+      );
+
+      await advanceSessionDeliveryAgentRun(
+        id,
+        {
+          message: "only missing media",
+          expectedMediaUrls: ["/tmp/two.png"],
+          suppressTextDelivery: true,
+        },
+        tempDir,
+      );
+      [entry] = await loadPendingSessionDeliveries(tempDir);
+      expect(entry).toMatchObject({
+        agentRunAttempt: 1,
+        retryCount: 1,
+        message: "only missing media",
+        expectedMediaUrls: ["/tmp/two.png"],
+        expectedMediaAttachments: {
+          "/tmp/one.png": { type: "image", path: "/tmp/one.png", mimeType: "image/png" },
+          "/tmp/two.png": { type: "image", path: "/tmp/two.png", mimeType: "image/png" },
+        },
+        preparedMediaBlocks: {
+          "/tmp/one.png": [{ type: "image", artifactId: "artifact-one" }],
+          "/tmp/two.png": [{ type: "image", artifactId: "artifact-two" }],
+        },
+        suppressTextDelivery: true,
+      });
     });
   });
 

@@ -11,7 +11,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readAcpSessionMetaBatch } from "../acp/runtime/session-meta.js";
-import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import {
@@ -59,7 +59,7 @@ import {
 type SessionRow = SessionDisplayRow & {
   agentId: string;
   kind: SessionKind;
-  agentRuntime: ReturnType<typeof resolveCurrentSessionAgentRuntimeMetadata>;
+  agentRuntime: ReturnType<typeof resolveModelAgentRuntimeMetadata>;
   runtimeLabel: string;
   /** Carry the prepared identity into JSON/table emission without re-resolving plugin metadata. */
   displayModelRef: { provider: string; model: string };
@@ -200,7 +200,7 @@ const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
 function resolveSessionRuntimeLabel(params: {
   cfg: OpenClawConfig;
   entry: SessionEntry;
-  agentRuntime: ReturnType<typeof resolveCurrentSessionAgentRuntimeMetadata>;
+  agentRuntime: ReturnType<typeof resolveModelAgentRuntimeMetadata>;
   modelProvider: string;
   classifyCliProvider: CliProviderClassifier;
 }): string {
@@ -387,11 +387,11 @@ export async function sessionsCommand(
     // ACP rows need stored-key metadata before model/runtime resolution so
     // bridge sessions and true ACP runtime sessions display differently.
     const modelRef = applyAcpModelOverlayIfNeeded(
-      resolveSessionDisplayModelRef(cfg, row, classifyCliProvider),
+      resolveSessionDisplayModelRef(cfg, row, classifyCliProvider, agentId),
       acpSessionKey,
       acpRuntime,
     );
-    const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
+    const agentRuntime = resolveModelAgentRuntimeMetadata({
       cfg,
       agentId,
       sessionEntry: entry,

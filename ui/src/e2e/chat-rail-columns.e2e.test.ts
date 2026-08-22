@@ -244,6 +244,25 @@ async function narrowestRailTabLabel(page: Page): Promise<number> {
     );
 }
 
+async function expectExpandedSidePanelFillsRegion(page: Page): Promise<void> {
+  const geometry = await sidePanel(page).evaluate((element) => {
+    const panel = element.getBoundingClientRect();
+    const region = element.closest(".sidebar-region")?.getBoundingClientRect();
+    if (!region) {
+      throw new Error("Expanded side panel has no sidebar region");
+    }
+    return {
+      bottom: Math.abs(panel.bottom - region.bottom),
+      left: Math.abs(panel.left - region.left),
+      right: Math.abs(panel.right - region.right),
+      top: Math.abs(panel.top - region.top),
+    };
+  });
+  for (const delta of Object.values(geometry)) {
+    expect(delta).toBeLessThanOrEqual(1);
+  }
+}
+
 async function captureRichPanel(page: Page, name: string) {
   if (!proofDir) {
     return;
@@ -422,7 +441,8 @@ suite.define(() => {
           await captureRichPanel(page, `rails-tabs-review-${themeMode}`);
 
           await openFromPlus(page, "Terminal");
-          await gateway.waitForRequest("terminal.open");
+          const terminalOpen = await gateway.waitForRequest("terminal.open");
+          expect(terminalOpen.params).toMatchObject({ agentId: "main", sessionKey });
           await sidePanel(page).locator('[data-panel-slot="terminal"]:not([hidden])').waitFor();
           await openFromPlus(page, "Tasks");
           await expect.poll(() => sidePanel(page).textContent()).toContain("Verify tab navigation");
@@ -735,6 +755,8 @@ suite.define(() => {
                 .evaluate((element) => getComputedStyle(element).display),
             )
             .toBe("none");
+          await expectExpandedSidePanelFillsRegion(page);
+          await captureRichPanel(page, `rails-tabs-expanded-${themeMode}`);
           await sidePanel(page).getByRole("button", { name: "Restore side panel" }).click();
 
           await sidePanel(page).getByRole("button", { name: "Close", exact: true }).click();
@@ -880,8 +902,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, scenario());
         await page.goto(`${suite.server.baseUrl}chat`);
         await page.locator(".chat-group").first().waitFor();
-        await page.locator(".chat-side-panel-toggle").click();
-        await openFromEmpty(page, "Files");
+        await activateChatHeaderPanelAction(page, "Show session files");
         await openFromPlus(page, "Terminal");
         await openFromPlus(page, "Side chat");
         await selectTab(page, "Side chat");
@@ -946,6 +967,7 @@ suite.define(() => {
               .evaluate((element) => getComputedStyle(element).display),
           )
           .toBe("none");
+        await expectExpandedSidePanelFillsRegion(page);
         await captureRichPanel(page, "rails-tabs-mobile-light");
       },
     );

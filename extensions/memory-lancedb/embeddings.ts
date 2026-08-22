@@ -42,7 +42,7 @@ type AgentEmbeddingProvider = {
   agentDir: string;
   promise: Promise<MemoryEmbeddingProvider>;
   activeUses: number;
-  idleWaiters: Set<() => void>;
+  idleResolver?: () => void;
 };
 
 type ProviderAdapterLifecycleState = {
@@ -219,8 +219,6 @@ class ProviderAdapterEmbeddings implements Embeddings {
   private unregisterAuthMutationListener: (() => void) | undefined;
   private closePromise: Promise<void> | null = null;
   private closed = false;
-  private activeUses = 0;
-  private idleWaiters = new Set<() => void>();
 
   constructor(private api: OpenClawPluginApi) {}
 
@@ -233,7 +231,7 @@ class ProviderAdapterEmbeddings implements Embeddings {
     }
     if (existing) {
       this.providers.delete(agentId);
-      this.retireProvider(existing);
+      void this.retireProviders([existing]).catch(() => undefined);
     }
 
     const entry: AgentEmbeddingProvider = {
@@ -247,7 +245,6 @@ class ProviderAdapterEmbeddings implements Embeddings {
         throw err;
       }),
       activeUses: 0,
-      idleWaiters: new Set(),
     };
     this.providers.set(agentId, entry);
     return entry;
@@ -258,29 +255,22 @@ class ProviderAdapterEmbeddings implements Embeddings {
       return;
     }
     this.embeddingFingerprint = fingerprint;
-    for (const [agentId, entry] of this.providers) {
-      this.providers.delete(agentId);
-      this.retireProvider(entry);
-    }
+    this.retireMatchingProviders(() => true);
   }
 
-  private retireProvider(entry: AgentEmbeddingProvider): void {
-    const retirement = runProviderAdapterLifecycle(async () => {
-      // Config replacement revokes the old credential immediately, but a request
-      // already admitted under that identity must finish before its client closes.
-      if (entry.activeUses > 0) {
-        await new Promise<void>((resolve) => {
-          entry.idleWaiters.add(resolve);
-        });
+  private retireMatchingProviders(predicate: (entry: AgentEmbeddingProvider) => boolean): void {
+    const entries: AgentEmbeddingProvider[] = [];
+    for (const [agentId, entry] of this.providers) {
+      if (predicate(entry)) {
+        this.providers.delete(agentId);
+        entries.push(entry);
       }
-      const provider = await entry.promise.catch(() => null);
-      if (provider) {
-        PROVIDER_ADAPTER_LIFECYCLE.retainedProviders.add(provider);
-      }
-      await drainRetainedProviders();
-    });
+    }
+    if (entries.length === 0) {
+      return;
+    }
     // The next provider create/close retries process-global retained ownership.
-    void retirement.catch(() => undefined);
+    void this.retireProviders(entries).catch(() => undefined);
   }
 
   private invalidateProvidersForAuthMutation(event: {
@@ -288,43 +278,28 @@ class ProviderAdapterEmbeddings implements Embeddings {
     affectsInheritedStores: boolean;
   }): void {
     const changedAgentDir = event.agentDir ? resolveFilePath(event.agentDir) : undefined;
-    for (const [agentId, entry] of this.providers) {
-      if (!event.affectsInheritedStores && resolveFilePath(entry.agentDir) !== changedAgentDir) {
-        continue;
-      }
-      this.providers.delete(agentId);
-      this.retireProvider(entry);
-    }
+    this.retireMatchingProviders(
+      (entry) =>
+        event.affectsInheritedStores || resolveFilePath(entry.agentDir) === changedAgentDir,
+    );
   }
 
-  private acquireUse(): () => void {
-    if (this.closed) {
-      throw new Error("memory-lancedb embeddings are closed");
-    }
-    this.activeUses += 1;
-    let released = false;
-    return () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      this.activeUses -= 1;
-      if (this.activeUses === 0) {
-        const waiters = Array.from(this.idleWaiters);
-        this.idleWaiters.clear();
-        for (const resolve of waiters) {
-          resolve();
+  private async retireProviders(entries: AgentEmbeddingProvider[]): Promise<void> {
+    await runProviderAdapterLifecycle(async () => {
+      for (const entry of entries) {
+        // Admission records the entry lease before embed() first yields, so this
+        // covers invalidation, pending creation, and explicit service close.
+        if (entry.activeUses > 0) {
+          await new Promise<void>((resolve) => {
+            entry.idleResolver = resolve;
+          });
+        }
+        const provider = await entry.promise.catch(() => null);
+        if (provider) {
+          PROVIDER_ADAPTER_LIFECYCLE.retainedProviders.add(provider);
         }
       }
-    };
-  }
-
-  private async awaitIdle(): Promise<void> {
-    if (this.activeUses === 0) {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      this.idleWaiters.add(resolve);
+      await drainRetainedProviders();
     });
   }
 
@@ -388,44 +363,41 @@ class ProviderAdapterEmbeddings implements Embeddings {
     embeddingConfig: EmbeddingConfig,
     timeoutMs?: number,
   ): Promise<number[]> {
-    const releaseUse = this.acquireUse();
+    if (this.closed) {
+      throw new Error("memory-lancedb embeddings are closed");
+    }
+    const embedding = { ...embeddingConfig };
+    const fingerprint = embeddingConfigFingerprint(embedding);
+    this.invalidate(fingerprint);
+    const entry = this.getProvider(normalizeAgentId(agentId), embedding);
+    entry.activeUses += 1;
     try {
-      const embedding = { ...embeddingConfig };
-      const fingerprint = embeddingConfigFingerprint(embedding);
-      this.invalidate(fingerprint);
-      const entry = this.getProvider(normalizeAgentId(agentId), embedding);
-      entry.activeUses += 1;
+      const provider = await entry.promise;
+      if (!timeoutMs) {
+        return await provider.embedQuery(text);
+      }
+      const controller = new AbortController();
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        const provider = await entry.promise;
-        if (!timeoutMs) {
-          return await provider.embedQuery(text);
-        }
-        const controller = new AbortController();
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        try {
-          timer = setTimeout(
-            () => controller.abort(new Error("memory-lancedb embedding timed out")),
-            resolveTimerTimeoutMs(timeoutMs, 1),
-          );
-          timer.unref?.();
-          return await provider.embedQuery(text, { signal: controller.signal });
-        } finally {
-          if (timer) {
-            clearTimeout(timer);
-          }
-        }
+        timer = setTimeout(
+          () => controller.abort(new Error("memory-lancedb embedding timed out")),
+          resolveTimerTimeoutMs(timeoutMs, 1),
+        );
+        timer.unref?.();
+        return await provider.embedQuery(text, { signal: controller.signal });
       } finally {
-        entry.activeUses -= 1;
-        if (entry.activeUses === 0) {
-          const waiters = Array.from(entry.idleWaiters);
-          entry.idleWaiters.clear();
-          for (const resolve of waiters) {
-            resolve();
-          }
+        if (timer) {
+          clearTimeout(timer);
         }
       }
     } finally {
-      releaseUse();
+      entry.activeUses -= 1;
+      if (entry.activeUses === 0) {
+        // Map removal gives each entry exactly one retirement waiter.
+        const resolveIdle = entry.idleResolver;
+        entry.idleResolver = undefined;
+        resolveIdle?.();
+      }
     }
   }
 
@@ -451,29 +423,11 @@ class ProviderAdapterEmbeddings implements Embeddings {
     this.closed = true;
     this.unregisterAuthMutationListener?.();
     this.unregisterAuthMutationListener = undefined;
-    const providers = Array.from(this.providers.entries());
-    await runProviderAdapterLifecycle(async () => {
-      // Close intent is queued before waiting. Replacement instances therefore remain
-      // behind this owner while already-admitted embeddings drain to completion.
-      await this.awaitIdle();
-      for (const [, entry] of providers) {
-        const provider = await entry.promise.catch(() => null);
-        if (provider) {
-          PROVIDER_ADAPTER_LIFECYCLE.retainedProviders.add(provider);
-        }
-      }
-      try {
-        await drainRetainedProviders();
-      } finally {
-        // Ownership moved to the process-global retained set before draining. Clear the
-        // instance even when another retained provider fails, so successful closes stay final.
-        for (const [agentId, entry] of providers) {
-          if (this.providers.get(agentId) === entry) {
-            this.providers.delete(agentId);
-          }
-        }
-      }
-    });
+    const providers = Array.from(this.providers.values());
+    this.providers.clear();
+    // Queue close intent before waiting so replacement instances remain behind
+    // every admitted entry and pending provider creation owned by this service.
+    await this.retireProviders(providers);
   }
 }
 

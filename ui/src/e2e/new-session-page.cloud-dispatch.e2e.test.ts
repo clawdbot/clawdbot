@@ -10,7 +10,7 @@ import {
   controlUiSessionUrl,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
-  expectPendingCloudStartupBeforeRuntime,
+  expectPendingSessionPlacementStartupBeforeRuntime,
   installMockGateway,
   pastePng,
   pollLocatorText,
@@ -19,8 +19,8 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
-const CLOUD_STARTUP_RUNTIME_REQUEST =
-  /\/assets\/cloud-session-startup\.runtime-[^/?]+\.js(?:\?.*)?$/;
+const SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST =
+  /\/assets\/session-placement-startup\.runtime-[^/?]+\.js(?:\?.*)?$/;
 
 suite.define(() => {
   it("dispatches a cloud target before sending its first turn and shows placement", async () => {
@@ -32,7 +32,7 @@ suite.define(() => {
     const page = await context.newPage();
     const runtimeLoad = createDeferred();
     let runtimeRequested = false;
-    await page.route(CLOUD_STARTUP_RUNTIME_REQUEST, async (route) => {
+    await page.route(SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST, async (route) => {
       runtimeRequested = true;
       await runtimeLoad.promise;
       await route.continue();
@@ -40,6 +40,7 @@ suite.define(() => {
     const sessionKey = "agent:cloud:cloud-e2e";
     const gateway = await installMockGateway(page, {
       defaultAgentId: "cloud",
+      operatorScopes: ["operator.admin", "operator.read", "operator.write"],
       deferredMethods: ["sessions.dispatch"],
       featureMethods: [
         "chat.metadata",
@@ -86,10 +87,11 @@ suite.define(() => {
                 {
                   id: "standard",
                   label: "Standard",
-                  description: "Balanced capacity",
+                  cpu: 32,
+                  memoryGb: 64,
                   default: true,
                 },
-                { id: "fast", label: "Fast", description: "More compute" },
+                { id: "fast", label: "Fast", cpu: 64, memoryGb: 128 },
               ],
             },
           ],
@@ -205,7 +207,7 @@ suite.define(() => {
       await expect.poll(() => project.getByLabel("Base branch").inputValue()).toBe("release");
       await project.getByLabel("Base branch").fill("main");
       await pollLocatorText(project.locator(".new-session-page__menu-note").last()).toContain(
-        "Syncs target-repo to the cloud worker",
+        "Syncs target-repo to the selected runner",
       );
       await page.keyboard.press("Escape");
       await expect
@@ -236,7 +238,7 @@ suite.define(() => {
       }
       await checkoutName.fill("cloud-e2e");
       await pollLocatorText(project.locator(".new-session-page__menu-note").last()).toContain(
-        "Syncs OpenClaw to the cloud worker",
+        "Syncs OpenClaw to the selected runner",
       );
       await captureUiProof(page, "01-cloud-worker-target.png");
       await page.keyboard.press("Escape");
@@ -282,7 +284,11 @@ suite.define(() => {
       expect(create.params).not.toHaveProperty("attachments");
       expect(create.params).not.toHaveProperty("cwd");
       await expect.poll(() => runtimeRequested).toBe(true);
-      const startupStatus = await expectPendingCloudStartupBeforeRuntime(page, gateway, sessionKey);
+      const startupStatus = await expectPendingSessionPlacementStartupBeforeRuntime(
+        page,
+        gateway,
+        sessionKey,
+      );
       runtimeLoad.resolve();
       const dispatch = await gateway.waitForRequest("sessions.dispatch");
       expect(dispatch.params).toMatchObject({
@@ -335,7 +341,7 @@ suite.define(() => {
           ts: Date.now(),
         });
         await gateway.emitGatewayEvent("sessions.changed", { sessionKey, reason: "dispatch" });
-        await pollLocatorText(startupStatus).toContain(`Cloud worker: ${state}`);
+        await pollLocatorText(startupStatus).toContain(`Placement: ${state}`);
       };
 
       for (const [state, generation] of [
@@ -365,7 +371,7 @@ suite.define(() => {
         app.runtime?.context.navigate("chat", { pathname });
       }, controlUiSessionPath(sessionKey));
       await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));
-      await pollLocatorText(startupStatus).toContain("Cloud worker: starting");
+      await pollLocatorText(startupStatus).toContain("Placement: starting");
       expect(await gateway.getRequests("sessions.abort")).toHaveLength(0);
       expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.delete")).toHaveLength(0);
@@ -465,6 +471,7 @@ suite.define(() => {
       await (await waitForConfirmModal(page)).getByRole("button", { name: "Stop worker" }).click();
       const reclaim = await gateway.waitForRequest("sessions.reclaim");
       expect(reclaim.params).toEqual({ key: managedSessionKey, agentId: "cloud" });
+      expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);
     } finally {
       await context.close();
     }

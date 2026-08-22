@@ -81,6 +81,10 @@ export function hasDeliberateSilentTerminalReply(result: EmbeddedAgentRunResult)
   );
 }
 
+export function hasIntentionalTerminalCompletion(result: EmbeddedAgentRunResult): boolean {
+  return result.meta.intentionalTerminalCompletion === "tool-batch";
+}
+
 function hasDeliverableAssistantPayload(result: {
   payloads?: unknown;
   meta?: { finalAssistantVisibleText?: unknown };
@@ -204,6 +208,7 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     return null;
   }
   if (
+    hasIntentionalTerminalCompletion(params.result) ||
     params.result.meta.aborted ||
     params.hasDirectlySentBlockReply === true ||
     params.hasBlockReplyPipelineOutput === true

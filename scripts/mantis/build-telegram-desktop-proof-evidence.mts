@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 type CliArgs = Record<string, string>;
 type LaneName = "baseline" | "candidate";
+type LaneStatus = "blocked" | "fail" | "pass";
 type SessionSummary = {
   artifacts?: Partial<
     Record<
@@ -43,7 +44,8 @@ type TelegramDesktopProofManifest = {
   scenario: string;
   comparison: {
     baseline: { expected: string; status: string; ref?: string; sha?: string };
-    candidate: { expected: string; status: string; fixed: boolean; ref?: string; sha?: string };
+    candidate: { expected: string; status: string; ref?: string; sha?: string };
+    outcome: LaneStatus;
     pass: boolean;
   };
   artifacts: EvidenceArtifact[];
@@ -161,6 +163,7 @@ function copyLaneArtifacts({
     resolveSummaryArtifact(lane, "previewGifCropped") ?? resolveSummaryArtifact(lane, "previewGif");
   copyArtifact({
     outputDir,
+    required: laneStatus(lane) === "pass",
     source: gif,
     targetPath: `${prefix}/telegram-desktop-proof.gif`,
   });
@@ -194,18 +197,28 @@ function copyLaneArtifacts({
   });
 }
 
-function laneStatus(lane: LoadedLane) {
-  return lane.status === "pass" ? "pass" : "fail";
+function laneStatus(lane: LoadedLane): LaneStatus {
+  return lane.status === "pass" || lane.status === "blocked" ? lane.status : "fail";
 }
 
 function requireLaneAttestation(lane: LoadedLane, expectedLane: LaneName, expectedSha: string) {
   const attestation = lane.summary.sutAttestation;
-  if (attestation?.lane !== expectedLane || attestation?.sha !== expectedSha) {
-    throw new Error(`SUT attestation mismatch for ${expectedLane}.`);
+  if (attestation?.lane === expectedLane && attestation.sha === expectedSha) {
+    return;
   }
+  if (
+    lane.status === "fail" &&
+    lane.summary.status === "infra-error" &&
+    attestation == null &&
+    Object.keys(lane.summary.artifacts ?? {}).length === 0 &&
+    lane.summary.report === undefined
+  ) {
+    return;
+  }
+  throw new Error(`SUT attestation mismatch for ${expectedLane}.`);
 }
 
-function laneArtifactEntries(): EvidenceArtifact[] {
+function laneArtifactEntries(statuses: Record<LaneName, LaneStatus>): EvidenceArtifact[] {
   return LANES.flatMap(({ altPrefix, label, lane }) => [
     {
       alt: `${altPrefix} native Telegram Desktop proof GIF`,
@@ -214,6 +227,7 @@ function laneArtifactEntries(): EvidenceArtifact[] {
       label,
       lane,
       path: `${lane}/telegram-desktop-proof.gif`,
+      required: statuses[lane] === "pass",
       targetPath: `${lane}/telegram-desktop-proof.gif`,
       width: 420,
     },
@@ -275,7 +289,12 @@ function buildTelegramDesktopProofManifest({
 }): TelegramDesktopProofManifest {
   const baselineStatus = laneStatus(baseline);
   const candidateStatus = laneStatus(candidate);
-  const pass = baselineStatus === "pass" && candidateStatus === "pass";
+  const outcome =
+    baselineStatus === "fail" || candidateStatus === "fail"
+      ? "fail"
+      : baselineStatus === "blocked" || candidateStatus === "blocked"
+        ? "blocked"
+        : "pass";
   return {
     schemaVersion: 1,
     id: "telegram-desktop-proof",
@@ -295,11 +314,11 @@ function buildTelegramDesktopProofManifest({
         ...(candidateRef ? { ref: candidateRef } : {}),
         expected: "candidate visual proof captured",
         status: candidateStatus,
-        fixed: candidateStatus === "pass",
       },
-      pass,
+      outcome,
+      pass: outcome === "pass",
     },
-    artifacts: laneArtifactEntries(),
+    artifacts: laneArtifactEntries({ baseline: baselineStatus, candidate: candidateStatus }),
   };
 }
 

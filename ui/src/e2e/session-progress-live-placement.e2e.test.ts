@@ -137,4 +137,121 @@ suite.define(() => {
       },
     );
   });
+
+  it("dismisses a completed card across rerender and reload", async () => {
+    const sessionKey = "agent:main:progress-complete";
+    const plan = [
+      { step: "Inspected owner", status: "completed" },
+      { step: "Implemented fix", status: "completed" },
+      { step: "Filed issue", status: "completed" },
+    ];
+
+    for (const colorScheme of ["light", "dark"] as const) {
+      await suite.withPage(
+        {
+          colorScheme,
+          locale: "en-US",
+          serviceWorkers: "block",
+          viewport: { height: 900, width: 560 },
+        },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, {
+            featureMethods: [
+              "chat.metadata",
+              "chat.startup",
+              "progressCard.get",
+              "progressCard.put",
+            ],
+            methodResponses: {
+              "progressCard.get": {
+                card: {
+                  revision: 3,
+                  sessionKey,
+                  steps: plan,
+                  updatedAt: 3,
+                },
+              },
+              "progressCard.put": { card: null },
+              "sessions.list": chatSessionListResponse([
+                {
+                  key: sessionKey,
+                  kind: "direct",
+                  label: "Completed progress",
+                  updatedAt: 3,
+                },
+              ]),
+            },
+            sessionKey,
+          });
+
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(1);
+          const card = page.locator('[data-progress-card-placement="composer"]');
+          await expect.poll(() => card.isVisible()).toBe(true);
+          await card.locator("summary").click();
+          await captureProof(page, `completed-${colorScheme}-before.png`);
+
+          await card.getByRole("button", { name: "Dismiss progress card" }).click();
+          const dismissRequest = await gateway.waitForRequest("progressCard.put");
+          expect(dismissRequest.params).toEqual({ sessionKey, expectedRevision: 3 });
+          await expect.poll(() => card.count()).toBe(0);
+
+          await page.locator("textarea").fill("rerender");
+          await expect.poll(() => card.count()).toBe(0);
+          await gateway.setMethodResponse("progressCard.get", { card: null });
+          await page.reload();
+          await page.locator("textarea").waitFor({ state: "visible" });
+          await expect.poll(() => card.count()).toBe(0);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+          await captureProof(page, `completed-${colorScheme}-after.png`);
+        },
+      );
+    }
+  });
+
+  it("keeps dismissal unavailable to a restricted session viewer", async () => {
+    const sessionKey = "agent:main:progress-viewer";
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 560 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["chat.metadata", "chat.startup", "progressCard.get", "progressCard.put"],
+          hasMultipleSessionSharingIdentities: true,
+          methodResponses: {
+            "progressCard.get": {
+              card: {
+                revision: 1,
+                sessionKey,
+                steps: [{ step: "Completed work", status: "completed" }],
+                updatedAt: 1,
+              },
+            },
+            "sessions.list": chatSessionListResponse([
+              {
+                key: sessionKey,
+                kind: "direct",
+                label: "Restricted progress",
+                sharingRole: "viewer",
+                updatedAt: 1,
+                visibility: "suggest",
+              },
+            ]),
+          },
+          sessionKey,
+        });
+
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const card = page.locator('[data-progress-card-placement="composer"]');
+        await expect.poll(() => card.isVisible()).toBe(true);
+        await expect
+          .poll(() => card.getByRole("button", { name: "Dismiss progress card" }).count())
+          .toBe(0);
+        expect(await gateway.getRequests("progressCard.put")).toHaveLength(0);
+      },
+    );
+  });
 });

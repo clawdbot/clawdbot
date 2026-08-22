@@ -11,13 +11,14 @@ import { readConfigFileSnapshotForWrite, resolveGatewayPort } from "../config/co
 import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createChannelSetupTransaction } from "../flows/channel-setup.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, ExitError } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
@@ -42,7 +43,7 @@ import {
   text,
 } from "./configure.shared.js";
 import { formatHealthCheckFailure } from "./health-format.js";
-import { healthCommand } from "./health.js";
+import { healthCommandNonExiting } from "./health.js";
 import {
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
@@ -178,7 +179,7 @@ async function runGatewayHealthCheck(params: {
     if (!gatewayProbe.ok) {
       throw new Error(gatewayProbe.detail ?? `gateway did not become reachable at ${wsUrl}`);
     }
-    await healthCommand(
+    await healthCommandNonExiting(
       {
         json: false,
         timeoutMs: 10_000,
@@ -192,7 +193,11 @@ async function runGatewayHealthCheck(params: {
       params.runtime,
     );
   } catch (err) {
-    params.runtime.error(formatHealthCheckFailure(err));
+    // A trapped ExitError means healthCommand already printed its own
+    // reachable-gateway diagnostic; re-formatting it would only add noise.
+    if (!(err instanceof ExitError)) {
+      params.runtime.error(formatHealthCheckFailure(err));
+    }
     note(
       [
         "Docs:",
@@ -622,6 +627,7 @@ export async function runConfigureWizard(
     let didPersistConfig = false;
     let daemonSetupOutcome: DaemonSetupOutcome | undefined;
     let healthCheckOutcome: GatewayHealthCheckOutcome | undefined;
+    const channelSetup = createChannelSetupTransaction({ runtime });
 
     const persistPendingConfig = async () => {
       if (!hasPendingConfig) {
@@ -632,11 +638,14 @@ export async function runConfigureWizard(
         mode: metadataMode,
       });
 
-      nextConfig = await writeWizardConfigFile(nextConfig, {
-        mergeBase: mergeBaseConfig,
-        writeOptions: configWriteOwnership,
+      nextConfig = await channelSetup.commit(nextConfig, async (configToCommit) => {
+        const committedConfig = await writeWizardConfigFile(configToCommit, {
+          mergeBase: mergeBaseConfig,
+          writeOptions: configWriteOwnership,
+        });
+        mergeBaseConfig = structuredClone(committedConfig);
+        return committedConfig;
       });
-      mergeBaseConfig = structuredClone(nextConfig);
       hasPendingConfig = false;
       didPersistConfig = true;
       logConfigUpdated(runtime);
@@ -731,6 +740,7 @@ export async function runConfigureWizard(
           deferStatusUntilSelection: true,
           skipConfirm: true,
           skipStatusNote: true,
+          onPostWriteHook: channelSetup.onPostWriteHook,
         });
       } else {
         nextConfig = await removeChannelConfigWizard(nextConfig, runtime);
@@ -757,7 +767,7 @@ export async function runConfigureWizard(
         await provisionWorkspace();
       },
       model: async () => {
-        nextConfig = await promptAuthConfig(nextConfig, runtime, prompter);
+        nextConfig = await promptAuthConfig(nextConfig, runtime, prompter, resolveSetupTarget());
       },
       web: async () => {
         nextConfig = await promptWebToolsConfig(nextConfig, runtime, prompter);

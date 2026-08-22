@@ -8,6 +8,8 @@ import type { CodexAppServerClientFactory } from "./shared-client.js";
 export type CodexRunAttemptOptions = {
   bindingStore: CodexAppServerBindingStore;
   pluginConfig?: unknown;
+  /** Private app-server request identity; public attempt identity remains params.modelId. */
+  runtimeModelId?: string;
   startupTimeoutFloorMs?: number;
   nativeHookRelay?: {
     enabled?: boolean;

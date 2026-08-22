@@ -423,6 +423,21 @@ describe("subagent registry seam flow", () => {
     },
   });
   let mod: RegistryHarness;
+  const recoveryRuntime: GatewayRecoveryRuntime = {
+    dispatchAgent: mocks.dispatchRecoveryAgent as GatewayRecoveryRuntime["dispatchAgent"],
+    waitForAgent: (params, timeoutMs) =>
+      mocks.callGateway({
+        method: "agent.wait",
+        params: params as unknown as Record<string, unknown>,
+        timeoutMs,
+      }) as never,
+    sendRecoveryNotice: vi.fn(),
+  };
+  const activateRegistry = () => mod.activateSubagentRegistry(() => ({ recoveryRuntime }) as never);
+  const hydrateAndActivateRegistry = () => {
+    mod.initSubagentRegistry();
+    activateRegistry();
+  };
   const findRequesterRun = (runId: string) =>
     mod.listSubagentRunsForRequester("agent:main:main").find((entry) => entry.runId === runId);
   const mockPendingAgentWait = () =>
@@ -530,7 +545,6 @@ describe("subagent registry seam flow", () => {
       callGateway: mocks.callGateway as typeof import("../../../gateway/call.js").callGateway,
       captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
       cleanupBrowserSessionsForLifecycleEnd: mocks.cleanupBrowserSessionsForLifecycleEnd,
-      getGatewayRecoveryRuntime: mocks.getGatewayRecoveryRuntime,
       onAgentEvent: mocks.onAgentEvent,
       persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
       persistSubagentRunsToDiskOrThrow: mocks.persistSubagentRunsToDiskOrThrow,
@@ -1411,7 +1425,7 @@ describe("subagent registry seam flow", () => {
       }) as never)
       .mockReturnValue(0);
 
-    mod.initSubagentRegistry();
+    hydrateAndActivateRegistry();
     expect(mocks.restoreSubagentRunsFromDisk).toHaveBeenCalledOnce();
     expect(mocks.onAgentEvent).not.toHaveBeenCalled();
 
@@ -1474,7 +1488,7 @@ describe("subagent registry seam flow", () => {
       return 1;
     }) as never);
 
-    mod.initSubagentRegistry();
+    hydrateAndActivateRegistry();
 
     await waitForFast(() => {
       expect(mocks.maybeWakeRequesterAfterAllChildrenSettled).toHaveBeenCalledTimes(1);
@@ -1513,7 +1527,7 @@ describe("subagent registry seam flow", () => {
       return 1;
     }) as never);
 
-    mod.initSubagentRegistry();
+    hydrateAndActivateRegistry();
     await Promise.resolve();
     await Promise.resolve();
 
@@ -1562,7 +1576,7 @@ describe("subagent registry seam flow", () => {
 
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension?.commit()).toBe(true);
-    mod.initSubagentRegistry();
+    hydrateAndActivateRegistry();
     await Promise.resolve();
     expect(mocks.callGateway.mock.calls.filter(([request]) => request.method === "agent")).toEqual(
       [],
@@ -1779,7 +1793,7 @@ describe("subagent registry seam flow", () => {
       return request.method === "agent.wait" ? { status: "pending" } : {};
     });
 
-    mod.initSubagentRegistry();
+    hydrateAndActivateRegistry();
     await waitForFast(() => expect(releaseAbort).toBeTypeOf("function"));
     expect(agentCalls).toBe(1);
 
@@ -1870,7 +1884,7 @@ describe("subagent registry seam flow", () => {
       },
     );
 
-    mod.initSubagentRegistry();
+    hydrateAndActivateRegistry();
 
     await waitForFast(() =>
       expect(launchedIds).toEqual(["run-unconfirmed-one", "run-unconfirmed-one"]),
@@ -1939,7 +1953,7 @@ describe("subagent registry seam flow", () => {
       },
     );
 
-    mod.initSubagentRegistry();
+    hydrateAndActivateRegistry();
 
     await waitForFast(() => {
       expect(
@@ -2014,7 +2028,7 @@ describe("subagent registry seam flow", () => {
       },
     );
 
-    mod.initSubagentRegistry();
+    hydrateAndActivateRegistry();
 
     // The first durable failure keeps FIFO ownership and replays the same key.
     await waitForFast(() => expect(launchedIds).toEqual(["run-durable-one", "run-durable-one"]));
@@ -2088,7 +2102,7 @@ describe("subagent registry seam flow", () => {
       return request.method === "agent.wait" ? { status: "pending" } : {};
     });
 
-    mod.initSubagentRegistry();
+    hydrateAndActivateRegistry();
     await waitForFast(() => expect(releaseDelete).toBeTypeOf("function"));
     expect(agentCalls).toBe(1);
 
@@ -2155,7 +2169,7 @@ describe("subagent registry seam flow", () => {
       return request.method === "agent.wait" ? { status: "pending" } : {};
     });
 
-    mod.initSubagentRegistry();
+    hydrateAndActivateRegistry();
 
     await waitForFast(() => expect(persistenceCalls).toBeGreaterThanOrEqual(3));
     await concurrentSweep;
@@ -2206,7 +2220,7 @@ describe("subagent registry seam flow", () => {
       agent: new Error("launch failed"),
     });
 
-    mod.initSubagentRegistry();
+    hydrateAndActivateRegistry();
 
     await waitForFast(() =>
       expect(mod.getSubagentRunByRunId("run-queued-failure")).toMatchObject({
@@ -2293,7 +2307,7 @@ describe("subagent registry seam flow", () => {
       return {};
     });
 
-    mod.initSubagentRegistry();
+    hydrateAndActivateRegistry();
 
     await waitForFast(() =>
       expect(mod.getSubagentRunByRunId("run-queued-cleanup-retry")).toMatchObject({
@@ -2467,9 +2481,7 @@ describe("subagent registry seam flow", () => {
   });
 
   it("does not fall back to network recovery without an instance-bound runtime", async () => {
-    mod.testing.setDepsForTest({
-      getGatewayRecoveryRuntime: () => undefined,
-    });
+    mod.activateSubagentRegistry(() => undefined);
 
     mod.scheduleSubagentRegistrySweep({ delayMs: 1 });
     await vi.advanceTimersByTimeAsync(1);
@@ -3177,7 +3189,7 @@ describe("subagent registry seam flow", () => {
         },
       });
 
-      mod.initSubagentRegistry();
+      hydrateAndActivateRegistry();
 
       await waitForFast(() => {
         const completedRun = findRequesterRun(runId);
@@ -3476,7 +3488,7 @@ describe("subagent registry seam flow", () => {
       },
     );
 
-    mod.initSubagentRegistry();
+    hydrateAndActivateRegistry();
 
     await waitForFast(() => {
       expect(waitTimeouts).toEqual([1_000]);
@@ -4805,7 +4817,7 @@ describe("subagent registry seam flow", () => {
           runId,
           childSessionKey,
           task: "cancel during result capture",
-          expectsCompletionMessage: true,
+          expectsCompletionMessage: false,
           createdAt: startedAt,
           startedAt,
         }),
@@ -6071,7 +6083,11 @@ describe("subagent registry seam flow", () => {
     lifecycleHandler?.({
       runId: "run-timeout-then-ok",
       stream: "lifecycle",
-      data: { phase: "end", endedAt: 1_250 },
+      data: {
+        phase: "end",
+        endedAt: 1_250,
+        terminalReply: { disposition: "visible", text: "Finished successfully." },
+      },
     });
 
     await waitForFast(() => {
@@ -6102,6 +6118,7 @@ describe("subagent registry seam flow", () => {
       status: "ok",
       startedAt: endedAt - 500,
       endedAt,
+      terminalReply: { disposition: "visible", text: "final completion reply" },
     });
 
     mod.registerSubagentRun({
@@ -6166,7 +6183,7 @@ describe("subagent registry seam flow", () => {
       return 1;
     }) as never);
 
-    mod.initSubagentRegistry();
+    hydrateAndActivateRegistry();
     await Promise.resolve();
     await Promise.resolve();
 
@@ -6209,7 +6226,7 @@ describe("subagent registry seam flow", () => {
       return 1;
     }) as never);
 
-    mod.initSubagentRegistry();
+    hydrateAndActivateRegistry();
     await Promise.resolve();
     await Promise.resolve();
 

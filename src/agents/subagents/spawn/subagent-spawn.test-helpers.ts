@@ -136,6 +136,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
   getRuntimeConfig?: () => Record<string, unknown>;
   loadSessionStoreMock?: MockFn;
   loadPreparedModelCatalogMock?: MockFn;
+  resolveProviderRefOwnershipMock?: MockFn;
   ensureContextEnginesInitializedMock?: MockFn;
   updateSessionStoreMock?: MockFn;
   forkSessionEntryFromParentMock?: MockFn;
@@ -271,6 +272,11 @@ export async function loadSubagentSpawnModuleForTest(params: {
       createSubagentSpawnTestConfig(params.workspaceDir ?? os.tmpdir()),
     loadPreparedModelCatalog: (...args: unknown[]) =>
       params.loadPreparedModelCatalogMock?.(...args) ?? [],
+    resolveProviderRefOwnership: (...args: unknown[]) =>
+      params.resolveProviderRefOwnershipMock?.(...args) ?? {
+        status: "owned",
+        pluginIds: ["test-provider"],
+      },
     loadSessionEntry: (scope: { storePath?: string; sessionKey: string }) =>
       ((params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore)[scope.sessionKey],
     loadSessionStore: params.loadSessionStoreMock ?? (() => ({})),

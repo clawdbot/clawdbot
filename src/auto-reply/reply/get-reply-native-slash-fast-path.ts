@@ -10,6 +10,7 @@ import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { recordSessionCreated } from "../../sessions/session-state-events.js";
+import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import {
@@ -202,13 +203,27 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   if (command.commandBodyNormalized === "/status") {
     const targetSessionEntry =
       sessionState.sessionStore[sessionState.sessionKey] ?? sessionState.sessionEntry;
+    const canApplyStoredModel =
+      params.provider === params.defaultProvider && params.model === params.defaultModel;
+    const storedModelOverride = canApplyStoredModel
+      ? resolveStoredModelOverride({
+          sessionEntry: targetSessionEntry,
+          sessionStore: sessionState.sessionStore,
+          sessionKey: sessionState.sessionKey,
+          parentSessionKey:
+            targetSessionEntry?.parentSessionKey ??
+            params.ctx.ModelParentSessionKey ??
+            params.ctx.ParentSessionKey,
+          defaultProvider: params.defaultProvider,
+        })
+      : null;
     const canApplyChannelModel =
       params.cfg.channels?.modelByChannel &&
       !isModelSelectionLocked(targetSessionEntry) &&
+      !storedModelOverride &&
       !normalizeOptionalString(targetSessionEntry?.modelOverride) &&
       !normalizeOptionalString(targetSessionEntry?.providerOverride) &&
-      params.provider === params.defaultProvider &&
-      params.model === params.defaultModel;
+      canApplyStoredModel;
     const deliveryChannel = normalizeMessageChannel(sessionDeliveryChannel(targetSessionEntry));
     // Shared sessions can retain another channel's peer; never let that stale
     // identity outrank the authorized current command's live sender.
@@ -245,10 +260,23 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
           aliasIndex: params.aliasIndex,
         })
       : null;
+    const resolvedInheritedModel =
+      storedModelOverride?.source === "parent"
+        ? (resolveModelRefFromString({
+            raw: `${storedModelOverride.provider ?? params.defaultProvider}/${storedModelOverride.model}`,
+            defaultProvider: params.defaultProvider,
+            aliasIndex: params.aliasIndex,
+          })?.ref ?? {
+            provider: storedModelOverride.provider ?? params.defaultProvider,
+            model: storedModelOverride.model,
+          })
+        : null;
     // Native status returns before normal channel routing; select once before
     // preparing model-bound thinking, runtime, auth, context, or fast-mode facts.
-    const statusProvider = resolvedChannelModel?.ref.provider ?? params.provider;
-    const statusModel = resolvedChannelModel?.ref.model ?? params.model;
+    const statusProvider =
+      resolvedInheritedModel?.provider ?? resolvedChannelModel?.ref.provider ?? params.provider;
+    const statusModel =
+      resolvedInheritedModel?.model ?? resolvedChannelModel?.ref.model ?? params.model;
     let resolvedDefaultThinkingLevel: ThinkLevel | undefined;
     const resolveDefaultThinkingLevel = async () => {
       resolvedDefaultThinkingLevel ??= await resolveNativeSlashDefaultThinkingLevel({

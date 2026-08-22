@@ -1197,15 +1197,33 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   });
 
   it("disables continuation tools when rebuilding nested compaction tools", async () => {
-    await compactEmbeddedAgentSessionDirect({
-      sessionId: "session-1",
-      sessionKey: TEST_SESSION_KEY,
-      sessionFile: TEST_SESSION_KEY,
-      workspaceDir: "/tmp/workspace",
-    });
+    await compactEmbeddedAgentSessionDirect(
+      wrappedCompactionArgs({
+        workspaceDir: "/tmp/workspace",
+        sessionEntry: {
+          sessionId: "session-1",
+        },
+      }),
+    );
 
     expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {
       disableContinuationTools: true,
+    });
+  });
+
+  it("preserves the recorded session permission policy when building compaction tools", async () => {
+    await compactEmbeddedAgentSessionDirect(
+      wrappedCompactionArgs({
+        workspaceDir: "/tmp/workspace",
+        sessionEntry: {
+          sessionId: "session-1",
+          permissionMode: "full",
+          sessionRoot: "/tmp/workspace",
+        },
+      }),
+    );
+    expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {
+      sessionPermissionPolicy: { mode: "full", root: "/tmp/workspace" },
     });
   });
 
@@ -1627,6 +1645,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       config: {
         agents: {
           defaults: {
+            compaction: { thinkingLevel: "inherit" as const },
             models: {
               "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
             },

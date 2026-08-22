@@ -10,6 +10,7 @@ import {
   normalizeContinuationTargetKeys,
 } from "../auto-reply/continuation/targeting-pure.js";
 import type { ContinuationTrigger } from "../auto-reply/get-reply-options.types.js";
+import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/source-reply-delivery-mode.types.js";
 import type { ChatType } from "../channels/chat-type.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
@@ -22,7 +23,6 @@ import {
 import type {
   DeliveryQueueCompletionRetention,
   DeliveryQueueEntryLoadResult,
-  DeliveryQueueRowMetadata,
 } from "./delivery-queue-sqlite.js";
 import { normalizeDiagnosticTraceparent } from "./diagnostic-trace-context.js";
 import {
@@ -124,6 +124,8 @@ type QueuedSessionDeliveryGenericPayload =
       sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
       continuationTrigger?: ContinuationTrigger;
       expectedMediaUrls?: string[];
+      expectedMediaAttachments?: Record<string, ReplyMediaAttachment>;
+      preparedMediaBlocks?: Record<string, Array<Record<string, unknown>>>;
       suppressTextDelivery?: true;
       idempotencyKey?: string;
       owner?: SessionDeliveryOwnerReference;
@@ -373,6 +375,30 @@ const QueuedAgentTurnSchema = z
     sourceReplyDeliveryMode: z.enum(["automatic", "message_tool_only"]).optional(),
     continuationTrigger: z.enum(["work-wake", "delegate-return", "subagent-return"]).optional(),
     expectedMediaUrls: z.array(z.string()).optional(),
+    expectedMediaAttachments: z
+      .record(
+        z.string(),
+        z
+          .object({
+            type: z.enum(["image", "audio", "video", "file"]).optional(),
+            path: z.string().optional(),
+            url: z.string().optional(),
+            mediaUrl: z.string().optional(),
+            filePath: z.string().optional(),
+            mimeType: z.string().optional(),
+            name: z.string().optional(),
+            sizeBytes: z.number().optional(),
+            durationMs: z.number().optional(),
+            width: z.number().optional(),
+            height: z.number().optional(),
+            trustedLocalMedia: z.boolean().optional(),
+          })
+          .strict(),
+      )
+      .optional(),
+    preparedMediaBlocks: z
+      .record(z.string(), z.array(z.record(z.string(), z.unknown())))
+      .optional(),
     suppressTextDelivery: z.literal(true).optional(),
     idempotencyKey: z.string().optional(),
     owner: z
@@ -653,17 +679,4 @@ export function normalizeQueuedSessionDeliveryTraceparent(
     delete normalizedPayload.traceparentProvenance;
   }
   return normalizedPayload;
-}
-
-export function queuedSessionDeliveryMetadata(
-  entry: QueuedSessionDelivery,
-): DeliveryQueueRowMetadata {
-  const route = entry.kind === "agentTurn" ? entry.route : undefined;
-  return {
-    entryKind: entry.kind,
-    sessionKey: entry.sessionKey,
-    channel: route?.channel ?? entry.deliveryContext?.channel,
-    target: route?.to ?? entry.deliveryContext?.to,
-    accountId: route?.accountId ?? entry.deliveryContext?.accountId,
-  };
 }

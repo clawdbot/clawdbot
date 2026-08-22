@@ -24,7 +24,7 @@ describe("cron view run history", () => {
         { ts: 1_000, jobId: "job-1", action: "finished", status: "ok", summary: "older run" },
         { ts: 2_000, jobId: "job-2", action: "finished", status: "ok", summary: "newer run" },
       ],
-      status: { enabled: true, jobs: 2 },
+      status: { enabled: true, triggersEnabled: true, jobs: 2 },
     });
 
     const titles = Array.from(container.querySelectorAll(".cron-run-entry__title")).map((el) =>

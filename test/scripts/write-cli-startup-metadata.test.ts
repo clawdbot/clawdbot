@@ -41,8 +41,6 @@ function writeStartupMetadataSourceSignatureFixture(rootDir: string): void {
     ["extensions/browser/src/cli/browser-cli.ts", "export const browserHelp = 'browser';\n"],
     ["extensions/canvas/cli-metadata.ts", "export const canvasMetadata = 'canvas';\n"],
     ["extensions/canvas/index.ts", "export const canvasEntry = 'canvas';\n"],
-    ["extensions/canvas/src/a2ui-jsonl.ts", "export const a2uiJsonl = 'canvas';\n"],
-    ["extensions/canvas/src/cli-helpers.ts", "export const canvasHelpers = 'canvas';\n"],
     ["extensions/canvas/src/cli.ts", "export const canvasCliHelp = 'canvas';\n"],
     ["src/cli/banner.ts", "export const banner = 'openclaw';\n"],
     [

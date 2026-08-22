@@ -148,6 +148,7 @@ describe("runAgentAttempt spawn-init requestCompactionOpts plumbing", () => {
   async function runEmbeddedAttempt(cfg: OpenClawConfig) {
     await runAgentAttempt({
       preparedRunAdmission: createTestPreparedRunAdmission("run-test"),
+      pluginGeneration: undefined,
       providerOverride: "anthropic",
       originalProvider: "anthropic",
       modelOverride: "claude-sonnet-4.7",

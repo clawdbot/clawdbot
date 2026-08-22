@@ -148,6 +148,7 @@ describe("subagent CONTINUE_WORK token self-continuation (token-form parity)", (
     runEmbeddedAgentMock.mockResolvedValueOnce(tokenRunResult(token));
     return runAgentAttempt({
       preparedRunAdmission: createTestPreparedRunAdmission("run-test"),
+      pluginGeneration: undefined,
       providerOverride: "anthropic",
       originalProvider: "anthropic",
       modelOverride: "claude-sonnet-4.7",

@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -45,13 +47,28 @@ function resolveRequiredPath(value: string | undefined, label: string): string {
 }
 
 async function resolveCreateDatabases(runtime: RuntimeEnv, options: BackupGitCreateOptions) {
-  const agents = [...new Set((options.agents ?? []).map((agent) => normalizeAgentId(agent)))];
-  const explicit = options.global === true || agents.length > 0;
+  const normalizedAgents = [
+    ...new Set(
+      (options.agents ?? []).map((agent) => {
+        const trimmed = agent.trim();
+        if (!trimmed) {
+          throw new Error("--agent must not be blank");
+        }
+        return normalizeAgentId(trimmed);
+      }),
+    ),
+  ];
+  const explicit = options.global === true || normalizedAgents.length > 0;
   if (options.all && explicit) {
     throw new Error("Use --all by itself, or select --global and --agent scopes explicitly.");
   }
   if (!options.all && !explicit) {
     throw new Error("Choose at least one Git backup scope: --all, --global, or --agent <id>.");
+  }
+  let agents: string[] = [];
+  if (normalizedAgents.length > 0) {
+    const config = getRuntimeConfig({ skipPluginValidation: true });
+    agents = normalizedAgents.map((agent) => resolveConfiguredAgentId(config, agent));
   }
   const databases: Array<{
     path: string;

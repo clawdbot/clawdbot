@@ -2795,6 +2795,28 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     );
   });
 
+  it("does not apply host exec approval floors to an explicit full session", () => {
+    const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
+      permissionMode: "full",
+      config: {
+        tools: {
+          exec: {
+            mode: "ask",
+          },
+        },
+      },
+      approvals: {
+        version: 1,
+        defaults: {
+          ask: "always",
+        },
+        agents: {},
+      },
+    });
+
+    expect(execPolicy).toMatchObject({ mode: "full", security: "full", ask: "off" });
+  });
+
   it("preserves explicit read-only sandbox for host exec approval ask floors", () => {
     const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
       config: {

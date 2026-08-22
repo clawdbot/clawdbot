@@ -12,10 +12,11 @@ const state = vi.hoisted(() => ({
   persistRunSessionUsage: vi.fn(async (_params: unknown) => undefined),
   refreshQueuedFollowupSession: vi.fn(),
   scheduleContinuation: vi.fn(),
+  resolveContextTokensForModel: vi.fn<() => number | undefined>(() => 200_000),
 }));
 
 vi.mock("../../agents/context.js", () => ({
-  resolveContextTokensForModel: () => 200_000,
+  resolveContextTokensForModel: () => state.resolveContextTokensForModel(),
 }));
 
 vi.mock("../../agents/fast-mode.js", () => ({
@@ -215,7 +216,7 @@ function createExecution(
     sessionCtx: {},
     pendingToolTasks: new Set(),
     progress: {
-      drain: vi.fn(),
+      drain: vi.fn(async () => {}),
       visibleToolErrorObserved: () => false,
     },
   } as FollowupExecutionResult;
@@ -229,6 +230,7 @@ beforeEach(() => {
   });
   state.incrementRunCompactionCount.mockResolvedValue(7);
   state.scheduleContinuation.mockResolvedValue(undefined);
+  state.resolveContextTokensForModel.mockReturnValue(200_000);
 });
 
 describe("accountFollowupTurn", () => {
@@ -277,7 +279,7 @@ describe("accountFollowupTurn", () => {
   });
 
   it("forwards typed runtime context provenance to session persistence", async () => {
-    const params = createFallbackParams();
+    const params = createParams();
     const result = params.execution.execution.outcome;
     if (result.kind !== "settled") {
       throw new Error("expected settled test execution");
@@ -332,6 +334,112 @@ describe("accountFollowupTurn", () => {
       }),
     );
   });
+
+  it("treats a source-less current-run context window as runtime provenance", async () => {
+    const params = createParams();
+    const result = params.execution.execution.outcome;
+    if (result.kind !== "settled") {
+      throw new Error("expected settled test execution");
+    }
+    result.result.meta.agentMeta = {
+      sessionId: "session-1",
+      provider: "openai",
+      model: "gpt-4o",
+      agentHarnessId: "legacy-runtime",
+      contextTokens: 512_000,
+    };
+
+    await accountFollowupTurn(params);
+
+    expect(state.persistRunSessionUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentHarnessId: "legacy-runtime",
+        contextTokensUsed: 512_000,
+        contextTokensSource: "runtime",
+      }),
+    );
+  });
+
+  it("marks a successful current model lookup with versioned resolved provenance", async () => {
+    const params = createParams();
+
+    await accountFollowupTurn(params);
+
+    expect(state.persistRunSessionUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextTokensUsed: 200_000,
+        contextTokensSource: "resolved-v1",
+      }),
+    );
+  });
+
+  it("does not label a prior context fallback as a current resolution after a model switch", async () => {
+    state.resolveContextTokensForModel.mockReturnValueOnce(undefined);
+    const params = createParams();
+    const session = params.turn.session as unknown as {
+      current: () => SessionEntry;
+      adopt: (entry: SessionEntry) => void;
+    };
+    session.adopt({
+      ...session.current(),
+      modelProvider: "anthropic",
+      model: "claude",
+      agentHarnessId: "openclaw",
+      contextTokens: 272_000,
+      contextTokensSource: "resolved",
+    });
+    const result = params.execution.execution.outcome;
+    if (result.kind !== "settled") {
+      throw new Error("expected settled test execution");
+    }
+    result.result.meta.agentMeta = {
+      sessionId: "session-1",
+      provider: "openai",
+      model: "gpt-4o",
+      agentHarnessId: "codex",
+    };
+
+    await accountFollowupTurn(params);
+
+    expect(state.persistRunSessionUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerUsed: "openai",
+        modelUsed: "gpt-4o",
+        agentHarnessId: "codex",
+        contextTokensUsed: 272_000,
+        contextTokensSource: undefined,
+      }),
+    );
+  });
+
+  it.each([
+    {
+      name: "source-less legacy user pin",
+      authProfileOverrideCompactionCount: undefined,
+      expectedSource: "user",
+    },
+    {
+      name: "source-less compaction-marked auto pin",
+      authProfileOverrideCompactionCount: 0,
+      expectedSource: "auto",
+    },
+  ] as const)(
+    "forwards a $name with canonical provenance during fallback queue refresh",
+    async ({ authProfileOverrideCompactionCount, expectedSource }) => {
+      await accountFollowupTurn(createParams(authProfileOverrideCompactionCount));
+
+      expect(state.refreshQueuedFollowupSession).toHaveBeenCalledOnce();
+      expect(state.refreshQueuedFollowupSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          key: "main",
+          nextProvider: "openai",
+          nextModel: "gpt-4o",
+          nextAuthProfileId: "openai:work",
+          nextAuthProfileIdSource: expectedSource,
+        }),
+      );
+    },
+  );
 
   it("forwards a work token retained only in raw terminal text", async () => {
     const turn = createTurn();
@@ -463,7 +571,7 @@ describe("accountFollowupTurn", () => {
     });
   });
 
-  function createFallbackParams(
+  function createParams(
     authProfileOverrideCompactionCount?: number,
   ): Parameters<typeof accountFollowupTurn>[0] {
     let entry: SessionEntry = {
@@ -575,7 +683,7 @@ describe("accountFollowupTurn", () => {
     ] as const)(
       "forwards a $name with canonical provenance during fallback queue refresh",
       async ({ authProfileOverrideCompactionCount, expectedSource }) => {
-        await accountFollowupTurn(createFallbackParams(authProfileOverrideCompactionCount));
+        await accountFollowupTurn(createParams(authProfileOverrideCompactionCount));
 
         expect(state.refreshQueuedFollowupSession).toHaveBeenCalledOnce();
         expect(state.refreshQueuedFollowupSession).toHaveBeenCalledWith(

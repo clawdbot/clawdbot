@@ -521,7 +521,7 @@ export class ApprovalPage extends OpenClawLightDomElement {
       <header class="approval-page__brand">
         <img
           class="approval-page__logo"
-          src=${controlUiPublicAssetPath("apple-touch-icon.png", this.context.basePath)}
+          src=${controlUiPublicAssetPath("apple-touch-icon.png", this.context.resourceBasePath)}
           alt=""
         />
         <div>

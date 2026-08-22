@@ -128,6 +128,47 @@ describe("provider flow install catalog contributions", () => {
     expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
 
+  it("resolves text and media setup choices in one metadata-only pass", () => {
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "fal",
+        providerId: "fal",
+        methodId: "api-key",
+        choiceId: "fal-api-key",
+        choiceLabel: "fal API key",
+        onboardingScopes: ["image-generation", "music-generation"],
+      },
+      {
+        pluginId: "openai",
+        providerId: "openai",
+        methodId: "api-key",
+        choiceId: "openai-api-key",
+        choiceLabel: "OpenAI API key",
+      },
+    ]);
+    resolveProviderInstallCatalogEntries.mockReturnValue([
+      {
+        pluginId: "vydra",
+        providerId: "vydra",
+        methodId: "api-key",
+        choiceId: "vydra-api-key",
+        choiceLabel: "Vydra API key",
+        onboardingScopes: ["image-generation"],
+        label: "Vydra",
+        origin: "bundled",
+        install: { npmSpec: "@openclaw/vydra-provider" },
+      },
+    ]);
+
+    expect(
+      resolveProviderSetupFlowContributions({ scope: "all" }).map(({ option }) => option.value),
+    ).toEqual(expect.arrayContaining(["fal-api-key", "openai-api-key", "vydra-api-key"]));
+    expect(resolveManifestProviderAuthChoices).toHaveBeenCalledOnce();
+    expect(resolveProviderInstallCatalogEntries).toHaveBeenCalledOnce();
+    expect(resolveProviderWizardOptions).not.toHaveBeenCalled();
+    expect(resolvePluginProvidersCore).not.toHaveBeenCalled();
+  });
+
   it("prefers manifest setup contributions over duplicate install-catalog entries", () => {
     resolveManifestProviderAuthChoices.mockReturnValue([
       {

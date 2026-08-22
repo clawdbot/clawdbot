@@ -373,7 +373,6 @@ describe("stored outbox summaries", () => {
       undefined,
       "waiting-idle",
       "executing-command",
-      "steering",
       "sending",
       "waiting-reconnect",
     ] as const;
@@ -427,8 +426,8 @@ describe("stored outbox summaries", () => {
     const threadA = storedChatOutboxScopeKey({ sessionKey: "thread-a" });
     const threadB = storedChatOutboxScopeKey({ sessionKey: "thread-b" });
 
-    expect(summary.total).toBe(9);
-    expect(summary.countsByScope.get(threadA)).toBe(8);
+    expect(summary.total).toBe(8);
+    expect(summary.countsByScope.get(threadA)).toBe(7);
     expect(summary.countsByScope.get(threadB)).toBe(1);
     expect(summary.attentionCountsByScope.get(threadA)).toBe(2);
     expect(summary.attentionCountsByScope.get(threadB)).toBe(1);

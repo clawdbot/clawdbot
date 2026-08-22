@@ -877,4 +877,16 @@ describe("mcp cli", () => {
       });
     });
   });
+
+  it("points serve startup failures at the deep Gateway health diagnostic", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      serveOpenClawChannelMcp.mockRejectedValueOnce(new Error("gateway unavailable"));
+
+      await expect(runMcpCommand(["mcp", "serve"])).rejects.toThrow("__exit__:1");
+
+      expect(lastErrorLine()).toBe(
+        "MCP server failed to start: gateway unavailable. Run openclaw gateway status --deep --require-rpc to inspect Gateway health.",
+      );
+    });
+  });
 });

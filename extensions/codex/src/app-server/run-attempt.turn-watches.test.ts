@@ -1005,10 +1005,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
     vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const harness = createStartedThreadHarness();
-    vi.spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest").mockResolvedValue({
-      action: "accept",
-      content: null,
-      _meta: null,
+    vi.spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest").mockResolvedValue({
+      kind: "handled",
+      response: { action: "accept", content: null, _meta: null },
     });
     const params = makeTestParams({ timeoutMs: 10_000 });
     const onRunProgress = vi.fn();
@@ -1072,15 +1071,14 @@ describe("runCodexAppServerAttempt turn watches", () => {
   it("keeps turn request activity active until elicitation handling resolves", async () => {
     const harness = createStartedThreadHarness();
     const bridgedResponse = {
-      action: "accept",
-      content: null,
-      _meta: null,
+      kind: "handled",
+      response: { action: "accept", content: null, _meta: null },
     } as const;
     let resolveBridge!: (value: typeof bridgedResponse) => void;
     const bridgePromise = new Promise<typeof bridgedResponse>((resolve) => {
       resolveBridge = resolve;
     });
-    vi.spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest").mockImplementation(
+    vi.spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest").mockImplementation(
       async () => await bridgePromise,
     );
     const params = makeTestParams({ timeoutMs: 500 });
@@ -1138,7 +1136,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     ).toBe(false);
 
     resolveBridge(bridgedResponse);
-    await expect(response).resolves.toEqual(bridgedResponse);
+    await expect(response).resolves.toEqual(bridgedResponse.response);
     await vi.waitFor(
       () =>
         expect(onRunProgress).toHaveBeenCalledWith(
@@ -1162,7 +1160,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     const harness = createStartedThreadHarness();
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     let requestAborted = false;
-    vi.spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest").mockImplementation(
+    vi.spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest").mockImplementation(
       async ({ signal }) =>
         await new Promise<never>((_resolve, reject) => {
           signal?.addEventListener(
@@ -1290,11 +1288,10 @@ describe("runCodexAppServerAttempt turn watches", () => {
   it("keeps an eliciting MCP tool active past the completion timeout", async () => {
     const harness = createStartedThreadHarness();
     const bridgedResponse = {
-      action: "accept",
-      content: null,
-      _meta: null,
+      kind: "handled",
+      response: { action: "accept", content: null, _meta: null },
     } as const;
-    vi.spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest").mockResolvedValue(
+    vi.spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest").mockResolvedValue(
       bridgedResponse,
     );
     const params = createParams(
@@ -1337,7 +1334,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
           _meta: null,
         },
       }),
-    ).resolves.toEqual(bridgedResponse);
+    ).resolves.toEqual(bridgedResponse.response);
 
     await new Promise((resolve) => {
       setTimeout(resolve, 40);

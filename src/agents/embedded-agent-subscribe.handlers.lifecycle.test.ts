@@ -811,36 +811,6 @@ describe("handleAgentEnd", () => {
     });
   });
 
-  it("keeps a recovery-only token-limited terminal working", async () => {
-    const onAgentEvent = vi.fn();
-    const onBeforeTerminalDelivery = vi.fn();
-    const ctx = createContext(
-      {
-        role: "assistant",
-        stopReason: "length",
-        content: [],
-      },
-      { onAgentEvent, onBeforeTerminalDelivery },
-    );
-    ctx.state.livenessState = "working";
-    ctx.state.assistantTexts = [];
-    ctx.state.lastToolRecovery = { toolName: "write" };
-
-    await handleAgentEnd(ctx);
-
-    expect(onBeforeTerminalDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({ incompleteTerminalAssistant: false }),
-    );
-    expect(onAgentEvent).toHaveBeenCalledWith({
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        stopReason: "length",
-        livenessState: "working",
-      },
-    });
-  });
-
   it("preserves token-limited terminal tool media before runner finalization", async () => {
     const onAgentEvent = vi.fn();
     const ctx = createContext(

@@ -127,6 +127,7 @@ export async function runSubagentAnnounceFlow(params: {
   continuationFanoutMode?: "tree" | "all";
   traceparent?: string;
   onBeforeDeleteChildSession?: () => boolean;
+  resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 }): Promise<SubagentAnnounceFlowOutcome> {
   let announceOutcome: SubagentAnnounceFlowOutcome = "retryable";
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
@@ -681,6 +682,7 @@ export async function runSubagentAnnounceFlow(params: {
       signal: params.signal,
       continuationTriggerOverride: returnRoute.continuationTriggerOverride,
       ...(returnRoute.traceparent ? { traceparent: returnRoute.traceparent } : {}),
+      resolveGatewayContext: params.resolveGatewayContext,
     });
     reportDeliveryResult(delivery);
     announceOutcome = delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");

@@ -136,6 +136,7 @@ function runCandidate(
 ) {
   return runEmbeddedFallbackCandidate({
     preparedRunAdmission: createTestPreparedRunAdmission("run-test"),
+    githubPublicationAvailable: false,
     turn: createTurn(config),
     effectiveRun: createTurn(config).followupRun.run,
     candidateRun: createTurn(config).followupRun.run,

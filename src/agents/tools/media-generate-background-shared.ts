@@ -101,7 +101,6 @@ type MediaGenerationExecutionResult = {
   provider: string;
   model: string;
   count: number;
-  paths: string[];
   wakeResult: string;
   attachments?: AgentGeneratedAttachment[];
   mediaUrls?: string[];
@@ -126,7 +125,6 @@ type CompleteMediaGenerationTaskRunParams = {
   provider: string;
   model: string;
   count: number;
-  paths: string[];
   terminalResult?: RequiredCompletionTerminalResult;
 };
 
@@ -330,7 +328,6 @@ function completeMediaGenerationTaskRun(params: {
   provider: string;
   model: string;
   count: number;
-  paths: string[];
   generatedLabel: string;
   terminalResult?: RequiredCompletionTerminalResult;
 }) {
@@ -339,7 +336,6 @@ function completeMediaGenerationTaskRun(params: {
   }
   try {
     const endedAt = Date.now();
-    const target = params.count === 1 ? params.paths[0] : `${params.count} files`;
     completeTaskRunByRunId({
       runId: params.handle.runId,
       runtime: "cli",
@@ -349,7 +345,7 @@ function completeMediaGenerationTaskRun(params: {
       progressSummary: `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"}`,
       terminalSummary:
         params.terminalResult?.terminalSummary ??
-        `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"} with ${params.provider}/${params.model}${target ? ` -> ${target}` : ""}.`,
+        `Generated ${params.count} ${params.generatedLabel}${params.count === 1 ? "" : "s"} with ${params.provider}/${params.model}.`,
       terminalOutcome: params.terminalResult?.terminalOutcome,
     });
   } finally {
@@ -568,7 +564,6 @@ export function scheduleMediaGenerationTaskCompletion<
         provider: executed.provider,
         model: executed.model,
         count: executed.count,
-        paths: executed.paths,
         terminalResult,
       });
     } catch (error) {

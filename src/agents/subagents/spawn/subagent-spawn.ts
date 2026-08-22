@@ -25,6 +25,7 @@ import {
   deriveContinuationDelegateChildSessionKey,
 } from "../../subagent-continuation-ids.js";
 import { registerSubagentTraceparentHandoff } from "../../subagent-traceparent-handoff.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import {
   buildContinuationSessionPatch,
   persistInitialChildRuntimeState,
@@ -95,6 +96,7 @@ export async function spawnSubagentDirect(
       error: "continuationChainState is required when drainsContinuationDelegateQueue is true",
     };
   }
+  const gatewayContextResolver = getGatewayToolCallerIdentity()?.gatewayContextResolver;
   let requestedAgentId = params.agentId?.trim();
   const requestResolution = resolveSubagentSpawnRequest(params, ctx, {
     initial: requestedAgentId,
@@ -585,6 +587,7 @@ export async function spawnSubagentDirect(
           queuedLaunch,
           queued: params.collect === true,
           taskRowOwnership,
+          ...(gatewayContextResolver ? { gatewayContextResolver } : {}),
           attachmentsDir: attachmentAbsDir,
           attachmentsRootDir: attachmentRootDir,
           retainAttachmentsOnKeep: retainOnSessionKeep,
@@ -639,6 +642,7 @@ export async function spawnSubagentDirect(
         rollbackPreparedContext: () =>
           rollbackPreparedContextEngine(pipelineResult.state.contextEnginePreparation),
         cleanupFailedSpawn,
+        gatewayContextResolver,
       });
       swarmReservationPending = false;
       collectorSessionKey = childSessionKey;

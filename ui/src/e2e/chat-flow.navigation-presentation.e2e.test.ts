@@ -13,7 +13,6 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-
 suite.define(() => {
   it("coalesces persisted same-session split panes during cold startup", async () => {
     const context = await suite.newBrowserContext({
@@ -285,14 +284,45 @@ suite.define(() => {
       await expect.poll(() => headers.first().locator(".chat-side-panel-toggle").count()).toBe(1);
       await expect.poll(() => page.locator(".chat-workspace-rail").count()).toBe(0);
 
-      // Keyboard focus on a header action marks the pane active.
-      await headers.first().getByRole("button", { name: "Close pane" }).focus();
       const cells = page.locator(".chat-split-view__cell");
+      const actionRows = headers.locator(".chat-pane__actions");
+      await expect.poll(() => actionRows.first().isVisible()).toBe(false);
+      await expect.poll(() => actionRows.last().isVisible()).toBe(true);
+      expect(
+        await headers
+          .first()
+          .locator(".chat-pane__close-pane")
+          .evaluate((button) => {
+            (button as HTMLElement).focus();
+            return document.activeElement === button;
+          }),
+      ).toBe(false);
+
+      await panes.first().click({ position: { x: 20, y: 80 } });
       await expect.poll(() => cells.first().getAttribute("class")).toContain("--active");
+      await expect.poll(() => actionRows.first().isVisible()).toBe(true);
+      await expect.poll(() => actionRows.last().isVisible()).toBe(false);
+      const paneEmphasis = await cells.evaluateAll((nodes) =>
+        nodes.map((cell) => {
+          const style = getComputedStyle(cell);
+          return {
+            active: cell.classList.contains("chat-split-view__cell--active"),
+            boxShadow: style.boxShadow,
+            filter: style.filter,
+            opacity: style.opacity,
+          };
+        }),
+      );
+      expect(paneEmphasis).toEqual([
+        { active: true, boxShadow: "none", filter: "none", opacity: "1" },
+        { active: false, boxShadow: "none", filter: "saturate(0.45)", opacity: "1" },
+      ]);
 
       const lastPane = page.locator(".chat-split-view__pane").last();
       await lastPane.click({ position: { x: 20, y: 80 } });
       await expect.poll(() => cells.last().getAttribute("class")).toContain("--active");
+      await expect.poll(() => actionRows.first().isVisible()).toBe(false);
+      await expect.poll(() => actionRows.last().isVisible()).toBe(true);
       const targetHeader = headers.first();
       await expect
         .poll(() =>
@@ -676,19 +706,16 @@ suite.define(() => {
         .evaluate((label) => getComputedStyle(label).fontWeight);
       expect(activeWeight).toBe(inactiveWeight);
 
-      const sortThreads = page.getByRole("button", { name: "Sort sessions" });
-      await sortThreads.locator("..").hover();
-      await sortThreads.click();
+      const filterAndSort = page.getByRole("button", { name: "Filter & sort" });
+      await filterAndSort.click();
       await page.getByRole("menuitemradio", { name: "Last updated" }).click();
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(updatedOrder);
 
-      await sortThreads.locator("..").hover();
-      await sortThreads.click();
+      await filterAndSort.click();
       await page.getByRole("menuitemradio", { name: "Created" }).click();
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
-      await sortThreads.locator("..").hover();
-      await sortThreads.click();
+      await filterAndSort.click();
       await page.getByRole("main").click();
       await expect.poll(() => page.getByRole("menuitemradio", { name: "Created" }).count()).toBe(0);
     } finally {

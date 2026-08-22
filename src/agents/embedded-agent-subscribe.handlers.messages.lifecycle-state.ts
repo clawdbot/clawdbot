@@ -110,6 +110,8 @@ export function shouldSuppressValidationLoopAssistantOutput(params: {
 export function resetMessageEndStreamingState(ctx: EmbeddedAgentSubscribeContext): void {
   ctx.state.deltaBuffer = "";
   ctx.state.thinkingTagStream = createThinkingTagStreamState();
+  ctx.state.deltaBufferIsCommentary = false;
+  ctx.state.hasFlushedPartialText = false;
   ctx.state.blockBuffer = "";
   ctx.blockChunker?.reset();
   ctx.state.blockState.thinking = false;

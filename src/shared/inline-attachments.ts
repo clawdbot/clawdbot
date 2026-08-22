@@ -113,7 +113,7 @@ function validateInlineAttachmentName(name: string, attachmentIndex: number): vo
     name.includes("\u0000") ||
     Array.from(name).some((char) => PORTABLE_ATTACHMENT_NAME_FORBIDDEN.has(char))
   ) {
-    throw new Error(`attachments_invalid_name (${index} name=${name})`);
+    throw new Error(`attachments_invalid_name (${index} forbidden character)`);
   }
   if (
     Array.from(name).some((char) => {
@@ -121,7 +121,7 @@ function validateInlineAttachmentName(name: string, attachmentIndex: number): vo
       return code < 0x20 || code === 0x7f;
     })
   ) {
-    throw new Error(`attachments_invalid_name (${index} name=${name})`);
+    throw new Error(`attachments_invalid_name (${index} forbidden control character)`);
   }
   const basenameBytes = Buffer.byteLength(name, "utf8");
   if (basenameBytes > MAX_INLINE_ATTACHMENT_BASENAME_BYTES) {

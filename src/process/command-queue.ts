@@ -8,10 +8,8 @@ import {
   logLaneEnqueue,
 } from "../logging/diagnostic-runtime.js";
 import {
-  notifyActiveCommandTaskWaiters,
   notifyAllCommandLaneIdleWaitersForState,
   notifyCommandLaneIdleWaitersForState,
-  waitForActiveCommandTasks,
   waitForCommandLaneIdleState,
 } from "./command-queue-waiters.js";
 import {
@@ -28,11 +26,15 @@ import {
   validateCommandLaneGroupSpec,
 } from "./command-queue.capacity-groups.js";
 import {
+  createLaneQueue,
+  dequeueLaneQueue,
+  enqueueLaneQueue,
   type CommandLaneTaskMarker,
   getQueueState,
   type LaneState,
   normalizeLane,
   type QueueEntry,
+  type QueuePriority,
 } from "./command-queue.state.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import {
@@ -179,7 +181,7 @@ function getLaneState(lane: string): LaneState {
   }
   const created: LaneState = {
     lane,
-    queue: [],
+    queue: createLaneQueue(),
     activeTaskIds: new Set(),
     maxConcurrent: 1,
     draining: false,
@@ -218,22 +220,6 @@ function retireIdleScopedCommandLane(state: LaneState): void {
   }
 }
 
-function hasPendingActiveTasks(taskIds: Set<number>): boolean {
-  const queueState = getQueueState();
-  for (const state of queueState.lanes.values()) {
-    for (const taskId of state.activeTaskIds) {
-      if (taskIds.has(taskId)) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-function notifyActiveTaskWaiters(): void {
-  notifyActiveCommandTaskWaiters(hasPendingActiveTasks);
-}
-
 function isCommandLaneIdle(lane: string): boolean {
   const state = getQueueState().lanes.get(lane);
   return !state || getLaneDepth(state) === 0;
@@ -254,7 +240,7 @@ function normalizeTaskTimeoutMs(value: number | undefined): number | undefined {
   return clampPositiveTimerTimeoutMs(value);
 }
 
-function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]): number {
+function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]): QueuePriority {
   switch (priority) {
     case "foreground":
       return 1;
@@ -266,18 +252,8 @@ function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]):
 }
 
 function enqueueLaneEntry(state: LaneState, entry: QueueEntry): void {
-  const insertAt = state.queue.findIndex(
-    (queued) =>
-      queued.priority < entry.priority ||
-      (queued.priority === entry.priority && queued.sequence > entry.sequence),
-  );
-  entry.queuedAheadAtEnqueue = insertAt < 0 ? state.queue.length : insertAt;
+  entry.queuedAheadAtEnqueue = enqueueLaneQueue(state.queue, entry);
   entry.activeAheadAtEnqueue = state.activeTaskIds.size;
-  if (insertAt < 0) {
-    state.queue.push(entry);
-    return;
-  }
-  state.queue.splice(insertAt, 0, entry);
 }
 
 async function runQueueEntryTask(
@@ -431,7 +407,7 @@ function drainLane(
       state.queue.length > 0 &&
       canAdmitInGroup(lane)
     ) {
-      const entry = state.queue.shift() as QueueEntry;
+      const entry = dequeueLaneQueue(state.queue) as QueueEntry;
       const waitedMs = Date.now() - entry.enqueuedAt;
       const activeBeforeStart = state.activeTaskIds.size;
       const taskId = getQueueState().nextTaskId++;
@@ -463,7 +439,6 @@ function drainLane(
           });
           const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
           if (completedCurrentGeneration) {
-            notifyActiveTaskWaiters();
             diag.debug(
               `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
             );
@@ -485,7 +460,6 @@ function drainLane(
             );
           }
           if (completedCurrentGeneration) {
-            notifyActiveTaskWaiters();
             drainReadyCommandLane(lane, state);
             notifyCommandLaneIdleWaiters(lane);
           }
@@ -733,8 +707,8 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
     return 0;
   }
   const removed = state.queue.length;
-  const pending = state.queue.splice(0);
-  for (const entry of pending) {
+  let entry: QueueEntry | undefined;
+  while ((entry = dequeueLaneQueue(state.queue))) {
     entry.reject(new CommandLaneClearedError(cleaned));
   }
   notifyCommandLaneIdleWaiters(cleaned);
@@ -759,7 +733,6 @@ export function resetCommandLane(lane: string = CommandLane.Main): number {
   // Clearing activeTaskIds may release multiple shared slots. Re-arbitrate the
   // whole group so the reset lane cannot reclaim them ahead of older siblings.
   drainReadyCommandLane(cleaned);
-  notifyActiveTaskWaiters();
   notifyCommandLaneIdleWaiters(cleaned);
   return released;
 }
@@ -794,43 +767,7 @@ export function resetAllLanes(): void {
   for (const lane of lanesToDrain) {
     drainReadyCommandLane(lane);
   }
-  notifyActiveTaskWaiters();
   notifyAllCommandLaneIdleWaiters();
-}
-
-/**
- * Returns the total number of actively executing tasks across all lanes
- * (excludes queued-but-not-started entries).
- */
-export function getActiveTaskCount(): number {
-  return [...getQueueState().lanes.values()].reduce(
-    (total, state) => total + state.activeTaskIds.size,
-    0,
-  );
-}
-
-/**
- * Wait for all currently active tasks across all lanes to finish.
- * Polls at a short interval; resolves when no tasks are active or
- * when `timeoutMs` elapses (whichever comes first). If no timeout is passed,
- * waits indefinitely for the active set captured at call time.
- *
- * New tasks enqueued after this call are ignored — only tasks that are
- * already executing are waited on.
- */
-export function waitForActiveTasks(timeoutMs?: number): Promise<{ drained: boolean }> {
-  const activeAtStart = new Set<number>();
-  for (const state of getQueueState().lanes.values()) {
-    for (const taskId of state.activeTaskIds) {
-      activeAtStart.add(taskId);
-    }
-  }
-
-  return waitForActiveCommandTasks({
-    activeTaskIds: activeAtStart,
-    hasPendingActiveTasks,
-    timeoutMs,
-  });
 }
 
 /**

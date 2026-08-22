@@ -12,7 +12,7 @@ type LoginGateElement = HTMLElement & {
 async function mountFailure(lastError: string, lastErrorCode: string | null) {
   const element = document.createElement("openclaw-login-gate") as LoginGateElement;
   element.props = {
-    basePath: "",
+    resourceBasePath: "",
     connected: false,
     lastError,
     lastErrorCode,

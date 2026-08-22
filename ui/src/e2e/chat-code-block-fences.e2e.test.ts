@@ -24,6 +24,10 @@ function fencedJson(lineCount: number): string {
   return `\`\`\`json\n[\n${values.join("\n")}\n]\n\`\`\``;
 }
 
+function fencedProse(language: "text" | "md" | "markdown"): string {
+  return `\`\`\`${language}\n${`${language} prose line\n`.repeat(20)}\`\`\``;
+}
+
 const shortFence = `\`\`\`json
 {
   "status": "ok",
@@ -120,6 +124,12 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
             timestamp: Date.now() + 5,
             __openclaw: { id: "assistant-fence-wide", seq: 6 },
           },
+          ...(["text", "md", "markdown"] as const).map((language, index) => ({
+            role: "assistant",
+            content: [{ type: "text", text: fencedProse(language) }],
+            timestamp: Date.now() + 6 + index,
+            __openclaw: { id: `assistant-fence-${language}`, seq: 7 + index },
+          })),
         ],
       });
 
@@ -141,6 +151,15 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
         expect(await shortBubble.locator(".code-block-wrapper.is-collapsible").count()).toBe(0);
         expect(await shortBubble.locator(".code-block-expand").count()).toBe(0);
         expect(await shortBubble.locator("pre code").isVisible()).toBe(true);
+
+        for (const language of ["text", "md", "markdown"] as const) {
+          const proseBubble = page.locator(`[data-entry-id="assistant-fence-${language}"]`);
+          expect(await proseBubble.locator(".code-block-wrapper.is-collapsible").count()).toBe(0);
+          expect(await proseBubble.locator(".code-block-expand").count()).toBe(0);
+          expect(await proseBubble.locator("pre code").textContent()).toContain(
+            `${language} prose line`,
+          );
+        }
 
         const longWrapper = longBubble.locator(".code-block-wrapper");
         const expand = longWrapper.locator(".code-block-expand");

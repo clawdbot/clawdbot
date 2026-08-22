@@ -245,8 +245,12 @@ struct MacNodeHostWorkerTests {
         #expect(await worker.invokedCommands().isEmpty)
     }
 
-    @Test(arguments: [OpenClawCanvasCommand.present.rawValue, "canvas.plugin.render"])
-    func `worker cannot bypass the canvas namespace consent gate`(command: String) async {
+    @Test(arguments: [
+        OpenClawCanvasCommand.present.rawValue,
+        OpenClawCanvasCommand.hide.rawValue,
+        OpenClawCanvasCommand.navigate.rawValue,
+    ])
+    func `worker cannot bypass the canvas presenter consent gate`(command: String) async {
         await TestIsolation.withUserDefaultsValues([canvasEnabledKey: false]) {
             let worker = StubMacNodeHostWorker(commands: [command])
             let runtime = MacNodeRuntime(nodeHostWorker: worker)
@@ -258,6 +262,23 @@ struct MacNodeHostWorkerTests {
             #expect(!response.ok)
             #expect(response.error?.code == .unavailable)
             #expect(response.error?.message == "CANVAS_DISABLED: enable Canvas in Settings")
+            #expect(await worker.invokedCommands().isEmpty)
+        }
+    }
+
+    @Test func `worker cannot claim commands in the retired canvas namespace`() async {
+        await TestIsolation.withUserDefaultsValues([canvasEnabledKey: true]) {
+            let command = "canvas.plugin.render"
+            let worker = StubMacNodeHostWorker(commands: [command])
+            let runtime = MacNodeRuntime(nodeHostWorker: worker)
+
+            let response = await runtime.handleInvoke(BridgeInvokeRequest(
+                id: "canvas-retired",
+                command: command))
+
+            #expect(!response.ok)
+            #expect(response.error?.code == .invalidRequest)
+            #expect(response.error?.message == "INVALID_REQUEST: unknown command")
             #expect(await worker.invokedCommands().isEmpty)
         }
     }

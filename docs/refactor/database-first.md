@@ -477,9 +477,10 @@ The branch already has a real shared SQLite base:
   TypeScript and the macOS companion. The row's `raw_json` remains authoritative
   for protocol CAS hashes; typed columns are write-time projections.
 - TypeScript device identity and device-auth tokens use typed
-  `device_identities` and `device_auth_tokens` rows, with doctor-only legacy JSON
-  import kept outside the runtime owners. Gateway-origin-scoped tokens use the
-  lazy additive `gateway_origin_device_tokens` table.
+  `device_identities` and `device_auth_tokens` rows. Gateway startup may import
+  a valid retired primary identity under the startup migration lease; invalid
+  canonical identity repair remains Doctor-only. Gateway-origin-scoped tokens
+  use the lazy additive `gateway_origin_device_tokens` table.
 - GitHub Copilot token exchange cache uses the shared SQLite plugin-state table
   under `github-copilot/token-cache/default`. It is provider-owned cache state,
   so it intentionally does not add a host schema table.
@@ -498,10 +499,11 @@ The branch already has a real shared SQLite base:
 - Android notification recent-package history uses typed
   `android_notification_recent_packages` rows. Runtime no longer migrates or
   reads the old SharedPreferences CSV keys.
-- Device identity creation fails closed when legacy `identity/device.json`
-  exists, when the SQLite identity row is invalid, or when the SQLite identity
-  store cannot be opened. Doctor imports and removes that file first, so runtime
-  startup cannot silently rotate pairing identity before migration.
+- Device identity creation fails closed when a legacy `identity/device.json`
+  cannot be safely imported, when the SQLite identity row is invalid, or when
+  the SQLite identity store cannot be opened. Gateway startup and Doctor both
+  verify the imported key before removing the retired file, so startup cannot
+  silently rotate pairing identity during migration.
 - Device identity selection is a SQLite row key, not a JSON file locator. Tests
   and gateway helpers pass explicit identity keys; only doctor migration and the
   fail-closed startup gate know the retired `identity/device.json` filename.
@@ -1186,10 +1188,9 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   stay temp materializations because channel delivery still needs a file path;
   their expiry metadata is SQLite-owned without JSON sidecars.
 - Canvas managed documents now use shared SQLite `plugin_blob_entries` instead
-  of a default `state/canvas/documents` directory. The Canvas host serves those
-  blobs directly; local files are created only for explicit `host.root`
-  operator content or temporary materialization when a downstream media reader
-  requires a path.
+  of a default `state/canvas/documents` directory. The hosted document route
+  serves those blobs directly; local files are created only for temporary
+  materialization when a downstream media reader requires a path.
 - File Transfer audit decisions now use shared SQLite `plugin_state_entries`
   instead of the unbounded `audit/file-transfer.jsonl` runtime log. Doctor
   imports the legacy JSONL audit file into plugin state and removes the source

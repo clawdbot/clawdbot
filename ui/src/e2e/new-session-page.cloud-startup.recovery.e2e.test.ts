@@ -7,6 +7,7 @@ import {
   installMockGateway,
   pollLocatorText,
   replaceGatewayClient,
+  waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -138,6 +139,10 @@ suite.define(() => {
           environments: [],
           profiles: [{ id: "aws", providerId: "crabbox" }],
         },
+        "sessions.describe": {
+          session: { sessionId: "session-late-cloud-create" },
+        },
+        "sessions.patch": { ok: true },
         "worktrees.branches": {
           branches: [{ kind: "local", name: "main" }],
           defaultBranch: "main",
@@ -149,7 +154,7 @@ suite.define(() => {
     const readRecovery = () =>
       page.evaluate(() => {
         const key = Object.keys(sessionStorage).find((candidate) =>
-          candidate.startsWith("openclaw.new-session.cloud-recovery.v2:"),
+          candidate.startsWith("openclaw.new-session.session-placement-recovery.v1:"),
         );
         return key ? (JSON.parse(sessionStorage.getItem(key) ?? "null") as unknown) : null;
       });
@@ -173,21 +178,39 @@ suite.define(() => {
         dispatchEvent(new PopStateEvent("popstate"));
       });
       await gateway.resolveDeferred("sessions.create", { key: sessionKey });
+      const archive = await gateway.waitForRequest("sessions.patch");
+      expect(archive.params).toMatchObject({
+        key: sessionKey,
+        agentId: "cloud",
+        archived: true,
+        expectedSessionId: "session-late-cloud-create",
+      });
       await gateway.waitForRequest("sessions.delete");
       await gateway.rejectDeferred("sessions.delete", {
         code: "UNAVAILABLE",
         message: "cleanup unavailable",
       });
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("sessions.patch")).some(
+            (request) => (request.params as { archived?: unknown }).archived === false,
+          ),
+        )
+        .toBe(true);
 
       await pollLocatorText(
         page.locator(".new-session-page__error").filter({ hasText: "cleanup unavailable" }),
       ).toContain("cleanup unavailable");
-      const stagedIdentity = staged as { messageId: string; profileId: string; agentId: string };
+      const stagedIdentity = staged as {
+        messageId: string;
+        target: { kind: "profile"; profileId: string };
+        agentId: string;
+      };
       expect(await readRecovery()).toMatchObject({
         sessionKey,
         messageId: stagedIdentity.messageId,
         message,
-        profileId: stagedIdentity.profileId,
+        target: stagedIdentity.target,
         agentId: stagedIdentity.agentId,
         phase: "dispatching",
       });
@@ -276,7 +299,10 @@ suite.define(() => {
       await page.evaluate(() => {
         const originalSetItem = sessionStorage.setItem.bind(sessionStorage);
         Storage.prototype.setItem = function (key: string, value: string) {
-          if (key.startsWith("openclaw.new-session.cloud-recovery.v2:")) {
+          if (
+            key.startsWith("openclaw.new-session.session-placement-recovery.v1:") ||
+            key.startsWith("openclaw.control-ui-e2e.")
+          ) {
             originalSetItem(key, value);
             return;
           }
@@ -286,15 +312,15 @@ suite.define(() => {
       await page.locator(".new-session-page__message").fill(message);
       await page.getByRole("button", { name: "Start session" }).click();
       const firstSend = await gateway.waitForRequest("sessions.send");
+      await waitForCommittedChatRoute(page);
       await gateway.rejectDeferred("sessions.send", {
         code: "UNAVAILABLE",
         message: "send outcome unknown",
       });
 
-      await pollLocatorText(page.locator(".chat-cloud-startup-error")).toContain(
-        "send outcome unknown",
-      );
-      expect(new URL(page.url()).pathname).toContain(controlUiSessionPath(sessionKey));
+      const alert = page.locator('.chat-cloud-startup-error[role="alert"]');
+      await pollLocatorText(alert).toContain("send outcome unknown");
+      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
       await replaceGatewayClient(page);
       await expect.poll(async () => (await gateway.getRequests("sessions.send")).length).toBe(2);
 

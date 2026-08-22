@@ -135,12 +135,10 @@ function formatKeyValueTraceBlock(
 }
 
 function inferFallbackAttemptResult(attempt: { reason?: FailoverReason; status?: number }): string {
-  if (attempt.reason === "timeout") {
-    return "timeout";
-  }
-  return "candidate_failed";
+  return attempt.reason === "timeout" ? "timeout" : "candidate_failed";
 }
 
+/** Merges fallback-run attempts with the winning execution trace for operator diagnostics. */
 export function mergeExecutionTrace(params: {
   fallbackAttempts?: Array<{
     provider: string;
@@ -148,13 +146,7 @@ export function mergeExecutionTrace(params: {
     reason?: FailoverReason;
     status?: number;
   }>;
-  executionTrace?: {
-    winnerProvider?: string;
-    winnerModel?: string;
-    attempts?: TraceAttemptView[];
-    fallbackUsed?: boolean;
-    runner?: "embedded" | "cli";
-  };
+  executionTrace?: TraceExecutionView;
   provider?: string;
   model?: string;
   runner: "embedded" | "cli";
@@ -172,7 +164,7 @@ export function mergeExecutionTrace(params: {
           result: inferFallbackAttemptResult(attempt),
         },
         attempt.reason ? { reason: attempt.reason } : {},
-        typeof attempt.status === `number` ? { status: attempt.status } : {},
+        typeof attempt.status === "number" ? { status: attempt.status } : {},
       ),
     ),
     ...executionAttempts,
@@ -202,7 +194,6 @@ export function mergeExecutionTrace(params: {
   if (!winnerProvider && !winnerModel && attempts.length === 0) {
     return undefined;
   }
-  const fallbackAttemptCount = params.fallbackAttempts?.length ?? 0;
   const traceFallbackUsed = params.executionTrace?.fallbackUsed;
   return {
     winnerProvider,
@@ -210,7 +201,7 @@ export function mergeExecutionTrace(params: {
     attempts: attempts.length > 0 ? attempts : undefined,
     fallbackUsed:
       traceFallbackUsed === true ||
-      fallbackAttemptCount > 0 ||
+      (params.fallbackAttempts?.length ?? 0) > 0 ||
       (traceFallbackUsed === undefined && attempts.length > 1),
     runner: params.executionTrace?.runner ?? params.runner,
   };

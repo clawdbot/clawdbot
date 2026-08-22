@@ -8,9 +8,8 @@ import {
   type MessagePayloadObject,
   type TopLevelComponents,
 } from "./internal/discord.js";
-import { stripUndefinedFields } from "./internal/undefined-fields.js";
 
-export { stripUndefinedFields };
+export { stripUndefinedFields } from "./internal/undefined-fields.js";
 
 const SUPPRESS_EMBEDS_FLAG = MessageFlags.SuppressEmbeds;
 export const SUPPRESS_NOTIFICATIONS_FLAG = MessageFlags.SuppressNotifications;
@@ -123,14 +122,14 @@ export function buildDiscordMessageRequest(params: DiscordMessageRequestParams) 
     params.endpoint === "create-message"
       ? (params.nonce ?? createDiscordMessageNonce())
       : undefined;
-  return stripUndefinedFields({
+  return {
     ...serializePayload(payload),
     ...(params.replyTo
       ? { message_reference: { message_id: params.replyTo, fail_if_not_exists: false } }
       : {}),
-    nonce,
-    enforce_nonce: nonce ? true : undefined,
-  });
+    ...(nonce !== undefined ? { nonce } : {}),
+    ...(nonce ? { enforce_nonce: true } : {}),
+  };
 }
 
 function hasV2Components(components?: TopLevelComponents[]): boolean {

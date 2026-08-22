@@ -545,6 +545,11 @@ function redactTranscriptStructuredValue(
     next = { ...source };
   }
   for (const [key, item] of Object.entries(source)) {
+    // The append transaction owns this control-plane identity. Redacting it would
+    // make stored dedupe disagree with the admitted message identity.
+    if (location === "root" && key === "idempotencyKey") {
+      continue;
+    }
     if (location === "root" && source.role === "assistant" && key === "providerReplay") {
       const sanitizedReplay = sanitizeCompactionReplayState(
         item,

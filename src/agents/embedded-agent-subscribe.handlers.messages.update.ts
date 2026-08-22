@@ -331,10 +331,12 @@ export function handleMessageUpdate(
   if (deliveryPhase === "commentary") {
     if (chunk) {
       ctx.state.deltaBuffer += chunk;
+      ctx.state.deltaBufferIsCommentary = true;
     } else if (!ctx.state.deltaBuffer) {
       ctx.state.deltaBuffer = coerceChatContentText(
         extractAssistantCommentaryText(streamAssistant),
       );
+      ctx.state.deltaBufferIsCommentary = true;
     }
     emitResolvedCommentaryDisplay(ctx, ctx.state.deltaBuffer, {
       itemId: deliveryItemId,
@@ -364,6 +366,7 @@ export function handleMessageUpdate(
 
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
+    ctx.state.deltaBufferIsCommentary = false;
     if (!skipLiveStream && !shouldUsePhaseAwareBlockReply) {
       if (!isPhasePendingAnthropicText && !isPhasePendingCompletionsText) {
         appendBlockReplyChunk(ctx, chunk);

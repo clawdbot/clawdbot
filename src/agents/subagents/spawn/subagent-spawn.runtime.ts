@@ -26,6 +26,7 @@ export { getSessionBindingService } from "../../../infra/outbound/session-bindin
 // back into spawn/announce runtime.
 export { resolveGatewaySessionStoreTarget } from "../../../gateway/session-utils-store-lookup.js";
 export { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+export { resolveProviderRefOwnership } from "../../../plugins/providers.js";
 export { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 export {
   mergeDeliveryContext,

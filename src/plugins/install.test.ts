@@ -1138,7 +1138,6 @@ describe("installPluginFromArchive", () => {
 
     expect(result.ok).toBe(true);
     const requests = readCapturedInstallPolicyRequests(logPath);
-    expect(requests).toHaveLength(2);
     expect(requests.map((request) => request.request.kind)).toEqual([
       "plugin-archive",
       "plugin-archive",
@@ -1962,7 +1961,6 @@ describe("installPluginFromArchive", () => {
 
     expect(result.ok).toBe(true);
     const requests = readCapturedInstallPolicyRequests(logPath);
-    expect(requests).toHaveLength(2);
     expect(requests.map((request) => request.request.kind)).toEqual(["plugin-dir", "plugin-dir"]);
     expect(requests.map((request) => request.plugin?.contentType)).toEqual([
       "package",

@@ -80,10 +80,9 @@ async function captureUiProof(targetPage: Page, fileName: string) {
 }
 
 async function openSidebarSortMenu(targetPage: Page) {
-  const sortThreads = targetPage.getByRole("button", { name: "Sort sessions" });
-  await expect.poll(() => sortThreads.count(), { timeout: 2_000 }).toBe(1);
-  await sortThreads.locator("..").hover();
-  await sortThreads.click();
+  const filterAndSort = targetPage.getByRole("button", { name: "Filter & sort" });
+  await expect.poll(() => filterAndSort.count(), { timeout: 2_000 }).toBe(1);
+  await filterAndSort.click();
   const menu = targetPage.locator(".sidebar-session-sort-menu");
   await menu.waitFor();
   return menu;
@@ -117,6 +116,15 @@ suite.define(() => {
     const gateway = await installMockGateway(currentPage, {
       hasMultipleSessionSharingIdentities: true,
       sessionKey: "agent:main:ada",
+      presenceUsers: [
+        {
+          self: true,
+          id: "profile-patrick",
+          name: "Patrick",
+          avatarUrl:
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=",
+        },
+      ],
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
       methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-bob"]) },
     });
@@ -130,6 +138,11 @@ suite.define(() => {
 
     const ownerMenu = await openSidebarSortMenu(currentPage);
     await ownerMenu.locator('[value="sort:people"]').waitFor();
+    const ownerRows = ownerMenu.locator('wa-dropdown-item[value^="owner:"]:not([value="owner:"])');
+    await expectBrowser(ownerRows).toHaveCount(3);
+    await expectBrowser(ownerRows.first()).toHaveAttribute("value", "owner:profile-patrick");
+    await expectBrowser(ownerRows.first()).toContainText("Patrick (You)");
+    await expectBrowser(ownerRows.first().locator("openclaw-session-owner-chip")).toHaveText("P");
     await captureUiProof(currentPage, "00-people-sort-available.png");
     await ownerMenu.evaluate((element) =>
       element.dispatchEvent(
@@ -196,7 +209,7 @@ suite.define(() => {
     expect(await currentPage.locator("openclaw-session-owner-chip").count()).toBe(0);
   });
 
-  it("keeps grouped single-owner thread actions accessible to keyboard users", async () => {
+  it("keeps global session actions accessible to keyboard users", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
@@ -211,10 +224,8 @@ suite.define(() => {
     await currentPage.getByText("Ada research", { exact: true }).first().waitFor();
     await currentPage.getByText("Bob operations", { exact: true }).first().waitFor();
 
-    const threads = currentPage.locator('[data-session-section="ungrouped"]');
-    await expect.poll(() => threads.count(), { timeout: 2_000 }).toBe(1);
-    const sortThreads = threads.getByRole("button", { name: "Sort sessions" });
-    await sortThreads.focus();
+    const filterAndSort = currentPage.getByRole("button", { name: "Filter & sort" });
+    await filterAndSort.focus();
     await currentPage.keyboard.press("Enter");
 
     const menu = currentPage.locator(".sidebar-session-sort-menu");
@@ -225,9 +236,12 @@ suite.define(() => {
     await expect
       .poll(() => currentPage.locator('[data-session-section^="category:"]').count())
       .toBe(0);
+    const threads = currentPage.locator('[data-session-section="ungrouped"]');
     await expect.poll(() => threads.locator(".sidebar-recent-session").count()).toBe(2);
 
-    const newThread = threads.getByRole("button", { name: "New session" });
+    const newThread = currentPage
+      .locator(".sidebar-session-toolbar")
+      .getByRole("button", { name: "New session" });
     await newThread.focus();
     await currentPage.keyboard.press("Enter");
     await expect.poll(() => new URL(currentPage.url()).pathname).toBe("/new");

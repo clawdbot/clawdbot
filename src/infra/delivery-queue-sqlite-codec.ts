@@ -6,15 +6,6 @@ type DeliveryQueueCompletionRetention =
       maxEntries: number;
     }>;
 
-/** Indexed metadata extracted from queue payloads for diagnostics and recovery. */
-export type DeliveryQueueRowMetadata = {
-  entryKind?: string;
-  sessionKey?: string;
-  channel?: string;
-  target?: string;
-  accountId?: string;
-};
-
 /** Persisted queue entry fields common to all delivery queue payloads. */
 type DeliveryQueueEntryState = {
   id: string;

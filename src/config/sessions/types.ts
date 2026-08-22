@@ -54,6 +54,7 @@ export type SessionOrigin = {
   to?: string;
   nativeChannelId?: string;
   nativeDirectUserId?: string;
+  avatar?: string;
   accountId?: string;
   threadId?: string | number;
 };
@@ -611,8 +612,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     agentHarnessId?: string;
     fallbackNotice?: FallbackNoticeState;
     contextTokens?: number;
-    /** Origin of the persisted context window; absent on legacy/unproven rows. */
-    contextTokensSource?: "runtime" | "runtime-configured" | "resolved";
+    /** Origin of the persisted context window; `resolved` is legacy/unverified. */
+    contextTokensSource?: "runtime" | "runtime-configured" | "resolved" | "resolved-v1";
     contextBudgetStatus?: SessionContextBudgetStatus;
     /**
      * Last context-pressure band that fired (e.g. 80, 90, 95). Used to deduplicate

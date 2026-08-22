@@ -34,9 +34,11 @@ function formatModelContextMeta(option: ChatModelPickerOption): string {
 }
 
 export type ChatModelPickerTargetGroup = {
+  errorLabel: string;
   id: string;
   label: string;
   options: readonly { label: string; value: string }[];
+  status: "loading" | "ready" | "error";
 };
 
 // Known models.list runtime ids; mirrors src/status/agent-runtime-label.ts,

@@ -1,33 +1,22 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createContinueDelegateTool } from "./tools/continue-delegate-tool.js";
-import { createContinueWorkTool, type ContinueWorkRequest } from "./tools/continue-work-tool.js";
+import { createContinueWorkTool } from "./tools/continue-work-tool.js";
 import { createDelegateArtifactTools } from "./tools/delegate-artifacts-tool.js";
-import {
-  createRequestCompactionTool,
-  type RequestCompactionToolOpts,
-} from "./tools/request-compaction-tool.js";
+import { createRequestCompactionTool } from "./tools/request-compaction-tool.js";
 
 const log = createSubsystemLogger("agents/openclaw-tools");
 
-export type OpenClawContinuationToolOptions = {
-  /** Whether the current run consumes the continue_delegate staging queue. */
-  drainsContinuationDelegateQueue?: boolean;
-  /** Internal maintenance/model-only runs that cannot schedule continuation work. */
-  disableContinuationTools?: boolean;
-  /** Callback for continue_work to request a post-turn continuation. */
-  continueWorkOpts?: {
-    requestContinuation: (request: ContinueWorkRequest) => void;
-  };
-  /** Closures for request_compaction. Only set when continuation is enabled. */
-  requestCompactionOpts?: {
-    sessionId?: string;
-    getContextUsage: () => number | null;
-    triggerCompaction: RequestCompactionToolOpts["triggerCompaction"];
-  };
-};
+type OpenClawContinuationToolOptions = Pick<
+  OpenClawToolsOptions,
+  | "drainsContinuationDelegateQueue"
+  | "disableContinuationTools"
+  | "continueWorkOpts"
+  | "requestCompactionOpts"
+>;
 
 export function createOpenClawContinuationTools(
   options: OpenClawContinuationToolOptions & {

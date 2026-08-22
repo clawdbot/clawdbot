@@ -24,6 +24,7 @@ import {
   storeCollapsedSessionSections,
   storeSidebarSessionsGrouping,
   storeSidebarSessionsShowCron,
+  storeSidebarSessionsShowPreview,
   storeSidebarSessionsShowSystem,
   type SidebarRecentSession,
   type SidebarSectionDropTarget,
@@ -736,6 +737,15 @@ export class SessionOrganizerController {
     this.host.sessionsShowCron = show;
     try {
       storeSidebarSessionsShowCron(show);
+    } catch {
+      // Keep the in-memory preference when storage is unavailable.
+    }
+  }
+
+  setSessionsShowPreview(show: boolean) {
+    this.host.sessionsShowPreview = show;
+    try {
+      storeSidebarSessionsShowPreview(show);
     } catch {
       // Keep the in-memory preference when storage is unavailable.
     }

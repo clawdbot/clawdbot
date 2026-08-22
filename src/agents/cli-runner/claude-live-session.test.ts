@@ -269,6 +269,43 @@ describe("runClaudeTurn", () => {
     expect(supervisorSpawnMock).toHaveBeenCalledOnce();
   });
 
+  it("restarts a warm Claude process when its thinking budget changes", async () => {
+    mockClaudeLiveRun(supervisorSpawnMock, {
+      events: [
+        { type: "system", subtype: "init", session_id: "live-thinking-budget" },
+        { type: "result", session_id: "live-thinking-budget", result: "one" },
+      ],
+      cancelable: true,
+    });
+    mockClaudeLiveRun(supervisorSpawnMock, {
+      events: [
+        { type: "system", subtype: "init", session_id: "live-thinking-budget" },
+        { type: "result", session_id: "live-thinking-budget", result: "two" },
+      ],
+    });
+    const backend = {
+      resumeArgs: ["-p", "--output-format", "stream-json", "--resume={sessionId}"],
+      liveSession: "claude-stdio" as const,
+    };
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        backend,
+        preparedEnv: { MAX_THINKING_TOKENS: "2048" },
+      }),
+    );
+    const second = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        backend,
+        preparedEnv: { MAX_THINKING_TOKENS: "16384" },
+      }),
+      "live-thinking-budget",
+    );
+
+    expect(second.text).toBe("two");
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+  });
+
   it("restarts Claude live sessions when a multi-section stable prompt changes", async () => {
     mockClaudeLiveRun(supervisorSpawnMock, {
       events: [

@@ -6,13 +6,11 @@ import { callGateway } from "../../../gateway/call.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { DetachedTaskFindResult } from "../../../tasks/detached-task-runtime-contract.js";
-import {
-  buildAgentRunTerminalOutcomeFromWaitResult,
-  classifyAgentRunTerminalOutcome,
-} from "../../agent-run-terminal-outcome.js";
+import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { isRecoverableAgentWaitError, waitForAgentRun } from "../../run-wait.js";
 import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
 import type { SubagentRunOutcome } from "../announce/subagent-run-outcome.js";
+import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
 import { clearDeliveryState, ensureCompletionState } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -291,7 +289,7 @@ export class SubagentWaitManager {
       const waitBlocked = waitTerminalOutcome?.reason === "blocked";
       const waitAborted =
         waitTerminalOutcome !== undefined &&
-        classifyAgentRunTerminalOutcome(waitTerminalOutcome) === "cancellation";
+        classifySubagentTerminalOutcome(waitTerminalOutcome) === "cancellation";
       const waitStatus = waitTerminalOutcome?.status ?? wait.status;
       if (wait.yielded === true && waitStatus !== "timeout" && !waitBlocked) {
         this.options.clearPendingLifecycleError(runId);

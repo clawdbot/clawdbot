@@ -99,6 +99,26 @@ describe("resolveMcpLoopbackScopedTools", () => {
     ]);
   });
 
+  it("forwards the exact Skill Workshop revision into loopback tool construction", () => {
+    const proposalRevision = {
+      agentId: "proposal-owner",
+      workspaceDir: "/proposal-workspace",
+      proposalId: "proposal-h1",
+      expectedRevisionHash: "1".repeat(64),
+    };
+
+    resolveMcpLoopbackScopedTools(
+      scopeParams({
+        toolsAllow: ["skill_workshop"],
+        skillWorkshop: { proposalRevision },
+      }),
+    );
+
+    expect(resolveGatewayScopedTools).toHaveBeenCalledWith(
+      expect.objectContaining({ skillWorkshop: { proposalRevision } }),
+    );
+  });
+
   it("exposes explicitly granted coding tools through the mediated loopback surface", () => {
     resolveGatewayScopedTools.mockReturnValue(scopedToolFixture(["read", "exec", "browser"]));
 

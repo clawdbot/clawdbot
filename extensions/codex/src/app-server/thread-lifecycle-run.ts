@@ -314,7 +314,7 @@ export async function startOrResumeThread(
     }
     const startModelSelection = resolveCodexAppServerThreadModelSelection({
       provider: params.params.provider,
-      model: params.params.modelId,
+      model: params.runtimeModelId ?? params.params.modelId,
       binding,
       authProfileId: params.params.authProfileId,
       authProfileStore: params.params.authProfileStore,

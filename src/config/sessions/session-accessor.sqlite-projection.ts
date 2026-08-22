@@ -10,7 +10,10 @@ import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import type { SessionArchivedTranscriptCleanupRule } from "./session-accessor.lifecycle-types.js";
+import {
+  SessionEntryLifecycleUpsertConflictError,
+  type SessionArchivedTranscriptCleanupRule,
+} from "./session-accessor.lifecycle-types.js";
 import {
   prunePublishedSessionArchivesByRetention,
   publishSessionStateArchives,
@@ -34,7 +37,7 @@ import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equal
 import {
   deleteLegacySessionEntryRows,
   deleteSessionEntryRows,
-  readExactSessionEntryJsonForCanonicalRepair,
+  readExactSessionEntryJson,
   readExactSessionEntryRow,
   readSessionEntryCount,
   readSessionEntryStore,
@@ -207,10 +210,7 @@ function readProjectedRemovalEntry(
         : readExactSessionEntryRow(database, projected.sessionKey)
     )?.entry;
   }
-  if (
-    readExactSessionEntryJsonForCanonicalRepair(database, projected.sessionKey) !==
-    expectedRawEntryJson
-  ) {
+  if (readExactSessionEntryJson(database, projected.sessionKey) !== expectedRawEntryJson) {
     throw new Error(
       `SQLite session entry changed before raw lifecycle removal for ${projected.sessionKey}`,
     );
@@ -339,6 +339,7 @@ export async function applySessionEntryLifecycleMutation(params: {
         sessionKey,
         entry,
         expectedEntry,
+        routeContext,
         resetBoundaryPlan,
       } of projected.upsertedEntries) {
         const sameKeyRemoval = validatedRemovals.find(
@@ -357,7 +358,7 @@ export async function applySessionEntryLifecycleMutation(params: {
           if (sameKeyRemoval) {
             throw new Error(`SQLite session entry has stale lifecycle state for ${sessionKey}`);
           }
-          throw new Error(`SQLite session entry changed before lifecycle upsert for ${sessionKey}`);
+          throw new SessionEntryLifecycleUpsertConflictError(sessionKey);
         }
         if (sameKeyRemoval && !shouldRemoveSessionEntry(currentEntry, sameKeyRemoval.removal)) {
           throw new Error(`SQLite session entry has stale lifecycle state for ${sessionKey}`);
@@ -377,6 +378,7 @@ export async function applySessionEntryLifecycleMutation(params: {
           allowStoredAliases: params.allowCanonicalRepair === true,
           preserveNodeSuggestions: params.allowCanonicalRepair === true,
           previousEntry: expectedCurrentEntry ?? null,
+          ...(routeContext !== undefined ? { routeContext } : {}),
         });
         const relatedRemovalKeys = validatedRemovals.flatMap((removal) => {
           const removedSessionId = removal.expectedEntry.sessionId;

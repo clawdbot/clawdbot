@@ -3,6 +3,7 @@
   "ios": {
     "controlUi.sessionPullRequests.changed": "Sidebar PR indicators are a Control UI surface; native apps do not render session PR chips.",
     "cron": "Cron run activity is not surfaced in the iOS app.",
+    "device.pair.changed": "Device label projection refresh is a Control UI surface; iOS does not render the Gateway Devices page.",
     "device.pair.requested": "Device pairing flows poll via device.pair.* methods on iOS.",
     "device.pair.resolved": "Device pairing flows poll via device.pair.* methods on iOS.",
     "device.pair.setup.completed": "Generated setup lifecycle is a Control UI surface; iOS direct Watch setup completes through Watch connectivity.",
@@ -36,6 +37,7 @@
   "android": {
     "controlUi.sessionPullRequests.changed": "Sidebar PR indicators are a Control UI surface; native apps do not render session PR chips.",
     "cron": "Cron run activity is not surfaced in the Android app.",
+    "device.pair.changed": "Device label projection refresh is a Control UI surface; Android does not render the Gateway Devices page.",
     "device.pair.requested": "Device pairing flows poll via device.pair.* methods on Android.",
     "device.pair.resolved": "Device pairing flows poll via device.pair.* methods on Android.",
     "device.pair.setup.completed": "Generated setup lifecycle is a Control UI surface; Android consumes setup codes but does not issue or track them.",

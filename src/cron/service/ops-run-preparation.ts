@@ -1,5 +1,6 @@
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
+import { resolveCronCompletionStatus } from "../completion-status.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import {
@@ -7,7 +8,12 @@ import {
   releaseLocalCronRunReceiptOwnership,
   type CronRunReceiptHandle,
 } from "../store/run-receipt-store.js";
-import type { CronJob, CronPayload, CronRunErrorClassification } from "../types.js";
+import type {
+  CronFailureNotificationDetail,
+  CronJob,
+  CronPayload,
+  CronRunErrorClassification,
+} from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { findJobOrThrow, hasActiveCronRun, isJobDue, isJobEnabled } from "./jobs-scheduling.js";
@@ -30,7 +36,7 @@ import type {
   CronServiceState,
   DeferredCronNotifications,
 } from "./state.js";
-import { emit, isImmediateCronRunMode } from "./state.js";
+import { cronFailureNotificationEventContext, emit, isImmediateCronRunMode } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications, warnIfDisabled } from "./store.js";
 import { tryCreateCronTaskRun, tryFinishCronTaskRun } from "./task-runs.js";
 import { applyJobResult, armTimer, type CronTriggerEvalOutcome } from "./timer.js";
@@ -96,17 +102,24 @@ export function emitCronRunFinished(
     triggerEval?: CronTriggerEvalOutcome;
     scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
     errorClassification?: CronRunErrorClassification;
+    failureNotificationDetail?: CronFailureNotificationDetail;
   },
 ): void {
+  const event = {
+    ...evt,
+    completionStatus:
+      evt.completionStatus ??
+      resolveCronCompletionStatus({ status: evt.status, deliveryStatus: evt.deliveryStatus }),
+  };
   tryFinishCronTaskRun(state, {
     taskRunId,
     job: evt.job,
-    event: evt,
+    event,
     errorClassification: details?.errorClassification,
     ...(details?.scriptResult ? { scriptResult: details.scriptResult } : {}),
     ...(details?.triggerEval ? { triggerEval: details.triggerEval } : {}),
   });
-  emit(state, evt);
+  emit(state, event, cronFailureNotificationEventContext(details?.failureNotificationDetail));
   if (tracker) {
     tracker.emitted = true;
   }
@@ -162,6 +175,7 @@ async function skipInvalidPersistedManualRun(params: {
     params.job,
     {
       status: "skipped",
+      completionStatus: "failed",
       error: errorText,
       diagnostics,
       startedAt: endedAt,

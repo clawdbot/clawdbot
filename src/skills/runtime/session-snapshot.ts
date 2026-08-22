@@ -2,6 +2,7 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { matchesSkillFilter } from "../discovery/filter.js";
 import {
   loadMergedWorkspaceSkills,
@@ -33,6 +34,7 @@ type ReusableSkillSnapshotParams = {
   snapshotVersion?: number;
   watch?: boolean;
   hydrateExisting?: boolean;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
 type ReusableSkillSnapshotResult = {
@@ -66,6 +68,9 @@ export function resolveReusableWorkspaceSkillSnapshot(
       workspaceDir: watcherWorkspaceDir,
       ...(skillRoots ? { executionSkillsDir: skillRoots.executionSkillsDir } : {}),
       config: params.config,
+      ...(params.pluginMetadataSnapshot
+        ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+        : {}),
     });
   }
   const snapshotVersion = params.snapshotVersion ?? getSkillsSnapshotVersion(watcherWorkspaceDir);
@@ -99,6 +104,7 @@ export function resolveReusableWorkspaceSkillSnapshot(
           skillFilter: params.skillFilter,
           skillOverrides: params.skillOverrides,
           eligibility: params.eligibility,
+          pluginMetadataSnapshot: params.pluginMetadataSnapshot,
         })
       : undefined;
     const snapshot = buildSkillSnapshot(params.workspaceDir, {
@@ -108,6 +114,7 @@ export function resolveReusableWorkspaceSkillSnapshot(
       skillFilter: params.skillFilter,
       skillOverrides: params.skillOverrides,
       eligibility: params.eligibility,
+      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       snapshotVersion,
     });
     return skillRoots ? { ...snapshot, skillRoots } : snapshot;

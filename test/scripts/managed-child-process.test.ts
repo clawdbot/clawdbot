@@ -80,14 +80,19 @@ describe("managed-child-process", () => {
   it("uses Windows shell normalization when the platform override is win32", () => {
     expect(
       createManagedCommandSpawnSpec({
-        args: ["lint:scripts", "--", "scripts"],
-        bin: "pnpm.cmd",
+        args: ["-p", "tsconfig.plugin-sdk.dts.json", "--listFilesOnly", "--noEmit"],
+        bin: "C:\\repo\\node_modules\\.bin\\tsgo",
         comSpec: "C:\\Windows\\System32\\cmd.exe",
         env: {},
         platform: "win32",
       }),
     ).toEqual({
-      args: ["/d", "/s", "/c", "pnpm.cmd lint:scripts -- scripts"],
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        "C:\\repo\\node_modules\\.bin\\tsgo -p tsconfig.plugin-sdk.dts.json --listFilesOnly --noEmit",
+      ],
       command: "C:\\Windows\\System32\\cmd.exe",
       options: {
         cwd: undefined,

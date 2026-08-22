@@ -4,8 +4,9 @@ import type { AgentWaitParams } from "../../../../packages/gateway-protocol/src/
 import { hasLiveOrRecentlyDispatchedContinuationWork } from "../../../auto-reply/continuation/work-store.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { callGateway } from "../../../gateway/call.js";
-import { getGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime-context.js";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   isGatewayRestartDraining,
   runWithGatewayIndependentRootWorkAdmission,
@@ -65,6 +66,7 @@ const subagentRegistryBootstrapState: {
 } = {};
 
 const resumeRetryTimers = new Set<ReturnType<typeof setTimeout>>();
+let activeGatewayContextResolver: GatewayContextResolver | undefined;
 const SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
 /** Admission pressure for recoverable completion deliveries; rows are never pruned for capacity. */
@@ -377,6 +379,7 @@ const subagentRestorer = createSubagentRegistryRestorer({
   runs: subagentRuns,
   resumedRuns,
   deps: () => subagentRegistryDeps,
+  getGatewayContextResolver: () => activeGatewayContextResolver,
   persist: persistSubagentRuns,
   persistOrThrow: persistSubagentRunsOrThrow,
   settleRequesterTurn: settleRequesterTurnAfterSessionSpawns,
@@ -406,7 +409,6 @@ const subagentRestorer = createSubagentRegistryRestorer({
   settleFailedQueuedSubagentLaunch: (runId, error) =>
     subagentRunManager.settleFailedQueuedSubagentLaunch(runId, error),
   completeCollectorLaunchCleanup: (runId) => publicApi.completeCollectorLaunchCleanup(runId),
-  scheduleSweep: scheduleSubagentRegistrySweep,
   warn: (message, meta) => log.warn(message, meta),
 });
 
@@ -446,7 +448,7 @@ const subagentSweeper = createSubagentRegistrySweeper({
       acceptedDispatch,
       requirePersistence,
     ),
-  getGatewayRecoveryRuntime: () => subagentRegistryDeps.getGatewayRecoveryRuntime(),
+  getGatewayRecoveryRuntime: () => activeGatewayContextResolver?.()?.recoveryRuntime,
   abandonSubagentRestartRecoveryLaunch: (params) =>
     subagentRunManager.abandonSubagentRestartRecoveryLaunch(params),
   clearAcceptedSubagentRestartRecovery: (params) =>
@@ -500,7 +502,7 @@ const subagentRunManager = createSubagentRunManager({
   persistOrThrow: persistSubagentRunsOrThrow,
   callGateway: async <T>(request: Parameters<typeof callGateway>[0]) => {
     if (request.method === "agent.wait") {
-      const gatewayRuntime = getGatewayRecoveryRuntime();
+      const gatewayRuntime = activeGatewayContextResolver?.()?.recoveryRuntime;
       if (gatewayRuntime) {
         // Registry waits are Gateway-owned lifecycle work. Keep them on the
         // owning instance when one exists; standalone processes authenticate normally.
@@ -558,6 +560,7 @@ export function adoptPausedSubagentRunForFollowUp(params: {
   childSessionKey: string;
   runId: string;
   task: string;
+  gatewayContextResolver?: GatewayContextResolver;
 }): boolean {
   const childSessionKey = params.childSessionKey.trim();
   const runId = params.runId.trim();
@@ -592,6 +595,9 @@ export function adoptPausedSubagentRunForFollowUp(params: {
     // Persist the follow-up text so restart recovery cannot reissue the task that
     // the child already yielded on.
     task: params.task,
+    ...(params.gatewayContextResolver
+      ? { gatewayContextResolver: params.gatewayContextResolver }
+      : {}),
   });
 }
 
@@ -609,6 +615,7 @@ function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   clearSubagentRunsReadCacheForTest();
   subagentSweeper.reset();
   subagentRestorer.reset();
+  activeGatewayContextResolver = undefined;
   subagentListener.reset();
   if (opts?.persist !== false) {
     persistSubagentRuns();
@@ -667,6 +674,15 @@ export function initSubagentRegistry() {
   }
   purgeExpiredDelegateArtifacts();
   state.restorer.restoreOnce();
+}
+export function activateSubagentRegistry(resolveGatewayContext: GatewayContextResolver) {
+  activeGatewayContextResolver = resolveGatewayContext;
+  for (const entry of subagentRuns.values()) {
+    bindGatewayContextResolver(entry, resolveGatewayContext);
+  }
+  subagentRestorer.activate();
+  // Post-ready only: collector cleanup retains the canonical sessions.delete RPC owner.
+  scheduleSubagentRegistrySweep();
 }
 export const settleRequesterAfterSessionSpawns = publicApi.settleRequesterAfterSessionSpawns;
 export const markRequesterTurnYielded = publicApi.markRequesterTurnYielded;

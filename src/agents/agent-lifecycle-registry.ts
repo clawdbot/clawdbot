@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import {
@@ -13,8 +15,10 @@ import {
   type AgentDeletionJournalCleanupPath,
   type AgentDeletionJournalEntry,
 } from "../state/agent-deletion-journal.js";
+import { readAgentProvenance, type AgentProvenance } from "../state/agent-provenance.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
 
 const AGENT_LIFECYCLE_KEY = Symbol.for("openclaw.agentLifecycle");
 const agentLifecycle = resolveGlobalMap<string, "deleting" | "deleted">(
@@ -29,6 +33,11 @@ export class AgentDeletionCommitUncertainError extends Error {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
   }
 }
+
+export type AgentLifecycleBinding = Readonly<{
+  agentId: string;
+  provenance: AgentProvenance | null;
+}>;
 
 function lifecycleKey(agentId: string, options: OpenClawStateDatabaseOptions): string {
   const databasePath = path.resolve(
@@ -123,4 +132,35 @@ export function isAgentDeletionBlocked(
     agentLifecycle.delete(key);
   }
   return Boolean(journal);
+}
+
+/** Captures the exact durable incarnation of an existing, deletion-safe agent. */
+export function captureAgentLifecycleBinding(
+  config: OpenClawConfig,
+  agentId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): AgentLifecycleBinding | undefined {
+  const id = normalizeAgentId(agentId);
+  if (!resolveAgentConfig(config, id) || isAgentDeletionBlocked(id, options)) {
+    return undefined;
+  }
+  return Object.freeze({
+    agentId: id,
+    provenance: readAgentProvenance(id, options) ?? null,
+  });
+}
+
+/** Revalidates an agent binding against both the roster and lifecycle owner. */
+export function matchesAgentLifecycleBinding(
+  config: OpenClawConfig,
+  binding: AgentLifecycleBinding,
+  options: OpenClawStateDatabaseOptions = {},
+): boolean {
+  const id = normalizeAgentId(binding.agentId);
+  return (
+    id === binding.agentId &&
+    Boolean(resolveAgentConfig(config, id)) &&
+    !isAgentDeletionBlocked(id, options) &&
+    isDeepStrictEqual(readAgentProvenance(id, options) ?? null, binding.provenance)
+  );
 }

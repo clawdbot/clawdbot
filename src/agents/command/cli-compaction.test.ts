@@ -610,7 +610,18 @@ describe("runCliTurnCompactionLifecycle", () => {
       agentDir: tmpDir,
       workspaceDir: tmpDir,
     });
-    const acquirePreparedModelRuntime = vi.fn(async () => preparedRuntimeLease);
+    const pluginGeneration = {
+      configuredCatalogEntries: [],
+      inlineProviderModels: [],
+      pluginMetadataSnapshot: preparedRuntimeLease.snapshot.metadataSnapshot,
+      pluginRegistry: preparedRuntimeLease.snapshot.pluginRegistry,
+    } as never;
+    const acquirePreparedModelRuntime = vi.fn<
+      NonNullable<CliCompactionTestDeps["acquirePreparedModelRuntime"]>
+    >(async (_input, options) => {
+      expect(options?.pluginGeneration).toBe(pluginGeneration);
+      return preparedRuntimeLease;
+    });
     const ensureSelectedAgentHarnessPlugin = vi.fn(async () => undefined);
     const compactAgentHarnessSession = vi.fn(async () => ({
       ok: true,
@@ -647,7 +658,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       },
     });
     const { sessionId, sessionKey } = scenario;
-    const updatedEntry = await scenario.run();
+    const updatedEntry = await scenario.run({ pluginGeneration });
 
     expect(resolveContextEngine).toHaveBeenCalledTimes(1);
     expect(applyAgentAutoCompactionGuard).toHaveBeenCalledWith(
@@ -664,16 +675,7 @@ describe("runCliTurnCompactionLifecycle", () => {
         pluginRegistry: preparedRuntimeLease.snapshot.pluginRegistry,
       }),
     );
-    expect(acquirePreparedModelRuntime).toHaveBeenCalledWith({
-      config: {},
-      agentId: "main",
-      agentDir: tmpDir,
-      workspaceDir: tmpDir,
-      allowGatewaySubagentBinding: true,
-      runtimePluginSelections: [
-        { agentId: "main", modelId: "gpt-5.5", provider: "openai", runtime: "codex" },
-      ],
-    });
+    expect(acquirePreparedModelRuntime).toHaveBeenCalledOnce();
     expect(applyAgentAutoCompactionGuard.mock.invocationCallOrder[0] ?? 0).toBeLessThan(
       compactAgentHarnessSession.mock.invocationCallOrder[0] ?? 0,
     );

@@ -30,6 +30,11 @@ import { CommandLane } from "../../process/lanes.js";
 import { isUnscopedSessionKeySentinel, toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
 import {
+  fenceScheduledGatewayContextResolver,
+  runWithScheduledGatewayContext,
+} from "../scheduled-run-gateway-context.js";
+import type { GatewayRequestContext } from "../server-methods/types.js";
+import {
   createHooksRequestHandler,
   type HookAgentDispatchResult,
   type HookClientIpConfig,
@@ -228,6 +233,12 @@ export function createGatewayHooksRequestHandler(params: {
   port: number;
   logHooks: SubsystemLogger;
   agentStartAdmissionTimeoutMs?: number;
+  /**
+   * Hook agent dispatch runs off a session-keyed queue, so the inbound HTTP
+   * request scope is already unwound by the time the turn starts. Without this
+   * the run is contextless and trusted built-in tools fail mid-run.
+   */
+  resolveGatewayContext?: () => GatewayRequestContext | undefined;
 }) {
   const {
     deps,
@@ -236,8 +247,11 @@ export function createGatewayHooksRequestHandler(params: {
     bindHost,
     port,
     logHooks,
+    resolveGatewayContext,
     agentStartAdmissionTimeoutMs = HOOK_AGENT_START_ADMISSION_TIMEOUT_MS,
   } = params;
+  const scheduledGatewayContextResolver =
+    fenceScheduledGatewayContextResolver(resolveGatewayContext);
   const enqueueHookAgentDispatch = createSessionKeyedHookDispatchQueue();
   let isolatedAgentModulePromise:
     | Promise<typeof import("../../cron/isolated-agent.js")>
@@ -455,27 +469,34 @@ export function createGatewayHooksRequestHandler(params: {
           if (startupAbortController.signal.aborted) {
             return;
           }
-          const result = await runCronIsolatedAgentTurn({
-            cfg,
-            deps,
-            job,
-            message: acceptedValue.message,
-            sessionKey,
-            // Isolated runs derive their lifecycle key from random jobId (or an
-            // already-stable cron: key), so accepted agentId closes reload drift.
-            agentId,
-            // Hook agent runs get their own lane rather than sharing
-            // `cron-nested` with cron inner work, so a saturated cron budget
-            // cannot starve them. Aggregate capacity stays bounded by the lane
-            // group that owns both lanes.
-            lane: CommandLane.HookDispatch,
-            abortSignal: startupAbortController.signal,
-            onExecutionStarted: () => {
-              // Existing runner-entry callbacks are the final owner-boundary fence:
-              // a deadline that wins this race prevents the runner call itself.
-              startupAbortController.signal.throwIfAborted();
-              settleAdmission({ ok: true, runId });
-            },
+          const runHookIsolatedTurn = async () =>
+            await runCronIsolatedAgentTurn({
+              cfg,
+              deps,
+              job,
+              message: acceptedValue.message,
+              sessionKey,
+              // Isolated runs derive their lifecycle key from random jobId (or an
+              // already-stable cron: key), so accepted agentId closes reload drift.
+              agentId,
+              // Hook agent runs get their own lane rather than sharing
+              // `cron-nested` with cron inner work, so a saturated cron budget
+              // cannot starve them. Aggregate capacity stays bounded by the lane
+              // group that owns both lanes.
+              lane: CommandLane.HookDispatch,
+              abortSignal: startupAbortController.signal,
+              onExecutionStarted: () => {
+                // Existing runner-entry callbacks are the final owner-boundary fence:
+                // a deadline that wins this race prevents the runner call itself.
+                startupAbortController.signal.throwIfAborted();
+                settleAdmission({ ok: true, runId });
+              },
+            });
+          const result = await runWithScheduledGatewayContext({
+            ...(scheduledGatewayContextResolver
+              ? { resolveGatewayContext: scheduledGatewayContextResolver }
+              : {}),
+            run: runHookIsolatedTurn,
           });
           if (admissionTimedOut) {
             return;

@@ -17,7 +17,8 @@
   min-width: 0;
 }
 
-.session-hovercard__avatar {
+.session-hovercard__avatar,
+.session-hovercard__avatar-fallback {
   display: grid;
   width: 34px;
   height: 34px;
@@ -29,6 +30,14 @@
   font-size: var(--control-ui-text-xs);
   font-weight: 700;
   place-items: center;
+}
+
+.session-hovercard__avatar > .channel-avatar {
+  box-sizing: border-box;
+  width: 34px;
+  height: 34px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  flex: 0 0 34px;
 }
 
 .session-hovercard__heading {
@@ -134,6 +143,18 @@
   background: var(--border);
 }
 
+.session-hovercard__excerpt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
 .session-progress-card--composer {
   flex: 1 1 100%;
   overflow: hidden;
@@ -167,9 +188,15 @@
   text-transform: uppercase;
 }
 
+.session-progress-card__heading-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .session-progress-card__summary {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 7px;
   min-width: 0;
@@ -222,6 +249,13 @@
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
   font-variant-numeric: tabular-nums;
+}
+
+.session-progress-card__dismiss {
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  min-height: 22px;
 }
 
 .session-progress-card--composer .session-progress-card__body {

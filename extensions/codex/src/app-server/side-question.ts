@@ -70,7 +70,8 @@ import {
   resolveCodexDynamicToolsLoading,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
-import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
+import { routeCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
+import { createCodexElicitationResponse } from "./elicitation-response.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
 import {
   buildCodexNativeHookRelayConfig,
@@ -171,6 +172,8 @@ export async function runCodexAppServerSideQuestion(
   options: {
     bindingStore: CodexAppServerBindingStore;
     pluginConfig?: unknown;
+    /** Private app-server request identity; public side-run identity remains params.model. */
+    runtimeModelId?: string;
     nativeHookRelay?: {
       enabled?: boolean;
       events?: readonly NativeHookRelayEvent[];
@@ -245,7 +248,7 @@ export async function runCodexAppServerSideQuestion(
         bindingModelProvider: binding.modelProvider,
       }));
   const modelSelection = resolveCodexAppServerRequestModelSelection({
-    model: supervisionModelSelection?.model ?? params.model,
+    model: supervisionModelSelection?.model ?? options.runtimeModelId ?? params.model,
     modelProvider,
     authProfileId,
     authProfileStore: preparedRuntimeAuth.authProfileStore,
@@ -501,7 +504,7 @@ export async function runCodexAppServerSideQuestion(
           return undefined;
         }
         if (request.method === "mcpServer/elicitation/request") {
-          return handleCodexAppServerElicitationRequest({
+          const approvalResult = await routeCodexAppServerElicitationRequest({
             requestParams: request.params,
             paramsForRun: sideRunParams,
             threadId: childThreadId,
@@ -509,6 +512,11 @@ export async function runCodexAppServerSideQuestion(
             pluginAppPolicyContext: binding.pluginAppPolicyContext,
             signal: runAbortController.signal,
           });
+          return approvalResult.kind === "handled"
+            ? approvalResult.response
+            : createCodexElicitationResponse("decline", null, {
+                message: "OpenClaw Codex side questions do not support interactive MCP input.",
+              });
         }
         if (request.method === "item/tool/requestUserInput") {
           return isSideUserInputRequest(request.params, childThreadId, turnId)

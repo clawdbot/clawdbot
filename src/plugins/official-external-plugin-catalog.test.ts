@@ -1,10 +1,14 @@
 import crypto from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import officialExternalChannelCatalog from "../../scripts/lib/official-external-channel-catalog.json" with { type: "json" };
 import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
+import officialExternalProviderCatalog from "../../scripts/lib/official-external-provider-catalog.json" with { type: "json" };
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import type { PluginPackageInstall } from "./manifest.js";
 import { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } from "./official-external-plugin-catalog-snapshot-store.js";
 import {
   getOfficialExternalChannelSecretContract,
@@ -15,6 +19,7 @@ import {
   getOfficialExternalPluginCatalogEntry,
   getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
+  isOfficialExternalPluginId,
   isOfficialExternalPluginCatalogFeed,
   listOfficialExternalChannelEnvVars,
   listOfficialExternalPluginCatalogEntries,
@@ -27,6 +32,83 @@ import {
   resolveOfficialExternalPluginInstall,
   resolveOfficialExternalPluginLegacyIds,
 } from "./official-external-plugin-catalog.js";
+
+type ExtensionPackageMetadata = {
+  name?: unknown;
+  openclaw?: {
+    build?: { bundledDist?: unknown };
+    install?: PluginPackageInstall;
+    release?: { publishToClawHub?: unknown; publishToNpm?: unknown };
+  };
+};
+
+type BundledCatalogIdentity = {
+  id?: string;
+  name?: string;
+  openclaw?: {
+    channel?: { id?: string };
+    plugin?: { id?: string };
+    providers?: readonly { id?: string }[];
+  };
+};
+
+function resolveBundledCatalogIdentity(entry: BundledCatalogIdentity): string | undefined {
+  return (
+    entry.openclaw?.plugin?.id ??
+    entry.openclaw?.channel?.id ??
+    entry.openclaw?.providers?.[0]?.id ??
+    entry.id
+  );
+}
+
+function listPublishedExternalPluginOwners(): Array<{
+  id: string;
+  packageName: string;
+  install: PluginPackageInstall;
+}> {
+  const extensionsDir = new URL("../../extensions/", import.meta.url);
+  return readdirSync(extensionsDir, { withFileTypes: true }).flatMap((entry) => {
+    if (!entry.isDirectory()) {
+      return [];
+    }
+    const extensionDir = new URL(`${entry.name}/`, extensionsDir);
+    let packageJson: ExtensionPackageMetadata;
+    try {
+      packageJson = JSON.parse(
+        readFileSync(new URL("package.json", extensionDir), "utf8"),
+      ) as ExtensionPackageMetadata;
+    } catch {
+      return [];
+    }
+    const release = packageJson.openclaw?.release;
+    if (
+      packageJson.openclaw?.build?.bundledDist !== false ||
+      (release?.publishToClawHub !== true && release?.publishToNpm !== true)
+    ) {
+      return [];
+    }
+    const packageName = packageJson.name;
+    if (typeof packageName !== "string" || !packageName.trim()) {
+      throw new Error(`${entry.name} publishes without a package name`);
+    }
+    const install = packageJson.openclaw?.install;
+    if (!install) {
+      throw new Error(`${entry.name} publishes without install metadata`);
+    }
+    let manifest: { id?: unknown };
+    try {
+      manifest = JSON.parse(
+        readFileSync(new URL("openclaw.plugin.json", extensionDir), "utf8"),
+      ) as { id?: unknown };
+    } catch {
+      throw new Error(`${entry.name} publishes without a readable plugin manifest`);
+    }
+    if (typeof manifest.id !== "string" || !manifest.id.trim()) {
+      throw new Error(`${entry.name} publishes without a manifest id`);
+    }
+    return [{ id: manifest.id, packageName, install }];
+  });
+}
 
 function expectCatalogEntry(id: string): OfficialExternalPluginCatalogEntry {
   const entry = getOfficialExternalPluginCatalogEntry(id);
@@ -257,6 +339,51 @@ describe("official external plugin catalog", () => {
       sequence: 1,
     });
     expect(officialExternalPluginCatalog.entries.length).toBeGreaterThan(0);
+  });
+
+  it("catalogs every published external extension exactly once", async () => {
+    const catalogs: ReadonlyArray<readonly [string, readonly BundledCatalogIdentity[]]> = [
+      ["channel", officialExternalChannelCatalog.entries],
+      ["provider", officialExternalProviderCatalog.entries],
+      ["plugin", officialExternalPluginCatalog.entries],
+    ];
+    const fallback = await loadHostedCatalog({ offline: true, snapshotStore: null });
+    expectBundledFallback(fallback);
+    const fallbackIds = fallback.entries.map(resolveOfficialExternalPluginId);
+
+    const gaps = listPublishedExternalPluginOwners().flatMap(({ id, packageName, install }) => {
+      const catalogMatches = catalogs.flatMap(([catalog, entries]) =>
+        entries
+          .filter((entry) => resolveBundledCatalogIdentity(entry) === id)
+          .map((entry) => ({ catalog, entry })),
+      );
+      const catalogEntry = catalogMatches.length === 1 ? catalogMatches[0]?.entry : undefined;
+      const catalogInstall = catalogEntry
+        ? resolveOfficialExternalPluginInstall(catalogEntry)
+        : undefined;
+      const official = isOfficialExternalPluginId(id);
+      const bundledFallbackMatches = fallbackIds.filter((candidate) => candidate === id).length;
+      return catalogMatches.length === 1 &&
+        catalogEntry?.name === packageName &&
+        isDeepStrictEqual(catalogInstall, install) &&
+        official &&
+        bundledFallbackMatches === 1
+        ? []
+        : [
+            {
+              id,
+              packageName,
+              install,
+              catalogMatches: catalogMatches.map(({ catalog }) => catalog),
+              catalogPackageName: catalogEntry?.name,
+              catalogInstall,
+              official,
+              bundledFallbackMatches,
+            },
+          ];
+    });
+
+    expect(gaps).toEqual([]);
   });
 
   it("keeps Codex installable as a harness without declaring a model provider", () => {
@@ -2473,6 +2600,24 @@ describe("official external plugin catalog", () => {
       optionKey: "tokenplanApiKey",
       cliFlag: "--tokenplan-api-key",
     });
+  });
+
+  it("keeps the shared OpenRouter onboarding flag with its provider", () => {
+    const arceeChoices = expectCatalogEntry("arcee").openclaw?.providers?.find(
+      (provider) => provider.id === "arcee",
+    )?.authChoices;
+    const directChoice = arceeChoices?.find((choice) => choice.choiceId === "arceeai-api-key");
+    const openRouterChoice = arceeChoices?.find(
+      (choice) => choice.choiceId === "arceeai-openrouter",
+    );
+
+    expect(directChoice).toMatchObject({
+      optionKey: "arceeaiApiKey",
+      cliFlag: "--arceeai-api-key",
+    });
+    expect(openRouterChoice).toMatchObject({ optionKey: "openrouterApiKey" });
+    expect(openRouterChoice).not.toHaveProperty("cliFlag");
+    expect(openRouterChoice).not.toHaveProperty("cliOption");
   });
 
   it("keeps Groq available through the cold-install auth catalog", () => {

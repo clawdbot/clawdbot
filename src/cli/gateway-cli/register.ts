@@ -22,7 +22,7 @@ import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import { rethrowExpectedCliError } from "../failure-output.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
-import { callGatewayFromCliWithTransport } from "../gateway-rpc.js";
+import { addGatewayClientOptions, callGatewayFromCliWithTransport } from "../gateway-rpc.js";
 import { formatHelpExamples } from "../help-format.js";
 import { setCommandJsonMode } from "../program/json-mode.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
@@ -106,13 +106,11 @@ function loadDaemonStatusGatherModule() {
 }
 
 function gatewayCallOpts(cmd: Command, defaultTimeoutMs = DEFAULT_GATEWAY_RPC_TIMEOUT_MS): Command {
-  return cmd
-    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
-    .option("--token <token>", "Gateway token (if required)")
-    .option("--password <password>", "Gateway password (password auth)")
-    .option("--timeout <ms>", "Timeout in ms", String(defaultTimeoutMs))
-    .option("--expect-final", "Wait for final response (agent)", false)
-    .option("--json", "Output JSON", false);
+  return addGatewayClientOptions(cmd, { timeoutMs: defaultTimeoutMs }).option(
+    "--json",
+    "Output JSON",
+    false,
+  );
 }
 
 async function callGatewayReadOnlyCli(method: string, opts: GatewayRpcOpts, params?: unknown) {
@@ -570,7 +568,6 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .description("Call a Gateway method")
       .argument("<method>", "Method name (health/status/system-presence/cron.*)")
       .option("--params <json>", "JSON object string for params", "{}")
-      .option("--port <port>", "Local Gateway port")
       .action(async (method, opts, command) => {
         await runGatewayCommand(
           async () => {
@@ -606,7 +603,6 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .description("Prepare the Gateway for cooperative host suspension")
       .option("--request-id <id>", "Stable suspension request id")
       .option("--wait <seconds>", "Wait up to this many seconds for active work to drain")
-      .option("--port <port>", "Local Gateway port")
       .action(async (opts, command) => {
         await runGatewayCommand(
           async () => {
@@ -632,7 +628,6 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .command("resume")
       .description("Release a cooperative Gateway suspension")
       .argument("<suspensionId>", "Suspension id returned by gateway suspend")
-      .option("--port <port>", "Local Gateway port")
       .action(async (suspensionId, opts, command) => {
         await runGatewayCommand(
           async () => {
@@ -658,7 +653,7 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
       .action(async (opts, command) => {
         await runGatewayCommand(
           async () => {
-            const rpcOpts = resolveGatewayRpcOptions(opts, command);
+            const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(opts, command);
             const days = parseDaysOption(opts.days);
             const agentId = typeof opts.agent === "string" ? opts.agent.trim() : undefined;
             // The gateway honors agentScope only when no agentId is set, so reject the
@@ -690,7 +685,6 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
     gateway
       .command("health")
       .description("Fetch Gateway health")
-      .option("--port <port>", "Local Gateway port")
       .action(async (opts, command) => {
         await runGatewayCommand(
           async () => {
@@ -811,11 +805,15 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
               return;
             }
 
-            const result = await callGatewayReadOnlyCli("diagnostics.stability", rpcOpts, {
-              limit: query.limit,
-              ...(query.type ? { type: query.type } : {}),
-              ...(query.sinceSeq !== undefined ? { sinceSeq: query.sinceSeq } : {}),
-            });
+            const result = await callGatewayReadOnlyCli(
+              "diagnostics.stability",
+              resolveGatewayRpcOptionsWithLocalPort(rpcOpts, command),
+              {
+                limit: query.limit,
+                ...(query.type ? { type: query.type } : {}),
+                ...(query.sinceSeq !== undefined ? { sinceSeq: query.sinceSeq } : {}),
+              },
+            );
             if (rpcOpts.json) {
               defaultRuntime.writeJson(result);
               return;

@@ -26,6 +26,7 @@ import {
 } from "./subagent-registry.store.sqlite.js";
 import {
   testing,
+  activateSubagentRegistry,
   getSubagentRunByChildSessionKey,
   initSubagentRegistry,
   listSubagentRunsForRequester,
@@ -162,6 +163,14 @@ describe("subagent registry persistence", () => {
   const restartRegistry = () => {
     resetSubagentRegistryForTests({ persist: false });
     initSubagentRegistry();
+    const recoveryRuntime = {
+      dispatchAgent: (params: Record<string, unknown>, timeoutMs?: number) =>
+        callGateway({ method: "agent", params, timeoutMs }),
+      waitForAgent: (params: Record<string, unknown>, timeoutMs?: number) =>
+        callGateway({ method: "agent.wait", params, timeoutMs }),
+      sendRecoveryNotice: vi.fn(),
+    };
+    activateSubagentRegistry(() => ({ recoveryRuntime }) as never);
   };
 
   const fastPersistSubagentRunsToDisk = (runs: Map<string, SubagentRunRecord>) =>
@@ -330,8 +339,7 @@ describe("subagent registry persistence", () => {
       wakeOnReturn: true,
       traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
     });
-    resetSubagentRegistryForTests({ persist: false });
-    initSubagentRegistry();
+    restartRegistry();
     releaseInitialWait?.({
       status: "ok",
       startedAt: 111,

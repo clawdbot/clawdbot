@@ -38,23 +38,16 @@ export type SessionWorkspaceState = {
   browserSearch: string;
   browserSearchTimer: ReturnType<typeof globalThis.setTimeout> | null;
   collapsed: boolean;
+  connectionEpoch: number;
   dock: ChatWorkspaceDock;
+  diffContent?: SidebarContent;
   error: string | null;
   list: SessionWorkspaceListResult | null;
   loading: boolean;
+  openRequest?: object;
   pendingReload: boolean;
-  requestId: number;
   sessionKey: string;
 };
-
-type OpenRequest = {
-  agentId: string;
-  id: number;
-  itemId: string;
-  sessionKey: string;
-};
-
-export type WorkspaceOpenRequest = OpenRequest;
 
 // Re-renders must preserve the document identity or the mounted diff panel
 // treats its loader as new and requests sessions.diff again.
@@ -63,6 +56,7 @@ export type SessionWorkspaceHost = {
   sessions: SessionCapability;
   client: GatewayBrowserClient | null;
   connected: boolean;
+  connectionEpoch: number;
   hello: GatewayHelloOk | null;
   terminalAvailable?: boolean;
   browserPanelAvailable?: boolean;
@@ -70,8 +64,8 @@ export type SessionWorkspaceHost = {
   agentsList?: SessionScopeHost["agentsList"];
   settings?: UiSettings;
   sessionWorkspaceState?: SessionWorkspaceState;
-  sessionWorkspaceOpenRequest?: WorkspaceOpenRequest;
   sessionWorkspaceDraftScope?: string;
+  sidebarContent: SidebarContent | null;
   requestUpdate?: () => void;
   handleOpenSidebar: (content: SidebarContent | null) => void;
 };

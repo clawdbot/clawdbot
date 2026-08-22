@@ -39,8 +39,9 @@ import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
   allowedHosts: string[];
-  fixture?: "approval" | "board" | "swarm" | "workboard";
+  fixture?: "approval" | "board" | "code-fences" | "swarm" | "workboard";
   host: string;
+  operatorScopes?: string[];
   port: number;
 };
 
@@ -155,6 +156,10 @@ function parseArgs(args: string[]): CliOptions {
       options.port = parsePort(args[++i], options.port);
     } else if (arg.startsWith("--port=")) {
       options.port = parsePort(arg.slice("--port=".length), options.port);
+    } else if (arg === "--operator-scopes") {
+      options.operatorScopes = parseOperatorScopes(args[++i]);
+    } else if (arg.startsWith("--operator-scopes=")) {
+      options.operatorScopes = parseOperatorScopes(arg.slice("--operator-scopes=".length));
     }
   }
   return options;
@@ -164,7 +169,13 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
   if (!value) {
     return undefined;
   }
-  if (value !== "approval" && value !== "board" && value !== "swarm" && value !== "workboard") {
+  if (
+    value !== "approval" &&
+    value !== "board" &&
+    value !== "code-fences" &&
+    value !== "swarm" &&
+    value !== "workboard"
+  ) {
     throw new Error(`Unknown Control UI mock fixture: ${value}`);
   }
   return value;
@@ -173,6 +184,14 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
 function parsePort(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 && parsed < 65_536 ? parsed : fallback;
+}
+
+function parseOperatorScopes(value: string | undefined): string[] | undefined {
+  const scopes = (value ?? "")
+    .split(",")
+    .map((scope) => scope.trim())
+    .filter(Boolean);
+  return scopes.length > 0 ? scopes : undefined;
 }
 
 function sessionRow(
@@ -279,6 +298,60 @@ function buildSearchSessionListCases(
   searchTerms: string[],
 ): Array<{ match: Record<string, unknown>; response: unknown }> {
   return searchTerms.flatMap((search) => buildSessionListCases(sessions, { search }));
+}
+
+function buildActivitySessionRows(baseTime: number) {
+  const owners = {
+    molty: { type: "agent", id: "profile-molty", label: "Molty" },
+    riley: { type: "human", id: "presence-riley", label: "Riley" },
+    colin: { type: "human", id: "presence-colin", label: "Colin" },
+    patricia: {
+      type: "human",
+      id: "presence-patricia",
+      label: "patricia.erichsen@example.com",
+    },
+    unresolved: { type: "human", id: "147591189530201337" },
+  } as const;
+  const hour = 60 * 60 * 1000;
+  const day = 24 * hour;
+  const fixtures = [
+    ["release-check", "Release readiness check", owners.riley, 5 * 60_000],
+    ["api-notes", "Gateway API notes", owners.molty, 20 * 60_000],
+    ["design-review", "Activity feed design review", owners.colin, hour],
+    ["archive-audit", "Archive retention audit", owners.unresolved, 3 * hour],
+    ["support-handoff", "Support handoff", owners.patricia, 6 * hour],
+    ["mobile-smoke", "Mobile layout smoke test", owners.riley, 18 * hour],
+    ["provider-matrix", "Provider matrix cleanup", owners.molty, 30 * hour],
+    ["docs-pass", "Operator docs pass", owners.colin, 2 * day],
+    ["queue-review", "Queue behavior review", owners.patricia, 2.5 * day],
+    ["identity-trace", "Identity trace", owners.unresolved, 3 * day],
+    ["channel-followup", "Channel delivery follow-up", owners.riley, 4 * day],
+    ["tooling-refresh", "Tooling refresh", owners.molty, 5 * day],
+    ["fixture-polish", "Mock fixture polish", owners.colin, 6 * day],
+    ["weekly-summary", "Weekly activity summary", owners.patricia, 6.5 * day],
+  ] as const;
+  const automationKeys = new Set(["release-check", "api-notes", "design-review"]);
+  return fixtures.map(([key, label, owner, age]) =>
+    sessionRow(`agent:activity:${key}`, label, baseTime - age, {
+      ...(key === "archive-audit"
+        ? {
+            activeRunIds: ["mock-activity-live-run"],
+            hasActiveRun: true,
+            observerDigest: {
+              headline: "Waiting on a fictional mock approval",
+              health: "waiting-on-user",
+              revision: 1,
+              runId: "mock-activity-live-run",
+              updatedAt: baseTime - age,
+            },
+            status: "running",
+          }
+        : {}),
+      createdActor: owner,
+      hasAutomation: automationKeys.has(key),
+      owner: { actor: owner },
+    }),
+  );
 }
 
 function usageCostTotals(totalTokens: number, totalCost = 0) {
@@ -1080,6 +1153,25 @@ function buildScrollableChatHistory(baseTime: number): unknown[] {
   return messages;
 }
 
+function buildCodeFenceChatHistory(baseTime: number): unknown[] {
+  const proseFence = (language: string, label: string) => {
+    const lines = Array.from({ length: 16 }, (_, index) => `${label} line ${index + 1}`);
+    return `\`\`\`${language}\n${lines.join("\n")}\n\`\`\``;
+  };
+  const jsonLines = Array.from({ length: 18 }, (_, index) => `  "item-${index + 1}",`);
+  jsonLines[jsonLines.length - 1] = `  "item-${jsonLines.length}"`;
+  return [
+    chatHistoryMessage("assistant", proseFence("text", "Plain text"), baseTime),
+    chatHistoryMessage("assistant", proseFence("md", "Markdown alias"), baseTime + 1_000),
+    chatHistoryMessage("assistant", proseFence("markdown", "Markdown"), baseTime + 2_000),
+    chatHistoryMessage(
+      "assistant",
+      `\`\`\`json\n[\n${jsonLines.join("\n")}\n]\n\`\`\``,
+      baseTime + 3_000,
+    ),
+  ];
+}
+
 function searchPrefixes(term: string): string[] {
   return Array.from({ length: term.length }, (_value, index) => term.slice(0, index + 1));
 }
@@ -1096,6 +1188,7 @@ async function createChatPickerScenario(
     createdAt: baseTime,
     updatedAt: baseTime,
     emails: ["riley@example.com"],
+    githubIdentity: null,
     hasAvatar: false,
   };
   const devicePairSetupCode = Buffer.from(
@@ -1404,7 +1497,9 @@ async function createChatPickerScenario(
         ]
       : [];
   const workboardMocks = buildWorkboardMocks(baseTime);
+  const activitySessions = buildActivitySessionRows(Date.now());
   const sessions = [
+    ...activitySessions,
     ...(fixture === "workboard"
       ? [
           sessionRow(workboardMocks.sessionKey, "Product operations dashboard", baseTime, {
@@ -1543,7 +1638,10 @@ async function createChatPickerScenario(
     swarmEnabled: fixture === "swarm",
     workboardEnabled: fixture === "workboard",
   });
-  const historyMessages = buildScrollableChatHistory(baseTime);
+  const historyMessages =
+    fixture === "code-fences"
+      ? buildCodeFenceChatHistory(baseTime)
+      : buildScrollableChatHistory(baseTime);
   const planSessionInfo = {
     activeRunIds: [PLAN_DEMO_RUN_ID],
     hasActiveRun: true,
@@ -1630,6 +1728,7 @@ async function createChatPickerScenario(
     featureMethods: [
       "browser.request",
       "chat.abort",
+      "config.schema",
       "chat.metadata",
       "chat.startup",
       "question.list",
@@ -2849,6 +2948,9 @@ async function waitForShutdown(): Promise<void> {
 
 const options = parseArgs(process.argv.slice(2));
 const scenario = await createChatPickerScenario(options.fixture);
+if (options.operatorScopes) {
+  scenario.operatorScopes = options.operatorScopes;
+}
 const server = await createServer({
   base: "/",
   cacheDir: path.join(repoRoot, ".artifacts", "control-ui-mock-vite"),

@@ -122,6 +122,50 @@ describe("evaluateChannelHealth", () => {
     ).toEqual({ healthy: false, reason: "disconnected" });
   });
 
+  it.each([
+    {
+      name: "uses reconnect grace for a fresh typed disconnect",
+      lastStartAt: 0,
+      lastDisconnect: { at: 95_000, error: "socket closed" },
+      expected: { healthy: true, reason: "reconnect-grace" },
+    },
+    {
+      name: "expires reconnect grace after 120 seconds",
+      lastStartAt: 0,
+      lastDisconnect: { at: -20_001, error: "socket closed" },
+      expected: { healthy: false, reason: "disconnected" },
+    },
+    {
+      name: "ignores a legacy string disconnect",
+      lastStartAt: 0,
+      lastDisconnect: "socket closed",
+      expected: { healthy: false, reason: "disconnected" },
+    },
+    {
+      name: "ignores a malformed typed disconnect",
+      lastStartAt: 0,
+      lastDisconnect: { at: Number.NaN, error: "socket closed" },
+      expected: { healthy: false, reason: "disconnected" },
+    },
+    {
+      name: "ignores a disconnect from the previous lifecycle",
+      lastStartAt: 80_000,
+      lastDisconnect: { at: 79_000, error: "socket closed" },
+      expected: { healthy: false, reason: "disconnected" },
+    },
+  ] as const)("$name", ({ lastStartAt, lastDisconnect, expected }) => {
+    expect(
+      evaluateHealth(
+        runningAccount({
+          connected: false,
+          lifecycle: "recovering",
+          lastStartAt,
+          lastDisconnect,
+        }),
+      ),
+    ).toEqual(expected);
+  });
+
   it("treats recorded blocked lifecycle as unhealthy", () => {
     expect(evaluateHealth(connectedAccount({ lifecycle: "blocked" }))).toEqual({
       healthy: false,

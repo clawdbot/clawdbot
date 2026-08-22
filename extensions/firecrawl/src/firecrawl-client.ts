@@ -210,7 +210,7 @@ async function postFirecrawlJson<T>(
   const mode = params.mode ?? (await validateFirecrawlBaseUrl(params.url));
   const withEndpoint =
     mode === "selfHosted" ? withSelfHostedWebToolsEndpoint : withStrictWebToolsEndpoint;
-  return await withEndpoint(
+  const result = await withEndpoint(
     {
       url: params.url,
       timeoutSeconds: params.timeoutSeconds,
@@ -270,6 +270,8 @@ async function postFirecrawlJson<T>(
       return await parse(response);
     },
   );
+  params.signal?.throwIfAborted();
+  return result;
 }
 
 function resolveSiteName(urlRaw: string): string | undefined {
@@ -716,13 +718,12 @@ export async function runFirecrawlScrape(
       return payloadLocal;
     },
   );
-  const result = parseFirecrawlScrapePayload({
+  return parseFirecrawlScrapePayload({
     payload,
     url: params.url,
     extractMode: params.extractMode,
     maxChars,
   });
-  return result;
 }
 
 export const testing = {

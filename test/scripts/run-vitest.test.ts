@@ -186,18 +186,18 @@ describe("scripts/run-vitest", () => {
   });
 
   it("isolates mixed explicit directory targets across Vitest projects", () => {
-    expect(resolveImplicitVitestArgs(["extensions/linux-canvas", "src/node-host"])).toEqual([
-      "extensions/linux-canvas",
+    expect(resolveImplicitVitestArgs(["extensions/canvas", "src/node-host"])).toEqual([
+      "extensions/canvas",
       "src/node-host",
       "--isolate",
     ]);
     expect(resolveImplicitVitestArgs(["src/node-host"])).toEqual(["src/node-host"]);
     expect(
-      resolveImplicitVitestArgs(["extensions/linux-canvas", "src/node-host", "--no-isolate"]),
-    ).toEqual(["extensions/linux-canvas", "src/node-host", "--no-isolate"]);
+      resolveImplicitVitestArgs(["extensions/canvas", "src/node-host", "--no-isolate"]),
+    ).toEqual(["extensions/canvas", "src/node-host", "--no-isolate"]);
     expect(
-      resolveImplicitVitestArgs(["extensions/linux-canvas", "src/node-host", "--", "--no-isolate"]),
-    ).toEqual(["extensions/linux-canvas", "src/node-host", "--isolate", "--", "--no-isolate"]);
+      resolveImplicitVitestArgs(["extensions/canvas", "src/node-host", "--", "--no-isolate"]),
+    ).toEqual(["extensions/canvas", "src/node-host", "--isolate", "--", "--no-isolate"]);
   });
 
   it("bounds config-only Gateway server runs in fresh worker processes", () => {
@@ -639,6 +639,29 @@ describe("scripts/run-vitest", () => {
       ]),
     ).toEqual({
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0",
+      PATH: "/usr/bin",
+    });
+  });
+
+  it("keeps mapped configs at their measured silence floor when env is smaller", () => {
+    expect(
+      resolveRunVitestSpawnEnv(
+        { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000", PATH: "/usr/bin" },
+        ["run", "--config", "test/vitest/vitest.extension-codex.config.ts"],
+      ),
+    ).toEqual({
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "2400000",
+      PATH: "/usr/bin",
+    });
+    expect(
+      resolveRunVitestSpawnEnv(
+        { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000", PATH: "/usr/bin" },
+        ["run", "--config", "test/vitest/vitest.unit.config.ts"],
+      ),
+    ).toEqual({
+      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "30000",
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000",
       PATH: "/usr/bin",
     });
   });

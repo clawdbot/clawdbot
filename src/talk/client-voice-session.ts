@@ -150,18 +150,21 @@ function recordClientVoiceToolEffect(event: TrustedToolExecutionEvent): void {
 
 function ensureToolEffectSubscription(): void {
   unsubscribeToolEffects ??= onTrustedToolExecutionEvent(recordClientVoiceToolEffect);
-  unsubscribeRunCompletion ??= onTrustedInternalDiagnosticEvent((event) => {
-    if (event.type !== "run.completed") {
-      return;
-    }
-    const binding = voiceSessionByRunId.get(event.runId);
-    if (!binding) {
-      return;
-    }
-    voiceSessionByRunId.delete(event.runId);
-    releaseClientVoiceConfirmationRun(binding.agentId, binding.voiceSessionId, event.runId);
-    mutationDigestDeliveryOwner.retry(binding);
-  });
+  unsubscribeRunCompletion ??= onTrustedInternalDiagnosticEvent(
+    (event) => {
+      if (event.type !== "run.completed") {
+        return;
+      }
+      const binding = voiceSessionByRunId.get(event.runId);
+      if (!binding) {
+        return;
+      }
+      voiceSessionByRunId.delete(event.runId);
+      releaseClientVoiceConfirmationRun(binding.agentId, binding.voiceSessionId, event.runId);
+      mutationDigestDeliveryOwner.retry(binding);
+    },
+    { include: ["run.completed"] },
+  );
 }
 
 /** Create a call record or resume the same open call across transport restarts. */

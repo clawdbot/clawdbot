@@ -92,14 +92,11 @@ export async function runCliFallbackCandidate(params: {
 }> {
   const turn = params.turn;
   const normalizedProvider = normalizeProviderId(params.provider);
-  const modelHasVision = Boolean(
-    turn.followupRun.run.thinkingCatalog
-      ?.find(
-        (entry) =>
-          normalizeProviderId(entry.provider) === normalizedProvider && entry.id === params.model,
-      )
-      ?.input?.includes("image"),
+  const selectedModelEntry = turn.followupRun.run.thinkingCatalog?.find(
+    (entry) =>
+      normalizeProviderId(entry.provider) === normalizedProvider && entry.id === params.model,
   );
+  const modelHasVision = Boolean(selectedModelEntry?.input?.includes("image"));
   const sessionKey = turn.sessionKey ?? turn.followupRun.run.sessionKey;
   const sessionTarget =
     sessionKey && turn.storePath
@@ -393,6 +390,8 @@ export async function runCliFallbackCandidate(params: {
             inputProvenance: turn.followupRun.run.inputProvenance,
             modelProvider: params.provider,
             modelHasVision,
+            modelContextWindow: selectedModelEntry?.contextWindow,
+            modelContextTokens: selectedModelEntry?.contextTokens,
             provider: params.cliExecutionProvider,
             execOverrides: turn.followupRun.run.execOverrides,
             bashElevated: turn.followupRun.run.bashElevated,
@@ -454,6 +453,7 @@ export async function runCliFallbackCandidate(params: {
             senderIsOwner: turn.followupRun.run.senderIsOwner,
             approvalReviewerDeviceId: turn.followupRun.run.approvalReviewerDeviceId,
             toolsAllow: turn.opts?.toolsAllow,
+            skillWorkshopProposalRevision: params.candidateRun.skillWorkshopProposalRevision,
             disableTools: turn.opts?.disableTools,
             toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(
               turn.followupRun,

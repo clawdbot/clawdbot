@@ -4,7 +4,10 @@ import {
   hasCompletedTerminalDeliveryEvidence,
   hasVisibleOutboundDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
-import { hasDeliberateSilentTerminalReply } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+import {
+  hasDeliberateSilentTerminalReply,
+  hasIntentionalTerminalCompletion,
+} from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { deriveContextPromptTokens, hasNonzeroUsage } from "../../agents/usage.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
@@ -180,6 +183,7 @@ export async function prepareReplyAgentPayloads(state: {
           successfulTerminalDelivery ||
           (successfulSideEffectDelivery && (directlySentBlockKeys?.size ?? 0) === 0) ||
           hasAcceptedSessionSpawn,
+        hasIntentionalTerminalCompletion: hasIntentionalTerminalCompletion(runResult),
         sessionCtx,
         cfg,
       });
@@ -501,6 +505,7 @@ export async function prepareReplyAgentPayloads(state: {
           runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
         hasExplicitSilentReply: hasDeliberateSilentTerminalReply(runResult),
         hasCommittedDelivery: false,
+        hasIntentionalTerminalCompletion: hasIntentionalTerminalCompletion(runResult),
         sessionCtx,
         cfg,
       });
@@ -556,6 +561,7 @@ export async function prepareReplyAgentPayloads(state: {
             runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0,
           hasExplicitSilentReply: hasDeliberateSilentTerminalReply(runResult),
           hasCommittedDelivery: false,
+          hasIntentionalTerminalCompletion: hasIntentionalTerminalCompletion(runResult),
           sessionCtx,
           cfg,
         }),

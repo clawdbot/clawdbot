@@ -18,12 +18,11 @@ const RICH_CONTENT_CLOSE_DELAY = 100;
 let nextTooltipId = 0;
 
 function createTooltipId() {
-  nextTooltipId += 1;
-  return `openclaw-tooltip-${nextTooltipId}`;
+  return `openclaw-tooltip-${++nextTooltipId}`;
 }
 
 function normalizeTooltipText(text: string) {
-  return text.replace(/\s+/gu, " ").trim();
+  return text.replace(/\s+/g, " ").trim();
 }
 
 function isHtmlElement(element: unknown): element is HTMLElement {
@@ -42,7 +41,7 @@ function isElementNode(node: Node): node is Element {
 function collectVisibleText(element: Element): string {
   const style = element.ownerDocument.defaultView?.getComputedStyle(element);
   if (
-    (isHtmlElement(element) && element.hidden) ||
+    element.hasAttribute("hidden") ||
     style?.display === "none" ||
     style?.contentVisibility === "hidden"
   ) {
@@ -74,11 +73,8 @@ function hasTooltipOverflow(element: HTMLElement) {
 
 function isTooltipTextRedundant(content: string, trigger: HTMLElement) {
   const tooltipText = normalizeTooltipText(content);
-  if (!tooltipText || !normalizeTooltipText(trigger.textContent ?? "").includes(tooltipText)) {
-    return false;
-  }
   const triggerText = normalizeTooltipText(collectVisibleText(trigger));
-  if (!triggerText.includes(tooltipText)) {
+  if (!tooltipText || !triggerText.includes(tooltipText)) {
     return false;
   }
   if (hasTooltipOverflow(trigger)) {
@@ -115,11 +111,9 @@ export function installNativeTitleGuard(ownerDocument: Document) {
       return;
     }
     const path = event.composedPath();
-    if (suppressed.size > 0) {
-      for (const trigger of suppressed.keys()) {
-        if (!path.includes(trigger)) {
-          restore(trigger);
-        }
+    for (const trigger of suppressed.keys()) {
+      if (!path.includes(trigger)) {
+        restore(trigger);
       }
     }
     for (const candidate of path) {
@@ -128,14 +122,14 @@ export function installNativeTitleGuard(ownerDocument: Document) {
       }
       const title = candidate.getAttribute("title");
       const previous = suppressed.get(candidate);
-      if (previous && title === "") {
-        continue;
-      }
-      if (previous !== undefined) {
+      if (previous) {
+        if (title === "") {
+          continue;
+        }
         candidate.removeEventListener("pointerleave", handlePointerLeave);
         suppressed.delete(candidate);
       }
-      if (title === null || !isTooltipTextRedundant(title, candidate)) {
+      if (!title || !isTooltipTextRedundant(title, candidate)) {
         continue;
       }
       suppressed.set(candidate, title);
@@ -160,7 +154,7 @@ class TooltipProvider extends OpenClawLitElement {
   @property({ type: Number }) touchDelay = TOUCH_DELAY;
 
   private activeTooltip: Tooltip | null = null;
-  private delayed = true;
+  delayed = true;
   private skipDelayTimer: number | null = null;
 
   override connectedCallback() {
@@ -202,10 +196,6 @@ class TooltipProvider extends OpenClawLitElement {
     }, this.skipDelay);
   }
 
-  shouldDelayOpen() {
-    return this.delayed;
-  }
-
   private clearSkipDelayTimer() {
     if (this.skipDelayTimer !== null) {
       window.clearTimeout(this.skipDelayTimer);
@@ -220,6 +210,10 @@ class TooltipProvider extends OpenClawLitElement {
 
 class Tooltip extends OpenClawLitElement {
   @property() content = "";
+
+  @property({ type: Boolean }) describe = true;
+
+  @property({ type: Boolean }) disabled = false;
 
   /** Let a reveal-only trigger open on click instead of dismissing. */
   @property({ type: Boolean, attribute: "open-on-click" }) openOnClick = false;
@@ -299,6 +293,9 @@ class Tooltip extends OpenClawLitElement {
     this.attachTrigger();
     this.syncDescription();
     this.syncWebAwesomeTooltip();
+    if (this.disabled) {
+      this.close();
+    }
   }
 
   override disconnectedCallback() {
@@ -310,18 +307,6 @@ class Tooltip extends OpenClawLitElement {
     this.tooltipProvider = null;
     this.detachTrigger();
     super.disconnectedCallback();
-  }
-
-  private get provider() {
-    return this.tooltipProvider ?? this.closest<TooltipProvider>("openclaw-tooltip-provider");
-  }
-
-  private get hoverDelay() {
-    return Math.max(0, this.provider?.delay ?? HOVER_DELAY);
-  }
-
-  private get touchDelay() {
-    return Math.max(0, this.provider?.touchDelay ?? TOUCH_DELAY);
   }
 
   private attachTrigger() {
@@ -428,10 +413,13 @@ class Tooltip extends OpenClawLitElement {
     }
     this.clearTimers();
     this.touchStart = { x: event.clientX, y: event.clientY };
-    this.touchTimer = window.setTimeout(() => {
-      this.touchTimer = null;
-      this.show();
-    }, this.touchDelay);
+    this.touchTimer = window.setTimeout(
+      () => {
+        this.touchTimer = null;
+        this.show();
+      },
+      Math.max(0, this.tooltipProvider?.touchDelay ?? TOUCH_DELAY),
+    );
   };
 
   private readonly handlePointerMove = (event: PointerEvent) => {
@@ -497,10 +485,11 @@ class Tooltip extends OpenClawLitElement {
   };
 
   private scheduleOpen() {
-    if (this.webAwesomeTooltip?.open || this.openTimer !== null) {
+    if (this.disabled || this.webAwesomeTooltip?.open || this.openTimer !== null) {
       return;
     }
-    const delay = this.provider?.shouldDelayOpen() === false ? 0 : this.hoverDelay;
+    const provider = this.tooltipProvider;
+    const delay = provider?.delayed === false ? 0 : Math.max(0, provider?.delay ?? HOVER_DELAY);
     this.openTimer = window.setTimeout(() => {
       this.openTimer = null;
       this.show();
@@ -509,11 +498,17 @@ class Tooltip extends OpenClawLitElement {
 
   private show() {
     const tooltip = this.webAwesomeTooltip;
-    if (!tooltip || !this.triggerElement || !this.tooltipText || this.isRedundant()) {
+    if (
+      this.disabled ||
+      !tooltip ||
+      !this.triggerElement ||
+      !this.tooltipText ||
+      this.isRedundant()
+    ) {
       return;
     }
     this.clearTimers(false);
-    this.provider?.openTooltip(this);
+    this.tooltipProvider?.openTooltip(this);
     this.syncDescription();
     tooltip.open = true;
   }
@@ -526,7 +521,7 @@ class Tooltip extends OpenClawLitElement {
     if (this.webAwesomeTooltip?.open) {
       this.webAwesomeTooltip.open = false;
     }
-    this.provider?.closeTooltip(this);
+    this.tooltipProvider?.closeTooltip(this);
   }
 
   closeFromProvider() {
@@ -558,6 +553,10 @@ class Tooltip extends OpenClawLitElement {
   }
 
   private syncDescription() {
+    if (!this.describe) {
+      this.restoreDescription();
+      return;
+    }
     const trigger = this.resolveDescribedElement();
     if (!trigger) {
       return;

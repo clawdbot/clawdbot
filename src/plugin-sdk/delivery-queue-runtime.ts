@@ -31,6 +31,12 @@ export async function drainPendingDeliveries(opts: DrainPendingDeliveriesOptions
     await drainPendingDeliveriesCore({
       ...opts,
       deliver,
+      // Conversation records belong to the Gateway recovery loop, which reconstructs current
+      // route authority before delivery. Plugin reconnect drains cannot safely consume them.
+      selectEntry: (entry, now) =>
+        entry.deliveryCompletion?.kind === "conversation"
+          ? { match: false, bypassBackoff: false }
+          : opts.selectEntry(entry, now),
     });
   });
 }

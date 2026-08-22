@@ -9,7 +9,10 @@ import {
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
-import { projectMcpCallToolResult } from "./mcp-content.js";
+import {
+  projectMcpCallToolResult,
+  setMcpCodeModeGuestResultFromAgentResult,
+} from "./mcp-content.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolPolicyName } from "./tool-policy.js";
 import { jsonResult } from "./tools/common.js";
@@ -33,11 +36,26 @@ function readNodeInvokePayload(value: unknown): unknown {
   return isRecord(value) && "payload" in value ? value.payload : value;
 }
 
-function mapMcpPayloadToAgentToolResult(payload: unknown): AgentToolResult<unknown> {
+function mapMcpPayloadToAgentToolResult(
+  payload: unknown,
+  mcp: { server: string; tool: string },
+): AgentToolResult<unknown> {
   if (!isRecord(payload)) {
     return jsonResult(payload);
   }
-  return projectMcpCallToolResult(payload, payload);
+  const textContent =
+    payload.structuredContent === undefined && Array.isArray(payload.content)
+      ? payload.content.flatMap((block) =>
+          isRecord(block) && block.type === "text" && typeof block.text === "string"
+            ? [{ type: "text" as const, text: block.text }]
+            : [],
+        )
+      : [];
+  return projectMcpCallToolResult(payload, {
+    mcpServer: mcp.server,
+    mcpTool: mcp.tool,
+    ...(textContent.length > 0 ? { content: textContent } : {}),
+  });
 }
 
 function normalizePolicyNames(values: readonly string[] | undefined): Set<string> {
@@ -203,7 +221,9 @@ export function createNodePluginTools(params: {
         nodeId: entry.nodeId,
       }),
       parameters: descriptor.parameters as never,
-      ...(mcpTool ? { executionMode: "sequential" as const } : {}),
+      ...(mcpTool
+        ? { executionMode: "sequential" as const, resultContentSource: "network" as const }
+        : {}),
       execute: async (toolCallId, toolParams, signal) => {
         const raw = await callGatewayTool(
           "node.invoke",
@@ -226,9 +246,10 @@ export function createNodePluginTools(params: {
         );
         const payload = readNodeInvokePayload(raw);
         if (mcpTool) {
-          return mapMcpPayloadToAgentToolResult(payload);
+          return mapMcpPayloadToAgentToolResult(payload, mcpTool);
         }
-        return isAgentToolResult(payload) ? payload : jsonResult(payload);
+        const result = isAgentToolResult(payload) ? payload : jsonResult(payload);
+        return descriptor.mcp ? setMcpCodeModeGuestResultFromAgentResult(result) : result;
       },
     };
     setPluginToolMeta(tool, {

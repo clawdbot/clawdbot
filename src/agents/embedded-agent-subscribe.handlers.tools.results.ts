@@ -616,7 +616,6 @@ export async function emitToolResultOutput(params: {
       failure: { error: `Approval prompt delivery failed: ${message}` },
     });
     ctx.state.lastToolError = terminal.lastToolError;
-    ctx.state.lastToolRecovery = terminal.lastToolRecovery;
     ctx.state.deterministicApprovalPromptSent = false;
   };
   const hasStructuredMedia = Boolean(

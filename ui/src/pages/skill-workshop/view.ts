@@ -2,9 +2,11 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
+import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import "../../components/file-preview-modal-registration.ts";
 import "../../components/modal-dialog.ts";
+import "../../components/resizable-divider.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
@@ -14,14 +16,22 @@ import "../../styles/skill-workshop.css";
 import {
   filterSkillWorkshopProposals,
   type SkillWorkshopActionNotice,
+  type SkillWorkshopAppliedDiffMode,
   type SkillWorkshopAppliedSkill,
   type SkillWorkshopEvaluation,
   type SkillWorkshopEvaluationFinding,
   type SkillWorkshopEvaluationOutcome,
   type SkillWorkshopProposal,
+  type SkillWorkshopProposalDecision,
   type SkillWorkshopStatusFilter,
 } from "../../lib/skill-workshop/index.ts";
-import { renderLazyAppliedHistory, resolveAppliedHistory } from "./applied-history.ts";
+import {
+  renderLazyAppliedHistory,
+  renderLazyAppliedRevisionDiff,
+  resolveAppliedBodyView,
+  resolveAppliedHistory,
+  type SkillWorkshopBodyView,
+} from "./applied-history.ts";
 import { renderBoardEmptyDetail, renderWorkshopEmptyState } from "./empty-states.ts";
 import { renderSkillWorkshopHistoryScan } from "./history-scan.ts";
 import { renderSkillWorkshopProposalList } from "./proposal-list.ts";
@@ -136,6 +146,7 @@ export function renderSkillWorkshop(props: SkillWorkshopProps) {
 
 function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
   const busy = props.actionBusy?.key === proposal.key && props.actionBusy.action === "revise";
+  const cancelDisabled = Boolean(props.actionBusy) || props.revisionRecoveryActive;
   const canSubmit =
     props.access.canRevise && props.revisionDraft.trim().length > 0 && !props.actionBusy;
   const verb =
@@ -146,7 +157,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
       .label=${`${t("skillWorkshop.revision.title", { verb })}: ${proposal.slug}`}
       .description=${t("skillWorkshop.revision.description")}
       style="--openclaw-modal-width: 560px"
-      @modal-cancel=${props.onRevisionCancel}
+      @modal-cancel=${cancelDisabled ? undefined : props.onRevisionCancel}
     >
       <section class="sw-revision-dialog ${busy ? "sw-revision-dialog--sending" : ""}">
         <div class="sw-revision-dialog__head">
@@ -161,7 +172,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
               type="button"
               class="sw-revision-dialog__close"
               aria-label=${t("skillWorkshop.actions.close")}
-              ?disabled=${Boolean(props.actionBusy)}
+              ?disabled=${cancelDisabled}
               @click=${props.onRevisionCancel}
             >
               ×
@@ -174,7 +185,9 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
           autofocus
           placeholder=${t("skillWorkshop.revision.placeholder")}
           .value=${props.revisionDraft}
-          ?disabled=${!props.access.canRevise || Boolean(props.actionBusy)}
+          ?disabled=${!props.access.canRevise ||
+          Boolean(props.actionBusy) ||
+          props.revisionRecoveryActive}
           @input=${(event: Event) =>
             props.onRevisionDraftChange((event.target as HTMLTextAreaElement).value ?? "")}
         ></textarea>
@@ -190,7 +203,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
           <button
             type="button"
             class="sw-btn sw-btn--ghost"
-            ?disabled=${Boolean(props.actionBusy)}
+            ?disabled=${cancelDisabled}
             @click=${props.onRevisionCancel}
           >
             ${t("skillWorkshop.actions.cancel")}
@@ -235,59 +248,24 @@ function renderBoard(
 }
 
 function renderQueueResizer(props: SkillWorkshopProps) {
-  return html`
-    <div
-      class="sw-queue-resizer"
-      role="separator"
-      aria-label=${t("skillWorkshop.queue.resize")}
-      aria-orientation="vertical"
-      tabindex="0"
-      @pointerdown=${(event: PointerEvent) => startQueueResize(event, props)}
-      @keydown=${(event: KeyboardEvent) => resizeQueueWithKeyboard(event, props)}
-    ></div>
-  `;
-}
-
-function startQueueResize(event: PointerEvent, props: SkillWorkshopProps): void {
-  event.preventDefault();
-  event.stopPropagation();
-
-  const startX = event.clientX;
-  const startWidth = props.queueWidth;
-  const body = document.body;
-  const previousCursor = body.style.cursor;
-  const previousUserSelect = body.style.userSelect;
-  body.style.cursor = "col-resize";
-  body.style.userSelect = "none";
-
-  const cleanup = () => {
-    window.removeEventListener("pointermove", onMove);
-    window.removeEventListener("pointerup", onUp);
-    window.removeEventListener("pointercancel", onUp);
-    body.style.cursor = previousCursor;
-    body.style.userSelect = previousUserSelect;
+  let divider: HTMLElement | undefined;
+  const measureSize = () => {
+    const queue = divider?.previousElementSibling?.getBoundingClientRect().width ?? 0;
+    const detail = divider?.nextElementSibling?.getBoundingClientRect().width ?? 0;
+    return queue + detail;
   };
-
-  const onMove = (moveEvent: PointerEvent) => {
-    props.onQueueWidthChange(startWidth + moveEvent.clientX - startX);
-  };
-
-  const onUp = () => {
-    cleanup();
-  };
-
-  window.addEventListener("pointermove", onMove);
-  window.addEventListener("pointerup", onUp);
-  window.addEventListener("pointercancel", onUp);
-}
-
-function resizeQueueWithKeyboard(event: KeyboardEvent, props: SkillWorkshopProps): void {
-  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
-    return;
-  }
-  event.preventDefault();
-  const delta = event.key === "ArrowLeft" ? -24 : 24;
-  props.onQueueWidthChange(props.queueWidth + delta);
+  return html`<resizable-divider
+    ${ref((element) => (divider = element instanceof HTMLElement ? element : undefined))}
+    class="sw-queue-resizer"
+    .label=${t("skillWorkshop.queue.resize")}
+    .splitRatio=${0.5}
+    .minRatio=${0.2}
+    .maxRatio=${0.8}
+    .measureRatio=${() => props.queueWidth / measureSize()}
+    .measureSize=${measureSize}
+    @resize=${(event: CustomEvent<{ splitRatio: number }>) =>
+      props.onQueueWidthChange(event.detail.splitRatio * measureSize())}
+  ></resizable-divider>`;
 }
 
 function renderLifecycleTabs(props: SkillWorkshopProps) {
@@ -309,6 +287,53 @@ function renderLifecycleTabs(props: SkillWorkshopProps) {
   `;
 }
 
+function renderBodyModeButton(
+  props: SkillWorkshopProps,
+  mode: SkillWorkshopAppliedDiffMode,
+  label: string,
+) {
+  const active = props.appliedDiffMode === mode;
+  return html`
+    <button
+      class="sw-body-mode__button ${active ? "is-active" : ""}"
+      aria-pressed=${active ? "true" : "false"}
+      @click=${() => props.onAppliedDiffModeChange(mode)}
+    >
+      ${label}
+    </button>
+  `;
+}
+
+function renderBodyModeToggle(props: SkillWorkshopProps) {
+  return html`
+    <div class="sw-body-mode" role="group" aria-label=${t("skillWorkshop.diff.viewLabel")}>
+      ${renderBodyModeButton(props, "changes", t("skillWorkshop.diff.changes"))}
+      ${renderBodyModeButton(props, "full", t("skillWorkshop.diff.fullBody"))}
+    </div>
+  `;
+}
+
+function renderRevisionBody(view: SkillWorkshopBodyView, proposal: SkillWorkshopProposal) {
+  if (view.kind === "diff") {
+    return renderLazyAppliedRevisionDiff(view.previous.body, proposal.body);
+  }
+  if (view.kind === "loadingPrevious") {
+    return html`<p class="sw-muted" aria-busy="true">
+      ${t("skillWorkshop.diff.loadingPrevious")}
+    </p>`;
+  }
+  if (view.kind === "previousUnavailable") {
+    return html`
+      <p class="sw-muted">${t("skillWorkshop.diff.previousUnavailable")}</p>
+      ${renderProposalBody(proposal.body)}
+    `;
+  }
+  if (view.kind === "tooLarge") {
+    return html`<p class="sw-muted">${t("skillWorkshop.diff.tooLarge")}</p>`;
+  }
+  return renderProposalBody(proposal.body);
+}
+
 function renderDetail(
   props: SkillWorkshopProps,
   proposal: SkillWorkshopProposal,
@@ -319,8 +344,12 @@ function renderDetail(
   const createdLabel = editedAt
     ? t("skillWorkshop.detail.edited", { time: formatRelative(editedAt) })
     : t("skillWorkshop.detail.created", { time: formatRelative(proposal.createdAt) });
-  const detailLoading = props.inspectingKey === proposal.key && !proposal.body;
+  const detailLoading = props.inspectingKey === proposal.key && !proposal.bodyLoaded;
   const firstSupportFile = proposal.supportFiles[0];
+  const previousRevision =
+    appliedSkill?.revisions.find(({ proposal: revision }) => revision.key === proposal.key)
+      ?.previous ?? null;
+  const bodyView = resolveAppliedBodyView(props, proposal, previousRevision);
 
   return html`
     <div class="sw-detail">
@@ -359,10 +388,13 @@ function renderDetail(
 
       <div class="sw-detail__body">
         <div class="sw-body-card">
-          <h1>${proposal.slug}</h1>
+          <div class="sw-body-card__head">
+            <h1>${proposal.slug}</h1>
+            ${previousRevision ? renderBodyModeToggle(props) : nothing}
+          </div>
           ${detailLoading
             ? html`<p class="sw-muted">${t("skillWorkshop.detail.loading")}</p>`
-            : renderProposalBody(proposal.body)}
+            : renderRevisionBody(bodyView, proposal)}
         </div>
 
         ${appliedSkill ? renderLazyAppliedHistory(props, appliedSkill) : nothing}
@@ -411,6 +443,13 @@ function renderActionNotice(notice: SkillWorkshopActionNotice) {
   `;
 }
 
+function proposalDecision(proposal: SkillWorkshopProposal): SkillWorkshopProposalDecision {
+  return {
+    proposalId: proposal.key,
+    expectedRevisionHash: proposal.revisionHash,
+  };
+}
+
 function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
   const busy = props.actionBusy?.key === proposal.key ? props.actionBusy.action : null;
   const disabled = Boolean(props.actionBusy);
@@ -428,7 +467,7 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
       <button
         class="sw-btn sw-btn--primary ${busy === "apply" ? "is-busy" : ""}"
         ?disabled=${disabled || !props.access.canApply}
-        @click=${() => props.onApply(proposal.key)}
+        @click=${() => props.onApply(proposalDecision(proposal))}
       >
         ${busy === "apply" ? t("skillWorkshop.actions.applying") : t("skillWorkshop.actions.apply")}
       </button>
@@ -444,7 +483,7 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
       <button
         class="sw-btn sw-btn--ghost sw-btn--danger ${busy === "reject" ? "is-busy" : ""}"
         ?disabled=${disabled || !props.access.canReject}
-        @click=${() => props.onReject(proposal.key)}
+        @click=${() => props.onReject(proposalDecision(proposal))}
       >
         ${busy === "reject"
           ? t("skillWorkshop.actions.rejecting")
@@ -582,7 +621,7 @@ function renderToday(
                 <button
                   class="sw-today__big sw-today__big--primary ${busy === "apply" ? "is-busy" : ""}"
                   ?disabled=${disabled || !props.access.canApply}
-                  @click=${() => props.onApply(hero.key)}
+                  @click=${() => props.onApply(proposalDecision(hero))}
                 >
                   ${busy === "apply"
                     ? t("skillWorkshop.actions.applying")
@@ -602,7 +641,7 @@ function renderToday(
                 <button
                   class="sw-today__big sw-today__big--skip ${busy === "reject" ? "is-busy" : ""}"
                   ?disabled=${disabled || !props.access.canReject}
-                  @click=${() => props.onReject(hero.key)}
+                  @click=${() => props.onReject(proposalDecision(hero))}
                 >
                   ${busy === "reject"
                     ? t("skillWorkshop.today.skipping")

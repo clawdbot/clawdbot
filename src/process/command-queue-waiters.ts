@@ -1,12 +1,6 @@
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-type ActiveTaskWaiter = {
-  activeTaskIds: Set<number>;
-  resolve: (value: { drained: boolean }) => void;
-  timeout?: ReturnType<typeof setTimeout>;
-};
-
 type CommandLaneIdleWaiter = {
   lane: string;
   resolve: (value: { idle: boolean }) => void;
@@ -19,57 +13,8 @@ const COMMAND_QUEUE_WAITERS_KEY = Symbol.for("openclaw.commandQueueWaiters");
 
 function getWaiterState() {
   return resolveGlobalSingleton(COMMAND_QUEUE_WAITERS_KEY, () => ({
-    activeTaskWaiters: new Set<ActiveTaskWaiter>(),
     laneIdleWaiters: new Map<string, Set<CommandLaneIdleWaiter>>(),
   }));
-}
-
-function resolveActiveTaskWaiter(waiter: ActiveTaskWaiter, result: { drained: boolean }): void {
-  const state = getWaiterState();
-  if (!state.activeTaskWaiters.delete(waiter)) {
-    return;
-  }
-  if (waiter.timeout) {
-    clearTimeout(waiter.timeout);
-  }
-  waiter.resolve(result);
-}
-
-export function notifyActiveCommandTaskWaiters(
-  hasPendingActiveTasks: (taskIds: Set<number>) => boolean,
-): void {
-  for (const waiter of Array.from(getWaiterState().activeTaskWaiters)) {
-    if (waiter.activeTaskIds.size === 0 || !hasPendingActiveTasks(waiter.activeTaskIds)) {
-      resolveActiveTaskWaiter(waiter, { drained: true });
-    }
-  }
-}
-
-export function waitForActiveCommandTasks(params: {
-  activeTaskIds: Set<number>;
-  hasPendingActiveTasks: (taskIds: Set<number>) => boolean;
-  timeoutMs?: number;
-}): Promise<{ drained: boolean }> {
-  if (params.activeTaskIds.size === 0) {
-    return Promise.resolve({ drained: true });
-  }
-  if (params.timeoutMs !== undefined && params.timeoutMs <= 0) {
-    return Promise.resolve({ drained: false });
-  }
-  return new Promise((resolve) => {
-    const waiter: ActiveTaskWaiter = {
-      activeTaskIds: params.activeTaskIds,
-      resolve,
-    };
-    if (params.timeoutMs !== undefined) {
-      waiter.timeout = setTimeout(
-        () => resolveActiveTaskWaiter(waiter, { drained: false }),
-        params.timeoutMs,
-      );
-    }
-    getWaiterState().activeTaskWaiters.add(waiter);
-    notifyActiveCommandTaskWaiters(params.hasPendingActiveTasks);
-  });
 }
 
 function resolveCommandLaneIdleWaiter(
@@ -153,9 +98,6 @@ export function waitForCommandLaneIdleState(params: {
 
 export function resetCommandQueueWaiters(): void {
   const state = getWaiterState();
-  for (const waiter of Array.from(state.activeTaskWaiters)) {
-    resolveActiveTaskWaiter(waiter, { drained: true });
-  }
   for (const laneWaiters of Array.from(state.laneIdleWaiters.values())) {
     for (const waiter of Array.from(laneWaiters)) {
       resolveCommandLaneIdleWaiter(waiter, { idle: true });

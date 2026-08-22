@@ -5,11 +5,11 @@
 import { describe, expect, it } from "vitest";
 import { resolveToolSearchCodeDisplayTarget } from "./tool-display-common.js";
 import {
+  hasShellCompoundCommand,
   scanTopLevelChars,
   splitTopLevelPipes,
   splitTopLevelStages,
 } from "./tool-display-exec-shell.js";
-import { resolveExecDetail } from "./tool-display-exec.js";
 import {
   formatToolDetail,
   formatToolSummary,
@@ -319,6 +319,139 @@ describe("tool display details", () => {
     );
 
     expect(detail).toBe("print lines 1-80 from extensions/discord/src/draft-stream.ts");
+  });
+
+  it("keeps shell compound commands intact instead of inventing command stages", () => {
+    const loop = 'for d in $(find . -type d); do echo "$d"; ls "$d"; done';
+    const conditional = "echo start && if test -f package.json; then pnpm test; fi";
+    const subshell = "(echo one; echo two)";
+    const functionBody = "f() { echo one; echo two; }";
+    const functionKeyword = "function f { echo one; echo two; }";
+    const hyphenatedFunction = "function deploy-prod { echo one; echo two; }";
+    const namespacedFunction = "function log::info { echo one; echo two; }";
+    const selectLoop = 'select d in a b; do echo "$d"; break; done';
+    const doubleBracket = "[[ -f package.json && -f pnpm-lock.yaml ]] && pnpm test";
+    const pipedSelect = "printf x | select d in a b; do break; done";
+    const pipedDoubleBracket = "printf x | [[ -n x ]]";
+    const backgroundSelect = "true & select d in a b; do break; done";
+    const stderrPipedSelect = "printf x |& select d in a b; do break; done";
+    const pipedFunction = "printf x | function deploy-prod { echo one; echo two; }";
+    const conditionalFunction = "function deploy-prod if true; then echo ok; fi";
+    const doubleBracketFunction = "function check [[ -n x ]]";
+    const arithmeticFunction = "function bump (( n++ )) && pnpm test";
+    const subshellFunction = "function sub() (echo one; echo two)";
+    const posixConditionalFunction = "plain() if true; then echo ok; fi";
+    const negatedDoubleBracket = "! [[ -f a && -f b ]] && pnpm test";
+    const timedNegatedDoubleBracket = "time -p ! [[ -n x ]]";
+    const negatedTimedDoubleBracket = "! time [[ -n x ]]";
+    const operatorTimedSubshell = "time(echo one; echo two)";
+    const operatorArithmeticFunction = "function bump(( n++ )) && pnpm test";
+
+    for (const command of [
+      loop,
+      conditional,
+      subshell,
+      functionBody,
+      functionKeyword,
+      hyphenatedFunction,
+      namespacedFunction,
+      "deploy-prod() { echo one; echo two; }",
+      "log::info() { echo one; echo two; }",
+      selectLoop,
+      "coproc worker { echo one; echo two; }",
+      "coproc (echo one; echo two)",
+      doubleBracket,
+      pipedSelect,
+      pipedDoubleBracket,
+      backgroundSelect,
+      stderrPipedSelect,
+      pipedFunction,
+      conditionalFunction,
+      doubleBracketFunction,
+      arithmeticFunction,
+      subshellFunction,
+      "function worker (echo one; echo two)",
+      "function worker(echo one; echo two)",
+      posixConditionalFunction,
+      negatedDoubleBracket,
+      timedNegatedDoubleBracket,
+      negatedTimedDoubleBracket,
+      operatorTimedSubshell,
+      operatorArithmeticFunction,
+      "time -- if true; then echo one; echo two; fi",
+    ]) {
+      expect(splitTopLevelStages(command)).toEqual([command]);
+      expect(
+        formatToolDetail(
+          resolveToolDisplay({ name: "exec", args: { command }, detailMode: "explain" }),
+        ),
+      ).toBe(command);
+    }
+
+    for (const command of [
+      "(( ready && enabled )) && pnpm test",
+      "time (( ready || fallback )) && pnpm test",
+      ["(\\", "( ready && enabled )) && pnpm test"].join("\n"),
+      ["echo $\\", "(( ready && enabled )) && pnpm test"].join("\n"),
+      "time(( n++ )) && pnpm test",
+      "time -p(( n++ )) && pnpm test",
+      "!(( n++ )) && pnpm test",
+      "time -p -- (( n++ )) && pnpm test",
+    ]) {
+      const separatorIndex = command.lastIndexOf(" && ");
+      expect(splitTopLevelStages(command)).toEqual([command.slice(0, separatorIndex), "pnpm test"]);
+    }
+
+    for (const command of [
+      ["true && \\", "if true; then echo ok; fi"].join("\n"),
+      ["printf x | \\", "select d in a b; do break; done"].join("\n"),
+      ["true && \\\\", "if true; then echo ok; fi"].join("\n"),
+    ]) {
+      expect(splitTopLevelStages(command)).toEqual([command]);
+    }
+
+    for (const quoted of [
+      "printf '%s' '; if ' && pnpm test",
+      "printf '%s' 'function f { echo; }' && pnpm test",
+      "printf '%s' 'select d; do echo; done' && pnpm test",
+      "printf '%s' '[[ a && b ]]' && pnpm test",
+      "printf '%s' $'can\\'t; if literal' && pnpm test",
+      ["printf '%s' $\\", "'can\\'t; if literal' && pnpm test"].join("\n"),
+    ]) {
+      expect(splitTopLevelStages(quoted)).toEqual([
+        quoted.slice(0, quoted.lastIndexOf(" && ")),
+        "pnpm test",
+      ]);
+      expect(
+        formatToolDetail(
+          resolveToolDisplay({ name: "exec", args: { command: quoted }, detailMode: "explain" }),
+        ),
+      ).toBe("print text → run tests");
+    }
+
+    for (const command of [
+      "select-editor --version && pnpm test",
+      "coprocess --version && pnpm test",
+      "[[helper arg && pnpm test",
+      '"x"select --version && pnpm test',
+      "select'' --version && pnpm test",
+      'selec"t" --version && pnpm test',
+    ]) {
+      expect(splitTopLevelStages(command)).toEqual([
+        command.slice(0, command.lastIndexOf(" && ")),
+        "pnpm test",
+      ]);
+    }
+
+    for (const command of [
+      "function f{ echo one; echo two; }",
+      "function f {not-a-body; echo two; }",
+      "printf x >& select",
+      "printf x &> select",
+      "printf x >| select",
+    ]) {
+      expect(hasShellCompoundCommand(command)).toBe(false);
+    }
   });
 
   it("keeps normal search patterns concise", () => {
@@ -920,136 +1053,5 @@ describe("tool display details", () => {
 
       expect(detail).not.toContain("node:");
     }
-  });
-});
-
-describe("compactRawCommand middle truncation", () => {
-  it("preserves start and end of long commands", () => {
-    // Use an unknown binary so resolveExecDetail returns the compact raw form directly.
-    const longCommand =
-      "/opt/custom/bin/my-processor --input /data/warehouse/2024/q1/transactions/raw/batch_001.csv --output /data/warehouse/2024/q1/transactions/processed/batch_001_clean.csv";
-    const result = resolveExecDetail({ command: longCommand });
-    // Should contain the start of the command
-    expect(result).toContain("/opt/custom/bin/my-processor");
-    // Should contain the end (filename)
-    expect(result).toContain("batch_001_clean.csv");
-    // Should contain the ellipsis for middle truncation
-    expect(result).toContain("…");
-    // Ellipsis should be in the middle, not at the end
-    expect(result).not.toMatch(/…$/);
-  });
-
-  it("does not truncate short commands", () => {
-    // Use an unknown binary so resolveExecDetail returns the compact raw form directly.
-    const result = resolveExecDetail({ command: "/opt/custom/bin/my-tool --version" });
-    expect(result).toBe("/opt/custom/bin/my-tool --version");
-  });
-
-  it("redacts credential-like tails before middle truncation", () => {
-    // The --token flag and its value sit in the middle of a long command.
-    // Without redaction-before-truncation, middle truncation could cut out
-    // the --token flag context but preserve the raw secret at the tail.
-    const longCommand =
-      "/opt/custom/bin/deploy --region us-east-1 --token sk-proj-ABCDEFGHIJKLMNOP1234567890abcdefghij --output /data/results/deploy-output.json";
-    const result = resolveExecDetail({ command: longCommand });
-    // The sk- prefixed token must be redacted (masked) before truncation
-    expect(result).not.toContain("ABCDEFGHIJKLMNOP1234567890abcdefghij");
-  });
-
-  it("uses the canonical tool payload redactor before compacting raw commands", () => {
-    const longCommand =
-      "/opt/custom/bin/deploy --aws-key AKIDABCDEFGHIJKLMNOP1234567890 --output /data/results/deploy-output.json";
-    const result = resolveExecDetail({ command: longCommand });
-
-    expect(result).not.toContain("AKIDABCDEFGHIJKLMNOP1234567890");
-    expect(result).toContain("AKIDAB…7890");
-  });
-
-  it("does not split a surrogate pair when the head boundary lands on an emoji", () => {
-    // The one-line form is 140 UTF-16 units. With the default maxLength=120 the head
-    // slice ends at index 59, but the 😀 emoji (U+1F600, a surrogate pair) occupies
-    // indices 58-59 — so a raw .slice(0, 59) would keep the high surrogate and drop
-    // its low half, leaving a lone surrogate that renders as the replacement char.
-    const emoji = String.fromCodePoint(0x1f600);
-    // Unknown binary so resolveExecDetail returns the compact raw form directly.
-    const longCommand = `/opt/custom/bin/run ${"a".repeat(38)}${emoji}${"b".repeat(80)}`;
-    const result = resolveExecDetail({ command: longCommand });
-
-    expect(result).toBeDefined();
-    // The whole emoji is dropped at the boundary rather than half of it.
-    expect(result).not.toContain(emoji);
-    // No dangling/lone surrogate code units remain in the rendered detail.
-    expect(result).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
-    expect(result).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
-    // Start and end of the command are still preserved around the ellipsis.
-    expect(result).toContain("/opt/custom/bin/run");
-    expect(result).toContain("…");
-    expect(result).toMatch(/b{4}$/);
-  });
-});
-
-describe("coerceDisplayValue middle truncation", () => {
-  it("preserves start and end of long string values", () => {
-    const longPath =
-      "/usr/local/share/very/deeply/nested/directory/structure/" +
-      "a".repeat(150) +
-      "/important-file.txt";
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "sessions_spawn",
-        args: { task: longPath },
-      }),
-    );
-    // Should contain the start of the path
-    expect(detail).toContain("/usr/local/share/");
-    // Should contain the end (filename)
-    expect(detail).toContain("important-file.txt");
-    // Should contain the ellipsis for middle truncation
-    expect(detail).toContain("…");
-  });
-
-  it("does not truncate short string values", () => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "sessions_spawn",
-        args: { task: "short-task-name" },
-      }),
-    );
-    expect(detail).toBe("short-task-name");
-    expect(detail).not.toContain("…");
-  });
-
-  it("redacts credential-like values in long generic string details", () => {
-    // A long string whose tail contains a GitHub PAT. Without
-    // redaction-before-truncation, middle truncation could preserve
-    // the raw token at the tail after its prefix context is cut.
-    const longValue =
-      "Deploying service to production cluster with auth ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop and " +
-      "x".repeat(200) +
-      " final-step";
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "sessions_spawn",
-        args: { task: longValue },
-      }),
-    );
-    // The ghp_ token must be redacted before truncation
-    expect(detail).not.toContain("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop");
-  });
-
-  it("uses the canonical tool payload redactor before compacting string details", () => {
-    const longValue =
-      "Deploying with AWS key AKIDABCDEFGHIJKLMNOP1234567890 and " +
-      "x".repeat(200) +
-      " final-step";
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "sessions_spawn",
-        args: { task: longValue },
-      }),
-    );
-
-    expect(detail).not.toContain("AKIDABCDEFGHIJKLMNOP1234567890");
-    expect(detail).toContain("AKIDAB…7890");
   });
 });

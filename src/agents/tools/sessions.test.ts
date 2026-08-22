@@ -1483,6 +1483,11 @@ describe("sessions_send gating", () => {
         content: [{ type: "text", text: "older reply from a previous run" }],
         timestamp: 20,
       };
+      const freshPrivateFinal = {
+        role: "assistant",
+        content: [{ type: "text", text: "private final that must stay private" }],
+        timestamp: 21,
+      };
 
       callGatewayMock.mockImplementation(async (opts: unknown) => {
         const request = opts as { method?: string; params?: Record<string, unknown> };
@@ -1504,7 +1509,12 @@ describe("sessions_send gating", () => {
         }
         if (request.method === "chat.history") {
           historyCalls += 1;
-          return { messages: [staleAssistantMessage] };
+          return {
+            messages:
+              historyCalls === 1
+                ? [staleAssistantMessage]
+                : [staleAssistantMessage, freshPrivateFinal],
+          };
         }
         return {};
       });
@@ -1515,7 +1525,7 @@ describe("sessions_send gating", () => {
         timeoutSeconds: 1,
       });
 
-      expect(historyCalls).toBe(2);
+      expect(historyCalls).toBe(1);
       const details = requireDetails(result);
       expect(details.status).toBe("no_reply");
       expect(details.reply).toBeUndefined();

@@ -10,7 +10,7 @@ import { deliverSubagentAnnouncement } from "../subagents/announce/subagent-anno
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
 
-export type MediaGenerationCompletionHandle = {
+type MediaGenerationCompletionHandle = {
   taskId: string;
   runId: string;
   requesterSessionKey: string;

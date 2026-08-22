@@ -23,6 +23,7 @@ import {
   SessionDeliverySafeRetryError,
   type QueuedSessionDelivery,
 } from "../infra/session-delivery-queue-storage.js";
+import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEventRaw as enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
@@ -40,38 +41,53 @@ function sessionDeliveryStateDirArgs(stateDir?: string): [] | [string] {
   return stateDir === undefined ? [] : [stateDir];
 }
 
-function enqueueRestartSentinelWake(
-  message: string,
-  sessionKey: string,
+function enqueueRestartSentinelWake(params: {
+  message: string;
+  sessionKey: string;
+  agentId?: string;
   deliveryContext?: {
     channel?: string;
     to?: string;
     accountId?: string;
     threadId?: string | number;
-  },
-  traceparent?: string,
-  sessionDeliveryAckId?: string,
-  sessionDeliveryAckStateDir?: string,
-  expectedSessionId?: string,
+  };
+  traceparent?: string;
+  sessionDeliveryAckId?: string;
+  sessionDeliveryAckStateDir?: string;
+  expectedSessionId?: string;
   delegateArtifactReceipt?: NonNullable<
     Extract<QueuedSessionDelivery, { kind: "systemEvent" }>["managedDelegateArtifactDelivery"]
-  >["receipt"],
-  awaitsTurnAdoption?: boolean,
-) {
-  enqueueSystemEvent(message, {
-    sessionKey,
+  >["receipt"];
+  awaitsTurnAdoption?: boolean;
+}) {
+  const eventOptions = {
+    sessionKey: params.sessionKey,
     trusted: true,
     // The durable row owns this contract; a replayed event must carry it too, or
     // the re-created in-memory copy would be acked at prompt preparation.
-    ...(awaitsTurnAdoption ? { sessionDeliveryAwaitsTurnAdoption: true } : {}),
-    ...(deliveryContext ? { deliveryContext } : {}),
-    ...(traceparent ? { traceparent } : {}),
-    ...(sessionDeliveryAckId ? { sessionDeliveryAckId } : {}),
-    ...(sessionDeliveryAckStateDir ? { sessionDeliveryAckStateDir } : {}),
-    ...(expectedSessionId ? { expectedSessionId } : {}),
-    ...(delegateArtifactReceipt ? { delegateArtifactReceipt } : {}),
+    ...(params.awaitsTurnAdoption ? { sessionDeliveryAwaitsTurnAdoption: true } : {}),
+    ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
+    ...(params.traceparent ? { traceparent: params.traceparent } : {}),
+    ...(params.sessionDeliveryAckId ? { sessionDeliveryAckId: params.sessionDeliveryAckId } : {}),
+    ...(params.sessionDeliveryAckStateDir
+      ? { sessionDeliveryAckStateDir: params.sessionDeliveryAckStateDir }
+      : {}),
+    ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
+    ...(params.delegateArtifactReceipt
+      ? { delegateArtifactReceipt: params.delegateArtifactReceipt }
+      : {}),
+  };
+  enqueueSystemEvent(
+    params.message,
+    params.agentId ? withSystemEventOwner(eventOptions, params.agentId) : eventOptions,
+  );
+  requestHeartbeat({
+    source: "restart-sentinel",
+    intent: "immediate",
+    reason: "wake",
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    sessionKey: params.sessionKey,
   });
-  requestHeartbeat({ source: "restart-sentinel", intent: "immediate", reason: "wake", sessionKey });
 }
 
 function isRestartContinuationBusyPayload(payload: OutboundReplyPayload): boolean {
@@ -114,6 +130,7 @@ export async function deliverQueuedSessionDeliveryCore(params: {
   deps: CliDeps;
   entry: QueuedSessionDelivery;
   stateDir?: string;
+  resolveGatewayContext?: import("./server-methods/types.js").GatewayContextResolver;
 }) {
   return await deliverResolvedQueuedSessionDelivery({
     ...params,
@@ -125,6 +142,7 @@ async function deliverResolvedQueuedSessionDelivery(params: {
   deps: CliDeps;
   entry: QueuedSessionDelivery;
   stateDir?: string;
+  resolveGatewayContext?: import("./server-methods/types.js").GatewayContextResolver;
 }) {
   if (params.entry.kind === "postCompactionDelegate") {
     await deliverQueuedPostCompactionDelegate({ entry: params.entry });
@@ -254,17 +272,18 @@ async function deliverResolvedQueuedSessionDelivery(params: {
       }
       deliveryText = replaceManagedDelegateReturnInPrompt(params.entry.text, refreshed.projection);
     }
-    enqueueRestartSentinelWake(
-      deliveryText,
-      canonicalKey,
-      queuedDeliveryContext,
-      params.entry.traceparent,
-      params.entry.id,
-      params.stateDir,
-      params.entry.expectedSessionId,
-      params.entry.managedDelegateArtifactDelivery?.receipt,
-      params.entry.awaitPromptAdoption,
-    );
+    enqueueRestartSentinelWake({
+      message: deliveryText,
+      sessionKey: canonicalKey,
+      agentId: params.entry.agentId,
+      deliveryContext: queuedDeliveryContext,
+      traceparent: params.entry.traceparent,
+      sessionDeliveryAckId: params.entry.id,
+      sessionDeliveryAckStateDir: params.stateDir,
+      expectedSessionId: params.entry.expectedSessionId,
+      delegateArtifactReceipt: params.entry.managedDelegateArtifactDelivery?.receipt,
+      awaitsTurnAdoption: params.entry.awaitPromptAdoption,
+    });
     if (managedDelivery) {
       // In-memory enqueue only makes the prompt eligible. The durable queue row
       // remains pending until transcript admission adopts and acknowledges it.
@@ -292,26 +311,26 @@ async function deliverResolvedQueuedSessionDelivery(params: {
       expectedSessionId: params.entry.expectedSessionId,
       actualSessionId: entry?.sessionId ?? null,
     });
-    enqueueRestartSentinelWake(
-      params.entry.message,
-      canonicalKey,
-      queuedDeliveryContext,
-      params.entry.traceparent,
-      params.entry.id,
-      params.stateDir,
-    );
+    enqueueRestartSentinelWake({
+      message: params.entry.message,
+      sessionKey: canonicalKey,
+      deliveryContext: queuedDeliveryContext,
+      traceparent: params.entry.traceparent,
+      sessionDeliveryAckId: params.entry.id,
+      sessionDeliveryAckStateDir: params.stateDir,
+    });
     return;
   }
 
   if (!params.entry.route) {
-    enqueueRestartSentinelWake(
-      params.entry.message,
-      canonicalKey,
-      queuedDeliveryContext,
-      params.entry.traceparent,
-      params.entry.id,
-      params.stateDir,
-    );
+    enqueueRestartSentinelWake({
+      message: params.entry.message,
+      sessionKey: canonicalKey,
+      deliveryContext: queuedDeliveryContext,
+      traceparent: params.entry.traceparent,
+      sessionDeliveryAckId: params.entry.id,
+      sessionDeliveryAckStateDir: params.stateDir,
+    });
     return;
   }
 
@@ -323,6 +342,9 @@ async function deliverResolvedQueuedSessionDelivery(params: {
       storePath,
       sessionEntry: entry,
       ...(params.stateDir !== undefined ? { stateDir: params.stateDir } : {}),
+      ...(params.resolveGatewayContext
+        ? { resolveGatewayContext: params.resolveGatewayContext }
+        : {}),
     })
   ) {
     return;

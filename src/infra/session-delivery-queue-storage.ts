@@ -430,6 +430,30 @@ export async function advanceSessionDeliveryAgentRun(
   });
 }
 
+/** Preserve one prepared artifact before transcript persistence or retry transitions. */
+export async function mergeSessionDeliveryPreparedMediaBlocks(
+  id: string,
+  mediaUrl: string,
+  blocks: Array<Record<string, unknown>>,
+  stateDir?: string,
+): Promise<Array<Record<string, unknown>>> {
+  let retained = blocks;
+  updateDeliveryQueueEntry(SESSION_DELIVERY_QUEUE_NAME, id, stateDir, (entry) => {
+    // SAFETY: this queue namespace stores only QueuedSessionDelivery payloads.
+    const queued = entry as QueuedSessionDelivery;
+    if (queued.kind !== "agentTurn") {
+      return queued;
+    }
+    retained = queued.preparedMediaBlocks?.[mediaUrl] ?? blocks;
+    return {
+      ...queued,
+      // The first durable artifact identity wins if the same attempt is replayed.
+      preparedMediaBlocks: { ...queued.preparedMediaBlocks, [mediaUrl]: retained },
+    };
+  });
+  return retained;
+}
+
 /** Mark an agent turn before it can commit transcript or channel side effects. */
 export async function markSessionDeliveryAttemptStarted(
   entry: QueuedSessionDelivery,

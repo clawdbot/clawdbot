@@ -493,7 +493,7 @@ final class AppState {
         self.execApprovalsReadRetryDelay = execApprovalsReadRetryDelay
         self.gatewayConfigSaver = gatewayConfigSaver
         let onboardingSeen = AppDefaults.standard.bool(forKey: onboardingSeenKey)
-        self.isPaused = AppDefaults.standard.bool(forKey: pauseDefaultsKey)
+        self.isPaused = AppLaunchRuntimePlan.current.resolvePaused(AppDefaults.standard.bool(forKey: pauseDefaultsKey))
         self.launchAtLogin = false
         self.onboardingSeen = onboardingSeen
         self.debugPaneEnabled = AppDefaults.standard.bool(forKey: debugPaneEnabledKey)
@@ -606,8 +606,8 @@ final class AppState {
         self.activeComputerPresenceEnabled = Self.resolveActiveComputerPresenceEnabled()
         self.execApprovalMode = .deny
         self.execApprovalPolicyLoadState = .loading
-        self.peekabooBridgeEnabled = AppDefaults.standard
-            .object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true
+        self.peekabooBridgeEnabled = AppLaunchRuntimePlan.current.resolvePeekabooBridgeEnabled(
+            AppDefaults.standard.object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true)
         if !self.isPreview, !AppProfile.current.isActive {
             Task.detached(priority: .utility) { [weak self] in
                 let current = await LaunchAgentManager.status()

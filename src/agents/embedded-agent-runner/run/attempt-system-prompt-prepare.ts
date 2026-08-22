@@ -109,6 +109,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     config: attempt.config,
     agentId: params.sessionAgentId,
     sessionKey: attempt.sessionKey,
+    permissionMode: attempt.permissionMode,
     sandboxAvailable: params.sandbox?.enabled === true,
     execOverrides: attempt.execOverrides,
   });

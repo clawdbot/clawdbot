@@ -76,6 +76,7 @@ describe("tool-card extraction", () => {
             id: "call-publish",
             name: "delegate_artifacts_publish",
             arguments: { paths: ["reports/private-quarterly-summary.pdf", "notes/secret.md"] },
+            details: { path: "reports/private-quarterly-summary.pdf" },
           },
         ],
       },
@@ -87,6 +88,7 @@ describe("tool-card extraction", () => {
     // feeds the sidebar and the expanded raw block. Neither may carry paths.
     expect(cards[0]?.args).toBeUndefined();
     expect(cards[0]?.inputText).toBe("artifact paths redacted");
+    expect(cards[0]?.details).toBeUndefined();
     expect(JSON.stringify(cards[0])).not.toContain("private-quarterly-summary");
     expect(JSON.stringify(cards[0])).not.toContain("secret.md");
   });
@@ -510,6 +512,21 @@ describe("tool-card extraction", () => {
 
   it("does not create previews for non-assistant canvas or generic outputs", () => {
     const cases = [
+      {
+        name: "node-panel target",
+        toolName: "show_widget",
+        content: JSON.stringify({
+          kind: "canvas",
+          view: {
+            id: "cv_node_panel",
+            url: "/__openclaw__/canvas/documents/cv_node_panel/index.html",
+          },
+          presentation: {
+            target: "node_panel",
+            title: "Device panel demo",
+          },
+        }),
+      },
       {
         name: "tool-card target",
         toolName: "canvas_render",

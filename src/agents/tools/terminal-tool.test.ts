@@ -89,6 +89,9 @@ describe("terminal tool", () => {
 
   it("uses a flat action enum and the owner-only core gate", () => {
     const tool = createTerminalTool();
+    expect(tool.description).toContain(
+      "Terminals opened from this chat's Control UI panel are shared with the agent",
+    );
     expect(tool.parameters).toMatchObject({
       properties: {
         action: {

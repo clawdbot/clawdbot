@@ -1,5 +1,6 @@
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import {
   GatewayDrainingError,
   runWithGatewayIndependentRootWorkContinuation,
@@ -29,6 +30,7 @@ export function activateCollectorSubagentRun(params: {
     expectedSessionId?: string;
     expectedLifecycleRevision?: string;
   };
+  gatewayContextResolver?: GatewayContextResolver;
   launchChildRun: () => Promise<{ response: unknown }>;
   emitSpawnLifecycleHooks: (runId: string) => Promise<void>;
   rollbackPreparedContext: () => Promise<boolean>;
@@ -61,7 +63,15 @@ export function activateCollectorSubagentRun(params: {
           }),
         });
         try {
-          if (!startQueuedSubagentRun(params.childRunId, gatewayRunId)) {
+          const runStarted = params.gatewayContextResolver
+            ? startQueuedSubagentRun(
+                params.childRunId,
+                gatewayRunId,
+                undefined,
+                params.gatewayContextResolver,
+              )
+            : startQueuedSubagentRun(params.childRunId, gatewayRunId);
+          if (!runStarted) {
             throw new Error("collector registry row could not transition from queued to running");
           }
         } catch (error) {

@@ -8,6 +8,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { nativeHistoryMessageIdentity } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 type TestChatPane = HTMLElement & {
@@ -516,8 +517,14 @@ describe("chat pane native history pagination", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
     const projected = [
-      nativeHistoryMessage(1, "tool call"),
-      nativeHistoryMessage(1, "visible tool reply"),
+      {
+        ...nativeHistoryMessage(1, "Same routed send"),
+        openclawMessageToolMirror: { toolName: "message", toolCallId: "call-a" },
+      },
+      {
+        ...nativeHistoryMessage(1, "Same routed send"),
+        openclawMessageToolMirror: { toolName: "message", toolCallId: "call-b" },
+      },
     ];
 
     expect(pane.prependUniqueNativeMessages(projected, [nativeHistoryMessage(2)])).toEqual([
@@ -528,6 +535,37 @@ describe("chat pane native history pagination", () => {
     expect(
       pane.prependUniqueNativeMessages(projected, [projected[1], nativeHistoryMessage(2)]),
     ).toEqual([projected[0], projected[1], nativeHistoryMessage(2)]);
+  });
+
+  it("deduplicates byte-different live-event and history projections of one transcript row", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const liveEventProjection = {
+      role: "assistant",
+      content: [{ type: "text", text: "One stored reply" }],
+      __openclaw: {
+        id: "assistant-message-42",
+        idempotencyKey: "run-42",
+        seq: 42,
+      },
+    };
+    const historyProjection = {
+      role: "assistant",
+      content: [{ type: "text", text: "One stored reply" }],
+      __openclaw: {
+        id: "assistant-message-42",
+        idempotencyKey: "run-42",
+        recordTimestampMs: 1_786_000_000_000,
+        seq: 42,
+      },
+    };
+
+    expect(nativeHistoryMessageIdentity(liveEventProjection)).toBe(
+      nativeHistoryMessageIdentity(historyProjection),
+    );
+    expect(pane.prependUniqueNativeMessages([historyProjection], [liveEventProjection])).toEqual([
+      liveEventProjection,
+    ]);
   });
 
   it("deduplicates projected catalog transcript records by catalog message id", () => {

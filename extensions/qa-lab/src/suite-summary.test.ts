@@ -15,7 +15,11 @@ async function readSummary<T>(
 ): Promise<T> {
   const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-suite-summary-inline-"));
   const summaryPath = path.join(outputDir, "qa-suite-summary.json");
-  await fs.writeFile(summaryPath, JSON.stringify(summary), "utf8");
+  const payload =
+    summary && typeof summary === "object" && !Array.isArray(summary)
+      ? { run: { status: "completed" }, ...summary }
+      : summary;
+  await fs.writeFile(summaryPath, JSON.stringify(payload), "utf8");
   try {
     return await reader(summaryPath);
   } finally {
@@ -24,6 +28,50 @@ async function readSummary<T>(
 }
 
 describe("qa suite summary helpers", () => {
+  it.each([
+    ["running", { run: { status: "running" } }],
+    ["missing", {}],
+    ["unsupported", { run: { status: "paused" } }],
+  ])("rejects %s lifecycle state in every canonical count reader", async (_name, lifecycle) => {
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-suite-summary-lifecycle-"));
+    const summaryPath = path.join(outputDir, "qa-suite-summary.json");
+    await fs.writeFile(
+      summaryPath,
+      JSON.stringify({
+        ...lifecycle,
+        counts: { total: 1, passed: 1, failed: 0, skipped: 0 },
+        scenarios: [{ status: "pass" }],
+      }),
+      "utf8",
+    );
+    try {
+      for (const reader of [
+        readQaSuiteFailedScenarioCountFromFile,
+        readQaSuiteFailedOrSkippedScenarioCountFromFile,
+      ]) {
+        await expect(reader(summaryPath)).rejects.toMatchObject({ code: "summary_not_completed" });
+      }
+    } finally {
+      await fs.rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["null", null],
+    ["array", []],
+    ["string", "not-json-object"],
+    ["number", 1],
+  ])("rejects a %s summary as an invalid completion state", async (_name, summary) => {
+    for (const reader of [
+      readQaSuiteFailedScenarioCountFromFile,
+      readQaSuiteFailedOrSkippedScenarioCountFromFile,
+    ]) {
+      await expect(readSummary(summary, reader)).rejects.toMatchObject({
+        code: "summary_not_completed",
+      });
+    }
+  });
+
   it("counts failed scenarios from scenario statuses", () => {
     expect(
       countQaSuiteFailedScenarios([{ status: "pass" }, { status: "fail" }, { status: "fail" }]),
@@ -540,7 +588,7 @@ describe("qa suite summary helpers", () => {
     ).rejects.toThrow("did not include counts.failed");
     await expect(
       readSummary("not-json-object", readQaSuiteFailedScenarioCountFromFile),
-    ).rejects.toThrow("did not include counts.failed");
+    ).rejects.toMatchObject({ code: "summary_not_completed" });
   });
 
   it("reads failed scenario counts from summary files", async () => {
@@ -549,6 +597,7 @@ describe("qa suite summary helpers", () => {
     await fs.writeFile(
       summaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: { failed: 0 },
         scenarios: [{ status: "fail" }],
       }),
@@ -568,6 +617,7 @@ describe("qa suite summary helpers", () => {
     await fs.writeFile(
       summaryPath,
       JSON.stringify({
+        run: { status: "completed" },
         counts: { failed: 0, skipped: 1 },
         scenarios: [{ status: "pass" }],
       }),
@@ -584,7 +634,11 @@ describe("qa suite summary helpers", () => {
   it("fails summary files without a failure signal", async () => {
     const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-suite-summary-"));
     const summaryPath = path.join(outputDir, "qa-suite-summary.json");
-    await fs.writeFile(summaryPath, JSON.stringify({ counts: { total: 1, passed: 1 } }), "utf8");
+    await fs.writeFile(
+      summaryPath,
+      JSON.stringify({ run: { status: "completed" }, counts: { total: 1, passed: 1 } }),
+      "utf8",
+    );
 
     try {
       await expect(readQaSuiteFailedScenarioCountFromFile(summaryPath)).rejects.toThrow(

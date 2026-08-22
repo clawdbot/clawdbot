@@ -7,7 +7,6 @@ import {
 import {
   bindDeliveryQueueEntry,
   deliveryQueueRowColumns,
-  loadDeliveryQueueEntryInDatabase,
   pruneDeliveryQueueTombstoneAges,
   pruneDeliveryQueueTombstones,
   terminalizeBoundDeliveryQueueEntry,
@@ -49,10 +48,7 @@ type DeliveryQueueStatusRow = {
   recovery_state: string | null;
 };
 
-export type {
-  DeliveryQueueEntryLoadResult,
-  DeliveryQueueRowMetadata,
-} from "./delivery-queue-sqlite-codec.js";
+export type { DeliveryQueueEntryLoadResult } from "./delivery-queue-sqlite-codec.js";
 
 type TerminalizePendingDeliveryQueueEntryResult =
   | { status: "terminalized"; retained: boolean }
@@ -167,15 +163,6 @@ export function loadDeliveryQueueEntryResult(
       .where("status", "=", "pending"),
   );
   return row ? inflateDeliveryQueueEntryResult(row) : null;
-}
-
-/** Load a queue entry regardless of pending/failed/completed status. */
-export function loadDeliveryQueueEntryAnyStatus(
-  queueName: string,
-  id: string,
-  stateDir?: string,
-): DeliveryQueueEntryState | null {
-  return loadDeliveryQueueEntryInDatabase(openStateDatabase(stateDir), queueName, id);
 }
 
 /** Read row status without hiding dead-lettered entries. */
@@ -415,6 +402,27 @@ export function countFailedDeliveryQueueEntries(stateDir?: string): Array<{
   return rows.map(({ oldestFailedAt, ...row }) =>
     oldestFailedAt == null ? row : Object.assign(row, { oldestFailedAt }),
   );
+}
+
+/** Count pending entries across an exact set of queue namespaces. */
+export function countPendingDeliveryQueueEntries(
+  queueNames: readonly string[],
+  stateDir?: string,
+): number {
+  if (queueNames.length === 0) {
+    return 0;
+  }
+  const database = openStateDatabase(stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  const [row] = executeSqliteQuerySync(
+    database.db,
+    queueDb
+      .selectFrom("delivery_queue_entries")
+      .select((eb) => eb.fn.countAll<number>().as("count"))
+      .where("queue_name", "in", queueNames)
+      .where("status", "=", "pending"),
+  ).rows;
+  return row?.count ?? 0;
 }
 
 /** Physically expire age-bounded delivery queue tombstones. */
