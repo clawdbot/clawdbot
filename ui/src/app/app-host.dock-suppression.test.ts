@@ -104,7 +104,6 @@ describe("OpenClaw shell dock suppression", () => {
           approvalQueue: [],
           approvalBusy: false,
           approvalErrors: new Map(),
-          approvalNowMs: 0,
           devicePairSetupOpen: false,
           devicePairSetupLifecycle: { phase: "selection", access: "full" },
           devicePairPendingCount: 0,

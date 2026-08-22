@@ -30,7 +30,6 @@ async function renderApproval(
     busy: boolean;
     canGrant: boolean;
     errors: ReadonlyMap<string, string>;
-    nowMs: number;
     onDecision: ReturnType<typeof vi.fn>;
   }> = {},
 ) {
@@ -43,7 +42,6 @@ async function renderApproval(
         busy: overrides.busy ?? false,
         canGrant: overrides.canGrant ?? true,
         errors: overrides.errors ?? new Map(),
-        nowMs: overrides.nowMs ?? Date.now(),
         onDecision,
       }}
     ></openclaw-exec-approval>`,
@@ -155,12 +153,14 @@ describe("openclaw-exec-approval", () => {
   });
 
   it("renders the live expiry countdown as mm:ss", async () => {
-    await renderOpenedApproval(createExecRequest({ expiresAtMs: 90_500 }), { nowMs: 0 });
+    const now = vi.spyOn(Date, "now").mockReturnValue(0);
+    await renderOpenedApproval(createExecRequest({ expiresAtMs: 90_500 }));
     await getRenderedModalDialog(container);
 
     expect(container.querySelector(".exec-approval-countdown")?.textContent?.trim()).toBe(
       "expires in 01:31",
     );
+    now.mockRestore();
   });
 
   it("selects another queued request without changing queue order", async () => {

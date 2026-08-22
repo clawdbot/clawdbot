@@ -913,7 +913,6 @@ describe("inline approval card", () => {
 
     const container = renderChatView({
       inlineApproval,
-      approvalNowMs: 1_000,
       approvalCanGrant: false,
       approvalErrors: new Map([["approval-inline", "Approval failed: gateway unavailable"]]),
       onApprovalDecision,
