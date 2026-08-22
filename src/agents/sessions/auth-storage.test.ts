@@ -255,6 +255,63 @@ describe("SQLite auth storage", () => {
     ).not.toMatchObject({ expires: 1 });
   });
 
+  it("keeps stored OAuth identity fields when a provider refresh returns only tokens", async () => {
+    const agentDir = makeAgentDir();
+    writePersistedAuthProfileStoreRaw(
+      {
+        version: 1,
+        profiles: {
+          "test-oauth:default": {
+            type: "oauth",
+            provider: "test-oauth",
+            access: "fake-expired-access",
+            refresh: "fake-refresh",
+            expires: 1,
+            accountId: "fake-account-id",
+            email: "fake-user@example.com",
+            subscriptionType: "max",
+            rateLimitTier: "default_max_20x",
+          },
+        },
+      },
+      agentDir,
+    );
+    const storage = AuthStorage.forAgent(agentDir);
+    getAuthStorageOAuthProviderRegistry(storage).register({
+      id: "test-oauth",
+      name: "Test OAuth",
+      async login() {
+        throw new Error("not used");
+      },
+      async refreshToken() {
+        return {
+          access: "fake-fresh-access",
+          refresh: "fake-rotated-refresh",
+          expires: Date.now() + 60_000,
+        };
+      },
+      getApiKey(credentials: { access: string }) {
+        return credentials.access;
+      },
+    });
+
+    await expect(storage.getApiKey("test-oauth")).resolves.toBe("fake-fresh-access");
+    expect(loadPersistedAuthProfileStore(agentDir)?.profiles["test-oauth:default"]).toMatchObject({
+      type: "oauth",
+      provider: "test-oauth",
+      access: "fake-fresh-access",
+      refresh: "fake-rotated-refresh",
+      accountId: "fake-account-id",
+      email: "fake-user@example.com",
+      subscriptionType: "max",
+      rateLimitTier: "default_max_20x",
+    });
+    expect(storage.get("test-oauth")).toMatchObject({
+      accountId: "fake-account-id",
+      email: "fake-user@example.com",
+    });
+  });
+
   it("keeps AuthStorage.create(path) as a named SQLite-backed deprecation", () => {
     const agentDir = makeAgentDir();
     const legacyPath = path.join(agentDir, "auth.json");
