@@ -28,6 +28,17 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+function killProcessIfAlive(pid: number): void {
+  if (!Number.isInteger(pid) || pid <= 1) {
+    return;
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // The managed runner may have already reaped the fixture process.
+  }
+}
+
 async function waitFor(condition: () => boolean, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!condition()) {
@@ -70,7 +81,7 @@ function createProofRepo(): {
       compat: { pluginApi: ">=2026.8.22" },
       build: { openclawVersion: "2026.8.22" },
       install: { npmSpec: "@openclaw/proof-plugin" },
-      release: { publishToNpm: true },
+      release: { publishToClawHub: true },
     },
   });
   writeFileSync(join(packageDir, "README.md"), "# Proof plugin\n");
@@ -90,7 +101,7 @@ const args = process.argv.slice(2);
 if (args[0] === "view") {
   process.exit(0);
 }
-if (args[0] === "pack") {
+if (args[0] === "pack" || args[0] === "exec") {
   const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
     stdio: "ignore",
   });
@@ -122,12 +133,36 @@ describe("scripts/plugin-release-pretag-pack-check.ts real behavior", () => {
       process.env.PATH = `${shimDir}:${originalPath ?? ""}`;
       process.env.PROOF_NPM_PID_FILE = npmPidFile;
       process.env.PROOF_DESCENDANT_PID_FILE = descendantPidFile;
-      const startedAt = Date.now();
-      let thrown: unknown;
+      let proofSucceeded = false;
       try {
-        await runPluginReleasePretagPackCheck(repoDir, { timeoutMs: 2_000 });
-      } catch (error) {
-        thrown = error;
+        const startedAt = Date.now();
+        let thrown: unknown;
+        try {
+          await runPluginReleasePretagPackCheck(repoDir, { timeoutMs: 2_000 });
+        } catch (error) {
+          thrown = error;
+        }
+
+        expect(thrown).toMatchObject({ code: "ETIMEDOUT" });
+        await waitFor(() => existsSync(npmPidFile) && existsSync(descendantPidFile));
+        const directPid = Number(readFileSync(npmPidFile, "utf8"));
+        const descendantPid = Number(readFileSync(descendantPidFile, "utf8"));
+        await waitFor(() => !isProcessAlive(directPid) && !isProcessAlive(descendantPid));
+        const proof = {
+          timeoutCode: (thrown as { code?: string }).code,
+          message: (thrown as Error).message,
+          elapsedWithinBound: Date.now() - startedAt < 15_000,
+          directExited: !isProcessAlive(directPid),
+          descendantExited: !isProcessAlive(descendantPid),
+        };
+        console.log(`pretag-process-tree-proof ${JSON.stringify(proof)}`);
+        expect(proof).toMatchObject({
+          timeoutCode: "ETIMEDOUT",
+          elapsedWithinBound: true,
+          directExited: true,
+          descendantExited: true,
+        });
+        proofSucceeded = true;
       } finally {
         if (originalPath === undefined) delete process.env.PATH;
         else process.env.PATH = originalPath;
@@ -135,27 +170,14 @@ describe("scripts/plugin-release-pretag-pack-check.ts real behavior", () => {
         else process.env.PROOF_NPM_PID_FILE = originalNpmPidFile;
         if (originalDescendantPidFile === undefined) delete process.env.PROOF_DESCENDANT_PID_FILE;
         else process.env.PROOF_DESCENDANT_PID_FILE = originalDescendantPidFile;
+        if (!proofSucceeded) {
+          for (const pidFile of [npmPidFile, descendantPidFile]) {
+            if (existsSync(pidFile)) {
+              killProcessIfAlive(Number(readFileSync(pidFile, "utf8")));
+            }
+          }
+        }
       }
-
-      expect(thrown).toMatchObject({ code: "ETIMEDOUT" });
-      await waitFor(() => existsSync(npmPidFile) && existsSync(descendantPidFile));
-      const directPid = Number(readFileSync(npmPidFile, "utf8"));
-      const descendantPid = Number(readFileSync(descendantPidFile, "utf8"));
-      await waitFor(() => !isProcessAlive(directPid) && !isProcessAlive(descendantPid));
-      const proof = {
-        timeoutCode: (thrown as { code?: string }).code,
-        message: (thrown as Error).message,
-        elapsedWithinBound: Date.now() - startedAt < 15_000,
-        directExited: !isProcessAlive(directPid),
-        descendantExited: !isProcessAlive(descendantPid),
-      };
-      console.log(`pretag-process-tree-proof ${JSON.stringify(proof)}`);
-      expect(proof).toMatchObject({
-        timeoutCode: "ETIMEDOUT",
-        elapsedWithinBound: true,
-        directExited: true,
-        descendantExited: true,
-      });
     },
     30_000,
   );
