@@ -1035,18 +1035,18 @@ extension OnboardingAISetupModel {
             guard leaseTimeoutMs > 0 else { return false }
             // A successful activation reply can precede its deferred restart.
             // Never verify or hand off on the physical socket that scheduled it.
-            if await !(gateway.isCurrentServerLease(originalServerLease)),
-               let replacementLease = try? await gateway.acquireServerLease(
-                ifSameRouteAs: originalServerLease,
-                timeoutMs: Double(leaseTimeoutMs)),
-                await reconcilePersistedActivation(
-                    kind: kind,
-                    expectedModel: expectedModel,
-                    context: context,
-                    activationOwner: activationOwner,
-                    before: before,
-                    serverLease: replacementLease,
-                    deadline: deadline)
+            if await !(self.gateway.isCurrentServerLease(originalServerLease)),
+               let replacementLease = try? await self.gateway.acquireServerLease(
+                   ifSameRouteAs: originalServerLease,
+                   timeoutMs: Double(leaseTimeoutMs)),
+               await self.reconcilePersistedActivation(
+                   kind: kind,
+                   expectedModel: expectedModel,
+                   context: context,
+                   activationOwner: activationOwner,
+                   before: before,
+                   serverLease: replacementLease,
+                   deadline: deadline)
             {
                 self.serverLease = replacementLease
                 return true
@@ -1072,8 +1072,7 @@ extension OnboardingAISetupModel {
         originalServerLease: GatewayConnection.ServerLease,
         gatewayRestartRequired: Bool) async -> Failure?
     {
-        let restartRequired = gatewayRestartRequired ||
-            await !(self.gateway.isCurrentServerLease(originalServerLease))
+        let restartRequired = gatewayRestartRequired || await !(self.gateway.isCurrentServerLease(originalServerLease))
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return nil }
         guard restartRequired else {
             self.finishConnected(kind: kind, activationOwner: activationOwner)
