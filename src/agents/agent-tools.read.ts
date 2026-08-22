@@ -1295,6 +1295,7 @@ async function overwriteHostFileInPlace(handle: FileHandle, payload: Buffer, cur
 async function openHostFileForUpdate(resolved: string) {
   try {
     const existing = await fs.stat(resolved);
+    // Rollback requires the original bytes; unreadable files must fail before mutation.
     return existing.isFile() ? await fs.open(resolved, "r+") : undefined;
   } catch (error) {
     if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
