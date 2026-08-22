@@ -34,6 +34,7 @@ import {
 import { formatAuthChoiceChoicesForCli } from "./auth-choice-options.js";
 import { GENERIC_PROVIDER_AUTH_CHOICES } from "./auth-choice-options.static.js";
 import { isGatewayDaemonRuntime } from "./daemon-runtime.js";
+import { resolveOnboardingSetupTarget } from "./onboard-agent-target.js";
 import {
   applyCustomApiConfig,
   CustomApiError,
@@ -329,7 +330,16 @@ async function validateResetAuthChoice(params: {
       `Auth choice "${authChoice}" was not matched to provider "${params.opts.tokenProvider?.trim()}".`,
     );
   }
-  if (params.opts.nonInteractive && authChoice === "custom-api-key") {
+  if (!params.opts.nonInteractive || authChoice === "skip") {
+    return true;
+  }
+  const target = resolveOnboardingSetupTarget(
+    params.baseConfig,
+    params.opts.agentName
+      ? { name: params.opts.agentName, workspaceDir: params.workspaceDir }
+      : undefined,
+  );
+  if (authChoice === "custom-api-key") {
     try {
       const custom = parseNonInteractiveCustomApiFlags({
         baseUrl: params.opts.customBaseUrl,
@@ -351,6 +361,8 @@ async function validateResetAuthChoice(params: {
         flagName: "--custom-api-key",
         envVar: "CUSTOM_API_KEY",
         runtime: params.runtime,
+        agentDir: target.agentDir,
+        workspaceDir: params.workspaceDir,
         allowProfile: params.resetScope === "config",
         required: false,
         secretInputMode: params.opts.secretInputMode,
@@ -376,7 +388,7 @@ async function validateResetAuthChoice(params: {
       return rejectOption(params.runtime, message);
     }
   }
-  if (params.opts.nonInteractive && authChoice !== "custom-api-key" && authChoice !== "skip") {
+  if (authChoice !== "custom-api-key") {
     const runtimeProvider = providerAuthChoice
       ? resolveProviderMatch(
           resolvePluginProviders({
@@ -412,12 +424,15 @@ async function validateResetAuthChoice(params: {
       baseConfig: params.baseConfig,
       opts: params.opts,
       runtime: params.runtime,
+      agentDir: target.agentDir,
       workspaceDir: params.workspaceDir,
       resolveApiKey: async (input) =>
         await resolveNonInteractiveCredential({
           ...input,
           cfg: params.baseConfig,
           runtime: params.runtime,
+          agentDir: target.agentDir,
+          workspaceDir: params.workspaceDir,
           allowProfile: input.allowProfile === false ? false : params.resetScope === "config",
           secretInputMode: params.opts.secretInputMode,
         }),
