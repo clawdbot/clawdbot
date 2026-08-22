@@ -220,6 +220,7 @@ beforeEach(() => {
       result: await run(provider, model),
       provider,
       model,
+      attempts: [],
     }),
   );
 });

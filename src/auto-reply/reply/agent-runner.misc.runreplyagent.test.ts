@@ -11,7 +11,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import { clearRuntimeConfigSnapshot } from "../../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -458,6 +458,9 @@ describe("runReplyAgent auto-compaction token update", () => {
       sessionEntry,
       config: options?.config,
     });
+    if (options?.config) {
+      setRuntimeConfigSnapshot(options.config);
+    }
     return runReplyAgent({
       commandBody: "hello",
       followupRun,
@@ -673,8 +676,8 @@ describe("runReplyAgent auto-compaction token update", () => {
   it("keeps continuation-only direct replies silent", async () => {
     const result = await runEmptyDirectReply(
       {
-        payloads: [{ text: "CONTINUE_WORK:5" }],
-        meta: { agentMeta: {} },
+        payloads: [],
+        meta: { agentMeta: {}, finalAssistantRawText: "CONTINUE_WORK:5" },
       },
       {
         config: {

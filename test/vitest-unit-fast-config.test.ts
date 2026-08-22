@@ -1,7 +1,9 @@
 // Vitest unit-fast config tests validate fast unit test project setup.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
+import { withTestDir } from "../src/test-utils/temp-dir.js";
 import { cliProcessTestFiles } from "./vitest/vitest.cli-process-paths.mjs";
 import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
 import { createContractsPluginVitestConfig } from "./vitest/vitest.contracts-plugin.config.ts";
@@ -185,6 +187,32 @@ describe("unit-fast vitest lane", () => {
     expect(testConfig.include).not.toEqual(expect.arrayContaining(unitFastIsolatedTestFiles));
   });
 
+  it("intersects pattern-file shards with each unit-fast lane owner", async () => {
+    await withTestDir("openclaw-unit-fast-patterns-", async (tempDir) => {
+      const unitFastFile = unitFastTestFiles[0];
+      const isolatedFile = unitFastIsolatedTestFiles[0];
+      const timerFile = unitFastTimerTestFiles[0];
+      if (!unitFastFile || !isolatedFile || !timerFile) {
+        throw new Error("expected every unit-fast lane to own at least one test");
+      }
+      const patternFile = path.join(tempDir, "patterns.json");
+      await fs.writeFile(
+        patternFile,
+        JSON.stringify([unitFastFile, isolatedFile, timerFile]),
+        "utf8",
+      );
+      const env = { OPENCLAW_VITEST_INCLUDE_FILE: patternFile };
+
+      expect(requireTestConfig(createUnitFastVitestConfig(env)).include).toEqual([unitFastFile]);
+      expect(requireTestConfig(createUnitFastIsolatedVitestConfig(env)).include).toEqual([
+        isolatedFile,
+      ]);
+      expect(requireTestConfig(createUnitFastFakeTimersVitestConfig(env)).include).toEqual([
+        timerFile,
+      ]);
+    });
+  });
+
   it("does not treat moved config paths as CLI include filters", () => {
     const config = createUnitFastVitestConfig(
       {},
@@ -311,6 +339,7 @@ describe("unit-fast vitest lane", () => {
     const files = [
       "src/acp/translator.error-kind.test.ts",
       "src/agents/auth-profiles/oauth-refresh-error.test.ts",
+      "src/agents/embedded-agent-runner/run.continuation-integration.test.ts",
       "src/agents/embedded-agent-runner/model.provider-hooks.timeout.test.ts",
       "src/agents/tools/computer-tool.context.test.ts",
       "src/agents/tools/computer-tool.schema.test.ts",

@@ -138,6 +138,16 @@ function inferFallbackAttemptResult(attempt: { reason?: FailoverReason; status?:
   return attempt.reason === "timeout" ? "timeout" : "candidate_failed";
 }
 
+function sameTraceAttempt(left: TraceAttemptView, right: TraceAttemptView): boolean {
+  return (
+    left.provider === right.provider &&
+    left.model === right.model &&
+    left.result === right.result &&
+    left.reason === right.reason &&
+    left.status === right.status
+  );
+}
+
 /** Merges fallback-run attempts with the winning execution trace for operator diagnostics. */
 export function mergeExecutionTrace(params: {
   fallbackAttempts?: Array<{
@@ -155,20 +165,31 @@ export function mergeExecutionTrace(params: {
   const executionAttempts = params.exhausted
     ? (params.executionTrace?.attempts ?? []).filter((attempt) => attempt.result !== "success")
     : (params.executionTrace?.attempts ?? []);
-  const attempts: TraceAttemptView[] = [
-    ...(params.fallbackAttempts ?? []).map((attempt) =>
-      Object.assign(
-        {
-          provider: attempt.provider,
-          model: attempt.model,
-          result: inferFallbackAttemptResult(attempt),
-        },
-        attempt.reason ? { reason: attempt.reason } : {},
-        typeof attempt.status === "number" ? { status: attempt.status } : {},
-      ),
+  const fallbackAttempts = (params.fallbackAttempts ?? []).map((attempt) =>
+    Object.assign(
+      {
+        provider: attempt.provider,
+        model: attempt.model,
+        result: inferFallbackAttemptResult(attempt),
+      },
+      attempt.reason ? { reason: attempt.reason } : {},
+      typeof attempt.status === "number" ? { status: attempt.status } : {},
     ),
-    ...executionAttempts,
-  ];
+  );
+  // Run-entry also projects outer fallback attempts into the execution trace.
+  // Consume one cross-source match while preserving legitimate repeated attempts.
+  const unmatchedFallbackAttempts = [...fallbackAttempts];
+  const uniqueExecutionAttempts = executionAttempts.filter((attempt) => {
+    const duplicateIndex = unmatchedFallbackAttempts.findIndex((fallbackAttempt) =>
+      sameTraceAttempt(fallbackAttempt, attempt),
+    );
+    if (duplicateIndex < 0) {
+      return true;
+    }
+    unmatchedFallbackAttempts.splice(duplicateIndex, 1);
+    return false;
+  });
+  const attempts: TraceAttemptView[] = [...fallbackAttempts, ...uniqueExecutionAttempts];
   const winnerProvider = params.exhausted
     ? undefined
     : (params.executionTrace?.winnerProvider ?? normalizeOptionalString(params.provider));

@@ -951,3 +951,52 @@ OpenClaw's bounded `ps` inspection in
 implements a real lifecycle contract. The package scanner still requires its
 exact reviewed source finding; it suppresses a generated duplicate only when
 the chunk itself attributes the same rule to that source region.
+
+## 2026-08-22T14:15:29Z - Gate 3g immutable failure and owner-boundary repairs
+
+The complete Gate 3g fallback ran from immutable pushed head
+`aa02de3419ba94e3e4885a27fe6f9703a3cc844b` with
+`OPENCLAW_PREPUSH_SKIP_MACOS=1`, `OPENCLAW_VITEST_MAX_WORKERS=1`,
+`OPENCLAW_TEST_PROJECTS_SERIAL=1`, and a 6,144 MiB Node heap. It completed all
+548 full-suite shards in 10,945.73 seconds and exited 1. The durable receipt is
+`/home/figs/.copilot/session-state/fb697b5e-c2b3-42f8-89e8-904d36834ca0/files/gate-3g-prepush-final-2.log`.
+
+Failure classification and canonical owner proof:
+
+- `unit-fast` reported five failures because the global pattern-file input was
+  admitted by all three unit-fast projects, and bare
+  `import "./*.test-support.js"` dependencies were not classified as stateful.
+  The three configs now intersect pattern-file inputs with their owned file
+  lists, and helper discovery recognizes both `from` and bare imports. The
+  routing regression passes 14/14; the complete unit-fast owner passes 1,295
+  files with 14,562 assertions and 7 skipped.
+- `subagent-registry-lifecycle.test.ts` proved that delete cleanup retired a row
+  after an accepted steer dispatch had taken ownership. Cleanup now preserves
+  and persists that authoritative row. The complete lifecycle owner passes
+  150/150.
+- The TUI synchronized-row assertion was transient under the 548-shard run;
+  its complete PTY owner passed 63/63 unchanged.
+- Microsoft Teams entered a host-pressure timeout cascade after a long no-output
+  interval. Its unchanged complete owner passed 91 files and 1,433 assertions.
+- The auto-reply shard had one worker exit plus stale continuation fallback
+  fixtures. Nine mocks now return the current `attempts` field. The trace owner
+  removes only exact cross-source duplicates now that run-entry also projects
+  outer fallback attempts, while preserving repeated attempts within either
+  source. The raw continuation fixture now pins its supplied active config
+  snapshot, and the topology contract follows the current lazy loader owner in
+  `subagent-announce-deps.ts`. The complete auto-reply owner passes 250 files
+  with 5,092 assertions, 2 skipped, and 1 todo.
+
+The repair batch adds 25 net production lines across the accepted-steer owner
+and trace merge, 15 net test-runner tooling lines, and 42 net test lines. The
+positive production delta records two owner invariants that cannot be expressed
+by downstream guards: accepted dispatch authority survives cleanup, and one
+fallback attempt observed through two metadata sources renders once.
+
+`node scripts/check-changed.mjs -- <18 changed paths>` exits 0 across production
+and test typechecks, formatter, core/script lint, dead exports, import cycles,
+database/schema, dependency, patch, plugin-boundary, and repository ratchets.
+Focused routing and lifecycle owners pass 14/14 and 150/150. Mandatory
+uncommitted autoreview used Codex `gpt-5.6-sol` at high reasoning, passed
+TruffleHog, and returned no accepted/actionable findings with patch-correct
+probability 0.99.
