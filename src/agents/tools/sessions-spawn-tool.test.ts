@@ -1796,18 +1796,21 @@ describe("sessions_spawn tool", () => {
       currentMessagingTarget: "channel:source",
       currentChannelId: "source-native",
       currentMessageId: "message-789",
-      signal: controller.signal,
     });
 
-    const result = await tool.execute("call-2", {
-      runtime: "acp",
-      task: "investigate the failing CI run",
-      agentId: "codex",
-      cwd: "/workspace",
-      thread: true,
-      mode: "session",
-      streamTo: "parent",
-    });
+    const result = await tool.execute(
+      "call-2",
+      {
+        runtime: "acp",
+        task: "investigate the failing CI run",
+        agentId: "codex",
+        cwd: "/workspace",
+        thread: true,
+        mode: "session",
+        streamTo: "parent",
+      },
+      controller.signal,
+    );
 
     expectDetailFields(result.details, {
       status: "accepted",
