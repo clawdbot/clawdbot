@@ -213,7 +213,12 @@ describeLaunchdIntegration("launchd integration", () => {
       // probe (no launchd-status inference) before exercising the node-host
       // lifecycle against it. This closes the gap where a LaunchAgent could
       // report "running" before its listener has actually bound the port.
-      await expect(probePortUsage(gatewayPort, LOOPBACK_PORT_PROBE_HOSTS)).resolves.toBe("busy");
+      await expect
+        .poll(() => probePortUsage(gatewayPort, LOOPBACK_PORT_PROBE_HOSTS), {
+          timeout: 10_000,
+          interval: 100,
+        })
+        .toBe("busy");
 
       await installLaunchAgent({
         env: nodeEnv,

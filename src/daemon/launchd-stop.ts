@@ -11,7 +11,6 @@ import {
   isLaunchctlNotLoaded,
 } from "./launchd-exec.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
-import { shouldSkipGatewayPortOwnershipCheck } from "./launchd-node-gateway-guard.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "./launchd-plist.js";
 import { scheduleDetachedLaunchdMaintenancePark } from "./launchd-restart-handoff.js";
 import {
@@ -56,15 +55,6 @@ async function waitForGatewayPortRelease(
 }
 
 async function assertGatewayPortReleasedAfterStop(env: GatewayServiceEnv): Promise<void> {
-  // Node-host services only ever connect outward to a gateway as a client;
-  // they never bind the gateway's own port. Reusing the generic LaunchAgent
-  // stop path for `openclaw node stop`/`restart` on a host that is also
-  // running the Gateway would otherwise make this assertion see the
-  // co-located Gateway's own (legitimately still-open) port and report a
-  // false-positive "still busy" failure. See openclaw/openclaw#124296.
-  if (shouldSkipGatewayPortOwnershipCheck(env)) {
-    return;
-  }
   const { port, probeHosts } = await resolveLaunchAgentGatewayContext(env);
   if (port === null) {
     return;
