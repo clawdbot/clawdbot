@@ -3,6 +3,7 @@ import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { collectSqliteSchemaIssues } from "../infra/sqlite-schema-contract.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { hasLegacyCronRunLogs } from "../infra/state-migrations.cron-run-logs.js";
 import { VERSION } from "../version.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
@@ -38,6 +39,9 @@ export function isOpenClawStateSchemaFastPathEligible(
       STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
     ).some(isOpenClawStateStartupRepairableSchemaIssue);
     if (startupRepairRequired) {
+      return false;
+    }
+    if (hasLegacyCronRunLogs(database)) {
       return false;
     }
     // app_version commits only after this release's repairs; same-build writes are canonical.
