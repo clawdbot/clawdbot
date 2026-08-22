@@ -318,8 +318,9 @@ identifier or binary payload field.
 Model-visible tool-result text uses narrower assignment matching so source code
 remains intact. Registered secrets and explicit credential forms, including
 structured fields, environment entries, authorization headers, URL credentials,
-and known token formats, remain masked. Bare source assignments such as
-`token = timeObserverToken` remain unchanged in tool results.
+and known token formats, remain masked. Reads of recognized config files apply
+broader assignment masking before their content becomes a tool result. Bare
+source assignments such as `token = timeObserverToken` remain unchanged.
 
 The built-in defaults cover common API credentials and payment-credential field
 names such as card number, CVC/CVV, shared payment token, and payment credential

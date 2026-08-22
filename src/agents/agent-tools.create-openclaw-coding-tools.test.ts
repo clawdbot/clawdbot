@@ -3089,6 +3089,33 @@ describe("createOpenClawCodingTools read behavior", () => {
     expect(details?.truncation?.firstLineExceedsLimit).toBe(false);
     expect(details?.truncation).not.toHaveProperty("content");
   });
+
+  it("redacts config artifacts while preserving source-shaped read output", async () => {
+    const credential = "unquoted-config-credential-1234567890";
+    const source = "API_TOKEN = computeToken()";
+    const execute = vi.fn(async (_toolCallId: string, args: { path: string }) => {
+      const text = args.path.endsWith(".ts") ? source : `api_key: ${credential}`;
+      return {
+        content: [{ type: "text" as const, text }],
+        details: { kind: "text", content: text },
+      };
+    });
+    const readTool = createOpenClawReadTool({
+      name: "read",
+      label: "read",
+      description: "test read",
+      parameters: Type.Object({ path: Type.String() }),
+      execute,
+    });
+
+    const yamlResult = await readTool.execute("read-yaml", { path: "settings.yaml" });
+    const envResult = await readTool.execute("read-env", { path: "production.env" });
+    const sourceResult = await readTool.execute("read-source", { path: "settings.ts" });
+
+    expect(extractToolText(yamlResult)).not.toContain(credential);
+    expect(extractToolText(envResult)).not.toContain(credential);
+    expect(extractToolText(sourceResult)).toBe(source);
+  });
 });
 
 const DEFAULT_TOOLS = [

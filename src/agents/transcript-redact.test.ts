@@ -94,6 +94,8 @@ describe("redactTranscriptMessage", () => {
       '        credential = "fixture"',
       "        jwt = decodedPayload",
       "        let API_TOKEN = timeObserverToken",
+      "API_TOKEN = computeToken()",
+      "API_KEY: str = computeKey()",
       "        register(timeObserverToken)",
       "        struct.timeObserverToken",
     ];

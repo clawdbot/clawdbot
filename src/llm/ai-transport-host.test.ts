@@ -1,3 +1,4 @@
+import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { convertMessages } from "../../packages/ai/src/openai-completions-messages.js";
 import { streamSimpleAnthropic } from "../../packages/ai/src/providers/anthropic.js";
@@ -5,6 +6,7 @@ import { extractToolResultText } from "../../packages/ai/src/providers/tool-resu
 import { resolveOpenAICompletionsCompat } from "../../packages/ai/src/transports/openai-completions-compat.js";
 import type { Context, Model } from "../../packages/ai/src/types.js";
 import { projectProviderError } from "../../packages/ai/src/utils/provider-error.js";
+import { createOpenClawReadTool } from "../agents/agent-tools.read.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import "./ai-transport-host.js";
@@ -42,7 +44,34 @@ describe("OpenClaw provider tool-result redaction", () => {
   });
 
   it("carries the redacted result into Anthropic and OpenAI-compatible payloads", async () => {
-    const providerText = extractToolResultText(toolResultContent);
+    const configCredential = "unquoted-provider-config-credential-1234567890";
+    const sourceLines = [
+      "API_TOKEN = computeToken()",
+      "API_KEY: str = computeKey()",
+      "api_key: ConfigValue",
+    ];
+    const readTool = createOpenClawReadTool({
+      name: "read",
+      label: "read",
+      description: "test read",
+      parameters: Type.Object({ path: Type.String() }),
+      execute: async (_toolCallId, args: { path: string }) => {
+        const text = args.path.endsWith(".yaml")
+          ? `api_key: ${configCredential}`
+          : sourceLines.join("\n");
+        return {
+          content: [{ type: "text" as const, text }],
+          details: { kind: "text", content: text },
+        };
+      },
+    });
+    const configResult = await readTool.execute("read-config", { path: "settings.yaml" });
+    const sourceResult = await readTool.execute("read-source", { path: "settings.py" });
+    const providerText = [
+      extractToolResultText(toolResultContent),
+      extractToolResultText(configResult.content),
+      extractToolResultText(sourceResult.content),
+    ].join("\n");
     const context: Context = {
       messages: [
         {
@@ -112,7 +141,11 @@ describe("OpenClaw provider tool-result redaction", () => {
     for (const payload of [anthropicPayload, openAiPayload]) {
       const serialized = JSON.stringify(payload);
       expect(serialized).toContain("if let token = timeObserverToken {");
+      for (const sourceLine of sourceLines) {
+        expect(serialized).toContain(sourceLine);
+      }
       expect(serialized).not.toContain("provider-secret-value");
+      expect(serialized).not.toContain(configCredential);
     }
   });
 });

@@ -62,8 +62,8 @@ export const BODY_SECRET_KEYS = new Set([
 export const FORM_BODY_KEY_INVISIBLE_CHARS = String.raw`\p{C}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0`;
 const ENV_ASSIGNMENT_REDACT_PATTERN = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${PAYMENT_CREDENTIAL_ENV_KEYS})\b\s*[=:]\s*(["']?)([^\s"'\\]+)\1/g`;
 const ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${PAYMENT_CREDENTIAL_ENV_KEYS})\b\s*[=:]\s*\\+(["'])([^\s"'\\]+)\\+\1/g`;
-const TOOL_ENV_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|\r?\n)[ \t]*(?:export[ \t])?[A-Z0-9_]{0,80}(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${PAYMENT_CREDENTIAL_ENV_KEYS})\b[ \t]*[=:][ \t]*(["']?)([^\s"'\\]+)\2/gm`;
-const TOOL_ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|\r?\n)[ \t]*(?:export[ \t])?[A-Z0-9_]{0,80}(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${PAYMENT_CREDENTIAL_ENV_KEYS})\b[ \t]*[=:][ \t]*\\+(["'])([^\s"'\\]+)\\+\2/gm`;
+const TOOL_ENV_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|\r?\n)[ \t]*(?:export[ \t])?[A-Z0-9_]{0,80}(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${PAYMENT_CREDENTIAL_ENV_KEYS})\b=[ \t]*(["']?)([^\s"'\\]+)\2/gm`;
+const TOOL_ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN = String.raw`/(^|\r?\n)[ \t]*(?:export[ \t])?[A-Z0-9_]{0,80}(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${PAYMENT_CREDENTIAL_ENV_KEYS})\b=[ \t]*\\+(["'])([^\s"'\\]+)\\+\2/gm`;
 // Quoted values may contain the other quote characters; only the matching closing quote ends
 // the value. The unquoted variant accepts one leading quote so unterminated values still mask.
 const STANDALONE_ASSIGNMENT_QUOTED_REDACT_PATTERN = String.raw`(^|[\s,;])(?:${STANDALONE_ASSIGNMENT_SECRET_KEYS})=(["'\x60])((?:(?!\2)[^\r\n])+)\2`;
@@ -265,7 +265,8 @@ const TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS = new Set([
 ]);
 
 // Tool output commonly contains source code. Keep broad assignment matching in logs, but only
-// recognize line-oriented environment entries and explicit JSON fields in model-visible text.
+// recognize compact environment entries and explicit JSON fields in model-visible text. File
+// readers apply broad matching earlier when the requested path identifies a config artifact.
 export const TOOL_PAYLOAD_REDACT_PATTERNS: readonly string[] = [
   TOOL_ENV_ASSIGNMENT_REDACT_PATTERN,
   TOOL_ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN,
