@@ -2,6 +2,13 @@
   "id": "policy",
   "name": "Policy",
   "description": "Adds policy-backed doctor checks for workspace conformance.",
+  "cliCommands": [
+    {
+      "name": "policy",
+      "description": "Check policy requirements and emit audit evidence",
+      "hasSubcommands": true
+    }
+  ],
   "activation": {
     "onStartup": true,
     "onCommands": ["doctor", "policy"]
@@ -34,7 +41,7 @@
       },
       "path": {
         "type": "string",
-        "description": "Optional policy.jsonc path. Relative paths resolve from the active workspace."
+        "description": "Optional policy.jsonc path. Relative paths resolve from the selected agent workspace."
       }
     }
   }

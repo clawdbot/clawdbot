@@ -21,7 +21,7 @@ import type {
 } from "./session-transcript-turn-lifecycle.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
-import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry, SessionCompactionCheckpoint } from "./types.js";
 
 /**
  * Session access API for callers that need entries or transcripts without
@@ -403,6 +403,8 @@ export type SessionTranscriptTurnPersistOptions = {
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   /** Message rows to append under one transcript write lock. */
   messages: readonly SessionTranscriptTurnMessageAppend[];
+  /** Exact run provenance emitted only for terminal assistant message updates. */
+  runId?: string;
   /** Publish each appended message inline, one file-only invalidation, or nothing. */
   updateMode?: SessionTranscriptTurnUpdateMode;
   /** Emit file-only updates even when every candidate message was skipped. */
@@ -440,7 +442,6 @@ export type SessionTranscriptManualTrimResult =
       kept: number;
     }
   | {
-      archived: string;
       compacted: true;
       kept: number;
     };
@@ -609,15 +610,25 @@ export type ForkSessionFromParentTranscriptResult =
       status: "created";
       transcript: ParentForkedSessionTranscript;
     }
+  | {
+      status: "too-large";
+      decision: Extract<SessionParentForkDecision, { status: "skip" }>;
+    }
   | { status: "missing-parent" }
   | { status: "failed" };
 
 export type ForkSessionFromParentTranscriptParams = {
   agentId?: string;
+  /** Synchronous authority check run inside each transcript commit transaction. */
+  commitGuard?: () => void;
   parentEntry: SessionEntry;
   parentSessionKey: string;
   sessionKey: string;
   storePath: string;
+  /** Optional stable boundary used when the parent may still be appending. */
+  forkFrom?: "last-completed";
+  /** Enforce the parent-fork context cap against the selected source. */
+  enforceTokenLimit?: boolean;
   /** Stable target identity for lifecycle-owned hidden or resumable sessions. */
   targetSessionId?: string;
   /** Cross-agent forks land the child transcript in the target agent's store. */

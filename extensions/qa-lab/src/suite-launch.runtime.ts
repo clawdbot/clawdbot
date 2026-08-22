@@ -1,14 +1,13 @@
 // QA Lab plugin module implements suite launch behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { isRepoRootRelativeRef, toRepoRelativePath } from "./cli-paths.js";
 import { QaSuiteArtifactError, QaSuiteInfraError } from "./errors.js";
 import {
   QA_EVIDENCE_FILENAME,
-  QA_EVIDENCE_SUMMARY_KIND,
-  QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
   buildQaSuiteEvidenceSummary,
+  mergeQaEvidenceSummaries,
   validateQaEvidenceSummaryJson,
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
@@ -28,7 +27,10 @@ import {
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
 import { expandQaScenarioExecutionCells, type QaScenarioExecutionCell } from "./scenario-lane.js";
-import { publishQaSuiteArtifactFiles } from "./suite-artifacts.js";
+import {
+  invalidateQaSuiteArtifactGeneration,
+  publishQaSuiteArtifactFiles,
+} from "./suite-artifacts.js";
 import {
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
@@ -504,7 +506,7 @@ async function runWeightedUnifiedPartitionTasks(
       }
       finished = true;
       if (firstError) {
-        reject(firstError);
+        reject(toErrorObject(firstError, "QA suite partition failed"));
         return;
       }
       resolve(results);
@@ -595,31 +597,6 @@ async function resolveQaSuiteResultEvidenceSummary(result: {
   return validateQaEvidenceSummaryJson(rebasedSummary);
 }
 
-function mergeQaEvidenceSummaries(params: {
-  evidenceSummaries: readonly QaEvidenceSummaryJson[];
-  generatedAt: string;
-}) {
-  const profiles = [
-    ...new Set(
-      params.evidenceSummaries
-        .map((summary) => summary.profile?.trim())
-        .filter((profile): profile is string => Boolean(profile)),
-    ),
-  ];
-  return validateQaEvidenceSummaryJson({
-    kind: QA_EVIDENCE_SUMMARY_KIND,
-    schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
-    generatedAt: params.generatedAt,
-    evidenceMode:
-      params.evidenceSummaries.length > 0 &&
-      params.evidenceSummaries.every((summary) => summary.evidenceMode === "slim")
-        ? "slim"
-        : "full",
-    entries: params.evidenceSummaries.flatMap((summary) => summary.entries),
-    profile: profiles.length === 1 ? profiles[0] : undefined,
-  });
-}
-
 function hasCredentialPoolUnavailableCode(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
@@ -648,8 +625,9 @@ function testFileScenarioResultToSuiteScenario(
   result: QaTestFileScenarioRunResult["results"][number],
   repoRoot: string,
 ): QaSuiteScenarioResult {
-  const suiteStatus = result.status === "pass" ? "pass" : "fail";
-  const stepStatus = result.status === "skipped" ? "skip" : suiteStatus;
+  const suiteStatus =
+    result.status === "pass" ? "pass" : result.status === "skipped" ? "skip" : "fail";
+  const stepStatus = suiteStatus;
   const logPath = toRepoRelativePath(repoRoot, result.logPath);
   const details = [
     `execution.kind=${result.scenario.execution.kind}`,
@@ -757,6 +735,7 @@ async function runUnifiedQaSuite(params: {
   const startedAt = new Date();
   const repoRoot = path.resolve(params.runParams?.repoRoot ?? process.cwd());
   const outputDir = await resolveQaSuiteOutputDir(repoRoot, params.runParams?.outputDir);
+  await invalidateQaSuiteArtifactGeneration(outputDir);
   // Only an explicitly selected single flow may replace the unified suite's mock default.
   const [selectedScenario] = params.plan.scenarios;
   const selectedProviderMode =

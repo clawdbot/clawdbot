@@ -151,7 +151,7 @@ export function makeMissingToolResult(params: {
     toolCallId: params.toolCallId,
     toolName: params.toolName ?? "unknown",
     content: [{ type: "text", text: params.text ?? DEFAULT_MISSING_TOOL_RESULT_TEXT }],
-    details: { [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true },
+    details: { [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true, reason: "missing_tool_result" },
     isError: true,
     timestamp: Date.now(),
   } as ToolResultMessage;

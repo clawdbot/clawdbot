@@ -36,6 +36,7 @@ describe("executeAgentTurn: runtime selection", () => {
 
       const executeAgentTurn = await getExecuteAgentTurnForTest();
       const followupRun = createFollowupRun();
+      followupRun.run.agentId = "main";
       followupRun.run.provider = "codex-cli";
       followupRun.run.model = "gpt-5.4";
       followupRun.run.sessionKey = "agent:main:opaque:binding";
@@ -74,6 +75,7 @@ describe("executeAgentTurn: runtime selection", () => {
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
+    followupRun.run.agentId = "main";
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.4";
     followupRun.run.sessionKey = "agent:main:opaque:binding";
@@ -238,6 +240,53 @@ describe("executeAgentTurn: runtime selection", () => {
       provider: "openai",
       model: "gpt-5.4",
       agentHarnessId: "codex",
+    });
+  });
+
+  it("forwards model-scoped Codex policy as a worker preparation hint", async () => {
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("openai", "gpt-5.5"),
+      provider: "openai",
+      model: "gpt-5.5",
+      attempts: [],
+    }));
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "worker" }],
+      meta: {},
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const followupRun = createFollowupRun();
+    followupRun.run.agentId = "worker";
+    followupRun.run.sessionKey = "agent:worker:main";
+    followupRun.run.provider = "openai";
+    followupRun.run.model = "gpt-5.5";
+    followupRun.run.config = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: {},
+          worker: {
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+      },
+    };
+
+    const result = await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      sessionKey: "agent:worker:main",
+    });
+
+    expect(result.kind).toBe("success");
+    expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "embedded run params", {
+      agentId: "worker",
+      githubPublicationAvailable: false,
+      agentHarnessId: undefined,
+      agentHarnessRuntimeOverride: undefined,
+      agentHarnessRuntimePreparationHint: "codex",
     });
   });
 

@@ -110,6 +110,88 @@ describe("markdown sidebar", () => {
     panel.remove();
   });
 
+  it.each(["click", "Ctrl+click", "Enter", " "])(
+    "handles markdown preview session links with %j",
+    async (action) => {
+      const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+        content: unknown;
+        onOpenSessionLink?: (target: { sessionKey: string; agentId: string }) => void;
+        updateComplete?: Promise<unknown>;
+      };
+      const onOpenSessionLink = vi.fn();
+      const sessionKey = "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
+      panel.content = { kind: "markdown", content: `Open \`${sessionKey}\`` };
+      panel.onOpenSessionLink = onOpenSessionLink;
+      document.body.append(panel);
+      await panel.updateComplete;
+
+      const link = panel.querySelector<HTMLAnchorElement>("a.markdown-session-link");
+      if (action === "click" || action === "Ctrl+click") {
+        link?.setAttribute("href", "/chat/roboclaw/2139bddb");
+        const modified = action === "Ctrl+click";
+        const event = new MouseEvent("click", {
+          bubbles: true,
+          button: 0,
+          cancelable: true,
+          ctrlKey: modified,
+        });
+        link?.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(!modified);
+        if (modified) {
+          expect(onOpenSessionLink).not.toHaveBeenCalled();
+          panel.remove();
+          return;
+        }
+      } else {
+        link?.focus();
+        const event = new KeyboardEvent("keydown", {
+          key: action,
+          bubbles: true,
+          cancelable: true,
+        });
+        link?.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(true);
+      }
+
+      expect(onOpenSessionLink).toHaveBeenCalledWith({ sessionKey, agentId: "roboclaw" });
+      panel.remove();
+    },
+  );
+
+  it.each(["click", "Enter"])(
+    "SPA-routes markdown preview session hrefs with %s",
+    async (action) => {
+      const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+        basePath?: string;
+        content: unknown;
+        onOpenSessionLink?: (target: unknown) => void;
+        updateComplete?: Promise<unknown>;
+      };
+      const onOpenSessionLink = vi.fn();
+      const literalUuid = "12345678-90ab-cdef-1234-567890abcdef";
+      const href = `${window.location.origin}/control/dashboard/main/~key/${literalUuid}`;
+      panel.basePath = "/control";
+      panel.content = { kind: "markdown", content: `[Open session](${href})` };
+      panel.onOpenSessionLink = onOpenSessionLink;
+      document.body.append(panel);
+      await panel.updateComplete;
+
+      const link = panel.querySelector<HTMLAnchorElement>(`a[href^="${window.location.origin}"]`);
+      const event =
+        action === "click"
+          ? new MouseEvent("click", { bubbles: true, button: 0, cancelable: true })
+          : new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+      link?.dispatchEvent(event);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(onOpenSessionLink).toHaveBeenCalledWith({
+        namespace: "dashboard",
+        pathname: `/control/dashboard/main/~key/${literalUuid}`,
+      });
+      panel.remove();
+    },
+  );
+
   it("activates Markdown images only when a chat owner opts in", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
       content: unknown;

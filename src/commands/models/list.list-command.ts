@@ -1,7 +1,10 @@
 /** Implementation of `openclaw models list`. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { parseModelRef } from "../../agents/model-selection-normalize.js";
+import { formatCliCommand } from "../../cli/command-format.js";
+import { ExpectedCliError } from "../../cli/failure-output.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import type { ModelRegistry } from "../../llm/model-registry.js";
 import type { Model } from "../../llm/types.js";
@@ -15,7 +18,8 @@ import { ensureFlagCompatibility } from "./list.options.js";
 import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
-import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
+import { createModelCatalogProviderAliasCanonicalizer } from "./provider-aliases.js";
+import { resolveModelsTargetAgent } from "./shared.js";
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 
@@ -47,34 +51,33 @@ export async function modelsListCommand(
     all?: boolean;
     local?: boolean;
     provider?: string;
+    agent?: string;
     json?: boolean;
     plain?: boolean;
   },
   runtime: RuntimeEnv,
 ) {
   ensureFlagCompatibility(opts);
+  const rawProviderFilter = opts.provider?.trim();
   const parsedProviderFilter = (() => {
-    const raw = opts.provider?.trim();
-    if (!raw) {
+    if (!rawProviderFilter) {
       return undefined;
     }
-    if (/\s/u.test(raw)) {
-      runtime.error(
-        `Invalid provider filter "${raw}". Use a provider id such as "moonshot", not a display label.`,
-      );
-      process.exitCode = 1;
-      return null;
+    if (/\s/u.test(rawProviderFilter)) {
+      const message = `Invalid provider filter "${sanitizeTerminalText(rawProviderFilter)}". Use a provider id such as "moonshot", not a display label.`;
+      throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
     }
-    const parsed = parseModelRef(`${raw}/_`, DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
-    return parsed?.provider ?? normalizeLowercaseStringOrEmpty(raw);
+    const parsed = parseModelRef(
+      `${rawProviderFilter}/_`,
+      DEFAULT_PROVIDER,
+      DISPLAY_MODEL_PARSE_OPTIONS,
+    );
+    return parsed?.provider ?? normalizeLowercaseStringOrEmpty(rawProviderFilter);
   })();
-  if (parsedProviderFilter === null) {
-    return;
-  }
   const humanReadable = !opts.json && !opts.plain;
   const [
     { loadAuthProfileStoreWithoutExternalProfiles },
-    { resolveAgentWorkspaceDir, resolveDefaultAgentDir, resolveDefaultAgentId },
+    { resolveAgentWorkspaceDir },
     { resolveDefaultAgentWorkspaceDir },
   ] = await Promise.all([
     import("../../agents/auth-profiles/store.js"),
@@ -85,22 +88,38 @@ export async function modelsListCommand(
     commandName: "models list",
     runtime,
   });
-  const agentId = resolveDefaultAgentId(cfg);
-  const agentDir = resolveDefaultAgentDir(cfg);
-  const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+  const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent, {
+    kind: "read",
+  });
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId) ?? resolveDefaultAgentWorkspaceDir();
   const metadataSnapshot = loadManifestMetadataSnapshot({
     config: cfg,
     workspaceDir,
     env: process.env,
   });
+  const providerAliasCanonicalizer = createModelCatalogProviderAliasCanonicalizer({
+    cfg,
+    metadataSnapshot,
+  });
   const providerFilter = parsedProviderFilter
-    ? canonicalizeModelCatalogProviderAlias(parsedProviderFilter, {
-        cfg,
-        metadataSnapshot,
-      })
+    ? providerAliasCanonicalizer.provider(parsedProviderFilter)
     : undefined;
-  const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot);
+  const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot, agentId);
+  if (providerFilter) {
+    const knownProviderIds = new Set(
+      [
+        ...metadataSnapshot.owners.providers.keys(),
+        ...metadataSnapshot.owners.modelCatalogProviders.keys(),
+        ...Object.keys(cfg.models?.providers ?? {}),
+        ...entries.map((entry) => entry.ref.provider),
+      ].map((providerId) => providerAliasCanonicalizer.provider(providerId)),
+    );
+    if (!knownProviderIds.has(providerFilter)) {
+      const message = `Unknown provider filter "${sanitizeTerminalText(rawProviderFilter ?? providerFilter)}" for this installation. Run ${formatCliCommand("openclaw plugins list --json")} to see installed providers, or configure it under models.providers.`;
+      throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
+    }
+  }
+  const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
   const authIndex = createModelListAuthIndex({
     cfg,
     authStore,
@@ -180,9 +199,13 @@ export async function modelsListCommand(
       availableKeys = loaded.availableKeys;
     }
   } catch (err) {
-    runtime.error(`Model registry unavailable:\n${formatErrorWithStack(err)}`);
-    process.exitCode = 1;
-    return;
+    const detail = err instanceof Error ? err.message : String(err);
+    const message = `Model registry unavailable: ${detail}`;
+    throw new ExpectedCliError({
+      message,
+      humanOutput: `Model registry unavailable:\n${formatErrorWithStack(err)}`,
+      machineOutput: message,
+    });
   }
   const promotionsModulePromise = humanReadable ? promotionsModuleLoader.load() : undefined;
   const promotionsRefreshPromise = promotionsModulePromise

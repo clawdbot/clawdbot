@@ -18,3 +18,9 @@ export function resolveRuntimeWorkerUrl(params: {
   const extension = path.extname(currentPath) || ".js";
   return new URL(`./${params.sourceWorkerName}${extension}`, params.currentModuleUrl);
 }
+
+export function resolveRuntimeWorkerArgv(url: URL): string[] {
+  return url.pathname.endsWith(".ts")
+    ? ["--import", "tsx", fileURLToPath(url)]
+    : [fileURLToPath(url)];
+}

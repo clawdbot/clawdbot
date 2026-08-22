@@ -127,12 +127,6 @@ function isActiveMemoryPluginEnabled(cfg: OpenClawConfig): boolean {
   return plugins.entries["active-memory"]?.enabled !== false;
 }
 
-function hasRememberAcrossConversationsAgent(cfg: OpenClawConfig): boolean {
-  const configuredAgentIds = cfg.agents?.list?.map((agent) => agent.id) ?? [];
-  const agentIds = configuredAgentIds.length > 0 ? configuredAgentIds : ["main"];
-  return agentIds.some((agentId) => resolveRememberAcrossConversations(cfg, agentId));
-}
-
 function shouldRememberAcrossConversations(cfg: OpenClawConfig, agentId: string): boolean {
   return resolveRememberAcrossConversations(cfg, agentId);
 }
@@ -438,7 +432,6 @@ export {
   isEnabledForAgent,
   isPrivateRecallDestination,
   isSessionActiveMemoryDisabled,
-  hasRememberAcrossConversationsAgent,
   lacksAdminToMutateActiveMemoryGlobal,
   resolveCommandSessionKey,
   setSessionActiveMemoryDisabled,

@@ -168,10 +168,12 @@ These commands sit beside the main test suites when you need QA-lab realism.
 CI runs QA Lab in dedicated workflows. Agentic parity is nested under
 `QA-Lab - All Lanes` and release validation, not a standalone PR workflow.
 Broad validation should use `Full Release Validation` with
-`rerun_group=qa-parity` or the release-checks QA group. Stable/full,
-soak-enabled, and explicit `qa`/`qa-live` release checks include the QA-live
-Matrix and Telegram lanes. Bounded beta-publish `all` without soak runs parity
-but defers those live lanes to postpublish-confidence. `QA-Lab - All Lanes` runs
+`rerun_group=qa-parity` for parity or `rerun_group=qa-live` for live QA.
+The direct `OpenClaw Release Checks` child alone may use `rerun_group=qa` as a
+manual aggregate of both groups. Stable/full, soak-enabled, and explicit
+`qa-live` release checks include the QA-live Matrix and Telegram lanes. Bounded
+beta-publish `all` without soak runs parity but defers those live lanes to
+postpublish-confidence. `QA-Lab - All Lanes` runs
 nightly on `main` and from manual dispatch with the mock parity lane, live
 Matrix lane, Convex-managed live Telegram lane, and Convex-managed live Discord
 lane as parallel jobs. Scheduled QA and selected release checks run the
@@ -453,22 +455,26 @@ redacted QA report/evidence bundle in a Crabbox desktop browser, records MP4
 evidence, generates a motion-trimmed GIF, uploads the artifact bundle, and
 posts inline PR evidence through the Mantis GitHub App when `pr_number` is
 set. Maintainers can start it from the Actions UI through `Mantis Scenario`
-(`scenario_id: telegram-live`) or directly from a pull request comment:
-
-```text
-@openclaw-mantis telegram
-@openclaw-mantis telegram scenario=telegram-status-command
-@openclaw-mantis telegram scenarios=telegram-status-command,channel-canary
-```
+(`scenario_id: telegram-live`).
 
 `Mantis Telegram Desktop Proof` is the agentic native Telegram Desktop
 before/after wrapper for PR visual proof. Start it from the Actions UI with
 freeform `instructions`, through `Mantis Scenario` (`scenario_id:
-telegram-desktop-proof`), or from a PR comment:
+telegram-desktop-proof`), or from a maintainer PR comment:
 
 ```text
-@openclaw-mantis telegram desktop proof
+@openclaw-mantis
+@openclaw-mantis verify the streamed reply stays visible while it arrives
 ```
+
+ClawSweeper's `mantis: telegram-visible-proof` label starts this workflow
+automatically for branches in `openclaw/openclaw`. Fork PRs require the
+maintainer comment. Mantis reacts with 👀 when it accepts a comment, then
+posts the active workflow link in its evidence comment and replaces that same
+comment with the result. Any text after the mention is optional proof guidance.
+Manual requests stop before desktop setup and comment
+`There was nothing visible to test in this PR at all.` when the diff has no
+Telegram-visible behavior.
 
 The Mantis agent reads the PR, decides what Telegram-visible behavior proves
 the change, runs the real-user Crabbox Telegram Desktop proof lane on

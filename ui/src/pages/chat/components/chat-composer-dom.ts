@@ -1,3 +1,5 @@
+import { captureChatSessionScrollPosition } from "../scroll.ts";
+
 const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
   "a[href]",
   "button",
@@ -126,6 +128,10 @@ function updateTextareaOverflow(el: HTMLTextAreaElement) {
 }
 
 export function adjustTextareaHeight(el: HTMLTextAreaElement) {
+  const thread = el.closest(".chat")?.querySelector<HTMLElement>(".chat-thread") ?? null;
+  const preserveBottomAnchor = thread
+    ? captureChatSessionScrollPosition(thread).anchorToEnd
+    : false;
   // Hide the browser's scrollbar while measuring; restore it only when the
   // final CSS-constrained height actually clips the draft.
   el.style.overflowY = "hidden";
@@ -137,6 +143,11 @@ export function adjustTextareaHeight(el: HTMLTextAreaElement) {
   const maxHeight = pixelMaxHeight ? Number(pixelMaxHeight[1]) : 150;
   el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
   updateTextareaOverflow(el);
+  // Once capped, the textarea can perturb the sibling transcript without
+  // resizing its viewport, so ResizeObserver has no correction to apply.
+  if (thread && preserveBottomAnchor) {
+    thread.scrollTop = thread.scrollHeight;
+  }
 }
 
 export function observeTextareaOverflow(el: HTMLTextAreaElement) {
@@ -244,4 +255,32 @@ export function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up"
     target.selectionStart = caret;
     target.selectionEnd = caret;
   });
+}
+
+// Shared by the slash and skill composer menus, which resolve their own
+// active-option id but scroll the same ".slash-menu__scroll" viewport shape.
+export function scrollActiveMenuOptionIntoView(activeId: string | null): void {
+  if (!activeId) {
+    return;
+  }
+  requestAnimationFrame(() => {
+    const activeOption = document.getElementById(activeId);
+    const scrollRegion = activeOption?.closest<HTMLElement>(".slash-menu__scroll");
+    if (!activeOption || !scrollRegion) {
+      return;
+    }
+    const menuBounds = scrollRegion.getBoundingClientRect();
+    const optionBounds = activeOption.getBoundingClientRect();
+    // scrollIntoView also moves the short-landscape composer and page. Keep
+    // keyboard navigation owned by the menu so textarea focus stays stable.
+    if (optionBounds.top < menuBounds.top) {
+      scrollRegion.scrollTop -= menuBounds.top - optionBounds.top;
+    } else if (optionBounds.bottom > menuBounds.bottom) {
+      scrollRegion.scrollTop += optionBounds.bottom - menuBounds.bottom;
+    }
+  });
+}
+
+export function paneDomId(paneId: string, suffix: string): string {
+  return `chat-${encodeURIComponent(paneId)}-${suffix}`;
 }

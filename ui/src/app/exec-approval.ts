@@ -145,8 +145,16 @@ function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | nul
   };
 }
 
-export function parseExecApprovalResolved(payload: unknown): ExecApprovalResolved | null {
-  if (!isRecord(payload)) {
+export function parseApprovalResolvedEvent(
+  event: string,
+  payload: unknown,
+): ExecApprovalResolved | null {
+  if (
+    (event !== "exec.approval.resolved" &&
+      event !== "plugin.approval.resolved" &&
+      event !== "openclaw.approval.resolved") ||
+    !isRecord(payload)
+  ) {
     return null;
   }
   const id = normalizeOptionalString(payload.id) ?? "";

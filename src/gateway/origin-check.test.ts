@@ -70,6 +70,14 @@ describe("checkBrowserOrigin", () => {
       expected: { ok: false as const, reason: "origin not allowed" },
     },
     {
+      name: "rejects same-origin local-use NAT64 host without dangerous fallback",
+      input: {
+        requestHost: "[64:ff9b:1::8.8.8.8]:18789",
+        origin: "http://[64:ff9b:1::8.8.8.8]:18789",
+      },
+      expected: { ok: false as const, reason: "origin not allowed" },
+    },
+    {
       name: "accepts local loopback mismatches for local clients",
       input: {
         requestHost: "127.0.0.1:18789",

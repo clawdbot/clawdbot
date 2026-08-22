@@ -32,7 +32,6 @@ describe("sessions plugin metadata preparation", () => {
         defaults: {
           model: { primary: "openai/gpt-5.5" },
           models: { "openai/gpt-5.5": {} },
-          contextTokens: 128_000,
         },
       },
     };

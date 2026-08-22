@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -6,10 +7,14 @@ import { NODE_FS_LIST_DIR_COMMAND } from "../infra/node-commands.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { parseNodeList } from "../shared/node-list-parse.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
+import { resolveEligibleNodeFromList } from "../shared/node-resolve.js";
+import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
+import { redactCodeModeCatalogIds, type CodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { boundCodeModeValue } from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type { PendingBridgeRequest, SettledBridgeRequest } from "./code-mode-runtime.js";
 import { readCodeModeSkill } from "./code-mode-skills.js";
+import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import {
   getSwarmRunByLaunchReplayKey,
@@ -27,10 +32,9 @@ import {
   type CollectorCompletionResult,
 } from "./tools/agents-wait-tool.js";
 import { ToolInputError } from "./tools/common.js";
-import { resolveEligibleNodeFromList } from "./tools/nodes-utils.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
-const CODE_MODE_NODES_TOOL_ID = "openclaw:core:nodes";
+export const CODE_MODE_NODES_TOOL_ID = "openclaw:core:nodes";
 
 type CodeModeNode = {
   id: string;
@@ -64,7 +68,7 @@ async function callNodesTool(params: {
     parentToolCallId: params.parentToolCallId,
     signal: params.signal,
     onUpdate: params.onUpdate,
-    recoverySurface: "tools",
+    recoverySurface: "catalog",
   });
 }
 
@@ -371,15 +375,18 @@ function runSwarmNoteBridge(params: {
 
 export async function runBridgeRequest(params: {
   runtime: ToolSearchRuntime;
+  catalogProjection: CodeModeCatalogProjection;
   namespaceRuntime: CodeModeNamespaceRuntime;
   parentToolCallId: string;
   codeModeRunId: string;
   maxOutputBytes: number;
+  remainingMs: number;
   ctx: ToolSearchToolContext;
   request: PendingBridgeRequest;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
 }): Promise<SettledBridgeRequest> {
+  const catalogProjection = params.catalogProjection;
   try {
     const values = Array.isArray(params.request.args) ? params.request.args : [];
     let value: unknown;
@@ -390,49 +397,75 @@ export async function runBridgeRequest(params: {
           throw new ToolInputError("search query must be a string.");
         }
         const options = isRecord(values[1]) ? values[1] : undefined;
-        value = await params.runtime.search(query, {
+        const matches = await params.runtime.search(query, {
           limit: typeof options?.limit === "number" ? options.limit : undefined,
           includeMcp: false,
+          allowedIds: catalogProjection.byId,
         });
+        const exact = query.trim().toLowerCase();
+        const exactBinding = catalogProjection.bindings.find(
+          (binding) =>
+            binding.name.toLowerCase() === exact || binding.callableName.toLowerCase() === exact,
+        );
+        value = exactBinding
+          ? [exactBinding.callableName]
+          : matches.flatMap((entry) => {
+              const binding = catalogProjection.byId.get(entry.id);
+              return binding ? [binding.callableName] : [];
+            });
         break;
       }
       case "describe": {
-        const id = values[0];
-        if (typeof id !== "string") {
-          throw new ToolInputError("describe id must be a string.");
+        const callableName = values[0];
+        if (typeof callableName !== "string") {
+          throw new ToolInputError("describe callable name must be a string.");
         }
-        value = await params.runtime.describe(id, {
-          includeMcp: false,
-          recoverySurface: "tools",
-        });
-        break;
-      }
-      case "call": {
-        const id = values[0];
-        if (typeof id !== "string") {
-          throw new ToolInputError("call id must be a string.");
+        const binding = catalogProjection.byCallableName.get(callableName);
+        if (!binding) {
+          throw new ToolInputError(`Unknown catalog function: ${callableName}.`);
         }
-        value = await params.runtime.call(id, values[1] ?? {}, {
+        const described = await params.runtime.describe(binding.id, {
           includeMcp: false,
-          parentToolCallId: params.parentToolCallId,
-          signal: params.signal,
-          onUpdate: params.onUpdate,
-          recoverySurface: "tools",
         });
+        const { id: _id, sourceName: _sourceName, mcp: _mcp, ...guestDescription } = described;
+        value = { ...guestDescription, callableName: binding.callableName };
         break;
       }
       case "callValue": {
-        const id = values[0];
-        if (typeof id !== "string") {
-          throw new ToolInputError("callValue id must be a string.");
+        const callableName = values[0];
+        if (typeof callableName !== "string") {
+          throw new ToolInputError("catalog callable name must be a string.");
         }
-        value = await params.runtime.callValue(id, values[1] ?? {}, {
-          includeMcp: false,
+        const binding = catalogProjection.byCallableName.get(callableName);
+        if (!binding) {
+          throw new ToolInputError(`Unknown catalog function: ${callableName}.`);
+        }
+        let input = values[1] ?? {};
+        if (
+          binding.source === "openclaw" &&
+          binding.name === "exec" &&
+          binding.input?.includes("yieldMs") === true &&
+          isRecord(input) &&
+          input.background !== true &&
+          input.yieldMs === undefined
+        ) {
+          // The shell's 10s default equals Code Mode's default budget. Yield
+          // within the remaining shared deadline so late sequential calls can
+          // still return their process handle and resume the guest inline.
+          input = {
+            ...input,
+            yieldMs: Math.max(1, Math.min(1_000, Math.floor(params.remainingMs / 4))),
+          };
+        }
+        const called = await params.runtime.callExactId(binding.id, input, {
           parentToolCallId: params.parentToolCallId,
           signal: params.signal,
           onUpdate: params.onUpdate,
-          recoverySurface: "tools",
         });
+        value =
+          isRecord(called.result) && "details" in called.result
+            ? called.result.details
+            : called.result;
         break;
       }
       case "nodes": {
@@ -480,7 +513,13 @@ export async function runBridgeRequest(params: {
               onUpdate: params.onUpdate,
             });
             if (request.catalogId) {
-              return called.result;
+              const guestResult = consumeMcpCodeModeGuestResult(called.result);
+              if (guestResult === undefined) {
+                throw new ToolInputError(
+                  "MCP namespace tool result is missing its owned guest projection.",
+                );
+              }
+              return guestResult;
             }
             return isRecord(called.result) && "details" in called.result
               ? called.result.details
@@ -519,6 +558,16 @@ export async function runBridgeRequest(params: {
         value = await readCodeModeSkill(skill, params.signal);
         break;
       }
+      case "sleep": {
+        const delay = values[0];
+        if (typeof delay !== "number" || !Number.isFinite(delay) || delay < 0) {
+          throw new ToolInputError("setTimeout delay must be a non-negative finite number.");
+        }
+        value = await sleep(resolveSafeTimeoutDelayMs(delay, { minMs: 0 }), null, {
+          signal: params.signal,
+        });
+        break;
+      }
       case "swarmNote": {
         value = runSwarmNoteBridge(params);
         break;
@@ -530,6 +579,10 @@ export async function runBridgeRequest(params: {
       value: boundCodeModeValue(value, params.maxOutputBytes),
     };
   } catch (error) {
-    return { id: params.request.id, ok: false, error: formatErrorMessage(error) };
+    return {
+      id: params.request.id,
+      ok: false,
+      error: redactCodeModeCatalogIds(formatErrorMessage(error), catalogProjection.bindings),
+    };
   }
 }

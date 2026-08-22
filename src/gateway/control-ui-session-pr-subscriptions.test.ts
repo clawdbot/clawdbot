@@ -117,6 +117,30 @@ describe("control UI session PR subscriptions", () => {
     ).toEqual(["only-a", "only-b", "shared"]);
   });
 
+  it("hydrates and broadcasts only newly added keys across replacement sets", async () => {
+    vi.useFakeTimers();
+    const load = vi.fn(async () => READY);
+    const broadcastToConnIds = vi.fn();
+    active = createControlUiSessionPullRequestSubscriptions({ broadcastToConnIds, load });
+    await active.replace("conn-a", ["first", "second"]);
+    load.mockClear();
+    broadcastToConnIds.mockClear();
+
+    await active.replace("conn-a", ["second", "first"]);
+
+    expect(load).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).not.toHaveBeenCalled();
+
+    await active.replace("conn-a", ["first", "second", "added"]);
+
+    expect(load).toHaveBeenCalledExactlyOnceWith({ sessionKey: "added" });
+    expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+      CHANGED_EVENT,
+      { sessions: { added: { ...READY, status: "ready" } } },
+      new Set(["conn-a"]),
+    );
+  });
+
   it("loads agent-scoped global watch keys from the owning agent store", async () => {
     vi.useFakeTimers();
     const load = vi.fn(async () => READY);
@@ -132,10 +156,14 @@ describe("control UI session PR subscriptions", () => {
 
   it("forces only requested watched keys through the shared loader", async () => {
     vi.useFakeTimers();
-    const load = vi.fn(async () => READY);
+    const load = vi.fn(async ({ refresh }: ControlUiSessionPullRequestsParams) => ({
+      ...READY,
+      rateLimited: refresh === true,
+    }));
     const broadcastToConnIds = vi.fn();
     active = createControlUiSessionPullRequestSubscriptions({ broadcastToConnIds, load });
     await active.replace("conn-a", ["refresh-me", "leave-cached"]);
+    await active.replace("conn-b", ["refresh-me"]);
     load.mockClear();
     broadcastToConnIds.mockClear();
 
@@ -143,7 +171,11 @@ describe("control UI session PR subscriptions", () => {
 
     expect(load).toHaveBeenCalledTimes(1);
     expect(load).toHaveBeenCalledWith({ sessionKey: "refresh-me", refresh: true });
-    expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
+    expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+      CHANGED_EVENT,
+      { sessions: { "refresh-me": { ...READY, rateLimited: true, status: "rate-limited" } } },
+      new Set(["conn-a", "conn-b"]),
+    );
   });
 
   it("serializes forced refreshes behind older normal polls", async () => {
@@ -198,6 +230,21 @@ describe("control UI session PR subscriptions", () => {
     expect(load).not.toHaveBeenCalled();
   });
 
+  it("rejects replace-sets from inactive connections before loading", async () => {
+    const load = vi.fn(async () => READY);
+    const broadcastToConnIds = vi.fn();
+    active = createControlUiSessionPullRequestSubscriptions({
+      broadcastToConnIds,
+      load,
+      isConnectionActive: () => false,
+    });
+
+    await active.replace("conn-closed", ["orphan"]);
+
+    expect(load).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).not.toHaveBeenCalled();
+  });
+
   it("does not publish a superseded replace-set after its load completes", async () => {
     vi.useFakeTimers();
     let resolveFirst!: (value: ControlUiSessionPullRequests) => void;
@@ -210,7 +257,7 @@ describe("control UI session PR subscriptions", () => {
     const broadcastToConnIds = vi.fn();
     active = createControlUiSessionPullRequestSubscriptions({ broadcastToConnIds, load });
 
-    const oldReplace = active.replace("conn-a", ["old"]);
+    const oldReplace = active.replace("conn-a", ["old", "current"]);
     await vi.waitFor(() => expect(load).toHaveBeenCalledWith({ sessionKey: "old" }));
     await active.replace("conn-a", ["current"]);
     resolveFirst(READY);
@@ -219,6 +266,35 @@ describe("control UI session PR subscriptions", () => {
     expect(broadcastToConnIds.mock.calls.flatMap((call) => Object.keys(call[1].sessions))).toEqual([
       "current",
     ]);
+  });
+
+  it("delivers a shared cached key after its earlier hydration was superseded", async () => {
+    vi.useFakeTimers();
+    let resolveBlocked!: (value: ControlUiSessionPullRequests) => void;
+    const blocked = new Promise<ControlUiSessionPullRequests>((resolve) => {
+      resolveBlocked = resolve;
+    });
+    const load = vi.fn(async ({ sessionKey }: { sessionKey: string }) =>
+      sessionKey === "blocked" ? await blocked : READY,
+    );
+    const broadcastToConnIds = vi.fn();
+    active = createControlUiSessionPullRequestSubscriptions({ broadcastToConnIds, load });
+
+    const oldReplace = active.replace("conn-a", ["blocked", "shared"]);
+    await vi.waitFor(() => expect(load).toHaveBeenCalledWith({ sessionKey: "blocked" }));
+    await active.replace("conn-b", ["shared"]);
+    broadcastToConnIds.mockClear();
+
+    await active.replace("conn-a", ["shared"]);
+    resolveBlocked(READY);
+    await oldReplace;
+
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+      CHANGED_EVENT,
+      { sessions: { shared: { ...READY, status: "ready" } } },
+      new Set(["conn-a"]),
+    );
   });
 
   it("propagates rate-limit and failure states per key", async () => {

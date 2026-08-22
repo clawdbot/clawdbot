@@ -1,4 +1,5 @@
 // Builds memory flush prompts when conversation context exceeds model budget.
+import { resolveAnthropicServerCompactionPlan } from "@openclaw/ai/internal/anthropic";
 import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -15,7 +16,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 export function resolveMemoryFlushContextWindowTokens(params: {
   modelId?: string;
-  agentCfgContextTokens?: number;
   cfg?: OpenClawConfig;
   provider?: string;
 }): number {
@@ -24,7 +24,6 @@ export function resolveMemoryFlushContextWindowTokens(params: {
       cfg: params.cfg,
       provider: params.provider,
       model: params.modelId,
-      contextTokensOverride: params.agentCfgContextTokens,
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS
   );
@@ -67,8 +66,26 @@ export function resolveResponsesServerCompactionThreshold(params: {
     modelId,
   });
   const extraParams = { ...defaultParams, ...modelParams };
+  if (normalizedProvider === "anthropic") {
+    return resolveAnthropicServerCompactionPlan(
+      {
+        provider,
+        api: configuredModel?.api ?? providerConfig?.api ?? "anthropic-messages",
+        baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl,
+        contextWindow:
+          configuredModel?.contextWindow ??
+          resolveMemoryFlushContextWindowTokens({ cfg: params.cfg, provider, modelId }),
+      },
+      extraParams,
+    ).threshold;
+  }
   const defaultOpenAIBaseUrl =
     normalizedProvider === "openai" ? "https://api.openai.com/v1" : undefined;
+  const activeContextTokens = resolveMemoryFlushContextWindowTokens({
+    cfg: params.cfg,
+    provider,
+    modelId,
+  });
   return resolveOpenAIResponsesServerCompactionPlan(
     {
       provider,
@@ -78,10 +95,8 @@ export function resolveResponsesServerCompactionThreshold(params: {
         (normalizedProvider === "openai" ? "openai-responses" : undefined),
       baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl ?? defaultOpenAIBaseUrl,
       compat: configuredModel?.compat,
-      contextWindow:
-        configuredModel?.contextWindow ??
-        providerConfig?.contextWindow ??
-        resolveMemoryFlushContextWindowTokens({ cfg: params.cfg, provider, modelId }),
+      contextTokens: configuredModel?.contextTokens ?? activeContextTokens,
+      contextWindow: configuredModel?.contextWindow ?? activeContextTokens,
     },
     extraParams,
   ).threshold;

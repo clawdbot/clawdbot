@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -107,7 +109,7 @@ function recordSqliteOutcomeBestEffort(
     recordBackupRunOutcome({ kind: "sqlite-snapshot", ...params });
   } catch (error) {
     runtime.error(
-      `Warning: backup completed, but its run record could not be written: ${formatErrorMessage(error)}`,
+      `Warning: the backup outcome could not be recorded: ${formatErrorMessage(error)}`,
     );
   }
 }
@@ -168,6 +170,9 @@ async function resolveSnapshotDatabase(
   options: BackupSqliteCreateOptions,
 ): Promise<ResolvedSnapshotDatabase> {
   const rawAgentId = options.agent?.trim();
+  if (options.agent !== undefined && !rawAgentId) {
+    throw new Error("--agent must not be blank");
+  }
   if (options.global === true && rawAgentId) {
     throw new Error("Choose exactly one SQLite snapshot source: --global or --agent <id>.");
   }
@@ -180,7 +185,10 @@ async function resolveSnapshotDatabase(
       identity: { role: "global" },
     };
   }
-  const agentId = normalizeAgentId(rawAgentId);
+  const agentId = resolveConfiguredAgentId(
+    getRuntimeConfig({ skipPluginValidation: true }),
+    normalizeAgentId(rawAgentId),
+  );
   return {
     path: await fs.realpath(resolveOpenClawAgentSqlitePath({ agentId })),
     identity: { role: "agent", agentId },

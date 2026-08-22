@@ -283,7 +283,7 @@ describe("Anthropic provider", () => {
     ]);
   });
 
-  it("keeps aggregate cache billing buckets out of the context total", async () => {
+  it("includes compaction iterations in billed usage while keeping final context usage", async () => {
     const client = createAnthropicSseClient([
       {
         type: "message_start",
@@ -339,23 +339,130 @@ describe("Anthropic provider", () => {
     ]);
 
     const result = await streamAnthropic(
-      makeAnthropicModel({ id: "claude-fable-5", name: "Claude Fable 5" }),
+      makeAnthropicModel({
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      }),
       { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
       { apiKey: "sk-ant-provider", client: client as never },
     ).result();
 
     expect(result.usage).toMatchObject({
-      input: 12,
-      output: 15_104,
-      cacheRead: 819_661,
+      input: 24,
+      output: 16_104,
+      cacheRead: 968_523,
       cacheWrite: 93_130,
       contextUsage: {
         state: "available",
         promptTokens: 148_874,
         totalTokens: 163_978,
       },
-      totalTokens: 927_907,
+      totalTokens: 1_077_781,
     });
+    expect(result.usage.cost.total).toBeCloseTo(1.469044, 6);
+  });
+
+  it("captures and replays streamed Anthropic compaction blocks", async () => {
+    const firstClient = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_compaction",
+          model: "claude-sonnet-4-6",
+          usage: { input_tokens: 50_001, output_tokens: 0 },
+        },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "compaction", content: null },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "compaction_delta", content: "summary checkpoint" },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "text", text: "" },
+      },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "text_delta", text: "Done." },
+      },
+      { type: "content_block_stop", index: 1 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "compaction" },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      { type: "message_stop" },
+    ]);
+    const replayOptions = {
+      anthropicServerCompaction: true,
+      authProfileId: "anthropic:work",
+      sessionId: "session-1",
+    } as const;
+    const firstUser = { role: "user" as const, content: "old question", timestamp: 0 };
+    const first = await streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [firstUser] },
+      {
+        apiKey: "sk-ant-provider",
+        client: firstClient as never,
+        ...replayOptions,
+      },
+    ).result();
+
+    expect(first.stopReason).toBe("stop");
+    expect(first.providerReplay).toMatchObject({
+      type: "anthropic-compaction",
+      data: "summary checkpoint",
+      replayIndex: 0,
+    });
+
+    let replayPayload: Record<string, unknown> | undefined;
+    const secondClient = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: {
+          id: "msg_replay",
+          model: "claude-sonnet-4-6",
+          usage: { input_tokens: 1 },
+        },
+      },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      { type: "message_stop" },
+    ]);
+    await streamAnthropic(
+      makeAnthropicModel(),
+      {
+        messages: [firstUser, first, { role: "user", content: "new question", timestamp: 2 }],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        client: secondClient as never,
+        ...replayOptions,
+        onPayload: (payload) => {
+          replayPayload = payload as Record<string, unknown>;
+        },
+      },
+    ).result();
+
+    const replayMessages = replayPayload?.messages as Array<Record<string, unknown>>;
+    expect(replayMessages.map((message) => message.role)).toEqual(["assistant", "user"]);
+    expect(replayMessages[0]?.content).toEqual([
+      { type: "compaction", content: "summary checkpoint" },
+      { type: "text", text: "Done." },
+    ]);
   });
 
   it("ignores a message_delta whose usage object is omitted", async () => {
@@ -1720,6 +1827,136 @@ describe("Anthropic provider", () => {
     ]);
   });
 
+  it("rejects a malformed later tool before any sibling becomes executable", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: { id: "msg_tools", usage: { input_tokens: 1, output_tokens: 0 } },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "call_valid", name: "read", input: {} },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"path":"README.md"}' },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "content_block_start",
+        index: 1,
+        content_block: { type: "tool_use", id: "call_invalid", name: "read", input: {} },
+      },
+      {
+        type: "content_block_delta",
+        index: 1,
+        delta: { type: "input_json_delta", partial_json: '{"path":"SECRET.md"' },
+      },
+      { type: "content_block_stop", index: 1 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "tool_use" },
+        usage: { input_tokens: 1, output_tokens: 2 },
+      },
+      { type: "message_stop" },
+    ]);
+    const stream = streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "read", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("Provider completed tool call with malformed JSON arguments");
+    expect(result.errorMessage).not.toContain("SECRET.md");
+    expect(eventTypes).not.toContain("toolcall_end");
+    expect(eventTypes).not.toContain("done");
+  });
+
+  it("rejects an active tool call that never receives content_block_stop", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: { id: "msg_unsealed", usage: { input_tokens: 1, output_tokens: 0 } },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "call_unsealed", name: "read", input: {} },
+      },
+      {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "input_json_delta", partial_json: '{"path":"README.md"' },
+      },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "tool_use" },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      { type: "message_stop" },
+    ]);
+    const stream = streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "read", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    );
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(eventTypes.at(-1)).toBe("error");
+    expect(eventTypes).not.toContain("toolcall_end");
+    expect(eventTypes).not.toContain("done");
+    expect(result.content.some((block) => block.type === "toolCall")).toBe(false);
+  });
+
+  it("uses a complete tool input seeded at block start when no deltas arrive", async () => {
+    const client = createAnthropicSseClient([
+      {
+        type: "message_start",
+        message: { id: "msg_seeded", usage: { input_tokens: 1, output_tokens: 0 } },
+      },
+      {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "call_seeded",
+          name: "read",
+          input: { path: "README.md" },
+        },
+      },
+      { type: "content_block_stop", index: 0 },
+      {
+        type: "message_delta",
+        delta: { stop_reason: "tool_use" },
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      { type: "message_stop" },
+    ]);
+
+    const result = await streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "read", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    ).result();
+
+    expect(result.content).toContainEqual(
+      expect.objectContaining({ type: "toolCall", arguments: { path: "README.md" } }),
+    );
+  });
+
   it("discards buffered Fable output when the stream fails before terminal status", async () => {
     const client = createAnthropicSseClient([
       {
@@ -1778,7 +2015,6 @@ describe("Anthropic provider", () => {
     expect(result.stopReason).toBe("error");
     // Keep salient transport fields while replacing the cycle, so the terminal
     // diagnostic remains actionable without stranding the stream.
-    expect(result.errorMessage).toBeTruthy();
     expect(result.errorMessage).toBe('{"code":"ECONNRESET","self":"[Circular]"}');
   });
 

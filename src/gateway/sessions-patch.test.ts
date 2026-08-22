@@ -1230,6 +1230,43 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBe("medium");
   });
 
+  test("rejects thinking levels forbidden by the concrete runtime policy", async () => {
+    providerThinkingMocks.resolveProviderThinkingProfile.mockImplementation(({ provider }) =>
+      provider === "claude-cli"
+        ? { levels: [{ id: "off" }], defaultLevel: "off" }
+        : {
+            levels: [{ id: "minimal" }, { id: "medium" }, { id: "adaptive" }],
+            defaultLevel: "adaptive",
+            preserveWhenCatalogReasoningFalse: true,
+          },
+    );
+
+    const result = await runPatch({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-mythos-5" },
+          },
+        },
+      } as OpenClawConfig,
+      patch: {
+        key: MAIN_SESSION_KEY,
+        thinkingLevel: "medium",
+      },
+      loadGatewayModelCatalog: async () => [
+        {
+          provider: "anthropic",
+          id: "claude-mythos-5",
+          name: "Claude Mythos 5",
+          reasoning: false,
+          thinkingPolicyProvider: "claude-cli",
+        },
+      ],
+    });
+
+    expectPatchError(result, 'thinkingLevel "medium" is not supported');
+  });
+
   test("accepts xhigh thinking patches from configured catalog compat", async () => {
     const entry = expectPatchOk(
       await runPatch({
@@ -1560,6 +1597,26 @@ describe("gateway sessions patch", () => {
     expect(entry.execNode).toBe("worker-1");
     expect(entry.sendPolicy).toBe("deny");
     expect(entry.groupActivation).toBe("always");
+  });
+
+  test("stores and clears the session permission mode", async () => {
+    const stored = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ sessionRoot: "/workspace/project" }),
+        patch: { key: MAIN_SESSION_KEY, permissionMode: "workspace" },
+      }),
+    );
+    expect(stored.permissionMode).toBe("workspace");
+    expect(stored.sessionRoot).toBe("/workspace/project");
+
+    const cleared = expectPatchOk(
+      await runPatch({
+        store: { [MAIN_SESSION_KEY]: stored },
+        patch: { key: MAIN_SESSION_KEY, permissionMode: null },
+      }),
+    );
+    expect(cleared.permissionMode).toBeUndefined();
+    expect(cleared.sessionRoot).toBe("/workspace/project");
   });
 
   test("clears a node cwd when changing or clearing the node binding", async () => {

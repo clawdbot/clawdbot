@@ -3,8 +3,6 @@
     <string name="chat" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"聊天"</string>
     <string name="session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"会话"</string>
     <string name="model" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"模型"</string>
-    <string name="previous_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"上一个 %1$s"</string>
-    <string name="next_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"下一个 %1$s"</string>
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"控制"</string>
     <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"对话"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"手表音频失败"</string>
@@ -41,6 +39,17 @@
     <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"开始对话"</string>
     <string name="start_conversation_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"在手表上说话或输入文字。已配对的手机会通过其已认证的 OpenClaw 会话发送消息。"</string>
     <string name="current_session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"当前会话"</string>
+    <string name="context_label_value" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"%1$s: %2$s"</string>
+    <string name="close" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"关闭"</string>
+    <string name="search" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"搜索"</string>
+    <string name="search_sessions" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"搜索会话"</string>
+    <string name="search_models" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"搜索模型"</string>
+    <string name="load_more" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"加载更多"</string>
+    <string name="active_on_phone" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"在手机上活动"</string>
+    <string name="open_on_watch" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"在手表上打开"</string>
+    <string name="no_matches" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"无匹配项"</string>
+    <string name="search_sessions_title" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"查找会话"</string>
+    <string name="search_models_title" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"查找模型"</string>
     <string name="appearance" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"外观"</string>
     <string name="theme_dark" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"深色"</string>
     <string name="theme_light" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"浅色"</string>
@@ -86,4 +95,30 @@
     <string name="tile_description" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"打开会话并通过已配对的手机回复"</string>
     <string name="tile_open" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"打开"</string>
     <string name="tile_phone_proxy" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"手机代理"</string>
+    <string name="pulse" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Pulse"</string>
+    <string name="pulse_tasks" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"后台任务"</string>
+    <string name="pulse_swarm" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"会话群集"</string>
+    <string name="pulse_attention" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"注意"</string>
+    <string name="pulse_status" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"状态：%1$s"</string>
+    <string name="pulse_ready" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"就绪"</string>
+    <string name="pulse_refreshing" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"正在刷新"</string>
+    <string name="pulse_unavailable" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"不可用"</string>
+    <string name="pulse_loading" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"正在加载 Pulse"</string>
+    <string name="pulse_loading_detail" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"正在从已配对的手机读取有界聚合数据。"</string>
+    <string name="pulse_queued" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"已排队"</string>
+    <string name="pulse_running" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"运行中"</string>
+    <string name="pulse_completed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"已完成"</string>
+    <string name="pulse_done" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"完成"</string>
+    <string name="pulse_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"失败"</string>
+    <string name="pulse_groups" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"群组"</string>
+    <string name="pulse_pending_requests" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"待处理请求"</string>
+    <string name="pulse_task_snapshot_bounded" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"有界的活动与近期快照"</string>
+    <string name="pulse_active_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"活动任务列表已达上限"</string>
+    <string name="pulse_recent_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"近期任务列表已达上限"</string>
+    <string name="pulse_swarm_active" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"已启用"</string>
+    <string name="pulse_swarm_idle" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"空闲"</string>
+    <string name="pulse_phase" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"阶段 %1$d"</string>
+    <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"排队 %1$d，运行中 %2$d，已完成 %3$d，失败 %4$d，隐藏 %5$d"</string>
+    <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"更多阶段未显示"</string>
+    <string name="pulse_unknown" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"未知"</string>
 </resources>

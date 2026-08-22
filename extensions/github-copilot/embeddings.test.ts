@@ -343,6 +343,24 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
+  it("does not exchange auth, discover models, or embed after an unavailable owner credential", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    resolveFirstGithubTokenMock.mockRejectedValue(
+      new Error(
+        "providers.github-copilot.authProfiles.github-copilot:github.tokenRef is unresolved",
+      ),
+    );
+
+    await expect(
+      githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions()),
+    ).rejects.toThrow("github-copilot:github.tokenRef is unresolved");
+
+    expect(resolveCopilotRuntimeAuthMock).not.toHaveBeenCalled();
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("rejects an unresolved remote ref without falling back to another profile", async () => {
     await expect(
       githubCopilotMemoryEmbeddingProviderAdapter.create({

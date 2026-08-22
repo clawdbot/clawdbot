@@ -20,6 +20,7 @@ type LoadSessionPullRequests = (
 
 type SubscriptionDeps = {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+  isConnectionActive?: (connId: string) => boolean;
   load?: LoadSessionPullRequests;
   setTimer?: typeof globalThis.setTimeout;
   clearTimer?: typeof globalThis.clearTimeout;
@@ -124,7 +125,7 @@ export function parseControlUiSessionPullRequestsSubscribeParams(
 export function createControlUiSessionPullRequestSubscriptions(
   deps: SubscriptionDeps,
 ): ControlUiSessionPullRequestSubscriptions {
-  const subscriptions = new Map<string, Set<string>>();
+  const subscriptions = new Map<string, { keys: Set<string>; delivered: Set<string> }>();
   const replacementTokens = new Map<string, object>();
   const snapshots = new Map<
     string,
@@ -142,7 +143,7 @@ export function createControlUiSessionPullRequestSubscriptions(
 
   const subscribersForKey = (sessionKey: string): Set<string> => {
     const connIds = new Set<string>();
-    for (const [connId, keys] of subscriptions) {
+    for (const [connId, { keys }] of subscriptions) {
       if (keys.has(sessionKey)) {
         connIds.add(connId);
       }
@@ -152,7 +153,7 @@ export function createControlUiSessionPullRequestSubscriptions(
 
   const watchedKeys = (): Set<string> => {
     const keys = new Set<string>();
-    for (const watched of subscriptions.values()) {
+    for (const { keys: watched } of subscriptions.values()) {
       for (const key of watched) {
         keys.add(key);
       }
@@ -187,12 +188,21 @@ export function createControlUiSessionPullRequestSubscriptions(
 
   const push = (
     connIds: ReadonlySet<string>,
-    sessions: ControlUiSessionPullRequestsChanged["sessions"],
+    sessionKey: string,
+    snapshot: ControlUiSessionPullRequestSnapshot,
   ) => {
-    if (connIds.size === 0 || Object.keys(sessions).length === 0) {
+    if (connIds.size === 0) {
       return;
     }
+    const sessions = emptySessionDeltas();
+    sessions[sessionKey] = snapshot;
     deps.broadcastToConnIds(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, { sessions }, connIds);
+    for (const connId of connIds) {
+      const subscription = subscriptions.get(connId);
+      if (subscription?.keys.has(sessionKey)) {
+        subscription.delivered.add(sessionKey);
+      }
+    }
   };
 
   const pruneOrphans = () => {
@@ -235,11 +245,9 @@ export function createControlUiSessionPullRequestSubscriptions(
         continue;
       }
       snapshots.set(sessionKey, { hash, snapshot });
-      const sessions = emptySessionDeltas();
-      sessions[sessionKey] = snapshot;
       // Publish before awaiting another key; cross-key batching can otherwise
       // deliver an older poll result after a newer forced refresh.
-      push(connIds, sessions);
+      push(connIds, sessionKey, snapshot);
     }
   };
 
@@ -252,7 +260,7 @@ export function createControlUiSessionPullRequestSubscriptions(
       return;
     }
     const normalizedConnId = connId.trim();
-    if (!normalizedConnId) {
+    if (!normalizedConnId || deps.isConnectionActive?.(normalizedConnId) === false) {
       return;
     }
     const replacementToken = {};
@@ -267,7 +275,13 @@ export function createControlUiSessionPullRequestSubscriptions(
       }
       return;
     }
-    subscriptions.set(normalizedConnId, next);
+    const delivered = subscriptions.get(normalizedConnId)?.delivered ?? new Set<string>();
+    for (const sessionKey of delivered) {
+      if (!next.has(sessionKey)) {
+        delivered.delete(sessionKey);
+      }
+    }
+    subscriptions.set(normalizedConnId, { keys: next, delivered });
     pruneOrphans();
     schedulePoll();
 
@@ -278,6 +292,10 @@ export function createControlUiSessionPullRequestSubscriptions(
       const previous = snapshots.get(sessionKey);
       const refresh = refreshSessionKeys.has(sessionKey);
       const cached = refresh ? undefined : previous?.snapshot;
+      // A shared cached snapshot does not prove this connection received it.
+      if (cached && delivered.has(sessionKey)) {
+        continue;
+      }
       const snapshot = cached ?? (await loadSnapshot(sessionKey, refresh));
       // A later replace-set owns the connection immediately; an older async
       // initial load must never publish keys after that ownership changed.
@@ -288,14 +306,12 @@ export function createControlUiSessionPullRequestSubscriptions(
       if (!cached) {
         snapshots.set(sessionKey, { hash, snapshot });
       }
-      const sessions = emptySessionDeltas();
-      sessions[sessionKey] = snapshot;
       if (refresh && previous?.hash !== hash) {
-        push(subscribersForKey(sessionKey), sessions);
+        push(subscribersForKey(sessionKey), sessionKey, snapshot);
       } else {
         // Initial snapshots are also per-key so a later async load cannot
         // delay an old cached value past a concurrent refresh.
-        push(new Set([normalizedConnId]), sessions);
+        push(new Set([normalizedConnId]), sessionKey, snapshot);
       }
     }
   };

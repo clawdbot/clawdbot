@@ -60,7 +60,6 @@ const nonProductionPluginSdkSubpathSet = new Set([
   "qa-runtime",
   "reply-payload-testing",
   "sqlite-runtime-testing",
-  "ssrf-runtime-internal",
   "test-env",
   "test-fixtures",
   "test-live",

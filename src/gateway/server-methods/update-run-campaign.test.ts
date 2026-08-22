@@ -33,6 +33,8 @@ const getCampaignStateMock = vi.fn(() =>
 );
 const runGatewayUpdateMock =
   vi.fn<typeof import("../../infra/update-runner.js").runGatewayUpdate>();
+const runGatewayUpdatePreflightMock =
+  vi.fn<typeof import("../../infra/update-runner.js").runGatewayUpdatePreflight>();
 type UpdateInstallSurface = Awaited<
   ReturnType<typeof import("../../infra/update-runner.js").resolveUpdateInstallSurface>
 >;
@@ -130,6 +132,7 @@ vi.mock("../../infra/update-post-core-finalize.js", () => ({
 vi.mock("../../infra/update-runner.js", () => ({
   resolveUpdateInstallSurface: resolveUpdateInstallSurfaceMock,
   runGatewayUpdate: runGatewayUpdateMock,
+  runGatewayUpdatePreflight: runGatewayUpdatePreflightMock,
 }));
 
 vi.mock("../../infra/update-startup.js", () => ({
@@ -179,6 +182,8 @@ beforeEach(() => {
   getCampaignStateMock.mockClear();
   runGatewayUpdateMock.mockReset();
   runGatewayUpdateMock.mockResolvedValue(failedUpdate);
+  runGatewayUpdatePreflightMock.mockReset();
+  runGatewayUpdatePreflightMock.mockResolvedValue(undefined);
   resolveUpdateInstallSurfaceMock.mockReset();
   resolveUpdateInstallSurfaceMock.mockResolvedValue({
     kind: "git",

@@ -169,12 +169,15 @@ describe("sandboxListCommand", () => {
   });
 
   describe("error handling", () => {
-    it("should handle errors gracefully", async () => {
+    it("propagates backend probe failures instead of rendering an empty list", async () => {
       mocks.listSandboxContainers.mockRejectedValue(new Error("Docker not available"));
 
-      await sandboxListCommand({ browser: false, json: false }, runtime as never);
-
-      expect(runtime.log).toHaveBeenCalledWith("No sandbox runtimes found.");
+      // A failing probe must reach the CLI error path (message + exit 1),
+      // not masquerade as "No sandbox runtimes found."
+      await expect(
+        sandboxListCommand({ browser: false, json: false }, runtime as never),
+      ).rejects.toThrow("Docker not available");
+      expect(runtime.log).not.toHaveBeenCalledWith("No sandbox runtimes found.");
     });
   });
 });

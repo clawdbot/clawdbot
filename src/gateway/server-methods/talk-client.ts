@@ -16,6 +16,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { buildAgentMainSessionKey } from "../../routing/session-key.js";
+import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -58,6 +59,7 @@ import {
   closeTalkClientGatewayControlSession,
   createTalkClientAgentConsultRunner,
   createTalkClientGatewayControlOwner,
+  resolveTalkAgentConsultAuthority,
 } from "../talk-client-gateway-control.js";
 import {
   ensureTalkRealtimeRelayVoiceSession,
@@ -194,21 +196,21 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         defaults: realtimeConfig,
       });
       const requestedAgentId = resolveTalkSessionAgentId(runtimeConfig, typedParams.sessionKey);
+      assertSecretOwnerAvailable("capability", "talk:realtime");
       const resolution = resolveConfiguredRealtimeVoiceProvider({
         configuredProviderId: realtimeConfig.provider,
         providerConfigs: realtimeConfig.providers,
         ...(launchOptions.model ? { providerConfigOverrides: { model: launchOptions.model } } : {}),
         cfg: runtimeConfig,
-        cfgForResolve: runtimeConfig,
         agentId: requestedAgentId,
         defaultModel: realtimeConfig.model,
         surface: "browser-session",
-        noRegisteredProviderMessage: "No realtime voice provider registered",
       });
       const providerCapabilities = resolveRealtimeVoiceProviderCapabilities({
         provider: resolution.provider,
         providerConfig: resolution.providerConfig,
         cfg: runtimeConfig,
+        agentId: requestedAgentId,
         model: launchOptions.model,
         surface: "browser-session",
       });
@@ -298,6 +300,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           agentId,
           sessionKey,
           ...(ownerConnId ? { ownerConnId } : {}),
+          authority: resolveTalkAgentConsultAuthority(client?.connect?.scopes),
           getVoiceSessionId: () => activeVoiceSessionId,
           initialItems,
         });

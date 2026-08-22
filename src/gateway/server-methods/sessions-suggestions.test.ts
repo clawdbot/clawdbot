@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import {
@@ -74,7 +70,7 @@ describe("session suggestion handlers", () => {
     });
   });
 
-  it("attributes an ownerless active run to the persisted bare-key owner", async () => {
+  it("attributes a bare-key suggestion send to the persisted owner", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = state.path("shared-sessions.sqlite");
       await upsertSessionEntryCore(
@@ -95,10 +91,6 @@ describe("session suggestion handlers", () => {
         },
       } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
       const requestContext = context(vi.fn(), ownedConfig);
-      requestContext.chatAbortControllers.set("run-ops", {
-        sessionKey: "global",
-        sessionId: "session-ops-global",
-      } as never);
       const added = await call(
         "session.suggestions.add",
         { sessionKey: "global", text: "steer the owner" },
@@ -118,7 +110,6 @@ describe("session suggestion handlers", () => {
       expect(mocks.handleChatSend.mock.calls[0]?.[0]?.params).toMatchObject({
         agentId: "ops",
         queueMode: "steer",
-        expectedRunId: "run-ops",
       });
     });
   });
@@ -380,13 +371,6 @@ describe("session suggestion handlers", () => {
         );
         const id = responseSuggestionId(added);
         const requestContext = context();
-        if (resolution === "send") {
-          requestContext.chatAbortControllers.set("active-run", {
-            sessionKey,
-            sessionId: "session-main",
-            agentId: "main",
-          } as never);
-        }
 
         const resolved = await call(
           "session.suggestions.resolve",
@@ -400,7 +384,6 @@ describe("session suggestion handlers", () => {
             params: expect.objectContaining({
               message: "Ship the focused change",
               queueMode,
-              ...(resolution === "send" ? { expectedRunId: "active-run" } : {}),
               idempotencyKey: `session-suggestion:${id}`,
             }),
             client: expect.objectContaining({
@@ -419,7 +402,7 @@ describe("session suggestion handlers", () => {
     },
   );
 
-  it("sends immediately without a steer override when the session is idle", async () => {
+  it("sends immediately through start-or-steer when the session is idle", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertDefaultSuggestionSession();
       const added = await call(
@@ -439,83 +422,9 @@ describe("session suggestion handlers", () => {
       const chatParams = mocks.handleChatSend.mock.calls[0]?.[0]?.params;
       expect(chatParams).toMatchObject({
         message: "send while idle",
+        queueMode: "steer",
         idempotencyKey: `session-suggestion:${id}`,
       });
-      expect(chatParams).not.toHaveProperty("queueMode");
-      expect(chatParams).not.toHaveProperty("expectedRunId");
-    });
-  });
-
-  it("keeps a suggestion pending when multiple active runs make send-now ambiguous", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertDefaultSuggestionSession();
-      const added = await call(
-        "session.suggestions.add",
-        { sessionKey, text: "ambiguous send" },
-        client("alice", "Alice"),
-      );
-      const id = responseSuggestionId(added);
-      const requestContext = context();
-      for (const runId of ["run-a", "run-b"]) {
-        requestContext.chatAbortControllers.set(runId, {
-          sessionKey,
-          sessionId: "session-main",
-          agentId: "main",
-        } as never);
-      }
-
-      const resolved = await call(
-        "session.suggestions.resolve",
-        { sessionKey, id, resolution: "send" },
-        client("owner", "Owner"),
-        requestContext,
-      );
-
-      expect(resolved.responses[0]?.[0]).toBe(false);
-      expect(resolved.responses[0]?.[2]).toMatchObject({
-        message:
-          "session has multiple active runs; choose the target run before sending the suggestion",
-        details: { code: "SESSION_SUGGESTION_ACTIVE_RUN_AMBIGUOUS", sessionKey },
-      });
-      expect(mocks.handleChatSend).not.toHaveBeenCalled();
-      expect(listSessionSuggestions({ agentId: "main", sessionKey })).toEqual([
-        expect.objectContaining({ id, state: "pending" }),
-      ]);
-    });
-  });
-
-  it("rejects send-now when active work has no exact gateway run identity", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertDefaultSuggestionSession();
-      const added = await call(
-        "session.suggestions.add",
-        { sessionKey, text: "hidden active run" },
-        client("alice", "Alice"),
-      );
-      const id = responseSuggestionId(added);
-      const hiddenHandle = {
-        runId: "embedded-only-run",
-        abort: () => {},
-        queueMessage: async () => {},
-      } as never;
-      setActiveEmbeddedRun("session-main", hiddenHandle, sessionKey);
-
-      try {
-        const resolved = await call(
-          "session.suggestions.resolve",
-          { sessionKey, id, resolution: "send" },
-          client("owner", "Owner"),
-        );
-
-        expect(resolved.responses[0]?.[0]).toBe(false);
-        expect(resolved.responses[0]?.[2]).toMatchObject({
-          message: "active session run has no exact dispatch identity; refresh and retry",
-          details: { code: "SESSION_SUGGESTION_ACTIVE_RUN_AMBIGUOUS", sessionKey },
-        });
-        expect(mocks.handleChatSend).not.toHaveBeenCalled();
-      } finally {
-        clearActiveEmbeddedRun("session-main", hiddenHandle, sessionKey);
-      }
     });
   });
 

@@ -1,10 +1,11 @@
-import "../agents/prepared-model-runtime.test-harness.js";
-import { beforeEach, describe, expect, it } from "vitest";
-import { acquireAgentRunPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
 import {
   getPreparedModelRuntimeMocks,
   resetPreparedModelRuntimeHarness,
 } from "../agents/prepared-model-runtime.test-harness.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import { acquireAgentRunPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import { EmbeddedPreparedModelRuntimeHost } from "./embedded-prepared-runtime.js";
 
 const mocks = getPreparedModelRuntimeMocks();

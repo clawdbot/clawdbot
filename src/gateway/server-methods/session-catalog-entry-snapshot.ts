@@ -92,7 +92,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
         freshest = entry;
       }
     }
-    const actor = projectSessionActor(freshest?.createdActor);
+    const actor = projectSessionActor(freshest?.createdActor, undefined, params.cfg);
     actorBySessionKey.set(actorCacheKey, actor);
     return actor;
   };

@@ -2,16 +2,11 @@
 // Windows Smoke script supports OpenClaw repository automation.
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { stripLeadingPackageManagerSeparator } from "../../lib/arg-utils.mts";
 import { windowsAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
-  ensureValue,
   currentRunningSnapshotInfo,
   makeTempDir,
-  parseMode,
-  parseTcpPort,
-  parseProvider,
   readGitCommitEnv,
   readPositiveIntEnv,
   resolveLatestVersion,
@@ -52,19 +47,14 @@ import {
   expectedPackageTargetVersion,
   extractLastOpenClawVersion,
   packAndServeSmokeArtifact,
+  parseSmokeCliArgs,
   printSmokeTargetSummary,
   SmokeRunController,
-  type SmokeHostOptions,
-  type SmokeRunOptions,
+  type SmokeCliOptions,
 } from "./smoke-common.ts";
 import { ensureGuestGit, prepareMinGitZip } from "./windows-git.ts";
 
-interface WindowsOptions extends SmokeHostOptions, SmokeRunOptions {
-  vmName: string;
-  apiKeyEnv?: string;
-  modelId?: string;
-  installUrl: string;
-  latestVersion?: string;
+interface WindowsOptions extends SmokeCliOptions {
   upgradeFromPackedMain: boolean;
   skipLatestRefCheck: boolean;
 }
@@ -158,93 +148,14 @@ Environment:
 }
 
 export function parseArgs(argv: string[]): WindowsOptions {
-  const args = stripLeadingPackageManagerSeparator(argv);
   const options = defaultOptions();
-  const valueHandlers: Record<string, (value: string) => void> = {
-    "--api-key-env": (value) => {
-      options.apiKeyEnv = value;
+  return parseSmokeCliArgs(argv, options, {
+    flagHandlers: {
+      "--skip-latest-ref-check": (parsed) => (parsed.skipLatestRefCheck = true),
+      "--upgrade-from-packed-main": (parsed) => (parsed.upgradeFromPackedMain = true),
     },
-    "--host-ip": (value) => {
-      options.hostIp = value;
-    },
-    "--host-port": (value) => {
-      options.hostPort = parseTcpPort(value, "--host-port");
-      options.hostPortExplicit = true;
-    },
-    "--install-url": (value) => {
-      options.installUrl = value;
-    },
-    "--install-version": (value) => {
-      options.installVersion = value;
-    },
-    "--latest-version": (value) => {
-      options.latestVersion = value;
-    },
-    "--model": (value) => {
-      options.modelId = value;
-    },
-    "--npm-registry": (value) => {
-      options.npmRegistry = value;
-    },
-    "--openai-api-key-env": (value) => {
-      options.apiKeyEnv = value;
-    },
-    "--provider": (value) => {
-      options.provider = parseProvider(value);
-    },
-    "--snapshot-hint": (value) => {
-      options.snapshotHint = value;
-    },
-    "--target-package-spec": (value) => {
-      options.targetPackageSpec = value;
-    },
-    "--vm": (value) => {
-      options.vmName = value;
-    },
-    "--mode": (value) => {
-      options.mode = parseMode(value);
-    },
-  };
-  const flagHandlers: Record<string, () => void> = {
-    "--json": () => {
-      options.json = true;
-    },
-    "--keep-server": () => {
-      options.keepServer = true;
-    },
-    "--skip-latest-ref-check": () => {
-      options.skipLatestRefCheck = true;
-    },
-    "--upgrade-from-packed-main": () => {
-      options.upgradeFromPackedMain = true;
-    },
-  };
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === undefined) {
-      die(`missing argument at index ${i}`);
-    }
-    if (arg === "--") {
-      break;
-    }
-    const valueHandler = valueHandlers[arg];
-    if (valueHandler) {
-      valueHandler(ensureValue(args, i, arg));
-      i++;
-      continue;
-    }
-    const flagHandler = flagHandlers[arg];
-    if (flagHandler) {
-      flagHandler();
-      continue;
-    }
-    if (arg === "-h" || arg === "--help") {
-      process.stdout.write(usage());
-      process.exit(0);
-    }
-    die(`unknown arg: ${arg}`);
-  }
-  return options;
+    usage,
+  });
 }
 
 class WindowsSmoke extends SmokeRunController<WindowsOptions> {

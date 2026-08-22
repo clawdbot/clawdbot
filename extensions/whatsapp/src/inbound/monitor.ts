@@ -19,14 +19,13 @@ import {
   type WhatsAppGroupMetadataCache,
 } from "./group-metadata-cache.js";
 import { closeInboundMonitorSocket } from "./lifecycle.js";
-import { normalizeAdmittedWebInboundMessage } from "./message-aliases.js";
 import {
   createWhatsAppMessageDeliveryCoordinator,
   type WhatsAppAppendReplyWindow,
 } from "./message-delivery.js";
 import { createWebSendApi } from "./send-api.js";
 import { createWhatsAppAttachedSocketSession } from "./socket-session.js";
-import type { AdmittedWebInboundCallbackMessage, WebInboundMessageInput } from "./types.js";
+import type { AdmittedWebInboundCallbackMessage } from "./types.js";
 
 function logWhatsAppVerbose(enabled: boolean | undefined, message: string) {
   if (enabled) {
@@ -80,8 +79,8 @@ type AttachWebInboxToSocketOptions = Omit<
   "onMessage" | "shouldDebounce" | "socketTiming"
 > & {
   socketTiming: Required<WhatsAppSocketTimingOptions>;
-  onMessage: (msg: WebInboundMessageInput) => Promise<void>;
-  shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
+  onMessage: (msg: AdmittedWebInboundCallbackMessage) => Promise<void>;
+  shouldDebounce?: (msg: AdmittedWebInboundCallbackMessage) => boolean;
 };
 
 export async function attachWebInboxToSocket(
@@ -198,12 +197,6 @@ export async function monitorWebInbox(options: MonitorWebInboxOptions) {
   }
   return attachWebInboxToSocket({
     ...options,
-    onMessage: async (msg) => {
-      await options.onMessage(normalizeAdmittedWebInboundMessage(msg));
-    },
-    shouldDebounce: options.shouldDebounce
-      ? (msg) => options.shouldDebounce?.(normalizeAdmittedWebInboundMessage(msg)) ?? true
-      : undefined,
     socketTiming,
     sock,
     recentMessageKeys,

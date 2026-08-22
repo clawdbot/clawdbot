@@ -56,11 +56,13 @@ does not set this flag.
 Harnesses with an independently managed native surface can also declare
 `conversationToolPolicySafeDenyTools` using canonical OpenClaw tool names. Core
 preserves the native surface only when every expanded deny is a known core tool
-in that audited safe list. Finite allowlists, undeclared or unknown tool names,
-wildcards, and groups containing any undeclared name remain native-surface
-restrictions. Omit the list to retain the conservative behavior where every
-explicit restriction isolates the native surface. Because omissions fail
-closed, new tools cannot silently relax the policy boundary.
+in that audited safe list and passes the matching names in
+`params.pluginHarnessToolPolicySafeDeniedTools`. The harness must disable any
+native equivalents for those names. Finite allowlists, undeclared or unknown
+tool names, wildcards, and groups containing any undeclared name remain
+native-surface restrictions. Omit the list to retain the conservative behavior
+where every explicit restriction isolates the native surface. Because omissions
+fail closed, new tools cannot silently relax the policy boundary.
 
 Omit the declaration when any native capability can bypass those layers.
 OpenClaw then visibly rejects explicitly restricted turns before invoking the
@@ -317,8 +319,8 @@ For operator setup, model prefix examples, and Codex-only configs, see
 
 The Codex plugin enforces the minimum app-server version documented in
 [Codex Harness](/plugins/codex-harness). It checks the initialize handshake and
-blocks older or unversioned servers, so OpenClaw only runs against the protocol
-surface it has tested.
+blocks older, malformed, or unversioned servers. Admission permits startup to
+continue; it does not prove later runtime or capability operations will succeed.
 
 ### Tool-result middleware
 
@@ -372,6 +374,15 @@ choice/free-form answers back into the runtime's native response shape. The
 helper keeps channel/TUI presentation consistent while each harness keeps its
 own protocol parsing and pending-request lifecycle.
 
+For schema-backed forms and literal URL confirmation, use the
+`agentHarnessStructuredInput` runtime surface from the same subpath. It
+snapshots bounded own data without invoking accessors, compiles supported
+primitive fields into Gateway questions, and executes them with batching,
+secret-input, timeout, and cancellation fencing. Harnesses keep ownership of
+their protocol envelope and must pass the exact turn signal and active-owner
+check; `run(...)` returns an answered, declined, cancelled, or unsupported
+outcome for the adapter to translate.
+
 Each prepared attempt also receives a versioned `params.hostCapabilities`
 object. Use `bindToolSurface(...)` before exposing plugin-built OpenClaw tools,
 and use its policy and approval operations for native actions. A native action
@@ -381,6 +392,14 @@ bounded action fact while keeping identity and policy authority closure-bound. T
 binds the host-resolved run, sandbox, requester, route, and approval identity;
 plugins must not reconstruct those fields or retain the capability after the
 attempt returns. Calls made after attempt settlement fail closed.
+
+When trajectory capture has a valid host-owned session target,
+`params.hostCapabilities.trajectory` provides closure-bound `recordEvent(...)`
+and `flush()` operations. The host adds session attribution, bounds and redacts
+event data, and persists it through the canonical trajectory store. Treat the
+capability as optional, send only structured non-secret facts, and await
+`flush()` before the attempt settles; do not infer storage paths or create a
+plugin-side fallback when the capability is absent.
 
 New harnesses should implement `AgentHarnessV2` and type prepared attempts as
 `AgentHarnessAttemptParamsV2`, `EmbeddedRunAttemptParamsV2`, and

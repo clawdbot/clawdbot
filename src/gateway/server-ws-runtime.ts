@@ -33,7 +33,7 @@ export function attachGatewayWsHandlers(params: GatewayWsRuntimeParams) {
     nodeReapprovalCoordinator: params.nodeReapprovalCoordinator,
     preauthHandshakeTimeoutMs: params.preauthHandshakeTimeoutMs,
     isStartupPending: params.isStartupPending,
-    isControlUiDeviceAuthMigrationPending: params.isControlUiDeviceAuthMigrationPending,
+    isPendingWorkerNodeSetup: params.isPendingWorkerNodeSetup,
     gatewayMethods: params.gatewayMethods,
     events: params.events,
     refreshHealthSnapshot: params.context.refreshHealthSnapshot,

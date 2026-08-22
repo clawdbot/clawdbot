@@ -2,8 +2,7 @@ import { expect, test } from "vitest";
 import {
   createOperatorIdentityFixture,
   REMOTE_BOOTSTRAP_HEADERS,
-  startControlUiServer,
-  withControlUiServer,
+  startProxiedControlUiServer,
 } from "./server.auth.control-ui.fixtures.test-support.js";
 import {
   connectReq,
@@ -41,7 +40,8 @@ export function registerControlUiMobileBootstrapSuite(): void {
     const identityFixture =
       params.identityFixture ?? (await createOperatorIdentityFixture(params.identityPrefix));
     const { identityPath, identity } = identityFixture;
-    return await withControlUiServer(async ({ port }) => {
+    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
+    try {
       const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
       try {
         const issued = await issueDeviceBootstrapToken({
@@ -61,14 +61,17 @@ export function registerControlUiMobileBootstrapSuite(): void {
       } finally {
         wsBootstrap.close();
       }
-    });
+    } finally {
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
   };
   test("voice-node setup code reconnects with node and Talk-only operator tokens", async () => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
     const { VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE } =
       await import("../shared/device-bootstrap-profile.js");
     const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
-    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
     const { identityPath, identity } = await createOperatorIdentityFixture(
       "openclaw-bootstrap-voice-node-",
     );
@@ -179,9 +182,9 @@ export function registerControlUiMobileBootstrapSuite(): void {
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
     const { FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE } =
       await import("../shared/device-bootstrap-profile.js");
-    const { getPairedDevice, listDevicePairing, verifyDeviceToken } =
-      await import("../infra/device-pairing.js");
-    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { verifyDeviceToken } = await import("../infra/device-pairing-tokens.js");
+    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
 
     const { identityPath, identity } = await createOperatorIdentityFixture(
       "openclaw-bootstrap-node-",
@@ -433,7 +436,8 @@ export function registerControlUiMobileBootstrapSuite(): void {
     ]);
     expect(operatorHandoff?.scopes).not.toContain("operator.admin");
 
-    const { getPairedDevice, verifyDeviceToken } = await import("../infra/device-pairing.js");
+    const { verifyDeviceToken } = await import("../infra/device-pairing-tokens.js");
+    const { getPairedDevice } = await import("../infra/device-pairing.js");
     const paired = await getPairedDevice(identity.deviceId);
     expect(paired?.approvedScopes).not.toContain("operator.admin");
     expect(paired?.tokens?.operator?.scopes).not.toContain("operator.admin");

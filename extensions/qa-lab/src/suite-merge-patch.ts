@@ -7,6 +7,11 @@ export function isQaMergePatchObject(value: unknown): value is Record<string, un
   return isPlainObject(value);
 }
 
+/** Prototype-mutating keys a patch may never carry into a config. */
+export function isQaMergePatchBlockedKey(key: string): boolean {
+  return QA_MERGE_PATCH_BLOCKED_KEYS.has(key);
+}
+
 function isObjectWithStringId(value: unknown): value is { id: string } & Record<string, unknown> {
   return isQaMergePatchObject(value) && typeof value.id === "string" && value.id.length > 0;
 }

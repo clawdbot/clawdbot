@@ -12,7 +12,6 @@ import {
   validateWizardStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OnboardOptions } from "../../commands/onboard-types.js";
-import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import { createNonExitingRuntime, ExitError, type RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import {
@@ -77,15 +76,6 @@ function readWizardStatus(session: WizardSession) {
 
 function sanitizeWizardResultForClient<T extends { step?: WizardStep }>(result: T): T {
   return result.step ? { ...result, step: sanitizeWizardStepForClient(result.step) } : result;
-}
-
-function retainGatewayWorkUntilSettled(session: WizardSession): void {
-  // Hosted wizard state spans RPC requests. Keep restart/suspend admission
-  // active between steps or a config reload can erase the process-local session.
-  const release = retainGatewayRootWorkAdmissionContinuation();
-  if (release) {
-    void whenAdmittedWizardSessionSettled(session).then(release, release);
-  }
 }
 
 /** Resolves a live wizard session or sends the public not-found error. */
@@ -155,7 +145,6 @@ export const wizardHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    retainGatewayWorkUntilSettled(session);
     context.wizardSessions.set(sessionId, session);
     const result = await session.next();
     if (result.done) {

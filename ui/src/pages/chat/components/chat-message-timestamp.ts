@@ -1,7 +1,7 @@
 import { html } from "lit";
 import { t } from "../../../i18n/index.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { formatCompactTokenCount, formatTimeAgo } from "../../../lib/format.ts";
+import { formatCompactTokenCount, formatCost, formatTimeAgo } from "../../../lib/format.ts";
 
 type ChatTimestampDisplay = {
   label: string;
@@ -218,7 +218,7 @@ export function renderMessageMeta(timestamp: number, meta: GroupMeta | null) {
 
   // Cost
   if (meta.cost > 0) {
-    parts.push(html`<span class="msg-meta__cost">$${meta.cost.toFixed(4)}</span>`);
+    parts.push(html`<span class="msg-meta__cost">${formatCost(meta.cost)}</span>`);
   }
 
   // Context %

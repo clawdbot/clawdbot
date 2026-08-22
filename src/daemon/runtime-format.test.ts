@@ -8,4 +8,13 @@ describe("formatRuntimeStatus", () => {
       "stopped (last exit 134 (SIGABRT/abort))",
     );
   });
+
+  it("keeps multiline runtime details on one line", () => {
+    expect(
+      formatRuntimeStatus({
+        status: "unknown",
+        detail: "Operation failed.\nService manager returned more detail.",
+      }),
+    ).toBe("unknown (Operation failed. Service manager returned more detail.)");
+  });
 });

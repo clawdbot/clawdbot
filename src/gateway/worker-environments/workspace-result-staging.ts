@@ -2,8 +2,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { runBestEffortCleanup } from "../../infra/non-fatal-cleanup.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandBuffered, runCommandWithTimeout } from "../../process/exec.js";
 import type { WorkerWorkspaceReconcileRequest } from "./tunnel-contract.js";
+import { boundedWorkerError } from "./worker-error.js";
 import {
   activeWorkspaceHashContext,
   withWorkspaceHashContext,
@@ -22,8 +25,6 @@ import { reconciliationEntries } from "./workspace-reconcile-derived-paths.js";
 import { absoluteEntryMatches, localPath } from "./workspace-reconcile-fs.js";
 import {
   applyStagedWorkerWorkspace,
-  changedEntryPaths,
-  changedPaths,
   inspectAcceptedWorkerWorkspace,
   manifestNodes,
   type WorkerWorkspaceApplyResult,
@@ -38,6 +39,7 @@ const WORKER_RESULT_CLEANUP_REF_PREFIX = "refs/openclaw/worker-result-cleanup";
 const WORKER_RESULT_CLAIM_ID_PATTERN = /^[A-Za-z0-9-]+$/u;
 const STAGED_RESULT_MESSAGE = "OpenClaw worker workspace result";
 const STAGED_RESULT_METADATA_LIMIT = 128 * 1024 * 1024 + 4_096;
+const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
 // Git documents the platform null device as the per-command way to disable
 // hooks. An unowned path under a shared temp dir could be populated by another user.
 const DISABLED_GIT_HOOKS_PATH = os.devNull;
@@ -51,28 +53,32 @@ export function workerWorkspaceTransferPaths(
   base: WorkerWorkspaceManifest,
 ): string[] {
   // Staging is directory-agnostic because it transfers file and symlink bytes only.
-  return parseV2ChangedWorkspaceResult(base, current).entries.map((entry) => entry.path);
-}
-
-function workspaceReconciliationRecordCount(
-  base: WorkerWorkspaceManifest,
-  current: WorkerWorkspaceManifest,
-): number {
-  const baseNodes = manifestNodes(base);
-  const currentNodes = manifestNodes(current);
-  let records = 0;
-  for (const entryPath of changedPaths(base, current)) {
-    records += Number(baseNodes.has(entryPath)) + Number(currentNodes.has(entryPath));
-  }
-  return records;
+  return parseChangedWorkspaceResult(base, current).entries.map((entry) => entry.path);
 }
 
 function parseChangedWorkspaceResult(
   base: WorkerWorkspaceManifest,
   current: WorkerWorkspaceManifest,
+  enforceRecordLimit = true,
 ): { changed: boolean; entries: WorkerWorkspaceManifestEntry[] } {
-  const recordCount = workspaceReconciliationRecordCount(base, current);
-  const changed = changedEntryPaths(base, current);
+  const baseNodes = manifestNodes(base);
+  const currentNodes = manifestNodes(current);
+  const changed = new Set(
+    [...new Set([...baseNodes.keys(), ...currentNodes.keys()])].filter(
+      (entryPath) =>
+        JSON.stringify(baseNodes.get(entryPath)) !== JSON.stringify(currentNodes.get(entryPath)),
+    ),
+  );
+  const recordCount = [...changed].reduce(
+    (count, entryPath) =>
+      count + Number(baseNodes.has(entryPath)) + Number(currentNodes.has(entryPath)),
+    0,
+  );
+  if (enforceRecordLimit && recordCount > MAX_RECONCILIATION_ENTRIES) {
+    throw new Error(
+      `Cloud workspace reconciliation exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
+    );
+  }
   let totalBytes = 0;
   const entries = reconciliationEntries(current.entries).filter((entry) => changed.has(entry.path));
   for (const entry of entries) {
@@ -85,18 +91,6 @@ function parseChangedWorkspaceResult(
     }
   }
   return { changed: recordCount > 0, entries };
-}
-
-function parseV2ChangedWorkspaceResult(
-  base: WorkerWorkspaceManifest,
-  current: WorkerWorkspaceManifest,
-): { changed: boolean; entries: WorkerWorkspaceManifestEntry[] } {
-  if (workspaceReconciliationRecordCount(base, current) > MAX_RECONCILIATION_ENTRIES) {
-    throw new Error(
-      `Cloud workspace reconciliation exceeds the ${MAX_RECONCILIATION_ENTRIES} entry limit`,
-    );
-  }
-  return parseChangedWorkspaceResult(base, current);
 }
 
 async function requireGit(cwd: string, args: string[]): Promise<string> {
@@ -284,7 +278,7 @@ async function stageWorkerWorkspaceResult(params: {
   );
   // The authenticated manifests define the complete result. The durable tree
   // stores only changed resulting blobs; deletions intentionally have no blob.
-  const entries = parseV2ChangedWorkspaceResult(base, current).entries.toSorted((left, right) =>
+  const entries = parseChangedWorkspaceResult(base, current).entries.toSorted((left, right) =>
     left.path.localeCompare(right.path),
   );
   const blobs: Array<{ entry: WorkerWorkspaceManifestEntry; mark: number; content: Buffer }> = [];
@@ -404,10 +398,7 @@ async function loadStagedWorkerWorkspace(
   // Shipped v1 refs carry a complete current tree and predate the conservative
   // manifest worst-case record gate. Recovery still validates their manifests,
   // tree shape, and changed payload bytes; the apply owner caps actual records.
-  const changedResult =
-    version === 1
-      ? parseChangedWorkspaceResult(base, current)
-      : parseV2ChangedWorkspaceResult(base, current);
+  const changedResult = parseChangedWorkspaceResult(base, current, version !== 1);
   const changedEntries = changedResult.entries;
   const treeEntries = version === 1 ? reconciliationEntries(current.entries) : changedEntries;
   const tree = await runCommandBuffered(
@@ -542,7 +533,11 @@ async function applyStagedWorkerWorkspaceResultWithMemo(
     });
     return { ...applied, changed: staged.changed };
   } finally {
-    await fs.rm(stagingRoot, { recursive: true, force: true });
+    await runBestEffortCleanup({
+      cleanup: () => fs.rm(stagingRoot, { recursive: true, force: true }),
+      onError: (error) =>
+        workspaceLog.warn(`worker workspace staging cleanup failed: ${boundedWorkerError(error)}`),
+    });
   }
 }
 

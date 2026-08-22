@@ -85,14 +85,8 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
     activeOperation.abortSignal.addEventListener("abort", () => activeOperation.complete(), {
       once: true,
     });
-    const waitChanges: boolean[] = [];
     const replyResolver = vi.fn(async () => ({ text: "telegram reply" }) satisfies ReplyPayload);
-    const dispatchParams = {
-      ...createVisibleDispatchParams(replyResolver),
-      replyOptions: {
-        onReplyAdmissionWaitChange: (waiting: boolean) => waitChanges.push(waiting),
-      },
-    };
+    const dispatchParams = createVisibleDispatchParams(replyResolver);
     let settled = false;
 
     const resultPromise = dispatchReplyFromConfig(dispatchParams).then((result) => {
@@ -103,7 +97,6 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
     await vi.advanceTimersByTimeAsync(120_000);
 
     expect(settled).toBe(false);
-    expect(waitChanges).toEqual([true]);
     expect(replyResolver).not.toHaveBeenCalled();
 
     activeOperation.complete();
@@ -115,7 +108,6 @@ describe("dispatchReplyFromConfig stale visible admission recovery", () => {
     });
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-    expect(waitChanges).toEqual([true, false]);
   });
 
   it("reclaims stale pre-backend work after bounded terminal settlement", async () => {

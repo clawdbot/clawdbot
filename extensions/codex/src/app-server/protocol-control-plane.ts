@@ -235,6 +235,7 @@ export type CodexConfigBatchWriteParams = {
 };
 
 type CodexConfigLayerSource =
+  | { type: "packagedDefaults"; file: string }
   | { type: "mdm"; domain: string; key: string }
   | { type: "system"; file: string }
   | { type: "enterpriseManaged"; id: string; name: string }

@@ -1,6 +1,21 @@
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-archive.js";
+import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
+
+export function sqliteSessionStateDeleteSnapshotsEqual(
+  left: SessionStateDeleteSnapshot,
+  right: SessionStateDeleteSnapshot,
+): boolean {
+  return (
+    left.acpParentStreamEventCount === right.acpParentStreamEventCount &&
+    left.generation === right.generation &&
+    left.lastSeq === right.lastSeq &&
+    left.sessionKey === right.sessionKey &&
+    left.sessionUpdatedAt === right.sessionUpdatedAt &&
+    left.trajectoryLastSeq === right.trajectoryLastSeq &&
+    left.transcriptUpdatedAt === right.transcriptUpdatedAt
+  );
+}
 
 type SessionStateDeleteSnapshotDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -25,7 +40,7 @@ export function readSessionStateDeleteSnapshot(
     database,
     db
       .selectFrom("session_windows")
-      .select(["transcript_updated_at", "updated_at"])
+      .select(["session_key", "transcript_updated_at", "updated_at"])
       .where("session_id", "=", sessionId),
   );
   const rewriteWatermark = executeSqliteQueryTakeFirstSync(
@@ -64,6 +79,7 @@ export function readSessionStateDeleteSnapshot(
     acpParentStreamEventCount: normalizeOptionalSqliteNumber(acpParentStream?.event_count) ?? 0,
     generation: rewriteWatermark?.generation ?? null,
     lastSeq: lastEvent?.seq ?? null,
+    sessionKey: window?.session_key ?? null,
     sessionUpdatedAt: window?.updated_at ?? null,
     trajectoryLastSeq: lastTrajectory?.seq ?? null,
     transcriptUpdatedAt: window?.transcript_updated_at ?? null,

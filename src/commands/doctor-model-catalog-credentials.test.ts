@@ -108,7 +108,22 @@ describe("doctor model catalog credential migration", () => {
     expect(first.migrated).toBe(3);
     expect(first.warnings).toEqual([]);
     expect(cfg.models?.providers?.configured?.apiKey).toBe("configured-secret");
-    expect(loadPersistedAuthProfileStore(agentDir)?.profiles).toMatchObject({
+    // A fresh root records state-db shared ownership, so the migrated credentials persist in the
+    // shared store rather than the agent file. Read through the owner for this state root instead of
+    // pinning the storage layout.
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = state.stateDir;
+    let migratedProfiles: Record<string, unknown>;
+    try {
+      migratedProfiles = loadPersistedAuthProfileStore(undefined)?.profiles ?? {};
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
+    expect(migratedProfiles).toMatchObject({
       "configured:default": {
         type: "api_key",
         provider: "configured",
@@ -193,6 +208,38 @@ describe("doctor model catalog credential migration", () => {
 
     expect(result).toMatchObject({ detected: 0, migrated: 0, warnings: [] });
     expect(loadPersistedAuthProfileStore(childAgentDir)).toBeNull();
+  });
+
+  it("scans an explicit multi-agent roster without requiring a legacy default", async () => {
+    const state = createState();
+    const helperAgentDir = path.join(state.stateDir, "agents", "helper", "agent");
+    const thirdAgentDir = path.join(state.stateDir, "agents", "third", "agent");
+    fs.mkdirSync(helperAgentDir, { recursive: true });
+    fs.mkdirSync(thirdAgentDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(helperAgentDir, "models.json"),
+      `${JSON.stringify({ providers: { custom: provider("helper-catalog-secret") } })}\n`,
+    );
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: {
+          main: { agentDir: state.agentDir },
+          helper: { agentDir: helperAgentDir },
+          third: { agentDir: thirdAgentDir },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    await expect(maybeMigrateModelCatalogCredentials(migrationParams(state, cfg))).resolves.toEqual(
+      { detected: 1, migrated: 1, warnings: [] },
+    );
+    expect(loadPersistedAuthProfileStore(helperAgentDir)?.profiles["custom:default"]).toMatchObject(
+      {
+        key: "helper-catalog-secret",
+      },
+    );
   });
 
   it("allocates a global config profile that child stores cannot shadow", async () => {

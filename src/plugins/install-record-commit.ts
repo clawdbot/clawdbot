@@ -228,18 +228,13 @@ function resolveRetainedManagedNpmInstallMarkerTarget(params: {
       { runtimePluginIds: [] },
     ),
   );
-  if (
-    !plan.ok ||
-    !plan.directoryRemoval ||
-    plan.directoryRemoval.cleanup?.kind !== "npm" ||
-    path.resolve(plan.directoryRemoval.target) !== path.resolve(previousInstallPath)
-  ) {
+  if (!plan.ok || !plan.directoryRemoval || plan.directoryRemoval.cleanup?.kind !== "npm") {
     return null;
   }
-  if (nextInstallPath && installPathsOverlap(plan.directoryRemoval.target, nextInstallPath)) {
+  if (nextInstallPath && installPathsOverlap(previousInstallPath, nextInstallPath)) {
     return null;
   }
-  return plan.directoryRemoval.target;
+  return previousInstallPath;
 }
 
 function resolveNpmInstallRecordPackageName(record: PluginInstallRecord): string | null {

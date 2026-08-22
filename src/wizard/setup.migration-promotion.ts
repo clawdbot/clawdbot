@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDurableJsonFile, writeJsonAtomic } from "../infra/json-files.js";
-import { isNotFoundPathError } from "../infra/path-guards.js";
+import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
 import { hashSetupMigrationConfig } from "./setup.migration-canonical.js";
 import { SetupMigrationTargetChangedError } from "./setup.migration-snapshot.js";
@@ -452,14 +452,6 @@ async function canonicalizePromotionPath(
   }
 }
 
-function pathsOverlap(left: string, right: string): boolean {
-  const relative = path.relative(left, right);
-  return (
-    relative.length === 0 ||
-    (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
-  );
-}
-
 export async function assertSupportedStagedStateTree(params: {
   stagedStateDir: string;
   agentId: string;
@@ -518,7 +510,7 @@ export async function assertDisjointPromotionTargets(
       };
       const currentPath = normalizePath(current.path.path);
       const otherPath = normalizePath(other.path.path);
-      if (pathsOverlap(currentPath, otherPath) || pathsOverlap(otherPath, currentPath)) {
+      if (isPathInside(currentPath, otherPath) || isPathInside(otherPath, currentPath)) {
         throw new Error(
           `Migration promotion targets overlap: ${current.component.finalPath} and ${other.component.finalPath}.`,
         );

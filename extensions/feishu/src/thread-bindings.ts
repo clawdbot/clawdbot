@@ -349,13 +349,3 @@ export function getFeishuThreadBindingManager(
 ): FeishuThreadBindingManager | null {
   return getState().managersByAccountId.get(normalizeAccountId(accountId)) ?? null;
 }
-
-export const testing = {
-  resetFeishuThreadBindingsForTests() {
-    for (const manager of getState().managersByAccountId.values()) {
-      manager.stop();
-    }
-    getState().managersByAccountId.clear();
-    getState().bindingsByAccountConversation.clear();
-  },
-};

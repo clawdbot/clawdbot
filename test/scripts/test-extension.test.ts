@@ -170,14 +170,26 @@ describe("scripts/test-extension.mts", () => {
     expect(plan.hasTests).toBe(true);
   });
 
-  it("bounds Matrix test files across balanced process lifetimes", () => {
-    const config = "test/vitest/vitest.extension-matrix.config.ts";
-    const roots = [bundledPluginRoot("matrix")];
+  it.each([
+    {
+      name: "Matrix",
+      config: "test/vitest/vitest.extension-matrix.config.ts",
+      root: "matrix",
+      limit: 40,
+    },
+    {
+      name: "Telegram",
+      config: "test/vitest/vitest.extension-telegram.config.ts",
+      root: "telegram",
+      limit: 1,
+    },
+  ])("bounds $name test files across balanced process lifetimes", ({ config, root, limit }) => {
+    const roots = [bundledPluginRoot(root)];
     const expectedFiles = listExtensionTestFilesForRoots(roots);
     const chunks = createExtensionTestProcessTargetChunks(config, roots);
 
-    expect(chunks).toHaveLength(expectedMatrixTestProcessCount());
-    expect(chunks.every((chunk) => chunk.length <= MATRIX_TEST_PROCESS_FILE_LIMIT)).toBe(true);
+    expect(chunks).toHaveLength(Math.max(1, Math.ceil(expectedFiles.length / limit)));
+    expect(chunks.every((chunk) => chunk.length <= limit)).toBe(true);
     expect(Math.max(...chunks.map((chunk) => chunk.length))).toBeLessThanOrEqual(
       Math.min(...chunks.map((chunk) => chunk.length)) + 1,
     );

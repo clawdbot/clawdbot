@@ -77,7 +77,6 @@ type SlackTestState = {
   >;
   socketModeLogger?: { error: (...args: unknown[]) => void };
   createSlackStartupAuthClientMock: Mock<SlackStartupAuthClientFactory>;
-  createSlackStartupAuthClientActual?: SlackStartupAuthClientFactory;
 };
 
 // globalThis-backed singleton: with isolate=false, a vi.resetModules() in any
@@ -110,12 +109,8 @@ const slackTestState: SlackTestState = vi.hoisted(() => {
 
 export const getSlackTestState = (): SlackTestState => slackTestState;
 
-export function useRealSlackStartupAuthClientOnce(): void {
-  const actual = slackTestState.createSlackStartupAuthClientActual;
-  if (!actual) {
-    throw new Error("real Slack WebClient factory is unavailable");
-  }
-  slackTestState.createSlackStartupAuthClientMock.mockImplementationOnce(actual);
+export function useSlackStartupAuthClientOnce(factory: SlackStartupAuthClientFactory): void {
+  slackTestState.createSlackStartupAuthClientMock.mockImplementationOnce(factory);
 }
 
 type SlackClient = {
@@ -426,7 +421,6 @@ vi.mock("./resolve-users.js", () => ({
 
 vi.mock("./client.js", async () => {
   const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
-  slackTestState.createSlackStartupAuthClientActual = actual.createSlackStartupAuthClient;
   return {
     ...actual,
     createSlackStartupAuthClient: (...args: Parameters<SlackStartupAuthClientFactory>) =>

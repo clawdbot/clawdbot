@@ -15,6 +15,7 @@ import type {
   DiscordIngressLifecycle,
 } from "./ingress.js";
 import type { DiscordMessageEvent } from "./listeners.js";
+import { createDiscordAvatarResolver } from "./message-avatar.js";
 import { applyImplicitReplyBatchGate } from "./message-handler.batch-gate.js";
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import {
@@ -83,6 +84,7 @@ export function createDiscordMessageDispatcher(
     testing: params.testing,
   });
   const dispatcherShutdown = new AbortController();
+  const avatarResolver = createDiscordAvatarResolver();
 
   type DiscordDebounceEntry = {
     data: DiscordMessageEvent;
@@ -149,6 +151,7 @@ export function createDiscordMessageDispatcher(
                 (await loadMessagePreflightRuntime()).preflightDiscordMessage;
               const ctx = await preflight({
                 ...params,
+                avatarResolver,
                 ackReactionScope,
                 groupPolicy,
                 abortSignal,
@@ -203,6 +206,7 @@ export function createDiscordMessageDispatcher(
               (await loadMessagePreflightRuntime()).preflightDiscordMessage;
             const ctx = await preflight({
               ...params,
+              avatarResolver,
               ackReactionScope,
               groupPolicy,
               abortSignal,

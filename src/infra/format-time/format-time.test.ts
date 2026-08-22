@@ -61,6 +61,11 @@ describe("format-duration", () => {
       { input: 65000, options: { spaced: true }, expected: "1m 5s" },
       { input: 3660000, options: { spaced: true }, expected: "1h 1m" },
       { input: 90000000, options: { spaced: true }, expected: "1d 1h" },
+      {
+        input: 366 * 86400000,
+        options: { showYears: true, spaced: true },
+        expected: "1y 1d",
+      },
       { input: 59500, expected: "1m" },
       { input: 59400, expected: "59s" },
     ])("formats compact duration for %j", ({ input, options, expected }) => {

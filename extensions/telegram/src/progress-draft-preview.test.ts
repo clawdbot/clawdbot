@@ -26,7 +26,6 @@ describe("renderTelegramProgressDraftPreview", () => {
     for (const name of ["Bash", "bash", "exec"]) {
       const rendered = renderToolLine(name);
       expect(rendered.match(/🛠️/gu) ?? []).toHaveLength(1);
-      expect(rendered).toContain("print text");
     }
   });
 

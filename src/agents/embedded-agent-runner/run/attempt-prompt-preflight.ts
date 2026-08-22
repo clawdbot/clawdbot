@@ -3,6 +3,7 @@
  */
 import type { AssembleResult } from "../../../context-engine/types.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
+import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SessionManager } from "../../sessions/index.js";
@@ -101,7 +102,9 @@ export function handleEmbeddedAttemptMidTurnPrecheck(input: {
         handled: true as const,
         truncatedCount: truncationResult.truncatedCount,
       };
-      input.replaceSessionMessages(input.sessionManager.buildSessionContext().messages);
+      input.replaceSessionMessages(
+        sanitizeCompactionReplayMessages(input.sessionManager.buildSessionContext().messages),
+      );
       logMidTurnPrecheck(
         request.route,
         `handled=true truncatedCount=${truncationResult.truncatedCount}`,

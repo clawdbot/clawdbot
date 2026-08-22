@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "../../agents/runtime/index.js";
+import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { DurableMessageSendIntent } from "../../channels/message/types.js";
@@ -17,6 +18,7 @@ import type { OutboundDeliveryResult } from "./deliver-types.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import type { MessageBroadcastAccountPlan } from "./message-account-selection.js";
+import type { MessageActionDeniedError } from "./message-action-denial.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
@@ -49,6 +51,7 @@ export type MessageActionInput = {
   requesterSenderE164?: string | null;
   senderIsOwner?: boolean;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
+  workspaceDir?: string;
   /** @internal Host-owned route plan computed before broadcast SecretRef resolution. */
   broadcastAccountPlan?: MessageBroadcastAccountPlan;
   /**
@@ -61,7 +64,13 @@ export type MessageActionInput = {
     toolContext?: InternalChannelThreadingToolContext;
   };
   sessionId?: string;
+  /** @internal Admitted run correlation carried into owner-native delivery audit. */
+  runId?: string;
+  /** @internal Exact admitted execution provenance for owner-native delivery audit. */
+  executionIdentityToken?: ExecutionIdentityAdmissionToken;
   toolContext?: ChannelThreadingToolContext;
+  /** @internal Host media grant captured before untrusted caller code can mutate config. */
+  mediaAccess?: OutboundMediaAccess;
   gateway?: MessageActionGateway;
   deps?: OutboundSendDeps;
   sessionKey?: string;
@@ -86,8 +95,20 @@ export type MessageActionInput = {
   deliveryCompletion?: DurableDeliveryCompletion;
   /** @internal Runs after queue persistence and before platform I/O. */
   onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
+  /** @internal Revalidates caller-owned authority before each durable adapter attempt. */
+  onDeliveryAttempt?: () => Promise<void>;
   /** @internal Runs on identified platform evidence before queue acknowledgement. */
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
+  /** @internal Revalidates caller authority immediately before recipient-visible I/O. */
+  onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Keep ephemeral-authority sends out of replayable recovery. */
+  skipQueue?: boolean;
+  /** @internal Runs when broadcast converts a typed target denial into result text. */
+  onActionDenied?: (
+    error: MessageActionDeniedError,
+    channel: ChannelId,
+    receiptDiscriminator: string,
+  ) => void;
   sandboxRoot?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -156,6 +177,10 @@ export type MessageActionResult =
       toolResult?: AgentToolResult<unknown>;
       dryRun: boolean;
     };
+
+export const isMessageBroadcastSuccessful = (
+  result: Extract<MessageActionResult, { kind: "broadcast" }>,
+): boolean => result.payload.results.every((entry) => entry.ok);
 
 export type ResolvedActionContext = {
   cfg: OpenClawConfig;

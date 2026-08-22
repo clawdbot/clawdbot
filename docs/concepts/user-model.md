@@ -1,15 +1,34 @@
 ---
-summary: "Store durable user preferences and profile facts as directive-based USER.md entries"
+summary: "Manage durable user preferences and your Gateway profile identity"
 title: "User model"
 read_when:
   - You want stable preferences to guide future sessions
   - You need to update a preference without leaving contradictory history
   - You are deciding whether something belongs in USER.md or MEMORY.md
+  - You want verified GitHub identity and optional commit credit on your Gateway profile
 ---
 
 `USER.md` is the optional user-model artifact in an agent workspace. It stores stable preferences, communication style, relationships, and active-project context as directives that can guide future sessions.
 
 OpenClaw loads `USER.md` beside `MEMORY.md` at session start. It has a separate small bootstrap budget, and edits are picked up on later turns in a long-lived session. If the file is absent, startup continues without it.
+
+## Gateway profile and GitHub credit
+
+Your authenticated Gateway profile is separate from `USER.md`. Open **Settings → Profile → Identity** to set the display name and avatar shown to other people on the Gateway. A custom OpenClaw avatar remains authoritative when a GitHub account is verified.
+
+GitHub-backed sign-in is supported through Cloudflare Access and Tailscale Serve. For Cloudflare Access, the Gateway accepts identity enrichment only after successful `trusted-proxy` authentication with the standard Access email header and a required Access assertion header. It calls the Access identity endpoint, requires the returned email to match the authenticated proxy principal and the identity provider to be GitHub, then resolves the canonical GitHub login from the returned numeric account id. For Tailscale Serve, the Gateway resolves the verified GitHub-backed Tailscale login through GitHub. Both paths record the immutable numeric account id plus the current canonical login.
+
+The **GitHub account** row is read-only. Generic trusted proxies, token, password, and unauthenticated connections cannot claim a GitHub account, and agent or tool GitHub credentials are never used for this identity. The forwarded Cloudflare Access assertion is connection-scoped: OpenClaw does not persist, export, log, or expose it to the UI or model.
+
+Identity lookup runs after WebSocket sign-in, so connection status and other identity-independent reads remain available. Profile and session work waits for the lookup; a Cloudflare or GitHub rate limit or network failure returns retryable unavailability without exposing a mutable alias or erasing a previously verified account. A later request, connection, or Profile refresh retries the lookup. GitHub login renames are reconciled by numeric account id so profile history and preferences stay attached to one person.
+
+Public commit metadata is a separate choice. **Git co-author credit** defaults off. Enabling it adds the verified account's public GitHub noreply address to commits created from shared sessions; OpenClaw never requests or stores a private GitHub email for this feature. Signing in as a different numeric GitHub account resets the choice, so one account cannot inherit another account's consent.
+
+When your authenticated profile has prompted a session before an agent run, commits created from that run receive your exact `Co-authored-by` trailer. Profile-backed human participants with verified GitHub identity and Git co-author credit enabled are eligible; channel-only identities, agents, bots, and the configured primary Git author are excluded. The participant set is bounded to 32 and recorded best-effort. The run tells the model when a profile has no enabled credit or the bound may be incomplete; it never guesses an identity from transcript names.
+
+OpenClaw supplies exact trailers in the model context for that turn and instructs coding agents to retain them through amendments, rebases, and squash commits so credit reaches the final commit merged to the default branch. The trailers are not exported through the process or shell environment. Git commands remain ordinary shell execution: OpenClaw does not replace `git` or install repository hooks, so the instruction and post-commit verification are the enforcement boundary.
+
+Turning **Git co-author credit** off stops attribution for future runs. It does not rewrite commits that already contain the public trailer.
 
 ## Write directives, not observations
 

@@ -2,6 +2,9 @@
 // These helpers are shared by report rows and command output surfaces.
 
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import type { BestEffortConfigSnapshot } from "../config/io.js";
+import { formatConfigIssueLines } from "../config/issue-format.js";
 import { getSystemdCgroupHygieneSummary } from "../daemon/service-runtime.js";
 import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
@@ -10,6 +13,17 @@ import { formatTokenCount } from "../utils/token-format.js";
 export { shortenText } from "./text-format.js";
 
 export const formatKTokens = formatTokenCount;
+
+/** Formats the actionable entries shown under status config diagnostic headings. */
+export function formatStatusConfigDiagnosticEntries(
+  diagnostics: NonNullable<BestEffortConfigSnapshot["configDiagnostics"]>,
+): string[] {
+  return [
+    `- Config file is invalid: ${sanitizeTerminalText(diagnostics.path)}`,
+    ...formatConfigIssueLines(diagnostics.issues, "-", { normalizeRoot: true }),
+    "- Fix: openclaw doctor --fix",
+  ];
+}
 
 /** Formats a duration or returns `unknown` for missing/non-finite values. */
 export const formatDuration = (ms: number | null | undefined) => {

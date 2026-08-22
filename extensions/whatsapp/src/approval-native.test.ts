@@ -1,3 +1,4 @@
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 // Whatsapp tests cover approval native plugin behavior.
 import type {
   ExecApprovalRequest,
@@ -69,7 +70,7 @@ function buildPluginRequest(
 
 function nativeShouldHandle(params: {
   cfg: OpenClawConfig;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   request: ExecApprovalRequest | PluginApprovalRequest;
   accountId?: string | null;
 }) {

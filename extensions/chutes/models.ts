@@ -14,7 +14,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isChutesModelDiscoveryTestEnvironment } from "./model-discovery-env.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const CHUTES_MANIFEST_CATALOG = manifest.modelCatalog.providers.chutes;
@@ -107,9 +106,6 @@ function projectChutesModels(rows: readonly unknown[]): ModelDefinitionConfig[] 
 
 /** Discovers Chutes models dynamically, falling back to the bundled static catalog. */
 export async function discoverChutesModels(accessToken?: string): Promise<ModelDefinitionConfig[]> {
-  if (isChutesModelDiscoveryTestEnvironment()) {
-    return structuredClone(CHUTES_MODEL_CATALOG);
-  }
   const provider = await buildLiveModelProviderConfig({
     providerId: "chutes",
     endpoint: `${CHUTES_BASE_URL}/models`,

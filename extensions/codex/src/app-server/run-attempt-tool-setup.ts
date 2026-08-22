@@ -24,6 +24,7 @@ import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
+import { CodexCompactionPlanState } from "./plan-compaction-state.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
@@ -83,8 +84,14 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       },
     );
   }
-  const toolState = {
+  const toolState: {
+    yieldDetected: boolean;
+    yieldAcknowledgment?: string;
+    persistentWebSearchAllowed?: boolean;
+    webSearchAllowed: boolean;
+  } = {
     yieldDetected: false,
+    yieldAcknowledgment: undefined,
     persistentWebSearchAllowed: undefined as boolean | undefined,
     webSearchAllowed: false,
   };
@@ -115,16 +122,18 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         return ordinal;
       }
     : undefined;
-  const dynamicToolParams =
-    allocateCodexToolOutcomeOrdinal || onCodexToolOutcome
-      ? {
-          ...runtimeParams,
-          ...(allocateCodexToolOutcomeOrdinal
-            ? { allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal }
-            : {}),
-          ...(onCodexToolOutcome ? { onToolOutcome: onCodexToolOutcome } : {}),
-        }
-      : runtimeParams;
+  const compactionPlanState = new CodexCompactionPlanState();
+  const dynamicToolParams = {
+    ...runtimeParams,
+    onAgentEvent: (event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0]) => {
+      compactionPlanState.record(event);
+      return runtimeParams.onAgentEvent?.(event);
+    },
+    ...(allocateCodexToolOutcomeOrdinal
+      ? { allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal }
+      : {}),
+    ...(onCodexToolOutcome ? { onToolOutcome: onCodexToolOutcome } : {}),
+  };
   const computerContextEpoch: {
     value: number;
     frameToolCallId?: string;
@@ -180,6 +189,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         runtimeAuthority?: NonNullable<EmbeddedRunAttemptParams["scheduledRuntimeAuthority"]>;
       }>)
     | undefined;
+  const runtimeYieldCompletionClaim: { current?: () => boolean } = {};
   const commonToolParams = {
     params: dynamicToolParams,
     resolvedWorkspace,
@@ -199,9 +209,11 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
           cronCreatorAuthorityUnavailableReason: "queued-local-operator-configured-mcp" as const,
         }
       : {}),
-    onYieldDetected: () => {
+    onYieldDetected: (acknowledgment: string | undefined) => {
       toolState.yieldDetected = true;
+      toolState.yieldAcknowledgment = acknowledgment;
     },
+    claimYieldCompletion: () => runtimeYieldCompletionClaim.current?.() ?? false,
     onCodexAppServerEvent: (event: Parameters<typeof emitCodexAppServerEvent>[1]) => {
       void emitCodexAppServerEvent(params, event);
     },
@@ -539,6 +551,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       cronCreatorToolAllowlistCaptureRef,
       scheduledAppAuthoritySourceRef,
       dynamicToolParams,
+      compactionPlanState,
       computerContextEpoch,
       toolBridge,
       toolState,
@@ -546,6 +559,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       suppressedDynamicToolOutcomeOrdinals,
       onCodexToolOutcome,
       allocateCodexToolOutcomeOrdinal,
+      runtimeYieldCompletionClaim,
     };
   } catch (error) {
     // Materialized runtimes are attempt-owned only after this function returns.

@@ -3,8 +3,6 @@
     <string name="chat" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الدردشة"</string>
     <string name="session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الجلسة"</string>
     <string name="model" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"النموذج"</string>
-    <string name="previous_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s السابق"</string>
-    <string name="next_item" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s التالي"</string>
     <string name="controls" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"عناصر التحكم"</string>
     <string name="talk" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"التحدث"</string>
     <string name="real_time_audio_failed" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فشل صوت الساعة"</string>
@@ -41,6 +39,17 @@
     <string name="start_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"بدء محادثة"</string>
     <string name="start_conversation_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"تحدّث أو اكتب على ساعتك. يرسل الهاتف المقترن الرسالة عبر جلسة OpenClaw المصادق عليها."</string>
     <string name="current_session" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"الجلسة الحالية"</string>
+    <string name="context_label_value" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"%1$s: %2$s"</string>
+    <string name="close" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"إغلاق"</string>
+    <string name="search" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"بحث"</string>
+    <string name="search_sessions" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"البحث في الجلسات"</string>
+    <string name="search_models" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"البحث في النماذج"</string>
+    <string name="load_more" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"تحميل المزيد"</string>
+    <string name="active_on_phone" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"نشط على الهاتف"</string>
+    <string name="open_on_watch" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"افتح على الساعة"</string>
+    <string name="no_matches" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"لا توجد نتائج مطابقة"</string>
+    <string name="search_sessions_title" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"ابحث عن جلسة"</string>
+    <string name="search_models_title" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"ابحث عن نموذج"</string>
     <string name="appearance" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"المظهر"</string>
     <string name="theme_dark" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"داكن"</string>
     <string name="theme_light" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فاتح"</string>
@@ -86,4 +95,30 @@
     <string name="tile_description" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"افتح الجلسات ورد عبر هاتفك المقترن"</string>
     <string name="tile_open" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"فتح"</string>
     <string name="tile_phone_proxy" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"وكيل الهاتف"</string>
+    <string name="pulse" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Pulse"</string>
+    <string name="pulse_tasks" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"المهام في الخلفية"</string>
+    <string name="pulse_swarm" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"سرب الجلسات"</string>
+    <string name="pulse_attention" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"تنبيه"</string>
+    <string name="pulse_status" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"الحالة: %1$s"</string>
+    <string name="pulse_ready" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"جاهز"</string>
+    <string name="pulse_refreshing" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"جارٍ التحديث"</string>
+    <string name="pulse_unavailable" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"غير متاح"</string>
+    <string name="pulse_loading" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"جارٍ تحميل Pulse"</string>
+    <string name="pulse_loading_detail" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"قراءة التجميعات المحدودة من الهاتف المقترن."</string>
+    <string name="pulse_queued" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"في قائمة الانتظار"</string>
+    <string name="pulse_running" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"قيد التشغيل"</string>
+    <string name="pulse_completed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"مكتملة"</string>
+    <string name="pulse_done" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"تم"</string>
+    <string name="pulse_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"فشل"</string>
+    <string name="pulse_groups" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"المجموعات"</string>
+    <string name="pulse_pending_requests" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"الطلبات المعلقة"</string>
+    <string name="pulse_task_snapshot_bounded" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"لقطة محدودة للنشط والحديث"</string>
+    <string name="pulse_active_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"قائمة المهام النشطة بلغت الحد الأقصى"</string>
+    <string name="pulse_recent_at_limit" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"قائمة المهام الحديثة بلغت الحد الأقصى"</string>
+    <string name="pulse_swarm_active" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"نشط"</string>
+    <string name="pulse_swarm_idle" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"خامل"</string>
+    <string name="pulse_phase" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"المرحلة %1$d"</string>
+    <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"في قائمة الانتظار %1$d، قيد التشغيل %2$d، مكتمل %3$d، فشل %4$d، مخفي %5$d"</string>
+    <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"المزيد من المراحل غير معروضة"</string>
+    <string name="pulse_unknown" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"غير معروف"</string>
 </resources>

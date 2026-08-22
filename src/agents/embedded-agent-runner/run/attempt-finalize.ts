@@ -278,6 +278,7 @@ export async function completeEmbeddedAttemptAfterTurn(
             withSessionManagerRewriteLock: transcript.withSessionManagerRewriteLock,
             config: attempt.config,
             agentId: runtime.sessionAgentId,
+            contextEngineAgentId: attempt.contextEngineAgentId,
           }),
         sessionManager: transcript.sessionManager,
         config: attempt.config,

@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import {
   dispatchTestSessionId,
@@ -51,11 +50,14 @@ describe("sessions.reclaim", () => {
       }),
     );
 
-    expect(reclaim).toHaveBeenCalledWith({
-      sessionId: dispatchTestSessionId,
-      sessionKey: dispatchTestSessionKey,
-      agentId: "main",
-    });
+    expect(reclaim).toHaveBeenCalledWith(
+      {
+        sessionId: dispatchTestSessionId,
+        sessionKey: dispatchTestSessionKey,
+        agentId: "main",
+      },
+      undefined,
+    );
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
@@ -67,17 +69,25 @@ describe("sessions.reclaim", () => {
   });
 
   it("returns an already reclaimed placement as idempotent success", async () => {
-    const reclaim = vi.fn();
+    const reclaimed = makeReclaimedPlacement();
+    const reclaim = vi.fn().mockResolvedValue(reclaimed);
     const respond = await invokeSessionReclaim(
       makeDispatchTestContext({
         workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
         workerSessionPlacementService: {
-          getMany: () => new Map([[dispatchTestSessionId, makeReclaimedPlacement()]]),
+          getMany: () => new Map([[dispatchTestSessionId, reclaimed]]),
         },
       }),
     );
 
-    expect(reclaim).not.toHaveBeenCalled();
+    expect(reclaim).toHaveBeenCalledWith(
+      {
+        sessionId: dispatchTestSessionId,
+        sessionKey: dispatchTestSessionKey,
+        agentId: "main",
+      },
+      undefined,
+    );
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
@@ -88,8 +98,49 @@ describe("sessions.reclaim", () => {
     );
   });
 
-  it("rejects a missing placement", async () => {
-    const reclaim = vi.fn();
+  it("delegates a failed placement to the reclaim owner", async () => {
+    const failed = {
+      ...makeReclaimedPlacement(),
+      state: "failed",
+      environmentId: null,
+      activeOwnerEpoch: null,
+      workspaceBaseManifestRef: null,
+      remoteWorkspaceDir: null,
+      workerBundleHash: null,
+      recoveryError: "device worker is offline",
+      terminalReason: "device worker is offline",
+    } as WorkerSessionPlacementRecord;
+    const local = {
+      ...failed,
+      state: "local",
+      generation: failed.generation + 1,
+      recoveryError: null,
+      terminalReason: null,
+      terminalAtMs: null,
+    } as WorkerSessionPlacementRecord;
+    const reclaim = vi.fn().mockResolvedValue(local);
+    const respond = await invokeSessionReclaim(
+      makeDispatchTestContext({
+        workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
+        workerSessionPlacementService: {
+          getMany: () => new Map([[dispatchTestSessionId, failed]]),
+        },
+      }),
+    );
+
+    expect(reclaim).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        ok: true,
+        placement: expect.objectContaining({ state: "local" }),
+      }),
+      undefined,
+    );
+  });
+
+  it("delegates placement visibility races to the reclaim owner", async () => {
+    const reclaim = vi.fn().mockResolvedValue(makeReclaimedPlacement());
     const respond = await invokeSessionReclaim(
       makeDispatchTestContext({
         workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
@@ -99,11 +150,21 @@ describe("sessions.reclaim", () => {
       }),
     );
 
-    expect(reclaim).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
+    expect(reclaim).toHaveBeenCalledWith(
+      {
+        sessionId: dispatchTestSessionId,
+        sessionKey: dispatchTestSessionKey,
+        agentId: "main",
+      },
       undefined,
-      expect.objectContaining({ code: ErrorCodes.INVALID_REQUEST }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        ok: true,
+        placement: expect.objectContaining({ state: "reclaimed" }),
+      }),
+      undefined,
     );
   });
 });

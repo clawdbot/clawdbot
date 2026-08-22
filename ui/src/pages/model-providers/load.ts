@@ -1,7 +1,6 @@
 // Fetches the gateway signals behind the Models settings page.
 // Each source degrades independently: a missing usage hook or an older
 // gateway must not blank the provider list.
-import type { UsageSummary } from "../../../../src/infra/provider-usage.types.js";
 import type { SessionModelUsage } from "../../../../src/infra/session-cost-usage.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -11,11 +10,16 @@ import type {
   ModelCatalogProviderOutcome,
 } from "../../api/types.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
+import {
+  requestProviderUsage,
+  type ProviderUsageRequestResult,
+} from "../../lib/provider-usage-request.ts";
 import { requestSessionUsage } from "../../lib/sessions/index.ts";
 import { loadModels } from "../chat/models.ts";
 
@@ -28,7 +32,7 @@ export type ModelProvidersData = {
   providerOutcomes: ModelCatalogProviderOutcome[];
   catalogError: string | null;
   config: Record<string, unknown> | null;
-  providerUsage: UsageSummary | null;
+  providerUsage: ProviderUsageRequestResult | null;
   costByProvider: SessionModelUsage[] | null;
   updatedAt: number | null;
   error: string | null;
@@ -60,15 +64,12 @@ function errorMessage(error: unknown): string {
   if (isMissingOperatorReadScopeError(error)) {
     return formatMissingOperatorReadScopeMessage("model providers");
   }
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-  return typeof error === "string" ? error : "request failed";
+  return formatUiError(error, "request failed");
 }
 
 export async function loadModelProvidersData(
   client: GatewayBrowserClient,
-  opts?: { refresh?: boolean; agentId?: string; signal?: AbortSignal },
+  opts: { agentId: string; refresh?: boolean; signal?: AbortSignal },
 ): Promise<ModelProvidersData> {
   const request = <T>(method: string, params?: unknown): Promise<T> =>
     opts?.signal
@@ -79,7 +80,7 @@ export async function loadModelProvidersData(
   const catalogRefresh = opts?.refresh
     ? request<ModelProvidersCatalogResult>("models.list", {
         view: "all",
-        ...(opts.agentId ? { agentId: opts.agentId } : {}),
+        agentId: opts.agentId,
         refresh: true,
       })
         .then((result) => ({ ok: true as const, result: result ?? null }))
@@ -88,15 +89,15 @@ export async function loadModelProvidersData(
   const modelsLoad = opts?.refresh
     ? catalogRefresh.then((catalogResult) =>
         loadModels(client, {
-          ...(opts.agentId ? { agentId: opts.agentId } : {}),
+          agentId: opts.agentId,
           ...(catalogResult.ok ? { refresh: true } : { preparedOnly: true }),
         }),
       )
     : loadModels(client, {
-        ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+        agentId: opts.agentId,
         preparedOnly: true,
       }).catch(() => null);
-  const [authStatus, models, catalogResult, config, providerUsage, costByProvider] =
+  const [authStatus, models, catalogResult, config, providerUsageFetch, costByProvider] =
     await Promise.all([
       loadModelAuthStatus(client, opts).then(
         (result) => ({ ok: true as const, result }),
@@ -107,7 +108,7 @@ export async function loadModelProvidersData(
       request<ConfigSnapshot>("config.get", {})
         .then((snapshot) => resolveEditableSnapshotConfig(snapshot))
         .catch(() => null),
-      request<UsageSummary>("usage.status").catch(() => null),
+      requestProviderUsage(client, opts.signal ? { signal: opts.signal } : undefined),
       requestSessionUsage(client, {
         startDate: localDate(MODEL_PROVIDERS_COST_DAYS - 1),
         endDate: localDate(0),
@@ -124,7 +125,7 @@ export async function loadModelProvidersData(
     providerOutcomes: catalogResult.ok ? (catalogResult.result?.providerOutcomes ?? []) : [],
     catalogError: catalogResult.ok ? null : errorMessage(catalogResult.error),
     config,
-    providerUsage,
+    providerUsage: providerUsageFetch,
     costByProvider,
     updatedAt: Date.now(),
     // Auth status is the primary provider list; its failure is the only one

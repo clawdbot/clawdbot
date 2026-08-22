@@ -2,7 +2,7 @@
 // bootstrap fallback, and runtime facade projection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const resolveDefaultAgentIdMock = vi.hoisted(() => vi.fn());
+const tryResolveAmbientOwnerAgentIdMock = vi.hoisted(() => vi.fn());
 const resolveAgentWorkspaceDirMock = vi.hoisted(() => vi.fn());
 const getLoadedChannelPluginMock = vi.hoisted(() => vi.fn());
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
@@ -15,7 +15,7 @@ const normalizeMessageChannelMock = vi.hoisted(() => vi.fn());
 const isDeliverableMessageChannelMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  resolveDefaultAgentId: (...args: unknown[]) => resolveDefaultAgentIdMock(...args),
+  tryResolveAmbientOwnerAgentId: (...args: unknown[]) => tryResolveAmbientOwnerAgentIdMock(...args),
   resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
 }));
 
@@ -73,7 +73,7 @@ function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }): Record<s
 describe("outbound channel resolution", () => {
   beforeEach(async () => {
     vi.resetModules();
-    resolveDefaultAgentIdMock.mockReset();
+    tryResolveAmbientOwnerAgentIdMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
     getLoadedChannelPluginMock.mockReset();
     getChannelPluginMock.mockReset();
@@ -99,7 +99,7 @@ describe("outbound channel resolution", () => {
     });
     resolveDiscoverableScopedChannelPluginIdsMock.mockReturnValue(["alpha-plugin"]);
     resolveRuntimePluginRegistryMock.mockReturnValue({ channels: [] });
-    resolveDefaultAgentIdMock.mockReturnValue("main");
+    tryResolveAmbientOwnerAgentIdMock.mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
   });
 

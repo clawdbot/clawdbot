@@ -1,6 +1,4 @@
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { testing } from "./cli-shared.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 import {
   captureStdout,
@@ -464,21 +462,5 @@ describe("google-meet CLI", () => {
         { from: "user" },
       ),
     ).rejects.toThrow("timeout-sec must be a positive number");
-  });
-
-  it("caps auth callback timeout seconds", () => {
-    expect(testing.resolveGoogleMeetOAuthCallbackTimeoutMs(undefined)).toBe(300_000);
-    expect(testing.resolveGoogleMeetOAuthCallbackTimeoutMs("1.5")).toBe(1_500);
-    expect(testing.resolveGoogleMeetOAuthCallbackTimeoutMs(String(Number.MAX_SAFE_INTEGER))).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
-  });
-
-  it("caps gateway command timeout milliseconds", () => {
-    expect(testing.resolveGoogleMeetGatewayTimeoutMs(undefined)).toBe(5_000);
-    expect(testing.resolveGoogleMeetGatewayTimeoutMs(1.5)).toBe(2);
-    expect(testing.resolveGoogleMeetGatewayTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
   });
 });

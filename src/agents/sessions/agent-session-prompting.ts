@@ -100,10 +100,10 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     } satisfies PersistedUserTurnMessage;
     const imageFactIndexes = readRuntimePromptImageFactIndexes(images);
     return imageFactIndexes
-      ? ({
+      ? Object.assign({}, message, {
           ...message,
           __openclaw: { mediaImageBlockFactIndexes: imageFactIndexes },
-        } as unknown as PersistedUserTurnMessage)
+        })
       : message;
   }
 

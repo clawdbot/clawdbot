@@ -185,7 +185,6 @@ export async function warnIfModelConfigLooksOff(
                 (options?.agentId
                   ? resolveAgentDir(config, options.agentId)
                   : resolveDefaultAgentDir(config)),
-              inheritedAuthDir: resolveDefaultAgentDir(config),
               workspaceDir: resolveAgentWorkspaceDir(config, validationAgentId),
             },
             { force: true, provenance: "explicit" },

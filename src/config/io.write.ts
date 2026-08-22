@@ -63,7 +63,7 @@ import type {
 } from "./io.types.js";
 import { ConfigRuntimeRefreshError, configWritePostCommitRollback } from "./io.types.js";
 import { logConfigWarningsOnce } from "./io.warnings.js";
-import { formatConfigValidationFailure } from "./io.write-errors.js";
+import { createConfigValidationFailedError } from "./io.write-errors.js";
 import {
   preserveIncludeOwnedConfigForWrite,
   resolvePersistCandidateForWrite,
@@ -278,7 +278,7 @@ export async function writeConfigFileFromContext(
     );
   }
   const cronOwnerRefusal = persistOwnership
-    ? await prepareCronOwnerWriteRefusal({
+    ? await prepareCronOwnerWriteRefusal(snapshot.config, {
         storePath: resolveCronJobsStorePathFromConfig(nextConfig, deps.env),
         ...(retainedFleetOwner ? { provenOwnerAgentId: retainedFleetOwner } : {}),
         env: deps.env,
@@ -362,13 +362,11 @@ export async function writeConfigFileFromContext(
   const validated = validateConfigObjectRawWithPlugins(validationCandidate, {
     env: deps.env,
     pluginValidation: options.skipPluginValidation ? "skip" : "full",
+    semanticValidation: "strict",
     preservedLegacyRootKeys: options.preservedLegacyRootKeys,
   });
   if (!validated.ok) {
-    const issue = validated.issues[0];
-    throw new Error(
-      formatConfigValidationFailure(issue?.path || "<root>", issue?.message ?? "invalid"),
-    );
+    throw createConfigValidationFailedError(validated.issues);
   }
   const previousWarningFingerprint = loggedConfigWarningFingerprints.get(configPath);
   // Capture before commit so rollback cannot restore a watcher-updated slot.

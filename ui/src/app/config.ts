@@ -5,7 +5,7 @@ import {
   type ControlUiBootstrapConfig,
   type ControlUiEmbedSandboxMode,
   type ControlUiPluginFrameGrantAck,
-} from "../../../src/gateway/control-ui-contract.js";
+} from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
 import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
 
@@ -38,10 +38,12 @@ type ApplicationConfig = {
     avatarReason: string | null;
   };
   serverVersion: string | null;
+  serverBuildId?: string | null;
   devGitBranch: string | null;
   localMediaPreviewRoots: string[];
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
+  automaticallyFetchFavicons: boolean;
   terminalEnabled: boolean;
   cliAgentsEnabled?: boolean;
   pluginFrameGrants: ControlUiPluginFrameGrantAck[];
@@ -75,10 +77,12 @@ const DEFAULT_APPLICATION_CONFIG: ApplicationConfig = {
     avatarReason: null,
   },
   serverVersion: null,
+  serverBuildId: null,
   devGitBranch: null,
   localMediaPreviewRoots: [],
   embedSandboxMode: "strict",
   allowExternalEmbedUrls: false,
+  automaticallyFetchFavicons: false,
   terminalEnabled: readDocumentTerminalEnabled() ?? false,
   cliAgentsEnabled: false,
   pluginFrameGrants: [],
@@ -142,6 +146,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
       avatarReason: identity.avatarReason ?? null,
     },
     serverVersion: parsed.serverVersion ?? null,
+    serverBuildId: parsed.serverBuildId ?? null,
     devGitBranch:
       typeof parsed.devGitBranch === "string" && parsed.devGitBranch.trim()
         ? parsed.devGitBranch.trim()
@@ -156,6 +161,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
           ? "strict"
           : "scripts",
     allowExternalEmbedUrls: parsed.allowExternalEmbedUrls === true,
+    automaticallyFetchFavicons: parsed.automaticallyFetchFavicons === true,
     terminalEnabled: parsed.terminalEnabled === true,
     cliAgentsEnabled: parsed.cliAgentsEnabled === true,
     pluginFrameGrants: Array.isArray(parsed.pluginFrameGrants)
@@ -170,7 +176,7 @@ function normalizeApplicationConfig(parsed: ControlUiBootstrapConfig): Applicati
 }
 
 async function loadApplicationConfig(params: {
-  basePath: string;
+  resourceBasePath: string;
   auth?: ApplicationConfigAuthSource;
   skipWithoutAuthCandidate?: boolean;
   signal?: AbortSignal;
@@ -179,9 +185,9 @@ async function loadApplicationConfig(params: {
     return null;
   }
 
-  const basePath = normalizeRouteBasePath(params.basePath);
-  const url = basePath
-    ? `${basePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
+  const resourceBasePath = normalizeRouteBasePath(params.resourceBasePath);
+  const url = resourceBasePath
+    ? `${resourceBasePath}${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`
     : CONTROL_UI_BOOTSTRAP_CONFIG_PATH;
 
   try {
@@ -223,7 +229,7 @@ async function loadApplicationConfig(params: {
 }
 
 export function createApplicationConfigCapability(params: {
-  basePath: string;
+  resourceBasePath: string;
   auth?: ApplicationConfigAuthSource;
 }): ApplicationConfigCapability {
   let current = DEFAULT_APPLICATION_CONFIG;
@@ -246,7 +252,7 @@ export function createApplicationConfigCapability(params: {
       currentAuth = options?.auth ?? currentAuth;
       const version = ++refreshVersion;
       const next = await loadApplicationConfig({
-        basePath: params.basePath,
+        resourceBasePath: params.resourceBasePath,
         auth: currentAuth,
         skipWithoutAuthCandidate: options?.skipWithoutAuthCandidate,
         signal: options?.signal,

@@ -31,6 +31,10 @@ and what the automatic resume looks like.
 | Restart continuation          | SQLite restart sentinel                     | One-shot follow-up dispatched to the session that asked for the restart |
 | Gateway terminal PTYs         | Process memory                              | End with the old process; terminal sessions are not recovered           |
 
+Pending delivery rows drain or retry after restart. Failed rows discard their
+payload; only reusable or crash-ambiguous owners keep a minimal bounded or
+permanent receipt that prevents duplicate delivery.
+
 ## Graceful restarts drain first
 
 A requested restart (`openclaw gateway restart`, a config change that requires

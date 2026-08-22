@@ -197,6 +197,55 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     }
   });
 
+  it("atomically filters and restores direct tools plus the hidden catalog", () => {
+    const runtime = createRuntime({ tools: { toolSearch: true } });
+    const compacted = runtime.compactTools(
+      tools([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "read", "hidden_alpha", "hidden_beta"]),
+    );
+
+    try {
+      const alpha = compacted.promptToolPolicy.apply({ toolsAllow: ["hidden_alpha"] });
+      expect(alpha.tools.map((tool) => tool.name)).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME]);
+      expect(alpha.callableToolNames).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "hidden_alpha"]);
+
+      const beta = compacted.promptToolPolicy.apply({ toolsAllow: ["hidden_beta"] });
+      expect(beta.tools.map((tool) => tool.name)).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME]);
+      expect(beta.callableToolNames).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "hidden_beta"]);
+
+      const restored = compacted.promptToolPolicy.apply();
+      expect(restored.tools).toEqual(compacted.tools);
+      expect(restored.callableToolNames).toEqual([
+        TOOL_SEARCH_CODE_MODE_TOOL_NAME,
+        "read",
+        "hidden_alpha",
+        "hidden_beta",
+      ]);
+    } finally {
+      runtime.cleanup();
+    }
+  });
+
+  it("derives callable inventory after runtime schema projection", () => {
+    const runtime = createRuntime({ tools: { toolSearch: true } });
+    const invalid = {
+      ...createStubTool("invalid_hidden"),
+      parameters: { type: "array", items: { type: "number" } },
+    };
+    const compacted = runtime.compactTools([
+      ...tools([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "valid_hidden"]),
+      invalid,
+    ]);
+
+    try {
+      expect(compacted.promptToolPolicy.apply().callableToolNames).toEqual([
+        TOOL_SEARCH_CODE_MODE_TOOL_NAME,
+        "valid_hidden",
+      ]);
+    } finally {
+      runtime.cleanup();
+    }
+  });
+
   it.each([
     { name: "message-only delivery", sourceReplyDeliveryMode: "message_tool_only" as const },
     { name: "forced message delivery", forceMessageTool: true },

@@ -1,6 +1,8 @@
 import type { WebSocket } from "ws";
 import { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import type {
+  WorkerGitHubPublishParams,
+  WorkerGitHubPublishResponseFrame,
   WorkerHeartbeatParams,
   WorkerHeartbeatResponseFrame,
   WorkerHelloOk,
@@ -221,6 +223,12 @@ export class WorkerConnection {
     );
   }
 
+  requestGitHubPublish(
+    params: WorkerGitHubPublishParams,
+  ): Promise<WorkerGitHubPublishResponseFrame> {
+    return this.requestDurableSessionOperation(() => this.frames.request("github-publish", params));
+  }
+
   private async requestDurableSessionOperation<T>(request: () => Promise<T>): Promise<T> {
     for (;;) {
       try {
@@ -278,8 +286,17 @@ export class WorkerConnection {
         }
       }
       try {
-        return await this.connectOnce(attempt, Math.min(this.admissionTimeoutMs, remainingMs));
+        const hello = await this.connectOnce(
+          attempt,
+          Math.min(this.admissionTimeoutMs, remainingMs),
+        );
+        this.reportConnectionFailure(undefined);
+        return hello;
       } catch (error) {
+        if (this.isTerminal()) {
+          throw this.terminalError();
+        }
+        this.reportConnectionFailure(toWorkerConnectionError(error));
         if (error instanceof WorkerAdmissionError) {
           if (error.retryable) {
             attempt += 1;
@@ -291,9 +308,6 @@ export class WorkerConnection {
         if (error instanceof WorkerConnectionEndpointError) {
           this.finishFailed(error);
           throw error;
-        }
-        if (this.isTerminal()) {
-          throw this.terminalError();
         }
         attempt += 1;
       }
@@ -439,6 +453,14 @@ export class WorkerConnection {
   private transition(state: WorkerConnectionState): void {
     this.stateValue = state;
     notifyListeners(this.stateListeners, state);
+  }
+
+  private reportConnectionFailure(error: Error | undefined): void {
+    try {
+      this.options.onConnectionFailure?.(error);
+    } catch {
+      // Diagnostics must never change connection retry or admission behavior.
+    }
   }
 
   private finishFenced(reason: WorkerFencedReason): void {

@@ -72,7 +72,7 @@ function createDispatcher(
   handler: NonNullable<GatewayWsMessageHandlerParams["extraHandlers"][string]>,
   context: Record<string, unknown> = {},
 ) {
-  const send = vi.fn();
+  const send = vi.fn((_frame: unknown) => ({ kind: "sent" }) as const);
   const close = vi.fn();
   const setCloseCause = vi.fn();
   const logGateway = {
@@ -272,6 +272,7 @@ describe("authenticated WebSocket request trace dispatch", () => {
     });
     send.mockImplementation(() => {
       responseContext = getActiveDiagnosticTraceContext();
+      return { kind: "sent" } as const;
     });
 
     await dispatchInFreshMessageScope(dispatcher, createClient(), "failure", TRACEPARENTS.first);
@@ -438,6 +439,107 @@ describe("authenticated WebSocket request trace dispatch", () => {
       });
       expect(firstObservation?.after).toEqual(firstObservation?.before);
       expect(secondObservation?.after).toEqual(secondObservation?.before);
+    } finally {
+      ws?.terminate();
+      await server.close();
+      resetTestPluginRegistry();
+    }
+  });
+
+  it("returns a typed error when a handler response cannot be serialized", async () => {
+    let invalidSerializationAttempts = 0;
+    const healthySerializationAttempts = new Map<string, number>();
+    const registry = createEmptyPluginRegistry();
+    registry.gatewayHandlers["test.serialize"] = ({ req, respond }) => {
+      const invalid = req.id === "invalid-payload";
+      respond(true, {
+        toJSON: () => {
+          if (invalid) {
+            invalidSerializationAttempts += 1;
+            return { value: 1n };
+          }
+          const attempts = (healthySerializationAttempts.get(req.id) ?? 0) + 1;
+          healthySerializationAttempts.set(req.id, attempts);
+          if (attempts > 1) {
+            throw new Error("healthy response serialized more than once");
+          }
+          return { value: 1 };
+        },
+      });
+    };
+    setTestPluginRegistry(registry);
+
+    const token = "gateway-response-serialization-test-token";
+    const port = await getGatewayTestPort();
+    const server = await startTestGatewayServer(port, {
+      auth: { mode: "token", token },
+      bind: "loopback",
+      controlUiEnabled: false,
+    });
+    let ws: WebSocket | undefined;
+    try {
+      ws = await openAuthenticatedTraceSocket({
+        port,
+        token,
+        connectTraceparent: TRACEPARENTS.first,
+      });
+      const response = onceMessage<{ type: "res"; id: string; ok: boolean; error?: unknown }>(
+        ws,
+        (value) => value.type === "res" && value.id === "invalid-payload",
+      );
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: "invalid-payload",
+          method: "test.serialize",
+          params: {},
+        }),
+      );
+
+      await expect(response).resolves.toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE", message: "response serialization failed" },
+      });
+      expect(invalidSerializationAttempts).toBe(1);
+      await expect(
+        onceMessage(ws, (value) => value.type === "res" && value.id === "invalid-payload", 100),
+      ).rejects.toThrow("timeout");
+
+      const healthyResponse = onceMessage<{ type: "res"; id: string; ok: boolean }>(
+        ws,
+        (value) => value.type === "res" && value.id === "healthy-after-error",
+      );
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: "healthy-after-error",
+          method: "test.serialize",
+          params: {},
+        }),
+      );
+      await expect(healthyResponse).resolves.toMatchObject({ ok: true });
+      expect(healthySerializationAttempts.get("healthy-after-error")).toBe(1);
+
+      ws.terminate();
+      ws = await openAuthenticatedTraceSocket({
+        port,
+        token,
+        connectTraceparent: TRACEPARENTS.second,
+      });
+      const reconnectResponse = onceMessage<{ type: "res"; id: string; ok: boolean }>(
+        ws,
+        (value) => value.type === "res" && value.id === "healthy-after-reconnect",
+      );
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: "healthy-after-reconnect",
+          method: "test.serialize",
+          params: {},
+        }),
+      );
+      await expect(reconnectResponse).resolves.toMatchObject({ ok: true });
+      expect(healthySerializationAttempts.get("healthy-after-reconnect")).toBe(1);
     } finally {
       ws?.terminate();
       await server.close();

@@ -8,8 +8,8 @@ title: "macOS app"
 ---
 
 The macOS app is the OpenClaw **menu bar companion**: native tray UI, macOS
-permission prompts, notifications, WebChat, voice input, Canvas, and
-Mac-hosted node tools such as `system.run`.
+permission prompts, notifications, WebChat, voice input, a hosted-widget panel,
+and Mac-hosted node tools such as `system.run`.
 
 Use **Quick Chat** for a Spotlight-style main-session composer without opening a full window. Press Option-Space (⌥Space) by default, choose it from the menu bar menu, or record another shortcut in **Settings → General**.
 
@@ -98,6 +98,14 @@ Right-click an external link to choose **Open in Sidebar**, **Open in Default Br
 
 The first time the browser sidebar opens while the app runs against a local Gateway, the dashboard shows a dismissible banner when a Chrome-family profile with cookies exists on the Mac. The banner offers to copy those cookies into an isolated managed profile that agents use for browsing. Choose a profile from its **Import** control (Touch ID may be required); progress and the imported-cookie count appear inline, and only cookies are copied — passwords never leave the source browser. Dismissing the banner records the choice; **Settings → General → Browser login → Import…** re-offers it at any time. See [Browser](/cli/browser) for the underlying import flow and the `browser.allowSystemProfileImport` gate.
 
+## Sync cookies to a remote computer
+
+Import copies cookies once into a profile on the same Mac. When your Gateway and agent browser run on a **separate computer** (a dedicated box, a headless Linux host, or a cloud container), turn on cookie sync so this Mac keeps that remote browser signed in to the sites you choose.
+
+Open **Settings → General → Cookie sync**. It is **off by default** and only takes effect while the app runs in remote mode. Turn on **Sync cookies to the remote computer**, add the sites you want kept in sync to the **Domains** allowlist (for example `github.com` and `accounts.google.com`), and set the **Target profile** that receives them (the managed profile name on the remote Gateway, `imported` by default). A status row shows whether sync is running.
+
+While enabled, the app supervises the [`openclaw browser cookie-sync --watch`](/cli/browser#cookie-sync-to-a-remote-gateway) command against the connected Gateway. Cookies are decrypted locally on this Mac (one macOS Keychain or Touch ID prompt per session) and pushed to the remote profile over the app's existing encrypted Gateway connection; only the domains on the allowlist are ever sent, and cookie values are never written to logs. An empty allowlist syncs nothing. As with import, some Google sessions use device-bound session credentials (DBSC) that stay tied to this Mac and may still require re-authentication after sync; for those sites, drive the browser on the Mac itself through the [browser node proxy](/cli/browser#remote-browser-control-node-host-proxy) instead.
+
 ## Choose a Gateway mode
 
 | Mode   | Use it when                                                                    | Detail page                                        |
@@ -115,7 +123,7 @@ See [Gateway on macOS](/platforms/mac/bundled-gateway) for manual recovery.
 
 - Menu bar status, notifications, health, WebChat, and the floating Quick Chat bar.
 - macOS permission prompts for screen, microphone, speech, automation, and accessibility.
-- One Mac node that combines native Canvas, camera/screen capture, notifications,
+- One Mac node that combines the native widget panel, camera/screen capture, notifications,
   location, and computer control with the CLI node host's system, browser,
   plugin, skill, and MCP commands.
 - Exec approval prompts for Mac-hosted commands.
@@ -144,7 +152,7 @@ own docs.
 | Read menu bar status and health checks   | [Menu bar](/platforms/mac/menu-bar), [Health checks](/platforms/mac/health)                 |
 | Use the embedded chat UI                 | [WebChat](/platforms/mac/webchat)                                                           |
 | Use voice wake or push-to-talk           | [Voice wake](/platforms/mac/voicewake)                                                      |
-| Use Canvas and Canvas deep links         | [Canvas](/platforms/mac/canvas)                                                             |
+| Present hosted widgets in the Mac panel  | [Widget panel](/platforms/mac/canvas)                                                       |
 | Host PeekabooBridge for UI automation    | [Peekaboo bridge](/platforms/mac/peekaboo)                                                  |
 | Configure command approvals              | [Exec approvals](/tools/exec-approvals), [advanced details](/tools/exec-approvals-advanced) |
 | Inspect Mac node commands and app IPC    | [macOS IPC](/platforms/mac/xpc)                                                             |

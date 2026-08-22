@@ -2,6 +2,10 @@
  * Prepares the attempt-local tool catalog, schema projection, and diagnostics.
  */
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import {
+  isCodeModeDiagnosticEnabled,
+  logCodeModeDiagnostic,
+} from "../../../logging/code-mode-diagnostic.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
@@ -127,6 +131,14 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
   effectiveTools = toolSearchSchemaProjection.tools.map((tool) =>
     wrapEmbeddedAttemptToolWithActivity(tool, attempt.runId),
   );
+  if (codeModeControlsEnabledForRun && isCodeModeDiagnosticEnabled()) {
+    logCodeModeDiagnostic(log, "final-surface", {
+      runId: attempt.runId,
+      fallbackActive: attempt.fallbackActive === true,
+      catalogToolCount: toolSearch.catalogToolCount,
+      visibleToolNames: effectiveTools.map((tool) => tool.name),
+    });
+  }
   if (toolSearch.compacted && !toolSearch.catalogReused) {
     input.markStage(codeModeControlsEnabledForRun ? "code-mode" : "tool-search");
     log.info(

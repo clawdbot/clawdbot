@@ -19,7 +19,7 @@ import { t } from "../wizard/i18n/index.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 
-const GATEWAY_SETUP_DETECT_TIMEOUT_MS = 20_000;
+const GATEWAY_SETUP_DETECT_TIMEOUT_MS = 40_000;
 const GATEWAY_SETUP_ACTIVATE_TIMEOUT_MS = 150_000;
 const GATEWAY_CODEX_SETUP_ACTIVATE_TIMEOUT_MS = 480_000;
 const GATEWAY_SETUP_VERIFY_TIMEOUT_MS = 30_000;
