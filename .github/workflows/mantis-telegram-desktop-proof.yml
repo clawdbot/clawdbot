@@ -595,7 +595,7 @@ jobs:
           test -z "$(find "$build_cache_root" -type f -links +1 -print -quit)"
 
       - name: Save exact baseline build
-        if: steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.baseline_build_cache.outputs.cache-hit != 'true'
+        if: github.ref == 'refs/heads/main' && steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.baseline_build_cache.outputs.cache-hit != 'true'
         continue-on-error: true
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:

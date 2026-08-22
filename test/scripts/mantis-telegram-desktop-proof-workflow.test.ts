@@ -716,6 +716,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(createRun).toContain('git worktree add --detach "$candidate_root" "$CANDIDATE_SHA"');
     expect(restore.uses).toContain("actions/cache/restore@");
     expect(setup.with?.["cache-mode"]).toBe("read-write");
+    expect(save.if).toContain("github.ref == 'refs/heads/main'");
     expect(save.if).toContain("steps.setup-node-env.outputs.cache-mode == 'read-write'");
     expect(restore.with?.key).toContain("needs.resolve_request.outputs.baseline_revision");
     expect(restore.with?.key).toContain("steps.proof_worktrees.outputs.lockfile_sha256");
