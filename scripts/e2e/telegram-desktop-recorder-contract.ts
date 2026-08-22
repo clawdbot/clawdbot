@@ -21,9 +21,6 @@ export const recorderAuthorizationFailureFactSchema = z.object({
 });
 
 export type RecorderAuthorizationFailure = z.infer<typeof recorderAuthorizationFailureSchema>;
-export type RecorderAuthorizationFailureFact = z.infer<
-  typeof recorderAuthorizationFailureFactSchema
->;
 
 const recorderSessionBaseSchema = z.object({
   artifacts: z.record(z.string(), z.string()).optional(),
