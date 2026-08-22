@@ -9,9 +9,12 @@ import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
+import { isContextCompactionActivity } from "./chat-progress.ts";
 import { resolveMessageToolUseId, resolveToolBlockId } from "./chat-thread-items.ts";
 import {
   isKeyedAssistantStreamFallbackMessage,
+  streamPartBoundaryId,
+  streamPartRunId,
   transcriptRunId,
 } from "./chat-thread-run-identity.ts";
 import {
@@ -128,7 +131,6 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
   }
   return stampReplyAttribution(result);
 }
-
 function mergeToolCallResultPair(callItem: ChatItem, resultItem: ChatItem): ChatItem | null {
   if (callItem.kind !== "message" || resultItem.kind !== "message") {
     return null;
@@ -472,25 +474,13 @@ export type StreamRunRenderItem = {
   key: string;
   runId?: string;
   boundaryId?: string;
-  parts: Array<
-    Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" } | { kind: "question" }>
-  >;
+  parts: Array<Extract<ChatItem, { kind: "stream" | "reading-indicator" | "question" }>>;
 };
-function streamPartRunId(part: StreamRunRenderItem["parts"][number]): string | undefined {
-  return part.kind === "question" ? undefined : part.runId;
-}
-
-function streamPartBoundaryId(part: StreamRunRenderItem["parts"][number]): string | undefined {
-  return part.kind === "question" ? undefined : part.boundaryId;
-}
-
 export function coalesceStreamRuns(
   items: RenderChatItem[],
 ): Array<RenderChatItem | StreamRunRenderItem> {
   const result: Array<RenderChatItem | StreamRunRenderItem> = [];
   let run: StreamRunRenderItem["parts"] = [];
-  // Contiguous in-flight stream and reading-indicator items render under one
-  // assistant avatar; messages, groups, and dividers intentionally break the run.
   const flush = () => {
     const [first] = run;
     if (first) {
@@ -575,10 +565,6 @@ export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolea
     !group.messages.every(({ message }) => isContextCompactionActivity(message)) &&
     groupHasVisibleReplyContent(group)
   );
-}
-
-function isContextCompactionActivity(message: unknown): boolean {
-  return asRecord(asRecord(message)?.["__openclaw"])?.runtimeActivityKind === "context_compaction";
 }
 
 // History carries no final-vs-commentary marker (commentary exists only as

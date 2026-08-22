@@ -1621,7 +1621,7 @@ describe("chat transcript rendering", () => {
     );
   });
 
-  it("announces streamed text from an appended agent run frame", () => {
+  it("announces a run preamble and its later terminal answer separately", () => {
     const transcript = createTestTranscript();
     const container = document.createElement("div");
     const user = {
@@ -1643,21 +1643,22 @@ describe("chat transcript rendering", () => {
     };
     const renderItems = (items: ReturnType<typeof chatThread.buildCachedChatItems>) => {
       vi.mocked(chatThread.buildCachedChatItems).mockReturnValue(items);
-      renderChatInto(container, { transcript });
+      renderChatInto(container, { transcript, messages: items });
     };
 
     renderItems([user] as ReturnType<typeof chatThread.buildCachedChatItems>);
+    const stream = {
+      kind: "stream" as const,
+      key: "stream:announcement",
+      text: "Latest streamed narration",
+      startedAt: 2,
+      isStreaming: true,
+      runId: "run-announcement",
+      boundaryId: "send:run-announcement",
+    };
     renderItems([
       user,
-      {
-        kind: "stream",
-        key: "stream:announcement",
-        text: "Latest streamed narration",
-        startedAt: 2,
-        isStreaming: true,
-        runId: "run-announcement",
-        boundaryId: "send:run-announcement",
-      },
+      stream,
       {
         kind: "reading-indicator",
         key: "reading:announcement",
@@ -1669,6 +1670,52 @@ describe("chat transcript rendering", () => {
 
     expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
       "Latest streamed narration",
+    );
+
+    renderItems([
+      user,
+      { ...stream, isStreaming: false },
+      {
+        kind: "group",
+        key: "group:tool:announcement",
+        role: "tool",
+        messages: [
+          {
+            key: "tool:announcement",
+            message: {
+              role: "toolResult",
+              content: "Tool output",
+              runId: "run-announcement",
+            },
+          },
+        ],
+        timestamp: 3,
+        isStreaming: false,
+        runId: "run-announcement",
+      },
+      {
+        kind: "group",
+        key: "group:assistant:announcement",
+        role: "assistant",
+        messages: [
+          {
+            key: "assistant:announcement",
+            message: {
+              role: "assistant",
+              phase: "final_answer",
+              content: "Terminal answer",
+              runId: "run-announcement",
+            },
+          },
+        ],
+        timestamp: 4,
+        isStreaming: false,
+        runId: "run-announcement",
+      },
+    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+
+    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+      "Terminal answer",
     );
   });
 
@@ -7376,6 +7423,23 @@ describe("right-click Reply", () => {
     dispatchContextMenu(bubble);
     document.querySelector<HTMLButtonElement>('[aria-label="Copy as markdown"]')!.click();
     expect(onCopy).toHaveBeenCalledOnce();
+  });
+
+  it("offers Reply only for the bubble that owns the frame actions", () => {
+    const onSetReply = vi.fn();
+    const { bubble, group } = renderChatBubble(
+      { onSetReply },
+      { messageId: "commentary", text: "Intermediate commentary" },
+    );
+    const actionOwner = document.createElement("div");
+    actionOwner.dataset.messageActionsFor = "terminal";
+    group.append(actionOwner);
+    group.dataset.chatRowKey = 'agent-run:["run-1","send:send-1"]';
+
+    const event = dispatchContextMenu(bubble);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
   });
 
   it("dismisses an inline confirmation before opening the reply context menu", () => {

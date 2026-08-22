@@ -29,6 +29,22 @@ export function attachCodexMirrorAttestation(
   return attested;
 }
 
+export function attachCodexMirrorRunId<T extends AgentMessage>(
+  message: T,
+  runId: string,
+  terminal = false,
+): T {
+  const existing = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
+  return {
+    ...message,
+    [CODEX_META_KEY]: {
+      ...(existing && typeof existing === "object" && !Array.isArray(existing) ? existing : {}),
+      runId,
+      ...(terminal ? { runTerminal: true } : {}),
+    },
+  } as T; // SAFETY: AgentMessage variants permit provider metadata at runtime; preserve T.
+}
+
 export function readCodexMirrorSourceFingerprint(message: AgentMessage): string | undefined {
   const meta = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
   if (!meta || typeof meta !== "object" || Array.isArray(meta)) {

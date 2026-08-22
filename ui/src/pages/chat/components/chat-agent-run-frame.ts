@@ -4,7 +4,6 @@ import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import {
   agentRunFrameActiveStatusParts,
   agentRunFrameGroups,
-  agentRunFrameTerminalAssistant,
   type AgentRunFrameRenderItem,
 } from "../chat-agent-run-grouping.ts";
 import type { TurnRecap } from "../chat-progress.ts";
@@ -39,8 +38,8 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
   }
   const groups = agentRunFrameGroups(frame);
   const firstAssistant = groups.find((group) => group.role === "assistant");
-  const terminalAssistant = agentRunFrameTerminalAssistant(frame);
-  const representative = terminalAssistant ?? firstAssistant ?? groups[0];
+  const actionOwner = frame.outcome.kind === "completed" ? frame.outcome.actionOwner : null;
+  const representative = firstAssistant ?? groups[0];
   const streamStarts = frame.parts.flatMap((part) =>
     part.kind === "stream-run" ? part.parts.map((streamPart) => streamPart.startedAt) : [],
   );
@@ -52,7 +51,7 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
     replyToSender: firstAssistant?.replyToSender,
     messages: representative?.messages ?? [],
     timestamp: Math.min(...groups.map((group) => group.timestamp), ...streamStarts, Date.now()),
-    isStreaming: frame.state === "active",
+    isStreaming: frame.outcome.kind === "active",
     runId: frame.runId,
   };
   const renderFrameGroup = (group: MessageGroup) =>
@@ -85,7 +84,7 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
   return renderMessageGroup(shell, {
     ...opts.renderGroupOptions(shell),
     frameContent,
-    frameActionOwner: terminalAssistant?.messages.at(-1) ?? null,
+    frameActionOwner: actionOwner,
     turnRecap: opts.turnRecap,
   });
 }

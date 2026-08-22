@@ -42,6 +42,18 @@ export function optionalBoundaryIdentity(value: unknown): { boundaryId: string }
   return runId ? { boundaryId: `send:${runId}` } : undefined;
 }
 
+export function streamPartRunId(
+  part: Extract<ChatItem, { kind: "stream" | "reading-indicator" | "question" }>,
+): string | undefined {
+  return part.kind === "question" ? undefined : part.runId;
+}
+
+export function streamPartBoundaryId(
+  part: Extract<ChatItem, { kind: "stream" | "reading-indicator" | "question" }>,
+): string | undefined {
+  return part.kind === "question" ? undefined : part.boundaryId;
+}
+
 function isUserChatItem(item: ChatItem): boolean {
   if (item.kind !== "message") {
     return false;

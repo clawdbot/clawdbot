@@ -16,7 +16,6 @@ import { resolveTurnRecap, type TurnRecap } from "../chat-progress.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   agentRunFrameGroups,
-  agentRunFrameTerminalAssistant,
   assistantMessageExpansionSignature,
   buildCachedChatItems,
   coalesceAgentRunFrames,
@@ -552,8 +551,8 @@ export function projectChatTranscript(
       turnRecapOwnerKey = lastItem.key;
     } else if (
       lastItem?.kind === "agent-run-frame" &&
-      lastItem.state === "terminal" &&
-      agentRunFrameTerminalAssistant(lastItem)
+      lastItem.outcome.kind === "completed" &&
+      lastItem.outcome.actionOwner
     ) {
       turnRecapByGroupKey.set(lastItem.key, turnRecap);
       turnRecapOwnerKey = lastItem.key;

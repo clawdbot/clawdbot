@@ -768,6 +768,8 @@ describe("collapseCompletedTurnWork", () => {
           content: "Context compacted",
           display: true,
           excludeFromContext: true,
+          details: { runId: "run-1" },
+          idempotencyKey: "codex-context-compaction:thread:turn:item",
           timestamp: 2_000,
         },
         assistantMessage("All done.", 3_000),
@@ -780,8 +782,10 @@ describe("collapseCompletedTurnWork", () => {
     expect(work.groups[0]?.messages[0]?.message).toMatchObject({
       role: "assistant",
       content: [{ type: "text", text: "Context compacted" }],
+      runId: "run-1",
       __openclaw: { runtimeActivityKind: "context_compaction" },
     });
+    expect(work.groups[0]?.messages[0]?.message).not.toHaveProperty("idempotencyKey");
     expect(requireGroup(items[2]).messages[0]?.message).toMatchObject({
       content: "All done.",
     });

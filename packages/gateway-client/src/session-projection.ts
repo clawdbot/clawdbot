@@ -237,6 +237,7 @@ function entryMatches(
   }
   const durableEntry = left.identity?.id ? left : right.identity?.id ? right : null;
   const provisionalEntry = durableEntry === left ? right : durableEntry === right ? left : null;
+  const durableMetadata = readRecord(readRecord(durableEntry?.message)?.["__openclaw"]);
   if (
     durableEntry?.live &&
     provisionalEntry?.live &&
@@ -246,12 +247,15 @@ function entryMatches(
     !provisionalEntry.identity.isImported &&
     !provisionalEntry.identity.id &&
     durableEntry.identity.runId &&
-    durableEntry.identity.runId === provisionalEntry.identity.runId
+    durableEntry.identity.runId === provisionalEntry.identity.runId &&
+    (readNonemptyString(durableMetadata?.mirrorOrigin) === null ||
+      durableMetadata?.runTerminal === true)
   ) {
     return true;
   }
   const persisted = left.identity;
   const observed = right.identity;
+  const persistedMetadata = readRecord(readRecord(left.message)?.["__openclaw"]);
   if (
     allowSnapshotPromotion &&
     right.live &&
@@ -266,7 +270,9 @@ function entryMatches(
       (persisted.role === "assistant" &&
         observed.sequence === null &&
         persisted.runId !== null &&
-        persisted.runId === observed.runId))
+        persisted.runId === observed.runId &&
+        (readNonemptyString(persistedMetadata?.mirrorOrigin) === null ||
+          persistedMetadata?.runTerminal === true)))
   ) {
     // Only current-scope history can promote an observed native sequence or assistant run.
     return true;

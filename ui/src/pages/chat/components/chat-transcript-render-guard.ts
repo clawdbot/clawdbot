@@ -15,7 +15,7 @@ function itemDependencies(item: ChatRenderItem): readonly unknown[] {
     return [item.key, ...item.groups];
   }
   if (item.kind === "agent-run-frame") {
-    return [item.key, item.state, ...item.parts];
+    return [item.key, item.outcome, ...item.parts];
   }
   return [item];
 }

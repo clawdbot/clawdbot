@@ -62,6 +62,8 @@ export function readSessionMessageIdentity(
     readSessionProjectionString(envelope?.clientRunId);
   const persistedRunId = normalizeSessionProjectionRunId(idempotencyKey);
   const envelopeRunId = normalizeSessionProjectionRunId(envelope?.runId);
+  const metadataRunId = normalizeSessionProjectionRunId(metadata?.runId);
+  const mirroredMessage = readSessionProjectionString(metadata?.mirrorOrigin) !== null;
   // CLI persistence namespaces assistant send keys; the suffix is the
   // originating Gateway run identity consumed by every projection layer.
   const isCliAssistant =
@@ -70,6 +72,10 @@ export function readSessionMessageIdentity(
     isCliAssistant && persistedRunId?.startsWith("cli-assistant:")
       ? readSessionProjectionString(persistedRunId.slice("cli-assistant:".length))
       : persistedRunId;
+  const optimisticRunId =
+    metadata && Object.keys(metadata).every((key) => key === "idempotencyKey")
+      ? canonicalPersistedRunId
+      : null;
   return {
     role,
     id:
@@ -77,7 +83,12 @@ export function readSessionMessageIdentity(
     sequence: readSessionMessageSequence(message, envelope),
     idempotencyKey,
     runId:
-      (role === "assistant" ? envelopeRunId : null) ?? canonicalPersistedRunId ?? envelopeRunId,
+      role === "assistant"
+        ? (metadataRunId ??
+          envelopeRunId ??
+          (isCliAssistant || !mirroredMessage ? canonicalPersistedRunId : null) ??
+          optimisticRunId)
+        : (metadataRunId ?? canonicalPersistedRunId ?? envelopeRunId),
     isImported: Boolean(importedFrom || cliSessionId || externalId),
     // Imported IDs belong to their provider and CLI session, never the native ID namespace.
     externalSource:

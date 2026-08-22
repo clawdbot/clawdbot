@@ -13,16 +13,27 @@ type WorkingProgressCache = WorkingProgress;
 
 const CONTEXT_COMPACTION_CUSTOM_TYPE = "openclaw.context-compaction";
 
+export function isContextCompactionActivity(message: unknown): boolean {
+  return asRecord(asRecord(message)?.["__openclaw"])?.runtimeActivityKind === "context_compaction";
+}
+
 export function projectContextCompactionActivity(message: unknown): unknown {
   const record = asRecord(message);
   if (record?.role !== "custom" || record.customType !== CONTEXT_COMPACTION_CUSTOM_TYPE) {
     return message;
   }
   const metadata = asRecord(record["__openclaw"]);
+  const details = asRecord(record.details);
+  const { idempotencyKey: _activityId, ...activity } = record;
   return {
-    ...record,
+    ...activity,
     role: "assistant",
     content: [{ type: "text", text: t("chat.composer.contextCompacted") }],
+    ...(typeof metadata?.runId === "string"
+      ? { runId: metadata.runId }
+      : typeof details?.runId === "string"
+        ? { runId: details.runId }
+        : {}),
     __openclaw: {
       ...metadata,
       runtimeActivityKind: "context_compaction",

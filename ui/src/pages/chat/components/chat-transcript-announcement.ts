@@ -33,6 +33,17 @@ export function latestTranscriptAnnouncement(
       continue;
     }
     if (item.kind === "agent-run-frame") {
+      if (item.outcome.kind === "completed") {
+        const owner = item.outcome.actionOwner;
+        const text = owner ? extractTextCached(owner.message)?.trim() : null;
+        if (owner && text) {
+          return announcement(owner.key, text);
+        }
+        continue;
+      }
+      if (item.outcome.kind === "failed") {
+        continue;
+      }
       for (let partIndex = item.parts.length - 1; partIndex >= 0; partIndex -= 1) {
         const part = item.parts[partIndex];
         if (!part) {
@@ -43,17 +54,9 @@ export function latestTranscriptAnnouncement(
             (streamPart) => streamPart.kind === "stream" && streamPart.text.trim(),
           );
           if (text?.kind === "stream") {
-            return announcement(item.key, text.text.trim());
+            return announcement(text.key, text.text.trim());
           }
           continue;
-        }
-        const groups = part.kind === "group" ? [part] : part.groups;
-        for (let index = groups.length - 1; index >= 0; index -= 1) {
-          const group = groups[index];
-          const text = group ? assistantGroupText(group) : null;
-          if (text) {
-            return announcement(item.key, text);
-          }
         }
       }
       continue;
@@ -67,7 +70,8 @@ export function latestTranscriptAnnouncement(
     for (const group of groups) {
       const text = assistantGroupText(group);
       if (text) {
-        return announcement(item.key, text);
+        const owner = group.messages.findLast(({ message }) => Boolean(extractTextCached(message)));
+        return announcement(owner?.key ?? item.key, text);
       }
     }
   }

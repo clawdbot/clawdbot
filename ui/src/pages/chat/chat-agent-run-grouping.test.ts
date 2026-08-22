@@ -132,6 +132,39 @@ describe("coalesceAgentRunFrames", () => {
     expect(history.key).toBe(live.key);
   });
 
+  it("remounts a large live stream after steer without destabilizing ordinary frames", () => {
+    const runId = "run-steered";
+    const boundaryId = "send:steer-run";
+    const working: StreamRunRenderItem = {
+      kind: "stream-run",
+      key: "stream-run:working",
+      runId,
+      boundaryId,
+      parts: [{ kind: "reading-indicator", key: "working", startedAt: 1, runId, boundaryId }],
+    };
+    const streamed: StreamRunRenderItem = {
+      kind: "stream-run",
+      key: "stream-run:stream-after-steer",
+      runId,
+      boundaryId,
+      parts: [
+        {
+          kind: "stream",
+          key: "working:after:steer-run",
+          text: "Large terminal response",
+          startedAt: 2,
+          isStreaming: true,
+          runId,
+          boundaryId,
+        },
+      ],
+    };
+
+    expect(
+      requireFrame(coalesceAgentRunFrames([userBoundary("steer-run"), working])[1]).key,
+    ).not.toBe(requireFrame(coalesceAgentRunFrames([userBoundary("steer-run"), streamed])[1]).key);
+  });
+
   it("keeps different and missing run identities outside the same frame", () => {
     const first = group("assistant", "first", "run-1");
     const second = group("assistant", "second", "run-2");
@@ -148,18 +181,10 @@ describe("coalesceAgentRunFrames", () => {
     expect(requireFrame(items[2]).runId).toBe("run-2");
   });
 
-  it.each([
-    {
-      name: "forwarded sessions_send input",
-      boundary: group("assistant", "forwarded", "run-1", {
-        provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-      }),
-    },
-    {
-      name: "error",
-      boundary: group("assistant", "error", "run-1", { stopReason: "error" }),
-    },
-  ])("does not compose across $name", ({ boundary }) => {
+  it("does not compose across forwarded sessions_send input", () => {
+    const boundary = group("assistant", "forwarded", "run-1", {
+      provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+    });
     const items = coalesceAgentRunFrames([
       userBoundary(),
       group("assistant", "before", "run-1"),
@@ -261,9 +286,100 @@ describe("coalesceAgentRunFrames", () => {
       coalesceAgentRunFrames([userBoundary(), group("tool", "tool-only", runId)])[1],
     );
 
-    expect(active.state).toBe("active");
-    expect(toolOnly.state).toBe("terminal");
+    expect(active.outcome).toEqual({ kind: "active" });
+    expect(toolOnly.outcome).toEqual({ kind: "completed", actionOwner: null });
     expect(toolOnly.parts.at(-1)).toMatchObject({ role: "tool" });
+  });
+
+  it.each([
+    {
+      name: "tool-only completion",
+      parts: [group("tool", "tool-only", "run-1")],
+      outcome: { kind: "completed", actionOwner: null },
+    },
+    {
+      name: "tool-use commentary",
+      parts: [
+        group("assistant", "commentary-tool", "run-1", {
+          stopReason: "toolUse",
+          content: [
+            { type: "text", text: "I will inspect it." },
+            { type: "tool_call", id: "call-1", name: "read", args: {} },
+            { type: "tool_result", id: "call-1", name: "read", text: "done" },
+          ],
+        }),
+      ],
+      outcome: { kind: "completed", actionOwner: null },
+    },
+    {
+      name: "persisted keyed commentary",
+      parts: [
+        group("assistant", "commentary-stop", "run-1", {
+          stopReason: "stop",
+          openclawStreamFallback: {
+            replacementText: "I will inspect it.",
+            source: "segment",
+            itemId: "commentary-1",
+          },
+        }),
+        group("tool", "commentary-tool", "run-1"),
+      ],
+      outcome: { kind: "completed", actionOwner: null },
+    },
+    {
+      name: "Codex reasoning mirror",
+      parts: [
+        group("assistant", "reasoning", "run-1", {
+          stopReason: "stop",
+          __openclaw: { mirrorOrigin: "codex-app-server", runId: "run-1" },
+        }),
+        group("tool", "reasoning-tool", "run-1"),
+      ],
+      outcome: { kind: "completed", actionOwner: null },
+    },
+    {
+      name: "explicit final followed by work",
+      parts: [
+        group("assistant", "final", "run-1", {
+          phase: "final_answer",
+          content: "Finished.",
+        }),
+        group("tool", "trailing-tool", "run-1"),
+      ],
+      outcome: { kind: "completed", actionOwner: { key: "final" } },
+    },
+  ])("records $name without deriving completion from the last part", ({ parts, outcome }) => {
+    const frame = requireFrame(coalesceAgentRunFrames([userBoundary(), ...parts])[1]);
+
+    expect(frame).toMatchObject({ outcome });
+  });
+
+  it("marks preceding commentary failed when an error closes the run", () => {
+    const error = group("assistant", "error", "run-1", { stopReason: "error" });
+    const items = coalesceAgentRunFrames([
+      userBoundary(),
+      group("assistant", "commentary", "run-1", { phase: "commentary" }),
+      error,
+    ]);
+
+    expect(requireFrame(items[1])).toMatchObject({
+      outcome: { kind: "failed" },
+      parts: [{ key: "group:commentary" }, { key: "group:error" }],
+    });
+  });
+
+  it.each([
+    { name: "placement abort", terminal: { stopReason: "stop", openclawAbort: { aborted: true } } },
+    { name: "timeout", terminal: { stopReason: "timeout" } },
+  ])("marks an interrupted partial failed for $name", ({ terminal }) => {
+    const frame = requireFrame(
+      coalesceAgentRunFrames([
+        userBoundary(),
+        group("assistant", "partial", "run-1", { content: "Partial answer", ...terminal }),
+      ])[1],
+    );
+
+    expect(frame.outcome).toEqual({ kind: "failed" });
   });
 
   it("leaves active search projections uncomposed", () => {
