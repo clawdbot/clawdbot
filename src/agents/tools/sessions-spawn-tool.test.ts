@@ -495,7 +495,6 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.attachments?.description).toContain("unavailable with visible=true");
     expect(schema.properties?.attachAs?.description).toContain("unavailable with visible=true");
     expect(schema.properties?.category?.description).toContain("leave it ungrouped");
-    expect(schema.properties?.projectId?.description).toContain("visible session");
     expect(schema.properties?.mode?.enum).toEqual(["run"]);
     expect(schema.properties?.mode?.anyOf).toBeUndefined();
     expect(schema.properties?.worktree).toBeDefined();
@@ -583,40 +582,6 @@ describe("sessions_spawn tool", () => {
       );
       expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     });
-  });
-
-  it("creates a visible worktree from a registered project", async () => {
-    const callGateway = vi.fn(async () => ({
-      key: "agent:main:dashboard:project-child",
-      runStarted: true,
-      runId: "run-visible-project",
-    }));
-    const tool = createSessionsSpawnTool({
-      agentSessionKey: "agent:main:main",
-      config: { agents: { list: [{ id: "main" }] } },
-      callGateway: callGateway as never,
-      registerRun: vi.fn(),
-      countActiveRuns: () => 0,
-    });
-
-    const result = await tool.execute("visible-project", {
-      task: "inspect project",
-      projectId: "registered-openclaw",
-      visible: true,
-      worktree: true,
-    });
-
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      childSessionKey: "agent:main:dashboard:project-child",
-    });
-    expect(callGateway).toHaveBeenCalledWith(
-      "sessions.create",
-      expect.objectContaining({
-        projectId: "registered-openclaw",
-        worktree: true,
-      }),
-    );
   });
 
   it.each([{ category: undefined }, { category: "" }])(
@@ -795,15 +760,6 @@ describe("sessions_spawn tool", () => {
     await expect(
       tool.execute("hidden-worktree", { task: "inspect", worktree: true }),
     ).rejects.toThrow("Parameters require visible=true: worktree");
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
-  });
-
-  it("requires visible sessions for registered projects", async () => {
-    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
-
-    await expect(
-      tool.execute("hidden-project", { task: "inspect", projectId: "registered-openclaw" }),
-    ).rejects.toThrow("Parameters require visible=true: projectId");
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 

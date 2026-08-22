@@ -75,11 +75,6 @@
           "model": {
             "type": "string"
           },
-          "projectId": {
-            "description": "Registered project for a visible session; cannot be combined with cwd.",
-            "minLength": 1,
-            "type": "string"
-          },
           "runtime": {
             "description": "Runtime; visible=true requires \"subagent\".",
             "enum": ["subagent"],

@@ -50,12 +50,6 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
         "Sidebar category for a visible session. Omit or pass an empty string to leave it ungrouped.",
     }),
   ),
-  projectId: Type.Optional(
-    Type.String({
-      minLength: 1,
-      description: "Registered project for a visible session; cannot be combined with cwd.",
-    }),
-  ),
   worktree: Type.Optional(Type.Boolean({ description: "Visible session worktree" })),
   worktreeName: Type.Optional(Type.String({ description: "Worktree name" })),
   worktreeBaseRef: Type.Optional(Type.String({ description: "Worktree base ref" })),
@@ -117,13 +111,11 @@ export async function maybeSpawnVisibleSession(params: {
   const worktree = params.raw.worktree === true;
   const worktreeName = readToolStringParam(params.raw, "worktreeName");
   const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
-  const projectId = readToolStringParam(params.raw, "projectId");
   const categoryProvided = Object.hasOwn(params.raw, "category");
   const requestedCategory = readToolStringParam(params.raw, "category", { allowEmpty: true });
   if (params.raw.visible !== true) {
     const visibleOnlyParams = [
       ["category", categoryProvided ? requestedCategory : undefined],
-      ["projectId", projectId],
       ["worktree", worktree],
       ["worktreeName", worktreeName],
       ["worktreeBaseRef", worktreeBaseRef],
@@ -337,7 +329,6 @@ export async function maybeSpawnVisibleSession(params: {
         // and could spawn past maxSpawnDepth.
         spawnDepth: callerDepth + 1,
         ...(params.raw.context === "fork" ? { fork: true } : {}),
-        ...(projectId ? { projectId } : {}),
         ...(spawnedCwd ? { cwd: spawnedCwd } : {}),
         ...(worktree ? { worktree: true } : {}),
         ...(worktreeName ? { worktreeName } : {}),
