@@ -875,6 +875,41 @@ All named assertion failures from the parallel run are green. Its unsummarized
 worker exits remain host-pressure evidence; Gate 3g's mandated single-worker
 full graph is the authoritative whole-suite rerun.
 
+## 2026-08-22T07:31:00Z - Gate 3g first fallback run
+
+Mode-B was not dispatched. The final-gates work order records that its accepted
+163-shard digest is SHA-pinned to `f94f945...`, not this candidate's current
+planner graph. Current workflow run `32539751228` independently demonstrates
+the older Mode-B surface and is not candidate evidence. Per the explicit
+workorder, Gate 3g uses local `scripts/prepush-ci.sh`; Mode-B tooling is not
+changed in this lane.
+
+The first Gate 3g run used `OPENCLAW_PREPUSH_SKIP_MACOS=1`,
+`OPENCLAW_VITEST_MAX_WORKERS=1`, `OPENCLAW_TEST_PROJECTS_SERIAL=1`, and a
+6,144 MiB Node heap. It passed:
+
+- `pnpm check`;
+- strict build and plugin SDK export checks;
+- UI raw-window guard;
+- protocol generation and Swift drift check;
+- plugin asset build;
+- the single-worker extension suite: 5,341 passed, 57 skipped.
+
+It then ran the single-worker unit suite and stopped after 9,430 passed, 15
+skipped, and four failed assertions:
+
+- Node workspace transfer asserted exact `0644`/`0755` modes even though Git
+  preserves only executable-bit identity and checkout applies the host umask.
+  Assertions now check `mode & 0o111`, protecting the actual Git contract.
+- Two Git backup assertions inspected a bare fixture by cwd, which
+  `safe.bareRepository=explicit` correctly rejects. They now pass the fixture as
+  explicit `--git-dir`, including the negative no-ref assertion that previously
+  passed for the wrong safety-policy error.
+
+The focused owners now pass 27/27 assertions. The first Gate 3g log and exit
+receipt are
+`/home/figs/.copilot/session-state/fb697b5e-c2b3-42f8-89e8-904d36834ca0/files/gate-3g-prepush.{log,exit}`.
+
 ### Direct Codex contract evidence
 
 The package scan touches Codex runtime evidence, so the mandatory direct sibling

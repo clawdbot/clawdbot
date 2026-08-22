@@ -480,7 +480,7 @@ describe("Git-backed SQLite snapshots", () => {
         latestOk: { status: "ok", kind: "git", pushFailed: true, error: warning },
       });
     });
-    expect((await executeGitCommand(remotePath, ["show-ref"])).code).not.toBe(0);
+    expect((await executeGitCommand(root, ["--git-dir", remotePath, "show-ref"])).code).not.toBe(0);
   });
 
   it("pushes backup-only ancestry to a new remote", async () => {
@@ -503,7 +503,9 @@ describe("Git-backed SQLite snapshots", () => {
     const branch = await requireGit(repositoryPath, ["branch", "--show-current"]);
     expect(result).toMatchObject({ noChanges: false, pushed: true });
     expect(result).not.toHaveProperty("pushWarning");
-    expect(await requireGit(remotePath, ["rev-parse", `refs/heads/${branch}`])).toBe(result.commit);
+    expect(
+      await requireGit(root, ["--git-dir", remotePath, "rev-parse", `refs/heads/${branch}`]),
+    ).toBe(result.commit);
   });
 
   it("redacts credential-bearing origins in conflict errors", async () => {
