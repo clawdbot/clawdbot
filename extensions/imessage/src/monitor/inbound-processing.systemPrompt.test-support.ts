@@ -212,6 +212,7 @@ describe("buildIMessageInboundContext forwards GroupSystemPrompt", () => {
           lastRoutePolicy: "main",
           matchedBy: "default",
         },
+        bindingResolution: null,
         bodyText: "hi",
         createdAt: undefined,
         replyContext: null,

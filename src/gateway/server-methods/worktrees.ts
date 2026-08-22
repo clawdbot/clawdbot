@@ -100,7 +100,7 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         const result = await service.remove({
           id: params.id,
           reason: "manual-delete",
-          force: params.force,
+          allowSnapshotLoss: params.force,
         });
         respond(
           true,

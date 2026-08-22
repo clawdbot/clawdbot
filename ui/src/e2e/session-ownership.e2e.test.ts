@@ -116,6 +116,15 @@ suite.define(() => {
     const gateway = await installMockGateway(currentPage, {
       hasMultipleSessionSharingIdentities: true,
       sessionKey: "agent:main:ada",
+      presenceUsers: [
+        {
+          self: true,
+          id: "profile-patrick",
+          name: "Patrick",
+          avatarUrl:
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=",
+        },
+      ],
       historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
       methodResponses: { "sessions.list": sessionsList(["profile-ada", "profile-bob"]) },
     });
@@ -129,6 +138,11 @@ suite.define(() => {
 
     const ownerMenu = await openSidebarSortMenu(currentPage);
     await ownerMenu.locator('[value="sort:people"]').waitFor();
+    const ownerRows = ownerMenu.locator('wa-dropdown-item[value^="owner:"]:not([value="owner:"])');
+    await expectBrowser(ownerRows).toHaveCount(3);
+    await expectBrowser(ownerRows.first()).toHaveAttribute("value", "owner:profile-patrick");
+    await expectBrowser(ownerRows.first()).toContainText("Patrick (You)");
+    await expectBrowser(ownerRows.first().locator("openclaw-session-owner-chip")).toHaveText("P");
     await captureUiProof(currentPage, "00-people-sort-available.png");
     await ownerMenu.evaluate((element) =>
       element.dispatchEvent(
@@ -169,6 +183,23 @@ suite.define(() => {
         ),
       )
       .toBe(true);
+
+    const initialConnections = (await gateway.getRequests("connect")).length;
+    await gateway.closeLatest(1012, "owner filter reconnect proof");
+    await expect
+      .poll(async () => (await gateway.getRequests("connect")).length)
+      .toBeGreaterThan(initialConnections);
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.list")).at(-1)?.params)
+      .toMatchObject({ ownerId: "profile-ada" });
+    await expect
+      .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
+      .toBe(0);
+    const reconnectedMenu = await openSidebarSortMenu(currentPage);
+    await expectBrowser(reconnectedMenu.locator('[value="owner:profile-ada"]')).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
   });
 
   it("renders zero ownership chrome for a single owner", async () => {
@@ -409,11 +440,11 @@ suite.define(() => {
       code: "INVALID_REQUEST",
       message,
     });
-    const alert = currentPage.getByRole("alert").filter({ hasText: message });
+    const alert = currentPage.locator(".chat-error[role=alert]").filter({ hasText: message });
     await expectBrowser(alert).toBeVisible();
 
     await currentPage.getByRole("button", { name: "Session sharing" }).click();
-    await expectBrowser(dropdown.locator(".chat-pane__sharing-status--error")).toBeVisible();
+    await expectBrowser(dropdown.getByRole("alert").filter({ hasText: message })).toBeVisible();
   });
 
   it("lets a read-scoped owner inspect sharing but blocks mutations", async () => {

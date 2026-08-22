@@ -1180,6 +1180,40 @@ describe("qa suite runtime launcher", () => {
     );
   });
 
+  it("projects a skipped native producer as a skipped unified scenario", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-native-skip-");
+    const defaultImplementation = runQaTestFileScenarios.getMockImplementation();
+    if (!defaultImplementation) {
+      throw new Error("expected default QA test-file scenario mock implementation");
+    }
+    runQaTestFileScenarios.mockImplementationOnce(async (params) => {
+      const result = await defaultImplementation(params);
+      return {
+        ...result,
+        results: result.results.map(
+          (scenarioResult: QaTestFileScenarioRunResult["results"][number]) =>
+            Object.assign({}, scenarioResult, { status: "skipped" as const }),
+        ),
+      };
+    });
+
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/native-skip",
+      scenarioIds: ["control-ui-chat-flow-playwright"],
+    });
+    if (result.executionKind !== "suite") {
+      throw new Error("expected unified suite result");
+    }
+    expect(result.result.scenarios).toMatchObject([
+      { name: "Control UI chat flow Playwright coverage", status: "skip" },
+    ]);
+    const summary = JSON.parse(await fs.readFile(result.result.summaryPath, "utf8")) as {
+      counts: { failed: number; skipped: number };
+    };
+    expect(summary.counts).toMatchObject({ failed: 0, skipped: 1 });
+  });
+
   it("serializes test-file runner partitions in one checkout", async () => {
     const repoRoot = await makeTempRepo("qa-suite-test-file-serial-");
     let releaseVitest!: () => void;
@@ -1323,29 +1357,6 @@ describe("qa suite runtime launcher", () => {
             alternateModel: "mock-openai/gpt-5.6-luna-alt",
             fastMode: true,
             concurrency: 1,
-          }),
-      });
-    },
-  );
-
-  it.each([
-    { kind: "evidence", fileName: "qa-evidence.json" },
-    { kind: "report", fileName: "qa-suite-report.md" },
-    { kind: "summary", fileName: "qa-suite-summary.json" },
-  ])(
-    "preserves the prior unified $kind artifact when atomic publication fails",
-    async ({ fileName }) => {
-      const repoRoot = await makeTempRepo("qa-suite-unified-artifact-atomic-");
-      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "artifact-atomic");
-      await expectArtifactPublicationFailurePreservesPrior({
-        canonicalFileNames: ["qa-evidence.json", "qa-suite-report.md", "qa-suite-summary.json"],
-        failedFileName: fileName,
-        outputDir,
-        publish: async () =>
-          await runQaSuite({
-            repoRoot,
-            outputDir: ".artifacts/qa-e2e/artifact-atomic",
-            scenarioIds: ["control-ui-chat-flow-playwright"],
           }),
       });
     },
@@ -2583,6 +2594,16 @@ describe("qa suite runtime launcher", () => {
 
   it("waits for already-started partitions before recording a unified failure", async () => {
     const repoRoot = await makeTempRepo("qa-suite-reject-settle-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "reject-settle");
+    const priorArtifactPaths = [
+      path.join(outputDir, "qa-suite-summary.json"),
+      path.join(outputDir, "qa-evidence.json"),
+      path.join(outputDir, "qa-suite-report.md"),
+    ];
+    await fs.mkdir(outputDir, { recursive: true });
+    await Promise.all(
+      priorArtifactPaths.map((artifactPath) => fs.writeFile(artifactPath, "stale")),
+    );
     let releaseTestFile!: () => void;
     let markTestFileStarted!: () => void;
     const testFileStarted = new Promise<void>((resolve) => {
@@ -2635,6 +2656,9 @@ describe("qa suite runtime launcher", () => {
     await Promise.resolve();
 
     expect(completed).toBe(false);
+    for (const artifactPath of priorArtifactPaths) {
+      await expect(fs.access(artifactPath)).rejects.toMatchObject({ code: "ENOENT" });
+    }
 
     releaseTestFile();
     const result = await runPromise;

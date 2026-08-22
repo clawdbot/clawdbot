@@ -66,6 +66,7 @@ export type GatewaySessionListRow = {
   };
   spawnedBy?: string;
   label?: string;
+  category?: string;
   displayName?: string;
   derivedTitle?: string;
   lastMessagePreview?: string;
@@ -115,6 +116,7 @@ export type SessionListRow = {
   kind: SessionKind;
   channel: string;
   label?: string;
+  category?: string;
   displayName?: string;
   derivedTitle?: string;
   lastMessagePreview?: string;

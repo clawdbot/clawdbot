@@ -389,7 +389,7 @@ function captureExecutionIdentityAdmissionEnvelope(
   return freezeEnvelope(validateEnvelope(envelope));
 }
 
-/** Revalidate a structured-cloned worker message before any persistence work. */
+/** Revalidate a structured-cloned queue payload before any persistence work. */
 export function parseExecutionIdentityAdmissionEnvelope(
   value: unknown,
 ): ExecutionIdentityAdmissionEnvelope {
@@ -415,7 +415,7 @@ export function parseExecutionIdentityAdmissionEnvelope(
   return parsed;
 }
 
-/** Revalidate either bounded worker message before schema, key, or database work. */
+/** Revalidate either bounded queue payload before schema, key, or database work. */
 export function parseExecutionIdentityAdmissionWork(
   value: unknown,
 ): ExecutionIdentityAdmissionWork {

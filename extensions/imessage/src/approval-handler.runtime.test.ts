@@ -151,9 +151,15 @@ vi.mock("./actions.runtime.js", () => ({
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: approvalGatewayMock.resolveApprovalOverGateway,
 }));
-vi.mock("openclaw/plugin-sdk/error-runtime", () => ({
-  isApprovalNotFoundError: approvalGatewayMock.isApprovalNotFoundError,
-}));
+vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/error-runtime")>(
+    "openclaw/plugin-sdk/error-runtime",
+  );
+  return {
+    ...actual,
+    isApprovalNotFoundError: approvalGatewayMock.isApprovalNotFoundError,
+  };
+});
 
 describe("imessageApprovalNativeRuntime", () => {
   it("renders shared reactions in pending exec approvals", async () => {

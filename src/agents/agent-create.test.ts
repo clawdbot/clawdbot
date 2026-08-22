@@ -256,6 +256,27 @@ describe("createAgent", () => {
     });
   });
 
+  it("creates main when an unarmed scan proves every legacy store clean", async () => {
+    mocks.config = { agents: { entries: { robby: { id: "robby" } } } };
+    mocks.migrateLegacyMainSessionKeys.mockResolvedValueOnce({
+      armed: false,
+      changes: [],
+      complete: true,
+      ledgerComplete: false,
+      legacyAgentId: "main",
+      mainKey: "main",
+      outcomes: [{ kind: "no-legacy-rows", detail: "no configured owner" }],
+      warnings: [],
+    });
+
+    await expect(createAgent({ name: "main" })).resolves.toMatchObject({
+      status: "created",
+      agentId: "main",
+    });
+    expect(mocks.resolveSharedAuthStoreOwnership).toHaveBeenCalledOnce();
+    expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledOnce();
+  });
+
   it("defaults the workspace through the agent-scoped resolver", async () => {
     const result = await createAgent({ name: "Researcher" });
 
@@ -605,6 +626,60 @@ describe("createAgent", () => {
     await createAgent({ name: "researcher" });
 
     expect(mocks.ensureAgentWorkspace).toHaveBeenCalledOnce();
+  });
+
+  it("prepares staged config effects after setup and immediately before publication", async () => {
+    mocks.ensureAgentWorkspace.mockResolvedValue({
+      dir: "/tmp/default-researcher",
+      bootstrapPending: false,
+    });
+    const prepareConfigCommit = vi.fn(async () => {
+      expect(mocks.ensureAgentWorkspace).toHaveBeenCalledOnce();
+      expect(mocks.mkdir).toHaveBeenCalledOnce();
+      expect(mocks.rootWrite).toHaveBeenCalledOnce();
+      expect(mocks.persisted).not.toHaveProperty("agents");
+    });
+
+    await createAgent({ name: "researcher", prepareConfigCommit });
+
+    expect(prepareConfigCommit).toHaveBeenCalledOnce();
+    expect(mocks.persisted).toHaveProperty("agents.entries.researcher");
+  });
+
+  it("rolls staged config effects back once when config publication fails", async () => {
+    const rollback = vi.fn();
+    const prepareConfigCommit = vi.fn(async () => rollback);
+    mocks.transformConfigFileWithRetry.mockImplementationOnce(async ({ transform }) => {
+      await transform(structuredClone(mocks.config), {
+        snapshot: { exists: false },
+        previousHash: null,
+      });
+      throw new Error("injected config commit failure");
+    });
+
+    await expect(createAgent({ name: "researcher", prepareConfigCommit })).rejects.toThrow(
+      "injected config commit failure",
+    );
+
+    expect(prepareConfigCommit).toHaveBeenCalledOnce();
+    expect(rollback).toHaveBeenCalledOnce();
+  });
+
+  it("does not roll staged config effects back after config publication", async () => {
+    const rollback = vi.fn();
+    mocks.recordAgentProvenance.mockImplementationOnce(() => {
+      throw new Error("injected provenance failure");
+    });
+
+    await expect(
+      createAgent({
+        name: "researcher",
+        prepareConfigCommit: async () => rollback,
+      }),
+    ).rejects.toThrow("injected provenance failure");
+
+    expect(mocks.persisted).toHaveProperty("agents.entries.researcher");
+    expect(rollback).not.toHaveBeenCalled();
   });
 
   it("keeps the template identity while bootstrap is pending", async () => {

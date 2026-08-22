@@ -62,8 +62,22 @@ export function createOperationRegistrars(state: PluginRegistryState) {
 
   const registerWidgetPresenter = (record: PluginRecord, presenter: WidgetPresenter) => {
     const description = normalizeOptionalString(presenter.description);
+    const currentCapabilities =
+      presenter.target === "current_channel" ? presenter.capabilities : undefined;
+    const currentChannelValid =
+      presenter.target === "current_channel" &&
+      typeof presenter.match === "function" &&
+      currentCapabilities !== undefined &&
+      Array.isArray(currentCapabilities.sourceKinds) &&
+      currentCapabilities.sourceKinds.length > 0 &&
+      currentCapabilities.sourceKinds.every(
+        (kind) => typeof kind === "string" && kind.trim().length > 0,
+      ) &&
+      (currentCapabilities.maxSourceBytes === undefined ||
+        (Number.isInteger(currentCapabilities.maxSourceBytes) &&
+          currentCapabilities.maxSourceBytes > 0));
     if (
-      presenter.target !== "node_panel" ||
+      (presenter.target !== "node_panel" && !currentChannelValid) ||
       !description ||
       description.length > 160 ||
       typeof presenter.availability !== "function" ||
@@ -77,9 +91,12 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    const existing = registry.widgetPresenters.find(
-      (registration) => registration.presenter.target === presenter.target,
-    );
+    const existing =
+      presenter.target === "current_channel"
+        ? undefined
+        : registry.widgetPresenters.find(
+            (registration) => registration.presenter.target === presenter.target,
+          );
     if (existing) {
       pushDiagnostic({
         level: "error",

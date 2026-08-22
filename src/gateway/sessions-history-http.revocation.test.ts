@@ -25,16 +25,21 @@ vi.mock("../config/config.js", () => ({
   }),
 }));
 
-vi.mock("../sessions/transcript-events.js", () => ({
-  onInternalSessionTranscriptUpdate: (cb: typeof transcriptUpdateHandler) => {
-    transcriptUpdateHandler = cb;
-    return () => {
-      if (transcriptUpdateHandler === cb) {
-        transcriptUpdateHandler = undefined;
-      }
-    };
-  },
-}));
+vi.mock("../sessions/transcript-events.js", async (importOriginal) => {
+  const { resolveTerminalAssistantTranscriptRunId } =
+    await importOriginal<typeof import("../sessions/transcript-events.js")>();
+  return {
+    resolveTerminalAssistantTranscriptRunId,
+    onInternalSessionTranscriptUpdate: (cb: typeof transcriptUpdateHandler) => {
+      transcriptUpdateHandler = cb;
+      return () => {
+        if (transcriptUpdateHandler === cb) {
+          transcriptUpdateHandler = undefined;
+        }
+      };
+    },
+  };
+});
 
 vi.mock("./http-utils.js", () => ({
   getHeader: (req: IncomingMessage, name: string) => {

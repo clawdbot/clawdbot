@@ -375,7 +375,7 @@ async function executeThink(
           t("chat.commandResults.thinking.current", {
             level: resolveCurrentThinkingLevel(session, defaults, models),
           }),
-          formatThinkingCommandOptionsForSession(session, defaults),
+          formatThinkingCommandOptionsForSession(session, defaults, models),
         ),
       };
     } catch (err) {
@@ -405,20 +405,21 @@ async function executeThink(
 
   try {
     const { session, defaults } = await loadCurrentSessionState(context, sessionKey);
-    const level = resolveThinkingLevelInput(rawLevel, session, defaults);
+    const modelCatalog = context.chatModelCatalog ?? context.modelCatalog ?? [];
+    const level = resolveThinkingLevelInput(rawLevel, session, defaults, modelCatalog);
     if (!level) {
       return {
         content: t("chat.commandResults.thinking.unrecognized", {
           level: rawLevel,
-          options: formatThinkingCommandOptionsForSession(session, defaults),
+          options: formatThinkingCommandOptionsForSession(session, defaults, modelCatalog),
         }),
       };
     }
-    if (!isThinkingLevelOptionForSession(session, defaults, level)) {
+    if (!isThinkingLevelOptionForSession(session, defaults, level, modelCatalog)) {
       return {
         content: t("chat.commandResults.thinking.unsupported", {
           level: rawLevel,
-          options: formatThinkingCommandOptionsForSession(session, defaults),
+          options: formatThinkingCommandOptionsForSession(session, defaults, modelCatalog),
         }),
       };
     }
@@ -825,6 +826,7 @@ function resolveCommandMessage(
 }
 
 type SteerChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
+type SteerChatSendAck = { runId?: unknown; status?: unknown };
 
 function normalizeSteerChatSendAckStatus(payload: unknown): SteerChatSendAckStatus {
   if (!payload || typeof payload !== "object") {
@@ -900,7 +902,7 @@ async function executeSteer(
 
 /** Hard redirect — aborts the active run and restarts with a new message. */
 async function executeRedirect(
-  _client: GatewayBrowserClient,
+  client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
   context: SlashCommandContext,
@@ -914,11 +916,13 @@ async function executeRedirect(
       };
     }
     assertCurrentSlashCommand(context);
-    const resp = await context.sessions.steer(
-      resolved.key,
-      resolved.message,
-      selectedGlobalScope(resolved.key, context),
-    );
+    const resp = await client.request<SteerChatSendAck>("chat.send", {
+      sessionKey: resolved.key,
+      ...selectedGlobalScope(resolved.key, context),
+      message: resolved.message,
+      queueMode: "interrupt",
+      idempotencyKey: generateUUID(),
+    });
     const ackStatus = normalizeSteerChatSendAckStatus(resp);
     const terminalAckContent = formatTerminalRedirectAckContent(ackStatus);
     if (terminalAckContent) {

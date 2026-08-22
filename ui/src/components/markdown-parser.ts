@@ -539,9 +539,6 @@ export function createMarkdownParser(): MarkdownIt {
         if (generatedUrlLabel) {
           open.attrJoin("class", BARE_URL_CLASS);
         }
-        if (!githubLink) {
-          continue;
-        }
         let labelToken: Token | null = null;
         for (let cursor = index + 1; cursor < children.length; cursor++) {
           const token = children[cursor];
@@ -552,14 +549,22 @@ export function createMarkdownParser(): MarkdownIt {
             (token.type === "text" || token.type === "code_inline") &&
             token.content.trim() !== ""
           ) {
-            open.attrJoin("class", GITHUB_LINK_CLASS);
             labelToken = token;
             break;
           }
         }
-        if (generatedUrlLabel && labelToken) {
+        if (githubLink && labelToken) {
+          open.attrJoin("class", GITHUB_LINK_CLASS);
+        }
+        if (githubLink && generatedUrlLabel && labelToken) {
           labelToken.content = formatGitHubLinkLabel(url);
           open.attrSet("title", href ?? url.href);
+        }
+        if (!githubLink && labelToken && state.env.linkFavicons) {
+          const favicon = new state.Token("link_favicon", "img", 0);
+          favicon.meta = { hostname: host };
+          children.splice(index + 1, 0, favicon);
+          index += 1;
         }
       }
     }
@@ -600,6 +605,12 @@ export function createMarkdownParser(): MarkdownIt {
     return token?.meta?.taskListPlugin === true
       ? token.content
       : renderRawMarkdownHtml(tokens, index, env, false);
+  };
+  markdownParser.renderer.rules.link_favicon = (tokens, index) => {
+    const hostname: unknown = tokens[index]?.meta?.hostname;
+    return typeof hostname === "string"
+      ? `<img class="markdown-link-favicon" data-link-favicon-host="${escapeMarkdownHtml(hostname)}" alt="" role="presentation">`
+      : "";
   };
   markdownParser.renderer.rules.code_inline = (tokens, index, options, env, self) => {
     const rendered = defaultCodeInlineRenderer(tokens, index, options, env, self);
@@ -645,7 +656,12 @@ export function createMarkdownParser(): MarkdownIt {
   });
 
   // Fenced and indented blocks share one interaction and overflow surface.
-  markdownParser.renderer.rules.fence = (tokens, index, _options, env) => {
+  markdownParser.renderer.rules.fence = (
+    tokens,
+    index,
+    _options,
+    env: Partial<MarkdownRenderEnv> | undefined,
+  ) => {
     const token = tokens[index];
     if (!token) {
       return "";
@@ -653,8 +669,12 @@ export function createMarkdownParser(): MarkdownIt {
     // token.info contains the full fence info string (e.g., "json title=foo");
     // extract only the first whitespace-separated token as the language.
     const language = token.info.trim().split(/\s+/)[0] || "";
+    // An unfinished fence consumes the remaining input; only container closers can
+    // follow it. Invalid fence-looking prose must not de-highlight an earlier block.
     return renderMarkdownCodeBlock(token.content, language, env, {
       copyText: markdownCodeBlockCopyText(token.content),
+      highlight:
+        !env?.streamingOpenFence || tokens.findLastIndex(({ nesting }) => nesting !== -1) !== index,
     });
   };
   // Override indented code blocks (code_block) with the same treatment as fence

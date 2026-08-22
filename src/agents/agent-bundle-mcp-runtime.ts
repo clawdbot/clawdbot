@@ -16,6 +16,7 @@ import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { mergeMcpToolCatalogs } from "./agent-bundle-mcp-combined.js";
 import {
@@ -71,7 +72,7 @@ import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
 import { sanitizeMcpMetadataText } from "./mcp-metadata.js";
 import { collectMcpPaginatedItems } from "./mcp-pagination.js";
 import { isMcpToolAllowed, normalizeMcpToolFilter } from "./mcp-tool-filter.js";
-import { createMcpToolCatalogMetadata, type McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
+import { normalizeMcpToolCatalog, type McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 
 type BundleMcpSession = {
@@ -128,9 +129,8 @@ async function listAllTools(
   client: Client,
   timeoutMs: number,
   signal: AbortSignal,
-  schemaValidator = createMcpJsonSchemaValidator(),
-) {
-  const tools = await collectMcpPaginatedItems({
+): Promise<Tool[]> {
+  return await collectMcpPaginatedItems({
     label: "MCP tool listing",
     itemLabel: "tools",
     timeoutMs,
@@ -161,11 +161,6 @@ async function listAllTools(
       }
     },
   });
-  const metadata = createMcpToolCatalogMetadata(tools, schemaValidator);
-  return {
-    tools: tools.filter((tool) => !metadata.isRequiredTaskTool(tool.name)),
-    metadata,
-  };
 }
 
 function isMcpMethodNotFoundError(error: unknown): boolean {
@@ -345,7 +340,6 @@ export function createSessionMcpRuntime(params: {
       ].toSorted((left, right) => left.serverName.localeCompare(right.serverName)),
     };
     catalogRetryAfterMs = Date.now();
-    catalogInFlight = undefined;
   };
   const catalogRetryIsDue = (): boolean =>
     catalogRetryAfterMs !== undefined && Date.now() >= catalogRetryAfterMs;
@@ -602,6 +596,12 @@ export function createSessionMcpRuntime(params: {
 
       try {
         // Safe names come from the full declared set (precomputed), not from who resolved.
+        type ServerResult = {
+          serverName: string;
+          serverEntry: McpServerCatalog | null;
+          toolEntries: McpCatalogTool[];
+          diagnostics: McpToolCatalogDiagnostic[];
+        };
         const preparedEntries: Array<{
           serverName: string;
           rawServer: (typeof loaded.mcpServers)[string];
@@ -609,12 +609,41 @@ export function createSessionMcpRuntime(params: {
           safeServerName: string;
           launchDescription: string;
         }> = [];
+        const unavailableServerResults: ServerResult[] = [];
         for (const [serverName, rawServer] of Object.entries(loaded.mcpServers)) {
           failIfDisposed();
           if (retryServerNames && !retryServerNames.has(serverName)) {
             continue;
           }
+          const safeServerName =
+            safeServerNamesByServer.get(serverName) ??
+            sanitizeServerName(serverName, usedServerNames);
+          if (safeServerName !== serverName) {
+            logWarn(
+              `bundle-mcp: server key "${serverName}" registered as "${safeServerName}" for provider-safe tool names.`,
+            );
+          }
           const override = params.connectionOverrides?.get(serverName);
+          if (!override) {
+            try {
+              assertSecretOwnerAvailable("capability", `mcp:${serverName}`);
+            } catch (error) {
+              unavailableServerResults.push({
+                serverName,
+                serverEntry: null,
+                toolEntries: [],
+                diagnostics: [
+                  {
+                    serverName,
+                    safeServerName,
+                    launchSummary: "MCP SecretRef unavailable",
+                    message: redactMcpDiagnosticError(error),
+                  },
+                ],
+              });
+              continue;
+            }
+          }
           // Overrides supply per-requester transport only; never write them back to config.
           const transportSource = override
             ? applyMcpConnectionOverride(rawServer, override)
@@ -631,14 +660,6 @@ export function createSessionMcpRuntime(params: {
           if (!resolved) {
             continue;
           }
-          const safeServerName =
-            safeServerNamesByServer.get(serverName) ??
-            sanitizeServerName(serverName, usedServerNames);
-          if (safeServerName !== serverName) {
-            logWarn(
-              `bundle-mcp: server key "${serverName}" registered as "${safeServerName}" for provider-safe tool names.`,
-            );
-          }
           // Never put per-user resolved URLs into catalog/diagnostics/model text.
           const launchDescription = override
             ? `${serverName}: requester-scoped connection`
@@ -654,13 +675,6 @@ export function createSessionMcpRuntime(params: {
 
         // Bounded fan-out keeps common 4-5 server setups parallel without letting
         // large configs spawn/connect every MCP transport at once.
-        type ServerResult = {
-          serverName: string;
-          serverEntry: McpServerCatalog | null;
-          toolEntries: McpCatalogTool[];
-          diagnostics: McpToolCatalogDiagnostic[];
-        };
-
         const tasks = preparedEntries.map(
           ({ serverName, rawServer, resolved, safeServerName, launchDescription }) =>
             async (): Promise<ServerResult> => {
@@ -752,14 +766,11 @@ export function createSessionMcpRuntime(params: {
                 );
                 let listedTools: ListedTool[];
                 try {
-                  const listed = await listAllTools(
+                  listedTools = await listAllTools(
                     session.client,
                     getCatalogListTimeoutMs(rawServer, resolved.requestTimeoutMs),
                     lifecycleAbortController.signal,
-                    schemaValidator,
                   );
-                  listedTools = listed.tools;
-                  session.toolMetadata = listed.metadata;
                 } catch (error) {
                   if (
                     !capabilities.tools &&
@@ -779,13 +790,18 @@ export function createSessionMcpRuntime(params: {
                 const deniedToolNames = new Set(
                   denialMap && Object.hasOwn(denialMap, serverName) ? denialMap[serverName] : [],
                 );
-                const policyEligibleTools = listedTools.filter((tool) =>
-                  isMcpToolAllowed(toolFilter, tool.name.trim()),
+                const normalizedTools = normalizeMcpToolCatalog(
+                  listedTools,
+                  schemaValidator,
+                  (toolName) => {
+                    if (!isMcpToolAllowed(toolFilter, toolName)) {
+                      return "exclude";
+                    }
+                    return deniedToolNames.has(toolName) ? "denied" : "include";
+                  },
                 );
-                const exposedTools = policyEligibleTools.filter((tool) => {
-                  const toolName = tool.name.trim();
-                  return !deniedToolNames.has(toolName);
-                });
+                session.toolMetadata = normalizedTools.metadata;
+                const exposedTools = normalizedTools.tools;
                 const serverEntry: McpServerCatalog = {
                   serverName,
                   safeServerName,
@@ -812,11 +828,11 @@ export function createSessionMcpRuntime(params: {
                   codexApprovalMode: resolveMcpCodexToolApprovalMode(serverName, rawServer),
                 };
                 const toolEntries: McpCatalogTool[] = [];
-                for (const tool of policyEligibleTools) {
-                  const toolName = tool.name.trim();
-                  if (!toolName) {
-                    continue;
-                  }
+                for (const [tool, deniedBySession] of [
+                  ...normalizedTools.tools.map((entry) => [entry, false] as const),
+                  ...normalizedTools.deniedTools.map((entry) => [entry, true] as const),
+                ]) {
+                  const toolName = tool.name;
                   const { _meta: metadata } = tool;
                   const uiMeta =
                     metadata?.ui && typeof metadata.ui === "object" && !Array.isArray(metadata.ui)
@@ -838,7 +854,7 @@ export function createSessionMcpRuntime(params: {
                     fallbackDescription: `Provided by bundle MCP server "${serverName}" (${launchDescription}).`,
                     ...(uiResourceUri ? { uiResourceUri } : {}),
                     ...(uiVisibility ? { uiVisibility } : {}),
-                    ...(deniedToolNames.has(toolName) ? { deniedBySession: true } : {}),
+                    ...(deniedBySession ? { deniedBySession: true } : {}),
                     codexAnnotations: normalizeMcpCodexToolAnnotations(tool.annotations),
                   });
                 }
@@ -892,7 +908,7 @@ export function createSessionMcpRuntime(params: {
           throw firstError;
         }
 
-        for (const result of results) {
+        for (const result of [...unavailableServerResults, ...results]) {
           if (!result) {
             continue;
           }
@@ -1020,6 +1036,7 @@ export function createSessionMcpRuntime(params: {
     },
     async callTool(serverName, toolName, input) {
       const session = await getActiveSession(serverName);
+      const validateResult = session.toolMetadata?.validatorForCall(toolName);
       const result = (await runGuardedMcpRequest(serverName, session, (signal) =>
         session.client.callTool(
           { name: toolName, arguments: isRecord(input) ? input : {} },
@@ -1027,7 +1044,7 @@ export function createSessionMcpRuntime(params: {
           { timeout: session.requestTimeoutMs, signal },
         ),
       )) as CallToolResult;
-      session.toolMetadata?.validateResult(toolName, result);
+      validateResult?.(result);
       return result;
     },
     async listTools(serverName, requestParams) {

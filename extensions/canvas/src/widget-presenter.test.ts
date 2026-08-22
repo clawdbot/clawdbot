@@ -2,7 +2,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createCanvasWidgetPresenter } from "./widget-presenter.js";
 
-const commands = ["canvas.present", "canvas.navigate"];
+const commands = ["canvas.present"];
 
 function createNodesRuntime(
   nodes: Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"],
@@ -10,11 +10,12 @@ function createNodesRuntime(
   return {
     list: vi.fn(async () => ({ nodes })),
     invoke: vi.fn(async () => ({ ok: true })),
+    openDuplex: vi.fn(),
   };
 }
 
 describe("Canvas widget presenter", () => {
-  it("prefers the existing local Mac default and invokes present before navigate", async () => {
+  it("prefers the existing local Mac default and presents the hosted URL atomically", async () => {
     const runtime = createNodesRuntime([
       {
         nodeId: "android-recent",
@@ -39,34 +40,29 @@ describe("Canvas widget presenter", () => {
 
     await expect(
       presenter.present({
-        documentUrlPath: "/__openclaw__/canvas/documents/cv_1/index.html",
+        document: {
+          kind: "html",
+          html: "<p>Status</p>",
+          hostedUrl: "/__openclaw__/canvas/documents/cv_1/index.html",
+        },
         title: "Status",
-        sessionContext: { sessionKey: "agent:main:status" },
+        context: { sessionKey: "agent:main:status" },
       }),
     ).resolves.toEqual({
       ok: true,
-      value: { nodeId: "mac-local", nodeName: "Studio" },
+      value: { kind: "node", nodeId: "mac-local", nodeName: "Studio" },
     });
     expect(runtime.invoke).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
         nodeId: "mac-local",
         command: "canvas.present",
-        params: {},
-        sessionKey: "agent:main:status",
-        idempotencyKey: expect.any(String),
-      }),
-    );
-    expect(runtime.invoke).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        nodeId: "mac-local",
-        command: "canvas.navigate",
         params: { url: "/__openclaw__/canvas/documents/cv_1/index.html" },
         sessionKey: "agent:main:status",
         idempotencyKey: expect.any(String),
       }),
     );
+    expect(runtime.invoke).toHaveBeenCalledTimes(1);
   });
 
   it("maps missing eligible nodes and node invocation failures", async () => {
@@ -99,13 +95,59 @@ describe("Canvas widget presenter", () => {
     const presenter = createCanvasWidgetPresenter(runtime);
     await expect(
       presenter.present({
-        documentUrlPath: "/__openclaw__/canvas/documents/cv_2/index.html",
+        document: {
+          kind: "html",
+          html: "<p>Status</p>",
+          hostedUrl: "/__openclaw__/canvas/documents/cv_2/index.html",
+        },
         title: "Status",
-        sessionContext: {},
+        context: {},
       }),
     ).resolves.toEqual({
       ok: false,
       error: { code: "node_error", message: "panel disabled", nodeId: "mac-panel" },
+    });
+  });
+
+  it("leaves no stale visible content when atomic presentation fails", async () => {
+    const documentUrlPath = "/__openclaw__/canvas/documents/cv_partial/index.html";
+    const panel = { visible: false, url: undefined as string | undefined };
+    const transcript: Array<{ command: string; params: unknown }> = [];
+    const runtime = createNodesRuntime([
+      {
+        nodeId: "mac-panel",
+        platform: "macos",
+        connected: true,
+        caps: ["canvas"],
+        invocableCommands: commands,
+      },
+    ]);
+    vi.mocked(runtime.invoke).mockImplementation(async ({ command, params }) => {
+      transcript.push({ command, params });
+      if (command === "canvas.present") {
+        if ((params as { url?: unknown } | undefined)?.url === documentUrlPath) {
+          throw new Error("presentation rejected");
+        }
+        panel.visible = true;
+        panel.url = "default";
+        return { ok: true };
+      }
+      throw new Error("navigation rejected after presentation");
+    });
+
+    const result = await createCanvasWidgetPresenter(runtime).present({
+      document: { kind: "html", html: "<p>Status</p>", hostedUrl: documentUrlPath },
+      title: "Status",
+      context: {},
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "node_error", message: "presentation rejected", nodeId: "mac-panel" },
+    });
+    expect({ panel, transcript }).toEqual({
+      panel: { visible: false, url: undefined },
+      transcript: [{ command: "canvas.present", params: { url: documentUrlPath } }],
     });
   });
 
@@ -127,9 +169,13 @@ describe("Canvas widget presenter", () => {
     });
     await expect(
       presenter.present({
-        documentUrlPath: "/__openclaw__/canvas/documents/cv_linux/index.html",
+        document: {
+          kind: "html",
+          html: "<p>Status</p>",
+          hostedUrl: "/__openclaw__/canvas/documents/cv_linux/index.html",
+        },
         title: "Status",
-        sessionContext: {},
+        context: {},
       }),
     ).resolves.toMatchObject({
       ok: false,

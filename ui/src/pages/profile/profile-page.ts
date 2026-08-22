@@ -3,12 +3,13 @@ import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import type {
   UserProfile,
-  UsersClearGitHubIdentityResult,
+  UsersPrefsGetResult,
+  UsersPrefsSetResult,
   UsersSelfResult,
   UsersSetAvatarResult,
   UsersSetDisplayNameResult,
-  UsersSetGitHubIdentityResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
+import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import {
@@ -19,7 +20,7 @@ import {
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
-import { resolveCurrentSelfUser, userProfileAvatarUrl } from "../../app/user-profile.ts";
+import { resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderDocsLink,
@@ -36,9 +37,10 @@ import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../../lib/ava
 import { formatUiError } from "../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
-import "../../styles/profile.css";
 import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
+import "../../styles/profile.css";
 import { renderIdentitySection } from "./identity-section.ts";
+import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
 
 const PROFILE_DOCS_URL = "https://docs.openclaw.ai/concepts/user-model";
 
@@ -53,9 +55,9 @@ export class ProfilePage extends OpenClawLightDomElement {
   @state() private selfUser: AuthenticatedUser | null = null;
   @state() private ownProfile: UserProfile | null = null;
   @state() private displayName = "";
-  @state() private githubUsername = "";
+  @state() private gitCoauthorEnabled = false;
   @state() private identityLoading = false;
-  @state() private identityBusy: "display-name" | "avatar" | "github" | null = null;
+  @state() private identityBusy: "display-name" | "avatar" | "git-coauthor" | null = null;
   @state() private identityError: string | null = null;
   @state() private failedHeroAvatarUrl: string | null = null;
 
@@ -138,7 +140,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       this.identityRequestId += 1;
       this.ownProfile = null;
       this.displayName = "";
-      this.githubUsername = "";
+      this.gitCoauthorEnabled = false;
       this.identityLoading = false;
       this.identityBusy = null;
       this.identityError = null;
@@ -166,12 +168,8 @@ export class ProfilePage extends OpenClawLightDomElement {
     const requestId = ++this.identityRequestId;
     const currentProfile = this.ownProfile;
     const displayNameDraft = this.displayName;
-    const githubUsernameDraft = this.githubUsername;
     const hasUnsavedDisplayName =
       currentProfile !== null && displayNameDraft.trim() !== (currentProfile.displayName ?? "");
-    const hasUnsavedGitHubUsername =
-      currentProfile !== null &&
-      githubUsernameDraft.trim() !== (currentProfile.githubIdentity?.login ?? "");
     this.identityLoading = true;
     this.identityError = null;
     try {
@@ -185,9 +183,17 @@ export class ProfilePage extends OpenClawLightDomElement {
       }
       this.ownProfile = profile;
       this.displayName = hasUnsavedDisplayName ? displayNameDraft : (profile.displayName ?? "");
-      this.githubUsername = hasUnsavedGitHubUsername
-        ? githubUsernameDraft
-        : (profile.githubIdentity?.login ?? "");
+      this.gitCoauthorEnabled = false;
+      if (profile.githubIdentity) {
+        const preferences = await client.request<UsersPrefsGetResult>("users.prefs.get", {
+          keys: [GIT_COAUTHOR_PREFERENCE_KEY],
+        });
+        if (requestId !== this.identityRequestId) {
+          return;
+        }
+        this.gitCoauthorEnabled =
+          preferences.status === "ok" && preferences.entries[GIT_COAUTHOR_PREFERENCE_KEY] === true;
+      }
     } catch (error) {
       if (requestId === this.identityRequestId) {
         this.identityError = toIdentityErrorMessage(error);
@@ -202,7 +208,6 @@ export class ProfilePage extends OpenClawLightDomElement {
   private applyOwnProfile(profile: UserProfile) {
     this.ownProfile = profile;
     this.displayName = profile.displayName ?? "";
-    this.githubUsername = profile.githubIdentity?.login ?? "";
   }
 
   private async saveDisplayName() {
@@ -276,6 +281,7 @@ export class ProfilePage extends OpenClawLightDomElement {
         this.context.gateway.connection.gatewayUrl,
         result.profile.id,
         result.avatarRevision,
+        this.context.resourceBasePath,
       );
       const presenceAvatarChanged =
         this.selfUser?.id === result.profile.id && this.selfUser.avatarUrl !== selfAvatarUrlBefore;
@@ -306,61 +312,38 @@ export class ProfilePage extends OpenClawLightDomElement {
     }
   }
 
-  private async saveGitHubIdentity() {
+  private async saveGitCoauthorPreference(enabled: boolean) {
+    const client = this.client;
     const profile = this.ownProfile;
-    const username = this.githubUsername.trim();
     if (
-      !profile ||
-      !username ||
-      username.toLowerCase() === profile.githubIdentity?.login.toLowerCase()
+      !client ||
+      !profile?.githubIdentity ||
+      !this.canWrite ||
+      this.identityBusy ||
+      this.identityLoading
     ) {
       return;
     }
-    await this.runGitHubIdentityMutation(
-      async (client) =>
-        (
-          await client.request<UsersSetGitHubIdentityResult>("users.setGitHubIdentity", {
-            username,
-          })
-        ).profile,
-    );
-  }
-
-  private async clearGitHubIdentity() {
-    await this.runGitHubIdentityMutation(
-      async (client) =>
-        (await client.request<UsersClearGitHubIdentityResult>("users.clearGitHubIdentity", {}))
-          .profile,
-    );
-  }
-
-  private async runGitHubIdentityMutation(
-    mutate: (client: GatewayBrowserClient) => Promise<UserProfile>,
-  ) {
-    const client = this.client;
-    const profile = this.ownProfile;
-    if (!client || !profile || this.identityBusy || this.identityLoading) {
-      return;
-    }
-    this.identityBusy = "github";
+    this.identityBusy = "git-coauthor";
     this.identityError = null;
     const identityRequestId = this.identityRequestId;
-    const displayNameDraft = this.displayName;
-    const hasUnsavedDisplayName = displayNameDraft.trim() !== (profile.displayName ?? "");
     try {
-      const nextProfile = await mutate(client);
+      const result = await client.request<UsersPrefsSetResult>("users.prefs.set", {
+        entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: enabled },
+      });
       if (client !== this.client || identityRequestId !== this.identityRequestId) {
         return;
       }
-      this.ownProfile = nextProfile;
-      this.displayName = hasUnsavedDisplayName ? displayNameDraft : (nextProfile.displayName ?? "");
-      this.githubUsername = nextProfile.githubIdentity?.login ?? "";
+      if (result.status !== "ok") {
+        throw new Error(t("profilePage.identity.profileUnavailable"));
+      }
+      this.gitCoauthorEnabled = enabled;
     } catch (error) {
       if (client === this.client && identityRequestId === this.identityRequestId) {
         this.identityError = toIdentityErrorMessage(error);
       }
     } finally {
-      if (identityRequestId === this.identityRequestId && this.identityBusy === "github") {
+      if (identityRequestId === this.identityRequestId && this.identityBusy === "git-coauthor") {
         this.identityBusy = null;
       }
     }
@@ -407,12 +390,13 @@ export class ProfilePage extends OpenClawLightDomElement {
             this.context.gateway.connection.gatewayUrl,
             this.ownProfile.id,
             this.ownProfile.updatedAt,
+            this.context.resourceBasePath,
           );
     return renderIdentitySection({
       profile: this.ownProfile,
       avatarUrl,
       displayName: this.displayName,
-      githubUsername: this.githubUsername,
+      gitCoauthorEnabled: this.gitCoauthorEnabled,
       busy: this.identityLoading ? "loading" : this.identityBusy,
       error: this.identityError,
       onDisplayNameInput: (value) => {
@@ -420,11 +404,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       },
       onSaveDisplayName: () => void this.saveDisplayName(),
       onAvatarSelect: (file) => void this.saveAvatar(file),
-      onGitHubUsernameInput: (value) => {
-        this.githubUsername = value;
-      },
-      onSaveGitHubIdentity: () => void this.saveGitHubIdentity(),
-      onClearGitHubIdentity: () => void this.clearGitHubIdentity(),
+      onGitCoauthorChange: (enabled) => void this.saveGitCoauthorPreference(enabled),
     });
   }
 

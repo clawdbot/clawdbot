@@ -59,8 +59,11 @@
   --rail-header-title-weight: 600;
   --rail-divider-color: var(--border);
   --rail-divider-size: 1px;
-  --rail-divider-active-size: 2px;
-  --rail-resizer-size: 4px;
+  --resize-handle-size: 6px;
+  --resize-handle-line-size: 1px;
+  --resize-handle-active-line-size: 2px;
+  --resize-handle-rest-color: color-mix(in srgb, var(--border) 74%, transparent);
+  --resize-handle-active-color: color-mix(in srgb, var(--text) 42%, transparent);
 
   /*
    * Accent - Punchy signature red
@@ -209,6 +212,11 @@
   --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.5);
   --shadow-glow: 0 0 24px var(--accent-glow);
 
+  /* Transient surfaces use one edge and elevation treatment. Persistent
+     panels and dialogs keep their independent elevation hierarchy. */
+  --overlay-border: color-mix(in srgb, var(--border-strong) 64%, transparent);
+  --overlay-shadow: 0 1px 2px rgb(0 0 0 / 0.18), 0 8px 24px rgb(0 0 0 / 0.24);
+
   /* Spacing scale. Settings surfaces use these (see
      ui/docs/design-system/settings-design.md); elsewhere raw px padding/gap is
      grandfathered — adopt the scale when rewriting a rule, don't mass-migrate. */
@@ -268,6 +276,7 @@
   --duration-fast: 100ms;
   --duration-normal: 180ms;
   --duration-slow: 300ms;
+  --cursor-action: default;
   --safe-area-top: env(safe-area-inset-top, 0px);
   --safe-area-right: env(safe-area-inset-right, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
@@ -340,6 +349,7 @@
   }
 
   .agent-tool-card.agent-tool-card,
+  .chat-tool-card__preview.chat-tool-card__preview,
   .chat-thread.chat-thread,
   .chat-bubble.chat-bubble,
   .agent-chat__input.agent-chat__input,
@@ -565,6 +575,8 @@
   --shadow-lg: 0 12px 28px rgba(60, 42, 24, 0.09);
   --shadow-xl: 0 24px 48px rgba(60, 42, 24, 0.11);
   --shadow-glow: 0 0 20px var(--accent-glow);
+  --overlay-border: color-mix(in srgb, var(--border-strong) 64%, transparent);
+  --overlay-shadow: 0 1px 2px rgb(60 42 24 / 0.035), 0 8px 24px rgb(60 42 24 / 0.065);
 
   --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23444' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 
@@ -646,6 +658,7 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
+  --overlay-shadow: var(--shadow-md);
 
   --grid-line: rgba(255, 255, 255, 0.025);
 }
@@ -712,6 +725,7 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
   --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.08);
+  --overlay-shadow: var(--shadow-md);
 
   --grid-line: rgba(0, 0, 0, 0.04);
 }
@@ -787,6 +801,7 @@
   --shadow-sm: 0 1px 2px rgba(10, 6, 4, 0.35);
   --shadow-md: 0 4px 16px rgba(10, 6, 4, 0.45);
   --shadow-lg: 0 12px 32px rgba(10, 6, 4, 0.55);
+  --overlay-shadow: var(--shadow-md);
 
   --grid-line: rgba(255, 240, 225, 0.03);
 }
@@ -851,6 +866,7 @@
   --shadow-sm: 0 1px 2px rgba(60, 40, 20, 0.06);
   --shadow-md: 0 4px 12px rgba(60, 40, 20, 0.08);
   --shadow-lg: 0 12px 28px rgba(60, 40, 20, 0.1);
+  --overlay-shadow: var(--shadow-md);
 
   --grid-line: rgba(80, 50, 20, 0.04);
 }
@@ -996,37 +1012,9 @@ openclaw-app {
   }
 }
 
-/* Cursor policy. A browser tab gets the pointer hand, the only hover affordance
-   a page owns; installed/app-like windows are desktop chrome and keep the arrow.
-   Controls consume --cursor-action rather than hardcoding a cursor, and real
-   hyperlinks keep the UA pointer in every mode. */
-/* stylelint-disable-next-line no-duplicate-selectors -- cursor policy block, see comment above */
-:root {
-  --cursor-action: pointer;
-}
-
-/* Separate from the standalone block above, which owns viewport and safe-area
-   insets; widening its condition would change those too. `fullscreen` is absent
-   on purpose: it is a transient presentation state any window can enter, and
-   the manifest installs this UI as `standalone`. */
-@media (display-mode: standalone),
-  (display-mode: minimal-ui),
-  (display-mode: window-controls-overlay) {
-  :root {
-    --cursor-action: default;
-  }
-}
-
-/* Native app hosts are installed desktop windows too, but they embed a plain
-   web view that reports `display-mode: browser`; they announce themselves with
-   these `<html>` markers instead (all three, as layout.css already matches). */
-html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrome) {
-  --cursor-action: default;
-}
-
-/* Generic actionable controls, at element/attribute specificity only so the
-   component rules that own semantic cursors (not-allowed, disabled, grab,
-   resize, deliberate `default` on non-actionable elements) still win. */
+/* State-changing controls use the desktop arrow. This stays at
+   element/attribute specificity so component rules that own semantic cursors
+   (not-allowed, disabled, grab, resize, deliberate `default`) still win. */
 button,
 summary,
 select,
@@ -1058,6 +1046,17 @@ a {
   text-underline-offset: 2px;
 }
 
+/* Real links keep the hand even when styled as controls. */
+a[href] {
+  cursor: pointer;
+}
+
+/* Non-anchor controls opt in only when their primary action opens a browser
+   tab/window. Disabled controls keep their component-owned cursor. */
+[data-new-tab-action]:not(:disabled):not([disabled]):not([aria-disabled="true"]) {
+  cursor: pointer;
+}
+
 a:hover {
   text-decoration-thickness: 2px;
 }
@@ -1086,6 +1085,15 @@ wa-dropdown-item[type="checkbox"]::part(checkmark) {
 wa-dropdown-item[type="checkbox"] {
   display: flex;
   align-items: center;
+}
+
+/* Web Awesome owns these popup panels in shadow DOM, so shared tokens enter
+   through exported parts; feature styles continue to own content geometry. */
+wa-dropdown::part(menu),
+wa-popover::part(body),
+wa-select::part(listbox) {
+  border-color: var(--overlay-border);
+  box-shadow: var(--overlay-shadow);
 }
 
 button,

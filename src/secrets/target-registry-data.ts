@@ -107,7 +107,7 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "auth-profiles.api_key.key",
     targetType: "auth-profiles.api_key.key",
-    configFile: "auth-profiles.json",
+    configFile: "auth-profile-store",
     pathPattern: "profiles.*.key",
     refPathPattern: "profiles.*.keyRef",
     secretShape: SIBLING_REF_SHAPE,
@@ -120,7 +120,7 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "auth-profiles.token.token",
     targetType: "auth-profiles.token.token",
-    configFile: "auth-profiles.json",
+    configFile: "auth-profile-store",
     pathPattern: "profiles.*.token",
     refPathPattern: "profiles.*.tokenRef",
     secretShape: SIBLING_REF_SHAPE,

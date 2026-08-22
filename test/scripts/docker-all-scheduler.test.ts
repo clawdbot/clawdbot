@@ -627,9 +627,11 @@ describe("scripts/test-docker-all scheduler", () => {
     for (const fileName of [
       "docker-e2e-plan.mts",
       "docker-e2e-scenarios.mts",
+      "managed-child-process.mts",
       "official-external-channel-catalog.json",
       "release-version.mjs",
       "sleep.mjs",
+      "windows-taskkill.mjs",
     ]) {
       copyFileSync(path.join("scripts/lib", fileName), path.join(libDir, fileName));
     }

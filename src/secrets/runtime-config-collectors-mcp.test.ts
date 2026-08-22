@@ -84,4 +84,37 @@ describe("core MCP SecretRef collection", () => {
       "mcp.servers.remote.env.API_TOKEN",
     ]);
   });
+
+  it("does not resolve Authorization refs replaced by OAuth-managed transports", () => {
+    const config = {
+      mcp: {
+        servers: {
+          oauth: {
+            url: "https://mcp.example.test/oauth",
+            auth: "oauth",
+            headers: {
+              Authorization: ref("UNUSED_OAUTH_AUTHORIZATION"),
+              "X-Tenant": ref("OAUTH_TENANT"),
+            },
+          },
+          authProfile: {
+            url: "https://mcp.example.test/profile",
+            auth: "oauth",
+            oauth: { authProfileId: "work" },
+            headers: { authorization: ref("UNUSED_PROFILE_AUTHORIZATION") },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const context = collect(config);
+
+    expect(context.assignments.map((entry) => entry.path)).toEqual([
+      "mcp.servers.oauth.headers.X-Tenant",
+    ]);
+    expect(context.warnings.map((entry) => entry.path)).toEqual([
+      "mcp.servers.oauth.headers.Authorization",
+      "mcp.servers.authProfile.headers.authorization",
+    ]);
+  });
 });

@@ -143,6 +143,7 @@ describe("createNodePluginTools", () => {
     });
 
     expect(tools.map((tool) => tool.name)).toEqual(["remote_echo"]);
+    expect(tools[0]?.resultContentSource).toBeUndefined();
     expect(expectDefined(tools[0], "tools[0] test invariant").description).toContain("Studio Node");
     expect(getPluginToolMeta(expectDefined(tools[0], "tools[0] test invariant"))).toMatchObject({
       pluginId: "remote-demo",
@@ -165,6 +166,31 @@ describe("createNodePluginTools", () => {
       { scopes: ["operator.write"] },
     );
     expect(result.content).toEqual([{ type: "text", text: "pong" }]);
+
+    vi.mocked(callGatewayTool)
+      .mockResolvedValueOnce({
+        payload: {
+          content: [{ type: "text", text: "pong from Code Mode" }],
+          details: { ok: true, privateState: "must-not-leak" },
+        },
+      })
+      .mockResolvedValueOnce({
+        payload: {
+          content: [{ type: "text", text: "remote command failed" }],
+          details: { status: "error", privateState: "must-not-leak" },
+        },
+      });
+    const { codeModeTools } = createCodeModeHarness(tools);
+    const guest = await runCodeMode(
+      codeModeTools,
+      'return { success: await MCP.remoteDemo.echo({ text: "ping" }), failure: await MCP.remoteDemo.echo({ text: "fail" }) };',
+    );
+    expect(guest.status, JSON.stringify(guest)).toBe("completed");
+    expect(guest.value).toEqual({
+      success: { content: [{ type: "text", text: "pong from Code Mode" }], isError: false },
+      failure: { content: [{ type: "text", text: "remote command failed" }], isError: true },
+    });
+    expect(JSON.stringify(guest.value)).not.toContain("privateState");
   });
 
   it("forwards the caller abort signal to node gateway invocations", async () => {
@@ -257,11 +283,18 @@ describe("createNodePluginTools", () => {
     vi.mocked(callGatewayTool).mockResolvedValueOnce({
       payload: {
         content: [
-          { type: "image", data: "aW1hZ2UtMQ==", mimeType: "image/png" },
+          {
+            type: "image",
+            data: "aW1hZ2UtMQ==",
+            mimeType: "image/png",
+            annotations: { audience: ["assistant"] },
+            _meta: { detailCanary: "must-not-leak" },
+          },
           { type: "text", text: "first" },
           { type: "text", text: "second" },
           { type: "image", data: "aW1hZ2UtMg==", mimeType: "image/png" },
           { type: "image", data: 42, mimeType: "image/png" },
+          { type: "audio", data: "audio-canary", mimeType: "audio/wav" },
         ],
         structuredContent: { hits: 2 },
         isError: true,
@@ -287,6 +320,7 @@ describe("createNodePluginTools", () => {
       { scopes: ["operator.write"] },
     );
     expect(tool.executionMode).toBe("sequential");
+    expect(tool.resultContentSource).toBe("network");
     expect(getPluginToolMeta(tool)?.mcp?.node).toEqual({ id: "node-1" });
     expect(result.content).toEqual([
       { type: "text", text: 'structuredContent:\n{\n  "hits": 2\n}' },
@@ -295,19 +329,15 @@ describe("createNodePluginTools", () => {
       { type: "text", text: "second" },
       { type: "image", data: "aW1hZ2UtMg==", mimeType: "image/png" },
       { type: "text", text: '{"type":"image","data":42,"mimeType":"image/png"}' },
+      { type: "text", text: "[audio audio/wav]" },
     ]);
     expect(result.details).toEqual({
-      content: [
-        { type: "image", data: "aW1hZ2UtMQ==", mimeType: "image/png" },
-        { type: "text", text: "first" },
-        { type: "text", text: "second" },
-        { type: "image", data: "aW1hZ2UtMg==", mimeType: "image/png" },
-        { type: "image", data: 42, mimeType: "image/png" },
-      ],
+      mcpServer: "docs",
+      mcpTool: "search",
       structuredContent: { hits: 2 },
-      isError: true,
       status: "error",
     });
+    expect(JSON.stringify(result.details)).not.toContain("canary");
     expect(isToolResultError(result)).toBe(true);
   });
 
@@ -334,8 +364,26 @@ describe("createNodePluginTools", () => {
     });
     vi.mocked(callGatewayTool).mockResolvedValueOnce({
       payload: {
-        content: [{ type: "text", text: "found" }],
+        content: [
+          {
+            type: "text",
+            text: "found",
+            annotations: { audience: ["assistant"] },
+            _meta: { source: "text-block" },
+          },
+          {
+            type: "image",
+            data: "aW1hZ2U=",
+            mimeType: "image/png",
+            _meta: { source: "image-block" },
+          },
+          { type: "audio", data: "YXVkaW8=", mimeType: "audio/wav" },
+          { type: "resource_link", uri: "memo://one", name: "memo" },
+          { type: "resource", resource: { uri: "memo://two", text: "memo body" } },
+        ],
         structuredContent: { hits: 1 },
+        isError: false,
+        _meta: { privateAppState: "must-not-leak" },
       },
     });
 
@@ -358,11 +406,11 @@ describe("createNodePluginTools", () => {
       `
         const api = await API.read("mcp/docs.d.ts");
         const called = await MCP.docs.search({ query: "needle" });
-        const direct = await tools.search("docs_search");
+        const direct = await catalog.search("docs_search");
         return {
           api: api.content,
-          called: called.details,
-          allHasNodeMcp: ALL_TOOLS.some((entry) => entry.id === "mcp:docs:docs_search"),
+          called,
+          allHasNodeMcp: catalog.all().some((entry) => entry.source === "mcp"),
           direct,
         };
       `,
@@ -372,8 +420,25 @@ describe("createNodePluginTools", () => {
     expect(details.value).toEqual({
       api: expect.stringContaining("query: string;"),
       called: {
-        content: [{ type: "text", text: "found" }],
+        content: [
+          {
+            type: "text",
+            text: "found",
+            annotations: { audience: ["assistant"] },
+            _meta: { source: "text-block" },
+          },
+          {
+            type: "image",
+            data: "aW1hZ2U=",
+            mimeType: "image/png",
+            _meta: { source: "image-block" },
+          },
+          { type: "audio", data: "YXVkaW8=", mimeType: "audio/wav" },
+          { type: "resource_link", uri: "memo://one", name: "memo" },
+          { type: "resource", resource: { uri: "memo://two", text: "memo body" } },
+        ],
         structuredContent: { hits: 1 },
+        isError: false,
       },
       allHasNodeMcp: false,
       direct: [],
@@ -408,17 +473,24 @@ describe("createNodePluginTools", () => {
         },
       ],
     });
-    vi.mocked(callGatewayTool).mockResolvedValueOnce({
-      payload: { content: [], isError: true },
-    });
+    vi.mocked(callGatewayTool)
+      .mockResolvedValueOnce({ payload: { content: [], isError: true } })
+      .mockResolvedValueOnce({ payload: { content: [], isError: true } });
 
-    const tool = expectDefined(createNodePluginTools({})[0], "node MCP tool");
+    const nodeTools = createNodePluginTools({});
+    const tool = expectDefined(nodeTools[0], "node MCP tool");
     const result = await tool.execute("empty-error", {});
 
     expect(result.content).toEqual([
       { type: "text", text: "MCP tool failed without returning content." },
     ]);
     expect(isToolResultError(result)).toBe(true);
+
+    const { codeModeTools } = createCodeModeHarness(nodeTools);
+    const guestResult = await runCodeMode(codeModeTools, "return await MCP.docs.fail({})");
+
+    expect(guestResult.status, JSON.stringify(guestResult)).toBe("completed");
+    expect(guestResult.value).toEqual({ content: [], isError: true });
   });
 
   it("disambiguates gateway-node and node-node MCP server collisions", async () => {
@@ -443,7 +515,23 @@ describe("createNodePluginTools", () => {
       });
     }
     vi.mocked(callGatewayTool).mockResolvedValueOnce({
-      payload: { content: [{ type: "text", text: "node-b" }] },
+      payload: {
+        content: [
+          {
+            type: "image",
+            data: 42,
+            mimeType: "image/png",
+            annotations: { audience: ["assistant"], canary: "malformed-annotations" },
+            _meta: { canary: "malformed-meta" },
+          },
+          {
+            type: "text",
+            text: "node-b",
+            annotations: { canary: "text-annotations" },
+            _meta: { canary: "text-meta" },
+          },
+        ],
+      },
     });
 
     const { codeModeTools, compacted } = createCodeModeHarness([
@@ -459,7 +547,7 @@ describe("createNodePluginTools", () => {
       `
         const files = await API.list("mcp");
         const called = await MCP.nodeCDocs.searchC({});
-        return { files: files.files.map((file) => file.path), called: called.details };
+        return { files: files.files.map((file) => file.path), called };
       `,
     );
 
@@ -472,7 +560,23 @@ describe("createNodePluginTools", () => {
         "mcp/nodeCDocs.d.ts",
         "mcp/tickets.d.ts",
       ],
-      called: { content: [{ type: "text", text: "node-b" }] },
+      called: {
+        content: [
+          {
+            type: "image",
+            data: 42,
+            mimeType: "image/png",
+            annotations: { audience: ["assistant"], canary: "malformed-annotations" },
+            _meta: { canary: "malformed-meta" },
+          },
+          {
+            type: "text",
+            text: "node-b",
+            annotations: { canary: "text-annotations" },
+            _meta: { canary: "text-meta" },
+          },
+        ],
+      },
     });
     expect(callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",

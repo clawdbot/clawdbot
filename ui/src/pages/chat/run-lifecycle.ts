@@ -24,6 +24,7 @@ import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./i
 // Control UI chat module implements run lifecycle behavior.
 import {
   resetToolStream,
+  resetToolStreamRun,
   type CompactionStatus,
   type FallbackStatus,
   type WaitingApprovalStatus,
@@ -83,6 +84,7 @@ type ReconcileOptions = {
   clearChatStream?: boolean;
   clearIndicators?: boolean;
   clearToolStream?: boolean;
+  clearToolStreamForRun?: boolean;
   clearRunStatus?: boolean;
   publishRunStatus?: boolean;
   armLocalTerminalReconcile?: boolean;
@@ -452,8 +454,12 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
   if (options.clearLocalRun) {
     host.chatRunId = null;
   }
-  if (options.clearToolStream && canResetToolStream(host)) {
-    resetToolStream(host);
+  if (canResetToolStream(host)) {
+    if (options.clearToolStream) {
+      resetToolStream(host);
+    } else if (options.clearToolStreamForRun && runId) {
+      resetToolStreamRun(host, runId);
+    }
   }
   if (options.outcome) {
     const status: ChatRunUiStatus = {
@@ -606,6 +612,7 @@ export function reconcileChatRunFromSessionRow(
     sessionKeys: [row.key],
     clearLocalRun: true,
     clearChatStream: true,
+    clearToolStreamForRun: true,
     publishRunStatus: options.publishRunStatus,
   });
   return true;

@@ -19,6 +19,7 @@ import { withSetupMigrationTargetLock } from "../wizard/setup.migration-snapshot
 import { createNonInteractiveLoggingPrompter } from "./non-interactive-prompter.js";
 import { runNonInteractiveLocalSetup } from "./onboard-non-interactive/local.js";
 import { runNonInteractiveRemoteSetup } from "./onboard-non-interactive/remote.js";
+import { rejectOnboardingOption } from "./onboard-options.js";
 import type { OnboardOptions } from "./onboard-types.js";
 
 function isMigrationImport(opts: OnboardOptions): boolean {
@@ -37,10 +38,11 @@ async function runNonInteractiveMigrationImport(params: {
   if (!providerId) {
     // Migration import cannot safely prompt in non-interactive mode; require the
     // provider id so the import path is deterministic.
-    params.runtime.error(
+    rejectOnboardingOption(
+      params.opts,
+      params.runtime,
       `--import-from is required for non-interactive migration import. Run ${formatCliCommand("openclaw migrate list")} to choose a provider.`,
     );
-    params.runtime.exit(1);
     return;
   }
   const { detectSetupMigrationSources, runSetupMigrationImport } =
@@ -85,6 +87,9 @@ async function runNonInteractiveMigrationImport(params: {
       return committed.nextConfig;
     },
   });
+  if (outcome.kind === "back") {
+    throw new Error("Non-interactive migration import cannot navigate back.");
+  }
   await outcome.acknowledgePromotion?.();
 }
 
@@ -107,10 +112,11 @@ async function runNonInteractiveSetupExclusive(opts: OnboardOptions, runtime: Ru
     : {};
   const mode = opts.mode ?? "local";
   if (mode !== "local" && mode !== "remote") {
-    runtime.error(
+    rejectOnboardingOption(
+      opts,
+      runtime,
       `Invalid --mode "${String(mode)}". Use "local" or "remote", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
     );
-    runtime.exit(1);
     return;
   }
 

@@ -20,6 +20,7 @@ import {
 } from "./deliver-queue-state.js";
 import {
   OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
@@ -233,6 +234,11 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       params.abortSignal?.throwIfAborted();
       platformSendStarted = true;
     },
+    onDirectAdapterHandoff: async () => {
+      params.abortSignal?.throwIfAborted();
+      await params.onPlatformSendDispatch?.();
+      params.abortSignal?.throwIfAborted();
+    },
     onPlatformSendDispatch: async () => {
       params.abortSignal?.throwIfAborted();
       // Once any payload returns an identity, unknown-after-send protects the whole batch.
@@ -302,6 +308,24 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
 
   try {
     throwIfProducerLeaseLost();
+    const conversationAttemptAuthority =
+      params.deliveryCompletion?.kind === "conversation"
+        ? params.deliveryCompletion
+        : params.conversationDeliveryAttemptAuthority;
+    if (conversationAttemptAuthority) {
+      // Conversation delivery was not stable-shipped before route fingerprints. An unfinished
+      // legacy intent cannot be rebound safely after upgrade, so missing authority fails closed.
+      if (!conversationAttemptAuthority.routeFingerprint || !params.onDeliveryAttempt) {
+        throw new PlatformMessageNotDispatchedError(
+          "Conversation delivery is missing its current route authorization",
+          { cause: undefined, retryable: false },
+        );
+      }
+      // One durable attempt admits its bounded adapter fanout/retries. A later queue or recovery
+      // attempt rechecks from the serialized fingerprint; in-flight revocation is not promised.
+      await params.onDeliveryAttempt();
+      throwIfProducerLeaseLost();
+    }
     const results = await deliverOutboundPayloadsCore(wrappedParams);
     // Core reconciles adapter progress objects with hook-bearing final results.
     deliveredResults = results;

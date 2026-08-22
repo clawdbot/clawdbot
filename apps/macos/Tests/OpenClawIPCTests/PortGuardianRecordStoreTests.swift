@@ -123,6 +123,42 @@ struct PortGuardianRecordStoreTests {
     }
 
     @Test
+    func `cancelled port sweep never touches its durable tunnel records`() async throws {
+        let fixture = try Self.fixture()
+        defer { fixture.cleanup() }
+        let store = try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
+        let orphan = Self.record(pid: 2_000_000_000, port: 18789, timestamp: 1)
+        try store.upsert(orphan)
+        let guardian = PortGuardian(recordStoreFactory: {
+            try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
+        })
+
+        let sweep = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            await guardian.sweep(mode: .unconfigured)
+        }
+        await sweep.value
+
+        #expect(try store.records() == [orphan])
+    }
+
+    @Test
+    func `uncancelled unconfigured sweep still reaps orphaned tunnel records`() async throws {
+        let fixture = try Self.fixture()
+        defer { fixture.cleanup() }
+        let store = try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
+        let orphan = Self.record(pid: 2_000_000_000, port: 18789, timestamp: 1)
+        try store.upsert(orphan)
+        let guardian = PortGuardian(recordStoreFactory: {
+            try PortGuardianRecordStore(databaseURL: fixture.databaseURL)
+        })
+
+        await guardian.sweep(mode: .unconfigured)
+
+        #expect(try store.records().isEmpty)
+    }
+
+    @Test
     func `failed receipt deletion relinquishes ownership for sweep retry`() async throws {
         let fixture = try Self.fixture()
         defer { fixture.cleanup() }

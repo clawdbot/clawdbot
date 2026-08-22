@@ -1,4 +1,5 @@
 // Prepares consistent private SQLite read-only snapshots.
+import { execFile, spawnSync } from "node:child_process";
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
@@ -7,6 +8,7 @@ import {
   requireNodeSqlite,
   resolveSqliteFilesystemPath,
 } from "./node-sqlite.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
   createPrivateSqliteTempDirectory,
   createPrivateSqliteTempDirectorySync,
@@ -19,6 +21,8 @@ const SQLITE_HEADER_BYTES = 20;
 const SQLITE_READONLY_RESULT_CODE = 8;
 const SQLITE_RESULT_CODE_MASK = 0xff;
 const SQLITE_JOURNAL_MAGIC = Buffer.from([0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]);
+export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
+const SQLITE_READONLY_STDERR_TAIL_CHARS = 4_000;
 const pendingTempDirectoryCleanup = new Set<string>();
 let cleanupExitHandlerInstalled = false;
 
@@ -40,6 +44,8 @@ type PreparedSqliteReadOnlyLocation = {
   cleanup: () => boolean;
   location: string;
 };
+
+type SqliteReadOnlyWorkerResult = { ok: true; location: string } | { ok: false; message: string };
 
 class SqliteSourceChangedError extends Error {}
 
@@ -281,6 +287,24 @@ function removeTempDirectory(tempDir: string): boolean {
   }
 }
 
+function adoptPreparedLocation(location: string): PreparedSqliteReadOnlyLocation {
+  const tempDir = path.dirname(location);
+  let active = true;
+  return {
+    location,
+    cleanup: () => {
+      if (!active) {
+        return true;
+      }
+      const removed = removeTempDirectory(tempDir);
+      if (removed) {
+        active = false;
+      }
+      return removed;
+    },
+  };
+}
+
 function recoverPrivateRollbackCopy(snapshotPath: string): void {
   if (rollbackJournalReferencesSuperJournal(`${snapshotPath}-journal`)) {
     throw new Error(
@@ -355,20 +379,7 @@ function createStableReadOnlyCopyInTempDirectory(
       // a later writable open can perform SQLite's normal crash recovery.
       recoverPrivateRollbackCopy(snapshotPath);
     }
-    let active = true;
-    return {
-      location: snapshotPath,
-      cleanup: () => {
-        if (!active) {
-          return true;
-        }
-        const removed = removeTempDirectory(tempDir);
-        if (removed) {
-          active = false;
-        }
-        return removed;
-      },
-    };
+    return adoptPreparedLocation(snapshotPath);
   } catch (error) {
     removeTempDirectory(tempDir);
     throw error;
@@ -435,20 +446,7 @@ async function createOnlineReadOnlyBackup(
     } finally {
       fs.closeSync(descriptor);
     }
-    let active = true;
-    return {
-      location: snapshotPath,
-      cleanup: () => {
-        if (!active) {
-          return true;
-        }
-        const removed = removeTempDirectory(tempDir);
-        if (removed) {
-          active = false;
-        }
-        return removed;
-      },
-    };
+    return adoptPreparedLocation(snapshotPath);
   } catch (error) {
     removeTempDirectory(tempDir);
     throw error;
@@ -459,8 +457,10 @@ async function createOnlineReadOnlyBackup(
  * Active rollback and WAL state use SQLite's locking and backup protocol.
  * Crash residue that cannot be opened read-only is copied and recovered
  * privately so inspection never mutates coordination files beside the source.
+ * The InProcess exports are child-only: POSIX close() can release every lock
+ * the calling process holds on the same source inode.
  */
-export async function prepareSqliteReadOnlyLocation(
+export async function prepareSqliteReadOnlyLocationInProcess(
   pathname: string,
 ): Promise<PreparedSqliteReadOnlyLocation> {
   const canonicalPath = fs.realpathSync.native(pathname);
@@ -540,8 +540,7 @@ export async function prepareSqliteReadOnlyLocation(
   });
 }
 
-/** Synchronously prepares a stable private family for lock-free public inspection. */
-export function prepareSqliteReadOnlyLocationSync(
+export function prepareSqliteReadOnlyLocationSyncInProcess(
   pathname: string,
 ): PreparedSqliteReadOnlyLocation {
   const canonicalPath = fs.realpathSync.native(pathname);
@@ -575,6 +574,124 @@ export function prepareSqliteReadOnlyLocationSync(
   throw new Error(`SQLite source did not stabilize for read-only inspection: ${canonicalPath}`, {
     cause: lastChange,
   });
+}
+
+function resolveSqliteReadOnlyWorkerUrl(): URL {
+  return resolveRuntimeWorkerUrl({
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "sqlite-readonly-location.worker",
+    distWorkerPath: "infra/sqlite-readonly-location.worker.js",
+  });
+}
+
+function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteReadOnlyWorkerResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  if (Object.keys(value).length !== 2 || !("ok" in value)) {
+    return false;
+  }
+  return (
+    (value.ok === true && "location" in value && typeof value.location === "string") ||
+    (value.ok === false && "message" in value && typeof value.message === "string")
+  );
+}
+
+function createSqliteReadOnlyWorkerError(message: string, stderr: string): Error {
+  const stderrTail = stderr.trim().slice(-SQLITE_READONLY_STDERR_TAIL_CHARS);
+  return new Error(
+    `SQLite read-only worker ${message}${stderrTail ? `\nstderr (tail): ${stderrTail}` : ""}`,
+  );
+}
+
+function parseSqliteReadOnlyWorkerResult(
+  stdout: string,
+  stderr: string,
+): SqliteReadOnlyWorkerResult {
+  if (!stdout.trim()) {
+    throw createSqliteReadOnlyWorkerError("returned no JSON result", stderr);
+  }
+  let message: unknown;
+  try {
+    message = JSON.parse(stdout);
+  } catch {
+    throw createSqliteReadOnlyWorkerError("returned invalid JSON", stderr);
+  }
+  if (!isSqliteReadOnlyWorkerResult(message)) {
+    throw createSqliteReadOnlyWorkerError("returned an invalid result", stderr);
+  }
+  return message;
+}
+
+function adoptSqliteReadOnlyWorkerResult(params: {
+  failure?: string;
+  stderr: string;
+  stdout: string;
+}): PreparedSqliteReadOnlyLocation {
+  let result: SqliteReadOnlyWorkerResult;
+  try {
+    result = parseSqliteReadOnlyWorkerResult(params.stdout, params.stderr);
+  } catch (error) {
+    if (params.failure) {
+      throw createSqliteReadOnlyWorkerError(params.failure, params.stderr);
+    }
+    throw error;
+  }
+  if (params.failure || !result.ok) {
+    throw createSqliteReadOnlyWorkerError(
+      !result.ok ? result.message : (params.failure ?? "failed"),
+      params.stderr,
+    );
+  }
+  return adoptPreparedLocation(result.location);
+}
+
+export async function prepareSqliteReadOnlyLocation(
+  pathname: string,
+): Promise<PreparedSqliteReadOnlyLocation> {
+  const workerUrl = resolveSqliteReadOnlyWorkerUrl();
+  return await new Promise((resolve, reject) => {
+    execFile(
+      process.execPath,
+      [
+        ...resolveRuntimeWorkerArgv(workerUrl),
+        SQLITE_READONLY_CHILD_ARG,
+        "async",
+        path.resolve(pathname),
+      ],
+      { encoding: "utf8" },
+      (error, stdout, stderr) => {
+        try {
+          const failure = error ? `exited unsuccessfully: ${error.message}` : undefined;
+          resolve(adoptSqliteReadOnlyWorkerResult({ failure, stderr, stdout }));
+        } catch (workerError) {
+          reject(workerError instanceof Error ? workerError : new Error(String(workerError)));
+        }
+      },
+    );
+  });
+}
+
+export function prepareSqliteReadOnlyLocationSync(
+  pathname: string,
+): PreparedSqliteReadOnlyLocation {
+  const workerUrl = resolveSqliteReadOnlyWorkerUrl();
+  const result = spawnSync(
+    process.execPath,
+    [
+      ...resolveRuntimeWorkerArgv(workerUrl),
+      SQLITE_READONLY_CHILD_ARG,
+      "sync",
+      path.resolve(pathname),
+    ],
+    { encoding: "utf8" },
+  );
+  const failure = result.error
+    ? `failed to start: ${result.error.message}`
+    : result.status === 0
+      ? undefined
+      : `exited with ${result.signal ? `signal ${result.signal}` : `code ${result.status}`}`;
+  return adoptSqliteReadOnlyWorkerResult({ failure, stderr: result.stderr, stdout: result.stdout });
 }
 
 async function prepareSqliteSnapshotSource(

@@ -11,11 +11,7 @@ import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
-import {
-  shouldToggleSelectableDisclosure,
-  syncToolDisclosureOverflow,
-  toggleToolDisclosureKeepingScroll,
-} from "./chat-tool-cards.ts";
+import { shouldToggleSelectableDisclosure, syncToolDisclosureOverflow } from "./chat-tool-cards.ts";
 import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
 
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
@@ -32,7 +28,7 @@ type StreamMessageOptions = Pick<
   | "runActive"
   | "onRequestUpdate"
   | "canvasPluginSurfaceUrl"
-  | "basePath"
+  | "resourceBasePath"
   | "localMediaPreviewRoots"
   | "assistantAttachmentAuthToken"
   | "resolveArtifactDownload"
@@ -41,6 +37,7 @@ type StreamMessageOptions = Pick<
   | "onOpenImage"
   | "embedSandboxMode"
   | "allowExternalEmbedUrls"
+  | "fetchLinkFavicon"
   | "onOpenWorkspaceFile"
 >;
 
@@ -93,7 +90,7 @@ export function renderStreamGroupParts(
               runActive: opts.runActive,
               onRequestUpdate: opts.onRequestUpdate,
               canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-              basePath: opts.basePath,
+              resourceBasePath: opts.resourceBasePath,
               localMediaPreviewRoots: opts.localMediaPreviewRoots,
               assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
               resolveArtifactDownload: opts.resolveArtifactDownload,
@@ -102,6 +99,7 @@ export function renderStreamGroupParts(
               onOpenImage: opts.onOpenImage,
               embedSandboxMode: opts.embedSandboxMode,
               allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
+              fetchLinkFavicon: opts.fetchLinkFavicon,
               onOpenWorkspaceFile: opts.onOpenWorkspaceFile,
             },
             opts.onOpenSidebar,
@@ -113,7 +111,7 @@ export function renderStreamGroupParts(
 // arrives as several stream segments renders under a single avatar/footer
 // instead of flashing a separate avatar+bubble per segment (#63956).
 export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOptions = {}) {
-  const { assistant, basePath, assistantAttachmentAuthToken } = opts;
+  const { assistant, resourceBasePath, assistantAttachmentAuthToken } = opts;
   const name = assistant?.name ?? "Assistant";
   // Footer (sender + time) anchors to the earliest streamed segment; a run that
   // is only the reading indicator has no timestamp and therefore no footer.
@@ -126,7 +124,13 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   const avatar =
     workingOnly || opts.showAssistantAvatar === false
       ? nothing
-      : renderChatAvatar("assistant", assistant, undefined, basePath, assistantAttachmentAuthToken);
+      : renderChatAvatar(
+          "assistant",
+          assistant,
+          undefined,
+          resourceBasePath,
+          assistantAttachmentAuthToken,
+        );
   const groupClass = `chat-group assistant${workingOnly ? " chat-group--working" : ""}${footerStartedAt !== null ? " chat-group--with-footer" : ""}`;
 
   return html`
@@ -170,7 +174,7 @@ export function renderWorkGroupSummary(
             @focus=${syncToolDisclosureOverflow}
             @click=${(event: MouseEvent) => {
               if (shouldToggleSelectableDisclosure(event)) {
-                toggleToolDisclosureKeepingScroll(event, opts.onToggle);
+                opts.onToggle();
               }
             }}
           >

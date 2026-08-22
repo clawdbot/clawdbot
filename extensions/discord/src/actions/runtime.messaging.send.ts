@@ -1,6 +1,9 @@
 // Discord plugin module implements runtime.messaging.send behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { createReusableDiscordReplyReference } from "../reply-reference.js";
+import {
+  createReusableDiscordReplyReference,
+  resolveDiscordReplyReference,
+} from "../reply-reference.js";
 import {
   assertMediaNotDataUrl,
   jsonResult,
@@ -8,7 +11,6 @@ import {
   readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
-  resolvePollMaxSelections,
 } from "../runtime-api.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
 import { isThreadChannelType } from "../send.permissions.js";
@@ -24,6 +26,19 @@ function hasDiscordComponentObjectKeys(value: unknown): value is Record<string, 
     !Array.isArray(value) &&
     Object.keys(value as Record<string, unknown>).length > 0,
   );
+}
+
+function resolveActionReplyReference(ctx: DiscordMessagingActionContext, replyToId?: string) {
+  const reply = ctx.options?.reply;
+  // Host-resolved facts own physical-send scope. Raw-only plugin callers keep
+  // their longstanding reusable reply semantics when no host fact exists.
+  return reply
+    ? resolveDiscordReplyReference({
+        replyToId: reply.replyToId,
+        replyToIdSource: reply.source,
+        replyToMode: reply.source === "implicit" ? reply.mode : undefined,
+      })
+    : createReusableDiscordReplyReference(replyToId);
 }
 
 function readDiscordThreadArchiveTimestamp(thread: unknown): string | undefined {
@@ -177,29 +192,6 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       );
       return jsonResult({ ok: true });
     }
-    case "poll": {
-      if (!ctx.isActionEnabled("polls")) {
-        throw new Error("Discord polls are disabled.");
-      }
-      const to = readStringParam(ctx.params, "to", { required: true });
-      const content = readStringParam(ctx.params, "content");
-      const question = readStringParam(ctx.params, "question", {
-        required: true,
-      });
-      const answers = readStringArrayParam(ctx.params, "answers", {
-        required: true,
-        label: "answers",
-      });
-      const allowMultiselect = readBooleanParam(ctx.params, "allowMultiselect");
-      const durationHours = readPositiveIntegerParam(ctx.params, "durationHours");
-      const maxSelections = resolvePollMaxSelections(answers.length, allowMultiselect);
-      await discordMessagingActionRuntime.sendPollDiscord(
-        to,
-        { question, options: answers, maxSelections, durationHours },
-        ctx.withOpts({ content }),
-      );
-      return jsonResult({ ok: true });
-    }
     case "sendMessage": {
       if (!ctx.isActionEnabled("messages")) {
         throw new Error("Discord message sends are disabled.");
@@ -252,7 +244,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
           {
             ...ctx.withOpts(),
             silent,
-            reply: createReusableDiscordReplyReference(replyTo),
+            reply: resolveActionReplyReference(ctx, replyTo),
             sessionKey: sessionKey ?? undefined,
             agentId: agentId ?? undefined,
             mediaUrl: mediaUrl ?? undefined,
@@ -286,7 +278,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         assertMediaNotDataUrl(mediaUrl);
         const result = await discordMessagingActionRuntime.sendVoiceMessageDiscord(to, mediaUrl, {
           ...ctx.withOpts(),
-          reply: createReusableDiscordReplyReference(replyTo),
+          reply: resolveActionReplyReference(ctx, replyTo),
           silent,
           mediaAccess: ctx.options?.mediaAccess,
           mediaLocalRoots: ctx.options?.mediaLocalRoots,
@@ -308,7 +300,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         filename: filename ?? undefined,
         mediaLocalRoots: ctx.options?.mediaLocalRoots,
         mediaReadFile: ctx.options?.mediaReadFile,
-        reply: createReusableDiscordReplyReference(replyTo),
+        reply: resolveActionReplyReference(ctx, replyTo),
         components,
         embeds,
         silent,
@@ -424,7 +416,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
           mediaAccess: ctx.options?.mediaAccess,
           mediaLocalRoots: ctx.options?.mediaLocalRoots,
           mediaReadFile: ctx.options?.mediaReadFile,
-          reply: createReusableDiscordReplyReference(replyTo),
+          reply: resolveActionReplyReference(ctx, replyTo),
         },
       );
       return jsonResult({ ok: true, result });

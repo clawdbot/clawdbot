@@ -9,6 +9,7 @@ export function contextWith(
   runtime = "openclaw",
   featureMethods: string[] = [],
   cloudPlacementSupported?: boolean,
+  devicePlacementSupported?: boolean,
 ) {
   const request = vi.fn().mockResolvedValue({ models });
   const navigate = vi.fn();
@@ -30,6 +31,7 @@ export function contextWith(
             agentRuntime: {
               id: runtime,
               ...(cloudPlacementSupported === undefined ? {} : { cloudPlacementSupported }),
+              ...(devicePlacementSupported === undefined ? {} : { devicePlacementSupported }),
               source: "defaults",
             },
           },

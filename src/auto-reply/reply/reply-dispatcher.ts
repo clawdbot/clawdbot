@@ -7,7 +7,7 @@ import {
   findPlatformMessageRejectedError,
   isProvenDeliveryNotSentError,
 } from "../../infra/delivery-recovery.shared.js";
-import { collectErrorGraphCandidates } from "../../infra/errors.js";
+import { collectErrorGraphCandidates, toErrorObject } from "../../infra/errors.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
@@ -67,7 +67,7 @@ type ReplyDispatchCancelHandler = (
   info: ReplyDispatchRuntimeInfo,
 ) => Promise<void> | void;
 
-export { isReplyDispatchProvenInvisible, type ReplyDispatchDeliveryOutcome };
+export type { ReplyDispatchDeliveryOutcome };
 
 function isRetryableNoSendFailure(error: unknown): boolean {
   return (
@@ -166,6 +166,8 @@ export type ReplyDispatcherOptions = {
   onHeartbeatStrip?: () => void;
   onIdle?: () => Promise<void> | void;
   onError?: ReplyDispatchErrorHandler;
+  /** Let a durable ingress owner retry when every attempted send proves no recipient visibility. */
+  propagateRetryableNoSendFailure?: boolean;
   // AIDEV-NOTE: onSkip lets channels detect silent/empty drops (e.g. Telegram empty-response fallback).
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
@@ -273,6 +275,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     block: createReplyDispatchSettledCounts(),
     final: createReplyDispatchSettledCounts(),
   };
+  let retryableNoSendError: Error | undefined;
   let sendChain: Promise<void> = Promise.resolve();
   let settlementChain: Promise<void> = Promise.resolve();
   let pendingFinalizations = 0;
@@ -441,10 +444,12 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         })(),
       };
     } catch (error) {
+      const retryableNoSend = isRetryableNoSendFailure(error);
+      if (retryableNoSend) {
+        retryableNoSendError ??= toErrorObject(error, "reply delivery failed before dispatch");
+      }
       const outcome: ReplyDispatchDeliveryOutcome =
-        deliveryStarted && !isRetryableNoSendFailure(error)
-          ? "failed-deliver"
-          : "failed-before-deliver";
+        deliveryStarted && !retryableNoSend ? "failed-deliver" : "failed-before-deliver";
       if (custody && deliveryStarted) {
         // Proven no-send keeps the marker replayable for restart recovery —
         // including after direct custody escalated queued→unknown pre-I/O,
@@ -610,7 +615,15 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     supportsSettledReceipt: true,
     waitForIdle: async () => {
       await waitForIdle();
-      return buildReceipt();
+      const receipt = buildReceipt();
+      if (
+        options.propagateRetryableNoSendFailure === true &&
+        !receipt.anyVisibleDelivered &&
+        retryableNoSendError !== undefined
+      ) {
+        throw retryableNoSendError;
+      }
+      return receipt;
     },
     getQueuedCounts: () => ({ ...queuedCounts }),
     getCancelledCounts: () => mapReplyDispatchCounts(settledCounts, (counts) => counts.cancelled),

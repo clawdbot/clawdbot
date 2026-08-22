@@ -326,7 +326,7 @@ describeBrowserLayout("touch-primary form controls", () => {
 });
 
 describeBrowserLayout("mount fallback cursor", () => {
-  it("advertises its controls with the hand in a browser tab, alongside its real link", async () => {
+  it("uses the arrow for recovery controls and the hand for its real link", async () => {
     const page = await desktopContext.newPage();
     try {
       await page.setContent(readStyleSheet("ui/index.html"));
@@ -345,11 +345,9 @@ describeBrowserLayout("mount fallback cursor", () => {
         };
       });
 
-      // A browser tab is display-mode: browser, so the fallback follows the same
-      // cursor policy as the app it is standing in for.
       expect(cursors).toEqual({
-        retry: "pointer",
-        wait: "pointer",
+        retry: "default",
+        wait: "default",
         docs: "pointer",
       });
     } finally {

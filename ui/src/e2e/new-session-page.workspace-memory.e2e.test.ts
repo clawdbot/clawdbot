@@ -270,9 +270,9 @@ suite.define(() => {
         .toBe(true);
       const secondShortcut = secondModel.locator('[data-chat-model-shortcut-number="2"]');
       await expect.poll(() => secondShortcut.count()).toBe(1);
-      // Async page loads can still shift the whole layout mid-test; measure the
-      // menu and action relative to the picker anchor in one synchronous pass so
-      // only a focus-induced menu move can change the snapshot.
+      // wa-popup updates its anchored position asynchronously. Gate the atomic
+      // baseline on that settlement. After focus, poll the same exact geometry so
+      // transient frames settle before enforcing the opacity-only no-reflow contract.
       const menuGeometry = () =>
         page.evaluate(() => {
           const anchor = document.querySelector('[data-chat-model-select="true"]');
@@ -287,6 +287,7 @@ suite.define(() => {
           const menuBox = menu.getBoundingClientRect();
           const actionBox = action.getBoundingClientRect();
           return {
+            anchorGap: Math.round(anchorBox.top - menuBox.bottom),
             menu: {
               dx: menuBox.x - anchorBox.x,
               dy: menuBox.y - anchorBox.y,
@@ -301,6 +302,7 @@ suite.define(() => {
             },
           };
         });
+      await expect.poll(async () => (await menuGeometry())?.anchorGap).toBe(6);
       const geometryBeforeFocus = await menuGeometry();
       expect(geometryBeforeFocus).not.toBeNull();
       await expect
@@ -314,7 +316,7 @@ suite.define(() => {
       await expect
         .poll(() => secondShortcut.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("0");
-      expect(await menuGeometry()).toEqual(geometryBeforeFocus);
+      await expect.poll(menuGeometry).toEqual(geometryBeforeFocus);
       await search.press("1");
       await expect.poll(() => search.inputValue()).toBe("1");
       await expect.poll(() => picker.getAttribute("open")).toBe("");
@@ -564,10 +566,10 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       const trigger = page.locator("#new-session-project-trigger");
       await trigger.click();
-      expect(await page.locator('[data-value="recent::/shared"]').count()).toBe(0);
+      expect(await page.locator('[data-value="recent:/shared"]').count()).toBe(0);
       expect(await page.locator('[data-value="recent-project:registered"]').count()).toBe(0);
       const project = page.locator('[data-value="project:registered"]');
-      const recentFolder = page.locator(`[data-value="recent::${WORKSPACE}/scratch"]`);
+      const recentFolder = page.locator(`[data-value="recent:${WORKSPACE}/scratch"]`);
       await project.waitFor();
       await recentFolder.waitFor();
       await captureProjectUiProof(page, "identity-project-recents-after.png");

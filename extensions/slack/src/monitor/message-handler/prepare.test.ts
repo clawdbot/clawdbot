@@ -505,6 +505,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     assertPrepared(prepared, "org-wide Slack DM");
     expect(prepared.ctxPayload.GroupSpace).toBe("T123ENTERPRISE");
+    expect(prepared.ctxPayload.ConversationRouteContextObserved).toBe(true);
+    expect(prepared.ctxPayload.ConversationRoutePeerId).toBe("team:T123ENTERPRISE:user:U123");
     expect(prepared.ctxPayload.To).toBe("team:T123ENTERPRISE:user:U123");
     expect(prepared.ctxPayload.OriginatingTo).toBe("team:T123ENTERPRISE:user:U123");
     expect(prepared.ctxPayload.NativeChannelId).toBe("D999");

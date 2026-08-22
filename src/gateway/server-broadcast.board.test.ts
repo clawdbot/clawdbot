@@ -164,6 +164,32 @@ describe("collaboration event scope guards", () => {
     expect(unsubscribed.socket.events).toEqual([]);
   });
 
+  it("prepares session subscription lookups once per ordinary broadcast", () => {
+    const first = makeClient("first", "operator", ["operator.read"]);
+    const second = makeClient("second", "operator", ["operator.read"]);
+    const unrelated = makeClient("unrelated", "operator", ["operator.read"]);
+    const legacy = makeClient("legacy", "operator", ["operator.read"]);
+    for (const entry of [first, second, unrelated]) {
+      entry.client.connect.caps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
+    }
+    const subscribers = createSessionMessageSubscriberRegistry();
+    subscribers.subscribe(first.client.connId, "session-a");
+    subscribers.subscribe(second.client.connId, "session-a");
+    const getSubscribers = vi.spyOn(subscribers, "get");
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new Set([first.client, second.client, unrelated.client, legacy.client]),
+      sessionMessageSubscribers: subscribers,
+    });
+
+    broadcast("chat", { sessionKey: "session-a", state: "delta" });
+
+    expect(getSubscribers).toHaveBeenCalledExactlyOnceWith("session-a");
+    expect(first.socket.events).toEqual(["chat"]);
+    expect(second.socket.events).toEqual(["chat"]);
+    expect(unrelated.socket.events).toEqual([]);
+    expect(legacy.socket.events).toEqual(["chat"]);
+  });
+
   it("suppresses session.tool mirrors for scoped clients without a matching subscription", () => {
     const subscribed = makeClient("subscribed", "operator", ["operator.read"]);
     const otherSession = makeClient("other-session", "operator", ["operator.read"]);

@@ -130,6 +130,7 @@ function createHarness(
     },
   );
   const transport: NodeWorkerSupervisorTransport = {
+    hasCurrentRunner: () => false,
     listCurrentNodes: async () => [params.node ?? node],
     getBundleStatus: () => currentBundleStatus,
     acceptBundleStatus,

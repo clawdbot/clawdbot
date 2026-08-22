@@ -44,7 +44,6 @@ export function normalizeWorkerMachineOptions(
     if (
       option.id.trim() !== option.id ||
       option.label.trim() !== option.label ||
-      (option.description !== undefined && option.description.trim() !== option.description) ||
       ids.has(option.id) ||
       (option.default === true && hasDefault)
     ) {
@@ -56,7 +55,8 @@ export function normalizeWorkerMachineOptions(
   return value.map((option) => ({
     id: option.id,
     label: option.label,
-    ...(option.description === undefined ? {} : { description: option.description }),
+    ...(option.cpu === undefined ? {} : { cpu: option.cpu }),
+    ...(option.memoryGb === undefined ? {} : { memoryGb: option.memoryGb }),
     ...(option.default === undefined ? {} : { default: option.default }),
   }));
 }
@@ -87,7 +87,7 @@ export function requireWorkerLeaseStatus(value: unknown): WorkerLeaseStatus {
 }
 
 export function resolveWorkerTransportModeError(
-  provider: WorkerProvider,
+  provider: WorkerProvider<"internal">,
   transportMode: WorkerExecutionMode,
 ): WorkerProviderError | undefined {
   const modes = provider.supportedExecutionModes;
@@ -100,7 +100,7 @@ export function resolveWorkerTransportModeError(
 }
 
 export function resolveWorkerLeaseModeError(
-  provider: WorkerProvider,
+  provider: WorkerProvider<"internal">,
   lease: WorkerLease,
 ): WorkerProviderError | undefined {
   return resolveWorkerTransportModeError(provider, lease.node ? "worker-turn" : "remote-exec");

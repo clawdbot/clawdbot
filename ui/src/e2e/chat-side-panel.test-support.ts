@@ -26,11 +26,14 @@ export async function activateChatHeaderPanelAction(page: Page, label: string): 
     .locator('wa-dropdown-item[value^="quick:panels:"]')
     .filter({ hasText: label });
   if (!(await action.isVisible())) {
-    await menu
-      .locator(".session-menu__text")
-      .filter({ hasText: /^Panels$/ })
-      .hover();
+    const panels = menu.locator(".session-menu__text").filter({ hasText: /^Panels$/ });
+    if ((await menu.locator("wa-dropdown.chat-header-session-menu--compact").count()) > 0) {
+      await panels.click();
+    } else {
+      await panels.hover();
+    }
   }
+  await action.waitFor({ state: "visible" });
   const afterHide = menu.locator("wa-dropdown").evaluate(
     (dropdown) =>
       new Promise<void>((resolve) => {

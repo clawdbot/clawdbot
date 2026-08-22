@@ -165,7 +165,6 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
       cfg: ctx.cfg,
       env: ctx.env ?? process.env,
       unresolvedReasonStyle: "detailed",
-      envFallback: gatewayTokenRef ? "never" : "always",
     });
     if (gatewayTokenRef ? resolvedToken.source === "secretRef" : resolvedToken.token) {
       return;

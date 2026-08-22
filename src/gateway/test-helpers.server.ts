@@ -545,7 +545,7 @@ export async function prepareGatewayReplyRuntimeForTest(options?: {
   ]);
   await preparedRuntime.refreshPreparedModelRuntimeSnapshots(configRuntime.getRuntimeConfig(), {
     gatewayLifecycle: true,
-    catalogMode: "static",
+    catalogMode: agentDiscoveryMock.enabled ? "live" : "static",
     allowGatewaySubagentBinding: true,
   });
   gatewayReplyRuntimePrepared = true;

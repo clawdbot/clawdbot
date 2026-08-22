@@ -108,7 +108,7 @@ describe("outbound durable-batch target adoption", () => {
     expect(adoptTargetFromDelivery).toHaveBeenCalledTimes(1);
   });
 
-  it("waits for an identified successful send after no-identity and failed attempts", async () => {
+  it("adopts an identified accepted send before a later payload failure", async () => {
     const sendText = vi.fn(
       async ({
         text,
@@ -157,12 +157,13 @@ describe("outbound durable-batch target adoption", () => {
     expect(sendText.mock.calls.map(([ctx]) => ctx.threadId)).toEqual([
       undefined,
       undefined,
-      undefined,
-      "thread-created",
+      "thread-failed",
+      "thread-failed",
     ]);
     expect(afterDeliverPayload.mock.calls.map(([ctx]) => ctx.target.threadId)).toEqual([
-      "thread-created",
-      "thread-created",
+      "thread-failed",
+      "thread-failed",
+      "thread-failed",
     ]);
     expect(adoptTargetFromDelivery).toHaveBeenCalledTimes(1);
   });

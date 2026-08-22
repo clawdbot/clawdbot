@@ -1,6 +1,6 @@
 // Chat-item projection, expansion, reply hydration, and guarded row rendering.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { html, nothing, type TemplateResult } from "lit";
+import { nothing, type TemplateResult } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import { i18n } from "../../../i18n/index.ts";
@@ -208,7 +208,7 @@ export function projectChatTranscript(
   const chatItems = buildCachedChatItems({
     paneId: props.paneId,
     sessionKey: props.sessionKey,
-    runId: props.runId === undefined ? (activeSession?.activeRunIds?.[0] ?? null) : props.runId,
+    runId: props.runId ?? null,
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,
@@ -345,7 +345,7 @@ export function projectChatTranscript(
     runActive: props.runActive,
     onOpenWorkspaceFile: props.onOpenWorkspaceFile,
     onRequestUpdate: requestUpdate,
-    basePath: props.basePath,
+    resourceBasePath: props.resourceBasePath,
     localMediaPreviewRoots: props.localMediaPreviewRoots ?? [],
     assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
     resolveArtifactDownload: props.resolveArtifactDownload,
@@ -355,6 +355,7 @@ export function projectChatTranscript(
     canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
     embedSandboxMode: props.embedSandboxMode ?? "scripts",
     allowExternalEmbedUrls: props.allowExternalEmbedUrls ?? false,
+    fetchLinkFavicon: props.fetchLinkFavicon,
     showAssistantAvatar: false,
   } satisfies StreamGroupOptions;
   const streamGroupOptions = {
@@ -462,16 +463,13 @@ export function projectChatTranscript(
     }
     if (item.kind === "work-group") {
       const workExpanded = expandedToolCards.get(item.key) ?? false;
-      return html`
-        ${renderWorkGroupSummary(item, {
-          expanded: workExpanded,
-          onToggle: () => {
-            setExpansionState(expandedToolCards, item.key, !workExpanded);
-            requestUpdate();
-          },
-        })}
-        ${workExpanded ? item.groups.map((group) => renderGroupItem(group)) : nothing}
-      `;
+      return renderWorkGroupSummary(item, {
+        expanded: workExpanded,
+        onToggle: () => {
+          setExpansionState(expandedToolCards, item.key, !workExpanded);
+          requestUpdate();
+        },
+      });
     }
     if (item.kind === "activity-run") {
       const firstGroup = item.groups[0];
@@ -576,11 +574,19 @@ export function projectChatTranscript(
       turnRecapOwnerKey = lastItem.key;
     }
   }
-  const transcriptRows: TranscriptRow<ChatRenderItem>[] = transcriptItems.map((item) => ({
-    kind: "item",
-    key: item.key,
-    item,
-  }));
+  // New row keys measure expanded work immediately; existing keys keep their
+  // cached height until ResizeObserver reports the changed layout.
+  const transcriptRows = transcriptItems.flatMap((item): TranscriptRow<ChatRenderItem>[] =>
+    [{ kind: "item" as const, key: item.key, item }].concat(
+      item.kind === "work-group" && expandedToolCards.get(item.key)
+        ? item.groups.map((group) => ({
+            kind: "item" as const,
+            key: `${item.key}:${group.key}`,
+            item: group,
+          }))
+        : [],
+    ),
+  );
   const realtimeConversation = renderRealtimeTalkConversation(props);
   if (realtimeConversation !== nothing) {
     transcriptRows.push({
@@ -648,12 +654,13 @@ export function projectChatTranscript(
     props.userName,
     props.userAvatar,
     props.typingActors,
-    props.basePath,
+    props.resourceBasePath,
     (props.localMediaPreviewRoots ?? []).join("\u0000"),
     props.assistantAttachmentAuthToken,
     props.canvasPluginSurfaceUrl,
     props.embedSandboxMode ?? "scripts",
     props.allowExternalEmbedUrls ?? false,
+    Boolean(props.fetchLinkFavicon),
     threadContextWindow,
     Boolean(props.onSetReply),
     props.replyMessageAccess?.revision ?? 0,

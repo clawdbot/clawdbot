@@ -1,4 +1,4 @@
-import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
+import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 // OpenClaw overview gathers config, agent, tool, docs, source, and gateway status.
 import { listAgentEntries, resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import {
@@ -146,7 +146,7 @@ export async function loadSystemAgentOverview(
   const readSnapshot = deps.readConfigFileSnapshot ?? readConfigFileSnapshot;
   const snapshot = await readSnapshot();
   const cfg = snapshot.runtimeConfig ?? snapshot.sourceConfig ?? {};
-  const defaultAgentId = resolveSystemAgentTargetAgentId(cfg);
+  const defaultAgentId = resolveAmbientOwnerAgentId(cfg);
   const defaultModel =
     resolveAgentEffectiveModelPrimary(cfg, defaultAgentId) ??
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model);

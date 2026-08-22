@@ -1,24 +1,21 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { Socket } from "node:net";
 import { pipeline, type Readable } from "node:stream";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
 import {
   encodeServiceChildMessage,
   type ServiceChildAnchorMessage,
+  type ServiceChildAnchorPayload,
+  type ServiceChildControlMessage,
   type ServiceChildStart,
 } from "./service-child-protocol.js";
-
-type WithoutEnvelope<T> = T extends unknown ? Omit<T, "generation" | "sequence"> : never;
-type ServiceChildAnchorPayload = WithoutEnvelope<ServiceChildAnchorMessage>;
 
 const LINEAGE_EXIT_OBSERVATION_MS = 100;
 
 type AnchorState = "starting" | "active" | "closing" | "closed";
 type StdioEntry = "ignore" | "inherit" | "pipe" | number;
-type ServiceChildControlMessage = {
-  generation: string;
-  sequence: number;
-} & ({ type: "cancel"; signal: "SIGTERM" | "SIGKILL" } | { type: "startup-error-ack" });
+
 function commandStdio(start: ServiceChildStart): {
   stdio: StdioEntry[];
   lineageFd: number;
@@ -62,26 +59,11 @@ export function runServiceChildGroupAnchor(): void {
   let stderrDrained = false;
   let lineageClosed = false;
   let forceCleanup = false;
-  let resolveForceCleanup: () => void = () => {};
-  const forceCleanupRequested = new Promise<void>((resolve) => {
-    resolveForceCleanup = resolve;
-  });
-  let resolveLineage!: () => void;
-  const lineageDone = new Promise<void>((resolve) => {
-    resolveLineage = resolve;
-  });
-  let resolveRootExited!: () => void;
-  const rootExited = new Promise<void>((resolve) => {
-    resolveRootExited = resolve;
-  });
-  let resolveRootSettled!: () => void;
-  const rootSettledDone = new Promise<void>((resolve) => {
-    resolveRootSettled = resolve;
-  });
-  let resolveStartupErrorAck!: () => void;
-  const startupErrorAcknowledged = new Promise<void>((resolve) => {
-    resolveStartupErrorAck = resolve;
-  });
+  const forceCleanupRequested = createDeferredCore();
+  const lineageDone = createDeferredCore();
+  const rootExited = createDeferredCore();
+  const rootSettledDone = createDeferredCore();
+  const startupErrorAcknowledged = createDeferredCore();
 
   const send = async (message: ServiceChildAnchorPayload) => {
     if (!start || !control || control.destroyed) {
@@ -122,7 +104,7 @@ export function runServiceChildGroupAnchor(): void {
     await send({ type: "startup-error", error });
     // A write callback only proves kernel acceptance. Keep the exact anchor alive until the
     // host records the authoritative spawn failure and acknowledges it on this same channel.
-    await startupErrorAcknowledged;
+    await startupErrorAcknowledged.promise;
     await closeAuthority("lineage-lost", false);
   };
 
@@ -136,7 +118,7 @@ export function runServiceChildGroupAnchor(): void {
     if (state === "closing") {
       forceCleanup ||= signal === "SIGKILL";
       if (forceCleanup) {
-        resolveForceCleanup();
+        forceCleanupRequested.resolve();
       }
       return;
     }
@@ -146,7 +128,7 @@ export function runServiceChildGroupAnchor(): void {
     if (!forceCleanup) {
       // The anchor catches its own signal while every command-group member receives it.
       process.kill(0, "SIGTERM");
-      await Promise.race([lineageDone, termGraceDone, forceCleanupRequested]);
+      await Promise.race([lineageDone.promise, termGraceDone, forceCleanupRequested.promise]);
     }
     if (state !== "closing" || !start) {
       return;
@@ -154,7 +136,7 @@ export function runServiceChildGroupAnchor(): void {
     if (lineageClosed && !rootExit && !forceCleanup) {
       // Cleanup already owns the group. A normal root exit may race lineage EOF,
       // but the short observation window must not replace the configured TERM grace.
-      await Promise.race([rootExited, termGraceDone, forceCleanupRequested]);
+      await Promise.race([rootExited.promise, termGraceDone, forceCleanupRequested.promise]);
     }
     if (state !== "closing" || !start) {
       return;
@@ -162,7 +144,7 @@ export function runServiceChildGroupAnchor(): void {
     if (lineageClosed && rootExit && !forceCleanup) {
       // Output can outlive lineage and the root. It may preserve the authentic root
       // result only within the existing TERM grace, and KILL must wake this wait.
-      await Promise.race([rootSettledDone, termGraceDone, forceCleanupRequested]);
+      await Promise.race([rootSettledDone.promise, termGraceDone, forceCleanupRequested.promise]);
       if (state !== "closing" || !start) {
         return;
       }
@@ -183,13 +165,17 @@ export function runServiceChildGroupAnchor(): void {
     }
     lastHostSequence = message.sequence;
     if (message.type === "startup-error-ack") {
-      resolveStartupErrorAck();
+      startupErrorAcknowledged.resolve();
       return;
     }
     void requestCleanup("cancel", message.signal);
   };
 
   const startCommand = async (next: ServiceChildStart) => {
+    if (next.controlFd === undefined) {
+      process.exitCode = 1;
+      return;
+    }
     start = next;
     control = new Socket({ fd: start.controlFd, readable: true, writable: true });
     control.setEncoding("utf8");
@@ -247,19 +233,19 @@ export function runServiceChildGroupAnchor(): void {
         return;
       }
       lineageClosed = true;
-      resolveLineage();
+      lineageDone.resolve();
       if (state === "active") {
         // Pipe EOF and the child exit notification race independently. Wait
         // briefly for the exact child event before treating EOF as lease loss.
         void (async () => {
           if (!rootExit) {
-            await Promise.race([rootExited, delay(LINEAGE_EXIT_OBSERVATION_MS)]);
+            await Promise.race([rootExited.promise, delay(LINEAGE_EXIT_OBSERVATION_MS)]);
           }
           if (state !== "active") {
             return;
           }
           if (rootExit && rootSettlementStarted) {
-            await rootSettledDone;
+            await rootSettledDone.promise;
           }
           if (state !== "active") {
             return;
@@ -279,7 +265,7 @@ export function runServiceChildGroupAnchor(): void {
       }
       rootSettlementStarted = true;
       await rootResultDelivery;
-      resolveRootSettled();
+      rootSettledDone.resolve();
       if (lineageClosed && state === "active") {
         await closeAuthority("lineage-closed", false);
       }
@@ -321,7 +307,7 @@ export function runServiceChildGroupAnchor(): void {
       // The host gates public settlement on output EOF, so record the authentic root
       // result before cleanup can hard-close an output-holding descendant.
       rootResultDelivery = send({ type: "root-result", code, signal });
-      resolveRootExited();
+      rootExited.resolve();
       void settleRoot();
     });
   };

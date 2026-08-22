@@ -21,6 +21,7 @@ import {
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
+  isCodexPairedNodeRemoteExecPlacementSandbox,
   isCodexRemoteExecPlacementSandbox,
   readCodexPluginConfig,
   readCodexRequirementsToml,
@@ -47,7 +48,10 @@ import {
   applyCodexSessionPermissionPolicy,
   resolveCodexSessionPermissionCwd,
 } from "./session-permission-policy.js";
-import { getLeasedSharedCodexAppServerClient } from "./shared-client.js";
+import {
+  createIsolatedCodexAppServerClient,
+  getLeasedSharedCodexAppServerClient,
+} from "./shared-client.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
 
 export async function prepareCodexAttemptConnection({ params, options }: CodexRunAttemptInput) {
@@ -69,7 +73,6 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const preDynamicStartupStages = createCodexDynamicToolBuildStageTracker({
     enabled: profilerEnabled,
   });
-  const attemptClientFactory = options.clientFactory ?? getLeasedSharedCodexAppServerClient;
   const runtimeArtifactRequest =
     params.captureRuntimeArtifact || params.expectedRuntimeArtifact
       ? params.expectedRuntimeArtifact
@@ -99,12 +102,18 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
           sessionKey: sandboxSessionKey,
           workspaceDir: resolvedWorkspace,
         });
+  // Upstream cannot remove registered environments, so node leases own one disposable client.
+  const attemptClientFactory =
+    options.clientFactory ??
+    (isCodexPairedNodeRemoteExecPlacementSandbox(sandbox)
+      ? createIsolatedCodexAppServerClient
+      : getLeasedSharedCodexAppServerClient);
   preDynamicStartupStages.mark("sandbox");
   const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
-    // The explicit session mode replaces legacy per-session execSecurity/execAsk.
-    // Global/agent policy and approvals-file floors remain authoritative.
+    // Explicit modes replace legacy fields; full also replaces approval-file floors.
+    permissionMode: params.permissionMode,
     execOverrides: params.execOverrides,
-    approvals: loadExecApprovals(),
+    approvals: params.permissionMode === "full" ? undefined : loadExecApprovals(),
     config: params.config,
     agentId: sessionAgentId,
   });
@@ -224,6 +233,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     }).appServer;
   const initialStartupBindingHadInactiveThreadBootstrap =
     isInactiveThreadBootstrapBinding(startupBinding);
+  const appServerHomeScope = resolveCodexAppServerHomeScope({
+    appServer: pluginConfig.appServer,
+  });
   const preparedAuthRoute = usesSupervisionConnection
     ? undefined
     : params.runtimePlan?.auth.modelRoute;
@@ -257,7 +269,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         authProfileId: resolvedStartupAuthProfileId,
         authProfileStore: params.authProfileStore,
         agentDir,
-        homeScope: resolveCodexAppServerHomeScope({ appServer: pluginConfig.appServer }),
+        homeScope: appServerHomeScope,
         requirePreparedAuth: isCodexRemoteExecPlacementSandbox(sandbox),
         config: params.config,
         subscriptionProfileRequiredError:
@@ -270,7 +282,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     preparedAuth: startupPreparedAuth,
   } = authHandoff;
   const startupClientAuthProfileId =
-    usesSupervisionConnection || startupPreparedAuth?.kind === "api-key"
+    usesSupervisionConnection ||
+    appServerHomeScope === "user" ||
+    startupPreparedAuth?.kind === "api-key"
       ? null
       : startupAuthProfileId;
   const resolveReviewerPolicyContext = (binding: CodexAppServerThreadBinding | undefined) => {

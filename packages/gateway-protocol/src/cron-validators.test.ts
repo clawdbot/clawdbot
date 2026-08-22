@@ -102,6 +102,33 @@ describe("cron protocol validators", () => {
     ).toBe(false);
   });
 
+  it.each(["succeeded", "failed", "unknown"] as const)(
+    "accepts additive cron completion status %s",
+    (completionStatus) => {
+      expect(
+        Value.Check(CronRunLogEntrySchema, {
+          ts: 1,
+          jobId: "job-1",
+          action: "finished",
+          status: "ok",
+          completionStatus,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("rejects unknown cron completion status values", () => {
+    expect(
+      Value.Check(CronRunLogEntrySchema, {
+        ts: 1,
+        jobId: "job-1",
+        action: "finished",
+        status: "ok",
+        completionStatus: "partial",
+      }),
+    ).toBe(false);
+  });
+
   it("rejects client-authored scheduled authority provenance", () => {
     const scheduledToolPolicy = { version: 1, mode: "trusted" } as const;
     expectCases(validateCronAddParams, false, [add({ scheduledToolPolicy })]);
@@ -370,6 +397,7 @@ describe("cron protocol validators", () => {
         enabled: "all",
         scheduleKind: "cron",
         lastRunStatus: "unknown",
+        trigger: "conditional",
         sortBy: "nextRunAtMs",
         sortDir: "asc",
         agentId: "ops",
@@ -382,6 +410,7 @@ describe("cron protocol validators", () => {
       { agentId: "" },
       { scheduleKind: "yearly" },
       { lastRunStatus: "pending" },
+      { trigger: "configured" },
     ]);
   });
 

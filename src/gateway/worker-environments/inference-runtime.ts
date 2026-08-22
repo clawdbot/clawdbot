@@ -8,14 +8,12 @@ import type {
   WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
-  resolveAgentConfig,
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
-import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
-import { ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
+import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
 import { applyExtraParamsToAgent } from "../../agents/embedded-agent-runner/extra-params.js";
 import { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "../../agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
@@ -35,12 +33,10 @@ import {
   createModelVisibilityPolicy,
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
 } from "../../agents/model-visibility-policy.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   type PreparedModelRuntimeSnapshot,
 } from "../../agents/prepared-model-runtime.js";
-import { resolveProviderModelRouteAuthRequirement } from "../../agents/provider-model-route-auth.js";
 import { projectProviderModelRouteConfig } from "../../agents/provider-model-route.js";
 import { registerProviderStreamForModel } from "../../agents/provider-stream.js";
 import {
@@ -49,7 +45,6 @@ import {
 } from "../../agents/simple-completion-runtime.js";
 import { normalizeUsage, hasNonzeroUsage } from "../../agents/usage.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
@@ -106,8 +101,7 @@ type WorkerInferenceRuntimeDependencies = {
   ) => WorkerInferenceSessionTarget | undefined;
   acquireRuntimeLease: typeof acquireAgentRunPreparedModelRuntime;
   resolveDefaultModel: typeof resolveDefaultModelForAgent;
-  resolveSessionAuthProfile: typeof resolveSessionAuthProfileOverride;
-  resolveAuthProfileMode: typeof resolveWorkerInferenceAuthProfileMode;
+  resolveSessionAuthSelection: typeof resolveSessionAuthSelection;
   resolveModel: typeof resolveModelAsync;
   prepareModel: typeof prepareSimpleCompletionModel;
   resolveProviderStream: typeof registerProviderStreamForModel;
@@ -117,22 +111,6 @@ type WorkerInferenceRuntimeDependencies = {
   createTrace: typeof createDiagnosticTraceContextFromActiveScope;
   recordUsage: (params: WorkerInferenceUsageParams) => void;
 };
-
-function resolveWorkerInferenceAuthProfileMode(params: {
-  config: OpenClawConfig;
-  agentDir: string;
-  profileId: string;
-}): string | undefined {
-  const configuredMode = params.config.auth?.profiles?.[params.profileId]?.mode;
-  if (configuredMode) {
-    return configuredMode;
-  }
-  return ensureAuthProfileStore(params.agentDir, {
-    readOnly: true,
-    allowKeychainPrompt: false,
-    config: params.config,
-  }).profiles[params.profileId]?.type;
-}
 
 const ERROR_MESSAGES = {
   "model-not-approved": "Model is not approved for this agent.",
@@ -348,8 +326,7 @@ const DEFAULT_DEPENDENCIES: WorkerInferenceRuntimeDependencies = {
   },
   acquireRuntimeLease: acquireAgentRunPreparedModelRuntime,
   resolveDefaultModel: resolveDefaultModelForAgent,
-  resolveSessionAuthProfile: resolveSessionAuthProfileOverride,
-  resolveAuthProfileMode: resolveWorkerInferenceAuthProfileMode,
+  resolveSessionAuthSelection,
   resolveModel: resolveModelAsync,
   prepareModel: prepareSimpleCompletionModel,
   resolveProviderStream: registerProviderStreamForModel,
@@ -359,19 +336,6 @@ const DEFAULT_DEPENDENCIES: WorkerInferenceRuntimeDependencies = {
   createTrace: createDiagnosticTraceContextFromActiveScope,
   recordUsage: emitWorkerInferenceUsage,
 };
-
-function resolveReturnedProfileSource(
-  entry: WorkerInferenceSessionTarget["sessionEntry"],
-  profileId: string | undefined,
-): "auto" | "user" | undefined {
-  if (!profileId) {
-    return undefined;
-  }
-  if (entry.authProfileOverride?.trim() !== profileId) {
-    return "auto";
-  }
-  return resolveSessionAuthProfileOverrideSource(entry);
-}
 
 async function resolveApprovedModel(params: {
   config: OpenClawConfig;
@@ -415,27 +379,16 @@ async function resolveApprovedModel(params: {
         manifestPlugins: manifestSnapshot.plugins,
         ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
       });
-      const agentModels = resolveAgentConfig(lifecycleConfig, target.agentId)?.models;
-      const aliasConfig = agentModels
-        ? {
-            ...lifecycleConfig,
-            agents: {
-              ...lifecycleConfig.agents,
-              defaults: {
-                ...lifecycleConfig.agents?.defaults,
-                models: { ...lifecycleConfig.agents?.defaults?.models, ...agentModels },
-              },
-            },
-          }
-        : lifecycleConfig;
       const aliasIndex = buildModelAliasIndex({
-        cfg: aliasConfig,
+        cfg: lifecycleConfig,
+        agentId: target.agentId,
         defaultProvider: defaultModel.provider,
         manifestPlugins: manifestSnapshot.plugins,
         ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
       });
       const resolved = resolveModelRefFromString({
-        cfg: aliasConfig,
+        cfg: lifecycleConfig,
+        agentId: target.agentId,
         raw: rawRef,
         defaultProvider: defaultModel.provider,
         aliasIndex,
@@ -492,14 +445,12 @@ async function resolveApprovedModel(params: {
         lifecycleConfig.plugins?.entries?.codex?.enabled === true
           ? harnessPolicy.runtime
           : undefined;
-      const sessionProfileId = await dependencies.resolveSessionAuthProfile({
+      const sessionSelection = await dependencies.resolveSessionAuthSelection({
         cfg: lifecycleConfig,
         provider: resolved.ref.provider,
-        acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
-          provider: resolved.ref.provider,
-          harnessRuntime: harnessPolicy.runtime,
-          config: lifecycleConfig,
-        }),
+        modelId: resolved.ref.model,
+        ...(configuredDefaultProfile ? { configuredProfileId: configuredDefaultProfile } : {}),
+        harnessRuntime: harnessPolicy.runtime,
         agentDir,
         sessionEntry: target.sessionEntry,
         sessionStore: target.sessionStore,
@@ -507,28 +458,10 @@ async function resolveApprovedModel(params: {
         storePath: target.storePath,
         isNewSession: false,
       });
-      const sessionProfileSource = resolveReturnedProfileSource(
-        target.sessionEntry,
-        sessionProfileId,
-      );
-      const selectedProfile =
-        sessionProfileId && sessionProfileSource === "user"
-          ? { id: sessionProfileId, source: sessionProfileSource }
-          : configuredDefaultProfile
-            ? { id: configuredDefaultProfile, source: "user" as const }
-            : sessionProfileId
-              ? { id: sessionProfileId, source: sessionProfileSource }
-              : undefined;
+      const selectedProfileId = sessionSelection?.profileId;
+      const routeRequirement = sessionSelection?.routeRequirement;
       let modelConfig = lifecycleConfig;
-      const authMode = selectedProfile
-        ? dependencies.resolveAuthProfileMode({
-            config: lifecycleConfig,
-            agentDir,
-            profileId: selectedProfile.id,
-          })
-        : undefined;
-      const authRequirement = resolveProviderModelRouteAuthRequirement(authMode);
-      const routeResolution = authRequirement
+      const routeResolution = routeRequirement
         ? resolveProviderModelRoutes({
             provider: resolved.ref.provider,
             modelId: resolved.ref.model,
@@ -538,7 +471,7 @@ async function resolveApprovedModel(params: {
       const route =
         routeResolution?.kind === "routes"
           ? routeResolution.routes.find(
-              (candidate) => candidate.authRequirement === authRequirement,
+              (candidate) => candidate.authRequirement === routeRequirement,
             )
           : undefined;
       if (route) {
@@ -559,9 +492,9 @@ async function resolveApprovedModel(params: {
         provider: resolved.ref.provider,
         modelId: resolved.ref.model,
         agentDir,
-        ...(selectedProfile ? { profileId: selectedProfile.id } : {}),
-        ...(selectedProfile ? { preferredProfile: selectedProfile.id } : {}),
-        ...(selectedProfile ? { bindAuthOwner: true } : {}),
+        ...(selectedProfileId ? { profileId: selectedProfileId } : {}),
+        ...(selectedProfileId ? { preferredProfile: selectedProfileId } : {}),
+        ...(selectedProfileId ? { bindAuthOwner: true } : {}),
         allowMissingApiKeyModes: ["aws-sdk"],
         modelResolver: dependencies.resolveModel,
         preparedModelRuntime: runtimeSnapshot,

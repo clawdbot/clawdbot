@@ -1,16 +1,20 @@
 /** Collects core config secret refs during runtime preparation. */
+import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
-import { isDangerousMcpStdioEnvVarName } from "../agents/mcp-config-shared.js";
-import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
+import {
+  resolveConfiguredTalkRealtimeProviderId,
+  resolveConfiguredTalkSpeechProviderId,
+} from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isSecretRef } from "../config/types.secrets.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import {
   resolveConfiguredMediaEntryCapabilities,
   resolveEffectiveMediaEntryCapabilities,
 } from "../media-understanding/entry-capabilities.js";
 import { buildMediaUnderstandingCapabilityRegistry } from "../media-understanding/provider-capability-registry.js";
+import { resolveVoiceModelRefs } from "../tts/voice-models.js";
+import { collectMcpAssignments } from "./runtime-config-collectors-mcp.js";
 import { collectAgentMemorySearchAssignments } from "./runtime-config-collectors-memory.js";
 import { collectAgentSandboxAssignments } from "./runtime-config-collectors-sandbox.js";
 import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js";
@@ -139,84 +143,13 @@ function collectSkillAssignments(params: {
   }
 }
 
-function collectMcpAssignments(params: {
-  config: OpenClawConfig;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
-  const servers = params.config.mcp?.servers;
-  if (!servers) {
-    return;
+function findTalkProviderConfig(providers: unknown, providerId: string) {
+  if (!isRecord(providers)) {
+    return undefined;
   }
-  for (const [serverName, server] of Object.entries(servers)) {
-    const disabled = server.enabled === false;
-    const transport = disabled
-      ? null
-      : resolveMcpTransportConfig(serverName, server, { logWarnings: false });
-    const owner = {
-      ownerKind: "capability",
-      ownerId: `mcp:${serverName}`,
-      requiredForGateway: false,
-      disposition: "isolate",
-      contract: server,
-    } satisfies SecretAssignmentOwner;
-    const env = isRecord(server.env) ? server.env : undefined;
-    if (env) {
-      for (const [envKey, envValue] of Object.entries(env)) {
-        if (!isSecretRef(envValue)) {
-          continue;
-        }
-        const blocked = transport?.kind === "stdio" && isDangerousMcpStdioEnvVarName(envKey);
-        const active = transport?.kind === "stdio" && !blocked;
-        collectRuntimeSecretInputAssignment({
-          value: envValue,
-          path: `mcp.servers.${serverName}.env.${envKey}`,
-          expected: "string",
-          defaults: params.defaults,
-          context: params.context,
-          active,
-          inactiveReason: disabled
-            ? "MCP server is disabled."
-            : blocked
-              ? `stdio MCP env key "${envKey}" is blocked by host env safety policy.`
-              : "stdio MCP transport is not selected.",
-          owner,
-          apply: (value) => {
-            if (typeof value !== "string") {
-              throw new TypeError("Resolved MCP stdio env secret must be a string.");
-            }
-            env[envKey] = value;
-          },
-        });
-      }
-    }
-    const headers = isRecord(server.headers) ? server.headers : undefined;
-    if (headers) {
-      for (const [headerKey, headerValue] of Object.entries(headers)) {
-        if (!isSecretRef(headerValue)) {
-          continue;
-        }
-        collectRuntimeSecretInputAssignment({
-          value: headerValue,
-          path: `mcp.servers.${serverName}.headers.${headerKey}`,
-          expected: "string",
-          defaults: params.defaults,
-          context: params.context,
-          active: transport?.kind === "http",
-          inactiveReason: disabled
-            ? "MCP server is disabled."
-            : "HTTP MCP transport is not selected.",
-          owner,
-          apply: (value) => {
-            if (typeof value !== "string") {
-              throw new TypeError("Resolved MCP HTTP header secret must be a string.");
-            }
-            headers[headerKey] = value;
-          },
-        });
-      }
-    }
-  }
+  const id = findNormalizedProviderKey(providers, providerId);
+  const config = id ? providers[id] : undefined;
+  return id && isRecord(config) ? { id, config } : undefined;
 }
 
 function collectTalkAssignments(params: {
@@ -228,6 +161,9 @@ function collectTalkAssignments(params: {
   if (!isRecord(talk)) {
     return;
   }
+  // Keep resolving the legacy flat key while configurations migrate to the
+  // provider map. It has no selected-provider owner because it predates that
+  // surface and must retain the original fail-open collection behavior.
   collectSecretInputAssignment({
     value: talk.apiKey,
     path: "talk.apiKey",
@@ -238,44 +174,127 @@ function collectTalkAssignments(params: {
       talk.apiKey = value;
     },
   });
-  collectTalkProviderApiKeyAssignments({
-    providers: talk.providers,
-    pathPrefix: "talk.providers",
-    defaults: params.defaults,
-    context: params.context,
-  });
-  const realtime = isRecord(talk.realtime) ? talk.realtime : undefined;
-  collectTalkProviderApiKeyAssignments({
-    providers: realtime?.providers,
-    pathPrefix: "talk.realtime.providers",
-    defaults: params.defaults,
-    context: params.context,
-  });
-}
-
-function collectTalkProviderApiKeyAssignments(params: {
-  providers: unknown;
-  pathPrefix: string;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-}): void {
-  if (!isRecord(params.providers)) {
-    return;
-  }
-  for (const [providerId, providerConfig] of Object.entries(params.providers)) {
-    if (!isRecord(providerConfig)) {
+  for (const surface of ["speech", "realtime"] as const) {
+    const section =
+      surface === "speech" ? talk : isRecord(talk.realtime) ? talk.realtime : undefined;
+    if (!section) {
       continue;
     }
-    collectSecretInputAssignment({
-      value: providerConfig.apiKey,
-      path: `${params.pathPrefix}.${providerId}.apiKey`,
-      expected: "string",
-      defaults: params.defaults,
-      context: params.context,
-      apply: (value) => {
-        providerConfig.apiKey = value;
-      },
-    });
+    const configuredId =
+      surface === "speech"
+        ? resolveConfiguredTalkSpeechProviderId(params.config)
+        : resolveConfiguredTalkRealtimeProviderId(params.config);
+    const normalizedConfiguredId = normalizeOptionalLowercaseString(configuredId);
+    const capability = surface === "speech" ? "speechProviders" : "realtimeVoiceProviders";
+    const providerIds = normalizedConfiguredId
+      ? params.context.manifestRegistry
+        ? params.context.manifestRegistry.plugins
+            .map((manifest) => manifest.contracts?.[capability])
+            .find((ids) =>
+              ids?.some((id) => normalizeOptionalLowercaseString(id) === normalizedConfiguredId),
+            )
+        : [normalizedConfiguredId]
+      : undefined;
+    const normalizedProviderIds = providerIds
+      ?.map((id) => normalizeOptionalLowercaseString(id) ?? id)
+      .filter((id, index, ids) => ids.indexOf(id) === index);
+    const providerId = normalizedProviderIds?.[0];
+    const selected = configuredId
+      ? findTalkProviderConfig(section.providers, configuredId)
+      : undefined;
+    const inherited =
+      surface === "speech" && providerId
+        ? normalizedProviderIds
+            .map((id) => findTalkProviderConfig(params.config.tts?.providers, id))
+            .find((entry) => entry !== undefined)
+        : undefined;
+    const explicitModel =
+      surface === "realtime"
+        ? section.model
+        : (selected?.config.model ??
+          selected?.config.modelId ??
+          inherited?.config.model ??
+          inherited?.config.modelId);
+    const voiceModel =
+      explicitModel === undefined
+        ? resolveVoiceModelRefs(params.config.agents?.defaults?.voiceModel).find((ref) =>
+            normalizedProviderIds?.includes(ref.provider.toLowerCase()),
+          )
+        : undefined;
+    const { providers: _providers, provider: _provider, ...realtimeDefaults } = section;
+    const inheritedConfig =
+      inherited && selected?.config.apiKey !== undefined
+        ? Object.fromEntries(Object.entries(inherited.config).filter(([key]) => key !== "apiKey"))
+        : inherited?.config;
+    const owner = providerId
+      ? ({
+          ownerKind: "capability",
+          ownerId: `talk:${surface}`,
+          requiredForGateway: false,
+          disposition: "isolate",
+          contract: {
+            provider: providerId,
+            selectedProvider: configuredId,
+            providerConfig: selected?.config,
+            voiceModel,
+            ...(surface === "realtime"
+              ? {
+                  ...realtimeDefaults,
+                  canonicalProviderConfig: findTalkProviderConfig(section.providers, providerId)
+                    ?.config,
+                }
+              : {
+                  inheritedProviderConfig: inheritedConfig,
+                  timeoutMs: params.config.tts?.timeoutMs,
+                  maxTextLength: params.config.tts?.maxTextLength,
+                }),
+          },
+        } satisfies SecretAssignmentOwner)
+      : undefined;
+    const inheritedKey =
+      surface === "speech" && inherited && selected?.config.apiKey === undefined
+        ? inherited
+        : undefined;
+    const entries = Object.entries(isRecord(section.providers) ? section.providers : {});
+    if (inheritedKey) {
+      entries.push([inheritedKey.id, inheritedKey.config]);
+    }
+    for (const [id, config] of entries) {
+      if (!isRecord(config)) {
+        continue;
+      }
+      const isInherited = config === inheritedKey?.config;
+      const destination = isInherited && selected ? selected.config : config;
+      const normalized = normalizeOptionalLowercaseString(id);
+      const isOverriddenRealtimeCanonicalFallback =
+        surface === "realtime" &&
+        normalized === providerId &&
+        normalized !== normalizedConfiguredId &&
+        selected?.config.apiKey !== undefined;
+      const active = Boolean(
+        isInherited ||
+        (providerId &&
+          (normalized === normalizedConfiguredId ||
+            (surface === "realtime" &&
+              normalized === providerId &&
+              !isOverriddenRealtimeCanonicalFallback))),
+      );
+      collectRuntimeSecretInputAssignment({
+        value: config.apiKey,
+        path: isInherited
+          ? `tts.providers.${id}.apiKey`
+          : `talk.${surface === "realtime" ? "realtime." : ""}providers.${id}.apiKey`,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
+        active,
+        inactiveReason: "Talk provider is not selected.",
+        owner,
+        apply: (resolved) => {
+          destination.apiKey = resolved;
+        },
+      });
+    }
   }
 }
 

@@ -36,7 +36,6 @@ export function resolveRequestedSessionAgentId(
   cfg: OpenClawConfig,
   key: string,
   explicitAgentId?: string,
-  options?: { allowUnconfiguredExplicitAgent?: boolean },
 ): RequestedSessionAgentIdResolution {
   const parsed = parseAgentSessionKey(key.trim());
   const configuredAgentIds = listAgentIds(cfg);
@@ -49,11 +48,7 @@ export function resolveRequestedSessionAgentId(
     };
   }
   const normalizedRequestedAgentId = normalizedRequest?.value;
-  if (
-    normalizedRequestedAgentId &&
-    !options?.allowUnconfiguredExplicitAgent &&
-    !configuredAgentIds.includes(normalizedRequestedAgentId)
-  ) {
+  if (normalizedRequestedAgentId && !configuredAgentIds.includes(normalizedRequestedAgentId)) {
     return {
       ok: false,
       error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${explicitAgentId}"`),
@@ -64,11 +59,7 @@ export function resolveRequestedSessionAgentId(
     const keyIsGlobalMainAlias =
       cfg.session?.scope === "global" &&
       (parsed.rest === "main" || parsed.rest === normalizeMainKey(cfg.session?.mainKey));
-    if (
-      keyIsGlobalMainAlias &&
-      !options?.allowUnconfiguredExplicitAgent &&
-      !configuredAgentIds.includes(keyAgentId)
-    ) {
+    if (keyIsGlobalMainAlias && !configuredAgentIds.includes(keyAgentId)) {
       return {
         ok: false,
         error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${parsed.agentId}"`),

@@ -385,9 +385,13 @@ function createAssistantCanvasBlock(params: {
   url?: string;
   preferredHeight?: number;
   presentationTarget?: "assistant_message" | "tool_card";
+  mcpApp?: { viewId: string };
 }) {
   const viewId = `cv_inline_${params.suffix}`;
-  const preview = createCanvasPreview({ ...params, viewId });
+  const preview = {
+    ...createCanvasPreview({ ...params, viewId }),
+    ...(params.mcpApp ? { mcpApp: params.mcpApp } : {}),
+  };
   return {
     type: "canvas",
     preview,
@@ -913,6 +917,38 @@ describe("grouped chat rendering", () => {
     expect(order).toEqual(["Reply to message", "Rewind", "name", "time"]);
   });
 
+  it("orders peer footer actions after the sender name and timestamp", () => {
+    const container = document.createElement("div");
+    const message = createUserMessage("Peer footer order.");
+    const group = createMessageGroup(message, "user", {
+      sender: { id: "peer-user", name: "Peer User" },
+      senderLabel: "Peer User",
+    });
+    render(
+      renderTestMessageGroup(group, {
+        onReply: vi.fn(),
+        onRewind: vi.fn(),
+        userId: "current-user",
+      }),
+      container,
+    );
+
+    const footer = expectElement(container, ".chat-group--peer .chat-group-footer", HTMLElement);
+    const order = [
+      ...footer.querySelectorAll<HTMLElement>("button, .chat-sender-name, .chat-group-timestamp"),
+    ].map((element) => {
+      if (element.classList.contains("chat-sender-name")) {
+        return "name";
+      }
+      if (element.classList.contains("chat-group-timestamp")) {
+        return "time";
+      }
+      return element.getAttribute("aria-label");
+    });
+
+    expect(order).toEqual(["name", "time", "Reply to message", "Rewind"]);
+  });
+
   it("keeps hidden assistant thinking out of inline reply context", () => {
     const container = document.createElement("div");
     const onReply = vi.fn();
@@ -963,6 +999,7 @@ describe("grouped chat rendering", () => {
       codeBlockInteraction: "static",
       fileLinks: true,
       interactiveImages: false,
+      linkFavicons: false,
       sessionLinks: true,
       tableInteractions: "enabled",
     });
@@ -1086,6 +1123,7 @@ describe("grouped chat rendering", () => {
       codeBlockInteraction: "interactive",
       fileLinks: true,
       interactiveImages: false,
+      linkFavicons: false,
       sessionLinks: true,
       tableInteractions: "enabled",
     });
@@ -1625,15 +1663,20 @@ describe("grouped chat rendering", () => {
     );
 
     expect(markdownRenderMock).not.toHaveBeenCalled();
-    expect(streamingMarkdownRenderMock).toHaveBeenCalledWith("**live**\nreply", {
-      assistantTranscriptRoleHeaders: true,
-      codeBlockChrome: "copy",
-      codeBlockInteraction: "interactive",
-      fileLinks: true,
-      interactiveImages: false,
-      sessionLinks: true,
-      tableInteractions: "enabled",
-    });
+    expect(streamingMarkdownRenderMock).toHaveBeenCalledWith(
+      "**live**\nreply",
+      {
+        assistantTranscriptRoleHeaders: true,
+        codeBlockChrome: "copy",
+        codeBlockInteraction: "interactive",
+        fileLinks: true,
+        interactiveImages: false,
+        linkFavicons: false,
+        sessionLinks: true,
+        tableInteractions: "enabled",
+      },
+      "stream:1",
+    );
     const text = container.querySelector(".streaming-markdown");
     expect(text?.textContent).toBe("**live**\nreply");
   });
@@ -2272,6 +2315,80 @@ describe("grouped chat rendering", () => {
     expect(activity.textContent).not.toContain("read_file");
     expect(activity.textContent).not.toContain("run_command");
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+  });
+
+  it("keeps a persisted tool review icon-only until its command activity expands", () => {
+    const container = document.createElement("div");
+    const group = createToolGroup("reviewed-tool-group", [
+      createMessageEntry(
+        "reviewed-tool-message",
+        createToolResultMessage("call-reviewed", "run_command", "completed", {
+          details: {
+            approvalReviews: [
+              {
+                id: "review-1",
+                label: "Guardian",
+                status: "approved",
+                riskLevel: "low",
+                userAuthorization: "high",
+                rationale: "Narrowly scoped to the requested file.",
+              },
+            ],
+            approvalReviewOutcome: "approved",
+          },
+          timestamp: 1000,
+        }),
+      ),
+    ]);
+
+    renderMessageGroups(container, [group], {
+      isToolMessageExpanded: (id) => (id === "activity:reviewed-tool-group" ? false : undefined),
+    });
+    expect(
+      container.querySelector('.chat-activity-group__review-status[data-outcome="approved"]'),
+    ).not.toBeNull();
+    expect(container.textContent).not.toContain("Guardian approved");
+
+    renderMessageGroups(container, [group], {
+      isToolMessageExpanded: () => true,
+      isToolExpanded: () => true,
+    });
+    const review = container.querySelector('.chat-tool-review[data-review-status="approved"]');
+    expect(review?.textContent).toContain("Guardian approved");
+    expect(review?.textContent).toContain("Narrowly scoped to the requested file.");
+    expect(container.querySelector(".chat-tool-msg-body")).not.toBeNull();
+    expect(container.querySelectorAll(".chat-tool-review")).toHaveLength(1);
+  });
+
+  it("renders a persisted denial shield after the denied row leaves bounded review details", () => {
+    const container = document.createElement("div");
+    const group = createToolGroup("bounded-review-group", [
+      createMessageEntry(
+        "bounded-review-message",
+        createToolResultMessage("call-bounded-review", "run_command", "completed", {
+          details: {
+            approvalReviews: [
+              {
+                id: "later-approved-review",
+                label: "Guardian",
+                status: "approved",
+              },
+            ],
+            approvalReviewOutcome: "denied",
+          },
+          timestamp: 1000,
+        }),
+      ),
+    ]);
+
+    renderMessageGroups(container, [group], {
+      isToolMessageExpanded: () => false,
+    });
+
+    expect(
+      container.querySelector('.chat-activity-group__review-status[data-outcome="denied"]'),
+    ).not.toBeNull();
+    expect(container.querySelectorAll(".chat-tool-review")).toHaveLength(0);
   });
 
   it("collapses paired parallel tool cards from one message into an activity group", () => {
@@ -3032,6 +3149,51 @@ describe("grouped chat rendering", () => {
     container.remove();
   });
 
+  it("renders an expanded orphan tool result without a nested disclosure", () => {
+    const container = document.createElement("div");
+    renderMessageGroups(
+      container,
+      [
+        createMessageGroup(
+          createToolResultMessage("call-orphan", "read", "Orphan tool output", {
+            id: "orphan-tool-result",
+          }),
+          "tool",
+        ),
+      ],
+      { isToolMessageExpanded: () => true },
+    );
+
+    expect(container.querySelector(".chat-tool-msg-body .chat-tool-msg-summary")).toBeNull();
+    expect(container.querySelectorAll(".chat-tool-card__block code")).toHaveLength(1);
+    expect(container.querySelector(".chat-tool-card__block code")?.textContent).toBe(
+      "Orphan tool output",
+    );
+  });
+
+  it("keeps text visible beside an orphan tool-result image", () => {
+    const container = document.createElement("div");
+    renderMessageGroups(
+      container,
+      [
+        createMessageGroup(
+          createToolResultMessage("call-image", "image", [
+            { type: "text", text: "Generated image" },
+            { type: "image", data: "cG5n", mimeType: "image/png", alt: "Generated preview" },
+          ]),
+          "tool",
+        ),
+      ],
+      { isToolMessageExpanded: () => true },
+    );
+
+    expect(container.querySelector(".chat-text")?.textContent).toContain("Generated image");
+    expect(
+      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
+    ).toBe("data:image/png;base64,cG5n");
+    expect(container.querySelector(".chat-tool-msg-body .chat-tool-msg-summary")).not.toBeNull();
+  });
+
   it("collapses an inline tool call while keeping matching tool output visible", () => {
     const container = document.createElement("div");
     const groups = [
@@ -3266,6 +3428,7 @@ describe("grouped chat rendering", () => {
   it("checks local assistant audio against server metadata while preview roots load", async () => {
     const source = `/home/node/.openclaw/media/outbound/${crypto.randomUUID()}.mp3`;
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      expect(new URL(url, "http://control.test").pathname).toBe("/__openclaw__/assistant-media");
       expect(url).toContain("meta=1");
       expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer session-token");
       return {
@@ -3285,7 +3448,7 @@ describe("grouped chat rendering", () => {
         }),
         {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "",
           assistantAttachmentAuthToken: "session-token",
           localMediaPreviewRoots: [],
           onRequestUpdate: renderMessage,
@@ -3300,7 +3463,7 @@ describe("grouped chat rendering", () => {
     const audioPlayer = await requireAudioPlayer(container);
     const audio = expectElement(audioPlayer, "audio", HTMLAudioElement);
     expect(audio.getAttribute("src")).toBe(
-      `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-bootstrap-audio`,
+      `/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-bootstrap-audio`,
     );
     expect((audioPlayer as unknown as { serverDurationMs?: number }).serverDurationMs).toBe(2_345);
   });
@@ -3684,7 +3847,7 @@ describe("grouped chat rendering", () => {
         ),
         {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "session-token",
           localMediaPreviewRoots: [],
           onRequestUpdate: renderMessage,
@@ -3731,7 +3894,7 @@ describe("grouped chat rendering", () => {
           }),
           {
             showToolCalls: false,
-            basePath: "/openclaw",
+            resourceBasePath: "/openclaw",
             assistantAttachmentAuthToken: "session-token",
             localMediaPreviewRoots: [],
             onRequestUpdate: renderMessage,
@@ -4059,7 +4222,7 @@ describe("grouped chat rendering", () => {
         }),
         {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "session-token",
           localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: renderMessage,
@@ -4109,7 +4272,7 @@ describe("grouped chat rendering", () => {
         }),
         {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "/openclaw",
           localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
         },
@@ -4161,7 +4324,7 @@ describe("grouped chat rendering", () => {
         },
         {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "test-auth-token",
           localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
@@ -4215,7 +4378,7 @@ describe("grouped chat rendering", () => {
         },
         {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "/openclaw",
           localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
         },
@@ -4277,7 +4440,7 @@ describe("grouped chat rendering", () => {
         },
         {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: token,
           localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: () => renderWithToken(token),
@@ -4321,7 +4484,7 @@ describe("grouped chat rendering", () => {
         },
         {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "/openclaw",
           localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
         },
@@ -4362,7 +4525,7 @@ describe("grouped chat rendering", () => {
         },
         {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "/openclaw",
           localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
         },
@@ -4401,7 +4564,7 @@ describe("grouped chat rendering", () => {
       ),
       {
         showToolCalls: false,
-        basePath: "/openclaw",
+        resourceBasePath: "/openclaw",
         localMediaPreviewRoots: ["/tmp/openclaw"],
       },
     );
@@ -4426,7 +4589,7 @@ describe("grouped chat rendering", () => {
       }),
       {
         showToolCalls: false,
-        basePath: "/openclaw",
+        resourceBasePath: "/openclaw",
         localMediaPreviewRoots: ["/tmp/openclaw"],
       },
     );
@@ -4478,7 +4641,7 @@ describe("grouped chat rendering", () => {
       const rerender = () =>
         renderGroupedMessage(container, message, "user", {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "test-auth-token",
           localMediaPreviewRoots: ["/tmp/openclaw"],
           onRequestUpdate: rerender,
@@ -4550,7 +4713,7 @@ describe("grouped chat rendering", () => {
         "user",
         {
           showToolCalls: false,
-          basePath: "/openclaw",
+          resourceBasePath: "/openclaw",
           assistantAttachmentAuthToken: "test-auth-token",
           localMediaPreviewRoots: [],
           onRequestUpdate: rerender,
@@ -4673,7 +4836,7 @@ describe("grouped chat rendering", () => {
       {
         showToolCalls: false,
         assistantAttachmentAuthToken: "test-auth-token",
-        basePath: "/rosita",
+        resourceBasePath: "/rosita",
         onOpenImage,
       },
     );
@@ -4720,7 +4883,7 @@ describe("grouped chat rendering", () => {
       {
         showToolCalls: false,
         assistantAttachmentAuthToken: "must-not-be-forwarded",
-        basePath: "/rosita",
+        resourceBasePath: "/rosita",
         resolveArtifactDownload,
       },
     );
@@ -5374,6 +5537,30 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector(".chat-group.tool .chat-tool-msg-summary__names")?.textContent,
     ).toBe("canvas_render");
+  });
+
+  it("keeps MCP App raw details reachable from its widget menu", () => {
+    const container = document.createElement("div");
+    const canvas = createAssistantCanvasBlock({
+      suffix: "mcp-raw",
+      mcpApp: { viewId: "view-mcp-raw" },
+    });
+    renderAssistantMessage(container, createAssistantMessage([canvas]), {
+      sessionKey: "agent:main:main",
+    });
+
+    const dropdown = expectElement(container, "wa-dropdown", HTMLElement);
+    expect(dropdown.querySelectorAll("wa-dropdown-item")).toHaveLength(1);
+    dropdown.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "raw-details" } },
+      }),
+    );
+    expect(
+      container
+        .querySelector(".chat-tool-card__widget-raw .chat-tool-card__raw-toggle")
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true");
   });
 
   it("opens generic tool details instead of a canvas preview from tool rows", () => {

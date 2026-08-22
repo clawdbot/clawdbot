@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
-import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.facts.js";
+import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 
 vi.mock("../plugins/manifest-registry-installed.js", () => ({
   resolveInstalledManifestRegistryIndexFingerprint: () => "test-plugin-index",
@@ -42,13 +42,20 @@ describe("prepared model catalog worker input", () => {
     };
     const workerInput = createPreparedModelCatalogWorkerInput({
       agentFacts: {
-        input: { agentDir: "/tmp/agent", config: {}, workspaceDir: "/tmp/workspace" },
+        input: {
+          agentDir: "/tmp/agent",
+          config: {},
+          workspaceDir: "/tmp/workspace",
+          loadRuntimePlugins: true,
+          runtimePluginSelections: [{ provider: "selected", modelId: "model" }],
+        },
         env: {},
         authStore,
         credentials: { shared: { ...authStore.profiles["shared:named"] } },
         providerIds: ["configured"],
         configuredModelRefs: [],
         configuredRuntimeModels: [],
+        runtimeCapabilityModels: [],
         configuredGeneratedCatalogPluginIds: [],
         templateAuthStorage: {} as never,
       } satisfies PreparedModelRuntimeAgentFacts,
@@ -74,5 +81,9 @@ describe("prepared model catalog worker input", () => {
     });
     expect(cloned.authStore.order).toEqual(authStore.order);
     expect(cloned.authStore.lastGood).toEqual(authStore.lastGood);
+    expect(cloned.input.runtimePluginSelections).toEqual([
+      { provider: "selected", modelId: "model" },
+    ]);
+    expect(cloned.input).not.toHaveProperty("loadRuntimePlugins");
   });
 });

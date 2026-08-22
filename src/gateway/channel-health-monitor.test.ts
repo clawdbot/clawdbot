@@ -521,6 +521,17 @@ describe("channel-health-monitor", () => {
     await expectNoRestart(manager);
   });
 
+  it("does not restart a long-running channel during fresh reconnect grace", async () => {
+    const now = Date.now();
+    const manager = createSlackSnapshotManager(
+      disconnectedAccount(now - 300_000, {
+        lifecycle: "recovering",
+        lastDisconnect: { at: now - 5_000, error: "socket closed" },
+      }),
+    );
+    await expectNoRestart(manager);
+  });
+
   it("respects custom per-channel startup grace", async () => {
     const now = Date.now();
     const manager = createSnapshotManager({

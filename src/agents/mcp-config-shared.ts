@@ -43,6 +43,11 @@ export function isDangerousMcpStdioEnvVarName(rawKey: string): boolean {
   return isDangerousHostInheritedEnvVarName(key);
 }
 
+/** Whether the selected MCP auth flow replaces a configured Authorization header. */
+export function mcpUsesManagedAuthorization(rawServer: unknown, authProfileId?: string): boolean {
+  return Boolean(authProfileId) || (isRecord(rawServer) && rawServer.auth === "oauth");
+}
+
 function toMcpFilteredStringRecord(
   value: unknown,
   options?: {

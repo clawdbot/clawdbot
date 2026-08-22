@@ -322,7 +322,7 @@ suite.define(() => {
     expect(metrics).toEqual({ bodyScrollTop: 0, htmlScrollTop: 0, rootScrollY: 0 });
   });
 
-  it("moves drawer and search controls into the narrow chat title bar", async () => {
+  it("keeps drawer and search reachable from the narrow chat title bar", async () => {
     const page = await openPage({ nativeNav: false, width: 900 });
     const header = page.locator(".chat-pane__header").first();
     await expect
@@ -332,9 +332,10 @@ suite.define(() => {
     await expect
       .poll(() => header.getByRole("button", { name: "Expand sidebar" }).isVisible())
       .toBe(true);
-    await expect
-      .poll(() => header.getByRole("button", { name: "Open command palette" }).isVisible())
-      .toBe(true);
+    await expect.poll(() => header.locator(".chat-pane__palette-open").count()).toBe(0);
+    await header.locator(".chat-header-session-menu__trigger").click();
+    await page.getByText("Open command palette", { exact: true }).click();
+    await page.locator(".cmd-palette__input").waitFor({ state: "visible" });
   });
 
   it("keeps the mobile drawer modal, keyboard-contained, and focus-restoring", async () => {

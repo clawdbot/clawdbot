@@ -447,6 +447,18 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         if (settledResult) {
           return settledResult;
         }
+        if (turnAbortSignal.aborted) {
+          const abortResult: TelegramMessageProcessingResult =
+            turnAbortSignal.reason === "skipped"
+              ? { kind: "skipped" }
+              : {
+                  kind: "failed-retryable",
+                  error:
+                    turnAbortSignal.reason ??
+                    new Error("telegram spooled replay owner cancelled before adoption"),
+                };
+          return await settle(abortResult, "terminal");
+        }
         if (adoptionAttempted && !deferred && result.kind === "completed") {
           runtime.error?.(
             danger(

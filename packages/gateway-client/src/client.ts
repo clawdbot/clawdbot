@@ -992,6 +992,7 @@ export class GatewayClient {
       this.logDebug("gateway rejected protocol v4; retrying node host with protocol v3");
       return { closeCode: 1008, closeReason: "connect retry" };
     }
+    this.nodeProtocolTransitionPending = false;
     const role = this.opts.role ?? "operator";
     const detailCode =
       error instanceof GatewayClientRequestError ? readConnectErrorDetailCode(error.details) : null;
@@ -1117,6 +1118,7 @@ export class GatewayClient {
         details,
         deviceTokenRetryPending: this.pendingDeviceTokenRetry,
         tokenMismatchIsTerminal: true,
+        protocolMismatchIsTerminal: !this.nodeProtocolTransitionPending,
         clientVersionMismatchIsTerminal: true,
       })
     ) {

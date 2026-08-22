@@ -1,10 +1,16 @@
 // QA Lab Slack live domain contracts and wire schemas.
-import type { WebClient } from "@slack/web-api";
+import type { createSlackWebClient } from "@openclaw/slack/api.js";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { z } from "zod";
 import type { startQaGatewayChild } from "../../gateway-child.js";
 import { splitQaModelRef } from "../../model-selection.js";
+
+export type SlackQaWebClient = ReturnType<typeof createSlackWebClient>;
+export type SlackQaFetchFunction = NonNullable<
+  NonNullable<Parameters<typeof createSlackWebClient>[1]>["fetch"]
+>;
+type WebClient = SlackQaWebClient;
 
 export type SlackQaRuntimeEnv = {
   channelId: string;

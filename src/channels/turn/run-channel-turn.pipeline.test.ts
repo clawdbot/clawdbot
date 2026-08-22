@@ -945,6 +945,43 @@ describe("channel turn pipeline", () => {
     ]);
   });
 
+  it.each([
+    {
+      name: "accepts compatibility counters when no receipt exists",
+      dispatchResult: { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } },
+      warns: false,
+    },
+    {
+      name: "keeps a non-visible settled receipt authoritative",
+      dispatchResult: {
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+        settledReceipt: {
+          anyVisibleDelivered: false,
+          counts: { final: { delivered: 0, failedAfterSend: 0 } },
+        },
+      },
+      warns: true,
+    },
+  ])("$name", async ({ dispatchResult, warns }) => {
+    const log = vi.fn();
+
+    await runPreparedChannelTurn({
+      channel: "test",
+      routeSessionKey: "agent:main:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession: createRecordInboundSession(),
+      runDispatch: vi.fn(async () => dispatchResult),
+      log,
+      messageId: "msg-compat",
+    });
+
+    expect(log.mock.calls.some(([event]) => event.reason === "zero-count-visible-dispatch")).toBe(
+      warns,
+    );
+  });
+
   it("does not warn for observed-path deliveries with zero queued counts", async () => {
     const events: string[] = [];
     const log = vi.fn();

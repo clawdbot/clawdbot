@@ -233,7 +233,7 @@ export async function finalizeChatSendSourceReplies(params: {
     if (!attachParams.messageId) {
       return;
     }
-    await attachManagedOutgoingMediaToMessage({
+    attachManagedOutgoingMediaToMessage({
       messageId: attachParams.messageId,
       blocks: attachParams.request.state.persistedContent,
     });

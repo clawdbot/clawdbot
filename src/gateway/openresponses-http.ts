@@ -54,6 +54,7 @@ import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   type AuthorizedGatewayHttpRequest,
   authorizeOpenAiCompatibleHttpModelOverride,
+  authorizeOpenAiCompatibleHttpSession,
   getBearerToken,
   getHeader,
   isAgentSelectionRequiredError,
@@ -76,7 +77,7 @@ import {
   type Usage,
 } from "./open-responses.schema.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
-import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
+import { isFailedOpenAiAgentRun, resolveOpenAiCompatError } from "./openai-compat-errors.js";
 import {
   isToolChoiceConstraintSatisfied,
   resolveUnsatisfiedToolChoiceMessage,
@@ -643,6 +644,15 @@ export async function handleOpenResponsesHttpRequest(
   );
   const sessionKey = previousSessionKey ?? resolved.sessionKey;
   const messageChannel = resolved.messageChannel;
+  const sessionAuth = authorizeOpenAiCompatibleHttpSession({
+    agentId: resolved.agentId,
+    sessionKey,
+    senderIsOwner,
+  });
+  if (!sessionAuth.allowed) {
+    sendMissingScopeForbidden(res, sessionAuth.missingScope);
+    return true;
+  }
 
   const fileContext = fileContexts.length > 0 ? fileContexts.join("\n\n") : undefined;
   const toolChoiceContext = toolChoicePrompt?.trim();
@@ -710,7 +720,7 @@ export async function handleOpenResponsesHttpRequest(
       }
 
       const meta = (result as { meta?: { error?: unknown; stopReason?: unknown } } | null)?.meta;
-      if (meta?.error || meta?.stopReason === "error") {
+      if (isFailedOpenAiAgentRun(result)) {
         throw new Error("agent run failed");
       }
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
@@ -1174,6 +1184,23 @@ export async function handleOpenResponsesHttpRequest(
       if (closed) {
         return;
       }
+
+      if (isFailedOpenAiAgentRun(result)) {
+        terminalLifecyclePhase = "error";
+        rememberResponseSession();
+        finalizeFailedResponse(
+          createResponseResource({
+            id: responseId,
+            model,
+            status: "failed",
+            output: [],
+            error: { code: "api_error", message: "internal error" },
+            usage: extractUsageFromResult(result),
+          }),
+        );
+        return;
+      }
+
       finalUsage = extractUsageFromResult(result);
 
       if (unrepresentableAssistantReplacement) {

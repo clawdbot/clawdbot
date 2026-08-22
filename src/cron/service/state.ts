@@ -12,10 +12,12 @@ import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
 import type {
+  CronCompletionStatus,
   CronTriggerEvaluationResult,
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
   CronFailureNotificationDelivery,
+  CronFailureNotificationDetail,
   CronDeliveryStatus,
   CronDeliveryTrace,
   CronJob,
@@ -41,6 +43,7 @@ export type CronEvent = {
   runAtMs?: number;
   durationMs?: number;
   status?: CronRunStatus;
+  completionStatus?: CronCompletionStatus;
   error?: string;
   summary?: string;
   diagnostics?: CronRunDiagnostics;
@@ -55,6 +58,18 @@ export type CronEvent = {
   nextRunAtMs?: number;
   triggerFired?: boolean;
 } & CronRunTelemetry;
+
+/** Transient internal context delivered beside, but never projected into, a CronEvent. */
+type CronEventContext = {
+  failureNotificationDetail?: CronFailureNotificationDetail;
+};
+
+/** Builds event context only when a closed notification fact exists. */
+export function cronFailureNotificationEventContext(
+  failureNotificationDetail?: CronFailureNotificationDetail,
+): CronEventContext | undefined {
+  return failureNotificationDetail ? { failureNotificationDetail } : undefined;
+}
 
 /** Logger contract consumed by cron service internals. */
 export type Logger = {
@@ -142,6 +157,8 @@ export type CronServiceDeps = {
     sessionKey?: string;
     agentId?: string;
   }) => DeliveryContext | undefined;
+  /** Runs timer and startup work inside the owning Gateway's detached scope. */
+  runSchedulerOwned?: <T>(run: () => Promise<T>) => Promise<T>;
   requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
   runHeartbeatOnce?: (opts?: {
     source?: HeartbeatWakeRequest["source"];
@@ -245,8 +262,9 @@ export type CronServiceDeps = {
     mode?: "announce" | "webhook";
     accountId?: string;
     threadId?: string | number;
+    inheritSessionThread?: false;
   }) => Promise<void>;
-  onEvent?: (evt: CronEvent) => void;
+  onEvent?: (evt: CronEvent, context?: CronEventContext) => void;
 };
 
 /** Cron deps after optional defaults have been made concrete. */
@@ -258,6 +276,8 @@ type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
 type CronRunAdmission = {
   active: number;
   waiters: Array<(release: (() => void) | null) => void>;
+  /** One bounded wake-up for scheduled work left without a free slot. */
+  capacityListener: (() => void) | null;
 };
 
 type QueuedCronRunReservation = {
@@ -277,6 +297,8 @@ export type CronServiceState = {
   durableNextRunAtMsByJobId: Map<string, number | undefined>;
   timer: NodeJS.Timeout | null;
   running: boolean;
+  /** Number of timer batches currently executing admitted scheduled work. */
+  activeTimerTicks: number;
   stopped: boolean;
   schedulingPaused: boolean;
   schedulerStarted: boolean;
@@ -313,12 +335,13 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     timer: null,
     running: false,
+    activeTimerTicks: 0,
     stopped: false,
     schedulingPaused: false,
     schedulerStarted: false,
     activeManualRunJobIds: new Set<string>(),
     manualSetupTimeoutNotified: false,
-    runAdmission: { active: 0, waiters: [] },
+    runAdmission: { active: 0, waiters: [], capacityListener: null },
     queuedRunReservationsByJobId: new Map<string, QueuedCronRunReservation>(),
     op: Promise.resolve(),
     warnedDisabled: false,
@@ -331,9 +354,13 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
 }
 
 /** Dispatches a cron event without letting subscriber errors escape scheduler work. */
-export function emit(state: CronServiceState, evt: CronEvent) {
+export function emit(state: CronServiceState, evt: CronEvent, context?: CronEventContext) {
   try {
-    state.deps.onEvent?.(evt);
+    if (context) {
+      state.deps.onEvent?.(evt, context);
+    } else {
+      state.deps.onEvent?.(evt);
+    }
   } catch {
     /* ignore */
   }
@@ -352,6 +379,7 @@ export type CronWakeMode = "now" | "next-heartbeat";
 /** Lightweight service status returned to gateway/control surfaces. */
 export type CronStatusSummary = {
   enabled: boolean;
+  triggersEnabled: boolean;
   /** @deprecated Alias for `sqlitePath`. */
   storePath: string;
   /** Storage backend identifier. */

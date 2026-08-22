@@ -21,6 +21,7 @@ import {
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
+  ensureConfiguredBindingRouteReady,
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
@@ -911,6 +912,19 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       }
       enqueueIMessageReactionSystemEvent({ decision, runtime, logVerbose });
       return;
+    }
+
+    if (decision.bindingResolution) {
+      const readiness = await ensureConfiguredBindingRouteReady({
+        cfg,
+        bindingResolution: decision.bindingResolution,
+      });
+      if (!readiness.ok) {
+        runtime.error?.(
+          `imessage: dropped inbound message; configured ACP binding unavailable for ${decision.bindingResolution.record.conversation.conversationId}: ${readiness.error}`,
+        );
+        return;
+      }
     }
 
     const storePath = resolveStorePath(cfg.session?.store, {

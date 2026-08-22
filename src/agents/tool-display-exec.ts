@@ -10,6 +10,7 @@ import { formatInlineCodeSpan } from "../shared/markdown-code.js";
 import {
   binaryName,
   firstPositional,
+  hasShellCompoundCommand,
   optionValue,
   positionalArgs,
   scanTopLevelChars,
@@ -613,20 +614,25 @@ export function resolveExecDetail(
       : undefined;
 
   const unwrapped = unwrapShellWrapper(raw);
-  const result = summarizeExecCommand(unwrapped) ?? summarizeExecCommand(raw);
-  const summary = result?.text || "run command";
-
+  const compact = compactRawCommand(unwrapped);
   const cwdRaw =
     typeof record.workdir === "string"
       ? record.workdir
       : typeof record.cwd === "string"
         ? record.cwd
         : undefined;
+  const nodeFragment = nodeName ? ` · node: ${nodeName}` : "";
+  if (hasShellCompoundCommand(unwrapped)) {
+    const cwdSuffix = cwdRaw?.trim() ? formatCwdSuffix(cwdRaw.trim()) : undefined;
+    return `${cwdSuffix ? `${compact} ${cwdSuffix}` : compact}${nodeFragment}`;
+  }
+
+  const result = summarizeExecCommand(unwrapped) ?? summarizeExecCommand(raw);
+  const summary = result?.text || "run command";
+
   const cwd = cwdRaw?.trim() || result?.chdirPath || undefined;
 
-  const compact = compactRawCommand(unwrapped);
   const cwdSuffix = cwd ? formatCwdSuffix(cwd) : undefined;
-  const nodeFragment = nodeName ? ` · node: ${nodeName}` : "";
 
   if (result?.allGeneric !== false && isGenericSummary(summary)) {
     const base = cwdSuffix ? `${compact} ${cwdSuffix}` : compact;

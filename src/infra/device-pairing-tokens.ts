@@ -13,7 +13,7 @@ import {
   type DevicePairingStoreState,
 } from "./device-pairing-store.js";
 import {
-  clearNodePairingGenerationBins,
+  clearNodePairingGenerationState,
   listApprovedPairedDeviceRoles,
   resolveNodePairingGeneration,
 } from "./device-pairing.js";
@@ -279,7 +279,7 @@ export async function ensureDeviceToken(params: {
     });
     tokens[role] = next;
     device.tokens = tokens;
-    clearNodePairingGenerationBins(device, previousNodeGeneration);
+    clearNodePairingGenerationState(device, previousNodeGeneration);
     state.pairedByDeviceId[device.deviceId] = device;
     persistState(state, params.baseDir, "paired");
     return next;
@@ -371,7 +371,7 @@ export async function rotateDeviceToken(params: {
     });
     tokens[role] = next;
     device.tokens = tokens;
-    clearNodePairingGenerationBins(device, previousNodeGeneration);
+    clearNodePairingGenerationState(device, previousNodeGeneration);
     state.pairedByDeviceId[device.deviceId] = device;
     persistState(state, params.baseDir, "paired");
     return { ok: true, entry: next };
@@ -413,7 +413,7 @@ export async function revokeDeviceToken(params: {
     const entry = { ...existing, revokedAtMs: Date.now() };
     tokens[role] = entry;
     device.tokens = tokens;
-    clearNodePairingGenerationBins(device, previousNodeGeneration);
+    clearNodePairingGenerationState(device, previousNodeGeneration);
     state.pairedByDeviceId[device.deviceId] = device;
     persistState(state, params.baseDir, "paired");
     return { ok: true, entry };

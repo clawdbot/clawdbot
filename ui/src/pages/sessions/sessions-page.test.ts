@@ -2,7 +2,10 @@
 
 import { nothing } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionsSearchResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  PreservedSessionWorktree,
+  SessionsSearchResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -582,7 +585,7 @@ describe("sessions page lifecycle", () => {
     const deleted = deferred<{
       deleted: string[];
       errors: string[];
-      preservedWorktrees: Array<{ id: string; branch: string; path: string }>;
+      preservedWorktrees: PreservedSessionWorktree[];
     }>();
     const deleteMany = vi.fn(() => deleted.promise);
     const managed = createManagedSessions({ deleteMany });
@@ -848,7 +851,7 @@ describe("sessions page lifecycle", () => {
     const deleted = deferred<{
       deleted: string[];
       errors: string[];
-      preservedWorktrees: Array<{ id: string; branch: string; path: string }>;
+      preservedWorktrees: PreservedSessionWorktree[];
     }>();
     const patched = deferred<unknown>();
     const forked = deferred<string | null>();
@@ -868,7 +871,7 @@ describe("sessions page lifecycle", () => {
       if (method === "chat.history") {
         return Promise.resolve({ messages: [] });
       }
-      if (method === "workboard.cards.create") {
+      if (method === "workboard.cards.captureSession") {
         return captured.promise;
       }
       return Promise.resolve({});
@@ -895,7 +898,7 @@ describe("sessions page lifecycle", () => {
       page.rememberCustomGroup("Stale group"),
     ];
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("workboard.cards.create", expect.any(Object)),
+      expect(request).toHaveBeenCalledWith("workboard.cards.captureSession", expect.any(Object)),
     );
 
     mutableGateway.emit({ phase: "reconnecting", client });

@@ -16,6 +16,7 @@ import {
   deriveCopilotApiBaseUrlFromToken,
   isProviderApiKeyConfigured,
   normalizeGithubCopilotDomain,
+  removeProviderAuthProfilesWithLock,
   resolveCopilotApiToken,
 } from "./provider-auth.js";
 
@@ -25,6 +26,12 @@ const TEST_CACHED_COPILOT_TOKEN = [
   ["proxy-ep", "proxy.individual.githubcopilot.com"].join("="),
 ].join(";");
 const TEST_GITHUB_TOKEN_FINGERPRINT = createHash("sha256").update(TEST_GITHUB_TOKEN).digest("hex");
+
+describe("provider auth public SDK", () => {
+  it("retains provider-scoped profile removal", () => {
+    expect(removeProviderAuthProfilesWithLock).toBeTypeOf("function");
+  });
+});
 
 async function withPartialCopilotResponse(run: (port: number) => Promise<void>): Promise<void> {
   const { once } = await import("node:events");

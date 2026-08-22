@@ -126,7 +126,7 @@ export function finalizeBeforeToolCallExecutionParams(params: {
   finalizerMode: "adapter" | "wrapped";
 }): unknown {
   const reconciledParams = reconcileCodeModeExecBeforeHookParams({
-    tool: params.tool,
+    owner: { tool: params.tool },
     originalParams: params.preparedParams,
     hookParams: params.hookParams,
     adjustedParams: params.adjustedParams,

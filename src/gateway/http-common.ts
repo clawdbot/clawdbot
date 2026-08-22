@@ -42,10 +42,8 @@ export function finishFailedGatewayHttpResponse(res: ServerResponse): void {
     return;
   }
 
-  // Flush committed bytes before closing; truncated fixed-length bodies cannot reuse this socket.
-  const socket = res.socket;
-  res.end();
-  socket?.end();
+  // Ending would frame a partial chunked body as a complete successful response.
+  res.destroy();
 }
 
 export function sendJson(res: ServerResponse, status: number, body: unknown) {
@@ -107,7 +105,7 @@ export function sendInvalidRequest(res: ServerResponse, message: string) {
   });
 }
 
-export function buildMissingScopeForbiddenBody(
+function buildMissingScopeForbiddenBody(
   missingScope: string | undefined,
   requiredScopes?: readonly string[],
 ) {

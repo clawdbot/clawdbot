@@ -24,7 +24,7 @@ import { sanitizeMcpMetadataText } from "../agents/mcp-metadata.js";
 import { collectMcpPaginatedItems } from "../agents/mcp-pagination.js";
 import { isMcpToolAllowed } from "../agents/mcp-tool-filter.js";
 import {
-  createMcpToolCatalogMetadata,
+  normalizeMcpToolCatalog,
   type McpToolCatalogMetadata,
 } from "../agents/mcp-tool-metadata.js";
 import { resolveMcpRequestTimeoutMs } from "../agents/mcp-transport-config.js";
@@ -252,19 +252,11 @@ async function listAllTools(
       );
       return { items: page.tools, nextCursor: page.nextCursor, serializedValue: page };
     },
-    mapItem: (tool) => {
-      const toolName = tool.name.trim();
-      if (!toolName || !shouldInclude(toolName)) {
-        return undefined;
-      }
-      return { ...tool, name: toolName };
-    },
   });
-  const metadata = createMcpToolCatalogMetadata(tools, createMcpJsonSchemaValidator());
-  return {
-    tools: tools.filter((tool) => !metadata.isRequiredTaskTool(tool.name)),
-    metadata,
-  };
+  const normalized = normalizeMcpToolCatalog(tools, createMcpJsonSchemaValidator(), (toolName) =>
+    shouldInclude(toolName) ? "include" : "exclude",
+  );
+  return { tools: normalized.tools, metadata: normalized.metadata };
 }
 
 function disposeNodeHostMcpSession(session: NodeHostMcpSession): Promise<void> {
@@ -526,10 +518,10 @@ export async function startNodeHostMcpManager(
       return;
     }
     state.refreshQueued = true;
-    enqueueWork(state, async () => {
+    void enqueueCatalogWork(state, async () => {
       state.refreshQueued = false;
-      await enqueueCatalogWork(state, () => refresh(state, session));
-    });
+      await refresh(state, session);
+    }).catch(() => {});
   }
 
   const tasks = Array.from(states.values(), (state) => async () => {
@@ -581,6 +573,7 @@ export async function startNodeHostMcpManager(
       }
       const requestedTimeoutMs =
         clampPositiveTimerTimeoutMs(params.timeoutMs) ?? NODE_MCP_TOOL_CALL_TIMEOUT_MS;
+      const validateResult = session.toolMetadata?.validatorForCall(params.tool);
       try {
         const result = await session.client.callTool(
           { name: params.tool, arguments: params.arguments ?? {} },
@@ -590,7 +583,7 @@ export async function startNodeHostMcpManager(
             ...(params.signal ? { signal: params.signal } : {}),
           },
         );
-        session.toolMetadata?.validateResult(params.tool, result);
+        validateResult?.(result);
         return result;
       } catch (error) {
         const sessionExpired = isStatefulMcpHttpSessionExpired(session, error);
@@ -629,13 +622,16 @@ export async function startNodeHostMcpManager(
           clearTimeout(state.retryTimer);
           state.retryTimer = undefined;
         }
-        await state.work;
         const session = state.current;
         state.current = undefined;
         state.listedTools = [];
         if (session) {
           await disposeNodeHostMcpSession(session);
         }
+        // Lifecycle work accepted before close may append catalog work. Drain it
+        // first, then await the latest catalog tail before releasing ownership.
+        await state.work;
+        await state.catalogWork;
       });
       await Promise.allSettled(closing);
     },

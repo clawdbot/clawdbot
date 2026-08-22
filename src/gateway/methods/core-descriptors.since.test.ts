@@ -89,6 +89,7 @@ const CURRENT_TRAIN_METHODS = [
   "sessions.recover",
   "update.hold",
   "sessions.catalog.startTerminal",
+  "sessions.github.publish",
   "worker.desktop.observe",
   "projects.list",
   "projects.register",
@@ -116,8 +117,9 @@ const CURRENT_TRAIN_METHODS = [
   "progressCard.put",
   "tools.github.status",
   "tools.github.configure",
-  "users.setGitHubIdentity",
-  "users.clearGitHubIdentity",
+  "tools.github.authorize.start",
+  "tools.github.authorize.poll",
+  "tools.github.authorize.cancel",
 ] as const;
 
 describe("core gateway method release trains", () => {

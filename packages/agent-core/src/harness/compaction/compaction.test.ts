@@ -647,6 +647,53 @@ describe("session-entry compaction budgeting", () => {
 });
 
 describe("generateSummary thinking options", () => {
+  it("consumes the decorated stream before reading its result", async () => {
+    const model: Model = {
+      id: "summary-model",
+      name: "Summary Model",
+      api: "test-api",
+      provider: "test-provider",
+      baseUrl: "https://example.test",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 100_000,
+      maxTokens: 8_000,
+    };
+    let consumed = false;
+    const streamFn = vi.fn<StreamFn>(() => ({
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            consumed = true;
+            return { done: true as const, value: undefined };
+          },
+        };
+      },
+      async result() {
+        if (!consumed) {
+          throw new Error("stream result read before iteration");
+        }
+        return createAssistant("summary", createUsage(1), 1);
+      },
+    }));
+
+    await generateSummary(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      model,
+      1_000,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      streamFn,
+    );
+
+    expect(consumed).toBe(true);
+  });
+
   it("maps explicit Fable off to low effort for compaction", async () => {
     const model: Model = {
       id: "production-fable",

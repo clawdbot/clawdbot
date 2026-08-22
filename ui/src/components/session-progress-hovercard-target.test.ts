@@ -1,45 +1,65 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { sessionProgressHoverAnchorFromEvent } from "./session-progress-hovercard-target.ts";
+import { sessionProgressHoverTargetFromEvent } from "./session-progress-hovercard-target.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
 
-describe("sessionProgressHoverAnchorFromEvent", () => {
-  it("matches only markdown session-reference anchors", () => {
+describe("sessionProgressHoverTargetFromEvent", () => {
+  it.each([
+    ["a chat link", "a", "markdown-session-link"],
+    ["a sidebar row", "div", "sidebar-recent-session"],
+  ])("matches %s", (_label, tagName, className) => {
     const host = document.body.appendChild(document.createElement("div"));
-    const anchor = host.appendChild(document.createElement("a"));
-    anchor.className = "markdown-session-link";
-    anchor.dataset.sessionKey = "agent:main:other-session";
-    const code = anchor.appendChild(document.createElement("code"));
-    let matched: HTMLAnchorElement | null = null;
+    const target = host.appendChild(document.createElement(tagName));
+    target.className = className;
+    target.dataset.sessionKey = "agent:main:other-session";
+    const child = target.appendChild(document.createElement("span"));
+    let matched: HTMLElement | null = null;
     host.addEventListener("pointerover", (event) => {
-      matched = sessionProgressHoverAnchorFromEvent(event);
+      matched = sessionProgressHoverTargetFromEvent(event);
     });
 
-    code.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
+    child.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, composed: true }));
 
-    expect(matched).toBe(anchor);
+    expect(matched).toBe(target);
   });
 
-  it.each([
-    ["a sidebar row", "div", "sidebar-recent-session"],
-    ["another data carrier", "button", "custom-session-control"],
-    ["an unmarked anchor", "a", "sidebar-recent-session__link"],
-  ])("ignores %s", (_label, tagName, className) => {
+  it("ignores unrelated data carriers", () => {
     const host = document.body.appendChild(document.createElement("div"));
-    const candidate = host.appendChild(document.createElement(tagName));
-    candidate.className = className;
+    const candidate = host.appendChild(document.createElement("button"));
+    candidate.className = "custom-session-control";
     candidate.dataset.sessionKey = "agent:main:other-session";
-    let matched: HTMLAnchorElement | null = null;
+    let matched: HTMLElement | null = null;
     host.addEventListener("pointerover", (event) => {
-      matched = sessionProgressHoverAnchorFromEvent(event);
+      matched = sessionProgressHoverTargetFromEvent(event);
     });
 
-    candidate.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
+    candidate.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, composed: true }));
+
+    expect(matched).toBeNull();
+  });
+
+  it("ignores touch pointer events", () => {
+    const host = document.body.appendChild(document.createElement("div"));
+    const row = host.appendChild(document.createElement("div"));
+    row.className = "sidebar-recent-session";
+    row.dataset.sessionKey = "agent:main:other-session";
+    let matched: HTMLElement | null = null;
+    host.addEventListener("pointerover", (event) => {
+      matched = sessionProgressHoverTargetFromEvent(event);
+    });
+
+    row.dispatchEvent(
+      new PointerEvent("pointerover", {
+        bubbles: true,
+        composed: true,
+        pointerType: "touch",
+      }),
+    );
 
     expect(matched).toBeNull();
   });

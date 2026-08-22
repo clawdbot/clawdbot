@@ -17,6 +17,7 @@ import {
   sessionPullRequestsForGateway,
 } from "../lib/session-pull-requests.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
+import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { SidebarCatalogMenuController } from "./app-sidebar-catalog-menu.ts";
@@ -36,6 +37,7 @@ import type {
   SessionOrganizerControllerHost,
 } from "./session-organizer-controller.ts";
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
+import { SESSION_MENU_OPEN_EVENT } from "./session-progress-hovercard-target.ts";
 
 type SidebarMenuAgent = {
   id: string;
@@ -116,6 +118,7 @@ interface SidebarMenusControllerHost
   hideSessionCatalog(catalogId: string): void;
   sessionSortMode: SidebarSessionSortMode;
   effectiveSessionSortMode(): SidebarSessionSortMode;
+  effectiveSessionsGrouping(): SidebarSessionsGrouping;
   sessionPeopleSortAvailable(): boolean;
   setSessionSortMode(mode: SidebarSessionSortMode): void;
   readonly terminalAvailable: boolean;
@@ -324,6 +327,9 @@ export class SidebarMenusController implements ReactiveController, SidebarMenusC
     y: number,
     trigger: HTMLElement | null = null,
   ) {
+    trigger?.dispatchEvent(
+      new CustomEvent(SESSION_MENU_OPEN_EVENT, { bubbles: true, composed: true }),
+    );
     if (!this.host.selectedSessionKeys.has(session.key)) {
       this.host.clearSessionSelection();
     }

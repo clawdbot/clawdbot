@@ -321,22 +321,13 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     draftStream.clear.mockRejectedValueOnce(new Error("preview cleanup failed"));
     const deliverFinal = createDeliverFinalMock();
 
-    let caught: unknown;
-    try {
-      await deliverDraftPreview({
-        payload: { text: "Already visible", replyToId: "reply-1" } as never,
-        draftStream,
-        deliverPayload: deliverFinal,
-      });
-    } catch (error: unknown) {
-      caught = error;
-    }
+    const result = await deliverDraftPreview({
+      payload: { text: "Already visible", replyToId: "reply-1" } as never,
+      draftStream,
+      deliverPayload: deliverFinal,
+    });
 
-    expect(isChannelPartialDeliveryError(caught)).toBe(true);
-    if (!isChannelPartialDeliveryError(caught)) {
-      throw new Error("expected a partial Mattermost preview delivery error");
-    }
-    expect(caught.deliveryResult).toMatchObject({
+    expect(result).toMatchObject({
       messageIds: ["delivered-post-1"],
       visibleReplySent: true,
       content: "Already visible",

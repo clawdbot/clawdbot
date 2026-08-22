@@ -1,5 +1,6 @@
 import {
   buildDelegationGuidanceSection,
+  buildHarnessVisibleReplyGuidance,
   buildSkillWorkshopPromptSection,
   resolveMainSessionDelegationMode,
   SKILL_WORKSHOP_TOOL_NAME,
@@ -104,23 +105,13 @@ export function buildDeveloperInstructions(
           hasSessionsSend,
         }).join("\n")
       : undefined,
-    buildVisibleReplyInstruction(params, messageToolAvailable),
+    buildHarnessVisibleReplyGuidance({
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      messageToolAvailable,
+    }),
     TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
     nativeCommandGuidance,
     params.extraSystemPrompt,
   ];
   return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
-}
-
-function buildVisibleReplyInstruction(
-  params: EmbeddedRunAttemptParams,
-  messageToolAvailable: boolean,
-): string {
-  if (params.sourceReplyDeliveryMode === "message_tool_only" && messageToolAvailable) {
-    return "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.";
-  }
-  if (messageToolAvailable) {
-    return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation. Use `message` for supported non-text actions in the current conversation, such as reacting to its current message. Reserve other `message` actions for explicit out-of-band sends or media/file delivery. Reactions are not delivered automatically.";
-  }
-  return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation.";
 }

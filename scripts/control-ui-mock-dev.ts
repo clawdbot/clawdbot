@@ -39,7 +39,7 @@ import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
   allowedHosts: string[];
-  fixture?: "approval" | "board" | "swarm" | "workboard";
+  fixture?: "approval" | "board" | "code-fences" | "swarm" | "workboard";
   host: string;
   operatorScopes?: string[];
   port: number;
@@ -65,7 +65,7 @@ const MOCK_ACTOR_MIRA: SessionActorFixture = {
   id: "profile-mira",
   label: "Mira",
 };
-// These actors are also the effective owners because the mock rows are unassigned.
+// Rows carry explicit owners the way the gateway projects createdActor fallbacks.
 const MOCK_SESSION_OWNERS: readonly SessionActorFixture[] = [MOCK_ACTOR_PETER, MOCK_ACTOR_MIRA];
 
 const SESSION_PAGE_SIZE = 50;
@@ -169,7 +169,13 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
   if (!value) {
     return undefined;
   }
-  if (value !== "approval" && value !== "board" && value !== "swarm" && value !== "workboard") {
+  if (
+    value !== "approval" &&
+    value !== "board" &&
+    value !== "code-fences" &&
+    value !== "swarm" &&
+    value !== "workboard"
+  ) {
     throw new Error(`Unknown Control UI mock fixture: ${value}`);
   }
   return value;
@@ -324,9 +330,25 @@ function buildActivitySessionRows(baseTime: number) {
     ["fixture-polish", "Mock fixture polish", owners.colin, 6 * day],
     ["weekly-summary", "Weekly activity summary", owners.patricia, 6.5 * day],
   ] as const;
+  const automationKeys = new Set(["release-check", "api-notes", "design-review"]);
   return fixtures.map(([key, label, owner, age]) =>
     sessionRow(`agent:activity:${key}`, label, baseTime - age, {
+      ...(key === "archive-audit"
+        ? {
+            activeRunIds: ["mock-activity-live-run"],
+            hasActiveRun: true,
+            observerDigest: {
+              headline: "Waiting on a fictional mock approval",
+              health: "waiting-on-user",
+              revision: 1,
+              runId: "mock-activity-live-run",
+              updatedAt: baseTime - age,
+            },
+            status: "running",
+          }
+        : {}),
       createdActor: owner,
+      hasAutomation: automationKeys.has(key),
       owner: { actor: owner },
     }),
   );
@@ -1131,6 +1153,25 @@ function buildScrollableChatHistory(baseTime: number): unknown[] {
   return messages;
 }
 
+function buildCodeFenceChatHistory(baseTime: number): unknown[] {
+  const proseFence = (language: string, label: string) => {
+    const lines = Array.from({ length: 16 }, (_, index) => `${label} line ${index + 1}`);
+    return `\`\`\`${language}\n${lines.join("\n")}\n\`\`\``;
+  };
+  const jsonLines = Array.from({ length: 18 }, (_, index) => `  "item-${index + 1}",`);
+  jsonLines[jsonLines.length - 1] = `  "item-${jsonLines.length}"`;
+  return [
+    chatHistoryMessage("assistant", proseFence("text", "Plain text"), baseTime),
+    chatHistoryMessage("assistant", proseFence("md", "Markdown alias"), baseTime + 1_000),
+    chatHistoryMessage("assistant", proseFence("markdown", "Markdown"), baseTime + 2_000),
+    chatHistoryMessage(
+      "assistant",
+      `\`\`\`json\n[\n${jsonLines.join("\n")}\n]\n\`\`\``,
+      baseTime + 3_000,
+    ),
+  ];
+}
+
 function searchPrefixes(term: string): string[] {
   return Array.from({ length: term.length }, (_value, index) => term.slice(0, index + 1));
 }
@@ -1490,6 +1531,7 @@ async function createChatPickerScenario(
     sessionRow(NARRATION_DEMO_SESSION_KEY, "Sidebar narration demo", baseTime - 15_000, {
       createdActor: MOCK_ACTOR_MIRA,
       hasActiveRun: true,
+      owner: { actor: MOCK_ACTOR_MIRA },
       startedAt: baseTime - 45_000,
       status: "running",
     }),
@@ -1503,10 +1545,12 @@ async function createChatPickerScenario(
       category: "Research",
       createdActor: MOCK_ACTOR_MIRA,
       execCwd: "/Users/peter/Projects/clawdbot",
+      owner: { actor: MOCK_ACTOR_MIRA },
     }),
     sessionRow("agent:main:model-budget", "Model budget review", baseTime - 80_000, {
       category: "Research",
       execCwd: "/Users/peter/Projects/openclaw",
+      owner: { actor: { type: "human", id: "presence-riley", label: "Riley" } },
       status: "failed",
       lastRunError: "Model out of credits: openai/gpt-5.6",
     }),
@@ -1514,6 +1558,7 @@ async function createChatPickerScenario(
       createdActor: MOCK_ACTOR_PETER,
       execCwd: "/Users/peter/Work/openclaw",
       lastReadAt: baseTime - 120_000,
+      owner: { actor: MOCK_ACTOR_PETER },
       observerDigest: {
         headline: "Done: fixed the flaky retry-window test",
         health: "done",
@@ -1597,7 +1642,10 @@ async function createChatPickerScenario(
     swarmEnabled: fixture === "swarm",
     workboardEnabled: fixture === "workboard",
   });
-  const historyMessages = buildScrollableChatHistory(baseTime);
+  const historyMessages =
+    fixture === "code-fences"
+      ? buildCodeFenceChatHistory(baseTime)
+      : buildScrollableChatHistory(baseTime);
   const planSessionInfo = {
     activeRunIds: [PLAN_DEMO_RUN_ID],
     hasActiveRun: true,
@@ -1743,6 +1791,9 @@ async function createChatPickerScenario(
     // Terminal has a second gate beyond the advertised method (see
     // ui/src/lib/terminal-availability.ts).
     terminalEnabled: true,
+    // The mock rows span several owners; advertise the multi-identity policy
+    // so people-aware UI (People sort, Person grouping) is exercisable here.
+    hasMultipleSessionSharingIdentities: true,
     historyMessages,
     // Lights up the footer facepile and who's-online roster; the email-only
     // entry keeps the roster's no-display-name row exercised.
@@ -2572,7 +2623,12 @@ async function createChatPickerScenario(
         },
       },
       status: {
-        eventLoop: { utilization: 0.42, delayP99Ms: 12, delayMaxMs: 87 },
+        eventLoop: { utilization: 0.42, cpuCoreRatio: 0.24, delayP99Ms: 12, delayMaxMs: 87 },
+        processMemory: {
+          rssBytes: 432 * 1_048_576,
+          heapUsedBytes: 210 * 1_048_576,
+          heapTotalBytes: 280 * 1_048_576,
+        },
         uptimeMs: 5_412_000,
       },
       "last-heartbeat": { ts: baseTime },

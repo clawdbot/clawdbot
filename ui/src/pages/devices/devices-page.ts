@@ -2,6 +2,7 @@ import { consume } from "@lit/context";
 import { initialState, Task } from "@lit/task";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
+import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../../../../src/gateway/events.js";
 import type { PresenceEntry } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import {
@@ -74,7 +75,8 @@ function presenceConnectivitySignature(entries: PresenceEntry[]): string {
     if (!id || entry.mode?.trim().toLowerCase() === "gateway") {
       continue;
     }
-    states.set(id, entry.reason?.trim().toLowerCase() === "disconnect" ? "offline" : "connected");
+    const key = entry.roles?.includes("node") ? `${id}:node` : id;
+    states.set(key, entry.reason?.trim().toLowerCase() === "disconnect" ? "offline" : "connected");
   }
   return JSON.stringify([...states].toSorted(([left], [right]) => left.localeCompare(right)));
 }
@@ -166,7 +168,11 @@ class DevicesPage extends OpenClawLightDomElement {
               void this.runPageTask((pageState) => loadNodes(pageState, { quiet: true }));
             }
           }
-          if (event.event === "device.pair.requested" || event.event === "device.pair.resolved") {
+          if (
+            event.event === GATEWAY_EVENT_DEVICE_PAIR_CHANGED ||
+            event.event === "device.pair.requested" ||
+            event.event === "device.pair.resolved"
+          ) {
             if (this.canManagePairing) {
               void this.runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
             }

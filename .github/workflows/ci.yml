@@ -8,6 +8,11 @@ on:
         required: false
         default: ""
         type: string
+      capture_ui_proof:
+        description: Capture and upload sanitized Control UI screenshots from real-Gateway tests.
+        required: false
+        default: false
+        type: boolean
       include_android:
         description: Run Android lanes for this manual CI dispatch.
         required: false
@@ -77,11 +82,17 @@ jobs:
     timeout-minutes: 20
     outputs:
       checkout_revision: ${{ steps.checkout_ref.outputs.sha }}
+      candidate_trust: ${{ steps.candidate_trust.outputs.trust }}
+      cache_mode: ${{ steps.candidate_trust.outputs.cache_mode }}
+      cache_write_allowed: ${{ steps.candidate_trust.outputs.cache_write_allowed }}
       diff_base_revision: ${{ steps.diff_base.outputs.sha }}
       diff_head_revision: ${{ steps.diff_base.outputs.head_sha }}
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       docs_changed: ${{ steps.manifest.outputs.docs_changed }}
       run_node: ${{ steps.manifest.outputs.run_node }}
+      # docker-seed-e2e-contract-v1: frozen targets without this marker skip the lane.
+      run_docker_seed_e2e: ${{ steps.manifest.outputs.run_docker_seed_e2e }}
+      docker_seed_lanes: ${{ steps.manifest.outputs.docker_seed_lanes }}
       run_macos: ${{ steps.manifest.outputs.run_macos }}
       run_android: ${{ steps.manifest.outputs.run_android }}
       run_skills_python: ${{ steps.manifest.outputs.run_skills_python }}
@@ -129,6 +140,14 @@ jobs:
       run_protocol_event_coverage: ${{ steps.manifest.outputs.run_protocol_event_coverage }}
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
+      - name: Checkout trusted CI harness
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-harness
+          sparse-checkout: .github/actions
+          persist-credentials: false
+
       - name: Validate release-gate dispatch
         if: github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
@@ -364,6 +383,7 @@ jobs:
         id: target_context_target
         if: inputs.target_context_ref != ''
         env:
+          GH_TOKEN: ${{ github.token }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_REF: ${{ inputs.target_ref }}
         run: |
@@ -376,11 +396,77 @@ jobs:
             echo "target_context_ref requires target_ref to be a full commit SHA." >&2
             exit 1
           fi
+          branch_sha="$(git ls-remote --heads origin "refs/heads/${TARGET_CONTEXT_REF}" | awk 'NR == 1 { print $1 }')"
+          if [[ ! "$branch_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "target_context_ref branch ${TARGET_CONTEXT_REF} does not exist." >&2
+            exit 1
+          fi
+          comparison_status="$(
+            gh api "repos/${GITHUB_REPOSITORY}/compare/${TARGET_REF}...${branch_sha}" --jq .status
+          )"
+          if [[ "$comparison_status" != "ahead" && "$comparison_status" != "identical" ]]; then
+            echo "target_ref must be the declared release branch head or one of its ancestors." >&2
+            exit 1
+          fi
           echo "eligible=true" >> "$GITHUB_OUTPUT"
+
+      - name: Classify candidate cache trust
+        id: candidate_trust
+        env:
+          CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
+          RELEASE_CANDIDATE_TARGET: ${{ steps.release_candidate_target.outputs.eligible || 'false' }}
+          RELEASE_GATE: ${{ inputs.release_gate && 'true' || 'false' }}
+          TARGET_CONTEXT_TARGET: ${{ steps.target_context_target.outputs.eligible || 'false' }}
+          TARGET_REF: ${{ inputs.target_ref }}
+          WORKFLOW_REVISION: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+
+          trust=untrusted
+          cache_mode=off
+          cache_write_allowed=false
+
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
+            trust=main
+            cache_mode=restore
+            cache_write_allowed=true
+          elif [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            trust=pull-request
+            cache_mode=restore
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            default_sha="$(git ls-remote origin "refs/heads/${DEFAULT_BRANCH}" | awk 'NR == 1 { print $1 }')"
+            if [[ "$RELEASE_GATE" == "true" ]]; then
+              trust=pull-request
+              cache_mode=restore
+            elif [[
+              "$HISTORICAL_TARGET" == "true" ||
+              "$RELEASE_CANDIDATE_TARGET" == "true" ||
+              "$TARGET_CONTEXT_TARGET" == "true"
+            ]]; then
+              trust=release
+              cache_mode=restore
+              cache_write_allowed=true
+            elif [[ -n "$default_sha" && "$CHECKOUT_REVISION" == "$default_sha" ]]; then
+              trust=main
+              cache_mode=restore
+              cache_write_allowed=true
+            elif [[ -z "$TARGET_REF" && "$CHECKOUT_REVISION" == "$WORKFLOW_REVISION" ]]; then
+              trust=workflow
+              cache_mode=restore
+            fi
+          fi
+
+          {
+            echo "trust=$trust"
+            echo "cache_mode=$cache_mode"
+            echo "cache_write_allowed=$cache_write_allowed"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Ensure preflight base commit
         if: github.event_name != 'workflow_dispatch'
-        uses: ./.github/actions/ensure-base-commit
+        uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: ${{ steps.diff_base.outputs.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
@@ -388,7 +474,7 @@ jobs:
       - name: Detect docs-only changes
         id: docs_scope
         if: github.event_name != 'workflow_dispatch'
-        uses: ./.github/actions/detect-docs-changes
+        uses: ./.ci-harness/.github/actions/detect-docs-changes
         with:
           base-sha: ${{ steps.diff_base.outputs.sha }}
 
@@ -425,8 +511,9 @@ jobs:
       # install and run through tsx.
       - name: Setup manifest pnpm
         if: github.event_name == 'workflow_dispatch'
-        uses: ./.github/actions/setup-pnpm-store-cache
+        uses: ./.ci-harness/.github/actions/setup-pnpm-store-cache
         with:
+          cache-mode: ${{ steps.candidate_trust.outputs.cache_mode }}
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install manifest dependencies
@@ -631,6 +718,7 @@ jobs:
             : "";
           const supportsOpenClawKitTests = targetWorkflow.includes("openclawkit-tests-contract-v1");
           const supportsCurrentAndroidCi = targetWorkflow.includes("android-ci-contract-v2");
+          const supportsDockerSeedE2e = targetWorkflow.includes("docker-seed-e2e-contract-v1");
           const useCompatibleAndroidCi = compatibilityTarget && !supportsCurrentAndroidCi;
           const supportsFormatCheck =
             targetWorkflow.split("pnpm format:check").length - 1 >= 2;
@@ -666,6 +754,13 @@ jobs:
           }
 
           const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
+          const dockerSeedLanes =
+            compactPullRequest &&
+            changedPaths &&
+            supportsDockerSeedE2e &&
+            typeof changedNodeTestPlan.resolveChangedDockerSeedLanes === "function"
+              ? changedNodeTestPlan.resolveChangedDockerSeedLanes(changedPaths)
+              : [];
           // Canonical pushes also use compact bins: 80+ single-group jobs
           // drain the runner pool for minutes, and per-shard check names on
           // main have no branch-protection consumers. Dispatch (release
@@ -756,15 +851,7 @@ jobs:
                   ...changedExtensionFallbackShards,
                 ]
             : [];
-          const assignVitestFsCacheWriter =
-            typeof nodeTestPlan.assignVitestFsCacheWriter === "function"
-              ? nodeTestPlan.assignVitestFsCacheWriter
-              : (shards) =>
-                  shards.map((shard, index) => ({
-                    ...shard,
-                    saveVitestFsCache: index === 0,
-                  }));
-          const nodeTestShards = assignVitestFsCacheWriter(rawNodeTestShards).map((shard) => ({
+          const nodeTestShards = rawNodeTestShards.map((shard) => ({
                 check_name: shard.checkName,
                 runtime: "node",
                 task: "test-shard",
@@ -778,7 +865,6 @@ jobs:
                 timeout_minutes: shard.timeoutMinutes,
                 plan_concurrency: shard.planConcurrency,
                 predicted_seconds: shard.predictedSeconds,
-                save_vitest_fs_cache: shard.saveVitestFsCache,
                 targets: shard.targets,
                 requires_go:
                   shard.shardName.startsWith("core-tooling") ||
@@ -803,6 +889,8 @@ jobs:
             docs_only: docsOnly,
             docs_changed: docsChanged,
             run_node: runNode,
+            run_docker_seed_e2e: dockerSeedLanes.length > 0,
+            docker_seed_lanes: dockerSeedLanes.join(" "),
             run_macos: runMacos,
             run_android: runAndroid,
             run_skills_python: runSkillsPython,
@@ -929,19 +1017,15 @@ jobs:
             node scripts/check-protocol-event-coverage.mts
           fi
 
-      # Publish one immutable semantic dependency archive before same-repo
-      # Blacksmith jobs fan out. The GitHub backend uses the pnpm-store cache.
-      # Pull-request archives remain merge-ref scoped;
-      # main archives seed later pull requests through the default-branch scope.
-      - name: Publish exact dependency cache
+      # Validate and consume the immutable dependency archive before same-repo
+      # Blacksmith jobs fan out. Cache publication belongs to the trusted warmer.
+      - name: Restore exact dependency cache
         if: vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.repository == 'openclaw/openclaw' && steps.manifest.outputs.run_node == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ steps.candidate_trust.outputs.cache_mode }}
           dependency-cache: "true"
           install-bun: "false"
-          save-actions-cache: "true"
-          save-dependency-cache: "true"
-          use-actions-cache: "true"
 
   # Run dependency-free security checks on a hosted runner in parallel with
   # scope detection. No downstream job waits for Python/pre-commit setup.
@@ -1009,6 +1093,14 @@ jobs:
           fi
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
+      - name: Checkout trusted CI harness
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-harness
+          sparse-checkout: .github/actions
+          persist-credentials: false
+
       - name: Resolve security diff base
         id: diff_base
         env:
@@ -1038,7 +1130,7 @@ jobs:
 
       - name: Ensure security base commit
         if: github.event_name != 'workflow_dispatch'
-        uses: ./.github/actions/ensure-base-commit
+        uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: ${{ steps.diff_base.outputs.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
@@ -1141,15 +1233,15 @@ jobs:
           REQUESTED_NODE_VERSION: "24.x"
         run: |
           set -euo pipefail
-          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
           openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
       - name: Audit production dependencies
         run: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
 
-  # Warm the lockfile- and pnpm-pinned Actions cache for fork PRs, manual runs,
-  # the GitHub backend, and docs-only same-repo PRs. Node-relevant Blacksmith
-  # runs already publish it through the exact dependency-cache writer in preflight.
+  # Prime the lockfile- and pnpm-pinned store for fork PRs, manual runs, the
+  # GitHub backend, and docs-only same-repo PRs. This job restores only; the
+  # trusted cache warmer owns publication.
   pnpm-store-warmup:
     permissions:
       contents: read
@@ -1164,6 +1256,7 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
 
@@ -1194,6 +1287,15 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            harness_dir="$workdir/.ci-harness"
+            git init "$harness_dir" >/dev/null
+            git -C "$harness_dir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+            git -C "$harness_dir" -c protocol.version=2 fetch \
+              --no-tags --no-recurse-submodules --depth=1 origin \
+              "+${WORKFLOW_SHA}:refs/remotes/origin/ci-harness" || return 1
+            git -C "$harness_dir" sparse-checkout set .github/actions || return 1
+            git -C "$harness_dir" checkout --force --detach "$WORKFLOW_SHA" || return 1
+            test -f "$harness_dir/.github/actions/setup-node-env/action.yml" || return 1
             echo "checkout attempt ${attempt}/5 succeeded"
           }
 
@@ -1209,10 +1311,10 @@ jobs:
           exit 1
 
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
-          save-actions-cache: "true"
 
   # Build dist once for Node-relevant changes and share it with downstream jobs.
   # Keep this overlapping with the fast correctness lanes so green PRs get heavy
@@ -1231,25 +1333,25 @@ jobs:
       - *linux_node_checkout_step
       - name: Ensure secrets base commit (PR fast path)
         if: github.event_name == 'pull_request'
-        uses: ./.github/actions/ensure-base-commit
+        uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: ${{ needs.preflight.outputs.diff_base_revision }}
           fetch-ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           node-compile-cache: "true"
           node-compile-cache-scope: "build"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
-          save-node-compile-cache: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'true' || 'false' }}
 
       - name: Restore build-all step cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        if: needs.preflight.outputs.cache_mode != 'off'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .artifacts/build-all-cache
           key: ${{ runner.os }}-build-all-v4-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'scripts/build-all.mts', 'scripts/runtime-postbuild.mjs', 'scripts/runtime-postbuild.mts', 'scripts/lib/tsx-cli-shim.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-private-local-only-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-public-subpaths.json', 'scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/**', 'packages/**', '!src/**/dist/**', '!src/**/node_modules/**', '!packages/**/dist/**', '!packages/**/node_modules/**') }}
@@ -1258,6 +1360,7 @@ jobs:
 
       - name: Restore dist build cache
         id: dist_build_cache
+        if: needs.preflight.outputs.cache_mode != 'off'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
@@ -1492,19 +1595,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      - name: Save dist build cache
-        if: steps.dist_build_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        continue-on-error: true
-        with:
-          path: |
-            dist/
-            dist-runtime/
-            packages/*/dist/
-            extensions/*/src/host/**/.bundle.hash
-            extensions/*/src/host/**/*.bundle.js
-          key: ${{ steps.dist_build_cache.outputs.cache-primary-key }}
-
       - name: Upload gateway watch regression artifacts
         if: always() && needs.preflight.outputs.run_check_additional == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -1524,11 +1614,11 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}
 
       - name: Download exact-run built runtime
@@ -1554,20 +1644,16 @@ jobs:
     runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          ref: ${{ needs.preflight.outputs.checkout_revision }}
-          persist-credentials: false
+      - *linux_node_checkout_step
 
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Verify native app i18n source
         run: |
@@ -1604,20 +1690,20 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: "24.x"
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}
 
       - &cache_playwright_chromium
         name: Cache Playwright Chromium
-        if: needs.preflight.outputs.compatibility_target != 'true'
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        if: needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.compatibility_target != 'true'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-chromium-1.62.1
@@ -1679,14 +1765,14 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: "24.x"
           install-bun: "false"
           # The github/hybrid planner profile uses the Actions pnpm-store cache
           # on either runner backend; all-Blacksmith mode restores preflight's tree.
           dependency-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
-          use-actions-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
           restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}
 
       - *cache_playwright_chromium
@@ -1734,17 +1820,20 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: "24.x"
           install-bun: "false"
           # The github/hybrid planner profile uses the Actions pnpm-store cache
           # on either runner backend; all-Blacksmith mode restores preflight's tree.
           dependency-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
-          use-actions-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'true' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true') }}
 
       - *cache_playwright_chromium
       - *install_playwright_chromium
+
+      - name: Build Control UI bundle for real-Gateway tests
+        run: pnpm ui:build
 
       - name: Test MCP app conformance with a real Gateway
         run: >-
@@ -1754,11 +1843,23 @@ jobs:
           ui/src/e2e/mcp-app-conformance.e2e.test.ts
 
       - name: Test Control UI auth transports with a real Gateway
+        env:
+          OPENCLAW_CAPTURE_UI_PROOF: ${{ github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof && '1' || '0' }}
+          OPENCLAW_UI_E2E_ARTIFACT_DIR: .artifacts/control-ui-e2e/real-gateway
         run: >-
           node scripts/run-vitest.mjs run
           --config test/vitest/vitest.ui-e2e.config.ts
           --configLoader runner
           ui/src/e2e/control-ui-auth-transports.e2e.test.ts
+
+      - name: Upload sanitized Control UI real-Gateway proof
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: control-ui-real-gateway-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/control-ui-e2e/real-gateway
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Test Control UI Logs lifecycle with a real Gateway
         run: >-
@@ -1780,14 +1881,14 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: "24.x"
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Verify Control UI i18n source
         run: |
@@ -1869,13 +1970,13 @@ jobs:
           echo "RATCHET_RELEASE_MERGE_TREE=true" >> "$GITHUB_ENV"
 
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: ${{ matrix.task == 'bun-launcher' && 'true' || 'false' }}
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && (matrix.task == 'bundled-protocol' || matrix.task == 'contracts-plugins-ci-routing' || matrix.task == 'ci-routing' || matrix.task == 'bun-launcher') && 'true' || 'false' }}
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
@@ -1964,13 +2065,13 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           # The github/hybrid planner profile uses the Actions pnpm-store cache
           # on either runner backend; all-Blacksmith mode restores preflight's tree.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           # Reader of build-artifacts' protected daily archive: warms tsdown
           # tooling plus the repeated openclaw.mjs boots in the scenario loop.
           node-compile-cache: "true"
@@ -2148,13 +2249,13 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}
 
       - name: Run plugin contract shard
@@ -2191,13 +2292,13 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}
 
       - name: Run channel contract shard
@@ -2231,8 +2332,9 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: "22.22.3"
           install-bun: "false"
           build-all-cache-scope: full
@@ -2267,29 +2369,55 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: "${{ matrix.node_version || '24.x' }}"
           install-bun: "false"
-          # Only the preflight writer saves an exact dependency archive.
-          # All-Blacksmith shards restore it; github/hybrid use the pnpm store.
+          # Blacksmith shards restore the exact dependency archive;
+          # github/hybrid use the pnpm store.
           dependency-cache: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
           vitest-fs-cache: "true"
           node-compile-cache: "true"
           node-compile-cache-scope: "test"
-          # The github/hybrid planner profile elects one in-run writer so the
-          # transform cache can recover without waiting for the cache warmer.
-          save-vitest-fs-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && matrix.save_vitest_fs_cache && 'true' || 'false' }}
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true
         # The current workflow validates frozen targets whose go.mod may predate this patch pin.
-        # Keep the runner toolchain owned by the workflow while using the target only for cache keys.
+        # Keep the runner toolchain owned by the workflow; cache publication is gated separately.
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: "1.25.12"
-          cache-dependency-path: scripts/docs-i18n/go.sum
+          cache: false
+
+      - name: Resolve docs i18n Go cache
+        id: docs-i18n-go-cache-key
+        if: matrix.requires_go == true && needs.preflight.outputs.cache_mode != 'off'
+        env:
+          DEPENDENCY_HASH: ${{ hashFiles('scripts/docs-i18n/go.sum') }}
+        run: |
+          set -euo pipefail
+          arch="$(node -p process.arch)"
+          image_prefix=""
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            image_prefix="${ImageOS-undefined}-"
+          fi
+          version="$(go env GOVERSION)"
+          {
+            echo "key=setup-go-${RUNNER_OS}-${arch}-${image_prefix}go-${version#go}-${DEPENDENCY_HASH}"
+            echo "paths<<EOF"
+            go env GOMODCACHE
+            go env GOCACHE
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore docs i18n Go cache
+        id: docs-i18n-go-cache
+        if: matrix.requires_go == true && needs.preflight.outputs.cache_mode != 'off'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ steps.docs-i18n-go-cache-key.outputs.paths }}
+          key: ${{ steps.docs-i18n-go-cache-key.outputs.key }}
 
       - name: Verify docs i18n Go toolchain
         if: matrix.requires_go == true
@@ -2362,6 +2490,13 @@ jobs:
           fi
           node --import tsx "$runner"
 
+      - name: Save docs i18n Go cache
+        if: always() && matrix.requires_go == true && needs.preflight.outputs.cache_write_allowed == 'true' && steps.docs-i18n-go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ steps.docs-i18n-go-cache-key.outputs.paths }}
+          key: ${{ steps.docs-i18n-go-cache.outputs.cache-primary-key }}
+
   # Types, lint, and format check shards.
   check-shard:
     permissions:
@@ -2406,13 +2541,13 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           # The github/hybrid planner profile uses the Actions pnpm-store cache
           # on either runner backend; all-Blacksmith mode restores preflight's tree.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Compute extension boundary input fingerprint
         id: extension-boundary-inputs
@@ -2424,8 +2559,8 @@ jobs:
           echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
 
       - name: Cache extension package boundary artifacts for hosted lint
-        if: matrix.task == 'lint' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository))
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        if: needs.preflight.outputs.cache_mode != 'off' && matrix.task == 'lint' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository))
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             dist/plugin-sdk
@@ -2723,11 +2858,11 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Run hosted core lint stripe
         env:
@@ -2760,11 +2895,11 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Run hosted core test-types stripe
         shell: bash
@@ -2838,24 +2973,24 @@ jobs:
       - *linux_node_checkout_step
       - name: Ensure Plugin SDK API diff base commit
         if: matrix.group == 'plugin-sdk-api-diff'
-        uses: ./.github/actions/ensure-base-commit
+        uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: ${{ needs.preflight.outputs.diff_base_revision }}
           fetch-ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
       - name: Ensure Plugin SDK API diff head commit
         if: matrix.group == 'plugin-sdk-api-diff'
-        uses: ./.github/actions/ensure-base-commit
+        uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: ${{ needs.preflight.outputs.diff_head_revision }}
           fetch-ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate && format('refs/pull/{0}/merge', inputs.pull_request_number) || github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           # The github/hybrid planner profile uses the Actions pnpm-store cache
           # on either runner backend; all-Blacksmith mode restores preflight's tree.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Compute extension boundary input fingerprint
         id: extension-boundary-inputs
@@ -2922,8 +3057,8 @@ jobs:
 
       - name: Cache extension package boundary artifacts
         id: extension-package-boundary-cache
-        if: matrix.group == 'extension-package-boundary'
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        if: needs.preflight.outputs.cache_mode != 'off' && matrix.group == 'extension-package-boundary'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             dist/plugin-sdk
@@ -3125,13 +3260,13 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          use-actions-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
       - name: Check formatting
         if: needs.preflight.outputs.run_format_check == 'true'
@@ -3266,6 +3401,7 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           git init "$GITHUB_WORKSPACE"
@@ -3309,6 +3445,15 @@ jobs:
           }
           fetch_checkout_ref
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
+          harness_dir="$GITHUB_WORKSPACE/.ci-harness"
+          git init "$harness_dir"
+          git -C "$harness_dir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+          git -C "$harness_dir" -c protocol.version=2 fetch \
+            --no-tags --no-recurse-submodules --depth=1 origin \
+            "+${WORKFLOW_SHA}:refs/remotes/origin/ci-harness"
+          git -C "$harness_dir" sparse-checkout set .github/actions
+          git -C "$harness_dir" checkout --force --detach "$WORKFLOW_SHA"
+          test -f "$harness_dir/.github/actions/setup-node-env/action.yml"
 
       - name: Try to exclude workspace from Windows Defender (best-effort)
         shell: pwsh
@@ -3334,12 +3479,13 @@ jobs:
           REQUESTED_NODE_VERSION: "22.x"
         run: |
           set -euo pipefail
-          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
           openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
       - name: Setup pnpm
-        uses: ./.github/actions/setup-pnpm-store-cache
+        uses: ./.ci-harness/.github/actions/setup-pnpm-store-cache
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: 22.x
 
       - name: Runtime versions
@@ -3404,10 +3550,10 @@ jobs:
       - *platform_checkout_step
 
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
-          save-actions-cache: "true"
 
       - name: TS tests (macOS)
         env:
@@ -3505,17 +3651,20 @@ jobs:
           toolchain_key="$(printf '%s\n%s\n' "$xcode_version" "$swift_version" | shasum -a 256 | awk '{print $1}')"
           echo "key=$toolchain_key" >> "$GITHUB_OUTPUT"
 
-      - name: Cache SwiftPM
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      - name: Restore SwiftPM cache
+        id: swiftpm-cache
+        if: needs.preflight.outputs.cache_mode != 'off'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/Library/Caches/org.swift.swiftpm
           key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-swiftpm-
 
-      - name: Cache Swift build directory
+      - name: Restore Swift build directory cache
         id: swift-build-cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        if: needs.preflight.outputs.cache_mode != 'off'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: apps/macos/.build
           key: ${{ runner.os }}-swift-build-v3-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'apps/swabble/Package.swift', 'apps/swabble/Sources/**') }}
@@ -3649,6 +3798,20 @@ jobs:
           done
           exit 1
 
+      - name: Save SwiftPM cache
+        if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swiftpm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: ${{ steps.swiftpm-cache.outputs.cache-primary-key }}
+
+      - name: Save Swift build directory cache
+        if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swift-build-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: apps/macos/.build
+          key: ${{ steps.swift-build-cache.outputs.cache-primary-key }}
+
   ios-build:
     permissions:
       contents: read
@@ -3680,8 +3843,9 @@ jobs:
           swift --version
 
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
 
       - name: Install iOS Swift tooling
@@ -3891,19 +4055,22 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.workflow_sha }}
-          path: .ci-workflow
-          sparse-checkout: .github/actions/setup-android-toolchain
+          path: .ci-harness
+          sparse-checkout: .github/actions
           persist-credentials: false
 
       - name: Setup Android toolchain
         # Frozen targets keep their Gradle task contract, but CI toolchain pins remain
         # workflow-owned as before. Load them from the workflow revision so old targets work.
-        uses: ./.ci-workflow/.github/actions/setup-android-toolchain
+        uses: ./.ci-harness/.github/actions/setup-android-toolchain
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_write_allowed == 'true' && 'read-write' || needs.preflight.outputs.cache_mode }}
 
       - name: Setup Node environment for native resources
         if: needs.preflight.outputs.use_compatible_android_ci != 'true'
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
 
       # Same-repo runs carry the Gradle user home (dependency, wrapper, and
@@ -4040,6 +4207,33 @@ jobs:
               ;;
           esac
 
+  docker-seed-e2e:
+    permissions:
+      contents: read
+    name: docker-seed-e2e
+    needs: [preflight]
+    if: needs.preflight.outputs.run_docker_seed_e2e == 'true'
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.event_name == 'pull_request' && (github.run_attempt > 1 || github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 60
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.ci-harness/.github/actions/setup-node-env
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+          node-version: "24.x"
+          install-bun: "false"
+          dependency-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
+
+      - name: Run changed Docker seed owner lanes
+        env:
+          OPENCLAW_DOCKER_ALL_LANES: ${{ needs.preflight.outputs.docker_seed_lanes }}
+          OPENCLAW_DOCKER_ALL_LIVE_MODE: skip
+          OPENCLAW_DOCKER_E2E_ALLOW_UNRELEASED_CHANGELOG: "1"
+          OPENCLAW_DOCKER_ALL_PARALLELISM: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 3 || 1 }}
+          OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 3 || 1 }}
+        run: pnpm test:docker:all
+
   ci-gate:
     permissions:
       contents: read
@@ -4072,6 +4266,7 @@ jobs:
       - macos-swift
       - ios-build
       - android
+      - docker-seed-e2e
     if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -4108,6 +4303,7 @@ jobs:
             macos-swift=${{ needs.macos-swift.result }}
             ios-build=${{ needs.ios-build.result }}
             android=${{ needs.android.result }}
+            docker-seed-e2e=${{ needs.docker-seed-e2e.result }}
         run: |
           set -euo pipefail
 
