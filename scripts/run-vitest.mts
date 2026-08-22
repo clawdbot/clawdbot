@@ -19,6 +19,7 @@ import { createGatewayServerTestTargetChunks } from "./lib/gateway-server-test-p
 import { signalExitCode } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { spawnTestProjectsRunner } from "./lib/test-projects-delegation.mts";
+import { writeVitestProcessDiagnostics } from "./lib/vitest-process-diagnostics.mjs";
 import { resolveVitestProcessEnv } from "./lib/vitest-process-env.mts";
 import {
   createVitestUnhandledErrorDetector,
@@ -1283,6 +1284,7 @@ export function spawnWatchedVitestProcess({
       console.error(message);
     },
     onTimeout: () => {
+      writeVitestProcessDiagnostics({ pid: child.pid });
       onNoOutputTimeout?.();
       forwardSignalToVitestProcessGroup({
         child,
