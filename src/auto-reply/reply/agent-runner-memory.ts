@@ -1274,18 +1274,53 @@ export async function runMemoryFlushIfNeeded(params: {
     }
   }
 
+  // When the transcript read happened but produced no reliable prompt-token count
+  // (e.g. the raw provider usage was rejected as out-of-window, per #125333) and
+  // there is no fresh persisted total to fall back on either, estimate from the
+  // full message list instead — the same full-message fallback preflight
+  // compaction already uses. Without this, a rejected provider value silently
+  // turns a needed flush into a skip rather than a decision based on a real
+  // (if approximate) estimate.
+  let fallbackPromptTokens: number | undefined;
+  let fallbackOutputTokens: number | undefined;
+  if (
+    shouldReadTranscript &&
+    !hasReliableTranscriptPromptTokens &&
+    !hasFreshPersistedPromptTokens
+  ) {
+    const fallbackEstimate = await estimatePromptTokensFromSessionTranscript({
+      agentId: params.followupRun.run.agentId,
+      sessionId: params.followupRun.run.sessionId,
+      sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+      storePath: params.storePath,
+      contextWindowTokens,
+    });
+    if (
+      typeof fallbackEstimate?.promptTokens === "number" &&
+      Number.isFinite(fallbackEstimate.promptTokens) &&
+      fallbackEstimate.promptTokens > 0
+    ) {
+      fallbackPromptTokens = fallbackEstimate.promptTokens;
+      fallbackOutputTokens = fallbackEstimate.promptIncludesOutput
+        ? undefined
+        : fallbackEstimate.outputTokens;
+    }
+  }
+  const hasFallbackPromptTokens = fallbackPromptTokens !== undefined;
+
   const promptTokensSnapshot = Math.max(
     hasFreshPersistedPromptTokens ? (persistedPromptTokens ?? 0) : 0,
     hasReliableTranscriptPromptTokens ? (transcriptPromptTokens ?? 0) : 0,
+    fallbackPromptTokens ?? 0,
   );
   const hasFreshPromptTokensSnapshot =
     promptTokensSnapshot > 0 &&
-    (hasFreshPersistedPromptTokens || hasReliableTranscriptPromptTokens);
+    (hasFreshPersistedPromptTokens || hasReliableTranscriptPromptTokens || hasFallbackPromptTokens);
 
   const projectedTokenCount = hasFreshPromptTokensSnapshot
     ? resolveEffectivePromptTokens(
         promptTokensSnapshot,
-        transcriptOutputTokens,
+        hasFallbackPromptTokens ? fallbackOutputTokens : transcriptOutputTokens,
         promptTokenEstimate,
       )
     : undefined;

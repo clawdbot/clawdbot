@@ -2690,6 +2690,73 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to a full-message estimate when transcript usage is rejected as out-of-window (#125479 review)", async () => {
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 0,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    // A raw provider usage total far above the tiny test context window: rejected by
+    // deriveContextPromptTokens's window bound, so the cheap usage-derived read alone
+    // yields no reliable prompt-token count.
+    await writeTestSessionTranscript({
+      rootDir,
+      events: [
+        {
+          type: "message",
+          message: {
+            role: "user",
+            content: `long request ${"x".repeat(20_000)}`,
+          },
+        },
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            api: "openai-sub2api",
+            content: `long reply ${"x".repeat(20_000)}`,
+            usage: { input: 82_123, output: 3_000, cacheRead: 525_824, totalTokens: 610_947 },
+          },
+        },
+      ],
+    });
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+    const sessionStore = { main: sessionEntry };
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        provider: "openai-sub2api",
+        model: "gpt-5.6-sol",
+        sessionId: "session",
+        sessionKey: "main",
+      }),
+      sessionCtx: createTestTemplateContext({ Provider: "whatsapp" }),
+      defaultModel: "openai-sub2api/gpt-5.6-sol",
+      modelContextTokens: 500,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    // Without the full-message fallback, the rejected usage would leave no token
+    // count at all and the flush would be silently skipped despite exceeding the
+    // (tiny) configured window.
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+  });
+
   it("fails when required preflight compaction returns an unknown successful no-op", async () => {
     compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
       ok: true,

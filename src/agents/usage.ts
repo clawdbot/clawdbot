@@ -388,12 +388,16 @@ export function deriveContextPromptTokens(params: {
    */
   contextWindowTokens?: number;
 }): number | undefined {
+  const windowTokens =
+    typeof params.contextWindowTokens === "number" &&
+    Number.isFinite(params.contextWindowTokens) &&
+    params.contextWindowTokens > 0
+      ? params.contextWindowTokens
+      : undefined;
   const withinWindow = (value: number | undefined): value is number =>
     typeof value === "number" &&
     Number.isFinite(value) &&
-    (!Number.isFinite(params.contextWindowTokens) ||
-      (params.contextWindowTokens as number) <= 0 ||
-      value <= (params.contextWindowTokens as number));
+    (windowTokens === undefined || value <= windowTokens);
 
   const promptOverride = params.promptTokens;
   if (
@@ -452,6 +456,7 @@ export function deriveSessionTotalTokens(params: {
     lastCallUsage: params.lastCallUsage,
     promptTokens: hasPromptOverride ? promptOverride : undefined,
     usage,
+    contextWindowTokens: params.contextTokens,
   });
 
   if (!(typeof promptTokens === "number") || !Number.isFinite(promptTokens) || promptTokens <= 0) {
