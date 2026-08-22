@@ -739,12 +739,34 @@ openclaw-session-owner-chip {
 .app-toast--anchored {
   right: auto;
   left: var(--app-toast-anchor-center);
-  top: calc(var(--app-toast-anchor-top) + 16px);
+  top: var(--app-toast-anchor-top);
   transform: translateX(-50%);
   gap: var(--space-2);
   max-width: min(520px, calc(var(--app-toast-anchor-width) - 24px));
-  padding: 6px 6px 6px 10px;
+  padding: 8px 12px;
+  border-color: color-mix(in srgb, var(--info) 48%, var(--border));
   border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--info) 12%, var(--popover));
+  box-shadow:
+    0 12px 32px color-mix(in srgb, var(--info) 14%, transparent),
+    var(--shadow-lg);
+  transition-property: opacity, transform;
+  transition-duration: 220ms;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@starting-style {
+  .app-toast--anchored {
+    opacity: 0;
+    transform: translate(-50%, -10px);
+  }
+}
+
+.app-toast--anchored.app-toast--exiting {
+  opacity: 0;
+  transform: translate(-50%, -10px);
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
 }
 
 .app-toast__icon {
@@ -753,7 +775,7 @@ openclaw-session-owner-chip {
   width: 16px;
   height: 16px;
   place-items: center;
-  color: var(--accent);
+  color: var(--info);
 }
 
 .app-toast__icon svg {
@@ -803,6 +825,14 @@ openclaw-session-owner-chip {
 .app-toast--anchored .app-toast__dismiss {
   width: 24px;
   height: 24px;
+  margin-left: 2px;
+  border-radius: var(--radius-full);
+  color: var(--muted);
+}
+
+.app-toast--anchored .app-toast__dismiss svg {
+  width: 16px;
+  height: 16px;
 }
 
 .app-toast__action,
@@ -829,6 +859,13 @@ openclaw-session-owner-chip {
   color: var(--muted);
   font-size: 20px;
   line-height: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-toast--anchored,
+  .app-toast--anchored.app-toast--exiting {
+    transition: none;
+  }
 }
 
 .app-toast__action:hover,

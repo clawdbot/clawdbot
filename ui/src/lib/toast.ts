@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
 import { state } from "lit/decorators.js";
+import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { formatUiExternalText } from "./format-error.ts";
@@ -13,6 +14,7 @@ export type ToastOptions = {
   message: string | TemplateResult;
   /** Positions a compact toast at the top center of the owning surface. */
   anchor?: Element;
+  anchorTopOffset?: number;
   icon?: TemplateResult;
   actionLabel?: string;
   onAction?: () => void;
@@ -21,6 +23,7 @@ export type ToastOptions = {
 };
 
 const DEFAULT_TOAST_DURATION_MS = 6_000;
+const TOAST_EXIT_DURATION_MS = 150;
 
 function activeModalToastLayer() {
   return [...(document.openClawModalToastLayers ?? [])].findLast(
@@ -35,7 +38,9 @@ let queuedToast: ToastOptions | null = null;
 
 class OpenClawToastHost extends OpenClawLightDomContentsElement {
   @state() private toast: ToastOptions | null = null;
+  @state() private exiting = false;
   private dismissTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private exitTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
   override connectedCallback() {
     super.connectedCallback();
@@ -60,8 +65,9 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
   connectedMoveCallback() {}
 
   show(options: ToastOptions) {
-    this.dismiss("replaced");
+    this.finishDismiss("replaced");
     this.toast = options;
+    this.exiting = false;
     this.dismissTimer = globalThis.setTimeout(
       () => this.dismiss("timeout"),
       options.durationMs ?? DEFAULT_TOAST_DURATION_MS,
@@ -73,13 +79,37 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
       globalThis.clearTimeout(this.dismissTimer);
       this.dismissTimer = null;
     }
+    if (this.exitTimer !== null) {
+      globalThis.clearTimeout(this.exitTimer);
+      this.exitTimer = null;
+    }
+  }
+
+  private finishDismiss(reason: ToastDismissReason) {
+    const toast = this.toast;
+    this.clearDismissTimer();
+    this.exiting = false;
+    this.toast = null;
+    toast?.onDismiss?.(reason);
   }
 
   private dismiss(reason: ToastDismissReason) {
     const toast = this.toast;
+    if (!toast) {
+      return;
+    }
     this.clearDismissTimer();
-    this.toast = null;
-    toast?.onDismiss?.(reason);
+    const reducedMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (reason !== "dismiss" && reason !== "timeout" || reducedMotion || !this.isConnected) {
+      this.finishDismiss(reason);
+      return;
+    }
+    this.exiting = true;
+    this.exitTimer = globalThis.setTimeout(() => {
+      if (this.toast === toast) {
+        this.finishDismiss(reason);
+      }
+    }, TOAST_EXIT_DURATION_MS);
   }
 
   override render() {
@@ -91,12 +121,14 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     const anchored = anchorRect !== null && anchorRect.width > 0;
     return html`
       <div
-        class="app-toast ${anchored ? "app-toast--anchored" : ""}"
+        class="app-toast ${anchored ? "app-toast--anchored" : ""} ${this.exiting
+          ? "app-toast--exiting"
+          : ""}"
         style=${styleMap(
           anchored
             ? {
                 "--app-toast-anchor-center": `${anchorRect.left + anchorRect.width / 2}px`,
-                "--app-toast-anchor-top": `${anchorRect.top}px`,
+                "--app-toast-anchor-top": `${anchorRect.top + (toast.anchorTopOffset ?? 0)}px`,
                 "--app-toast-anchor-width": `${anchorRect.width}px`,
               }
             : {},
@@ -133,7 +165,7 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
           aria-label=${t("common.dismiss")}
           @click=${() => this.dismiss("dismiss")}
         >
-          ×
+          ${icons.x}
         </button>
       </div>
     `;

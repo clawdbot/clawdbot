@@ -79,6 +79,11 @@ describe("shared toast", () => {
     await vi.advanceTimersByTimeAsync(50);
     await host.updateComplete;
 
+    expect(host.querySelector(".app-toast--exiting")).not.toBeNull();
+
+    await vi.advanceTimersByTimeAsync(150);
+    await host.updateComplete;
+
     expect(host.querySelector(".app-toast")).toBeNull();
   });
 

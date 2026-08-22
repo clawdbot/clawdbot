@@ -170,8 +170,12 @@ export function renderChatPaneComposerControls(params: {
             scopedAgentParamsForSession(state, state.sessionKey),
           );
           if (runWasActive) {
+            const topbarHeight = toastAnchor
+              ?.querySelector(".chat-pane__header")
+              ?.getBoundingClientRect().height;
             showToast({
               anchor: toastAnchor,
+              anchorTopOffset: (topbarHeight ?? 0) + 12,
               durationMs: 5_000,
               icon: icons.shieldCheck,
               message: t("chat.permissionControls.nextRun"),
