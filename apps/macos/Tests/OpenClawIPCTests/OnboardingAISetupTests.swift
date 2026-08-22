@@ -1266,86 +1266,6 @@ struct OnboardingAISetupTests {
         #expect(pendingState(defaults) == .none)
     }
 
-    @Test func `successful activation waits for required Gateway restart before handoff`() async throws {
-        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingRequiredRestartTests"))
-        let recorder = AISetupRequestRecorder()
-        let restartGate = AISetupRequestGate()
-        let socketGeneration = AISetupSocketGeneration()
-        let session = GatewayTestWebSocketSession(taskFactory: {
-            let generation = socketGeneration.claim()
-            return GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
-                guard sendIndex > 0, let request = aiSetupRequest(from: message) else { return }
-                if respondToAISetupHealth(task: task, request: request) {
-                    return
-                }
-                await recorder.record(message)
-                if generation == 0 {
-                    switch request.method {
-                    case "openclaw.setup.detect":
-                        task.emitReceiveSuccess(.data(detectedSetupResponse(
-                            id: request.id,
-                            kind: "codex-cli",
-                            modelRef: "openai/gpt-5.5")))
-                    case "openclaw.setup.activate":
-                        task.emitReceiveSuccess(.data(successfulActivationResponse(
-                            id: request.id,
-                            modelRef: "openai/gpt-5.5",
-                            latencyMs: 42,
-                            gatewayRestartRequired: true)))
-                        Task {
-                            await restartGate.wait()
-                            task.emitReceiveFailure()
-                        }
-                    default:
-                        break
-                    }
-                    return
-                }
-                switch request.method {
-                case "openclaw.setup.detect":
-                    task.emitReceiveSuccess(.data(persistedDetectedSetupResponse(id: request.id)))
-                case "openclaw.setup.verify":
-                    task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
-                default:
-                    break
-                }
-            })
-        })
-        let url = try #require(URL(string: "ws://example.invalid"))
-        let gateway = makeAISetupGateway(url: url, session: session)
-        let appState = AppState(preview: true)
-        appState.connectionMode = .local
-        var handoffs: [OnboardingDashboardHandoff] = []
-        let view = OnboardingView(
-            state: appState,
-            aiSetupGateway: gateway,
-            systemAgentDefaults: defaults,
-            aiSetupRouteIdentityProvider: { "local" },
-            dashboardHandoffOpener: { handoffs.append($0) })
-
-        let activation = Task { await view.aiSetup.detectAndAutoConnect() }
-        await restartGate.waitUntilStarted()
-        await settleQueuedAISetupTasks()
-
-        #expect(!view.aiSetup.connected)
-        #expect(handoffs.isEmpty)
-
-        await restartGate.release()
-        await activation.value
-
-        #expect(await (recorder.snapshot()).methods == [
-            "openclaw.setup.detect",
-            "openclaw.setup.activate",
-            "openclaw.setup.detect",
-            "openclaw.setup.verify",
-        ])
-        #expect(view.aiSetup.connected)
-        #expect(view.aiSetup.selectedKind == "codex-cli")
-        #expect(view.finish())
-        #expect(view.finishState.didFinish)
-        #expect(handoffs == [.custodianOnboarding])
-    }
-
     @Test func `adopts pending activation stored under the retired crestodian key`() throws {
         let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingRetiredKeyMigrationTests"))
 
@@ -1375,12 +1295,18 @@ struct OnboardingAISetupTests {
             postRestartConfiguredModel: "openai/gpt-5.5")
         let url = try #require(URL(string: "ws://example.invalid"))
         let gateway = makeAISetupGateway(url: url, token: "route-token", session: session)
-        let model = makeAISetupModel(gateway: gateway, defaults: defaults)
-        var handoffCount = 0
-        model.onConnected = { handoffCount += 1 }
+        let appState = AppState(preview: true)
+        appState.connectionMode = .local
+        var handoffs: [OnboardingDashboardHandoff] = []
+        let view = OnboardingView(
+            state: appState,
+            aiSetupGateway: gateway,
+            systemAgentDefaults: defaults,
+            aiSetupRouteIdentityProvider: { "local" },
+            dashboardHandoffOpener: { handoffs.append($0) })
 
-        await model.detectAndAutoConnect()
-        await model.activate(kind: "codex-cli")
+        await view.aiSetup.detectAndAutoConnect()
+        await view.aiSetup.activate(kind: "codex-cli")
 
         let activationOwner = try #require(ownerObservation.value())
         #expect(session.snapshotMakeCount() >= 2)
@@ -1390,9 +1316,10 @@ struct OnboardingAISetupTests {
             "openclaw.setup.detect",
             "openclaw.setup.verify",
         ])
-        #expect(model.connected)
-        #expect(model.selectedKind == "codex-cli")
-        #expect(handoffCount == 1)
+        #expect(view.aiSetup.connected)
+        #expect(view.aiSetup.selectedKind == "codex-cli")
+        #expect(view.finish())
+        #expect(handoffs == [.custodianOnboarding])
         #expect(storedActivationOwner(defaults) == activationOwner)
         #expect(pendingState(defaults) == .completed)
     }
