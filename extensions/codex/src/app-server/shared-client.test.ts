@@ -1083,6 +1083,11 @@ describe("shared Codex app-server client", () => {
     expect(resolveAuthProfileCall().authProfileStore).toBe(preparedAuthProfileStore);
     expect(bridgeStartOptionsCall().authProfileStore).toBe(preparedAuthProfileStore);
     expect(applyAuthProfileCall().authProfileStore).toBe(preparedAuthProfileStore);
+    mocks.refreshCodexAppServerAuthTokens.mockResolvedValueOnce({
+      accessToken: "refreshed-access",
+      chatgptAccountId: "scoped-account",
+      chatgptPlanType: null,
+    });
 
     const priorWriteCount = harness.writes.length;
     harness.send({
@@ -1096,13 +1101,14 @@ describe("shared Codex app-server client", () => {
       agentDir: "/tmp/openclaw-agent",
       authProfileId: "openai:scoped",
       authProfileStore: preparedAuthProfileStore,
+      previousAccountId: "scoped-account",
       config: undefined,
     });
     expect(JSON.parse(harness.writes.at(-1) ?? "{}")).toEqual({
       id: "refresh-1",
       result: {
         accessToken: "refreshed-access",
-        chatgptAccountId: "refreshed-account",
+        chatgptAccountId: "scoped-account",
         chatgptPlanType: null,
       },
     });
@@ -1154,6 +1160,11 @@ describe("shared Codex app-server client", () => {
         },
       },
     });
+    mocks.refreshCodexAppServerAuthTokens.mockResolvedValueOnce({
+      accessToken: "refreshed-access",
+      chatgptAccountId: "scoped-account",
+      chatgptPlanType: null,
+    });
 
     const priorWriteCount = harness.writes.length;
     harness.send({
@@ -1166,6 +1177,7 @@ describe("shared Codex app-server client", () => {
       agentDir: "/tmp/openclaw-agent",
       authProfileId: "openai:scoped",
       authProfileStore,
+      previousAccountId: "scoped-account",
       config: undefined,
     });
   });
@@ -1356,6 +1368,11 @@ describe("shared Codex app-server client", () => {
     await sendInitializeResult(harness, "openclaw/0.149.0 (macOS; test)");
 
     await expect(clientPromise).resolves.toBe(harness.client);
+    mocks.refreshCodexAppServerAuthTokens.mockResolvedValueOnce({
+      accessToken: "refreshed-access",
+      chatgptAccountId: "persisted-account",
+      chatgptPlanType: null,
+    });
     const priorWriteCount = harness.writes.length;
     harness.send({
       id: "refresh-persisted",
@@ -1367,13 +1384,14 @@ describe("shared Codex app-server client", () => {
     expect(mocks.refreshCodexAppServerAuthTokens).toHaveBeenCalledWith({
       agentDir: "/tmp/openclaw-persisted-agent",
       authProfileId: "openai:persisted",
+      previousAccountId: "persisted-account",
       config: undefined,
     });
     expect(JSON.parse(harness.writes.at(-1) ?? "{}")).toEqual({
       id: "refresh-persisted",
       result: {
         accessToken: "refreshed-access",
-        chatgptAccountId: "refreshed-account",
+        chatgptAccountId: "persisted-account",
         chatgptPlanType: null,
       },
     });

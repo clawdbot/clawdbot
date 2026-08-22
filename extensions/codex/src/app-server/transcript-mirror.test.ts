@@ -25,6 +25,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexThread } from "./protocol.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import { attachCodexMirrorRunId } from "./transcript-mirror-attestation.js";
+import { projectBoundedCodexVisibleSessionHistory } from "./transcript-history-projection.js";
 import {
   buildCodexUserPromptMessage,
   codexTranscriptMirrorRuntime,
@@ -667,6 +668,72 @@ describe("projectBoundedCodexThreadHistory", () => {
     ]);
     expect(JSON.stringify(projection)).not.toContain("active tail");
     expect(JSON.stringify(projection)).not.toContain("failed tail");
+  });
+
+  it("preserves imported async and commentary ownership while keeping async messages out of model history", () => {
+    const importedThread = {
+      ...thread,
+      turns: [
+        {
+          id: "turn-async-history",
+          status: "completed",
+          items: [
+            {
+              id: "user-async-history",
+              type: "userMessage",
+              content: [{ type: "text", text: "Investigate this" }],
+            },
+            {
+              id: "commentary-history",
+              type: "agentMessage",
+              text: "Checking the deployment.",
+              phase: "commentary",
+            },
+            {
+              id: "async-history",
+              type: "agentMessage",
+              text: "Which environment should I use?",
+              phase: "final_answer",
+              delivery: "async",
+            },
+            {
+              id: "final-history",
+              type: "agentMessage",
+              text: "Deployment complete.",
+              phase: "final_answer",
+            },
+          ],
+        },
+      ],
+    } as unknown as CodexThread;
+
+    const projection = projectBoundedCodexThreadHistory({
+      thread: importedThread,
+      throughTurnId: "turn-async-history",
+      importedAt: 1_800_000_000_000,
+    });
+
+    expect(projection.transcriptMessages).toHaveLength(4);
+    expect(projection.transcriptMessages[1]).toMatchObject({ phase: "commentary" });
+    expect(projection.transcriptMessages[2]).toMatchObject({
+      phase: "final_answer",
+      openclawAsyncDelivery: { itemId: "async-history" },
+    });
+    expect(JSON.stringify(projection.responseItems)).not.toContain(
+      "Which environment should I use?",
+    );
+    expect(projection.responseItems).toHaveLength(3);
+    const visibleSessionHistory = projectBoundedCodexVisibleSessionHistory(
+      projection.transcriptMessages.map((message, index) => ({
+        entryId: `entry-${index}`,
+        parentId: index === 0 ? null : `entry-${index - 1}`,
+        seq: index,
+        role: message.role,
+        message,
+      })),
+    );
+    expect(JSON.stringify(visibleSessionHistory)).not.toContain("Which environment should I use?");
+    expect(visibleSessionHistory).toHaveLength(3);
   });
 
   it("accepts terminal boundaries", () => {

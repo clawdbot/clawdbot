@@ -11,11 +11,6 @@ import {
   type CodexAppServerClient,
 } from "./client.js";
 import {
-  killStaleComputerUseMcpChildren,
-  scopedRepairUnavailableStatus,
-  type CodexComputerUseRepairStatus,
-} from "./computer-use-process-repair.js";
-import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
   type CodexComputerUseConfig,
@@ -68,6 +63,13 @@ type CodexComputerUseInstallationStatus =
 type CodexComputerUseExposureStatus = "skipped" | "missing" | "available";
 
 type CodexComputerUseLiveTestState = "skipped" | "passed" | "failed";
+
+type CodexComputerUseRepairStatus = {
+  attempted: boolean;
+  killedPids: number[];
+  message: string;
+  warnings: string[];
+};
 
 type CodexComputerUseStatusSection = {
   status: string;
@@ -137,7 +139,6 @@ export type CodexComputerUseSetupParams = {
   forceEnable?: boolean;
   defaultBundledMarketplacePath?: string;
   defaultBundledMarketplacePathCandidates?: readonly string[];
-  repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
   releaseNativeConfigFence?: () => void;
 };
 
@@ -153,7 +154,6 @@ type CodexComputerUseInspectionParams = {
   installPlugin: boolean;
   defaultBundledMarketplacePath?: string;
   defaultBundledMarketplacePathCandidates?: readonly string[];
-  repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
   releaseNativeConfigFence?: () => void;
 };
 
@@ -370,11 +370,6 @@ async function inspectCodexComputerUseWithoutFence(
   params: CodexComputerUseInspectionParams,
 ): Promise<CodexComputerUseStatus> {
   const request = createComputerUseRequest(params);
-  const repairComputerUseMcpChildren =
-    params.repairComputerUseMcpChildren ??
-    (params.client
-      ? () => killStaleComputerUseMcpChildren({ ancestorPid: params.client?.getTransportPid() })
-      : undefined);
   if (params.installPlugin) {
     await request<JsonValue>("experimentalFeature/enablement/set", {
       enablement: { plugins: true },
@@ -413,7 +408,6 @@ async function inspectCodexComputerUseWithoutFence(
     config: params.computerUseConfig,
     plugin: pluginInspection.plugin,
     installPlugin: params.installPlugin,
-    repairComputerUseMcpChildren,
     releaseNativeConfigFence: params.releaseNativeConfigFence,
   });
 }
@@ -473,7 +467,6 @@ async function readComputerUseTools(params: {
   config: ResolvedCodexComputerUseConfig;
   plugin: CodexPluginDetail;
   installPlugin: boolean;
-  repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
   releaseNativeConfigFence?: () => void;
 }): Promise<CodexComputerUseStatus> {
   let server = await readMcpServerStatus(params.request, params.config.mcpServerName);
@@ -514,7 +507,6 @@ async function readComputerUseTools(params: {
   const { liveTest, repair } = await runCodexComputerUseLiveTest({
     request: params.request,
     config: params.config,
-    repairComputerUseMcpChildren: params.repairComputerUseMcpChildren,
   });
   const compatibilityStartupAllowed = !liveTest.ok && !params.config.strictReadiness;
   return {
@@ -558,7 +550,6 @@ function isNonStrictLiveTestStartupAllowed(
 export async function runCodexComputerUseLiveTest(params: {
   request: CodexComputerUseRequest;
   config: ResolvedCodexComputerUseConfig;
-  repairComputerUseMcpChildren?: () => Promise<CodexComputerUseRepairStatus>;
 }): Promise<{ liveTest: CodexComputerUseLiveTestStatus; repair?: CodexComputerUseRepairStatus }> {
   const startedAt = Date.now();
   let lastError: unknown;
@@ -571,8 +562,6 @@ export async function runCodexComputerUseLiveTest(params: {
         {
           input: [],
           developerInstructions: COMPUTER_USE_LIVE_TEST_THREAD_NAME,
-          sandbox: "danger-full-access",
-          approvalPolicy: "never",
           ephemeral: true,
         },
         {
@@ -600,7 +589,7 @@ export async function runCodexComputerUseLiveTest(params: {
           attempts: attempt + 1,
           timeoutMs: params.config.liveTestTimeoutMs,
           retried: attempt > 0,
-          repaired: Boolean(repair?.attempted),
+          repaired: Boolean(repair?.attempted && repair.warnings.length === 0),
           durationMs: Math.max(0, Date.now() - startedAt),
           message: "Computer Use live test passed.",
         },
@@ -608,18 +597,13 @@ export async function runCodexComputerUseLiveTest(params: {
       };
     } catch (error) {
       lastError = error;
-      if (attempt >= COMPUTER_USE_LIVE_TEST_RETRY_COUNT) {
-        break;
-      }
-      if (params.config.autoRepair) {
-        repair = params.repairComputerUseMcpChildren
-          ? await params.repairComputerUseMcpChildren()
-          : scopedRepairUnavailableStatus();
-      }
     } finally {
       if (threadId) {
         await cleanupComputerUseProbeThread(params.request, threadId, params.config);
       }
+    }
+    if (attempt < COMPUTER_USE_LIVE_TEST_RETRY_COUNT && params.config.autoRepair) {
+      repair = await repairComputerUseMcpRuntime(params.request, params.config);
     }
   }
   const errorMessage = describeControlFailure(lastError);
@@ -631,13 +615,32 @@ export async function runCodexComputerUseLiveTest(params: {
       attempts: COMPUTER_USE_LIVE_TEST_RETRY_COUNT + 1,
       timeoutMs: params.config.liveTestTimeoutMs,
       retried: COMPUTER_USE_LIVE_TEST_RETRY_COUNT > 0,
-      repaired: Boolean(repair?.attempted),
+      repaired: Boolean(repair?.attempted && repair.warnings.length === 0),
       durationMs: Math.max(0, Date.now() - startedAt),
       message: `Computer Use live test failed after ${COMPUTER_USE_LIVE_TEST_RETRY_COUNT + 1} attempts: ${errorMessage}`,
       error: errorMessage,
     },
     ...(repair ? { repair } : {}),
   };
+}
+
+async function repairComputerUseMcpRuntime(
+  request: CodexComputerUseRequest,
+  config: ResolvedCodexComputerUseConfig,
+): Promise<CodexComputerUseRepairStatus> {
+  try {
+    // Codex owns MCP process lifetimes; signaling descendants can kill an active sibling.
+    await request("config/mcpServer/reload", undefined, { timeoutMs: config.liveTestTimeoutMs });
+    return {
+      attempted: true,
+      killedPids: [],
+      warnings: [],
+      message: "Reloaded Computer Use MCP servers through Codex app-server.",
+    };
+  } catch (error) {
+    const message = `Could not reload Computer Use MCP servers: ${describeControlFailure(error)}`;
+    return { attempted: true, killedPids: [], warnings: [message], message };
+  }
 }
 
 async function cleanupComputerUseProbeThread(

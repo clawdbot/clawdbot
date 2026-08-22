@@ -43,9 +43,18 @@ function guardianActionCommand(action: JsonObject | undefined): string | undefin
   if (!action) {
     return undefined;
   }
-  const command = readString(action, "command");
-  if (command) {
-    return command;
+  const directLabel =
+    readString(action, "command") ??
+    readString(action, "target") ??
+    readString(action, "toolTitle") ??
+    readString(action, "reason");
+  if (directLabel) {
+    return directLabel;
+  }
+  const server = readString(action, "connectorName") ?? readString(action, "server");
+  const tool = readString(action, "toolName");
+  if (server && tool) {
+    return `${server}/${tool}`;
   }
   const argv = Array.isArray(action.argv)
     ? action.argv.filter((value): value is string => typeof value === "string")
@@ -108,6 +117,7 @@ export class CodexEventProjection {
     | {
         reviewId?: string;
         targetItemId?: string | null;
+        command?: string;
         threadId: string;
         turnId: string;
       }
@@ -132,6 +142,7 @@ export class CodexEventProjection {
     const action = isJsonObject(params.action) ? params.action : undefined;
     const reviewId = readString(params, "reviewId");
     const targetItemId = readNullableString(params, "targetItemId");
+    const command = guardianActionCommand(action);
     const reviewStatus = review ? readString(review, "status") : undefined;
     const status = normalizeApprovalReviewStatus(reviewStatus);
     const riskLevel = review ? readString(review, "riskLevel") : undefined;
@@ -158,7 +169,7 @@ export class CodexEventProjection {
     const threadId = readString(params, "threadId") ?? this.threadId;
     const turnId = readString(params, "turnId") ?? this.turnId;
     if (method.endsWith("/started")) {
-      this.activeGuardianReview = { reviewId, targetItemId, threadId, turnId };
+      this.activeGuardianReview = { reviewId, targetItemId, command, threadId, turnId };
     }
     this.emitAgentEvent({
       stream: "codex_app_server.guardian",
@@ -175,7 +186,7 @@ export class CodexEventProjection {
         userAuthorization,
         rationale,
         actionType: action ? readString(action, "type") : undefined,
-        command: guardianActionCommand(action),
+        command,
       },
     });
     if (reviewId && targetItemId && status) {
@@ -204,7 +215,7 @@ export class CodexEventProjection {
         },
       });
     }
-    if (method.endsWith("/completed")) {
+    if (method.endsWith("/completed") && this.activeGuardianReview?.reviewId === reviewId) {
       this.activeGuardianReview = undefined;
     }
   }
@@ -220,6 +231,27 @@ export class CodexEventProjection {
       stream: "codex_app_server.guardian",
       data: { phase: "warning", message },
     });
+  }
+
+  handleWarning(params: JsonObject): void {
+    const summary = readString(params, "summary") ?? readString(params, "message");
+    const details = readString(params, "details");
+    const message = [summary, details].filter(Boolean).join("\n");
+    if (message) {
+      this.emitAgentEvent({ stream: "notice", data: { phase: "warning", message } });
+    }
+  }
+
+  handleModelRerouted(params: JsonObject): void {
+    const fromModel = readString(params, "fromModel");
+    const toModel = readString(params, "toModel");
+    const reason = readString(params, "reason");
+    if (fromModel && toModel && fromModel !== toModel) {
+      this.emitAgentEvent({
+        stream: "fallback",
+        data: { fromModel, toModel, ...(reason ? { reason } : {}) },
+      });
+    }
   }
 
   flushPendingGuardianWarning(): void {
@@ -245,6 +277,7 @@ export class CodexEventProjection {
         turnId: readString(params, "turnId") ?? this.activeGuardianReview?.turnId ?? this.turnId,
         reviewId: this.activeGuardianReview?.reviewId,
         targetItemId: this.activeGuardianReview?.targetItemId,
+        command: this.activeGuardianReview?.command,
         startedAtMs: asFiniteNumber(params.startedAtMs),
       },
     });

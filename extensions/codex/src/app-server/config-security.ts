@@ -138,6 +138,7 @@ function stableStringifyJson(value: JsonValue): string {
 export function withMcpElicitationsApprovalPolicy(
   policy: CodexAppServerEffectiveApprovalPolicy,
 ): CodexAppServerEffectiveApprovalPolicy {
+  // UnlessTrusted already allows MCP elicitation; granular would erase per-command approvals.
   if (policy === "untrusted") {
     return policy;
   }

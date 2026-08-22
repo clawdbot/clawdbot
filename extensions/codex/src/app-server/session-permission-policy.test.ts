@@ -129,6 +129,51 @@ describe("Codex session permission policy", () => {
     });
   });
 
+  it.each([
+    {
+      mode: "read-only" as const,
+      allowedSandbox: "workspace-write",
+    },
+    {
+      mode: "read-only" as const,
+      allowedSandbox: "danger-full-access",
+    },
+    {
+      mode: "guarded" as const,
+      allowedSandbox: "danger-full-access",
+    },
+    {
+      mode: "workspace" as const,
+      allowedSandbox: "danger-full-access",
+    },
+  ])("never widens $mode access to the managed $allowedSandbox sandbox", (params) => {
+    expect(() =>
+      applyCodexSessionPermissionPolicy({
+        appServer: appServer(),
+        permissionMode: params.mode,
+        sessionRoot: "/workspace/project",
+        pluginConfig,
+        canUseAutoReview: true,
+        requirementsToml: `allowed_sandbox_modes = ["${params.allowedSandbox}"]`,
+      }),
+    ).toThrow(
+      `Codex session permission mode=${params.mode} cannot satisfy managed sandbox requirements`,
+    );
+  });
+
+  it("lets managed requirements further restrict a guarded session to read-only", () => {
+    expect(
+      applyCodexSessionPermissionPolicy({
+        appServer: appServer(),
+        permissionMode: "guarded",
+        sessionRoot: "/workspace/project",
+        pluginConfig,
+        canUseAutoReview: true,
+        requirementsToml: 'allowed_sandbox_modes = ["read-only"]',
+      }),
+    ).toMatchObject({ sandbox: "read-only", approvalsReviewer: "user" });
+  });
+
   it("lets a deny exec floor tighten a guarded tuple", () => {
     const resolved = applyCodexSessionPermissionPolicy({
       appServer: appServer(),
@@ -189,6 +234,36 @@ describe("Codex session permission policy", () => {
       ).toEqual({ mode: effective, root: "/workspace/project", execMode });
     },
   );
+
+  it.each(["read-only", "guarded", "workspace"] as const)(
+    "keeps mandatory per-command approval when applying %s session permissions",
+    (permissionMode) => {
+      expect(
+        applyCodexSessionPermissionPolicy({
+          appServer: { ...appServer(), approvalPolicy: "untrusted" },
+          permissionMode,
+          sessionRoot: "/workspace/project",
+          pluginConfig,
+          canUseAutoReview: true,
+          execMode: "ask",
+        }),
+      ).toMatchObject({ approvalPolicy: "untrusted", approvalsReviewer: "user" });
+    },
+  );
+
+  it("fails closed when session requirements exclude mandatory per-command approval", () => {
+    expect(() =>
+      applyCodexSessionPermissionPolicy({
+        appServer: { ...appServer(), approvalPolicy: "untrusted" },
+        permissionMode: "guarded",
+        sessionRoot: "/workspace/project",
+        pluginConfig,
+        canUseAutoReview: true,
+        execMode: "ask",
+        requirementsToml: 'allowed_approval_policies = ["on-request"]',
+      }),
+    ).toThrow("tools.exec.ask=always requires Codex app-server per-command approvals");
+  });
 
   it("fails closed when requirements cannot provide mandatory user review", () => {
     expect(() =>

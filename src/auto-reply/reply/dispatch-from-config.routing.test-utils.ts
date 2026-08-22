@@ -304,6 +304,71 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("never lets a durable block intent route a private webchat turn to an inherited external recipient", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    installThreadingTestPlugin({ id: "imessage" });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      OriginatingChannel: "imessage",
+      OriginatingTo: "imessage:+15550001111",
+    });
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await requireBlockReplyHandler(opts?.onBlockReply)(
+        { text: "Private dashboard update" },
+        { deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:private" },
+      );
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: automaticDirectReplyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({ text: "Private dashboard update" });
+  });
+
+  it("never lets a durable block intent deliver directly from a parent-owned background session", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    installThreadingTestPlugin({ id: "telegram" });
+    sessionStoreMocks.currentEntry = {
+      sessionId: "background-child",
+      spawnedBy: "agent:main:parent",
+      acp: { backend: "codex" },
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await requireBlockReplyHandler(opts?.onBlockReply)(
+        { text: "Private delegated progress" },
+        { deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:child" },
+      );
+      return undefined;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:main:background-child",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+      }),
+      cfg: automaticDirectReplyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
   it("routes external origin replies for internal webchat turns when explicit delivery is set", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();

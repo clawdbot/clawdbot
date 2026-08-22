@@ -224,6 +224,7 @@ export type CodexModelBackedReviewerContext = {
   agentDir?: string;
   codexConfigToml?: string | null;
   homeScope?: CodexAppServerHomeScope;
+  codexArgs?: readonly string[];
 };
 
 export type CodexPluginConfig = {

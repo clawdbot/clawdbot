@@ -283,7 +283,15 @@ async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenCla
   const execServer: OpenClawLeasedExecServer =
     connection.kind === "node"
       ? { ...common, node: { id: connection.id, leases: new Map() } }
-      : { ...common, backend: connection.backend, fsBridge: connection.fsBridge };
+      : {
+          ...common,
+          backend: connection.backend,
+          fsBridge: connection.fsBridge,
+          // Bind isolation to this provisioned runtime, not mutable config or request claims.
+          networkIsolated:
+            (connection.backend.id === "docker" || connection.backend.id === "podman") &&
+            sandbox.docker.network.trim().toLowerCase() === "none",
+        };
   server.on("connection", (socket, request) => {
     // ws emits error for maxPayload rejections before auth or JSON-RPC sees the frame.
     socket.on("error", handleExecServerSocketError);

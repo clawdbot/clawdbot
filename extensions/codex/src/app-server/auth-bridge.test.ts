@@ -174,6 +174,19 @@ function expectOAuthProfile(
   return profile;
 }
 
+function chatgptAccessToken(accountId: string, subject?: string): string {
+  return [
+    Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url"),
+    Buffer.from(
+      JSON.stringify({
+        "https://api.openai.com/auth": { chatgpt_account_id: accountId },
+        ...(subject ? { sub: subject } : {}),
+      }),
+    ).toString("base64url"),
+    "test-signature",
+  ].join(".");
+}
+
 async function writeCodexCliAuthFile(codexHome: string): Promise<void> {
   await fs.mkdir(codexHome, { recursive: true });
   await fs.writeFile(
@@ -720,13 +733,14 @@ describe("bridgeCodexAppServerStartOptions", () => {
   });
 
   it("materializes one prepared subscription profile snapshot", async () => {
+    const access = chatgptAccessToken("prepared-account");
     const authProfileStore: AuthProfileStore = {
       version: 1,
       profiles: {
         "openai:work": {
           type: "token",
           provider: "openai",
-          token: "prepared-subscription-token",
+          token: access,
           email: "prepared@example.test",
         },
       },
@@ -752,8 +766,8 @@ describe("bridgeCodexAppServerStartOptions", () => {
         snapshot: {
           loginParams: {
             type: "chatgptAuthTokens",
-            accessToken: "prepared-subscription-token",
-            chatgptAccountId: "prepared@example.test",
+            accessToken: access,
+            chatgptAccountId: "prepared-account",
           },
         },
       },
@@ -762,10 +776,10 @@ describe("bridgeCodexAppServerStartOptions", () => {
       handoff.preparedAuth?.kind === "profile"
         ? handoff.preparedAuth.snapshot?.secretFreeCacheKey
         : undefined,
-    ).toMatch(/^prepared@example\.test:token:sha256:[a-f0-9]{64}$/u);
+    ).toMatch(/^prepared-account:token:sha256:[a-f0-9]{64}$/u);
   });
 
-  it("isolates prepared OAuth snapshots without a stable account identity", async () => {
+  it("isolates static access tokens that share the same genuine ChatGPT workspace", async () => {
     const snapshotFor = (access: string) =>
       resolveCodexAppServerPreparedAuthProfileSnapshot({
         authProfileId: "openai:shared",
@@ -773,24 +787,24 @@ describe("bridgeCodexAppServerStartOptions", () => {
           version: 1,
           profiles: {
             "openai:shared": {
-              type: "oauth",
+              type: "token",
               provider: "openai",
-              access,
-              refresh: `${access}-refresh`,
-              expires: Date.now() + 60 * 60_000,
+              token: access,
             },
           },
         },
       });
 
-    const first = await snapshotFor("first-access-token");
-    const second = await snapshotFor("second-access-token");
+    const firstToken = chatgptAccessToken("shared-account", "first-subject");
+    const secondToken = chatgptAccessToken("shared-account", "second-subject");
+    const first = await snapshotFor(firstToken);
+    const second = await snapshotFor(secondToken);
 
-    expect(first?.secretFreeCacheKey).toMatch(/^openai:shared:token:sha256:[a-f0-9]{64}$/u);
-    expect(second?.secretFreeCacheKey).toMatch(/^openai:shared:token:sha256:[a-f0-9]{64}$/u);
+    expect(first?.secretFreeCacheKey).toMatch(/^shared-account:token:sha256:[a-f0-9]{64}$/u);
+    expect(second?.secretFreeCacheKey).toMatch(/^shared-account:token:sha256:[a-f0-9]{64}$/u);
     expect(first?.secretFreeCacheKey).not.toBe(second?.secretFreeCacheKey);
-    expect(first?.secretFreeCacheKey).not.toContain("first-access-token");
-    expect(second?.secretFreeCacheKey).not.toContain("second-access-token");
+    expect(first?.secretFreeCacheKey).not.toContain(firstToken);
+    expect(second?.secretFreeCacheKey).not.toContain(secondToken);
   });
 
   it("keeps legacy profile classification outside the prepared union", async () => {
@@ -1282,6 +1296,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
           access: "initial-access",
           refresh: "initial-refresh",
           expires: Date.now() + 60_000,
+          accountId: "rotating-account",
         },
       });
       const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
@@ -1331,6 +1346,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
           access: "initial-access",
           refresh: "initial-refresh",
           expires: Date.now() + 60_000,
+          accountId: "initial-account",
         },
       });
       const authProfileStore = loadAuthProfileStoreForSecretsRuntime(agentDir);
@@ -1437,6 +1453,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       access: "scoped-refreshed-access",
       refresh: "scoped-refreshed-refresh",
       expires: Date.now() + 60_000,
+      accountId: "scoped-account",
     });
     try {
       upsertAuthProfile({
@@ -1475,7 +1492,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       expect(request).toHaveBeenCalledWith("account/login/start", {
         type: "chatgptAuthTokens",
         accessToken: "scoped-refreshed-access",
-        chatgptAccountId: "openai:work",
+        chatgptAccountId: "scoped-account",
         chatgptPlanType: null,
       });
       expect(loadAuthProfileStoreForSecretsRuntime(agentDir).profiles["openai:work"]).toMatchObject(
@@ -1793,17 +1810,78 @@ describe("bridgeCodexAppServerStartOptions", () => {
         profiles: { "openai:work": { ...base, accountId: "account-123" } },
       },
     });
-    const emailOnly = await resolveCodexAppServerPreparedAuthProfileSnapshot({
+    expect(withAccount?.chatgptAccountId).toBe("account-123");
+  });
+
+  it("derives a missing ChatGPT account id from the access-token workspace claim", async () => {
+    const access = chatgptAccessToken("account-from-jwt");
+
+    const snapshot = await resolveCodexAppServerPreparedAuthProfileSnapshot({
       agentDir: "/tmp/openclaw-agent",
-      authProfileId: "openai:email-only",
+      authProfileId: "openai:work",
       authProfileStore: {
         version: 1,
-        profiles: { "openai:email-only": base },
+        profiles: {
+          "openai:work": {
+            type: "oauth",
+            provider: "openai",
+            access,
+            refresh: "refresh-token",
+            expires: Date.now() + 60 * 60_000,
+            email: "operator@example.test",
+          },
+        },
       },
     });
 
-    expect(withAccount?.chatgptAccountId).toBe("account-123");
-    expect(emailOnly).not.toHaveProperty("chatgptAccountId");
+    expect(snapshot).toMatchObject({
+      loginParams: { type: "chatgptAuthTokens", chatgptAccountId: "account-from-jwt" },
+      chatgptAccountId: "account-from-jwt",
+    });
+  });
+
+  it("rejects an email-only OAuth profile instead of inventing a workspace identity", async () => {
+    await expect(
+      resolveCodexAppServerPreparedAuthProfileSnapshot({
+        agentDir: "/tmp/openclaw-agent",
+        authProfileId: "openai:work",
+        authProfileStore: {
+          version: 1,
+          profiles: {
+            "openai:work": {
+              type: "oauth",
+              provider: "openai",
+              access: "opaque-access-token",
+              refresh: "refresh-token",
+              expires: Date.now() + 60 * 60_000,
+              email: "operator@example.test",
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow("ChatGPT account ID");
+  });
+
+  it("rejects a stored workspace that contradicts the access-token identity", async () => {
+    await expect(
+      resolveCodexAppServerPreparedAuthProfileSnapshot({
+        agentDir: "/tmp/openclaw-agent",
+        authProfileId: "openai:work",
+        authProfileStore: {
+          version: 1,
+          profiles: {
+            "openai:work": {
+              type: "oauth",
+              provider: "openai",
+              access: chatgptAccessToken("workspace-from-token"),
+              refresh: "refresh-token",
+              expires: Date.now() + 60 * 60_000,
+              accountId: "workspace-from-profile",
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow("different ChatGPT account ID");
   });
 
   it("applies a normal OpenAI API-key profile as a Codex app-server backup", async () => {
@@ -2602,7 +2680,8 @@ describe("bridgeCodexAppServerStartOptions", () => {
   it("applies an OpenAI Codex token profile backed by a secret ref", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
-    vi.stubEnv("OPENAI_CODEX_TOKEN", "ref-backed-access-token");
+    const access = chatgptAccessToken("ref-backed-account");
+    vi.stubEnv("OPENAI_CODEX_TOKEN", access);
     try {
       upsertAuthProfile({
         agentDir,
@@ -2623,8 +2702,8 @@ describe("bridgeCodexAppServerStartOptions", () => {
 
       expect(request).toHaveBeenCalledWith("account/login/start", {
         type: "chatgptAuthTokens",
-        accessToken: "ref-backed-access-token",
-        chatgptAccountId: "codex@example.test",
+        accessToken: access,
+        chatgptAccountId: "ref-backed-account",
         chatgptPlanType: null,
       });
     } finally {
@@ -2635,6 +2714,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
   it("passes OpenAI Codex token profiles through to app-server token login", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
+    const access = chatgptAccessToken("token-profile-account");
     try {
       upsertAuthProfile({
         agentDir,
@@ -2642,7 +2722,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
         credential: {
           type: "token",
           provider: "openai",
-          token: "sk-openai-chatgpt-api-key-value",
+          token: access,
         },
       });
 
@@ -2656,8 +2736,8 @@ describe("bridgeCodexAppServerStartOptions", () => {
 
       expect(request).toHaveBeenCalledWith("account/login/start", {
         type: "chatgptAuthTokens",
-        accessToken: "sk-openai-chatgpt-api-key-value",
-        chatgptAccountId: "openai:work",
+        accessToken: access,
+        chatgptAccountId: "token-profile-account",
         chatgptPlanType: null,
       });
     } finally {
@@ -2780,6 +2860,49 @@ describe("bridgeCodexAppServerStartOptions", () => {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
   });
+
+  it.each([
+    {
+      identity: "profile metadata",
+      access: "workspace-access-token",
+      accountId: "workspace-selected",
+    },
+    {
+      identity: "access-token claims",
+      access: chatgptAccessToken("workspace-selected"),
+      accountId: undefined,
+    },
+  ])(
+    "rejects a different previous workspace from $identity before refreshing",
+    async ({ access, accountId }) => {
+      const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+      try {
+        upsertAuthProfile({
+          agentDir,
+          profileId: "openai:work",
+          credential: {
+            type: "oauth",
+            provider: "openai",
+            access,
+            refresh: "workspace-refresh-token",
+            expires: Date.now() + 60_000,
+            ...(accountId ? { accountId } : {}),
+          },
+        });
+
+        await expect(
+          refreshCodexAppServerAuthTokens({
+            agentDir,
+            authProfileId: "openai:work",
+            previousAccountId: "workspace-original",
+          }),
+        ).rejects.toThrow("ChatGPT workspace changed");
+        expect(oauthMocks.refreshOpenAICodexToken).not.toHaveBeenCalled();
+      } finally {
+        await fs.rm(agentDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("does not persist an expired stale credential before forced token refresh succeeds", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));

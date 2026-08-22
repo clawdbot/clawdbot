@@ -2262,6 +2262,40 @@ describe("grouped chat rendering", () => {
     },
   );
 
+  it("renders configuration warnings as system notices rather than Guardian failures", () => {
+    const container = document.createElement("div");
+    const host = createHost();
+    handleAgentEvent(
+      host,
+      agentEvent("run-warning", 1, "notice", {
+        phase: "warning",
+        message: "Custom execution rules were not applied.",
+      }),
+    );
+    const items = buildCachedChatItems({
+      paneId: "configuration-warning-render-test",
+      sessionKey: "main",
+      runId: "run-warning",
+      messages: [],
+      toolMessages: [],
+      guardianNotices: host.guardianNotices,
+      streamSegments: [],
+      stream: null,
+      streamStartedAt: null,
+      showToolCalls: true,
+    });
+    const notice = items[0];
+    if (notice?.kind !== "notice") {
+      throw new Error("Expected configuration warning notice");
+    }
+
+    render(renderChatNotice(notice), container);
+
+    expect(container.querySelector(".chat-divider__title")?.textContent).toBe("System");
+    expect(container.textContent).toContain("Custom execution rules were not applied.");
+    expect(container.textContent).not.toContain("Guardian warning");
+  });
+
   it("uses the current profile display name for the signed-in user's historical messages", () => {
     const container = document.createElement("div");
     render(
