@@ -267,6 +267,14 @@ describe("sessions_send gateway loopback", () => {
         ],
       },
     };
+    let previousConfig: string | undefined;
+    try {
+      previousConfig = await fs.readFile(configPath, "utf-8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
 
     testState.sessionStorePath = path.join(dir, "sessions.json");
     testState.agentsConfig = config.agents;
@@ -328,6 +336,11 @@ describe("sessions_send gateway loopback", () => {
     } finally {
       testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
+      if (previousConfig === undefined) {
+        await fs.rm(configPath, { force: true });
+      } else {
+        await fs.writeFile(configPath, previousConfig, "utf-8");
+      }
     }
   });
 
