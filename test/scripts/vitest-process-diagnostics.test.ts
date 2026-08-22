@@ -67,8 +67,8 @@ describe("vitest process diagnostics", () => {
       }
       return [
         "42 7 42 01:02 S 87.5 204800 wait /Users/alice/private/node --token SECRET_TOKEN",
-        "43 42 42 01:01 D 12.5 102400 futex /opt/private/worker https://internal.example",
-        "44 42 42 01:00 S 1.0 2048 wait https://internal.example/SECRET_TOKEN",
+        "43 42 42 01:01 D 12.5 102400 futex ci.internal.example:8443",
+        "44 42 42 01:00 S 1.0 2048 wait SECRET_TOKEN",
       ].join("\n");
     });
 
@@ -82,8 +82,7 @@ describe("vitest process diagnostics", () => {
 
     const output = log.mock.calls.flat().join("\n");
     expect(output).toContain("comm=node");
-    expect(output).toContain("comm=worker");
-    expect(output).toContain("comm=unknown");
+    expect(output).toContain("comm=other");
     expect(output).toContain("fd summary: total=2 types=CHR:1,REG:1");
     expect(output).not.toMatch(
       /SECRET_TOKEN|internal\.example|\/Users\/alice|private-token|alice/u,

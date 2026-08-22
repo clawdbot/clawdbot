@@ -49,6 +49,19 @@ type TimeoutTerminationParams = ProcessGroupParams & {
 const VITEST_DIAGNOSTICS_DEADLINE_MS = 1_000;
 const VITEST_DIAGNOSTICS_MAX_BYTES = 64 * 1024;
 const VITEST_DIAGNOSTICS_MAX_PROCESSES = 20;
+const SAFE_DIAGNOSTIC_COMMANDS = new Set([
+  "bash",
+  "bun",
+  "dash",
+  "git",
+  "node",
+  "node.exe",
+  "npm",
+  "pnpm",
+  "pwsh",
+  "sh",
+  "zsh",
+]);
 
 function sanitizeDiagnosticToken(value: string, fallback = "unknown") {
   const sanitized = value.replace(/[^\w.+:-]/gu, "").slice(0, 40);
@@ -57,10 +70,8 @@ function sanitizeDiagnosticToken(value: string, fallback = "unknown") {
 
 function sanitizeDiagnosticComm(value: string) {
   const executable = value.trim().split(/\s+/u)[0] ?? "";
-  if (executable.includes("://")) {
-    return "unknown";
-  }
-  return sanitizeDiagnosticToken(path.basename(executable), "unknown");
+  const basename = path.basename(executable).toLowerCase();
+  return SAFE_DIAGNOSTIC_COMMANDS.has(basename) ? basename : "other";
 }
 
 function parseDiagnosticProcessRows(output: string, processGroupId?: number) {
