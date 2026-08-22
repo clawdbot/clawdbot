@@ -225,7 +225,7 @@ describe("ClickClack account resolution", () => {
   });
 
   it("isolates unavailable root and account token files without falling back", async () => {
-    await withTempDir("clickclack-unavailable-token-", async (tempDir) => {
+    await withTestDir("clickclack-unavailable-token-", async (tempDir) => {
       const missingRootFile = path.join(tempDir, "missing-root-token");
       const missingAccountFile = path.join(tempDir, "missing-account-token");
       const missingDefaultFile = path.join(tempDir, "missing-default-token");
@@ -267,7 +267,7 @@ describe("ClickClack account resolution", () => {
   });
 
   it("degrades empty and unsafe token files without exposing their filesystem paths", async () => {
-    await withTempDir("clickclack-invalid-token-", async (tempDir) => {
+    await withTestDir("clickclack-invalid-token-", async (tempDir) => {
       const emptyFile = path.join(tempDir, "empty-token");
       fs.writeFileSync(emptyFile, "  \n", "utf8");
       const invalidFiles: Array<[string, "invalid-path" | "symlink"]> = [

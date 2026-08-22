@@ -1026,7 +1026,7 @@ candidate `2f08a3b375d55525570c23a49829b4976838b390`.
 - `git diff --name-only 3376c298 23854c39 | wc -l` returned `1165`, matching the
   work order's file-drift figure.
 - `git merge-base --is-ancestor 46f4d2115700d574501bb3c4763abf6b2ba977fe
-  2f08a3b3` exited 1. The forbidden composite is not an ancestor of the base and
+2f08a3b3` exited 1. The forbidden composite is not an ancestor of the base and
   therefore cannot become one through this merge, whose only new parent is
   upstream.
 - `git fetch upstream` was run before reasoning about the target.
@@ -1107,7 +1107,7 @@ wholesale `--ours` or `--theirs`.
 - `scripts/plugin-sdk-surface-report.mts`. Two budget ceilings conflicted. These
   are additive counters, so both deltas from the shared base were summed rather
   than either side being chosen: public exports `4337 + 17 (continuation) + 3
-  (upstream) = 4357`, public function exports `2578 + 5 + 3 = 2586`. Upstream's
+(upstream) = 4357`, public function exports `2578 + 5 + 3 = 2586`. Upstream's
   two justification comments were kept alongside the continuation's. The summed
   ceilings are verified empirically by `pnpm plugin-sdk:surface:check`; they are
   not an operator estimate.

@@ -428,7 +428,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
       // -18: retire the expired August compatibility exports and messaging-targets subpath.
       // +3: resolved-tree measurement correction for combined compatibility projections.
-      1139,
+      // +2: upstream #126003 restored shipped Slack and Discord setup-runtime helpers
+      //     as deprecated exports; upstream raised only the per-entrypoint
+      //     setup-runtime budget because its aggregate had headroom this branch does not.
+      1141,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
