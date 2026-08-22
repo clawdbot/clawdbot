@@ -36,6 +36,7 @@ describe("runtime-only background wake production path", () => {
   it("submits a bare event stub with hidden inbound context and cleans it up", async () => {
     let submittedPrompt: string | undefined;
     let submittedMessages: unknown[] | undefined;
+    let sessionMessagesAfterSubmission: unknown[] | undefined;
     const result = await createContextEngineAttemptRunner({
       contextEngine: createContextEngineBootstrapAndAssemble(),
       sessionKey,
@@ -63,6 +64,7 @@ describe("runtime-only background wake production path", () => {
           ...session.messages,
           { role: "assistant", content: "done", timestamp: 2 },
         ];
+        sessionMessagesAfterSubmission = [...session.messages];
       },
     });
 
@@ -73,7 +75,7 @@ describe("runtime-only background wake production path", () => {
         "customType" in message &&
         message.customType === "openclaw.runtime-context",
     );
-    const finalSnapshot = JSON.stringify(result.messagesSnapshot) ?? "";
+    const finalSnapshot = JSON.stringify(sessionMessagesAfterSubmission) ?? "";
     expect(submittedPrompt).toBe("Continue the OpenClaw runtime event.");
     expect(submittedPrompt).not.toContain("Hello from the replied message");
     expect(carrier).toBeDefined();
