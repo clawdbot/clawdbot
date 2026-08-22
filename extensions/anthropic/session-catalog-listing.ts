@@ -10,7 +10,7 @@ import {
   normalizeBoundedOptionalString as readBoundedString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
-import { listClaudeSessions } from "./session-catalog-discovery.js";
+import { listClaudeSessions, listClaudeSessionsWithStatus } from "./session-catalog-discovery.js";
 import { resolveClaudeCatalogHomeDir } from "./session-catalog-home.js";
 import { createNodeListFailedError, resolveNodeLabel } from "./session-catalog-node-helpers.js";
 import {
@@ -65,7 +65,8 @@ export async function listLocalClaudeSessionPage(
   const params = readListParams(value);
   const offset = decodeOffset(params.cursor, "catalog");
   const search = params.searchTerm?.toLocaleLowerCase();
-  const records = (await listClaudeSessions(resolvedHome, resolvedScanOptions)).filter((record) => {
+  const scan = await listClaudeSessionsWithStatus(resolvedHome, resolvedScanOptions);
+  const records = scan.records.filter((record) => {
     if (!search) {
       return true;
     }
@@ -80,6 +81,7 @@ export async function listLocalClaudeSessionPage(
   return {
     sessions: page,
     ...(nextOffset < records.length ? { nextCursor: encodeOffset(nextOffset) } : {}),
+    ...(scan.error ? { error: scan.error } : {}),
   };
 }
 

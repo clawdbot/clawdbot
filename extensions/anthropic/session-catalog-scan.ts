@@ -86,7 +86,40 @@ type CatalogJsonCacheEntry = {
 
 export type CatalogJsonReadBudget = {
   remainingBytes: number;
+  skippedFiles: number;
 };
+
+function markCatalogJsonSkipped(budget: CatalogJsonReadBudget | undefined): void {
+  if (budget) {
+    budget.skippedFiles += 1;
+  }
+}
+
+export async function reserveCatalogJsonFile(
+  filePath: string,
+  budget: CatalogJsonReadBudget,
+  onIoFailure?: () => void,
+): Promise<number | undefined> {
+  const stat = await fs.stat(filePath).catch(() => {
+    onIoFailure?.();
+    return undefined;
+  });
+  if (!stat?.isFile()) {
+    deleteCatalogJsonCache(filePath);
+    return undefined;
+  }
+  if (stat.size > MAX_CATALOG_JSON_FILE_BYTES) {
+    deleteCatalogJsonCache(filePath);
+    budget.skippedFiles += 1;
+    onIoFailure?.();
+    return undefined;
+  }
+  if (!reserveCatalogJsonBytes(budget, stat.size)) {
+    budget.skippedFiles += 1;
+    return undefined;
+  }
+  return stat.size;
+}
 
 type FileSignature = { mtimeMs: number; size: number; ino: number };
 type SafeSessionFile = ({ filePath: string } & FileSignature) | undefined;
@@ -129,7 +162,7 @@ const catalogJsonCache = new Map<string, CatalogJsonCacheEntry>();
 let catalogJsonCacheBytes = 0;
 
 export function createCatalogJsonReadBudget(): CatalogJsonReadBudget {
-  return { remainingBytes: MAX_CATALOG_JSON_SCAN_BYTES };
+  return { remainingBytes: MAX_CATALOG_JSON_SCAN_BYTES, skippedFiles: 0 };
 }
 
 function deleteCatalogJsonCache(filePath: string): void {
@@ -174,30 +207,6 @@ function reserveCatalogJsonBytes(
   }
   budget.remainingBytes -= bytes;
   return true;
-}
-
-export async function reserveCatalogJsonFile(
-  filePath: string,
-  budget: CatalogJsonReadBudget,
-  onIoFailure?: () => void,
-): Promise<number | undefined> {
-  const stat = await fs.stat(filePath).catch(() => {
-    onIoFailure?.();
-    return undefined;
-  });
-  if (!stat?.isFile()) {
-    deleteCatalogJsonCache(filePath);
-    return undefined;
-  }
-  if (stat.size > MAX_CATALOG_JSON_FILE_BYTES) {
-    deleteCatalogJsonCache(filePath);
-    onIoFailure?.();
-    return undefined;
-  }
-  if (!reserveCatalogJsonBytes(budget, stat.size)) {
-    return undefined;
-  }
-  return stat.size;
 }
 
 export function setBoundedCache<K, V>(
@@ -306,6 +315,7 @@ export async function readJsonFile(
   }
   if (stat.size > MAX_CATALOG_JSON_FILE_BYTES) {
     deleteCatalogJsonCache(filePath);
+    markCatalogJsonSkipped(options.budget);
     options.onIoFailure?.();
     return undefined;
   }
@@ -324,6 +334,7 @@ export async function readJsonFile(
       options.reservedBytes === undefined &&
       !reserveCatalogJsonBytes(options.budget, cached.size)
     ) {
+      markCatalogJsonSkipped(options.budget);
       return undefined;
     }
     touchCatalogJsonCache(filePath, cached);
@@ -335,6 +346,9 @@ export async function readJsonFile(
     const openedStat = await handle.stat();
     if (!openedStat.isFile() || openedStat.size > MAX_CATALOG_JSON_FILE_BYTES) {
       deleteCatalogJsonCache(filePath);
+      if (openedStat.size > MAX_CATALOG_JSON_FILE_BYTES) {
+        markCatalogJsonSkipped(options.budget);
+      }
       options.onIoFailure?.();
       return undefined;
     }
@@ -345,6 +359,7 @@ export async function readJsonFile(
       }
     } else if (!reserveCatalogJsonBytes(options.budget, openedStat.size)) {
       deleteCatalogJsonCache(filePath);
+      markCatalogJsonSkipped(options.budget);
       return undefined;
     }
     const buffer = Buffer.allocUnsafe(openedStat.size);

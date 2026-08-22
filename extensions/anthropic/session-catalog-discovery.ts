@@ -22,16 +22,14 @@ import {
   type ClaudeProjectsTreeSnapshot,
   type CatalogJsonReadBudget,
   type ClaudeSessionScanContext,
-  projectsDir,
   readClaudeCatalogMetadata,
   readJsonFile,
-  readProjectsTreeSnapshot,
   reserveCatalogJsonFile,
   safeSessionFileForScan,
   setBoundedCache,
 } from "./session-catalog-scan.js";
 import { collectTranscriptText } from "./session-catalog-transcript.js";
-import type { ClaudeSessionCatalogSession } from "./session-catalog-types.js";
+import type { ClaudeSessionCatalogError, ClaudeSessionCatalogSession } from "./session-catalog-types.js";
 
 const MAX_CATALOG_DISCOVERY_FILES = 10_000;
 const MAX_CATALOG_DISCOVERY_CACHE_ENTRIES = 20_000;
@@ -112,6 +110,11 @@ export type CatalogRecord = ClaudeSessionCatalogSession & {
   filePath: string;
 };
 
+export type ClaudeSessionScanResult = {
+  records: CatalogRecord[];
+  complete: boolean;
+  error?: ClaudeSessionCatalogError;
+};
 function isCliEntrypoint(value: unknown): value is string {
   return typeof value === "string" && CLI_ENTRYPOINTS.has(value);
 }
@@ -475,7 +478,7 @@ async function scanClaudeSessions(
   };
   const indexed = await readIndexRecords(context, budget);
   await discoverCliRecords(context, indexed.records, indexed.sidechainIds);
-  return { ...indexed, context };
+  return { ...indexed, context, budget };
 }
 
 async function mergeClaudeSessions(
@@ -566,10 +569,10 @@ async function readCliScan(
   }
 }
 
-export async function listClaudeSessions(
+async function readMergedClaudeSessions(
   homeDir = resolveClaudeCatalogHomeDir(),
   options: { forceRefresh?: boolean; configDir?: string; includeDesktop?: boolean } = {},
-): Promise<CatalogRecord[]> {
+): Promise<ClaudeSessionScanResult> {
   const budget = createCatalogJsonReadBudget();
   const snapshot = await readProjectsTreeSnapshot(projectsDir(homeDir, options.configDir), options);
   const cli = await readCliScan(snapshot, options.forceRefresh, budget);
@@ -587,5 +590,34 @@ export async function listClaudeSessions(
     merged = mergeClaudeSessions(cli, desktop);
     overlays.set(desktop, merged);
   }
-  return merged;
+  const skippedFiles = Math.max(cli.budget.skippedFiles, budget.skippedFiles);
+  const complete = cli.context.complete && skippedFiles === 0;
+  const error = complete
+    ? undefined
+    : {
+        code: "LOCAL_CATALOG_PARTIAL",
+        message:
+          skippedFiles > 0
+            ? `Some Local Claude session metadata was skipped by the 16 MiB per-file or 64 MiB aggregate safety limit (${skippedFiles} file${skippedFiles === 1 ? "" : "s"}).`
+            : "Some Local Claude session metadata could not be read.",
+      };
+  return {
+    records: merged,
+    complete,
+    ...(error ? { error } : {}),
+  };
+}
+
+export async function listClaudeSessionsWithStatus(
+  homeDir = resolveClaudeCatalogHomeDir(),
+  options: { forceRefresh?: boolean; configDir?: string; includeDesktop?: boolean } = {},
+): Promise<ClaudeSessionScanResult> {
+  return readMergedClaudeSessions(homeDir, options);
+}
+
+export async function listClaudeSessions(
+  homeDir = resolveClaudeCatalogHomeDir(),
+  options: { forceRefresh?: boolean; configDir?: string; includeDesktop?: boolean } = {},
+): Promise<CatalogRecord[]> {
+  return (await listClaudeSessionsWithStatus(homeDir, options)).records;
 }

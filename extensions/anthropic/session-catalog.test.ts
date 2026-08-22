@@ -2229,7 +2229,9 @@ describe("Claude session catalog", () => {
       return await realpath(...args);
     });
 
-    await expect(listLocalClaudeSessionPage({}, home)).resolves.toEqual({ sessions: [] });
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [],
+    });
     await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
       sessions: [expect.objectContaining({ threadId: "recovered" })],
     });
@@ -2336,7 +2338,10 @@ describe("Claude session catalog", () => {
       return await open(...args);
     });
 
-    await expect(listLocalClaudeSessionPage({}, home)).resolves.toEqual({ sessions: [] });
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [],
+      error: { code: "LOCAL_CATALOG_PARTIAL" },
+    });
     now += 15_001;
     await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
       sessions: [expect.objectContaining({ threadId: sessionId })],
@@ -2708,10 +2713,31 @@ describe("Claude session catalog", () => {
     expect((await fs.stat(desktopPath)).size).toBeGreaterThan(MAX_CATALOG_JSON_FILE_BYTES);
 
     const openSpy = vi.spyOn(fs, "open");
-    await expect(listLocalClaudeSessionPage({}, home)).resolves.toEqual({ sessions: [] });
+    const readFileSpy = vi.spyOn(fs, "readFile");
+    const page = await listLocalClaudeSessionPage({}, home);
+    expect(page.sessions).toEqual([]);
+    expect(page.error).toEqual({
+      code: "LOCAL_CATALOG_PARTIAL",
+      message: expect.stringContaining("2 files"),
+    });
     expect(openSpy.mock.calls.map(([filePath]) => filePath)).not.toEqual(
       expect.arrayContaining([indexPath, desktopPath]),
     );
+    expect(readFileSpy.mock.calls.map(([filePath]) => filePath)).not.toEqual(
+      expect.arrayContaining([indexPath, desktopPath]),
+    );
+
+    process.env.HOME = home;
+    const provider = captureCatalogProvider({
+      nodes: { list: vi.fn().mockResolvedValue({ nodes: [] }) },
+    } as unknown as PluginRuntime);
+    await expect(provider.list({ hostIds: ["gateway:local"] })).resolves.toEqual([
+      expect.objectContaining({
+        hostId: "gateway:local",
+        sessions: [],
+        error: expect.objectContaining({ code: "LOCAL_CATALOG_PARTIAL" }),
+      }),
+    ]);
   });
 
   it("bounds aggregate catalog JSON bytes and weights the parse cache", async () => {
@@ -2761,6 +2787,10 @@ describe("Claude session catalog", () => {
     }
 
     const refreshed = await listLocalClaudeSessionPage({ limit: 100 }, home);
+    expect(refreshed.error).toEqual({
+      code: "LOCAL_CATALOG_PARTIAL",
+      message: expect.stringContaining("1 file"),
+    });
     expect(refreshed.sessions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
