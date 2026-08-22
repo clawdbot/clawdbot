@@ -3,11 +3,11 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
+import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { showToast } from "../../lib/toast.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
@@ -159,9 +159,9 @@ export function renderChatPaneComposerControls(params: {
         if (!permissionAccess.allowed) {
           return;
         }
-        const runWasActive = selectedSession
-          ? isSessionRunActive(selectedSession)
-          : Boolean(state.chatRunId);
+        const runWasActive =
+          Boolean(state.chatRunId) ||
+          Boolean(selectedSession && isSessionRunActive(selectedSession));
         try {
           state.chatError = null;
           await state.sessions.patch(

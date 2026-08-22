@@ -181,14 +181,21 @@ describe("chat pane composer controls", () => {
   });
 
   it.each([
-    { label: "running", hasActiveRun: true, status: "running", toastCount: 1 },
-    { label: "idle", hasActiveRun: false, status: "done", toastCount: 0 },
+    { label: "running", chatRunId: null, hasActiveRun: true, status: "running", toastCount: 1 },
+    {
+      label: "locally running with a stale idle session row",
+      chatRunId: "run-active",
+      hasActiveRun: false,
+      status: "done",
+      toastCount: 1,
+    },
+    { label: "idle", chatRunId: null, hasActiveRun: false, status: "done", toastCount: 0 },
   ] as const)("shows the next-run notice only for a $label session", async (sessionCase) => {
     showToastMock.mockClear();
     const patch = vi.fn(async () => ({}));
     const toastAnchor = document.createElement("div");
     const state = {
-      chatRunId: null,
+      chatRunId: sessionCase.chatRunId,
       connected: true,
       client: {},
       chatLoading: false,

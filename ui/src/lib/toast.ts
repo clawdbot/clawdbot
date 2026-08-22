@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { styleMap } from "lit/directives/style-map.js";
 import { state } from "lit/decorators.js";
+import { styleMap } from "lit/directives/style-map.js";
 import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
@@ -103,7 +103,14 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     }
     this.clearDismissTimer();
     const reducedMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    if (reason !== "dismiss" && reason !== "timeout" || reducedMotion || !this.isConnected) {
+    const anchorRect = toast.anchor?.isConnected ? toast.anchor.getBoundingClientRect() : null;
+    const anchored = anchorRect !== null && anchorRect.width > 0;
+    if (
+      (reason !== "dismiss" && reason !== "timeout") ||
+      reducedMotion ||
+      !this.isConnected ||
+      !anchored
+    ) {
       this.finishDismiss(reason);
       return;
     }

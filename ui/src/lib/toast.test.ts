@@ -73,8 +73,21 @@ describe("shared toast", () => {
   it("auto-dismisses after the configured duration", async () => {
     vi.useFakeTimers();
     const host = await mountHost();
+    const anchor = document.createElement("div");
+    document.body.append(anchor);
+    vi.spyOn(anchor, "getBoundingClientRect").mockReturnValue({
+      bottom: 100,
+      height: 100,
+      left: 0,
+      right: 100,
+      toJSON: () => ({}),
+      top: 0,
+      width: 100,
+      x: 0,
+      y: 0,
+    });
 
-    showToast({ message: "Temporary", durationMs: 50 });
+    showToast({ anchor, message: "Temporary", durationMs: 50 });
     await host.updateComplete;
     await vi.advanceTimersByTimeAsync(50);
     await host.updateComplete;
@@ -120,9 +133,7 @@ describe("shared toast", () => {
     await host.updateComplete;
     host.querySelector<HTMLButtonElement>(".app-toast__dismiss")?.click();
     await host.updateComplete;
-    expect(host.querySelector('.app-toast[data-active="false"]')).not.toBeNull();
-    await vi.advanceTimersByTimeAsync(450);
-    await host.updateComplete;
+    expect(host.querySelector(".app-toast")).toBeNull();
 
     showToast({ message: "Fourth", onDismiss: (reason) => reasons.push(reason) });
     host.remove();
