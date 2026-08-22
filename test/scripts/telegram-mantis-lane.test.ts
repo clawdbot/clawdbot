@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   publishableRecorderArtifacts,
   publishStartupFailure,
+  startDesktopRecorder,
 } from "../../scripts/e2e/telegram-mantis-lane.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -77,7 +78,7 @@ async function setupHarness(
     observerPidFile: path.join(root, "observer.pid.json"),
     observerSocket,
     privateDir: path.join(sessionRoot, "attempt"),
-    recorderSession: path.join(sessionRoot, "attempt", "recorder.json"),
+    recorderSession: path.join(sessionRoot, "desktop-recorder.json"),
     repoRoot: "/prepared/candidate",
     sendCount: 0,
     startedAt: new Date().toISOString(),
@@ -177,6 +178,120 @@ async function runLane(env: NodeJS.ProcessEnv, args: string[]) {
 }
 
 describe("Telegram Mantis free-form lane", () => {
+  it("passes one run-scoped recorder session across sequential lane starts", async () => {
+    const root = tempDirs.make("telegram-mantis-recorder-reuse-");
+    const sessionRoot = path.join(root, "private");
+    const recorderCommand = path.join(root, "recorder");
+    const recorderLog = path.join(root, "recorder.log");
+    const provisionLog = path.join(root, "provision.log");
+    fs.mkdirSync(sessionRoot);
+    fs.writeFileSync(
+      recorderCommand,
+      `#!/bin/sh
+session=
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --session ]; then session=$2; break; fi
+  shift
+done
+printf '%s\\n' "$session" >> ${JSON.stringify(recorderLog)}
+if [ ! -f ${JSON.stringify(sessionRoot)}/"$session" ]; then
+  printf 'provision\\n' >> ${JSON.stringify(provisionLog)}
+  : > ${JSON.stringify(sessionRoot)}/"$session"
+fi
+`,
+      { mode: 0o755 },
+    );
+    const priorSessionRoot = process.env.OPENCLAW_MANTIS_SESSION_ROOT;
+    process.env.OPENCLAW_MANTIS_SESSION_ROOT = sessionRoot;
+    try {
+      for (const [lane, attempt] of [
+        ["baseline", "1"],
+        ["candidate", "1"],
+      ] as const) {
+        await startDesktopRecorder({
+          chat: "-100123456789",
+          outputDir: path.join(sessionRoot, "attempts", lane, attempt),
+          recorderCommand,
+          sessionPath: path.join(sessionRoot, "desktop-recorder.json"),
+          sessionRoot,
+          userDriver: "/usr/local/bin/telegram-user-driver",
+        });
+      }
+    } finally {
+      if (priorSessionRoot === undefined) {
+        delete process.env.OPENCLAW_MANTIS_SESSION_ROOT;
+      } else {
+        process.env.OPENCLAW_MANTIS_SESSION_ROOT = priorSessionRoot;
+      }
+    }
+    expect(fs.readFileSync(recorderLog, "utf8").trim().split("\n")).toEqual([
+      "desktop-recorder.json",
+      "desktop-recorder.json",
+    ]);
+    expect(fs.readFileSync(provisionLog, "utf8").trim().split("\n")).toEqual(["provision"]);
+  });
+
+  it("stops invoking the recorder after two authorization failures", async () => {
+    const root = tempDirs.make("telegram-mantis-recorder-budget-");
+    const sessionRoot = path.join(root, "private");
+    const recorderCommand = path.join(root, "recorder");
+    const recorderLog = path.join(root, "recorder.log");
+    fs.mkdirSync(sessionRoot);
+    fs.writeFileSync(
+      recorderCommand,
+      `#!/bin/sh
+printf '%s\\n' "$*" >> ${JSON.stringify(recorderLog)}
+output=
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --output-dir ]; then output=$2; break; fi
+  shift
+done
+count=$(wc -l < ${JSON.stringify(recorderLog)})
+classification=qr-unreadable
+accepted=0
+if [ "$count" -eq 2 ]; then classification=token-accepted-no-transition; accepted=2; fi
+mkdir -p ${JSON.stringify(sessionRoot)}/"$output"
+printf '{"failures":[{"acceptedTokenCount":%s,"classification":"%s","failedAt":"2026-08-22T00:00:00.000Z","loginScreenshotPath":"%s/login.png","qrAttemptCount":6}],"schemaVersion":1}\n' "$accepted" "$classification" ${JSON.stringify(sessionRoot)}/"$output" > ${JSON.stringify(sessionRoot)}/"$output"/telegram-desktop-authorization-failure.json
+exit 1
+`,
+      { mode: 0o755 },
+    );
+    const priorSessionRoot = process.env.OPENCLAW_MANTIS_SESSION_ROOT;
+    process.env.OPENCLAW_MANTIS_SESSION_ROOT = sessionRoot;
+    const start = (attempt: number) =>
+      startDesktopRecorder({
+        chat: "-100123456789",
+        outputDir: path.join(sessionRoot, "attempts", "candidate", String(attempt)),
+        recorderCommand,
+        sessionPath: path.join(sessionRoot, "desktop-recorder.json"),
+        sessionRoot,
+        userDriver: "/usr/local/bin/telegram-user-driver",
+      });
+    try {
+      await expect(start(1)).rejects.toThrow();
+      await expect(start(2)).rejects.toThrow(
+        "desktop-unavailable: stop retrying; this run's desktop is unavailable",
+      );
+      await expect(start(3)).rejects.toThrow(
+        /attemptCount=2, classification=token-accepted-no-transition.*loginScreenshotPath=.*login\.png/u,
+      );
+    } finally {
+      if (priorSessionRoot === undefined) {
+        delete process.env.OPENCLAW_MANTIS_SESSION_ROOT;
+      } else {
+        process.env.OPENCLAW_MANTIS_SESSION_ROOT = priorSessionRoot;
+      }
+    }
+    expect(fs.readFileSync(recorderLog, "utf8").trim().split("\n")).toHaveLength(2);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(sessionRoot, "desktop-recorder-failures.json"), "utf8")),
+    ).toMatchObject({
+      attemptCount: 2,
+      classification: "token-accepted-no-transition",
+      unavailable: true,
+    });
+  });
+
   it("publishes only cropped visual evidence", () => {
     expect(
       publishableRecorderArtifacts({
@@ -223,7 +338,7 @@ describe("Telegram Mantis free-form lane", () => {
         observerSocket: path.join(sessionRoot, "observer.sock"),
         privateDir: path.join(sessionRoot, "attempts", "candidate", "1"),
         recorderRequested: true,
-        recorderSession: path.join(sessionRoot, "attempts", "candidate", "1", "recorder.json"),
+        recorderSession: path.join(sessionRoot, "desktop-recorder.json"),
         repoRoot: "/prepared/candidate",
         startedAt,
       },
@@ -321,7 +436,7 @@ describe("Telegram Mantis free-form lane", () => {
         "observe",
       ]);
       expect(fs.readFileSync(harness.recorderLog, "utf8")).toContain(
-        "view --session attempt/recorder.json --message-id 101",
+        "view --session desktop-recorder.json --message-id 101",
       );
       expect(JSON.parse(fs.readFileSync(harness.recorderControlLog, "utf8"))).toMatchObject({
         hold: true,
@@ -404,7 +519,7 @@ describe("Telegram Mantis free-form lane", () => {
         results: [{ command: "click", stdout: "clicked\n" }],
       });
       expect(fs.readFileSync(harness.recorderLog, "utf8")).toContain(
-        "actions --session attempt/recorder.json --actions-file attempt/desktop-actions-2.json --timeout-seconds 90",
+        "actions --session desktop-recorder.json --actions-file attempt/desktop-actions-2.json --timeout-seconds 90",
       );
       const state = JSON.parse(
         fs.readFileSync(path.join(harness.sessionRoot, "candidate.active.json"), "utf8"),
@@ -869,7 +984,7 @@ describe("Telegram Mantis free-form lane", () => {
       observerSocket: path.join(harness.sessionRoot, "observer.sock"),
       privateDir: harness.sessionRoot,
       recorderRequested: false,
-      recorderSession: path.join(harness.sessionRoot, "recorder.json"),
+      recorderSession: path.join(harness.sessionRoot, "desktop-recorder.json"),
       repoRoot: "/prepared/candidate",
       startedAt: new Date().toISOString(),
     });
