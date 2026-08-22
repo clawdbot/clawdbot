@@ -12,9 +12,9 @@ import {
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
   readAskUserQuestionId,
-  type ReplyPayload,
 } from "../reply-payload.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
+import { createBlockReplySettlementRegistry } from "./block-reply-settlement-registry.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
 import {
@@ -83,7 +83,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
   let deliberateSilentTerminalReply = false;
   let pendingContinuation = false;
   let didDeliverVisiblePartialReply = false;
-  const blockReplySettlements = new WeakMap<ReplyPayload, () => Promise<boolean>>();
+  const blockReplySettlements = createBlockReplySettlementRegistry();
   const flushDeferredFinalText = async () => {
     if (!deferFinalTtsText || params.replyOptions?.isHeartbeat === true) {
       return false;
@@ -151,8 +151,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                   params.replyOptions?.onAssistantMessageStart,
                 ),
                 onBlockReplyQueued: wrapProgressCallback(params.replyOptions?.onBlockReplyQueued),
-                settleBlockReplyDelivery: async (payload) =>
-                  await (blockReplySettlements.get(payload)?.() ?? Promise.resolve(false)),
+                settleBlockReplyDelivery: (payload) => blockReplySettlements.settle(payload),
                 onToolStart: wrapProgressCallback(params.replyOptions?.onToolStart, {
                   allowWhenToolSummariesHidden:
                     params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
@@ -553,7 +552,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                         "block",
                       );
                       state.recordRoutedBlockReplyDelivery(normalizedPayload, result);
-                      blockReplySettlements.set(inputPayload, () =>
+                      blockReplySettlements.register(inputPayload, () =>
                         Promise.resolve(result?.delivered === true),
                       );
                       if (result?.delivered === true && !state.suppressAutomaticSourceDelivery) {
@@ -568,12 +567,11 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       if (admitted) {
                         state.progressState.hasPendingDirectBlockReplyDelivery = true;
                       }
-                      let settlement: Promise<boolean> | undefined;
-                      const settle = () =>
-                        (settlement ??= admitted
+                      const settle = blockReplySettlements.register(inputPayload, () =>
+                        admitted
                           ? wasReplyDeliveredAsBlock(normalizedPayload, context?.abortSignal)
-                          : Promise.resolve(false));
-                      blockReplySettlements.set(inputPayload, settle);
+                          : Promise.resolve(false),
+                      );
                       if (
                         admitted &&
                         !state.suppressAutomaticSourceDelivery &&
