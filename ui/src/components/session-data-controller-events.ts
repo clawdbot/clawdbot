@@ -46,14 +46,17 @@ export function publishSidebarSessionList(
   const visibleKeys = new Set(
     retainedResults.flatMap((result) => result.sessions.map((row) => row.key).filter(Boolean)),
   );
-  for (const key of owner.sessionCreatedOrder.keys()) {
+  let nextCreatedOrder = 0;
+  for (const [key, order] of owner.sessionCreatedOrder) {
     if (!visibleKeys.has(key)) {
       owner.sessionCreatedOrder.delete(key);
+    } else {
+      nextCreatedOrder = Math.max(nextCreatedOrder, order + 1);
     }
   }
   for (const row of sessions) {
     if (row.key && !owner.sessionCreatedOrder.has(row.key)) {
-      owner.sessionCreatedOrder.set(row.key, owner.sessionCreatedOrder.size);
+      owner.sessionCreatedOrder.set(row.key, nextCreatedOrder++);
     }
   }
 }

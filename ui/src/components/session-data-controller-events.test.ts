@@ -1,15 +1,16 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { SessionsListResult } from "../api/types.ts";
+import { compareSidebarSessionRowsByMode } from "./app-sidebar-session-navigation-logic.ts";
 import { publishSidebarSessionList } from "./session-data-controller-events.ts";
 
 describe("publishSidebarSessionList", () => {
   const createOwner = () => ({
     context: undefined,
     sessionCreatedOrder: new Map<string, number>(),
-    sessionResultsByAgent: {},
-    sessionsResult: null,
-    sessionsAgentId: null,
+    sessionResultsByAgent: {} as Record<string, SessionsListResult>,
+    sessionsResult: null as SessionsListResult | null,
+    sessionsAgentId: null as string | null,
     sessionsLoading: false,
     sessionMutationError: null,
     expandedAgentId: () => "main",
@@ -34,6 +35,25 @@ describe("publishSidebarSessionList", () => {
     publish(owner, "main", ["second", "third"]);
 
     expect([...owner.sessionCreatedOrder.keys()]).toEqual(["second", "third"]);
+  });
+
+  it("keeps observed order after pruning and adding a session", () => {
+    const owner = createOwner();
+
+    publish(owner, "main", ["removed", "z-retained"]);
+    publish(owner, "main", ["z-retained"]);
+    publish(owner, "main", ["z-retained", "a-added"]);
+
+    const ordered = owner.sessionResultsByAgent.main?.sessions.toSorted((a, b) =>
+      compareSidebarSessionRowsByMode({
+        a,
+        b,
+        sortMode: "created",
+        owners: undefined,
+        createdOrder: owner.sessionCreatedOrder,
+      }),
+    );
+    expect(ordered?.map((row) => row.key)).toEqual(["z-retained", "a-added"]);
   });
 
   it("keeps creation order for every retained agent result", () => {
