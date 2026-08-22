@@ -796,16 +796,13 @@ describe("web outbound", () => {
       "default",
       "1555@s.whatsapp.net",
       "poll123",
-      cfgWithHookEnabled,
     );
   });
 
-  it("does not persist poll ownership/key state when the hook is disabled (default)", async () => {
+  it("does not record poll ownership when the hook is disabled (default)", async () => {
     // WHATSAPP_TEST_CFG has no pluginHooks.pollVoteReceived set — the
-    // default-off case. Sending a poll must still succeed, but nothing
-    // decryptable should be written to durable state: the opt-in being off
-    // must mean no durable poll-key material exists at all, not just that
-    // dispatch is suppressed later.
+    // default-off case. Sending a poll must still succeed without recording
+    // process-local ownership for the opt-in hook.
     const result = await sendPollWhatsApp(
       "+1555",
       { question: "Lunch?", options: ["Pizza", "Sushi"] },
@@ -816,32 +813,6 @@ describe("web outbound", () => {
       toJid: "1555@s.whatsapp.net",
     });
     expect(hoisted.rememberWhatsAppOwnPollCreation).not.toHaveBeenCalled();
-  });
-
-  it("keeps an accepted poll send successful even when hook-state persistence throws", async () => {
-    // Regression: Baileys has already accepted the poll by the time
-    // rememberWhatsAppOwnPollCreation runs. If that (or the key-persistence
-    // call) throws — e.g. a plugin-state I/O failure — it must not fail the
-    // send: the caller would see an error for a poll that's actually live,
-    // and a naive retry could create a duplicate poll.
-    const cfgWithHookEnabled: OpenClawConfig = {
-      channels: { whatsapp: { pluginHooks: { pollVoteReceived: true } } },
-    };
-    hoisted.rememberWhatsAppOwnPollCreation.mockImplementationOnce(() => {
-      throw new Error("simulated plugin-state write failure");
-    });
-
-    const result = await sendPollWhatsApp(
-      "+1555",
-      { question: "Lunch?", options: ["Pizza", "Sushi"] },
-      { verbose: false, cfg: cfgWithHookEnabled },
-    );
-
-    expect(result).toEqual({
-      messageId: "poll123",
-      toJid: "1555@s.whatsapp.net",
-    });
-    expect(hoisted.rememberWhatsAppOwnPollCreation).toHaveBeenCalledTimes(1);
   });
 
   it("rejects polls without an accepted provider message key", async () => {

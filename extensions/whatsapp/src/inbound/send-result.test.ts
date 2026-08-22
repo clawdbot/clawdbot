@@ -86,6 +86,20 @@ describe("WhatsApp send receipts", () => {
     });
   });
 
+  it("does not expose a poll creation payload from an accepted send", () => {
+    const result = normalizeWhatsAppSendResult(
+      {
+        key: { id: "poll-1", remoteJid: "123@g.us", fromMe: true },
+        message: {
+          messageContextInfo: { messageSecret: Buffer.from("poll-secret") },
+        },
+      } as unknown as WAMessage,
+      "poll",
+    );
+
+    expect(result).not.toHaveProperty("pollCreationMessage");
+  });
+
   it("enriches matching partial-delivery ids that do not yet carry their canonical receipt", () => {
     const accepted = normalizeWhatsAppSendResult(
       { key: { id: "receipt-enrichment", remoteJid: "123@s.whatsapp.net" } } as WAMessage,

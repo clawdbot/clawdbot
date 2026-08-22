@@ -289,51 +289,19 @@ accepted-send time, so replaying or delaying delivery of the corresponding
 inbound echo has no effect on stored state — there's nothing left for a
 delayed echo to do.
 
-**Retention.** Decoding a vote requires the poll's decryption key, captured
-directly from the accepted send's own result (no need to wait for or rely on
-any later inbound echo). That key (and the ownership record above) is kept
-in the runtime's canonical plugin-state store, namespaced under the
-`whatsapp` plugin id — not a bespoke database — so it survives a gateway
-restart, not just an in-memory cache, but **only when the hook is enabled**:
-with `pluginHooks.pollVoteReceived` off (the default), nothing is persisted
-for outbound polls at all. Each record's expiry is anchored to when it was
-first written and does not move. Expired records stop being readable
-immediately, and are physically removed from disk the next time the
-framework's plugin-state maintenance task runs (periodic, not synchronous
-with expiry) — so a small window can exist where expired key material is
-unreadable but not yet erased from the underlying database file. A vote
-arriving after the retention window is not decodable and the hook does not
-fire for it. That outcome is **logged**, not silent: alongside each poll's
-decoding state OpenClaw writes a small tombstone that outlives it by one
-hour and holds no decryption material — only the fact that this account
-created that poll id. When a late vote matches a tombstone, OpenClaw logs a
-warning naming the poll and the configured retention, so the lost vote is
-diagnosable and the fix (raising `pollVoteRetentionMs`) is actionable. A
-vote on a poll OpenClaw never created stays silent by design — reporting it
-would leak that a third party's poll is being observed. `pollVoteRetentionMs` accepts any positive value up to a hard
-maximum of `86400000` (24 hours); larger configured values are rejected by
-config validation. Configure the window channel-wide or per account:
-
-```json5
-{
-  channels: {
-    whatsapp: {
-      pollVoteRetentionMs: 1800000, // 30 minutes
-      accounts: {
-        support: {
-          pollVoteRetentionMs: 3600000, // override: 1 hour for this account
-        },
-      },
-    },
-  },
-}
-```
+**Retention.** The poll creation message and its decryption key stay only in
+Baileys' bounded, process-local message cache; OpenClaw never writes them to
+plugin state. Consequently, a Gateway restart drops the material required to
+decode later poll votes. The hook resumes normally once the poll creation
+message is observed again in the new process. A vote on a poll OpenClaw never
+created, or one whose creation message is no longer in memory, stays silent to
+avoid exposing third-party vote data.
 
 **Known limitation: a vote cast while the gateway is offline is not
-recovered when it comes back.** The durable retention above solves the half
-of this that's under OpenClaw's control — the decryption key and ownership
-record survive a restart. The other half is not: WhatsApp does not appear to
-redeliver a poll vote that arrived while this account's session was
+recovered when it comes back.** A Gateway restart also drops the in-memory
+poll decryption material, so votes for polls created before that restart are
+not decoded unless WhatsApp redelivers the creation message. WhatsApp does not
+appear to redeliver a poll vote that arrived while this account's session was
 disconnected, at least not for a companion/linked device, and at least not
 within several minutes of reconnecting. Two approaches were tried and
 verified live against a real account:

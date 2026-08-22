@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   maybeEmitWhatsAppPollVoteReceivedHook,
   rememberWhatsAppOwnPollCreation,
-  rememberWhatsAppPollCreationMessage,
 } from "./inbound/poll-votes.js";
 import {
   buildPollCreationMessageForTests,
@@ -106,15 +105,7 @@ describe("web monitor inbox poll vote hook", () => {
       // echo alone must NOT be sufficient to establish ownership (a fromMe
       // poll-creation message can also come from another linked device).
       // Simulate what sendPollWhatsApp would have done at accepted-send time.
-      const cfg = mockLoadConfig() as never;
-      rememberWhatsAppOwnPollCreation(DEFAULT_ACCOUNT_ID, CHAT_JID, pollMessageId, cfg);
-      rememberWhatsAppPollCreationMessage(
-        DEFAULT_ACCOUNT_ID,
-        CHAT_JID,
-        pollMessageId,
-        pollCreationMessage,
-        cfg,
-      );
+      rememberWhatsAppOwnPollCreation(DEFAULT_ACCOUNT_ID, CHAT_JID, pollMessageId);
     }
 
     const vote = encryptPollVoteForTests({
@@ -353,15 +344,7 @@ describe("web monitor inbox poll vote hook", () => {
 
     // Simulate ownership recorded from an accepted send (the only producer
     // since round 3), so the hook actually reaches the point that throws.
-    const cfg = mockLoadConfig() as never;
-    rememberWhatsAppOwnPollCreation(DEFAULT_ACCOUNT_ID, CHAT_JID, pollMessageId, cfg);
-    rememberWhatsAppPollCreationMessage(
-      DEFAULT_ACCOUNT_ID,
-      CHAT_JID,
-      pollMessageId,
-      pollCreationMessage,
-      cfg,
-    );
+    rememberWhatsAppOwnPollCreation(DEFAULT_ACCOUNT_ID, CHAT_JID, pollMessageId);
 
     const vote = encryptPollVoteForTests({
       selectedOptionNames: ["Sushi"],
@@ -553,7 +536,7 @@ describe("web monitor inbox poll vote hook", () => {
         },
       } as never;
       // Only account A observed (and recorded) this poll as its own.
-      rememberWhatsAppOwnPollCreation(ACCOUNT_A, CHAT_JID, pollMessageId, cfg);
+      rememberWhatsAppOwnPollCreation(ACCOUNT_A, CHAT_JID, pollMessageId);
 
       // Account B, opted in, observes a vote on the same chat/poll id — must
       // not fire, since B never recorded this poll as its own.
