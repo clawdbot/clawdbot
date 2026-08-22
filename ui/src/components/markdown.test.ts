@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { handleMarkdownCodeBlockClick } from "./markdown-code-blocks.ts";
+import { splitStableStreamingMarkdown } from "./markdown-streaming.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "./markdown.ts";
 
 function htmlFragment(html: string): HTMLElement {
@@ -856,6 +857,147 @@ PY
 });
 
 describe("toStreamingMarkdownHtml", () => {
+  it("keeps appended-prefix splitting below repeated full-rescan cost", () => {
+    const splitIncrementally = splitStableStreamingMarkdown as (
+      markdown: string,
+      streamKey: string,
+    ) => ReturnType<typeof splitStableStreamingMarkdown>;
+    const prefixes: string[] = [];
+    let prefix = "<details><summary>Done</summary></details>\n\n";
+    for (let index = 0; index < 96; index += 1) {
+      prefix += `${String(index).padStart(3, "0")} ${"streaming markdown ".repeat(50)}\n`;
+      prefixes.push(prefix);
+    }
+    const measure = (streamKey?: string) => {
+      const startedAt = performance.now();
+      for (const value of prefixes) {
+        if (streamKey) {
+          splitIncrementally(value, streamKey);
+        } else {
+          splitStableStreamingMarkdown(value);
+        }
+      }
+      return performance.now() - startedAt;
+    };
+    measure("line-scan-warmup");
+    const fullRescanMs = measure();
+    const incrementalMs = measure("line-scan-regression");
+
+    expect(incrementalMs).toBeLessThan(fullRescanMs / 5);
+  }, 5_000);
+
+  it("keeps chunked-prefix splits identical to full splits", () => {
+    const splitIncrementally = splitStableStreamingMarkdown as (
+      markdown: string,
+      streamKey: string,
+    ) => ReturnType<typeof splitStableStreamingMarkdown>;
+    const cases = [
+      [
+        "## Result",
+        "",
+        "A paragraph with `inline code`.",
+        "",
+        "<details>",
+        "<summary>Logs</summary>",
+        "",
+        "```ts",
+        "const value = 1;",
+        "```",
+        "",
+        "More **text**",
+        "",
+        "</details>",
+      ].join("\n"),
+      "- one\n\n  - nested\n\n[Docs][ref\\]]\n\n[ref\\]]: /docs",
+      "`` multiline\n<details> remains code\n``\n\n<details>\n<summary>Real</summary>",
+      "- item\n\n    <details>\n    <summary>Logs</summary>\n\n    still inside",
+      "1. item\n\n    <details>\n    <summary>Logs</summary>\n\n    still inside",
+    ];
+    for (const [caseIndex, markdown] of cases.entries()) {
+      for (const chunkSize of [1, 7, 64]) {
+        for (let end = chunkSize; end <= markdown.length + chunkSize; end += chunkSize) {
+          const prefix = markdown.slice(0, Math.min(end, markdown.length));
+          const key = `${caseIndex}-${chunkSize}`;
+          expect(splitIncrementally(prefix, `split-parity-${key}`)).toEqual(
+            splitStableStreamingMarkdown(prefix),
+          );
+          expect(toStreamingMarkdownHtml(prefix, {}, `html-parity-${key}`)).toBe(
+            toStreamingMarkdownHtml(prefix),
+          );
+          if (end >= markdown.length) {
+            break;
+          }
+        }
+      }
+    }
+  });
+
+  it("resets replaced streams and keeps interleaved streams independent", () => {
+    const splitIncrementally = splitStableStreamingMarkdown as (
+      markdown: string,
+      streamKey: string,
+    ) => ReturnType<typeof splitStableStreamingMarkdown>;
+    const streams = new Map([
+      ["a", "First stream\n\n```ts\nconst a = 1;"],
+      ["b", "Second stream\n\n<details>\n<summary>B</summary>"],
+    ]);
+    for (const end of [8, 16, 32, 64]) {
+      for (const [key, markdown] of streams) {
+        const prefix = markdown.slice(0, end);
+        expect(splitIncrementally(prefix, `interleaved-${key}`)).toEqual(
+          splitStableStreamingMarkdown(prefix),
+        );
+      }
+    }
+    for (const replacement of [
+      "short",
+      "Replacement\n\n- starts a different list",
+      "A much longer replacement\n\n```ts\nconst changed = true;",
+    ]) {
+      expect(splitIncrementally(replacement, "interleaved-a")).toEqual(
+        splitStableStreamingMarkdown(replacement),
+      );
+    }
+  });
+
+  it("resets an incremental cursor when a completed citation marker rewrites its prefix", () => {
+    const partial = "Intro\n\ncitevery-long-partial-citation-marker";
+    const completed = `${partial}\n\n\`\`\`ts\nconst answer = 42;`;
+
+    toStreamingMarkdownHtml(partial, {}, "citation-prefix-replacement");
+
+    expect(toStreamingMarkdownHtml(completed, {}, "citation-prefix-replacement")).toBe(
+      toStreamingMarkdownHtml(completed),
+    );
+  });
+
+  it.each(["- item", "1. item"])(
+    "keeps details inside a loose %s list continuation while streaming",
+    (item) => {
+      const markdown = `${item}\n\n    <details>\n    <summary>Logs</summary>\n\n    still inside`;
+      const fragment = htmlFragment(toStreamingMarkdownHtml(markdown, {}, `loose-list:${item}`));
+      const details = fragment.querySelector("li details");
+
+      expect(details?.querySelector("summary")?.textContent).toBe("Logs");
+      expect(details?.textContent).toContain("still inside");
+    },
+  );
+
+  it("preserves incremental parity when streamed text grows beyond the truncation cap", () => {
+    const text = Array.from(
+      { length: 210 },
+      (_, index) => `${String(index).padStart(3, "0")} ${"streamed markdown ".repeat(55)}\n`,
+    ).join("");
+
+    for (const end of [139_500, 140_050, 141_000, text.length]) {
+      const prefix = text.slice(0, end);
+
+      expect(toStreamingMarkdownHtml(prefix, {}, "truncated-stream-parity")).toBe(
+        toStreamingMarkdownHtml(prefix),
+      );
+    }
+  });
+
   it("marks a completed transcript-role header in the streaming tail", () => {
     const html = toStreamingMarkdownHtml("user[Thu 2026-07-02] question", {
       assistantTranscriptRoleHeaders: true,
@@ -958,13 +1100,39 @@ describe("toStreamingMarkdownHtml", () => {
     expect(html).toBe("<p>prices are $$50 and</p>\n");
   });
 
-  it("streams an open code fence as a live-highlighted code block", () => {
+  it("streams an open code fence without syntax highlighting", () => {
     const html = toStreamingMarkdownHtml("Intro\n\n```ts\nconst x = 1 < 2");
     const fragment = htmlFragment(html);
+    const code = fragment.querySelector("code.language-ts");
 
     expect(fragment.querySelector("p")?.textContent).toBe("Intro");
-    expect(fragment.querySelector("code.language-ts")?.textContent).toContain("const x = 1 < 2");
+    expect(code?.textContent).toContain("const x = 1 < 2");
+    expect(code?.classList.contains("hljs")).toBe(false);
+    expect(code?.querySelector("span")).toBeNull();
     expect(html).not.toContain("markdown-plain-text-fallback");
+  });
+
+  it("highlights only completed fences inside an open details block", () => {
+    const html = toStreamingMarkdownHtml(
+      "<details>\n<summary>Logs</summary>\n\n```ts\nconst closed = 1;\n```\n\n```ts\nconst open = 2;",
+    );
+    const code = htmlFragment(html).querySelectorAll("details code.language-ts");
+
+    expect(code).toHaveLength(2);
+    expect(code[0]?.classList.contains("hljs")).toBe(true);
+    expect(code[0]?.querySelector("span")).not.toBeNull();
+    expect(code[1]?.classList.contains("hljs")).toBe(false);
+    expect(code[1]?.querySelector("span")).toBeNull();
+  });
+
+  it("keeps a completed fence highlighted when a later backtick fence has invalid info", () => {
+    const html = toStreamingMarkdownHtml(
+      "- ```ts\n  const closed = 1;\n  ```\n\n  ```bad`info\n  trailing text",
+    );
+    const code = htmlFragment(html).querySelector("code.language-ts");
+
+    expect(code?.textContent).toContain("const closed = 1;");
+    expect(code?.classList.contains("hljs")).toBe(true);
   });
 
   it("streams an open list code fence through blank lines", () => {
@@ -974,6 +1142,7 @@ describe("toStreamingMarkdownHtml", () => {
 
     expect(code?.textContent).toContain("const x = 1;");
     expect(code?.textContent).toContain("const y = 2;");
+    expect(code?.classList.contains("hljs")).toBe(false);
     expect(html).not.toContain("markdown-plain-text-fallback");
   });
 
@@ -995,14 +1164,17 @@ describe("toStreamingMarkdownHtml", () => {
 
     expect(code?.textContent).toContain("const x = 1;");
     expect(code?.textContent).toContain("const y = 2;");
+    expect(code?.classList.contains("hljs")).toBe(false);
     expect(html).not.toContain("markdown-plain-text-fallback");
   });
 
   it("renders a completed code fence once the closing fence arrives", () => {
-    const html = toStreamingMarkdownHtml("```ts\nconst x = 1;\n```");
+    const markdown = "```ts\nconst x = 1;\n```";
+    const html = toStreamingMarkdownHtml(markdown);
 
     expect(html).toContain('<code class="hljs language-ts"');
     expect(html).toContain("const x = 1;");
     expect(html).not.toContain("markdown-plain-text-fallback");
+    expect(html).toBe(toSanitizedMarkdownHtml(markdown));
   });
 });

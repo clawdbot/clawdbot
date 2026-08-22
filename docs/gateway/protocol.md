@@ -1043,7 +1043,11 @@ context.
     `security.installPolicy` for operator-owned install decisions.
 - `skills.update` (`operator.admin`) has two modes:
   - ClawHub mode updates one tracked slug or all tracked ClawHub installs in
-    the default agent workspace.
+    the default agent workspace. Updates that would replace a skill directory
+    whose installed files no longer match the recorded install digests are
+    refused; the per-skill failure in `details.results` carries
+    `code: "force_required"`. Retry with the optional `force: true` parameter
+    to replace such a skill anyway.
   - Config mode patches `skills.entries.<skillKey>` values such as `enabled`,
     `apiKey`, and `env`.
 
