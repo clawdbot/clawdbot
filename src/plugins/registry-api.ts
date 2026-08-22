@@ -149,7 +149,7 @@ export function createPluginApiFactory(
     setPluginRuntimeRecord(record);
     const sideEffectGuard = createPluginSideEffectGuard(record.id);
     const isLoadedRecordInRegistry = () =>
-      registry.plugins.some((plugin) => plugin.id === record.id && plugin.status === "loaded");
+      registry.plugins.some((plugin) => plugin === record && plugin.status === "loaded");
     const isLoadedRecordInLiveRegistry = () =>
       sideEffectGuard.active &&
       isPluginRegistryActivated(registry) &&
@@ -165,6 +165,11 @@ export function createPluginApiFactory(
       !isPluginRegistryRetired(registry) &&
       (isActivatingLoadedRecord() ||
         (isPluginRegistryActivated(registry) && isLoadedRecordInRegistry()));
+    const assertLoadedRecordInLiveRegistry = () => {
+      if (!isLoadedRecordInLiveRegistry()) {
+        throw new Error(`plugin session state API is no longer active: ${record.id}`);
+      }
+    };
     const resolveCurrentConfig = () => registryParams.runtime.config?.current?.() ?? params.config;
     return buildPluginApi({
       id: record.id,
@@ -249,6 +254,7 @@ export function createPluginApiFactory(
               },
               registerSessionExtension: (extension) => registerSessionExtension(record, extension),
               getSessionExtension: ({ sessionKey, namespace }) => {
+                assertLoadedRecordInLiveRegistry();
                 const pluginState = getPluginSessionExtensionStateSync({
                   // SAFETY: DeepReadonly preserves the OpenClawConfig structure required by the read-only session resolver.
                   cfg: resolveCurrentConfig() as OpenClawConfig,
@@ -258,6 +264,7 @@ export function createPluginApiFactory(
                 return pluginState?.[namespace];
               },
               setSessionExtension: async ({ sessionKey, namespace, value }) => {
+                assertLoadedRecordInLiveRegistry();
                 const result = await patchPluginSessionExtension({
                   // SAFETY: The session patcher reads config routing fields and does not mutate the runtime config object.
                   cfg: resolveCurrentConfig() as OpenClawConfig,
@@ -265,13 +272,19 @@ export function createPluginApiFactory(
                   sessionKey,
                   namespace,
                   value,
+                  assertCurrent: assertLoadedRecordInLiveRegistry,
                 });
                 if (!result.ok || result.value === undefined) {
                   throw new Error(result.ok ? "session extension write failed" : result.error);
                 }
+                registryParams.hostServices?.sessionChanged?.({
+                  sessionKey: result.key,
+                  reason: "plugin-patch",
+                });
                 return result.value;
               },
               clearSessionExtension: async ({ sessionKey, namespace }) => {
+                assertLoadedRecordInLiveRegistry();
                 const result = await patchPluginSessionExtension({
                   // SAFETY: The session patcher reads config routing fields and does not mutate the runtime config object.
                   cfg: resolveCurrentConfig() as OpenClawConfig,
@@ -279,10 +292,15 @@ export function createPluginApiFactory(
                   sessionKey,
                   namespace,
                   unset: true,
+                  assertCurrent: assertLoadedRecordInLiveRegistry,
                 });
                 if (!result.ok) {
                   throw new Error(result.error);
                 }
+                registryParams.hostServices?.sessionChanged?.({
+                  sessionKey: result.key,
+                  reason: "plugin-patch",
+                });
               },
               enqueueNextTurnInjection: (injection) => {
                 if (params.hookPolicy?.allowPromptInjection === false) {
