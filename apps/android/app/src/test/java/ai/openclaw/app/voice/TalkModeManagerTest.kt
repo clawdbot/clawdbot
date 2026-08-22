@@ -987,7 +987,6 @@ class TalkModeManagerTest {
         "talk.event",
         """{"relaySessionId":"playback-relay","type":"clear","talkEvent":{"turnId":"realtime-turn"}}""",
       )
-      assertEquals(AudioTrack.STATE_UNINITIALIZED, track.state)
     } else {
       // The stock shadow accounts written frames immediately. Advance both
       // Android's playback clock and the coroutine idle poll beyond the PCM.
@@ -997,6 +996,10 @@ class TalkModeManagerTest {
       proof.scheduler.advanceTimeBy(20)
     }
     proof.scheduler.runCurrent()
+    // Clear is queued to the playout owner rather than retiring the device on the Gateway
+    // receive path, so the sink is released once the owner drains that command -- not on the
+    // return from handleGatewayEvent. The release itself is still required.
+    if (clear) assertEquals(AudioTrack.STATE_UNINITIALIZED, track.state)
   }
 
   private fun startRealtimeAudio(proof: RealtimePlaybackProof): AudioTrack {
