@@ -27,7 +27,6 @@ import {
   canDeleteSessionRows,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
-import { isActiveTask } from "../../lib/tasks/data.ts";
 import { renderBoardViewSwitch } from "./board-session-surface.ts";
 import { displayedChatSessionBranches } from "./chat-history.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
@@ -355,7 +354,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         ),
         icon: icons.listChecks,
         active: !backgroundTasks.collapsed,
-        badge: backgroundTasks.tasks?.filter(isActiveTask).length ?? 0,
+        badge: backgroundTasks.activeCount,
         onActivate: backgroundTasks.onToggleCollapsed,
       });
     }
