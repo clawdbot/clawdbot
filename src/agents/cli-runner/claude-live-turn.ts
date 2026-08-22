@@ -26,6 +26,7 @@ import {
   createCliJsonlStreamingParser,
   frameBoundedCliJsonlChunk,
   normalizeClaudeCliStreamJsonRecord,
+  streamJsonOutputLimitErrorText,
 } from "../cli-output-stream.js";
 import { parseCliOutput } from "../cli-output.js";
 import type { FailoverError } from "../failover-error.js";
@@ -362,10 +363,11 @@ function applyBackgroundTasksChanged(
 
 function pushTurnLine(host: ClaudeLiveTurnHost, turn: ClaudeLiveTurn, line: string): boolean {
   turn.streamingParser.push(`${line}\n`);
-  if (!turn.streamingParser.getErrorText()) {
+  const errorText = turn.streamingParser.getErrorText();
+  if (!errorText) {
     return true;
   }
-  host.close("abort", createClaudeOutputLimitError(host, "Claude CLI turn output exceeded limit."));
+  host.close("abort", createClaudeOutputLimitError(host, errorText));
   return false;
 }
 
@@ -494,7 +496,10 @@ export function acceptClaudeStdout(host: ClaudeLiveTurnHost, chunk: string): voi
     ) {
       host.close(
         "abort",
-        createClaudeOutputLimitError(host, "Claude CLI JSONL line exceeded output limit."),
+        createClaudeOutputLimitError(
+          host,
+          streamJsonOutputLimitErrorText("line", maxPendingLineChars),
+        ),
       );
     }
   } catch (error) {

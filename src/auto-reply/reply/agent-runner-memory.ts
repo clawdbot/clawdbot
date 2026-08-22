@@ -1471,6 +1471,8 @@ export async function runMemoryFlushIfNeeded(params: {
           sandboxSessionKey: params.runtimePolicySessionKey,
           allowGatewaySubagentBinding: true,
           silentExpected: true,
+          allowEmptyAssistantReplyAsSilent: true,
+          terminalReplyExpectation: "optional",
           trigger: "memory",
           memoryFlushWritePath,
           initialTurnTainted:

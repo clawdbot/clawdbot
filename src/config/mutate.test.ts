@@ -514,6 +514,30 @@ describe("config mutate helpers", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "diagnoses config lock failures through a symlinked config directory",
+    async () => {
+      const root = await suiteRootTracker.make("lock-permission-symlink");
+      const realConfigDir = path.join(root, "real");
+      const configuredDir = path.join(root, "configured");
+      await fs.mkdir(realConfigDir);
+      await fs.symlink(realConfigDir, configuredDir);
+      const configPath = path.join(configuredDir, "openclaw.json");
+      const lockPath = path.join(realConfigDir, "openclaw.json.lock");
+      const failure = Object.assign(new Error(`EACCES: permission denied, open '${lockPath}'`), {
+        code: "EACCES",
+        path: lockPath,
+      });
+      fileLockMocks.withFileLock.mockRejectedValueOnce(failure);
+      const snapshot = createSnapshot({ hash: "hash-1", path: configPath, sourceConfig: {} });
+
+      await expect(replaceConfigFile({ snapshot, nextConfig: {} })).rejects.toMatchObject({
+        message: `OpenClaw cannot write to the config directory ${configuredDir}. Fix its ownership or permissions, then try again. Underlying error: ${failure.message}`,
+        cause: failure,
+      });
+    },
+  );
+
   it("preserves a permission failure raised outside the config directory", async () => {
     const configDir = await suiteRootTracker.make("lock-unrelated-permission");
     const configPath = path.join(configDir, "openclaw.json");

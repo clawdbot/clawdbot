@@ -895,7 +895,7 @@ describe("Claude live turn output bounds and result projection", () => {
     });
 
     await expect(startLiveTurn("run-live-oversized-line", false)).rejects.toThrow(
-      "Claude CLI JSONL line exceeded output limit.",
+      "CLI JSONL line exceeded 8388608 characters; refusing to parse output.",
     );
   });
 
@@ -903,14 +903,17 @@ describe("Claude live turn output bounds and result projection", () => {
     {
       name: "a coalesced blank-frame flood",
       createChunk: () => "\n".repeat(20_001),
+      expectedError: "CLI JSONL output exceeded 20000 lines; refusing to parse output.",
     },
     {
       name: "whitespace-only records exceeding the raw budget",
       createChunk: () => `${" ".repeat(4_300_000)}\n${" ".repeat(4_300_000)}\n`,
+      expectedError: "CLI JSONL output exceeded 8388608 characters; refusing to parse output.",
     },
     {
       name: "valid JSON padded beyond the raw budget",
       createChunk: () => `${" ".repeat(4_300_000)}{}\n${" ".repeat(4_300_000)}{}\n`,
+      expectedError: "CLI JSONL output exceeded 8388608 characters; refusing to parse output.",
     },
     {
       name: "internal formatting around compacted Claude media",
@@ -934,14 +937,32 @@ describe("Claude live turn output bounds and result projection", () => {
         }).replace('"message":', `"message":${" ".repeat(4_300_000)}`);
         return `${line}\n${line}\n`;
       },
+      expectedError: "CLI JSONL output exceeded 8388608 characters; refusing to parse output.",
     },
-  ])("rejects $name from the managed Claude live session", async ({ createChunk }) => {
+  ])("reports the exact limit for $name", async ({ createChunk, expectedError }) => {
     const live: ReturnType<typeof mockClaudeLiveRun> = mockClaudeLiveRun(supervisorSpawnMock, {
       onWrite: () => live.spawnInput.onStdout?.(createChunk()),
     });
 
-    await expect(startLiveTurn("run-live-output-budget", false)).rejects.toThrow(
-      "Claude CLI turn output exceeded limit.",
+    await expect(startLiveTurn("run-live-output-budget", false)).rejects.toThrow(expectedError);
+  });
+
+  it("reports backend JSONL parser failures without relabeling them as output limits", async () => {
+    mockClaudeLiveRun(supervisorSpawnMock, {
+      events: [{ type: "system", subtype: "init", session_id: "live-parser-error" }],
+    });
+
+    await expectRejectsWithFields(
+      startLiveTurn("run-live-parser-error", false, {
+        parseJsonlEvent: () => {
+          throw new Error("invalid custom event");
+        },
+      }),
+      {
+        name: "FailoverError",
+        reason: "format",
+        message: "CLI backend claude-cli JSONL parser failed: invalid custom event",
+      },
     );
   });
 
