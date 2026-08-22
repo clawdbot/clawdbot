@@ -57,7 +57,7 @@ export function renderIdentitySection(props: IdentitySectionProps) {
                 .user=${avatarViewer(props.profile, props.avatarUrl)}
                 variant="profile"
               ></openclaw-viewer-avatar>
-              <label class="btn btn--sm">
+              <label class="btn btn--sm" aria-disabled=${props.busy !== null}>
                 ${props.busy === "avatar"
                   ? t("profilePage.identity.processingAvatar")
                   : t("profilePage.identity.chooseAvatar")}

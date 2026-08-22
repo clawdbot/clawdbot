@@ -639,6 +639,12 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("users.setAvatar")).length)
           .toBe(requestCountBefore + 1);
+        const chooser = page.locator(".identity-avatar-control > label");
+        await screenshot(page, "11-avatar-action-disabled.png");
+        await expect(chooser).toHaveAttribute("aria-disabled", "true");
+        await expect
+          .poll(() => chooser.evaluate((element) => getComputedStyle(element).opacity))
+          .toBe("0.5");
         await gateway.emitGatewayEvent("presence", {
           presence: [
             {
