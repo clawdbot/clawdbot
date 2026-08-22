@@ -98,7 +98,6 @@ function createMockModelRegistry() {
   })();
 }
 
-let previousExitCode: typeof process.exitCode;
 let previousOpenAiApiKey: string | undefined;
 
 vi.mock("./models/load-config.js", () => ({
@@ -233,26 +232,6 @@ function runtimeLogText(runtime: ReturnType<typeof makeRuntime>): string {
   return value;
 }
 
-function runtimeErrorText(runtime: ReturnType<typeof makeRuntime>): string {
-  const value = firstMockArg(runtime.error, "runtime.error");
-  if (typeof value !== "string") {
-    throw new Error("Expected runtime.error text");
-  }
-  return value;
-}
-
-function expectModelRegistryUnavailable(
-  runtime: ReturnType<typeof makeRuntime>,
-  expectedDetail: string,
-) {
-  expect(runtime.error).toHaveBeenCalledTimes(1);
-  const errorText = runtimeErrorText(runtime);
-  expect(errorText).toContain("Model registry unavailable:");
-  expect(errorText).toContain(expectedDetail);
-  expect(runtime.log).not.toHaveBeenCalled();
-  expect(process.exitCode).toBe(1);
-}
-
 async function loadSourceConfigSnapshotForTest(fallback: unknown): Promise<unknown> {
   try {
     const { snapshot } = await readConfigFileSnapshotForWrite();
@@ -266,8 +245,6 @@ async function loadSourceConfigSnapshotForTest(fallback: unknown): Promise<unkno
 }
 
 beforeEach(() => {
-  previousExitCode = process.exitCode;
-  process.exitCode = undefined;
   previousOpenAiApiKey = process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_API_KEY;
   modelRegistryState.models = [];
@@ -292,7 +269,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  process.exitCode = previousExitCode;
   if (previousOpenAiApiKey === undefined) {
     delete process.env.OPENAI_API_KEY;
   } else {
@@ -704,15 +680,21 @@ describe("models list/status", () => {
   it("models list rejects provider display labels", async () => {
     setDefaultZaiRegistry({ available: false });
     const runtime = makeRuntime();
+    const message =
+      'Invalid provider filter "Moonshot AI". Use a provider id such as "moonshot", not a display label.';
 
-    await modelsListCommand({ all: true, provider: "Moonshot AI", json: true }, runtime);
+    await expect(
+      modelsListCommand({ all: true, provider: "Moonshot AI", json: true }, runtime),
+    ).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message,
+      humanOutput: message,
+      machineOutput: message,
+    });
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      'Invalid provider filter "Moonshot AI". Use a provider id such as "moonshot", not a display label.',
-    );
+    expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
     expect(loadModelCatalog).not.toHaveBeenCalled();
-    expect(process.exitCode).toBe(1);
   });
 
   it("models list all local skips unauthenticated provider catalog rows", async () => {
@@ -755,9 +737,17 @@ describe("models list/status", () => {
 
     modelRegistryState.models = [];
     modelRegistryState.available = [];
-    await modelsListCommand({ local: true, json: true }, runtime);
+    await expect(modelsListCommand({ local: true, json: true }, runtime)).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: "Model registry unavailable: model discovery unavailable",
+      humanOutput: expect.stringContaining(
+        "Model registry unavailable:\nError: model discovery unavailable",
+      ),
+      machineOutput: "Model registry unavailable: model discovery unavailable",
+    });
 
-    expectModelRegistryUnavailable(runtime, "model discovery unavailable");
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 
   it("loadModelRegistry throws when model discovery is unavailable", async () => {
