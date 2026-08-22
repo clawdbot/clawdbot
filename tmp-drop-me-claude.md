@@ -1000,3 +1000,221 @@ Focused routing and lifecycle owners pass 14/14 and 150/150. Mandatory
 uncommitted autoreview used Codex `gpt-5.6-sol` at high reasoning, passed
 TruffleHog, and returned no accepted/actionable findings with patch-correct
 probability 0.99.
+
+## 2026-08-22T19:27:00Z - Current-upstream absorb: frozen inputs, savegame, merge topology
+
+Lane: `codeagent/continuation-current-upstream-absorb`. This section is the
+append-only record for absorbing current upstream
+`23854c39fc7d87b659d5ae1ab86a97880f2fd210` onto the accepted continuation
+candidate `2f08a3b375d55525570c23a49829b4976838b390`.
+
+### Frozen inputs and pre-mutation verification
+
+- Base (exact, workorder-pinned): `2f08a3b375d55525570c23a49829b4976838b390`.
+- Upstream target (exact, workorder-pinned):
+  `23854c39fc7d87b659d5ae1ab86a97880f2fd210`
+  (`fix: show WebChat attachments from active runs [AI-assisted] (#127879)`).
+- `git merge-base 2f08a3b3 23854c39` returned
+  `3376c29800166a3151cbca6b8ab204964e97ac39` exactly. The merge-base is the
+  frozen upstream the previous lane absorbed, so this is a true three-way merge
+  with a correct common ancestor rather than a re-parented frozen tree. That is
+  the structural reason the frozen-wall reverse-clobber class from the GATES
+  runbook does not apply mechanically here; it was still audited empirically
+  below rather than assumed away.
+- `git rev-list --left-right --count 2f08a3b3...23854c39` returned `1123 177`.
+  The upstream-only side is 177 commits, matching the work order.
+- `git diff --name-only 3376c298 23854c39 | wc -l` returned `1165`, matching the
+  work order's file-drift figure.
+- `git merge-base --is-ancestor 46f4d2115700d574501bb3c4763abf6b2ba977fe
+  2f08a3b3` exited 1. The forbidden composite is not an ancestor of the base and
+  therefore cannot become one through this merge, whose only new parent is
+  upstream.
+- `git fetch upstream` was run before reasoning about the target.
+  `git merge-base --is-ancestor 23854c39 upstream/main` exited 0, proving the
+  pinned target is genuinely on upstream `main` (upstream tip at fetch time was
+  `d0700b3bc26bc409e4d7aaaf38f7e1d71053b2f3`; later upstream flux is context
+  only, never the authority for this pinned absorb).
+- Tracked tree was clean at start (`git status --porcelain` empty).
+
+### Gate 1 savegame
+
+- Immutable savegame ref:
+  `savegame/20260822-1927Z/continuation-current-upstream-absorb-pre-23854c39`.
+- `git ls-remote origin` resolved that ref to
+  `2f08a3b375d55525570c23a49829b4976838b390`. It will not be deleted or moved.
+
+### Pre-mutation conflict inventory
+
+`git merge-tree --write-tree --name-only 2f08a3b3 23854c39` was run before any
+mutation. It reported 45 files requiring three-way content resolution and 8
+textual conflicts:
+
+1. `extensions/codex/src/app-server/side-question.ts`
+2. `scripts/plugin-sdk-surface-report.mts`
+3. `src/agents/command/attempt-execution.ts`
+4. `src/agents/embedded-agent-runner/run/source-reply-payloads.ts`
+5. `src/agents/transcript-redact.test.ts`
+6. `src/cli/config-cli.test.ts`
+7. `src/plugins/capability-provider-runtime.test.ts`
+8. `test/scripts/package-mac-app.test.ts`
+
+Highest-risk continuation surfaces in that set were reported before mutation:
+`attempt-execution.ts` (the CLI/embedded run-dispatch owner that carries the
+continuation's traceparent scoping and admission wrapper),
+`source-reply-payloads.ts` (reply-item shape), and `side-question.ts` (the /btw
+fork's continuation-tool suppression).
+
+### Merge topology
+
+`git merge --no-ff 23854c39fc7d87b659d5ae1ab86a97880f2fd210` produced
+`d54403ab018178fe8d946eecc44b86258c1b1def` with exactly two parents:
+
+- parent 1 `2f08a3b375d55525570c23a49829b4976838b390` (continuation candidate)
+- parent 2 `23854c39fc7d87b659d5ae1ab86a97880f2fd210` (current upstream)
+
+No squash, no rebase, no fast-forward.
+
+## 2026-08-22T19:40:00Z - Conflict resolution ledger
+
+Every conflict was resolved by reading the three-way `zdiff3` base side and
+applying upstream's exact delta onto the continuation side. No file used
+wholesale `--ours` or `--theirs`.
+
+- `src/agents/command/attempt-execution.ts`. The conflict hunk spanned 132 lines
+  on the continuation side because the continuation wraps the CLI dispatch in
+  `withLocalSessionPlacementTurnAdmission` plus
+  `runWithDiagnosticTraceparent`, and adds the fork-store claim/restore/persist
+  callbacks and the generated-media retry guard. Diffing the base side against
+  the upstream side showed upstream's entire delta in that region was one added
+  line, `contextWindow: params.sessionEntry?.contextWindow,` directly after
+  `chatType`. That single line was inserted into the continuation side at the
+  matching position and indentation; everything else on the continuation side
+  was preserved verbatim. The embedded-runner branch of the same file already
+  carried the identical field through clean auto-merge, so both dispatch paths
+  now pass the session context window.
+- `src/agents/embedded-agent-runner/run/source-reply-payloads.ts`. Upstream
+  widened `sourceReplyMirror` with `transcriptOwner?: true`; the continuation
+  added a sibling `preserveTextWhitespace?: boolean` field. Both were kept. The
+  mirror-construction body had already auto-merged upstream's
+  `...(payload.transcriptOwner ? { transcriptOwner: true as const } : {})`
+  projection, so the type and its producer agree.
+- `extensions/codex/src/app-server/side-question.ts`. The continuation adds
+  `disableContinuationTools: true` so a `/btw` fork cannot expose continuation
+  or compaction controls it does not own; upstream added
+  `...(toolConstructionPlan ? { toolConstructionPlan } : {})`. Both were kept.
+  `toolConstructionPlan` is bound earlier in the same function by
+  `resolveCodexNodePlacementToolConstructionPlan`, so upstream's spread resolves.
+- `scripts/plugin-sdk-surface-report.mts`. Two budget ceilings conflicted. These
+  are additive counters, so both deltas from the shared base were summed rather
+  than either side being chosen: public exports `4337 + 17 (continuation) + 3
+  (upstream) = 4357`, public function exports `2578 + 5 + 3 = 2586`. Upstream's
+  two justification comments were kept alongside the continuation's. The summed
+  ceilings are verified empirically by `pnpm plugin-sdk:surface:check`; they are
+  not an operator estimate.
+- `src/agents/transcript-redact.test.ts`. Both sides appended new test blocks at
+  the same anchor with an empty base side, so this is a pure additive union. The
+  continuation's `continue_delegate` transcript-boundary redaction test and both
+  of upstream's new tests (source-assignment preservation in tool results, and
+  broad assignment masking for non-tool messages) are all present. No upstream
+  assertion was weakened, reordered, or removed.
+- `src/cli/config-cli.test.ts`. Union of both added imports; the continuation's
+  `useHermeticOpenclawEnv` sorts before upstream's `ConfigMutationConflictError`
+  under the repository's import ordering.
+- `src/plugins/capability-provider-runtime.test.ts`. The continuation had
+  narrowed `expectManifestRegistryLoad` to `OpenClawConfig | undefined`;
+  upstream widened it to `OpenClawConfig | Record<string, never> | undefined`.
+  Upstream's signature was taken because it is the only one that types all three
+  live call sites in the merged file: `expectManifestRegistryLoad(0, params.cfg)`,
+  `(0, undefined)`, and `(0, {})`. Taking the continuation's narrower signature
+  would have forced a change to upstream's own new `{}` call site, which the
+  work order forbids.
+- `test/scripts/package-mac-app.test.ts`. Both sides fixed the same host leak:
+  a system corepack with a cached pnpm satisfies the detection this negative
+  test needs to fail. The continuation stripped `/usr/bin:/bin` from `PATH`;
+  upstream kept the realistic `PATH` and instead pointed `COREPACK_HOME` at an
+  empty temp dir with `COREPACK_ENABLE_NETWORK=0`. Upstream's current fix was
+  restored in full because it neutralizes corepack without shrinking the `PATH`
+  the helper is supposed to be exercised against, so it proves strictly more
+  than the continuation's workaround while fixing the same flake. This is a
+  restoration of upstream's fix, not a weakening of it; no assertion changed.
+
+## 2026-08-22T19:45:00Z - Silent-overlap and reverse-clobber audit
+
+Rather than assume the correct merge-base makes reverse clobber impossible, the
+whole absorb surface was walked mechanically.
+
+Partition of the drift, computed against the shared base `3376c298`:
+
+- upstream-touched files: 1165
+- continuation-touched files: 930
+- both-sides-touched (the entire silent-overlap risk surface): 45
+- upstream-only files: 1120
+
+Layer-A equivalent: every one of the 1120 upstream-only files is byte-identical
+to upstream in the merge head. `git diff --name-only HEAD 23854c39` intersected
+with the upstream-only set returned 0 files. There is no pure clobber anywhere
+outside the 45 both-sides files.
+
+Layer-B/C equivalent for the 45 both-sides files: for each file, every line
+upstream added between `3376c298` and `23854c39` was checked for presence in the
+merge head. Across all 45 files, exactly 3 upstream-added lines are absent, and
+all 3 are deliberate and accounted for:
+
+- `scripts/plugin-sdk-surface-report.mts`: the literals `4340,` and `2581,` are
+  absent because they were summed with the continuation's deltas into `4357,`
+  and `2586,` as recorded above. Dropping upstream's smaller ceiling is the
+  correct resolution for an additive budget; keeping it verbatim would have
+  under-counted the continuation's own exports.
+- `src/agents/command/attempt-execution.ts`: upstream's
+  `contextWindow: params.sessionEntry?.contextWindow,` at 12-space indentation
+  is absent only as that exact byte string. The same field is present at 14-space
+  indentation because the continuation nests the CLI call one level deeper inside
+  its admission wrapper. Confirmed present at both the CLI and embedded call
+  sites.
+
+No `FROZEN-STALE` class file exists in this absorb, and no `MIXED-CLOBBER` row
+survived triage: the only three candidate rows are the three explained lines
+above.
+
+### Gate 2.5 semantic-conflict surface
+
+Upstream changed 397 test files in the 177-commit delta. Intersecting that set
+with the both-sides-touched set gives 21 test files that are semantic-conflict
+candidates (upstream changed the test while the continuation also changed it):
+`extensions/clickclack/src/accounts.test.ts`,
+`extensions/codex/src/app-server/dynamic-tool-build.test.ts`,
+`extensions/codex/src/app-server/side-question.test.ts`,
+`extensions/telegram/src/bot.create-telegram-bot.test.ts`,
+`src/agents/session-tool-result-guard.test.ts`,
+`src/agents/subagents/announce/subagent-announce.format.e2e.test.ts`,
+`src/agents/subagents/announce/subagent-announce.requester-settle-wake.test.ts`,
+`src/agents/tools/sessions-spawn-tool.test.ts`,
+`src/agents/transcript-redact.test.ts`,
+`src/auto-reply/reply/commands-system-prompt.test.ts`,
+`src/cli/config-cli.test.ts`, `src/cli/daemon-cli/install.test.ts`,
+`src/commands/onboard-non-interactive.gateway-health-auth.test.ts`,
+`src/commands/status.test.ts`, `src/gateway/config-reload.test.ts`,
+`src/gateway/server-methods/server-methods.test.ts`,
+`src/logging/diagnostic.test.ts`,
+`src/plugins/capability-provider-runtime.test.ts`,
+`src/state/openclaw-state-db.test.ts`, `test/scripts/package-mac-app.test.ts`,
+`ui/src/components/form-controls.browser.test.ts`.
+These are the owner tests run locally; the remaining 376 upstream-changed test
+files are covered by the broad Mode-B dispatch rather than a local monolithic
+loop, per the work order.
+
+### Deviations
+
+- The work order forbids `scripts/prepush-ci.sh` as the broad completion gate
+  and forbids a local monolithic full-suite loop. The standing dispatch policy's
+  generic `node --import tsx scripts/test-projects.mts` completion signal is
+  therefore superseded for this lane by the workorder's Mode-B instruction. This
+  is recorded as an explicit, workorder-directed deviation, not a skipped gate.
+- `pnpm install --frozen-lockfile` required `CI=true` and a `node_modules` purge
+  because the upstream absorb changed the virtual-store layout. One retry was
+  needed after a transient `ERR_PNPM_ENOENT` importing from the host's shared
+  pnpm store (`/home/figs/actions-runner/_work/_temp/openclaw-local-ci-pnpm-store`,
+  shared with the local CI runner, which was idle). The retry installed cleanly.
+  No repository dependency, lockfile, patch, or store configuration was changed.
+- GitNexus index artifacts and any generated guidance stay untracked and out of
+  the candidate diff.
