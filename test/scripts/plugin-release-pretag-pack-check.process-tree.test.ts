@@ -86,6 +86,8 @@ function createProofRepo(): {
   });
   writeFileSync(join(packageDir, "README.md"), "# Proof plugin\n");
   writeFileSync(join(packageDir, "index.ts"), "export const proof = 1;\n");
+  mkdirSync(join(packageDir, "dist"));
+  writeFileSync(join(packageDir, "dist", "index.js"), "export const proof = 1;\n");
 
   const npmPidFile = join(repoDir, "proof-npm.pid");
   const descendantPidFile = join(repoDir, "proof-descendant.pid");
