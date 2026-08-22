@@ -200,6 +200,33 @@ describe("media persistence migration targets", () => {
     expect(fs.statSync(databasePath).mtimeMs).toBe(beforeMtimeMs);
   });
 
+  it("ignores the exact Arxi credential-only database outside owner state", () => {
+    const stateDir = fs.realpathSync.native(
+      makeTempDir(tempDirs, "media-persistence-arxi-owner-state-"),
+    );
+    const authDir = fs.realpathSync.native(
+      makeTempDir(tempDirs, "media-persistence-arxi-runtime-auth-"),
+    );
+    const env = { OPENCLAW_STATE_DIR: stateDir, ARXI_AUTH_AGENT_DIR: authDir };
+    const databasePath = path.join(authDir, "openclaw-agent.sqlite");
+    createLegacyAgentDatabase({ env, path: databasePath });
+    const beforeBytes = fs.readFileSync(databasePath);
+    const beforeMtimeMs = fs.statSync(databasePath).mtimeMs;
+
+    const result = migrateLegacyMediaPersistence({ env });
+
+    expect(result.warnings).toEqual([]);
+    expect(readUserVersion(databasePath)).toBe(PREVIOUS_VERSION);
+    expect(fs.readFileSync(databasePath)).toEqual(beforeBytes);
+    expect(fs.statSync(databasePath).mtimeMs).toBe(beforeMtimeMs);
+    expect(
+      listOpenClawRegisteredAgentDatabases({
+        env,
+        includeIncompatibleSchemaVersions: true,
+      }),
+    ).toEqual([expect.objectContaining({ agentId: "main", path: databasePath })]);
+  });
+
   it("migrates a configured out-of-tree session store", () => {
     const stateDir = fs.realpathSync.native(
       makeTempDir(tempDirs, "media-persistence-custom-active-"),

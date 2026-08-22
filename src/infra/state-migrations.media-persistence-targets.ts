@@ -20,6 +20,18 @@ type AgentDatabaseMigrationTarget = {
 
 type CandidateTarget = Omit<AgentDatabaseMigrationTarget, "realPath">;
 
+function isArxiCredentialOnlyDatabase(realPath: string, env: NodeJS.ProcessEnv): boolean {
+  const configuredDir = env.ARXI_AUTH_AGENT_DIR?.trim();
+  if (!configuredDir || !path.isAbsolute(configuredDir)) {
+    return false;
+  }
+  try {
+    return fs.realpathSync.native(path.join(configuredDir, "openclaw-agent.sqlite")) === realPath;
+  } catch {
+    return false;
+  }
+}
+
 function listDefaultAgentDatabaseTargets(
   env: NodeJS.ProcessEnv,
   warnings: string[],
@@ -126,6 +138,12 @@ export function resolveAgentDatabaseMigrationTargets(params: {
       activeStateDirRealPath &&
       (realPath === activeStateDirRealPath || isPathInside(activeStateDirRealPath, realPath)),
     );
+    // Arxi deliberately relocates only the auth-profile database outside the
+    // owner state tree. It is an exact configured credential target, not a
+    // session database, so session migrations must neither mutate nor reject it.
+    if (realPath && isArxiCredentialOnlyDatabase(realPath, params.env)) {
+      continue;
+    }
     if (realPath && !isInsideActiveStateDir && !isConfiguredPath) {
       if (candidate.source === "registry") {
         unregisterOpenClawAgentDatabase({
