@@ -458,7 +458,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
         </div>
         ${renderPeopleControl(props, people, selectedPerson, projection.timeCount)}
       </div>
-      <main class="activity-feed__main">
+      <div class="activity-feed__main">
         ${props.filters.personId
           ? identity
             ? renderIdentityHeader(props.context, identity, props.rows)
@@ -490,7 +490,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
                   </section>`}
             `
           : nothing}
-      </main>
+      </div>
     </div>
   `;
 }

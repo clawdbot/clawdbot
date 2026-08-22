@@ -331,15 +331,18 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
 
   it("fails when --gateway-token-ref-env points to a missing env var", () => {
     const runtime = createRuntime();
+    const message =
+      'Environment variable "MISSING_GATEWAY_TOKEN_ENV" is missing or empty. Export it first, then rerun openclaw onboard --non-interactive.';
 
     const result = applyGatewayConfig({
-      opts: { gatewayTokenRefEnv: "MISSING_GATEWAY_TOKEN_ENV" } as OnboardOptions,
+      opts: { gatewayTokenRefEnv: "MISSING_GATEWAY_TOKEN_ENV", json: true } as OnboardOptions,
       runtime,
     });
 
     expect(result).toBeNull();
-    expect(runtime.error).toHaveBeenCalledWith(
-      'Environment variable "MISSING_GATEWAY_TOKEN_ENV" is missing or empty. Export it first, then rerun openclaw onboard --non-interactive.',
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
+    expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+      JSON.stringify({ ok: false, phase: "options", message }, null, 2),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(randomToken).not.toHaveBeenCalled();
