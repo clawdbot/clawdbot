@@ -245,6 +245,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     // Scope-aware to match the store: admin-only, never advertisement alone.
     canCallGatewayMethod(gatewaySnapshot, "openclaw.chat", "operator.admin");
   const activeRoute = host.routeState.routeId ?? "chat";
+  const sessionRoute = isSessionRouteId(activeRoute);
   // Chat has an offline outbox, New Session keeps a local draft, and Appearance
   // persists local preference intent for replay. Their server actions are
   // independently gated; other pages cannot submit useful disconnected work.
@@ -299,7 +300,10 @@ export function renderApplicationShell(host: ShellViewHost) {
         .props=${{
           snapshot: gatewaySnapshot,
           mobile: mobileNavLayout,
-          showTrigger: !mergedChatChrome,
+          // Device-less clients may not reach a session pane, so the shell
+          // retains the manual-repair entry until the header can own it.
+          showTrigger:
+            !sessionRoute || onboarding || gatewaySnapshot.client?.scopeUpgradeReady !== true,
         }}
       ></openclaw-device-scope-upgrade-banner>`
     : null;
@@ -347,7 +351,6 @@ export function renderApplicationShell(host: ShellViewHost) {
   const uiSettings = loadSettings();
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
-  const sessionRoute = isSessionRouteId(activeRoute);
   const chatLikeRoute = sessionRoute || activeRoute === "new-session";
   const custodianRoute = activeRoute === "custodian";
   if (!settingsTakeover) {

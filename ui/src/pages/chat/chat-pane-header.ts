@@ -6,7 +6,8 @@ import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import {
   openScopeUpgradeDetails,
-  scopeUpgradeStatusVisible,
+  renderScopeUpgradeTrigger,
+  scopeUpgradeStatusUsesSessionHeader,
 } from "../../app/device-scope-upgrade.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
@@ -82,7 +83,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       return [];
     }
     const actions: HeaderMenuStatusAction[] = [];
-    if (scopeUpgradeStatusVisible(this.context.gateway.snapshot)) {
+    if (scopeUpgradeStatusUsesSessionHeader(this.context.gateway.snapshot)) {
       actions.push({
         id: "access",
         label: t("connection.scopeUpgrade.status"),
@@ -272,6 +273,14 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const desktopEnvironmentId = resolveChatPaneDesktopTarget(row);
     const desktopPanelAvailable =
       desktopEnvironmentId !== null && isDesktopPanelAvailable(this.context.gateway.snapshot);
+    const accessStatusAction =
+      this.active &&
+      !this.narrow &&
+      scopeUpgradeStatusUsesSessionHeader(this.context.gateway.snapshot)
+        ? renderScopeUpgradeTrigger(
+            "btn btn--ghost btn--icon chat-icon-btn scope-upgrade-status-trigger",
+          )
+        : nothing;
     const openDesktopPanel = sessionWorkspace.onToggleDesktop ?? (() => undefined);
     const discussion = this.resolveSessionDiscussionAction();
     const sidePanelOpen = (sidebarLayout ?? this.state?.sidebarLayout)?.open === true;
@@ -451,7 +460,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       canReveal,
       copiedAction: this.headerCopiedAction,
       renameDisabledReason,
-      panelActions: html`${browserPanelAction}${backgroundTasksAction}${sidePanelAction}`,
+      panelActions: html`${accessStatusAction}${browserPanelAction}${backgroundTasksAction}${sidePanelAction}`,
       discussionAction: nothing,
       diffAction: nothing,
       backgroundTasksAction: nothing,
