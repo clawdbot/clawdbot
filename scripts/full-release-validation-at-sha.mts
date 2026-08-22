@@ -5,12 +5,17 @@ import {
   spawnSync,
   type ExecFileSyncOptionsWithStringEncoding,
 } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { isRecord as isJsonRecord } from "../packages/normalization-core/src/record-coerce.ts";
+import {
+  classifyReleaseGhTransportError,
+  formatReleaseStateOutcome,
+  validateReleaseStateArtifact,
+} from "./full-release-validation-policy.mjs";
 import { execGhRead } from "./lib/plain-gh.mjs";
 
 const WORKFLOW = "full-release-validation.yml";
@@ -25,6 +30,8 @@ const GH_READ_TIMEOUT_MS = 60_000;
 export const FULL_RELEASE_WAIT_TIMEOUT_MINUTES = 720;
 export const FULL_RELEASE_WAIT_POLL_INTERVAL_MS = 45_000;
 const FULL_RELEASE_PROGRESS_INTERVAL_MS = 5 * 60_000;
+const RELEASE_DECISION_FILE = "full-release-decision.json";
+const MAX_RELEASE_DECISION_BYTES = 128 * 1024;
 const GH_READ_OPTIONS = {
   encoding: "utf8",
   killSignal: "SIGKILL",
@@ -65,7 +72,15 @@ type ReleaseInputs = Record<string, string> &
   Partial<Record<"release_profile" | "allow_unreleased_changelog", string>>;
 type CommandOptions = {
   dryRun?: boolean;
-  stdio?: "inherit" | ["ignore", "pipe" | "ignore", "inherit" | "ignore"];
+  stdio?: "inherit" | ["ignore", "pipe" | "ignore", "pipe" | "inherit" | "ignore"];
+  timeoutMs?: number;
+};
+type CommandStatus = {
+  error?: Error;
+  signal?: unknown;
+  status: number | null;
+  stderr: unknown;
+  stdout: unknown;
 };
 type TemporaryRefParams = {
   keepBranch: boolean;
@@ -89,6 +104,14 @@ function displayValue(value: unknown): string {
   return value === null ? "null" : (JSON.stringify(value) ?? "<undefined>");
 }
 
+function requiredPositiveInteger(value: unknown, label: string): number {
+  const normalized = Number(value);
+  if (!Number.isSafeInteger(normalized) || normalized < 1) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return normalized;
+}
+
 function usage() {
   console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <trusted-tooling-sha>] [--trusted-workflow-ref <main-or-release-publish-tag>] [--keep-branch] [--dry-run] [-- -f key=value ...]
 
@@ -100,7 +123,8 @@ workflow lineage through the release evidence manifest, then deletes both
 temporary branches by default. --keep-branch retains both branches. Exact-target and changelog-only Release SHA
 evidence reuse stay enabled; pass -f reuse_evidence=false to force a fresh
 run. Child workflows collect independent failures by default; pass
--f fail_fast=true to cancel each child after its first failed job. The release
+-f fail_fast=true to cancel only an exact still-active child after Release
+Decision identifies a blocking failure for that child. The release
 branch accepts only its final package version or a matching beta prerelease.
 Exact alpha tags remain supported for Tideclaw. The release profile defaults to
 beta for beta candidates and exact alpha tags, and stable otherwise; pass
@@ -124,11 +148,13 @@ function run(command: string, args: string[], options: CommandOptions = {}) {
 function runStatus(command: string, args: string[], options: CommandOptions = {}) {
   if (options.dryRun) {
     console.log(["+", command, ...args].join(" "));
-    return { status: 0, stdout: "" };
+    return { status: 0, stderr: "", stdout: "" };
   }
   return spawnSync(command, args, {
     encoding: "utf8",
+    killSignal: "SIGKILL",
     stdio: options.stdio ?? ["ignore", "pipe", "inherit"],
+    timeout: options.timeoutMs ?? GH_READ_TIMEOUT_MS,
   });
 }
 
@@ -542,6 +568,115 @@ function readActiveParentJobs(parentRunId: string) {
     }));
 }
 
+export function validateReleaseDecisionPayload(
+  payload: unknown,
+  expected: {
+    parentRunAttempt: number;
+    parentRunId: string;
+    workflowSha: string;
+  },
+) {
+  return validateReleaseStateArtifact(
+    payload,
+    {
+      parentRunAttempt: expected.parentRunAttempt,
+      parentRunId: expected.parentRunId,
+      workflowSha: expected.workflowSha,
+    },
+    "decision",
+  );
+}
+
+export function releaseDecisionStopsForeground(state: unknown) {
+  return [
+    "blocked_diagnostics_running",
+    "blocked_complete",
+    "orchestration_error",
+    "cancelled_with_children",
+  ].includes(stringValue(state));
+}
+
+export function tryReadReleaseDecision(
+  parentRunId: string,
+  parentRunAttempt: number,
+  workflowSha: string,
+  runStatusImpl: (
+    command: string,
+    args: string[],
+    options?: CommandOptions,
+  ) => CommandStatus = runStatus,
+) {
+  const artifactName = `full-release-decision-${parentRunId}-${parentRunAttempt}`;
+  const downloadDir = mkdtempSync(join(tmpdir(), "openclaw-release-decision-"));
+  try {
+    const result = runStatusImpl(
+      "gh",
+      [
+        "run",
+        "download",
+        parentRunId,
+        "--repo",
+        "openclaw/openclaw",
+        "--name",
+        artifactName,
+        "--dir",
+        downloadDir,
+      ],
+      { stdio: ["ignore", "ignore", "pipe"], timeoutMs: GH_READ_TIMEOUT_MS },
+    );
+    if (result.status !== 0) {
+      const stderr = stringValue(result.stderr);
+      if (
+        /no valid artifacts found|artifact .* not found|could not find any artifacts/iu.test(stderr)
+      ) {
+        return undefined;
+      }
+      const downloadError = Object.assign(
+        result.error instanceof Error
+          ? result.error
+          : new Error(
+              `Release Decision artifact download failed${
+                stderr.trim() ? `: ${stderr.trim().slice(0, 500)}` : ""
+              }`,
+            ),
+        {
+          signal: result.signal,
+          status: result.status,
+          stderr,
+        },
+      );
+      if (classifyReleaseGhTransportError(downloadError) === "transient") {
+        console.warn(
+          `Release Decision artifact unavailable this poll; retrying: ${downloadError.message}`,
+        );
+        return undefined;
+      }
+      throw new Error(
+        `Release Decision artifact download failed${
+          stderr.trim() ? `: ${stderr.trim().slice(0, 500)}` : ""
+        }`,
+        { cause: downloadError },
+      );
+    }
+    const decisionPath = join(downloadDir, RELEASE_DECISION_FILE);
+    if (!existsSync(decisionPath)) {
+      throw new Error(
+        `Release Decision artifact ${artifactName} omitted ${RELEASE_DECISION_FILE}.`,
+      );
+    }
+    if (statSync(decisionPath).size > MAX_RELEASE_DECISION_BYTES) {
+      throw new Error(`Release Decision artifact ${artifactName} exceeds the size limit.`);
+    }
+    return validateReleaseDecisionPayload(JSON.parse(readFileSync(decisionPath, "utf8")), {
+      parentRunAttempt,
+      parentRunId,
+      workflowSha,
+    });
+  } finally {
+    rmSync(downloadDir, { force: true, recursive: true });
+  }
+}
+
 function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
   let lastSummary = "";
   let consecutiveErrors = 0;
@@ -568,6 +703,18 @@ function waitForWorkflowRun(parentRunId: string, workflowSha: string) {
     if (summary !== lastSummary) {
       console.log(`Parent run status: ${summary}`);
       lastSummary = summary;
+    }
+    if (suite) {
+      const releaseDecision = tryReadReleaseDecision(
+        parentRunId,
+        requiredPositiveInteger(suite.run_attempt, "parent run attempt"),
+        workflowSha,
+      );
+      if (releaseDecision && releaseDecisionStopsForeground(releaseDecision.state)) {
+        throw new Error(
+          `${formatReleaseStateOutcome(releaseDecision)}\nhttps://github.com/openclaw/openclaw/actions/runs/${parentRunId}`,
+        );
+      }
     }
     if (suite?.status === "completed") {
       if (suite.conclusion === "success") {

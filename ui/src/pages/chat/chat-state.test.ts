@@ -24,9 +24,10 @@ import {
 } from "./chat-state-refresh.ts";
 import { resolveChatAvatarUrl, selectedChatSessionRow } from "./chat-state-route.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
-import { getChatSessionProjection } from "./history-merge.ts";
+import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
 beforeEach(() => {
   vi.spyOn(assistantIdentity, "loadLocalAssistantIdentity").mockReturnValue({
@@ -175,6 +176,110 @@ describe("canonical session message recovery", () => {
     expect(renderedTranscript(state)).toEqual([{ role: "assistant", text }]);
   });
 
+  it("retires the complete transient projection when the durable terminal arrives", () => {
+    const runId = "active-run";
+    const siblingRunId = "sibling-run";
+    const finalText = "The durable terminal reply.";
+    const toolMessage = { role: "assistant", runId, toolCallId: "tool-1" };
+    const siblingToolMessage = {
+      role: "assistant",
+      runId: siblingRunId,
+      toolCallId: "tool-2",
+    };
+    const toolIdentity = buildToolStreamIdentity(runId, "tool-1");
+    const siblingToolIdentity = buildToolStreamIdentity(siblingRunId, "tool-2");
+    const { state } = createSessionEventState({
+      connected: false,
+      chatMessages: [],
+      chatRunId: runId,
+      chatStream: finalText,
+      chatStreamStartedAt: 1,
+      chatStreamSegments: [
+        { text: "Commentary", ts: 1, runId, itemId: "commentary-1" },
+        {
+          text: "Sibling commentary",
+          ts: 1,
+          runId: siblingRunId,
+          itemId: "commentary-2",
+        },
+      ],
+      chatToolMessages: [toolMessage, siblingToolMessage],
+      toolStreamById: new Map([
+        [
+          toolIdentity,
+          {
+            message: toolMessage,
+            name: "exec",
+            receivedAt: 1,
+            runId,
+            startedAt: 1,
+            toolCallId: "tool-1",
+          },
+        ],
+        [
+          siblingToolIdentity,
+          {
+            message: siblingToolMessage,
+            name: "read",
+            receivedAt: 1,
+            runId: siblingRunId,
+            startedAt: 1,
+            toolCallId: "tool-2",
+          },
+        ],
+      ]),
+      toolStreamOrder: [toolIdentity, siblingToolIdentity],
+      activityEventSeqById: new Map([
+        [`tool:${JSON.stringify([runId, "tool-1"])}:result`, 2],
+        [`tool:${JSON.stringify([siblingRunId, "tool-2"])}:result`, 2],
+      ]),
+      knownAgentRunIds: new Set([runId, siblingRunId]),
+      waitingApprovalStatuses: new Map([
+        ["approval-1", { approvalId: "approval-1", toolCallId: "tool-1", runId }],
+        ["approval-2", { approvalId: "approval-2", toolCallId: "tool-2", runId: siblingRunId }],
+      ]),
+    });
+
+    applySessionMessagePayload(
+      state,
+      {
+        sessionKey: state.sessionKey,
+        runId,
+        messageId: "terminal-message",
+        messageSeq: 2,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: finalText }],
+          timestamp: 2,
+        },
+      },
+      false,
+      { kind: "live", activeRunId: runId },
+    );
+
+    expect(state.chatMessages.filter((message) => extractText(message) === finalText)).toHaveLength(
+      1,
+    );
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamSegments).toEqual([
+      {
+        text: "Sibling commentary",
+        ts: 1,
+        runId: siblingRunId,
+        itemId: "commentary-2",
+      },
+    ]);
+    expect(state.chatToolMessages).toEqual([siblingToolMessage]);
+    expect(state.toolStreamById.has(toolIdentity)).toBe(false);
+    expect(state.toolStreamById.has(siblingToolIdentity)).toBe(true);
+    expect(state.toolStreamOrder).toEqual([siblingToolIdentity]);
+    expect(state.knownAgentRunIds).toEqual(new Set([siblingRunId]));
+    expect([...state.waitingApprovalStatuses.keys()]).toEqual(["approval-2"]);
+    expect([...(state.activityEventSeqById?.keys() ?? [])]).toEqual([
+      `tool:${JSON.stringify([siblingRunId, "tool-2"])}:result`,
+    ]);
+  });
+
   it("keeps cumulative assistant output split across an authoritative steer", () => {
     const activeRunId = "active-run";
     const steerRunId = "steer-request";
@@ -216,6 +321,16 @@ describe("canonical session message recovery", () => {
     ]);
     expect(state.chatRunId).toBe(activeRunId);
     expect(state.chatQueue).toEqual([]);
+    reduceChatSessionProjection(state, {
+      type: "sendPending",
+      runId: steerRunId,
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "Steer prompt" }],
+        timestamp: 50,
+        __openclaw: { idempotencyKey: `${steerRunId}:user` },
+      },
+    });
     state.chatRunId = steerRunId;
 
     const steerEvent = {
@@ -243,6 +358,7 @@ describe("canonical session message recovery", () => {
     handlePageGatewayEvent(state, steerEvent);
     expect(state.chatRunId).toBe(activeRunId);
     const segmentsAfterRequestBoundary = state.chatStreamSegments;
+    expect(segmentsAfterRequestBoundary.at(-1)?.boundaryRunId).toBe(steerRunId);
     expect(state.chatStreamSegments).toBe(segmentsAfterRequestBoundary);
     expect(
       state.chatMessages.filter((message) => extractText(message) === "Steer prompt"),

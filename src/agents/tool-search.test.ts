@@ -3677,6 +3677,70 @@ describe("Tool Search", () => {
     expect(testing.getReusableCatalogSnapshotCountForTest()).toBe(snapshotsBefore);
   });
 
+  it("serializes a fresh hook-bound catalog schema only once", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const config = { tools: { toolSearch: true } } as never;
+    const catalogRef = createToolSearchCatalogRef();
+    const target = pluginTool("fake_hook_bound_schema", "Hook-bound schema probe");
+    let schemaTraversalCount = 0;
+    target.parameters = new Proxy(
+      { type: "object", properties: { value: { type: "string" } } },
+      {
+        ownKeys: (schema) => {
+          schemaTraversalCount += 1;
+          return Reflect.ownKeys(schema);
+        },
+      },
+    );
+
+    const result = applyToolSearchCatalog({
+      tools: [codeTool, target],
+      config,
+      sessionId: "session-hook-bound-schema",
+      runId: "run-hook-bound-schema",
+      catalogRef,
+      toolHookContext: {
+        agentId: "agent-main",
+        sessionId: "session-hook-bound-schema",
+        sessionKey: "agent:main:main",
+        runId: "run-hook-bound-schema",
+      },
+    });
+
+    expect(result.catalogRegistered).toBe(true);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual([
+      "fake_hook_bound_schema",
+    ]);
+    expect(schemaTraversalCount).toBe(1);
+  });
+
+  it("preserves last-wins replacement when duplicate catalog ids reorder", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const config = { tools: { toolSearch: true } } as never;
+    const catalogRef = createToolSearchCatalogRef();
+    const first = fakeTool("fake_duplicate_id", "First executable");
+    const second = fakeTool("fake_duplicate_id", "Second executable");
+    const params = {
+      config,
+      sessionId: "session-duplicate-id-order",
+      catalogRef,
+    };
+
+    applyToolSearchCatalog({ ...params, tools: [codeTool, first, second] });
+    expect(catalogRef.current?.entries.map((entry) => entry.description)).toEqual([
+      "Second executable",
+    ]);
+
+    const reordered = applyToolSearchCatalog({
+      ...params,
+      tools: [codeTool, second, first],
+    });
+    expect(reordered.catalogReused).toBe(false);
+    expect(catalogRef.current?.entries.map((entry) => entry.description)).toEqual([
+      "First executable",
+    ]);
+  });
+
   it("does not reuse when a same-named tool uses a different executable", () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const original = pluginTool("fake_exec_swap", "Stable description");

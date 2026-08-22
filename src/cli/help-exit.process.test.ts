@@ -398,6 +398,51 @@ describe("rejected CLI process state isolation", () => {
   });
 });
 
+describe("models list JSON failure process output", () => {
+  it.each(
+    [
+      {
+        provider: "Moonshot AI",
+        message:
+          'Invalid provider filter "Moonshot AI". Use a provider id such as "moonshot", not a display label.',
+      },
+      {
+        provider: "autoqa-no-such-provider",
+        message:
+          'Unknown provider filter "autoqa-no-such-provider" for this installation. Run openclaw plugins list --json to see installed providers, or configure it under models.providers.',
+      },
+    ].flatMap(({ provider, message }) => [
+      {
+        name: `routed ${provider}`,
+        provider,
+        message,
+        env: { OPENCLAW_DISABLE_ROUTE_FIRST: undefined },
+      },
+      {
+        name: `Commander ${provider}`,
+        provider,
+        message,
+        env: { OPENCLAW_DISABLE_ROUTE_FIRST: "1" },
+      },
+    ]),
+  )("renders $name as one clean canonical JSON document", async ({ provider, message, env }) => {
+    const result = await runCliProcess({
+      args: ["models", "list", "--provider", provider, "--json"],
+      config: {},
+      env,
+      expectedExitCode: 1,
+    });
+
+    expect(result.stdout).not.toContain("\u001B");
+    expect(result.stdout).not.toContain("\u0007");
+    expect(JSON.parse(result.stdout)).toEqual({
+      ok: false,
+      error: { type: "cli_error", message },
+    });
+    expect(result.stderr).toContain(message);
+  });
+});
+
 describe("message broadcast process exit", () => {
   it("exits nonzero after a structured target failure", async () => {
     const root = tempDirs.make("openclaw-message-broadcast-exit-");

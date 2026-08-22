@@ -340,6 +340,8 @@ export class ChatPane extends ChatPaneLayoutRender {
       sendShortcut: state.settings.chatSendShortcut,
       followUpMode: state.chatFollowUpMode,
       draft: state.chatMessage,
+      modelCatalog: state.chatModelCatalog,
+      modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
       queue: state.chatQueue,
       queuedOutboxCount: state.chatQueue.filter((item) => !item.pendingRunId).length,
       realtimeTalkActive: state.realtimeTalkActive,

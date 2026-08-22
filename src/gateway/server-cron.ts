@@ -785,12 +785,15 @@ export function buildGatewayCronService(params: {
         ...opts,
         preserveUntargeted: opts?.source !== "manual",
       });
+      // Monitor ticks choose agents.*.heartbeat.session in the runner; caller-targeted
+      // interval wakes keep their explicit session just like manual and event wakes.
+      const useConfiguredSession = opts?.source === "interval" && !opts.sessionKey?.trim();
       requestHeartbeat({
         source: opts?.source ?? "cron",
         intent: opts?.intent ?? "event",
         reason: opts?.reason,
         agentId,
-        sessionKey,
+        sessionKey: useConfiguredSession ? undefined : sessionKey,
         heartbeat: sanitizeCronHeartbeatOverride(opts?.heartbeat),
         ...(opts?.scheduledEveryMs !== undefined
           ? { scheduledEveryMs: opts.scheduledEveryMs }

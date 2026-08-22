@@ -170,7 +170,7 @@ export async function withTempDir<T>(
   prefix: string,
   run: (stateDir: string) => Promise<T>,
 ): Promise<T> {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  const stateDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
   try {
     return await run(stateDir);
   } finally {

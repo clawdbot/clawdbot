@@ -335,7 +335,9 @@ describe("missingSystemRunApprovalBinding", () => {
 
 describe("mutable file operand binding", () => {
   it("binds every script in a compound command and detects drift", async () => {
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-run-binding-"));
+    const cwd = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-system-run-binding-")),
+    );
     const first = path.join(cwd, "first.sh");
     const second = path.join(cwd, "second.py");
     try {
@@ -344,7 +346,14 @@ describe("mutable file operand binding", () => {
       const command = { kind: "shell" as const, text: "sh first.sh && python3 second.py" };
       const prepared = expectOk(await prepareSystemRunMutableFileBinding({ command, cwd }));
 
-      expect(prepared.binding.operands).toHaveLength(2);
+      // Assert the script operands by path: a host whose interpreters live in a writable
+      // prefix (Homebrew, asdf, nix profiles) also binds those executables, so an operand
+      // count would only describe the host that ran the test.
+      expect(
+        prepared.binding.operands
+          .filter((operand) => !operand.executable)
+          .map((operand) => operand.snapshot.path),
+      ).toEqual([first, second]);
       await expect(
         revalidateSystemRunMutableFileBinding({ binding: prepared.binding, cwd }),
       ).resolves.toEqual({ ok: true });

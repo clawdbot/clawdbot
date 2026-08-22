@@ -7,6 +7,7 @@ import {
   type WorkerProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { CRABBOX_HEARTBEAT_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 export { nonEmptyString };
 
@@ -39,6 +40,7 @@ type CrabboxProfile = {
   class: string;
   desktop?: boolean;
   heartbeatIntervalMs: number;
+  heartbeatTimeoutMs: number;
   idleTimeout: string;
   provider: string;
   ttl: string;
@@ -60,14 +62,18 @@ type IsExecutable = (candidate: string) => boolean;
 
 export const CRABBOX_WORKER_PROVIDER_ID = "crabbox";
 
-function requirePositiveDuration(value: unknown, key: string): string {
+function requirePositiveDuration(
+  value: unknown,
+  key: string,
+): { duration: string; milliseconds: number } {
   const duration = nonEmptyString(value);
-  if (!duration || parsePositiveGoDurationNanoseconds(duration) === undefined) {
+  const nanoseconds = duration ? parsePositiveGoDurationNanoseconds(duration) : undefined;
+  if (!duration || nanoseconds === undefined) {
     throw new WorkerProviderError(
       `Crabbox profile ${key} must be a positive Go duration such as 60m`,
     );
   }
-  return duration;
+  return { duration, milliseconds: Number(nanoseconds) / 1_000_000 };
 }
 
 function parsePositiveGoDurationNanoseconds(duration: string): bigint | undefined {
@@ -98,12 +104,7 @@ function parsePositiveGoDurationNanoseconds(duration: string): bigint | undefine
   return total > 0n ? total : undefined;
 }
 
-function heartbeatIntervalMs(idleTimeout: string): number {
-  const idleNanoseconds = parsePositiveGoDurationNanoseconds(idleTimeout);
-  if (idleNanoseconds === undefined) {
-    throw new Error("Crabbox heartbeat requires a positive idle timeout");
-  }
-  const idleTimeoutMs = Number(idleNanoseconds) / 1_000_000;
+function heartbeatIntervalMs(idleTimeoutMs: number): number {
   const referenceIntervalMs = Math.max(5_000, Math.min(60_000, idleTimeoutMs / 3));
   // Crabbox's floor can exceed short accepted timeouts. Keep renewal ahead of
   // coordinator idle expiry without changing the profile contract.
@@ -125,8 +126,11 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
   if (!machineClass) {
     throw new WorkerProviderError("Crabbox profile class must be a non-empty string");
   }
-  const ttl = requirePositiveDuration(profile.ttl, "ttl");
-  const idleTimeout = requirePositiveDuration(profile.idleTimeout, "idleTimeout");
+  const { duration: ttl } = requirePositiveDuration(profile.ttl, "ttl");
+  const { duration: idleTimeout, milliseconds: idleTimeoutMs } = requirePositiveDuration(
+    profile.idleTimeout,
+    "idleTimeout",
+  );
   const binaryValue = profile.binary;
   const binary = binaryValue === undefined ? undefined : nonEmptyString(binaryValue);
   if (binaryValue !== undefined && !binary) {
@@ -153,7 +157,11 @@ export function parseCrabboxProfile(profile: WorkerProfile): CrabboxProfile {
     binary,
     class: machineClass,
     desktop,
-    heartbeatIntervalMs: heartbeatIntervalMs(idleTimeout),
+    heartbeatIntervalMs: heartbeatIntervalMs(idleTimeoutMs),
+    heartbeatTimeoutMs: Math.min(
+      CRABBOX_HEARTBEAT_TIMEOUT_MS,
+      Math.max(1, Math.floor(idleTimeoutMs / 2)),
+    ),
     idleTimeout,
     provider,
     setup,

@@ -2,6 +2,7 @@
 // remote, CLI override, env override, and config-secret connection flows.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveConfigForRead } from "../config/io.read-helpers.js";
 import { setConfigResolutionFacts } from "../config/resolution-facts.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 
@@ -211,6 +212,35 @@ describe("resolveGatewayCredentialsWithSecretInputs", () => {
       }),
     ).resolves.toEqual({ token: "env-token", password: undefined });
   });
+
+  it.each([
+    {
+      name: "pending bare shorthand",
+      authored: "$SOURCE",
+      readEnv: {},
+      runtimeEnv: { SOURCE: "${OTHER}" },
+    },
+    {
+      name: "substituted template-looking literal",
+      authored: "${SOURCE}",
+      readEnv: { SOURCE: "${OTHER}" },
+      runtimeEnv: {},
+    },
+  ])(
+    "materializes authored provenance atomically: $name",
+    async ({ authored, readEnv, runtimeEnv }) => {
+      const read = resolveConfigForRead(
+        { gateway: { mode: "local", auth: { mode: "token", token: authored } } },
+        readEnv,
+      );
+      const config = cfg(read.resolvedConfigRaw as OpenClawConfig);
+      setConfigResolutionFacts(config, read.resolutionFacts);
+
+      await expect(
+        resolveGatewayCredentialsWithSecretInputs({ config, env: runtimeEnv }),
+      ).resolves.toEqual({ token: "${OTHER}", password: undefined });
+    },
+  );
 
   it("preserves escaped literal credentials through async resolution clones", async () => {
     const config = cfg({

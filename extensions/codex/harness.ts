@@ -49,10 +49,6 @@ const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "thread-bootstrap-projection",
 ] as const satisfies readonly ContextEngineHostCapability[];
 
-type CodexAppServerAgentHarness = AgentHarnessV2 & {
-  cloudPlacement?: { mode: "remote-exec" };
-};
-
 type CodexAppServerAgentHarnessOptions = {
   id?: string;
   label?: string;
@@ -124,11 +120,17 @@ export function createCodexAppServerAgentHarness(
     resolvePluginConfigObject(config, "codex") ??
     options.resolvePluginConfig?.() ??
     options.pluginConfig;
-  const harness: CodexAppServerAgentHarness = {
+  const harness: AgentHarnessV2 = {
     id: harnessRuntimeId,
     label: options?.label ?? "Codex agent harness",
     autoSelection: { providerIds: [...providerIds] },
-    cloudPlacement: { mode: "remote-exec" },
+    cloudPlacement: {
+      mode: "remote-exec",
+      devicePlacement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+    },
     delegatedExecutionPluginIds: ["voice-call"],
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
     conversationToolPolicySupport: "exact",
@@ -204,6 +206,19 @@ export function createCodexAppServerAgentHarness(
       }
       const preparedAuth = ctx.modelProvider?.preparedAuth;
       const runtimePolicy = ctx.modelProvider?.runtimePolicy;
+      // Codex owns discovery and auth for new first-party models. Only trust that
+      // native account when no authored transport or host credential is involved.
+      const nativeAccountOwnsUnobservedModel =
+        provider === "openai" &&
+        ctx.requestedRuntime === "codex" &&
+        Boolean(ctx.modelId?.trim()) &&
+        (preparedAuth === undefined || preparedAuth.source === "harness") &&
+        preparedAuth?.mode === undefined &&
+        preparedAuth?.requirement === undefined &&
+        ctx.modelProvider?.api === undefined &&
+        ctx.modelProvider?.baseUrl === undefined &&
+        ctx.modelProvider?.azureApiVersion === undefined &&
+        ctx.modelProvider?.request === undefined;
       if (runtimePolicy) {
         const compatible = runtimePolicy.compatibleIds.some(
           (id) => id.trim().toLowerCase() === normalizedHarnessRuntimeId,
@@ -214,7 +229,7 @@ export function createCodexAppServerAgentHarness(
             reason: "Codex cannot reproduce the prepared provider route",
           };
         }
-      } else if (ctx.modelProvider && provider !== "codex") {
+      } else if (ctx.modelProvider && provider !== "codex" && !nativeAccountOwnsUnobservedModel) {
         return {
           supported: false,
           reason: "provider route compatibility with Codex is not declared",
@@ -251,6 +266,7 @@ export function createCodexAppServerAgentHarness(
       return runCodexAppServerAttempt(params, {
         bindingStore: options.bindingStore,
         pluginConfig: resolveAttemptPluginConfig(params.config),
+        runtime: sessionRuntime,
         runtimeModelId: readCodexRuntimeModelId(params.model, params.modelId),
         nativeHookRelay: { enabled: true },
       });
@@ -290,6 +306,7 @@ export function createCodexAppServerAgentHarness(
       return runCodexAppServerSideQuestion(params, {
         bindingStore: options.bindingStore,
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+        runtime: sessionRuntime,
         runtimeModelId: readCodexRuntimeModelId(params.runtimeModel, params.model),
         nativeHookRelay: { enabled: true },
       });

@@ -7,6 +7,7 @@ import {
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
 } from "../infra/exec-approval-command-display.js";
+import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -24,6 +25,7 @@ import {
   buildRequestedApprovalEvent,
   handlePendingApprovalRequest,
 } from "./server-methods/approval-shared.js";
+import type { GatewayNodeInvokeStream } from "./server-methods/shared-types.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 
 // Plugin node.invoke policies are the last gateway-side guard before a
@@ -143,6 +145,13 @@ function createApprovalRuntime(params: {
           256,
         ),
         severity: input.severity ?? "warning",
+        ...(input.allowedDecisions === undefined
+          ? {}
+          : {
+              allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions({
+                allowedDecisions: input.allowedDecisions,
+              }),
+            }),
         // toolName/agentId are interpolated into channel approval text; only
         // host-minted runtime identity values skip the display escape.
         toolName: sanitizeOptionalMeta(input.toolName),
@@ -231,6 +240,7 @@ export async function applyPluginNodeInvokePolicy(params: {
   nodeSession: NodeSession;
   command: string;
   params: unknown;
+  sessionKey?: string;
   turnSource?: {
     channel?: unknown;
     to?: unknown;
@@ -241,6 +251,7 @@ export async function applyPluginNodeInvokePolicy(params: {
   signal?: AbortSignal;
   resolveRemainingTimeoutMs?: () => number | undefined;
   onNodeCommandDispatched?: () => void;
+  nodeInvokeStream?: GatewayNodeInvokeStream;
   idempotencyKey?: string;
   isInvocationCurrent?: () => boolean | Promise<boolean>;
   isApprovalAuthorityActive?: () => boolean;
@@ -393,16 +404,23 @@ export async function applyPluginNodeInvokePolicy(params: {
       params: override.params ?? params.params,
       timeoutMs,
       ...(params.signal ? { signal: params.signal } : {}),
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       idempotencyKey: override.idempotencyKey ?? params.idempotencyKey,
+      ...(params.nodeInvokeStream && {
+        onProgress: params.nodeInvokeStream.onProgress,
+        idleTimeoutMs: params.nodeInvokeStream.idleTimeoutMs,
+      }),
       isDispatchAuthorized: () =>
+        (params.nodeInvokeStream?.isRuntimeCurrent() ?? true) &&
         (!callerIdentity ||
           params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) === true) &&
         params.isApprovalAuthorityActive?.() !== false,
-      onDispatchReady: () => {
+      onDispatchReady: (invokeId) => {
         // Only the registry knows that the transport send succeeded. Preserve
         // pre-send failures as retry-safe while making later failures ambiguous.
         nodeCommandDispatched = true;
         params.onNodeCommandDispatched?.();
+        params.nodeInvokeStream?.onDispatchReady(invokeId);
       },
     });
     if (!res.ok) {

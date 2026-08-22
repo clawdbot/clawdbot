@@ -11,10 +11,6 @@ import {
   assertPluginPrereleaseTestPlanComplete,
   createPluginPrereleaseTestPlan,
 } from "../../scripts/lib/plugin-prerelease-test-plan.mts";
-import {
-  pluginPrereleaseTimeoutComponents,
-  releaseTimeoutForProfile,
-} from "../helpers/release-workflow-timeouts.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
@@ -43,19 +39,6 @@ function readFullReleaseValidationWorkflow() {
 
 function readPluginPrereleaseWorkflow() {
   return parse(readFileSync(".github/workflows/plugin-prerelease.yml", "utf8"));
-}
-
-function readLiveE2eWorkflow() {
-  return parse(readFileSync(".github/workflows/openclaw-live-and-e2e-checks-reusable.yml", "utf8"));
-}
-
-function pluginPrereleaseTimeoutFloor(profile: "beta" | "stable" | "full"): number {
-  const components = pluginPrereleaseTimeoutComponents({
-    pluginPrerelease: readPluginPrereleaseWorkflow(),
-    liveE2e: readLiveE2eWorkflow(),
-    profile,
-  });
-  return Object.values(components).reduce((total, value) => total + value, 0);
 }
 
 function getDockerLane(name: string) {
@@ -387,7 +370,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       (step: WorkflowStep) => step.name === "Summarize target",
     );
     const pluginDispatch = releaseWorkflow.jobs.plugin_prerelease.steps.find(
-      (step: WorkflowStep) => step.name === "Dispatch and monitor plugin prerelease",
+      (step: WorkflowStep) => step.name === "Dispatch plugin prerelease",
     );
     const evidenceReuse = releaseWorkflow.jobs.evidence_reuse.steps.find(
       (step: WorkflowStep) => step.name === "Find reusable validation evidence",
@@ -497,13 +480,13 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       (step: WorkflowStep) => step.name === "Build plugin prerelease manifest",
     ).env;
     const normalCiScript = releaseWorkflow.jobs.normal_ci.steps.find(
-      (step: WorkflowStep) => step.name === "Dispatch and monitor CI",
+      (step: WorkflowStep) => step.name === "Dispatch CI",
     ).run;
     const pluginPrereleaseScript = releaseWorkflow.jobs.plugin_prerelease.steps.find(
-      (step: WorkflowStep) => step.name === "Dispatch and monitor plugin prerelease",
+      (step: WorkflowStep) => step.name === "Dispatch plugin prerelease",
     ).run;
     const releaseChecksStep = releaseWorkflow.jobs.release_checks.steps.find(
-      (step: WorkflowStep) => step.name === "Dispatch and monitor release checks",
+      (step: WorkflowStep) => step.name === "Dispatch release checks",
     );
     const releaseChecksScript = releaseChecksStep.run;
     const buildDistStep = workflow.jobs["build-artifacts"].steps.find(
@@ -543,6 +526,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
           name: "Setup Node environment",
           uses: "./.github/actions/setup-node-env",
           with: {
+            "cache-mode": "restore",
             "install-bun": "false",
           },
         },
@@ -665,9 +649,9 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(releaseChecksScript).toContain("args+=(-f allow_frozen_target_scenario_omissions=true)");
     expect(releaseWorkflowSource).toContain('--arg targetContextRef "$TARGET_CONTEXT_REF"');
     expect(releaseWorkflowSource).toContain("targetContextRef: $targetContextRef");
-    expect(normalCiScript).toContain('dispatch_and_wait ci.yml "$dispatch_run_name" "${args[@]}"');
+    expect(normalCiScript).toContain('dispatch_child ci.yml "$dispatch_run_name" "${args[@]}"');
     const normalCiDispatchCase = normalCiScript.match(/^\s*ci\)\n([\s\S]*?)^\s*;;$/mu)?.[1];
-    expect(normalCiDispatchCase).toContain('dispatch_and_wait ci.yml "$dispatch_run_name"');
+    expect(normalCiDispatchCase).toContain('dispatch_child ci.yml "$dispatch_run_name"');
     expect(normalCiDispatchCase).not.toContain("full_release_validation=true");
     expect(pluginPrereleaseScript).toContain(
       'args=(-f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f dispatch_id="$dispatch_id" -f node_test_exclude_patterns_json="$PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON")',
@@ -676,7 +660,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       'args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")',
     );
     expect(pluginPrereleaseScript).toContain(
-      'dispatch_and_wait plugin-prerelease.yml "$dispatch_run_name" "${args[@]}"',
+      'dispatch_child plugin-prerelease.yml "$dispatch_run_name" "${args[@]}"',
     );
     expect(pluginManifestScript).toContain("await import(");
     expect(pluginManifestScript).toContain('"./scripts/lib/plugin-prerelease-test-plan.mts"');
@@ -766,6 +750,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(
       inspector.steps.find((step: WorkflowStep) => step.name === "Setup Node environment").with,
     ).toEqual({
+      "cache-mode": "restore",
       "install-bun": "false",
     });
     const inspectorRun = inspector.steps.find(
@@ -885,7 +870,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     }
     expect(fullReleaseWorkflow.jobs.release_checks["runs-on"]).toBe("blacksmith-4vcpu-ubuntu-2404");
     expect(fullReleaseWorkflow.jobs.performance["runs-on"]).toBe("blacksmith-4vcpu-ubuntu-2404");
-    expect(fullReleaseWorkflow.jobs.normal_ci["timeout-minutes"]).toBe(240);
+    expect(fullReleaseWorkflow.jobs.normal_ci["timeout-minutes"]).toBe(15);
     expect(fullReleaseWorkflow.jobs.normal_ci.needs).toEqual(["resolve_target", "evidence_reuse"]);
     expect(fullReleaseWorkflow.jobs.normal_ci.if).toContain(
       "needs.resolve_target.result == 'success'",
@@ -894,7 +879,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       "needs.evidence_reuse.outputs.reuse != 'true'",
     );
     expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.if).toBe(
-      "${{ always() && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && needs.evidence_reuse.outputs.reuse != 'true' }}",
+      "${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && needs.evidence_reuse.outputs.reuse != 'true' }}",
     );
     expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight["timeout-minutes"]).toBe(20);
     const dockerPreflightStep = fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.find(
@@ -912,33 +897,13 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
         (step: WorkflowStep) => step.name === "Build and smoke test final Docker runtime image",
       ),
     ).toBe(false);
-    const pluginMonitorTimeout = fullReleaseWorkflow.jobs.plugin_prerelease["timeout-minutes"];
-    const childTimeoutFloors = {
-      beta: pluginPrereleaseTimeoutFloor("beta"),
-      stable: pluginPrereleaseTimeoutFloor("stable"),
-      full: pluginPrereleaseTimeoutFloor("full"),
-    };
-    const parentTimeouts = {
-      beta: releaseTimeoutForProfile(pluginMonitorTimeout, "beta"),
-      stable: releaseTimeoutForProfile(pluginMonitorTimeout, "stable"),
-      full: releaseTimeoutForProfile(pluginMonitorTimeout, "full"),
-    };
-    expect(childTimeoutFloors).toEqual({ beta: 175, stable: 175, full: 205 });
-    expect(parentTimeouts).toEqual({ beta: 240, stable: 240, full: 300 });
-    for (const profile of ["beta", "stable", "full"] as const) {
-      expect(parentTimeouts[profile] - childTimeoutFloors[profile], profile).toBeGreaterThanOrEqual(
-        60,
-      );
+    for (const jobName of ["plugin_prerelease", "release_checks", "npm_telegram", "performance"]) {
+      expect(fullReleaseWorkflow.jobs[jobName]["timeout-minutes"], jobName).toBe(15);
     }
-    expect(fullReleaseWorkflow.jobs.release_checks["timeout-minutes"]).toBe(420);
-    expect(fullReleaseWorkflow.jobs.npm_telegram["timeout-minutes"]).toBe(
-      "${{ inputs.release_profile == 'full' && 360 || 120 }}",
-    );
-    expect(fullReleaseWorkflow.jobs.performance["timeout-minutes"]).toBe(360);
     const fullReleaseSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
     expect(fullReleaseWorkflow.on.workflow_dispatch.inputs.fail_fast).toEqual({
       description:
-        "Cancel each child workflow after its first failed job; false collects independent failures to completion",
+        "Cancel only an exact active child after its first blocking job; false drains all children to completion",
       required: false,
       default: false,
       type: "boolean",
@@ -951,26 +916,26 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     ] as const) {
       const dispatch: WorkflowStep = fullReleaseWorkflow.jobs[jobName].steps[0];
       expect(dispatch.env?.CHILD_WORKFLOW_KIND).toBe(kind);
-      expect(dispatch.env?.FAIL_FAST).toBe("${{ inputs.fail_fast }}");
-      expect(dispatch.run).toContain('if [[ "$FAIL_FAST" != "true" ]]; then');
-      expect(dispatch.run).toContain("has failed child jobs before the workflow completed");
+      if (jobName === "release_checks") {
+        expect(dispatch.env?.FAIL_FAST).toBe("${{ inputs.fail_fast }}");
+        expect(dispatch.run).toContain('-f fail_fast="$FAIL_FAST"');
+      } else {
+        expect(dispatch.env).not.toHaveProperty("FAIL_FAST");
+      }
     }
     expect(fullReleaseWorkflow.jobs.performance.steps[0].env).not.toHaveProperty("FAIL_FAST");
     expect(fullReleaseSource).toContain('-f fail_fast="$FAIL_FAST"');
-    expect(fullReleaseSource).toContain(
-      "npm-telegram-beta-e2e.yml has failed child jobs before the workflow completed; cancelling the remaining run.",
+    expect(fullReleaseSource).not.toContain(
+      "has failed child jobs before the workflow completed; cancelling the remaining run.",
     );
     expect(fullReleaseSource).not.toContain("trap cancel_child");
     expect(fullReleaseSource).not.toContain("cancel_child_on_failure");
     expect(fullReleaseSource).not.toContain("exit_on_parent_signal");
     expect(fullReleaseSource).not.toContain("disable_child_cleanup");
-    expect(fullReleaseSource).toContain(
-      "Parent cancellation leaves this child running; cancel it explicitly if no longer needed.",
-    );
+    expect(fullReleaseSource).not.toContain("cancel_child");
     expect(fullReleaseSource).toContain(
       'if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then',
     );
-    expect(fullReleaseSource).toContain("cancel_child\n              exit 1");
     expect(releaseChecksWorkflow.on.workflow_dispatch.inputs.fail_fast).toEqual({
       description: "Stop the Matrix QA lane after its first failed check or scenario",
       required: false,
@@ -1032,7 +997,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       (step: WorkflowStep) => step.name === "Summarize target",
     );
     const releaseChecksDispatch = fullReleaseWorkflow.jobs.release_checks.steps.find(
-      (step: WorkflowStep) => step.name === "Dispatch and monitor release checks",
+      (step: WorkflowStep) => step.name === "Dispatch release checks",
     );
     expect(summarizeTarget?.env?.ALLOW_UNRELEASED_CHANGELOG).toBe(fullReleaseAllowance);
     expect(releaseChecksDispatch?.env?.ALLOW_UNRELEASED_CHANGELOG).toBe(fullReleaseAllowance);

@@ -204,7 +204,10 @@ describe("resolveTelegramConversationBaseSessionKey", () => {
     });
 
     expect(touch).toHaveBeenCalledWith("binding-plugin-owned", undefined);
-    expect(result.bindingMode).toEqual({ kind: "plugin-owned-runtime" });
+    expect(result.bindingMode).toEqual({
+      kind: "plugin-owned-runtime",
+      pluginId: "openclaw-codex-app-server",
+    });
     expect(result.route.agentId).toBe("main");
     expect(result.route.sessionKey).toBe("agent:main:telegram:group:-1001234567890:topic:11");
     expect(result.route.matchedBy).toBe("default");

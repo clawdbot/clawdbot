@@ -10,6 +10,7 @@ import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.s
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import { readTranscriptEventJsonSetInTransaction } from "./session-accessor.sqlite-read.js";
 import {
   formatSqliteSessionReferenceForScope,
@@ -116,10 +117,11 @@ function importSqliteSessionRowsInTransaction(
     allowStoredAliases: true,
     previousEntry: currentEntry ?? null,
   });
-  // The legacy-main handoff hashes raw ordered rows. Parsing or deduping here would make the
-  // destination proof differ and strand a partially imported canonical claim.
+  // Only trusted SQLite handoffs can transfer ownership and hash exact ordered rows;
+  // parsing, deduping, or trusting JSON ownership would break the migration boundary.
   const exactTranscriptRows = prepared.exactTranscriptRows;
   if (exactTranscriptRows) {
+    replaceSessionOwnerInTransaction(database, resolved.sessionKey, params.entry.owner);
     const transcriptScope = {
       ...resolved,
       sessionId: params.entry.sessionId,

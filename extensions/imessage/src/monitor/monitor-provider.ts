@@ -1061,6 +1061,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         : undefined;
     const { ctxPayload, chatTarget, imessageTo } = await buildIMessageInboundContext({
       cfg,
+      accountService: imessageCfg.service,
       decision: contextDecision,
       message,
       previousTimestamp,

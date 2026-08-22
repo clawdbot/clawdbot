@@ -1046,9 +1046,9 @@ export async function discoverLmstudioProvider(ctx: ProviderCatalogContext): Pro
   };
 }
 
-export async function prepareLmstudioDynamicModels(
+export async function prepareLmstudioDynamicModel(
   ctx: ProviderPrepareDynamicModelContext,
-): Promise<ProviderRuntimeModel[]> {
+): Promise<ProviderRuntimeModel | undefined> {
   const baseUrl = resolveLmstudioInferenceBase(ctx.providerConfig?.baseUrl);
   const { apiKey, headers } = await resolveLmstudioRequestContext({
     config: ctx.config,
@@ -1062,15 +1062,18 @@ export async function prepareLmstudioDynamicModels(
     headers,
     quiet: true,
   });
-  return discoveredModels.map((model) =>
-    Object.assign({}, model, {
-      provider: PROVIDER_ID,
-      api: ctx.providerConfig?.api ?? `openai-completions`,
-      baseUrl,
-      input: model.input.filter(
-        (entry): entry is "text" | "image" => entry === "text" || entry === "image",
-      ),
-    }),
-  );
+  const model = discoveredModels.find((candidate) => candidate.id === ctx.modelId);
+  if (!model) {
+    return undefined;
+  }
+  return {
+    ...model,
+    provider: PROVIDER_ID,
+    api: ctx.providerConfig?.api ?? "openai-completions",
+    baseUrl,
+    input: model.input.filter(
+      (entry): entry is "text" | "image" => entry === "text" || entry === "image",
+    ),
+  };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

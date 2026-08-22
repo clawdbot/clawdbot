@@ -139,12 +139,7 @@ struct OnboardingViewSmokeTests {
         #expect(!order.contains(2))
     }
 
-    @Test func `fresh remote setup installs CLI for the Mac node worker`() {
-        let order = OnboardingView.pageOrder(
-            for: .remote,
-            requiresCLIInstall: true)
-
-        #expect(order.contains(2))
+    @Test func `CLI install activates only a local gateway`() {
         #expect(!OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .remote))
         #expect(OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .local))
     }

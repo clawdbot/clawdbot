@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
 // OpenAI-compatible error helpers.
 // Converts OpenClaw failover/sampling errors to OpenAI-style HTTP responses.
@@ -30,6 +31,12 @@ const ERROR_TYPE_BY_REASON = {
   unclassified: undefined,
   unknown: undefined,
 } satisfies Record<FailoverReason, string | undefined>;
+
+/** Resolved agent failures must not become successful OpenAI HTTP responses. */
+export function isFailedOpenAiAgentRun(result: unknown): boolean {
+  const metadata = asOptionalRecord(asOptionalRecord(result)?.meta);
+  return Boolean(metadata?.error) || metadata?.stopReason === "error";
+}
 
 function statusForReason(reason: FailoverReason, status: number | undefined): number {
   if (reason === "server_error") {

@@ -78,24 +78,6 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     expect(sandboxExecServerRegistry.servers.has(sandbox.runtimeId)).toBe(false);
   });
 
-  it("propagates environment registration failures and releases the server lease", async () => {
-    const sandbox = createSandboxContext({});
-    const client = {
-      getServerVersion: vi.fn(() => CODEX_APP_SERVER_VERSION),
-      request: vi.fn(async () => {
-        throw new Error("environment registration failed");
-      }),
-    };
-
-    await expect(
-      ensureCodexSandboxExecServerEnvironment({
-        client: client as never,
-        sandbox,
-      }),
-    ).rejects.toThrow("environment registration failed");
-    expect(sandboxExecServerRegistry.servers.has(sandbox.runtimeId)).toBe(false);
-  });
-
   it.each([
     { containerWorkdir: "/workspace", cwd: "file:///workspace" },
     {

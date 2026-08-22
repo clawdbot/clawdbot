@@ -530,6 +530,9 @@ export function buildEmbeddedRunPayloads(params: {
           if (item.sourceReplyMirror.idempotencyKey) {
             sourceReplyTranscriptMirror.idempotencyKey = item.sourceReplyMirror.idempotencyKey;
           }
+          if (item.sourceReplyMirror.transcriptOwner) {
+            sourceReplyTranscriptMirror.transcriptOwner = true;
+          }
           setReplyPayloadMetadata(payload, {
             sourceReplyTranscriptMirror,
           });

@@ -331,7 +331,15 @@ describe("AppSidebar agent chip", () => {
         path: "",
         count: 1,
         defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 5, hasActiveRun: true }],
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 5,
+            hasActiveRun: true,
+            unread: true,
+          },
+        ],
       },
       agentId: "main",
     });
@@ -345,9 +353,24 @@ describe("AppSidebar agent chip", () => {
     expect(spinner).not.toBeNull();
     expect(sidebar.querySelector(".nav-item--home .nav-item__icon")).not.toBeNull();
     expect(sidebar.querySelector(".nav-item--home .session-glyph__ring")).toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).toBeNull();
     expect(spinner?.getAttribute("role")).toBe("img");
     expect(spinner?.getAttribute("aria-label")).toBe("Active run");
     expect(spinner?.getAttribute("title")).toBe("Active run");
+
+    harness.publishList({
+      result: {
+        ts: 3,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 6, unread: true }],
+      },
+      agentId: "main",
+    });
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".nav-item--home .session-run-spinner")).toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).not.toBeNull();
   });
 
   it("uses the shared tooltip for the Home dashboard glyph", async () => {

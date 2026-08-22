@@ -1543,41 +1543,47 @@ select.input {
   stroke-linejoin: round;
 }
 
-.scope-upgrade-chip-row {
-  display: flex;
-  min-height: 30px;
-  justify-content: flex-end;
-  align-items: center;
+.scope-upgrade-status-trigger {
+  color: color-mix(in srgb, var(--warn) 82%, var(--text-strong));
+  background: color-mix(in srgb, var(--warn) 11%, transparent);
 }
 
-.scope-upgrade-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 30px;
-  padding: 5px 11px;
-  border: 1px solid color-mix(in srgb, var(--warn) 32%, var(--border));
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--warn) 9%, var(--bg-elevated));
-  color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.scope-upgrade-chip:hover {
+.scope-upgrade-status-trigger:hover {
   background: color-mix(in srgb, var(--warn) 14%, var(--bg-elevated));
 }
 
-.scope-upgrade-chip:focus-visible {
+.scope-upgrade-status-trigger:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
 
-.scope-upgrade-chip__dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
+.scope-upgrade-details-popover {
+  --max-width: min(380px, calc(100vw - 32px));
+}
+
+.scope-upgrade-details-popover::part(body) {
+  padding: 0;
+}
+
+.scope-upgrade-details {
+  width: min(380px, calc(100vw - 32px));
+  box-shadow: var(--overlay-shadow);
+}
+
+.scope-upgrade-details-dialog .scope-upgrade-details {
+  width: 100%;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  box-shadow: 0 -18px 48px color-mix(in srgb, black 24%, transparent);
+}
+
+@media (max-width: 560px) {
+  .scope-upgrade-details {
+    flex-wrap: wrap;
+  }
+
+  .scope-upgrade-details .callout__content {
+    flex-basis: calc(100% - 38px);
+  }
 }
 
 .callout.danger {

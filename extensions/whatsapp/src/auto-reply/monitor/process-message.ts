@@ -19,6 +19,7 @@ import {
   toPluginMessageReceivedEvent,
   triggerInternalHook,
 } from "openclaw/plugin-sdk/hook-runtime";
+import { formatAudioTranscriptForAgent } from "openclaw/plugin-sdk/media-understanding-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { getPrimaryIdentityId, getSelfIdentity, getSenderIdentity } from "../../identity.js";
@@ -39,7 +40,6 @@ import { deliverWebReply } from "../deliver-reply.js";
 import { whatsappInboundLog } from "../loggers.js";
 import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
-import { formatWhatsAppAudioTranscriptForAgent } from "./audio-transcript.js";
 import {
   resolveVisibleWhatsAppGroupHistory,
   resolveVisibleWhatsAppReplyContext,
@@ -299,7 +299,7 @@ export async function processMessage(params: {
           ...params.msg,
           payload: {
             ...params.msg.payload,
-            body: formatWhatsAppAudioTranscriptForAgent(audioTranscript),
+            body: formatAudioTranscriptForAgent(audioTranscript),
           },
         }
       : params.msg;

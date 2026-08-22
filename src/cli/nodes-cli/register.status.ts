@@ -160,26 +160,14 @@ function formatPendingApprovalCommand(raw: unknown, opts: NodesRpcOpts): string 
   return formatCliCommand(args.map(quoteCliArg).join(" "));
 }
 
-function parseSinceMs(raw: unknown, label: string): number | undefined {
-  if (raw === undefined || raw === null) {
-    return undefined;
-  }
-  const value = normalizeOptionalString(raw) ?? (typeof raw === "number" ? String(raw) : null);
-  if (value === null) {
-    defaultRuntime.error(`${label}: invalid duration value`);
-    defaultRuntime.exit(1);
-    return undefined;
-  }
-  if (!value) {
+function parseSinceMs(raw: string | undefined, label: string): number | undefined {
+  if (raw === undefined) {
     return undefined;
   }
   try {
-    return parseDurationMs(value);
+    return parseDurationMs(raw);
   } catch (err) {
-    const message = formatErrorMessage(err);
-    defaultRuntime.error(`${label}: ${message}`);
-    defaultRuntime.exit(1);
-    return undefined;
+    throw new Error(`${label}: ${formatErrorMessage(err)}`, { cause: err });
   }
 }
 
@@ -501,7 +489,7 @@ export function registerNodesStatusCommands(nodes: Command) {
             defaultRuntime.log(muted("- (none effective)"));
           } else {
             for (const c of commands) {
-              defaultRuntime.log(`- ${c}`);
+              defaultRuntime.log(`- ${sanitizeTerminalText(c)}`);
             }
           }
           if (pendingCommands.length > 0) {

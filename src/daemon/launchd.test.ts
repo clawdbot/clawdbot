@@ -2763,6 +2763,50 @@ describe("launchd install", () => {
     expect(output).not.toContain("Stopped LaunchAgent");
   });
 
+  it("does not treat a co-located Gateway's own port as busy when stopping a node-host LaunchAgent", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_SERVICE_KIND: "node",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node",
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    setLaunchAgentPlist({
+      env,
+      label: "ai.openclaw.node",
+      programArguments: ["node", "node", "run", "--host", "127.0.0.1", "--port", "18789"],
+    });
+    const stdout = new PassThrough();
+    let output = "";
+    stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [],
+      hints: [],
+    });
+    probePortUsage.mockResolvedValue("busy");
+
+    await withProcessEnv(
+      {
+        LAUNCH_JOB_LABEL: undefined,
+        LAUNCH_JOB_NAME: undefined,
+        XPC_SERVICE_NAME: undefined,
+        OPENCLAW_SERVICE_MARKER: undefined,
+        OPENCLAW_SERVICE_KIND: undefined,
+        OPENCLAW_LAUNCHD_LABEL: undefined,
+      },
+      async () => {
+        await stopLaunchAgent({ env, stdout });
+      },
+    );
+
+    expect(inspectPortUsage).not.toHaveBeenCalled();
+    expect(cleanStaleGatewayProcessesSync).not.toHaveBeenCalled();
+    expect(output).toContain("Stopped LaunchAgent");
+  });
+
   it("stops LaunchAgent with disable+stop when --disable is passed", async () => {
     const env = createDefaultLaunchdEnv();
     const stdout = new PassThrough();
@@ -3664,6 +3708,35 @@ describe("launchd install", () => {
       expect(launchctlCommandNames()).not.toContain("kickstart");
     },
   );
+
+  it("does not treat a co-located Gateway's own port as busy when restarting a node-host LaunchAgent", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_SERVICE_KIND: "node",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node",
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    setLaunchAgentPlist({
+      env,
+      label: "ai.openclaw.node",
+      programArguments: ["node", "node", "run", "--host", "127.0.0.1", "--port", "18789"],
+    });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 9999, address: "TCP 127.0.0.1:18789 (LISTEN)" }],
+      hints: [],
+    });
+
+    const result = await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    expect(result).toEqual({ outcome: "completed" });
+    expect(cleanStaleGatewayProcessesSync).not.toHaveBeenCalled();
+    expect(inspectPortUsage).not.toHaveBeenCalled();
+  });
 
   it("skips stale cleanup when no explicit launch agent port can be resolved", async () => {
     const env = createDefaultLaunchdEnv();

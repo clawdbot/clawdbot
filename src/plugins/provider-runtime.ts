@@ -282,8 +282,8 @@ export async function prepareProviderDynamicModel(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   context: ProviderPrepareDynamicModelContext;
-}): Promise<void> {
-  await resolveProviderRuntimePlugin(params)?.prepareDynamicModel?.(params.context);
+}): Promise<ProviderRuntimeModel | void> {
+  return resolveProviderRuntimePlugin(params)?.prepareDynamicModel?.(params.context);
 }
 
 export function shouldPreferProviderRuntimeResolvedModel(params: {

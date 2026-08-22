@@ -10,13 +10,14 @@
   --shell-chrome-controls-inset: 10px;
   --shell-chrome-control-size: 32px;
   --shell-chrome-controls-gap: 4px;
+  --shell-chrome-controls-access-width: 0px;
   /* Four controls: the admin-gated Ask OpenClaw fallback joins the strip only
      while the nav is collapsed, which is exactly when this width applies. */
   --shell-chrome-controls-collapsed-width: calc(
     var(--shell-chrome-control-size) + var(--shell-chrome-control-size) +
       var(--shell-chrome-control-size) + var(--shell-chrome-control-size) +
       var(--shell-chrome-controls-gap) + var(--shell-chrome-controls-gap) +
-      var(--shell-chrome-controls-gap)
+      var(--shell-chrome-controls-gap) + var(--shell-chrome-controls-access-width)
   );
   --shell-chrome-safe-area-left: calc(
     var(--shell-chrome-controls-inset) + var(--shell-chrome-controls-collapsed-width) -
@@ -139,6 +140,51 @@
   stroke-linejoin: round;
 }
 
+.shell:has(.scope-upgrade-shell-status) {
+  --shell-chrome-controls-access-width: calc(
+    var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap)
+  );
+}
+
+.scope-upgrade-shell-status {
+  position: fixed;
+  top: 10px;
+  left: calc(
+    var(--shell-nav-width) + var(--shell-chrome-controls-inset) + 2 *
+      (var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap))
+  );
+  z-index: 45;
+}
+
+.shell--nav-collapsed .scope-upgrade-shell-status {
+  left: calc(
+    var(--shell-chrome-controls-inset) + 3 *
+      (var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap))
+  );
+}
+
+:is(.shell--settings, .shell--onboarding:not(.shell--mobile-nav)) .scope-upgrade-shell-status {
+  left: calc(var(--shell-nav-width) + var(--shell-chrome-controls-inset));
+}
+
+.shell--nav-collapsed:has(.scope-upgrade-shell-status) .shell-chrome-controls__custodian {
+  margin-left: calc(var(--shell-chrome-control-size) + var(--shell-chrome-controls-gap));
+}
+
+.shell--mobile-nav .scope-upgrade-shell-status {
+  top: max(10px, env(safe-area-inset-top));
+  right: max(58px, env(safe-area-inset-right));
+  left: auto;
+  width: 40px;
+  height: 40px;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.shell--onboarding.shell--mobile-nav .scope-upgrade-shell-status {
+  right: max(12px, env(safe-area-inset-right));
+}
+
 .shell--mobile-nav .shell-chrome-controls {
   display: none;
 }
@@ -151,12 +197,18 @@
       .shell:not(.shell--mobile-nav, .shell--nav-collapsed, .shell--settings)
   )
   .content
-  > :is(openclaw-update-banner, openclaw-device-scope-upgrade-banner)
+  > openclaw-update-banner
   .callout {
   margin-left: var(--shell-chrome-safe-area-left);
 }
 
 html.openclaw-native-macos .shell-chrome-controls {
+  top: 52px;
+}
+
+html.openclaw-native-macos:not(.openclaw-native-web-chrome)
+  .shell:not(.shell--mobile-nav)
+  .scope-upgrade-shell-status {
   top: 52px;
 }
 
@@ -173,9 +225,31 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   display: none;
 }
 
+html.openclaw-native-nav:not(.openclaw-native-web-chrome)
+  .shell:not(.shell--mobile-nav)
+  .scope-upgrade-shell-status {
+  left: calc(
+    var(--shell-nav-width) + var(--shell-chrome-controls-inset) + var(--shell-chrome-control-size) +
+      var(--shell-chrome-controls-gap)
+  );
+}
+
+html.openclaw-native-nav:not(.openclaw-native-web-chrome)
+  .shell--nav-collapsed:not(.shell--mobile-nav)
+  .scope-upgrade-shell-status {
+  left: var(--shell-chrome-controls-inset);
+}
+
 /* Web-chrome hosts provide this entire cluster in the native titlebar. */
 html.openclaw-native-web-chrome .shell-chrome-controls {
   display: none;
+}
+
+html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .scope-upgrade-shell-status {
+  top: 11px;
+  left: 252px;
+  width: 28px;
+  height: 28px;
 }
 
 .macos-titlebar-controls {
@@ -189,7 +263,8 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   display: flex;
   align-items: center;
   gap: 4px;
-  width: 156px;
+  width: max-content;
+  min-width: 156px;
   height: var(--openclaw-native-titlebar-height, 50px);
 }
 
@@ -616,7 +691,8 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 .settings-sidebar__footer {
   flex-shrink: 0;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
   padding: 12px 21px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
@@ -626,6 +702,10 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 
 openclaw-settings-save-indicator {
   min-width: 0;
+}
+
+openclaw-settings-save-indicator:empty {
+  display: none;
 }
 
 .settings-save-indicator {
@@ -3397,12 +3477,12 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 .sidebar-nav__head {
   position: absolute;
   z-index: 1;
-  top: 0;
+  top: 5px;
   right: 0;
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  padding: 2px 8px 2px 12px;
+  padding: 0 8px 0 12px;
 }
 
 .sidebar-nav__head-action {
@@ -3435,6 +3515,10 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   .sidebar-nav__head-action {
     opacity: 1;
   }
+
+  .sidebar-home-session-states {
+    transform: translateX(-25px);
+  }
 }
 
 .sidebar-nav__head-action:hover,
@@ -3463,6 +3547,14 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  transition: transform var(--duration-fast) ease;
+}
+
+/* The Pages editor shares Home's row. Move every trailing state together so
+   its hover/focus hitbox never covers progress, warning, or draft status. */
+.sidebar-nav:hover .sidebar-home-session-states,
+.sidebar-nav:focus-within .sidebar-home-session-states {
+  transform: translateX(-25px);
 }
 
 /* Zone 5: product chrome in one slim footer bar. The shell footer's top
@@ -3906,10 +3998,6 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   margin-top: 20px;
 }
 
-.content > openclaw-device-scope-upgrade-banner:has(.scope-upgrade-chip-row) + * {
-  margin-top: 8px;
-}
-
 .connection-action-block {
   padding: 10px 12px;
   border: 1px solid var(--border);
@@ -4001,20 +4089,14 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   max-height: 80px;
 }
 
-/* The fixed web chrome sits over the top-left of ordinary page headers too.
-   Settings, mobile drawers, and native hosts own different chrome. */
+/* Keep ordinary page headers below the fixed web chrome instead of shifting
+   their titles away from the page content. Settings, mobile drawers, and
+   native hosts own different chrome. */
 html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
-  .shell:not(.shell--nav-collapsed):not(.shell--mobile-nav):not(.shell--settings)
+  .shell:not(.shell--mobile-nav):not(.shell--settings)
   .content:not(.content--chat)
   .content-header {
-  padding-left: 88px;
-}
-
-html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
-  .shell--nav-collapsed:not(.shell--mobile-nav):not(.shell--settings)
-  .content:not(.content--chat)
-  .content-header {
-  padding-left: 124px;
+  margin-top: 48px;
 }
 
 .content-header--page + * {

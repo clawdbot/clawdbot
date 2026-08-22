@@ -3098,7 +3098,7 @@ button.chat-pr__diff {
   border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
   /* Split the inset evenly so the settings chip sits centered between the
      divider and the card edge instead of hugging the divider. */
-  padding: calc(var(--chat-box-inset) / 2) var(--chat-box-inset);
+  padding: calc(var(--chat-box-inset) / 2) max(var(--chat-box-inset), 8px);
 }
 
 .agent-chat__composer-meta,
@@ -4120,6 +4120,7 @@ button.chat-pr__diff {
     max-height: calc(7em + var(--chat-box-inset) + var(--chat-box-inset));
     padding-top: 10px;
     padding-bottom: 10px;
+    padding-left: var(--chat-box-inset);
     font-size: var(--control-ui-input-text-size);
   }
 

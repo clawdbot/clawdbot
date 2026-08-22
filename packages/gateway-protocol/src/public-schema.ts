@@ -309,6 +309,7 @@ export {
   AuditActivityToolActionV1Schema,
   ExecutionIdentityContextV1Schema,
   DecisionReceiptV1Schema,
+  DecisionReceiptDisplayV1Schema,
   AuditRunIdentityPresentV1Schema,
   AuditRunIdentityUnknownV1Schema,
   AuditRunIdentityUnsupportedV1Schema,

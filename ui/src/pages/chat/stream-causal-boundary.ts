@@ -100,7 +100,7 @@ export function indexTurnContinuations<T>(
 }
 
 export function latestPersistedSteerBoundary(
-  messages: unknown[],
+  messages: readonly unknown[],
   activeRunId: string,
 ): { index: number; runId: string } | null {
   for (let index = messages.length - 1; index >= 0; index -= 1) {

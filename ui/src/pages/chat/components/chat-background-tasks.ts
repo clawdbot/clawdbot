@@ -579,6 +579,7 @@ export function createBackgroundTasksProps(
     loading: state.loading,
     error: state.error,
     tasks: state.tasks,
+    activeCount: state.tasks?.filter(isActiveTask).length ?? 0,
     subagentActivity,
     openTaskId: opts.openTaskId,
     taskDetails: state.taskDetails,

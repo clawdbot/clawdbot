@@ -1,5 +1,5 @@
 // Builds grouped Vitest duration reports or compares two grouped reports.
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +7,11 @@ import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import pMap from "p-map";
 import { coerceErrorMessage } from "./lib/error-format.mts";
+import {
+  inspectManagedProcessGroup,
+  terminateManagedChild,
+  waitForManagedProcessGroupExit,
+} from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import {
   buildGroupedTestComparison,
@@ -17,7 +22,6 @@ import {
   renderGroupedTestReport,
 } from "./lib/test-group-report.mts";
 import { formatMs } from "./lib/vitest-report-cli-utils.mts";
-import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolveVitestNodeArgs } from "./run-vitest.mts";
 import {
   applyParallelVitestCachePaths,
@@ -31,7 +35,6 @@ const DEFAULT_TIMEOUT_KILL_GRACE_MS = 10_000;
 const DEFAULT_SPAWN_LOG_MAX_BYTES = 1024 * 1024 * 256;
 const DEFAULT_SPAWN_OUTPUT_MAX_BYTES = 1024 * 1024 * 64;
 const DEFAULT_SPAWN_OUTPUT_TAIL_BYTES = 1024 * 256;
-const PROCESS_GROUP_EXIT_POLL_MS = 25;
 
 type ProcessSignal = `SIG${string}`;
 type TimerHandle = ReturnType<typeof setTimeout>;
@@ -96,12 +99,6 @@ type RunVitestParams = TestGroupRunSpec &
     logPath: string;
     reportPath: string;
   };
-
-type TaskkillRunner = (
-  command: string,
-  args: string[],
-  options: { stdio: "ignore" },
-) => { error?: Error; status: number | null };
 
 function usage() {
   return [
@@ -335,57 +332,6 @@ function parseMaxRssBytes(output: string) {
   return null;
 }
 
-function hasErrorCode(error: unknown, code: string) {
-  return isRecord(error) && error.code === code;
-}
-
-export function signalTestGroupReportChild(
-  child: Pick<ChildProcess, "kill" | "pid">,
-  signal: ProcessSignal,
-  {
-    appendDiagnostic = () => {},
-    platform = process.platform,
-    runTaskkill = spawnSync,
-    useProcessGroup = platform !== "win32",
-  }: {
-    appendDiagnostic?: (message: string) => void;
-    platform?: typeof process.platform;
-    runTaskkill?: TaskkillRunner;
-    useProcessGroup?: boolean;
-  } = {},
-) {
-  if (useProcessGroup && typeof child.pid === "number") {
-    try {
-      process.kill(-child.pid, signal as NodeJS.Signals);
-      return;
-    } catch (error) {
-      if (error && !hasErrorCode(error, "ESRCH")) {
-        appendDiagnostic(
-          `[test-group-report] failed to send ${signal} to process group: ${coerceErrorMessage(error)}\n`,
-        );
-      }
-    }
-  }
-  if (platform === "win32" && typeof child.pid === "number") {
-    const args = ["/PID", String(child.pid), "/T"];
-    if (signal === "SIGKILL") {
-      args.push("/F");
-    }
-    const taskkillPath = resolveWindowsTaskkillPath();
-    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
-    if (!result?.error && result?.status === 0) {
-      return;
-    }
-    if (signal !== "SIGKILL") {
-      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
-      if (!forceResult?.error && forceResult?.status === 0) {
-        return;
-      }
-    }
-  }
-  child.kill(signal as NodeJS.Signals);
-}
-
 /**
  * Runs a command, captures text output, and terminates timed-out process groups.
  */
@@ -422,7 +368,17 @@ export function spawnText(command: string, args: readonly string[], options: Spa
     let childClosedResult: SpawnTextResult | null = null;
     let waitingForKillGrace = false;
     const signalChild = (signal: ProcessSignal) =>
-      signalTestGroupReportChild(child, signal, { appendDiagnostic, useProcessGroup });
+      terminateManagedChild(child, signal as NodeJS.Signals, {
+        onChildSignalError(error) {
+          throw error;
+        },
+        onProcessGroupSignalError(error) {
+          appendDiagnostic(
+            `[test-group-report] failed to send ${signal} to process group: ${coerceErrorMessage(error)}\n`,
+          );
+        },
+        taskkillTimeoutMs: null,
+      });
     const parentSignalHandlers: { signal: ProcessSignal; handler: () => void }[] = [];
     const cleanupParentSignalHandlers = () => {
       for (const { signal, handler } of parentSignalHandlers) {
@@ -448,34 +404,15 @@ export function spawnText(command: string, args: readonly string[], options: Spa
       relayParentSignal("SIGINT");
       relayParentSignal("SIGTERM");
     }
-    const processGroupIsAlive = () => {
-      if (!useProcessGroup || typeof child.pid !== "number") {
-        return false;
-      }
-      try {
-        process.kill(-child.pid, 0);
-        return true;
-      } catch (error) {
-        return Boolean(error && hasErrorCode(error, "EPERM"));
-      }
-    };
-    const waitForProcessGroupExit = async (timeoutMsToWait: number) => {
-      const deadlineAt = Date.now() + timeoutMsToWait;
-      while (Date.now() < deadlineAt) {
-        if (!processGroupIsAlive()) {
-          return true;
-        }
-        await new Promise((resolvePoll) => {
-          setTimeout(resolvePoll, PROCESS_GROUP_EXIT_POLL_MS);
-        });
-      }
-      return !processGroupIsAlive();
-    };
+    const processGroupIsAlive = () =>
+      inspectManagedProcessGroup(child, { errorPolicy: "alive-on-eperm" }) === "live";
     const finishAfterProcessGroupCleanup = async (result: SpawnTextResult) => {
       const graceRemainingMs =
         killGraceDeadline === null ? killGraceMs : Math.max(0, killGraceDeadline - Date.now());
       if (graceRemainingMs > 0) {
-        await waitForProcessGroupExit(graceRemainingMs);
+        await waitForManagedProcessGroupExit(child, graceRemainingMs, {
+          errorPolicy: "alive-on-eperm",
+        });
       }
       if (settled) {
         return;

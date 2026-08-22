@@ -31,6 +31,7 @@ import {
   getActiveSlashMenuOptionId,
   getActiveSlashMenuOptionLabel,
   isSlashMenuVisible,
+  resetSlashMenuState,
   updateSlashMenu,
 } from "./chat-composer-slash-menu.ts";
 import {
@@ -513,6 +514,10 @@ export function renderChatComposer(props: ChatComposerProps) {
     ?.getVideoTracks?.()[0]
     ?.getSettings?.().facingMode;
   const mirrorCameraPreview = cameraFacingMode !== "environment";
+  if (props.modelSwitching && state.slashMenuCommand?.key === "think") {
+    state.slashMenuOpen = false;
+    resetSlashMenuState(state);
+  }
   const slashMenuVisible = props.connected && canCompose && isSlashMenuVisible(state);
   const skillMenuVisible = props.connected && canCompose && isSkillMenuVisible(state);
   if (!skillMenuVisible && state.skillMenuOpen && !state.skillCommandRefreshPending) {

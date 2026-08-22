@@ -116,7 +116,22 @@ describe("cron view list pane", () => {
     expect(onJobsFiltersReset).toHaveBeenCalledTimes(1);
   });
 
-  it("renders table rows with schedule and status cells and selects on click", () => {
+  it("does not expose table rows without complete table semantics", () => {
+    const container = renderView({ jobs: [createJob("job-1")] });
+
+    for (const row of container.querySelectorAll('[role="row"]')) {
+      expect(row.closest('[role="table"], [role="grid"], [role="treegrid"]')).not.toBeNull();
+      expect(
+        Array.from(row.children).every((child) =>
+          child.matches(
+            '[role="cell"], [role="gridcell"], [role="columnheader"], [role="rowheader"]',
+          ),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("renders table rows with independent native buttons for opening tasks", () => {
     const onSelectJob = vi.fn();
     const job = createJob("job-1", {
       trigger: { script: "json({ fire: true })" },
@@ -134,10 +149,13 @@ describe("cron view list pane", () => {
 
     const rows = Array.from(container.querySelectorAll(".cron-table__row"));
     expect(rows).toHaveLength(3);
+    expect(rows[0]?.getAttribute("role")).toBeNull();
     expect(rows[0]?.textContent).toContain("Cron 0 9 * * *");
     expect(rows[1]?.classList.contains("cron-table__row--paused")).toBe(true);
     expect(rows[1]?.textContent).toContain("Paused");
-    expect(rows[2]?.querySelector(".cron-table__dot--error")).not.toBeNull();
+    expect(rows[2]?.querySelector(".cron-table__state--error")?.getAttribute("aria-label")).toBe(
+      "Error",
+    );
     expect(rows[2]?.querySelector(".cron-last-glyph--error")).not.toBeNull();
     expect(rows[2]?.querySelector(".cron-table__last-run")?.getAttribute("aria-label")).toBe(
       "Error",
@@ -148,7 +166,7 @@ describe("cron view list pane", () => {
       "Trigger configured",
     );
 
-    (rows[1] as HTMLElement).click();
+    getElement(rows[1] as Element, ".cron-table__name", HTMLButtonElement).click();
     expect(onSelectJob).toHaveBeenCalledWith(paused);
   });
 
@@ -337,9 +355,11 @@ describe("cron view selects", () => {
 
   it("shows persisted non-first values in jobs filters and runs sort", () => {
     const activity = renderView({ listTab: "activity", runsSortDir: "asc" });
-    const sort = getElement(activity, "select.cron-run-sort", HTMLSelectElement);
-    expect(sort.value).toBe("asc");
-    expect(sort.querySelector('option[value="asc"]')?.hasAttribute("selected")).toBe(true);
+    const sort = getElement(activity, ".cron-run-sort", HTMLButtonElement);
+    expect(sort.textContent).toContain("Oldest first");
+    expect(
+      activity.querySelector('wa-dropdown-item[value="asc"]')?.getAttribute("aria-current"),
+    ).toBe("true");
     const tasks = renderView({ jobsLastStatusFilter: "error" });
     const lastStatus = getElement(
       tasks,

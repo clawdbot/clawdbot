@@ -284,6 +284,7 @@ export type ChannelManager = {
 
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
 export function createChannelManager(opts: ChannelManagerOptions): ChannelManager & {
+  pruneInactiveChannelAccountState: (activeChannelIds: ReadonlySet<ChannelId>) => void;
   resolveRuntimeAccountId: (channelId: ChannelId, accountId: string) => string | undefined;
 } {
   const {
@@ -497,6 +498,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       restarts.delete(restartKey(channelId, id));
       manuallyStopped.delete(restartKey(channelId, id));
       recoveryStartRequested.delete(restartKey(channelId, id));
+    }
+  };
+
+  const pruneInactiveChannelAccountState = (activeChannelIds: ReadonlySet<ChannelId>): void => {
+    for (const [channelId, store] of channelStores) {
+      if (!activeChannelIds.has(channelId)) {
+        evictStaleChannelAccountState(channelId, store, []);
+      }
     }
   };
 
@@ -1420,6 +1429,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     startChannels,
     startChannel,
     stopChannel,
+    pruneInactiveChannelAccountState,
     setAutostartSuppression: (suppression) => {
       autostartSuppression = suppression;
     },

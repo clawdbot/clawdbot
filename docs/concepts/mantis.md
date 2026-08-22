@@ -202,10 +202,13 @@ in.
 ### Telegram Desktop recorder
 
 The Telegram Desktop recorder is a standalone operator utility, invoked
-directly through `pnpm qa:telegram-desktop-recorder`. It records native
-Telegram Desktop and nothing else: it never drives OpenClaw or sends Telegram
-messages. Whoever runs it owns the turn — start the SUT, send through a real
-Telegram user, then tell the recorder which message to show — and supplies
+directly through `pnpm qa:telegram-desktop-recorder`. It never drives OpenClaw.
+Its normal recording commands do not send Telegram messages. The optional
+`actions` command drives only the measured Telegram window through bounded
+`click`, `key`, `type`, and `sleep` actions; those actions can send as the
+signed-in Telegram user. Whoever runs it owns the turn and those side effects —
+start the SUT, send through a real Telegram user, then tell the recorder which
+message to show — and supplies
 `--user-driver`, the command the recorder shells out to for the TDLib calls it
 cannot make itself (`confirm-qr`, `terminate-session`). Any driver exposing
 those two verbs works, including this repo's
@@ -215,10 +218,14 @@ The `Mantis Telegram Desktop Proof` workflow invokes the recorder with its
 local Docker provider. Its OpenClaw SUT remains isolated in the lane-attested
 container boundary while Telegram Desktop runs in the prebaked local image.
 
-Start a fresh authorized desktop and begin recording:
+Start recording. `--session` names the run-scoped session handle: when it
+already points at a healthy authorized desktop, `start` reuses it and only
+begins a fresh capture in the new output directory; otherwise it provisions
+and QR-authorizes a desktop first.
 
 ```bash
 pnpm qa:telegram-desktop-recorder start \
+  --session .artifacts/qa-e2e/desktop-recorder.json \
   --output-dir .artifacts/qa-e2e/telegram-desktop \
   --chat -1001234567890 \
   --user-driver "python3 /path/to/telegram-user-driver.py" \
@@ -228,9 +235,11 @@ pnpm qa:telegram-desktop-recorder start \
 Use `view --session <recorder.json> --message-id <id>` to open a recorded
 group post. Use `screenshot --session <recorder.json>` for a still image. Run
 `stop --session <recorder.json> --crop telegram-window` to copy the recording
-and logs, build motion GIFs, terminate the Telegram Desktop authorization, and
-release the Crabbox lease. Add `--keep-box` only when the lease must remain
-available for WebVNC inspection.
+and logs and build motion GIFs; the authorized desktop stays alive for the next
+`start`, so repeated captures skip provisioning and QR login. When the run is
+finished, run `teardown --session <recorder.json>` to terminate the Telegram
+Desktop authorization and release the Crabbox lease; the box stays inspectable
+over WebVNC until then.
 
 The recorder defaults to Crabbox's local Docker desktop path. Build the pinned
 image once, then run `start` without coordinator access:

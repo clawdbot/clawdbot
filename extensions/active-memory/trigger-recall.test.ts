@@ -29,6 +29,7 @@ function result(overrides: Partial<MemorySearchResult> = {}): MemorySearchResult
     snippet: "User prefers aisle seats and extra connection time.",
     source: "memory",
     triggers: "when booking a flight; seat preferences",
+    provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 1 },
     ...overrides,
   };
 }
@@ -61,23 +62,43 @@ describe("active-memory trigger recall", () => {
   it("limits automatic injection to curated or trusted-origin entries", () => {
     expect(isPromotedTrustedMemoryEntry(result())).toBe(true);
     expect(isPromotedTrustedMemoryEntry(result({ path: "USER.md" }))).toBe(true);
-    expect(isPromotedTrustedMemoryEntry(result({ path: "memory/2026-07-27.md" }))).toBe(false);
+    expect(isPromotedTrustedMemoryEntry(result({ provenance: undefined }))).toBe(false);
+    expect(
+      isPromotedTrustedMemoryEntry({
+        ...result({ path: "memory/2026-07-27.md" }),
+        provenance: undefined,
+      }),
+    ).toBe(false);
     expect(isPromotedTrustedMemoryEntry(result({ source: "sessions" }))).toBe(false);
     expect(
-      isPromotedTrustedMemoryEntry(result({ path: "memory/promoted.md", originClass: "owner" })),
+      isPromotedTrustedMemoryEntry(
+        result({
+          path: "memory/promoted.md",
+          provenance: { originClass: "agent", sessionKind: "interactive", observedAt: 1 },
+        }),
+      ),
     ).toBe(true);
 
     const matches = selectStrongTriggerMatches("when booking a flight", [
       result(),
       result({ path: "USER.md", startLine: 3 }),
-      result({ path: "memory/2026-07-27.md", startLine: 4 }),
+      result({ path: "memory/2026-07-27.md", startLine: 4, provenance: undefined }),
       result({ source: "sessions", path: "session.jsonl", startLine: 5 }),
     ]);
     expect(matches.map((entry) => entry.path)).toEqual(["MEMORY.md", "USER.md"]);
 
     const provenanceMatches = selectStrongTriggerMatches("when booking a flight", [
-      result({ path: "memory/untrusted.md", originClass: "untrusted", score: 1 }),
-      result({ path: "memory/owner.md", originClass: "owner", score: 1 }),
+      result({
+        path: "memory/untrusted.md",
+        provenance: { originClass: "untrusted", sessionKind: "interactive", observedAt: 1 },
+        score: 1,
+      }),
+      result({ path: "memory/missing.md", provenance: undefined, score: 1 }),
+      result({
+        path: "memory/owner.md",
+        provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 1 },
+        score: 1,
+      }),
     ]);
     expect(provenanceMatches.map((entry) => entry.path)).toEqual(["memory/owner.md"]);
   });

@@ -14,11 +14,12 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { resolveDevicePlacementEligibility } from "../worker-environments/device-placement-eligibility.js";
 import { resolveWorkerPlacementDestination } from "../worker-environments/placement-destination.js";
 import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
 import {
-  resolveWorkerPlacementExecutionMode,
+  resolveWorkerPlacementCapabilities,
   resolveWorkerPlacementSessionRuntime,
 } from "../worker-environments/placement-session-runtime.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/session-placement-lifecycle.js";
@@ -136,28 +137,41 @@ async function resolveProjectProfileDestination(params: {
   return { profileId };
 }
 
-function validateDispatchExecutionMode(params: {
+async function validateDispatchExecutionMode(params: {
   context: GatewayRequestContext;
   executionMode: "worker-turn" | "remote-exec";
   sessionRuntime: string;
+  devicePlacement: ReturnType<typeof resolveWorkerPlacementCapabilities>["devicePlacement"];
   target: { profileId: string; deviceId?: string };
   respond: RespondFn;
-}): boolean {
+}): Promise<boolean> {
+  if (params.target.deviceId !== undefined) {
+    const eligibility = await resolveDevicePlacementEligibility({
+      environmentService: params.context.workerEnvironmentService,
+      deviceId: params.target.deviceId,
+      runtimeId: params.sessionRuntime,
+      requirement: params.devicePlacement,
+      config: params.context.getRuntimeConfig(),
+      currentNode: params.context.nodeRegistry?.get?.(params.target.deviceId),
+    });
+    if (eligibility.ok) {
+      return true;
+    }
+    respondInvalidWorkerSession(params.respond, eligibility.error);
+    return false;
+  }
   if (
     params.executionMode !== "remote-exec" ||
-    (params.target.deviceId === undefined &&
-      params.context.workerEnvironmentService?.supportsExecutionMode?.(
-        params.target.profileId,
-        params.executionMode,
-      ) === true)
+    params.context.workerEnvironmentService?.supportsExecutionMode?.(
+      params.target.profileId,
+      params.executionMode,
+    ) === true
   ) {
     return true;
   }
   respondInvalidWorkerSession(
     params.respond,
-    params.target.deviceId !== undefined
-      ? `runtime ${params.sessionRuntime} cannot dispatch to a paired device; select an agent/model route with agentRuntime.id "openclaw" (the embedded runtime), or choose an SSH-backed cloud worker provider`
-      : `runtime ${params.sessionRuntime} requires an SSH-backed cloud worker provider; choose a provider that supports remote-exec, or select an agent/model route with agentRuntime.id "openclaw"`,
+    `runtime ${params.sessionRuntime} requires an SSH-backed cloud worker provider; choose a provider that supports remote-exec, or select an agent/model route with agentRuntime.id "openclaw"`,
   );
   return false;
 }
@@ -259,7 +273,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       agentId: target.target.agentId,
       sessionKey: target.canonicalKey,
     });
-    const executionMode = resolveWorkerPlacementExecutionMode(sessionRuntime);
+    const { executionMode, devicePlacement } = resolveWorkerPlacementCapabilities(sessionRuntime);
     if (!executionMode) {
       respondInvalidWorkerSession(
         respond,
@@ -269,13 +283,14 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     }
     if (
       dispatchTarget &&
-      !validateDispatchExecutionMode({
+      !(await validateDispatchExecutionMode({
         context,
         executionMode,
         sessionRuntime,
+        devicePlacement,
         target: dispatchTarget,
         respond,
-      })
+      }))
     ) {
       return;
     }
@@ -328,13 +343,14 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     }
     if (
       canUseProjectProfile &&
-      !validateDispatchExecutionMode({
+      !(await validateDispatchExecutionMode({
         context,
         executionMode,
         sessionRuntime,
+        devicePlacement,
         target: dispatchTarget,
         respond,
-      })
+      }))
     ) {
       return;
     }
@@ -346,6 +362,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
           agentId: target.target.agentId,
           executionMode,
           ...dispatchTarget,
+          ...(dispatchTarget.deviceId && devicePlacement ? { devicePlacement } : {}),
         },
         () =>
           emitSessionsChanged(context, {

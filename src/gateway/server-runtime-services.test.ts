@@ -23,6 +23,8 @@ type DrainPendingDeliveries =
   typeof import("../infra/outbound/delivery-queue-recovery.js").drainPendingDeliveriesCore;
 type RecoverPendingDeliveries =
   typeof import("../infra/outbound/delivery-queue-recovery.js").recoverPendingDeliveries;
+type MigrateLegacyPendingOutboundDeliveries =
+  typeof import("../infra/outbound/delivery-queue-migration.js").migrateLegacyPendingOutboundDeliveries;
 
 const hoisted = vi.hoisted(() => {
   const heartbeatRunner = {
@@ -53,11 +55,15 @@ const hoisted = vi.hoisted(() => {
       skippedMaxRetries: 0,
       deferredBackoff: 0,
     })),
+    migrateLegacyPendingOutboundDeliveries: vi.fn<MigrateLegacyPendingOutboundDeliveries>(
+      async () => ({ moved: 0, skipped: 0, remaining: 0 }),
+    ),
     drainPendingDeliveries: vi.fn<DrainPendingDeliveries>(async () => undefined),
     recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
     deliverQueuedSessionDelivery: vi.fn(async () => undefined),
     settleQueuedSessionDelivery: vi.fn(async () => undefined),
     deliverOutboundPayloads: vi.fn(),
+    assertQueuedConversationDeliveryAttemptAuthorized: vi.fn(),
   };
 });
 
@@ -81,6 +87,15 @@ vi.mock("../infra/outbound/deliver.js", () => ({
 vi.mock("../infra/outbound/delivery-queue-recovery.js", () => ({
   recoverPendingDeliveries: hoisted.recoverPendingDeliveries,
   drainPendingDeliveriesCore: hoisted.drainPendingDeliveries,
+}));
+
+vi.mock("../infra/outbound/delivery-queue-migration.js", () => ({
+  migrateLegacyPendingOutboundDeliveries: hoisted.migrateLegacyPendingOutboundDeliveries,
+}));
+
+vi.mock("./conversation-route-ownership.js", () => ({
+  assertQueuedConversationDeliveryAttemptAuthorized:
+    hoisted.assertQueuedConversationDeliveryAttemptAuthorized,
 }));
 
 vi.mock("../infra/session-delivery-queue-runtime.js", () => ({
@@ -138,12 +153,19 @@ describe("server-runtime-services", () => {
       skippedMaxRetries: 0,
       deferredBackoff: 0,
     });
+    hoisted.migrateLegacyPendingOutboundDeliveries.mockReset();
+    hoisted.migrateLegacyPendingOutboundDeliveries.mockResolvedValue({
+      moved: 0,
+      skipped: 0,
+      remaining: 0,
+    });
     hoisted.drainPendingDeliveries.mockReset();
     hoisted.drainPendingDeliveries.mockResolvedValue(undefined);
     hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
     hoisted.deliverQueuedSessionDelivery.mockClear();
     hoisted.settleQueuedSessionDelivery.mockClear();
     hoisted.deliverOutboundPayloads.mockClear();
+    hoisted.assertQueuedConversationDeliveryAttemptAuthorized.mockReset();
   });
 
   afterEach(() => {
@@ -365,7 +387,7 @@ describe("server-runtime-services", () => {
       throw new Error("Expected delivery recovery log children");
     }
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledWith({
-      deliver: hoisted.deliverOutboundPayloads,
+      deliver: expect.any(Function),
       cfg: {},
       log: deliveryLog,
     });
@@ -560,6 +582,66 @@ describe("server-runtime-services", () => {
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledTimes(1);
   });
 
+  it("runs legacy migration once while clean periodic ticks keep draining canonical work", async () => {
+    vi.useFakeTimers();
+    const { services } = activateScheduledServicesForTest({ startCron: false });
+
+    await vi.dynamicImportSettled();
+    expect(hoisted.migrateLegacyPendingOutboundDeliveries).toHaveBeenCalledOnce();
+    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(hoisted.migrateLegacyPendingOutboundDeliveries).toHaveBeenCalledOnce();
+    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledTimes(3);
+    services.heartbeatRunner.stop();
+  });
+
+  it.each([
+    {
+      name: "the pass skipped work",
+      firstPass: { moved: 0, skipped: 1, remaining: 0 },
+    },
+    {
+      name: "retired work remains",
+      firstPass: { moved: 0, skipped: 0, remaining: 1 },
+    },
+  ])("retries legacy migration when $name until a clean pass completes", async ({ firstPass }) => {
+    vi.useFakeTimers();
+    hoisted.migrateLegacyPendingOutboundDeliveries
+      .mockResolvedValueOnce(firstPass)
+      .mockResolvedValueOnce({ moved: 1, skipped: 0, remaining: 0 });
+    const { services } = activateScheduledServicesForTest({ startCron: false });
+
+    await vi.dynamicImportSettled();
+    expect(hoisted.migrateLegacyPendingOutboundDeliveries).toHaveBeenCalledOnce();
+    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(hoisted.migrateLegacyPendingOutboundDeliveries).toHaveBeenCalledTimes(2);
+    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledTimes(2);
+    expect(hoisted.drainPendingDeliveries).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(hoisted.migrateLegacyPendingOutboundDeliveries).toHaveBeenCalledTimes(2);
+    expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
+    services.heartbeatRunner.stop();
+  });
+
+  it("resets legacy migration completion with the scheduled-service lifecycle", async () => {
+    vi.useFakeTimers();
+    const first = activateScheduledServicesForTest({ startCron: false });
+    await vi.dynamicImportSettled();
+    expect(hoisted.migrateLegacyPendingOutboundDeliveries).toHaveBeenCalledOnce();
+    await first.services.stopOutboundDeliveryRecovery();
+
+    const second = activateScheduledServicesForTest({ startCron: false });
+    await vi.dynamicImportSettled();
+    expect(hoisted.migrateLegacyPendingOutboundDeliveries).toHaveBeenCalledTimes(2);
+    second.services.heartbeatRunner.stop();
+  });
+
   it.each([
     {
       name: "startup recovery deferred an existing delivery for backoff",
@@ -589,12 +671,55 @@ describe("server-runtime-services", () => {
     const [drain] = hoisted.drainPendingDeliveries.mock.calls[0] ?? [];
     expect(drain).toMatchObject({
       drainKey: "gateway:outbound",
-      deliver: hoisted.deliverOutboundPayloads,
+      deliver: expect.any(Function),
     });
     expect(drain?.selectEntry({ channel: "discord" } as never, Date.now())).toEqual({
       match: true,
       bypassBackoff: false,
     });
+    services.heartbeatRunner.stop();
+  });
+
+  it("reconstructs conversation route authorization for a recovered delivery attempt", async () => {
+    vi.useFakeTimers();
+    const { services } = activateScheduledServicesForTest({ startCron: false });
+    await vi.dynamicImportSettled();
+    const recovery = hoisted.recoverPendingDeliveries.mock.calls[0]?.[0];
+    if (!recovery) {
+      throw new Error("Expected outbound recovery to start");
+    }
+    hoisted.deliverOutboundPayloads.mockImplementationOnce(async (params) => {
+      await params.onDeliveryAttempt?.();
+      return [];
+    });
+    const denial = new Error("conversation route reassigned");
+    hoisted.assertQueuedConversationDeliveryAttemptAuthorized.mockImplementationOnce(() => {
+      throw denial;
+    });
+
+    await expect(
+      recovery.deliver({
+        cfg: {},
+        channel: "reef",
+        to: "reef:molty",
+        payloads: [{ text: "hello" }],
+        conversationDeliveryAttemptAuthority: {
+          agentId: "main",
+          operationId: "operation-recovery",
+          storePath: "/tmp/agent.sqlite",
+          routeFingerprint: "route-recovery",
+        },
+      }),
+    ).rejects.toBe(denial);
+
+    expect(hoisted.assertQueuedConversationDeliveryAttemptAuthorized).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        operationId: "operation-recovery",
+        storePath: "/tmp/agent.sqlite",
+        routeFingerprint: "route-recovery",
+      }),
+    );
     services.heartbeatRunner.stop();
   });
 

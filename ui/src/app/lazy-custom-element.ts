@@ -74,7 +74,7 @@ export class LazyCustomElementRequestController {
     return this.current;
   }
 
-  preload(element: OptionalCustomElement): void {
+  preload(element: OptionalCustomElement, options?: { reportError?: boolean }): void {
     if (isOptionalElementDefined(element) || this.preloads.has(element.tagName)) {
       return;
     }
@@ -82,7 +82,17 @@ export class LazyCustomElementRequestController {
     void ensureCustomElementDefined(element.tagName, element.loadModule)
       .then(
         () => this.host.requestUpdate(),
-        () => undefined,
+        (error: unknown) => {
+          if (options?.reportError && !this.current) {
+            this.current = {
+              element,
+              error,
+              stale: isStaleChunkImportError(error),
+              status: "error",
+            };
+            this.host.requestUpdate();
+          }
+        },
       )
       .finally(() => this.preloads.delete(element.tagName));
   }

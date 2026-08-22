@@ -757,6 +757,35 @@ describe("collapseCompletedTurnWork", () => {
     expect(requireGroup(items[2]).role).toBe("assistant");
   });
 
+  it("keeps durable context compaction inside completed work instead of treating it as the reply", () => {
+    const items = collapsedItems({
+      messages: [
+        userMessage("do it", 1_000),
+        {
+          role: "custom",
+          customType: "openclaw.context-compaction",
+          content: "Context compacted",
+          display: true,
+          excludeFromContext: true,
+          timestamp: 2_000,
+        },
+        assistantMessage("All done.", 3_000),
+      ],
+    });
+
+    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
+    const work = requireWorkGroup(items[1]);
+    expect(work.groups).toHaveLength(1);
+    expect(work.groups[0]?.messages[0]?.message).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Context compacted" }],
+      __openclaw: { runtimeActivityKind: "context_compaction" },
+    });
+    expect(requireGroup(items[2]).messages[0]?.message).toMatchObject({
+      content: "All done.",
+    });
+  });
+
   it.each([
     {
       role: "assistant",

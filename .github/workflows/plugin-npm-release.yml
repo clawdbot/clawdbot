@@ -7,9 +7,12 @@ on:
       - main
     paths:
       - ".github/workflows/plugin-npm-release.yml"
+      - ".github/actions/setup-node-env/**"
       - "extensions/**"
       - "package.json"
-      - "packages/normalization-core/**"
+      - "pnpm-lock.yaml"
+      - "packages/normalization-core/src/**"
+      - "packages/plugin-package-contract/src/**"
       - "scripts/generate-npm-package-lock.mjs"
       - "scripts/generate-npm-package-lock.mts"
       - "scripts/lib/npm-publish-plan.mjs"
@@ -19,6 +22,8 @@ on:
       - "scripts/lib/plugin-npm-package-manifest.mts"
       - "scripts/lib/tsx-cli-shim.mjs"
       - "scripts/lib/plugin-npm-release.ts"
+      - "scripts/lib/plugin-publication-candidates.ts"
+      - "scripts/lib/plugin-publication-collector.ts"
       - "scripts/lib/actions-artifact-archive.mjs"
       - "scripts/plugin-npm-publish.sh"
       - "scripts/plugin-publication-artifact.mjs"
@@ -218,6 +223,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
@@ -392,6 +398,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
@@ -1297,6 +1304,7 @@ jobs:
         if: steps.publication_evidence.outputs.publish_route == 'npm-token-bootstrap' || steps.publication_evidence.outputs.publish_route == 'npm-readback'
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
@@ -1313,6 +1321,7 @@ jobs:
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
@@ -1514,6 +1523,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 

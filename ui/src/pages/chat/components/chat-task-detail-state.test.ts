@@ -68,6 +68,7 @@ function backgroundTasks(selectedTask: TaskSummary): BackgroundTasksProps {
     loading: false,
     error: null,
     tasks: [selectedTask],
+    activeCount: selectedTask.status === "queued" || selectedTask.status === "running" ? 1 : 0,
     subagentActivity: {
       rows: [],
       overflowWorking: 0,

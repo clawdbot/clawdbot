@@ -68,6 +68,9 @@ export function resolveReusableWorkspaceSkillSnapshot(
       workspaceDir: watcherWorkspaceDir,
       ...(skillRoots ? { executionSkillsDir: skillRoots.executionSkillsDir } : {}),
       config: params.config,
+      ...(params.pluginMetadataSnapshot
+        ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+        : {}),
     });
   }
   const snapshotVersion = params.snapshotVersion ?? getSkillsSnapshotVersion(watcherWorkspaceDir);

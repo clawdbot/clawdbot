@@ -114,6 +114,23 @@ export class OpenClawModalDialog extends OpenClawLitElement {
       }
     }
 
+    @media (max-width: 1100px) {
+      :host(.scope-upgrade-details-dialog) wa-dialog {
+        --width: 100vw;
+      }
+
+      :host(.scope-upgrade-details-dialog) wa-dialog::part(dialog) {
+        width: 100vw;
+        max-width: none;
+        max-height: min(70dvh, 560px);
+        margin: auto 0 0;
+      }
+
+      :host(.scope-upgrade-details-dialog) wa-dialog::part(body) {
+        overflow: auto;
+      }
+    }
+
     @media (max-width: 768px),
       (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
       :host(.mobile-edge-to-edge) wa-dialog {

@@ -442,14 +442,25 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         agentId: placement.agentId,
         sessionKey: placement.sessionKey,
       });
-      if (!options.environments.resolveSshIdentity) {
-        throw new Error("Remote-exec sandbox identity resolver is unavailable");
+      const preparedPlacement = options.placements.get(params.sessionId);
+      if (
+        preparedPlacement?.state !== "active" ||
+        preparedPlacement.executionMode !== "remote-exec" ||
+        preparedPlacement.agentId !== placement.agentId ||
+        preparedPlacement.sessionKey !== placement.sessionKey ||
+        preparedPlacement.environmentId !== placement.environmentId ||
+        preparedPlacement.activeOwnerEpoch !== placement.activeOwnerEpoch ||
+        preparedPlacement.generation !== placement.generation
+      ) {
+        throw new Error("Remote-exec placement changed while preparing its managed workspace");
       }
       const sandbox = await createRemoteExecPlacementSandbox({
         config: params.config,
         environments: {
           get: options.environments.get,
-          resolveSshIdentity: options.environments.resolveSshIdentity,
+          ...(options.environments.resolveSshIdentity
+            ? { resolveSshIdentity: options.environments.resolveSshIdentity }
+            : {}),
         },
         localWorkspaceDir,
         placement,
@@ -458,11 +469,26 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       if (
         current?.state !== "active" ||
         current.executionMode !== "remote-exec" ||
+        current.agentId !== placement.agentId ||
+        current.sessionKey !== placement.sessionKey ||
         current.environmentId !== placement.environmentId ||
         current.activeOwnerEpoch !== placement.activeOwnerEpoch ||
         current.generation !== placement.generation
       ) {
         throw new Error("Remote-exec placement changed while preparing its sandbox");
+      }
+      const currentEnvironment = options.environments.get(placement.environmentId);
+      if (
+        currentEnvironment?.state !== "attached" ||
+        currentEnvironment.environmentId !== placement.environmentId ||
+        currentEnvironment.ownerEpoch !== placement.activeOwnerEpoch ||
+        currentEnvironment.attachedSessionIds.length !== 1 ||
+        currentEnvironment.attachedSessionIds[0] !== placement.sessionId ||
+        (sandbox.backendId === "node" &&
+          "placementNodeId" in sandbox &&
+          currentEnvironment.nodeDeviceId !== sandbox.placementNodeId)
+      ) {
+        throw new Error("Remote-exec environment changed while preparing its sandbox");
       }
       return sandbox;
     },

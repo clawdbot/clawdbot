@@ -116,16 +116,12 @@ async function expectDiscordStartupDelay(
 }
 
 function installDiscordRuntime(
-  discord: Record<string, unknown>,
   openKeyedStore: (options: Record<string, unknown>) => unknown = vi.fn(() => ({
     lookup: vi.fn(async () => undefined),
     register: vi.fn(async () => undefined),
   })),
 ) {
   setDiscordRuntime({
-    channel: {
-      discord,
-    },
     logging: {
       shouldLogVerbose: () => false,
     },
@@ -167,7 +163,7 @@ afterEach(() => {
 
 beforeEach(async () => {
   vi.useRealTimers();
-  installDiscordRuntime({});
+  installDiscordRuntime();
 });
 
 beforeAll(async () => {
@@ -453,12 +449,6 @@ describe("discordPlugin outbound", () => {
   });
 
   it("uses direct Discord probe helpers for status probes", async () => {
-    const runtimeProbeDiscord = vi.fn(async () => {
-      throw new Error("runtime Discord probe should not be used");
-    });
-    installDiscordRuntime({
-      probeDiscord: runtimeProbeDiscord,
-    });
     probeDiscordMock.mockResolvedValue({
       ok: true,
       bot: { username: "Bob" },
@@ -487,7 +477,6 @@ describe("discordPlugin outbound", () => {
     const forwardedTimeoutMs = Number(argAt(probeDiscordMock, 0, 1));
     expect(forwardedTimeoutMs).toBeGreaterThan(0);
     expect(forwardedTimeoutMs).toBeLessThanOrEqual(5_000);
-    expect(runtimeProbeDiscord).not.toHaveBeenCalled();
   });
 
   it("subtracts lazy probe loading from the status budget", async () => {
@@ -577,16 +566,6 @@ describe("discordPlugin outbound", () => {
   });
 
   it("uses direct Discord startup helpers for async startup enrichment", async () => {
-    const runtimeProbeDiscord = vi.fn(async () => {
-      throw new Error("runtime Discord probe should not be used");
-    });
-    const runtimeMonitorDiscordProvider = vi.fn(async () => {
-      throw new Error("runtime Discord monitor should not be used");
-    });
-    installDiscordRuntime({
-      probeDiscord: runtimeProbeDiscord,
-      monitorDiscordProvider: runtimeMonitorDiscordProvider,
-    });
     probeDiscordMock.mockResolvedValue({
       ok: true,
       bot: { username: "Bob" },
@@ -613,8 +592,6 @@ describe("discordPlugin outbound", () => {
     expect(monitorParams.token).toBe("discord-token");
     expect(monitorParams.accountId).toBe("default");
     expect(sleepWithAbortMock).not.toHaveBeenCalled();
-    expect(runtimeProbeDiscord).not.toHaveBeenCalled();
-    expect(runtimeMonitorDiscordProvider).not.toHaveBeenCalled();
   });
 
   it("fails loudly before provider startup when a token SecretRef is configured but unresolved", async () => {
@@ -705,7 +682,7 @@ describe("discordPlugin outbound", () => {
       register: vi.fn(async () => undefined),
     };
     const openKeyedStore = vi.fn(() => commandDeployHashStore);
-    installDiscordRuntime({}, openKeyedStore);
+    installDiscordRuntime(openKeyedStore);
 
     await startDiscordAccount(createCfg());
 
@@ -721,7 +698,7 @@ describe("discordPlugin outbound", () => {
 
   it("continues Discord startup when the command deployment cache cannot open", async () => {
     prepareDiscordStartupMocks();
-    installDiscordRuntime({}, () => {
+    installDiscordRuntime(() => {
       throw new Error("SQLite unavailable");
     });
 

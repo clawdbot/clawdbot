@@ -64,7 +64,6 @@ import {
   resolveCollapsedToolDetail,
   shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
-  toggleToolDisclosureKeepingScroll,
 } from "./chat-tool-cards.ts";
 import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
 
@@ -503,11 +502,9 @@ export function renderGroupedMessage(
                 @focus=${syncToolDisclosureOverflow}
                 @click=${(event: MouseEvent) => {
                   if (shouldToggleSelectableDisclosure(event)) {
-                    toggleToolDisclosureKeepingScroll(event, () =>
-                      opts.onToggleToolMessageExpanded?.(
-                        toolMessageDisclosureId,
-                        toolMessageExpanded,
-                      ),
+                    opts.onToggleToolMessageExpanded?.(
+                      toolMessageDisclosureId,
+                      toolMessageExpanded,
                     );
                   }
                 }}
@@ -642,6 +639,7 @@ export function renderGroupedMessage(
                         opts.assistantMessageDisclosure,
                         markdownRenderOptions,
                         duplicateSuffix,
+                        opts.isStreaming ? messageKey : undefined,
                       )
                     : renderMarkdownText(
                         bodyMarkdown,

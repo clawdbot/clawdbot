@@ -181,7 +181,7 @@ jobs:
             setOutput("request_source", requestSource);
       - name: Create Mantis status token
         id: mantis_status_token
-        if: ${{ steps.resolve.outputs.request_source == 'issue_comment' }}
+        if: ${{ steps.resolve.outputs.pr_number != '' }}
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
@@ -201,12 +201,9 @@ jobs:
         with:
           github-token: ${{ steps.mantis_status_token.outputs.token }}
           script: |
-            const markerRoot = "<!-- mantis-telegram-desktop-proof:";
-            const runId = Number(process.env.GITHUB_RUN_ID);
-            const runAttempt = Number(process.env.GITHUB_RUN_ATTEMPT);
-            const marker = `${markerRoot}${runId}-${runAttempt} -->`;
+            const marker = `<!-- mantis-telegram-desktop-proof:${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT} -->`;
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
-            const body = `${marker}\nMantis started this proof. [Follow the active job](${runUrl}).`;
+            const body = `${marker}\n👀 Mantis started this proof. [Follow the active job](${runUrl}).`;
             const { owner, repo } = context.repo;
             const issueNumber = Number(process.env.TARGET_PR);
             await github.rest.issues.createComment({
@@ -248,7 +245,7 @@ jobs:
         if: >-
           ${{
             always() &&
-            steps.resolve.outputs.request_source == 'issue_comment' &&
+            steps.resolve.outputs.pr_number != '' &&
             (
               steps.mantis_status_token.outcome != 'success' ||
               steps.mantis_status_comment.outcome != 'success'
@@ -260,7 +257,7 @@ jobs:
         with:
           github-token: ${{ github.token }}
           script: |
-            const marker = "<!-- mantis-telegram-desktop-proof -->";
+            const marker = `<!-- mantis-telegram-desktop-proof:${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT} -->`;
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
             const { owner, repo } = context.repo;
             await github.rest.issues.createComment({
@@ -276,7 +273,7 @@ jobs:
     needs: resolve_request
     if: needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == ''
     runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 360
+    timeout-minutes: 120
     environment: qa-live-shared
     outputs:
       comparison_status: ${{ steps.inspect.outputs.comparison_status }}
@@ -290,8 +287,10 @@ jobs:
           fetch-depth: 1
 
       - name: Setup Node environment
+        id: setup-node-env
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: read-write
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -325,6 +324,9 @@ jobs:
           node_modules/.bin/esbuild scripts/e2e/telegram-bot-api-proxy.ts \
             --bundle --platform=node --format=esm --target=node24 \
             --outfile="$toolchain_build/scripts/e2e/telegram-bot-api-proxy.mjs"
+          node_modules/.bin/esbuild scripts/e2e/mock-openai-server.mjs \
+            --bundle --platform=node --format=esm --target=node24 \
+            --outfile="$toolchain_build/scripts/e2e/mock-openai-server.mjs"
           node_modules/.bin/esbuild scripts/e2e/telegram-desktop-recorder.ts \
             --bundle --platform=node --format=esm --target=node24 \
             --outfile="$toolchain_build/scripts/e2e/telegram-desktop-recorder.mjs"
@@ -431,6 +433,8 @@ jobs:
             /usr/local/lib/mantis-toolchain/scripts/e2e/telegram-mantis-lane.mjs
           sudo install -m 0444 "$toolchain_build/scripts/e2e/telegram-bot-api-proxy.mjs" \
             /usr/local/lib/mantis-toolchain/scripts/e2e/telegram-bot-api-proxy.mjs
+          sudo install -m 0444 "$toolchain_build/scripts/e2e/mock-openai-server.mjs" \
+            /usr/local/lib/mantis-toolchain/scripts/e2e/mock-openai-server.mjs
           sudo install -m 0444 "$toolchain_build/scripts/e2e/telegram-desktop-recorder.mjs" \
             /usr/local/lib/mantis-toolchain/scripts/e2e/telegram-desktop-recorder.mjs
           sudo ln -s /usr/bin/ffmpeg /usr/local/lib/mantis-toolchain/ffmpeg
@@ -527,95 +531,41 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .artifacts/mantis-baseline-build.tar
-          key: ${{ runner.os }}-${{ runner.arch }}-mantis-baseline-v3-${{ needs.resolve_request.outputs.baseline_revision }}-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}
+          key: ${{ runner.os }}-${{ runner.arch }}-mantis-baseline-v3-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}-${{ needs.resolve_request.outputs.baseline_revision }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-mantis-baseline-v3-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}-
 
-      - name: Prepare baseline proof build
+      - name: Prepare baseline and candidate proof builds
         env:
           BASELINE_BUILD_ARCHIVE: ${{ github.workspace }}/.artifacts/mantis-baseline-build.tar
           BASELINE_BUILD_CACHE_HIT: ${{ steps.baseline_build_cache.outputs.cache-hit }}
-          BASELINE_ROOT: ${{ steps.proof_worktrees.outputs.baseline_root }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          toolchain_dir=/usr/local/lib/mantis-toolchain
-          corepack_home="${RUNNER_TEMP}/mantis-corepack"
-
-          mkdir -p "${RUNNER_TEMP}/mantis-baseline-home"
-          cd "$BASELINE_ROOT"
-          env -i \
-            CI=1 \
-            COREPACK_HOME="$corepack_home" \
-            HOME="${RUNNER_TEMP}/mantis-baseline-home" \
-            OPENCLAW_BUILD_PRIVATE_QA=1 \
-            OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 \
-            PATH="$toolchain_dir:/usr/bin:/bin" \
-            "$toolchain_dir/pnpm" install --frozen-lockfile
-          if [[ "$BASELINE_BUILD_CACHE_HIT" == "true" ]]; then
-            tar -xf "$BASELINE_BUILD_ARCHIVE"
-          else
-            env -i \
-              CI=1 \
-              COREPACK_HOME="$corepack_home" \
-              HOME="${RUNNER_TEMP}/mantis-baseline-home" \
-              OPENCLAW_BUILD_PRIVATE_QA=1 \
-              OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 \
-              PATH="$toolchain_dir:/usr/bin:/bin" \
-              "$toolchain_dir/pnpm" build
-            mkdir -p "$(dirname "$BASELINE_BUILD_ARCHIVE")"
-            tar -cf "$BASELINE_BUILD_ARCHIVE" dist dist-runtime packages/*/dist .artifacts/build-all-cache
-            find extensions -type f -path '*/src/host/*' \
-              \( -name '.bundle.hash' -o -name '*.bundle.js' \) -print0 \
-              | tar --append --file="$BASELINE_BUILD_ARCHIVE" --null --files-from=-
-          fi
-          test -d dist-runtime
-          test -f dist/build-info.json
-          test -f dist/control-ui/index.html
-          test -f dist/index.js -o -f dist/index.mjs
-          build_cache_root="$BASELINE_ROOT/.artifacts/build-all-cache"
-          for phase in tsdown-ai tsdown-packages tsdown-unified; do
-            stamp="$build_cache_root/$phase/stamp.json"
-            outputs="$build_cache_root/$phase/outputs"
-            test -s "$stamp"
-            jq -e '
-              (.version | type) == "number" and
-              (.signature | type) == "string" and (.signature | length) == 64 and
-              (.outputs | type) == "array" and (.outputs | length) > 0
-            ' "$stamp" >/dev/null
-            test -d "$outputs"
-            test -n "$(find "$outputs" -type f -print -quit)"
-          done
-          test -z "$(find "$build_cache_root" -type l -print -quit)"
-          test -z "$(find "$build_cache_root" -type f -links +1 -print -quit)"
-
-      - name: Save exact baseline build
-        if: steps.baseline_build_cache.outputs.cache-hit != 'true'
-        continue-on-error: true
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: .artifacts/mantis-baseline-build.tar
-          key: ${{ steps.baseline_build_cache.outputs.cache-primary-key }}
-
-      - name: Prepare candidate proof build
-        env:
-          BASELINE_BUILD_ARCHIVE: ${{ github.workspace }}/.artifacts/mantis-baseline-build.tar
           BASELINE_SHA: ${{ needs.resolve_request.outputs.baseline_revision }}
           CANDIDATE_SHA: ${{ needs.resolve_request.outputs.candidate_revision }}
+          HOST_PNPM_STORE: ${{ steps.setup-node-env.outputs.pnpm-store-cache-path }}
         shell: bash
         run: |
           set -euo pipefail
           worktree_root="/tmp/openclaw-mantis-proof-worktrees-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           baseline_root="$worktree_root/baseline"
           candidate_root="$worktree_root/candidate"
+          toolchain_dir=/usr/local/lib/mantis-toolchain
+          corepack_home="${RUNNER_TEMP}/mantis-corepack"
+          baseline_archive_restored=false
+          if [[ -f "$BASELINE_BUILD_ARCHIVE" ]]; then
+            baseline_archive_restored=true
+          fi
+
           candidate_git_link="$(cat "$candidate_root/.git")"
-          if git -C "$baseline_root" diff --quiet "$BASELINE_SHA" "$CANDIDATE_SHA" -- \
-            scripts/build-all.mts \
-            scripts/lib \
-            scripts/pnpm-runner.mts \
-            packages/normalization-core \
-            package.json \
-            pnpm-lock.yaml \
-            pnpm-workspace.yaml \
-            tsconfig.json; then
+          if [[ "$baseline_archive_restored" == "true" ]] &&
+            git -C "$baseline_root" diff --quiet "$BASELINE_SHA" "$CANDIDATE_SHA" -- \
+              scripts/build-all.mts \
+              scripts/lib \
+              scripts/pnpm-runner.mts \
+              packages/normalization-core \
+              package.json \
+              pnpm-lock.yaml \
+              pnpm-workspace.yaml \
+              tsconfig.json; then
             # Observed 2026-08: cache-only seeding still rebuilt tsdown-unified for 3m04s;
             # its cache contract also requires the live plugin-SDK outputs it will replace.
             tar --no-same-owner -C "$candidate_root" -xf "$BASELINE_BUILD_ARCHIVE" \
@@ -623,18 +573,103 @@ jobs:
             test -z "$(find "$candidate_root/.artifacts/build-all-cache" -type l -print -quit)"
             test -z "$(find "$candidate_root/dist/plugin-sdk" -type l -print -quit)"
             test -z "$(find "$candidate_root/dist/plugin-sdk" -type f -links +1 -print -quit)"
-            echo "Seeded candidate build-all cache from the trusted baseline."
-          else
+            echo "Seeded candidate build-all cache from the trusted restored baseline."
+          elif [[ "$baseline_archive_restored" == "true" ]]; then
             echo "Candidate changed the build-cache engine closure; building without the baseline seed."
+          else
+            echo "No baseline archive restored; building candidate without the baseline seed."
           fi
-          sudo useradd --system --no-create-home --shell /usr/sbin/nologin mantis-builder
-          sudo chown -R mantis-builder:mantis-builder "$candidate_root"
-          sudo /usr/local/sbin/openclaw-mantis-sut-container build "$candidate_root"
-          test "$(cat "$candidate_root/.git")" = "$candidate_git_link"
-          git -c safe.directory="$candidate_root" -C "$candidate_root" diff --exit-code
-          git -c safe.directory="$candidate_root" -C "$candidate_root" diff --cached --exit-code
-          test "$(git -C "$baseline_root" rev-parse HEAD)" = "$BASELINE_SHA"
-          test "$(git -c safe.directory="$candidate_root" -C "$candidate_root" rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+          baseline_build() {
+            mkdir -p "${RUNNER_TEMP}/mantis-baseline-home"
+            cd "$baseline_root"
+            env -i \
+              CI=1 \
+              COREPACK_HOME="$corepack_home" \
+              HOME="${RUNNER_TEMP}/mantis-baseline-home" \
+              OPENCLAW_BUILD_PRIVATE_QA=1 \
+              OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 \
+              PATH="$toolchain_dir:/usr/bin:/bin" \
+              "$toolchain_dir/pnpm" install --frozen-lockfile
+            if [[ "$baseline_archive_restored" == "true" ]]; then
+              tar -C "$baseline_root" -xf "$BASELINE_BUILD_ARCHIVE"
+            fi
+            if [[ "$BASELINE_BUILD_CACHE_HIT" != "true" ]]; then
+              env -i \
+                CI=1 \
+                COREPACK_HOME="$corepack_home" \
+                HOME="${RUNNER_TEMP}/mantis-baseline-home" \
+                OPENCLAW_BUILD_PRIVATE_QA=1 \
+                OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 \
+                PATH="$toolchain_dir:/usr/bin:/bin" \
+                "$toolchain_dir/pnpm" build
+              mkdir -p "$(dirname "$BASELINE_BUILD_ARCHIVE")"
+              baseline_archive_new="${BASELINE_BUILD_ARCHIVE}.new"
+              test ! -e "$baseline_archive_new"
+              tar -cf "$baseline_archive_new" \
+                dist dist-runtime packages/*/dist .artifacts/build-all-cache
+              find extensions -type f -path '*/src/host/*' \
+                \( -name '.bundle.hash' -o -name '*.bundle.js' \) -print0 \
+                | tar --append --file="$baseline_archive_new" --null --files-from=-
+              mv -T "$baseline_archive_new" "$BASELINE_BUILD_ARCHIVE"
+            fi
+            test -d dist-runtime
+            test -f dist/build-info.json
+            test -f dist/control-ui/index.html
+            test -f dist/index.js -o -f dist/index.mjs
+            build_cache_root="$baseline_root/.artifacts/build-all-cache"
+            for phase in tsdown-ai tsdown-packages tsdown-unified; do
+              stamp="$build_cache_root/$phase/stamp.json"
+              outputs="$build_cache_root/$phase/outputs"
+              test -s "$stamp"
+              jq -e '
+                (.version | type) == "number" and
+                (.signature | type) == "string" and (.signature | length) == 64 and
+                (.outputs | type) == "array" and (.outputs | length) > 0
+              ' "$stamp" >/dev/null
+              test -d "$outputs"
+              test -n "$(find "$outputs" -type f -print -quit)"
+            done
+            test -z "$(find "$build_cache_root" -type l -print -quit)"
+            test -z "$(find "$build_cache_root" -type f -links +1 -print -quit)"
+          }
+
+          candidate_build() {
+            sudo useradd --system --no-create-home --shell /usr/sbin/nologin mantis-builder
+            sudo chown -R mantis-builder:mantis-builder "$candidate_root"
+            sudo /usr/local/sbin/openclaw-mantis-sut-container \
+              build "$candidate_root" "$HOST_PNPM_STORE"
+            test "$(cat "$candidate_root/.git")" = "$candidate_git_link"
+            git -c safe.directory="$candidate_root" -C "$candidate_root" diff --exit-code
+            git -c safe.directory="$candidate_root" -C "$candidate_root" diff --cached --exit-code
+            test "$(git -C "$baseline_root" rev-parse HEAD)" = "$BASELINE_SHA"
+            test "$(git -c safe.directory="$candidate_root" -C "$candidate_root" rev-parse HEAD)" = "$CANDIDATE_SHA"
+          }
+
+          baseline_log="${RUNNER_TEMP}/mantis-baseline-build.log"
+          candidate_log="${RUNNER_TEMP}/mantis-candidate-build.log"
+          (set -o pipefail; baseline_build 2>&1 | sed -u 's/^/[baseline] /' | tee "$baseline_log") &
+          baseline_pid=$!
+          (set -o pipefail; candidate_build 2>&1 | sed -u 's/^/[candidate] /' | tee "$candidate_log") &
+          candidate_pid=$!
+          set +e
+          wait "$baseline_pid"
+          baseline_status=$?
+          wait "$candidate_pid"
+          candidate_status=$?
+          set -e
+          if ((baseline_status != 0 || candidate_status != 0)); then
+            echo "::error::Proof build failure: baseline=${baseline_status}, candidate=${candidate_status}."
+            exit 1
+          fi
+
+      - name: Save exact baseline build
+        if: steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.baseline_build_cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .artifacts/mantis-baseline-build.tar
+          key: ${{ steps.baseline_build_cache.outputs.cache-primary-key }}
 
       - name: Install TDLib and restore Telegram QA user
         id: telegram_credential
@@ -677,6 +712,16 @@ jobs:
             echo "Shared QA Telegram account is busy; retrying in 15s." >&2
             sleep 15
           done
+          keepalive_pid_file="$credential_dir/lease-keepalive.pid"
+          lease_lost_marker="$credential_dir/lease.json.lost"
+          keepalive_log="$credential_dir/lease-keepalive.log"
+          rm -f "$keepalive_pid_file" "$lease_lost_marker" "$keepalive_log"
+          /usr/bin/setsid /usr/local/lib/mantis-toolchain/node --import tsx \
+            scripts/e2e/telegram-user-credential.ts heartbeat-loop \
+            --lease-file "$credential_dir/lease.json" \
+            --credential-role ci \
+            --interval-ms 30000 </dev/null >"$keepalive_log" 2>&1 &
+          printf '%s\n' "$!" >"$keepalive_pid_file"
           chmod 0700 "$credential_dir" "$credential_dir/user-driver"
           sut_credential_dir="/tmp/openclaw-mantis-sut-credential-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           session_root="/tmp/openclaw-mantis-proof-sessions-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -694,6 +739,8 @@ jobs:
             echo "state_dir=$credential_dir/user-driver"
             echo "sut_credential_dir=$sut_credential_dir"
             echo "session_root=$session_root"
+            echo "lease_keepalive_pid_file=$keepalive_pid_file"
+            echo "lease_lost_marker=$lease_lost_marker"
           } >> "$GITHUB_OUTPUT"
 
       - name: Ensure agent key exists
@@ -715,7 +762,7 @@ jobs:
           {
             printf '%s\n' 'Defaults env_keep += "CODEX_HOME CODEX_INTERNAL_ORIGINATOR_OVERRIDE"'
             printf '%s\n' 'Defaults env_keep += "BASELINE_REF BASELINE_SHA CANDIDATE_REF CANDIDATE_SHA"'
-            printf '%s\n' 'Defaults env_keep += "GITHUB_WORKSPACE MANTIS_BASELINE_ROOT MANTIS_CANDIDATE_ROOT MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_CONTEXT"'
+            printf '%s\n' 'Defaults env_keep += "GITHUB_WORKSPACE MANTIS_BASELINE_ROOT MANTIS_CANDIDATE_ROOT MANTIS_FIXTURE_PLUGINS_DIR MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_CONTEXT"'
             printf '%s\n' 'Defaults env_keep += "MANTIS_NODE_BIN MANTIS_PNPM_BIN"'
             printf '%s\n' 'Defaults env_keep += "OPENCLAW_TELEGRAM_MANTIS_LANE_CMD"'
             printf '%s\n' 'codex ALL=(mantis-sut) NOPASSWD: /usr/local/lib/mantis-toolchain/telegram-mantis-lane'
@@ -728,6 +775,16 @@ jobs:
           sudo install -d -m 0770 -o codex -g codex "$codex_home"
           sudo setfacl -m u:runner:rwx,u:codex:rwx "$codex_home"
           sudo setfacl -d -m u:runner:rwx,u:codex:rwx "$codex_home"
+          session_root="/tmp/openclaw-mantis-proof-sessions-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          fixture_plugins_root="$session_root/fixture-plugins"
+          sudo setfacl -m u:codex:--x "$session_root"
+          sudo install -d -m 0710 -o root -g mantis-proof "$fixture_plugins_root"
+          sudo setfacl -m u:codex:--x "$fixture_plugins_root"
+          for lane in baseline candidate; do
+            sudo install -d -m 2770 -o codex -g mantis-proof "$fixture_plugins_root/$lane"
+            sudo setfacl -m u:mantis-sut:rwx "$fixture_plugins_root/$lane"
+            sudo setfacl -d -m u:codex:rwx,u:mantis-sut:rwx "$fixture_plugins_root/$lane"
+          done
           workspace_parent="$(dirname "$GITHUB_WORKSPACE")"
           while [ "$workspace_parent" != "/" ]; do
             sudo setfacl -m u:codex:--x,u:mantis-sut:--x "$workspace_parent"
@@ -750,34 +807,60 @@ jobs:
           sudo find "$proof_worktree_root" -xdev ! -type l -perm /222 -exec chmod a-w {} +
           sudo chmod 0700 "$proof_worktree_root"
 
-      - name: Run Codex Mantis Telegram agent
-        # Pin audited 2026-08: runCodexExec rejects a missing codex-user, then
-        # launches the CLI as `sudo -u <codex-user> -- codex exec`.
+      - name: Prepare Codex action runtime
         uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
+        with:
+          openai-api-key: ${{ secrets.OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          codex-home: /tmp/mantis-codex-home-${{ github.run_id }}
+          safety-strategy: unprivileged-user
+          codex-user: codex
+          allow-bot-users: github-actions[bot]
+
+      - name: Run Codex Mantis Telegram agent
+        # Pin audited 2026-08: preserve codex-action's unprivileged launch shape while
+        # making the broker's terminal lease-loss marker fence the complete process group.
         env:
           BASELINE_REF: ${{ needs.resolve_request.outputs.baseline_ref }}
           BASELINE_SHA: ${{ needs.resolve_request.outputs.baseline_revision }}
           CANDIDATE_REF: ${{ needs.resolve_request.outputs.candidate_ref }}
           CANDIDATE_SHA: ${{ needs.resolve_request.outputs.candidate_revision }}
+          CODEX_HOME: /tmp/mantis-codex-home-${{ github.run_id }}
+          CODEX_INTERNAL_ORIGINATOR_OVERRIDE: codex_github_action
+          CODEX_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
+          FORCE_COLOR: "1"
           MANTIS_BASELINE_ROOT: /tmp/openclaw-mantis-proof-worktrees-${{ github.run_id }}-${{ github.run_attempt }}/baseline
           MANTIS_CANDIDATE_ROOT: /tmp/openclaw-mantis-proof-worktrees-${{ github.run_id }}-${{ github.run_attempt }}/candidate
+          MANTIS_FIXTURE_PLUGINS_DIR: /tmp/openclaw-mantis-proof-sessions-${{ github.run_id }}-${{ github.run_attempt }}/fixture-plugins
           MANTIS_INSTRUCTIONS: ${{ needs.resolve_request.outputs.instructions }}
           MANTIS_NODE_BIN: /usr/local/lib/mantis-toolchain/node
           MANTIS_OUTPUT_DIR: ${{ env.MANTIS_OUTPUT_DIR }}
           MANTIS_PR_CONTEXT: ${{ needs.resolve_request.outputs.pr_context }}
           MANTIS_PNPM_BIN: /usr/local/lib/mantis-toolchain/pnpm
           OPENCLAW_TELEGRAM_MANTIS_LANE_CMD: /usr/local/bin/openclaw-telegram-mantis-lane
-        with:
-          openai-api-key: ${{ secrets.OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
-          prompt-file: .github/codex/prompts/mantis-telegram-desktop-proof.md
-          model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
-          effort: medium
-          sandbox: danger-full-access
-          codex-args: '["-c","service_tier=\"fast\""]'
-          codex-home: /tmp/mantis-codex-home-${{ github.run_id }}
-          safety-strategy: unprivileged-user
-          codex-user: codex
-          allow-bot-users: github-actions[bot]
+        shell: bash
+        run: |
+          set -euo pipefail
+          lease_lost_marker="${{ steps.telegram_credential.outputs.lease_lost_marker }}"
+          codex_bin="$(command -v codex)"
+          output_file="$CODEX_HOME/mantis-final-message-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
+          trap 'rm -f "$output_file"' EXIT
+          codex_args=(
+            exec
+            --skip-git-repo-check
+            --cd "$GITHUB_WORKSPACE"
+            --output-last-message "$output_file"
+          )
+          if [[ -n "$CODEX_MODEL" ]]; then
+            codex_args+=(--model "$CODEX_MODEL")
+          fi
+          codex_args+=(
+            --config 'model_reasoning_effort="high"'
+            -c 'service_tier="fast"'
+            --sandbox danger-full-access
+          )
+          scripts/mantis/run-with-lease-fence.sh "$lease_lost_marker" -- \
+            sudo -u codex -- "$codex_bin" "${codex_args[@]}" \
+              < .github/codex/prompts/mantis-telegram-desktop-proof.md
 
       - name: Clean up abandoned Mantis sessions
         id: abandoned_cleanup
@@ -786,6 +869,10 @@ jobs:
         run: |
           set -euo pipefail
           result=0
+          scripts/mantis/stop-lease-keepalive.sh \
+            "${{ steps.telegram_credential.outputs.lease_keepalive_pid_file }}" \
+            "${{ steps.telegram_credential.outputs.lease_file }}" \
+            "$GITHUB_WORKSPACE"
           active_codex_pids() {
             sudo ps -u codex -o pid=,stat= 2>/dev/null | awk '$2 !~ /^Z/ {print $1}' || true
           }
@@ -847,6 +934,11 @@ jobs:
                 abort --lane "$lane" || result=1
             fi
           done
+          # Teardown goes through the public wrapper: this step already runs as the
+          # recorder user, and the internal exec shim cds into the session root where
+          # the recorder-owned session file lives. mantis-sut can do neither.
+          /usr/local/bin/openclaw-telegram-desktop-recorder \
+            teardown --session desktop-recorder.json || result=1
           if sudo test -f "$lock"; then
             echo "Mantis harness lock remained after cleanup." >&2
             result=1
@@ -890,6 +982,16 @@ jobs:
           sudo install -m 0400 -o root -g root "$agent_manifest" "$trusted_agent_manifest"
           agent_manifest="$trusted_agent_manifest"
           sudo install -d -m 0755 -o root -g root "$trusted_output"
+          recipe_suggestion="$quarantine/recipe-suggestion.md"
+          if sudo test -e "$recipe_suggestion" || sudo test -L "$recipe_suggestion"; then
+            sudo test -f "$recipe_suggestion"
+            sudo test ! -L "$recipe_suggestion"
+            test "$(sudo stat -c %h "$recipe_suggestion")" = 1
+            recipe_bytes="$(sudo stat -c %s "$recipe_suggestion")"
+            ((recipe_bytes > 0 && recipe_bytes <= 65536))
+            sudo install -m 0644 -o root -g root "$recipe_suggestion" \
+              "$trusted_output/recipe-suggestion.md"
+          fi
           manifest="$trusted_output/mantis-evidence.json"
           judgment="$RUNNER_TEMP/mantis-agent-judgment.json"
           sudo jq -e '
@@ -937,13 +1039,14 @@ jobs:
                .lane == $lane and
                (if .sutAttestation == null then
                   .status == "infra-error" and .artifacts == {} and .sendCount == 0 and
-                  .providerRequests == [] and .observation.events == [] and
+                  .botApiRequests == [] and .providerRequests == [] and .observation.events == [] and
                   .observation.truncated == false and
                   (.invocations | length) == 1 and .invocations[0].command == "start"
                 else
                   .sutAttestation.lane == $lane and .sutAttestation.sha == $sha
                 end) and
                (.invocations | type == "array") and (.observation.events | type == "array") and
+               (.botApiRequests | type == "array") and
                (.providerRequests | type == "array") and
                (if .status == "complete" or .status == "blocked" then (.cleanupErrors | length) == 0 else true end)' \
               "$verdict" >/dev/null
@@ -956,7 +1059,7 @@ jobs:
               sudo jq -e '
                 .sendCount >= 1 and (.focusMessageId | test("^[0-9]+$")) and
                 .observation.truncated == false and
-                (.focusMessageId as $focus | any(.observation.events[]; .messageId == $focus and .actor == "bot")) and
+                (.focusMessageId as $focus | any(.observation.events[]; .messageId == $focus and (.actor == "user" or .actor == "bot"))) and
                 any(.invocations[]; .command == "send") and
                 any(.invocations[]; .command == "finish") and
                 (.artifacts.screenshot.bytes > 10000) and
@@ -966,7 +1069,7 @@ jobs:
             fi
             if [[ "$fact_status" == "blocked" ]]; then
               sudo jq -e '
-                (.blocked.name | type) == "string" and (.blocked.name | length) > 0 and (.blocked.name | length) <= 200 and
+                (.blocked.name == null or ((.blocked.name | type) == "string" and (.blocked.name | length) > 0 and (.blocked.name | length) <= 200)) and
                 (.blocked.reason | type) == "string" and (.blocked.reason | length) > 0 and (.blocked.reason | length) <= 2000
               ' "$verdict" >/dev/null
               lane_status="blocked"
@@ -1083,6 +1186,7 @@ jobs:
                 hasFocusMessage: (.focusMessageId != null),
                 invocationCount: (.invocations | length),
                 observedEventCount: (.observation.events | length),
+                botApiRequestCount: (.botApiRequests | length),
                 providerRequestCount: (.providerRequests | length),
                 artifactNames: (.artifacts | keys),
                 cleanupErrorCount: (.cleanupErrors | length)
@@ -1115,7 +1219,16 @@ jobs:
         run: |
           set -euo pipefail
           lease_file="${{ steps.telegram_credential.outputs.lease_file }}"
+          scripts/mantis/stop-lease-keepalive.sh \
+            "${{ steps.telegram_credential.outputs.lease_keepalive_pid_file }}" \
+            "$lease_file" \
+            "$GITHUB_WORKSPACE"
           if [[ -z "$lease_file" ]] || ! sudo test -f "$lease_file"; then
+            exit 0
+          fi
+          lease_lost_marker="${{ steps.telegram_credential.outputs.lease_lost_marker }}"
+          if [[ -n "$lease_lost_marker" ]] && sudo test -f "$lease_lost_marker"; then
+            echo "::warning::lease lost mid-run; nothing to release"
             exit 0
           fi
           sudo env \
@@ -1219,7 +1332,7 @@ jobs:
             --request-source "$REQUEST_SOURCE"
 
       - name: Report failed Mantis proof
-        if: ${{ always() && needs.resolve_request.outputs.request_source == 'issue_comment' && steps.publish_evidence.outcome != 'success' }}
+        if: ${{ always() && needs.resolve_request.outputs.pr_number != '' && steps.publish_evidence.outcome != 'success' }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           TARGET_PR: ${{ needs.resolve_request.outputs.pr_number }}
@@ -1279,6 +1392,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -1347,7 +1461,8 @@ jobs:
             --manifest "$root/mantis-evidence.json" \
             --target-pr "$TARGET_PR" \
             --artifact-root "mantis/telegram-desktop/pr-${TARGET_PR}/published-${PUBLISH_RUN_ID}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --marker "<!-- mantis-telegram-desktop-proof -->" \
+            --marker "<!-- mantis-telegram-desktop-proof:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT} -->" \
+            --create-missing false \
             --artifact-url "$PUBLISH_ARTIFACT_URL" \
             --run-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${PUBLISH_RUN_ID}" \
             --request-source "$REQUEST_SOURCE"

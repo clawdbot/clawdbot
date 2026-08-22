@@ -336,13 +336,15 @@ class AgentsPage
     void this.selectDefaultAgentFile(agentId);
   }
 
-  private async selectDefaultAgentFile(agentId: string) {
+  private async selectDefaultAgentFile(agentId: string, force = false) {
     const files = this.agentFilesList?.files ?? [];
     if (!this.agentFileActive || !files.some((file) => file.name === this.agentFileActive)) {
       this.agentFileActive = files.find((file) => file.name === "AGENTS.md")?.name ?? null;
     }
     if (this.agentFileActive) {
-      await loadAgentFileContent(this, agentId, this.agentFileActive);
+      await loadAgentFileContent(this, agentId, this.agentFileActive, {
+        force,
+      });
     }
   }
 
@@ -676,7 +678,7 @@ class AgentsPage
       }
     }
     if (this.isCurrentRequest(client, generation, agentId, { agents })) {
-      await this.selectDefaultAgentFile(agentId);
+      await this.selectDefaultAgentFile(agentId, force);
     }
   }
 
