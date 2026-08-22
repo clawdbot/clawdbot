@@ -228,16 +228,7 @@ function isSchemaNode(value: unknown): boolean {
 function resolveBoundedProviderModelSchema(
   providerSchema: WebSearchProviderModelSchema,
 ): WebSearchProviderModelSchema | null {
-  let rawSchema: unknown;
-  try {
-    rawSchema = {
-      parameters: providerSchema.parameters,
-      providerParameters: providerSchema.providerParameters,
-    };
-  } catch {
-    return null;
-  }
-  const cloned = cloneBoundedSchemaValue(rawSchema, 0, { nodes: 0 });
+  const cloned = cloneBoundedSchemaValue(providerSchema, 0, { nodes: 0 });
   if (cloned === INVALID_SCHEMA_VALUE) {
     return null;
   }
@@ -251,6 +242,10 @@ function resolveBoundedProviderModelSchema(
   const providerParameters = modelSchema?.providerParameters;
   const parameterKeys = properties ? Object.keys(properties) : [];
   if (
+    !modelSchema ||
+    !Object.keys(modelSchema).every(
+      (entry) => entry === "parameters" || entry === "providerParameters",
+    ) ||
     parameters?.type !== "object" ||
     !properties ||
     !Array.isArray(providerParameters) ||

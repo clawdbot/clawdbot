@@ -290,6 +290,12 @@ describe("web_search provider-aware model schema", () => {
         throw new Error("provider schema accessor must remain unread");
       },
     });
+    const topLevelAccessorSchema = Object.defineProperty({}, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("provider schema top-level accessor must remain unread");
+      },
+    });
 
     for (const propertySchema of [cyclicSchema, accessorSchema]) {
       expect(
@@ -302,5 +308,11 @@ describe("web_search provider-aware model schema", () => {
         }),
       ).toBe(baseSchema);
     }
+    expect(
+      projectProviderModelSchema(
+        baseSchema,
+        topLevelAccessorSchema as Parameters<typeof projectProviderModelSchema>[1],
+      ),
+    ).toBe(baseSchema);
   });
 });
