@@ -668,12 +668,77 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(substages.map((entry) => entry.name)).toStrictEqual([
       "workspace-setup-state",
       "workspace-file-load",
+      "automatic-memory-provenance",
       "hook-overrides",
     ]);
     for (const entry of substages) {
       expect(Number.isFinite(entry.durationMs)).toBe(true);
       expect(entry.durationMs).toBeGreaterThanOrEqual(0);
     }
+  });
+
+  it("attributes a slow automatic-memory provenance classifier to its own substage", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-provenance-timing-");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_MEMORY_FILENAME), "private memory", "utf8");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_USER_FILENAME), "trusted user", "utf8");
+    memoryRuntimeMocks.classifyWorkspacePaths.mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () =>
+              resolve({
+                status: "classified",
+                classifications: [
+                  { relativePath: DEFAULT_MEMORY_FILENAME, originClass: "owner" },
+                  { relativePath: DEFAULT_USER_FILENAME, originClass: "owner" },
+                ],
+              }),
+            40,
+          ),
+        ),
+    );
+
+    const substages: Array<{ name: string; durationMs: number }> = [];
+    const files = await resolveBootstrapFilesForRunWithTiming({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+      onBootstrapSubstageTiming: (name, durationMs) => substages.push({ name, durationMs }),
+    });
+
+    const names = substages.map((entry) => entry.name);
+    expect(names.filter((name) => name === "automatic-memory-provenance")).toHaveLength(1);
+    expect(names.indexOf("automatic-memory-provenance")).toBeGreaterThan(
+      names.indexOf("workspace-file-load"),
+    );
+    expect(names.indexOf("automatic-memory-provenance")).toBeLessThan(
+      names.indexOf("hook-overrides"),
+    );
+    // 10ms slack absorbs timer jitter; the 40ms delay proves the classifier lands
+    // inside its own substage rather than leaking into the surrounding total.
+    const provenance = substages.find((entry) => entry.name === "automatic-memory-provenance");
+    expect(provenance?.durationMs).toBeGreaterThanOrEqual(10);
+    // Instrumentation must not alter provenance filtering: owner-origin files stay.
+    expect(files.map((file) => file.name)).toContain(DEFAULT_MEMORY_FILENAME);
+    expect(files.map((file) => file.name)).toContain(DEFAULT_USER_FILENAME);
+  });
+
+  it("still emits the automatic-memory provenance substage on the cheap no-candidate path", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-provenance-cheap-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
+
+    const substages: Array<{ name: string; durationMs: number }> = [];
+    await resolveBootstrapFilesForRunWithTiming({
+      workspaceDir,
+      onBootstrapSubstageTiming: (name, durationMs) => substages.push({ name, durationMs }),
+    });
+
+    const provenanceEntries = substages.filter(
+      (entry) => entry.name === "automatic-memory-provenance",
+    );
+    expect(provenanceEntries).toHaveLength(1);
+    expect(Number.isFinite(provenanceEntries[0]?.durationMs)).toBe(true);
+    expect(provenanceEntries[0]?.durationMs).toBeGreaterThanOrEqual(0);
   });
 });
 

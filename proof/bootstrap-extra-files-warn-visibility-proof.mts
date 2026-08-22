@@ -685,7 +685,8 @@ async function main(): Promise<void> {
   const slowHasSubstages =
     slowSubstages.length > 0 &&
     slowSubstages !== "none" &&
-    slowSubstages.includes("hook-overrides");
+    slowSubstages.includes("hook-overrides") &&
+    slowSubstages.includes("automatic-memory-provenance");
   const fastStaysSilent = !fastTraceWarn;
 
   const partAPass =
@@ -718,7 +719,9 @@ async function main(): Promise<void> {
     `  real assembly exceeded 2000ms (production totalMs): ${slowOverThreshold ? `YES (${slowTotalMs.toFixed(1)}ms)` : "NO"}`,
   );
   w(`  substage breakdown warn visible at DEFAULT info:    ${slowWarnVisible ? "YES" : "NO"}`);
-  w(`  breakdown names substages incl. hook-overrides:     ${slowHasSubstages ? "YES" : "NO"}`);
+  w(
+    `  breakdown names substages incl. hook-overrides + provenance: ${slowHasSubstages ? "YES" : "NO"}`,
+  );
   w(`  fast run (<2s) stays silent (gated on slowness):    ${fastStaysSilent ? "YES" : "NO"}`);
   w(`  PART B:                                             ${partBPass ? "PASS" : "FAIL"}`);
   w("");

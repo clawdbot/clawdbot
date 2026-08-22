@@ -409,7 +409,8 @@ async function main(): Promise<void> {
     // -------- Async run: the CHANGED bootstrap-context assembly (post-warmup) --------
     // Drive the exact two calls the embedded runner makes, capturing per-substage
     // timing so a stall is attributed to workspace-setup-state vs workspace-file-load
-    // vs hook-overrides
+    // vs automatic-memory-provenance (the awaited memory-origin classification) vs
+    // hook-overrides
     // (hook-overrides == the yielded dispatch that runs both handlers + fs.glob).
     registerInternalHook("agent:bootstrap", extraFilesHandler);
     registerInternalHook("agent:bootstrap", secondBootstrapHandler);
