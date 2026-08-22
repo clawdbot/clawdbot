@@ -1318,10 +1318,10 @@ struct OnboardingAISetupTests {
         ])
         #expect(view.aiSetup.connected)
         #expect(view.aiSetup.selectedKind == "codex-cli")
-        #expect(view.finish())
-        #expect(handoffs == [.custodianOnboarding])
         #expect(storedActivationOwner(defaults) == activationOwner)
         #expect(pendingState(defaults) == .completed)
+        #expect(view.finish())
+        #expect(handoffs == [.custodianOnboarding])
     }
 
     @Test func `managed Gateway restart rejects mismatched persisted transition`() async throws {
