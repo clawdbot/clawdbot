@@ -32,12 +32,14 @@ export {
   runBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.policy.js";
 export {
-  buildBlockedToolResult,
   getBeforeToolCallFailureDisposition,
   isBeforeToolCallBlockedError,
-  isPreExecutionBlockedToolResult,
   recordAdjustedParamsForToolCall,
   recordStructuredReplayTrustForToolCall,
   rewrapToolWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.wrapper.js";
+export {
+  buildBlockedToolResult,
+  isPreExecutionBlockedToolResult,
+} from "./agent-tools.before-tool-call.blocked-result.js";

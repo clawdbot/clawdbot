@@ -13,6 +13,7 @@ const startedToolCallIds = new Set<string>();
 const trackedToolCallIds = new Set<string>();
 const batchAdmittedToolCallIds = new Set<string>();
 const loopWarningsByToolCallId = new Map<string, { warning: string; carried: boolean }>();
+const MAX_TRACKED_TOOL_CALLS = 1024;
 const MAX_PENDING_LOOP_WARNINGS = 1024;
 
 export function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
@@ -43,6 +44,20 @@ export function consumePreExecutionBlockedToolCall(toolCallId: string, runId?: s
   const blocked = preExecutionBlockedToolCallIds.has(key);
   preExecutionBlockedToolCallIds.delete(key);
   return blocked;
+}
+
+export function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string): void {
+  if (!toolCallId) {
+    return;
+  }
+  preExecutionBlockedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
+  while (preExecutionBlockedToolCallIds.size > MAX_TRACKED_TOOL_CALLS) {
+    const oldest = preExecutionBlockedToolCallIds.values().next().value;
+    if (!oldest) {
+      break;
+    }
+    preExecutionBlockedToolCallIds.delete(oldest);
+  }
 }
 
 /** Snapshot whether policy prevented execution without stealing cleanup from the tool owner. */
@@ -203,6 +218,20 @@ export function carryLoopWarningToError(
 ): unknown {
   const warning = claimLoopWarningForTransport(toolCallId, runId);
   return warning ? appendWarningTextToError(error, warning) : error;
+}
+
+/** Carry warning guidance unless an aborted call cannot emit a model-visible result. */
+export function resolveLoopWarningError(
+  error: unknown,
+  toolCallId: string,
+  runId: string | undefined,
+  signal?: AbortSignal,
+): unknown {
+  if (signal?.aborted) {
+    consumeLoopWarningForToolCall(toolCallId, runId);
+    return error;
+  }
+  return carryLoopWarningToError(error, toolCallId, runId);
 }
 
 /** Release admission and warning state for prepared calls suppressed by steering. */
