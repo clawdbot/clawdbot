@@ -1126,9 +1126,15 @@ async function observe(
       since: 0,
     });
     const events = Array.isArray(timeline.events) ? timeline.events : [];
+    // Event predicates scope to post-`since` events so stale timeline history
+    // (a reused marker, prior turns) cannot satisfy an early return before the
+    // observed action produces evidence. Provider counts stay cumulative: the
+    // provider log has no per-observe cursor and requests can land before the
+    // observe starts, so a relative baseline would miss them.
+    const newEvents = events.slice(since);
     const textMatched =
-      untilText === undefined || events.some((event) => valueContainsText(event, untilText));
-    const eventCountMatched = untilEvents === undefined || (timeline.cursor ?? 0) >= untilEvents;
+      untilText === undefined || newEvents.some((event) => valueContainsText(event, untilText));
+    const eventCountMatched = untilEvents === undefined || newEvents.length >= untilEvents;
     const providerCountMatched =
       untilProviderRequests === undefined ||
       providerRequests(state, secret).length >= untilProviderRequests;

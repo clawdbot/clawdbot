@@ -699,6 +699,33 @@ describe("Telegram Mantis free-form lane", () => {
     }
   });
 
+  it("ignores stale pre-cursor events when evaluating observe conditions", async () => {
+    const harness = await setupHarness();
+    try {
+      const startedAt = Date.now();
+      // The mock observer timeline always holds two events ("draft", "final");
+      // with --since past them, a reused marker or count must not return early.
+      const result = await runLane(harness.env, [
+        "observe",
+        "--lane",
+        "candidate",
+        "--seconds",
+        "1",
+        "--since",
+        "2",
+        "--until-events",
+        "1",
+        "--until-text",
+        "final",
+      ]);
+      expect(Date.now() - startedAt).toBeGreaterThanOrEqual(1_000);
+      expect(JSON.parse(result.stdout)).toMatchObject({ events: [] });
+      expect(harness.requests.length).toBeGreaterThan(1);
+    } finally {
+      await harness.close();
+    }
+  });
+
   it("serializes commands across both lanes on the shared user session", async () => {
     const harness = await setupHarness();
     fs.writeFileSync(path.join(harness.sessionRoot, "harness.lock"), `${process.pid}\n`);

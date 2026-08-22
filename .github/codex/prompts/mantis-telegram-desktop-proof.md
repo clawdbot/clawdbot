@@ -67,7 +67,9 @@ Use `$OPENCLAW_TELEGRAM_MANTIS_LANE_CMD` with `--lane baseline|candidate`:
 - `send --text <text>`; also `--text-file`, `--media` (document), `--reply-to`
 - `turn --text <text> --observe-seconds 15` (send + observe convenience)
 - `observe --seconds N [--since cursor] [--until-events N] [--until-text substring]
-[--until-provider-requests N]` (returns early when all supplied conditions hold)
+[--until-provider-requests N]` (returns early when all supplied conditions hold;
+  event/text conditions count only events after the cursor, provider count is
+  cumulative for the lane)
 - `requests` (redacted provider requests; zero is a valid recorded fact)
 - `press --message-id ID --button INDEX`
 - `delete --message-id ID` (only user messages sent in this session)
