@@ -20,6 +20,21 @@ type PluginReleasePretagPackTarget = {
   packNpm: boolean;
 };
 
+/** Preserve conventional managed-command exit statuses at the executable boundary. */
+export function pluginReleasePretagExitCode(error: unknown): number {
+  if (
+    error instanceof Error &&
+    "code" in error &&
+    typeof error.code === "number" &&
+    Number.isInteger(error.code) &&
+    error.code >= 0 &&
+    error.code <= 255
+  ) {
+    return error.code;
+  }
+  return 1;
+}
+
 export function collectPluginReleasePretagPackTargets(
   rootDir = resolve("."),
 ): PluginReleasePretagPackTarget[] {
@@ -179,5 +194,10 @@ export async function runPluginReleasePretagPackCheck(
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  await runPluginReleasePretagPackCheck();
+  try {
+    await runPluginReleasePretagPackCheck();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = pluginReleasePretagExitCode(error);
+  }
 }

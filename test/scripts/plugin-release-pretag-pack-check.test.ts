@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectPluginReleasePretagPackTargets,
+  pluginReleasePretagExitCode,
   runPluginReleasePretagPackCheck,
 } from "../../scripts/plugin-release-pretag-pack-check.ts";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
@@ -154,5 +155,17 @@ describe("scripts/plugin-release-pretag-pack-check.ts", () => {
       "npm pack for @openclaw/demo-plugin timed out after 600000ms: bash scripts/plugin-npm-publish.sh --pack-dry-run extensions/demo-plugin",
     );
     expect((thrown as Error).message).not.toContain("secret-marker");
+  });
+
+  it("preserves managed cancellation statuses at the CLI boundary", () => {
+    expect(
+      pluginReleasePretagExitCode(Object.assign(new Error("interrupted"), { code: 130 })),
+    ).toBe(130);
+    expect(pluginReleasePretagExitCode(Object.assign(new Error("terminated"), { code: 143 }))).toBe(
+      143,
+    );
+    expect(
+      pluginReleasePretagExitCode(Object.assign(new Error("timed out"), { code: "ETIMEDOUT" })),
+    ).toBe(1);
   });
 });
