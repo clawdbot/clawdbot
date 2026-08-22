@@ -499,15 +499,15 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
                 >
                   ${this.playing ? icons.pause : icons.play}
                 </button>
+                <div class="chat-audio-player__time" aria-live="off">
+                  <span
+                    >${formatChatMediaTime(this.currentTime)} / ${formatChatMediaTime(
+                      this.duration,
+                    )}</span
+                  >
+                </div>
                 <div class="chat-audio-player__timeline">
                   ${this.renderSeek(progress)}
-                  <div class="chat-audio-player__time" aria-live="off">
-                    <span
-                      >${formatChatMediaTime(this.currentTime)} / ${formatChatMediaTime(
-                        this.duration,
-                      )}</span
-                    >
-                  </div>
                 </div>
                 <button
                   type="button"
