@@ -437,13 +437,219 @@ async function startAgentRun(params: {
   }
 }
 
-export function createSessionsSendTool(opts?: {
+type SessionsSendToolOptions = {
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
-}): AnyAgentTool {
+};
+
+type SessionsSendTargetResolution =
+  | { ok: true; sessionKey: string }
+  | { ok: false; result: ReturnType<typeof jsonResult> };
+
+/**
+ * Resolve a sessions_send target selector (label / agentId) to a canonical session key.
+ * Extracted so admission preparation and execution share one resolution and
+ * authorization path (loop-detection canonicalization reuses the result instead of
+ * resolving twice and diverging).
+ */
+async function resolveSessionsSendTargetSessionKey(params: {
+  label?: string;
+  agentId?: string;
+  cfg: OpenClawConfig;
+  mainKey: string;
+  effectiveRequesterKey?: string;
+  restrictToSpawned: boolean;
+  a2aPolicy: ReturnType<typeof createAgentToAgentPolicy>;
+  gatewayCall: GatewayCaller;
+}): Promise<SessionsSendTargetResolution> {
+  const {
+    label: labelParam,
+    agentId: labelAgentIdParam,
+    cfg,
+    mainKey,
+    effectiveRequesterKey,
+    restrictToSpawned,
+    a2aPolicy,
+    gatewayCall,
+  } = params;
+  if (!labelParam && labelAgentIdParam) {
+    const agentMainKey = resolveConfiguredAgentMainSessionKey({
+      cfg,
+      agentId: labelAgentIdParam,
+      mainKey,
+    });
+    if (!agentMainKey) {
+      return {
+        ok: false,
+        result: jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: `agent not found: ${labelAgentIdParam}`,
+        }),
+      };
+    }
+    return { ok: true, sessionKey: agentMainKey };
+  }
+  if (labelParam) {
+    const requesterAgentId = resolveAgentIdFromSessionKey(
+      effectiveRequesterKey,
+      resolveDefaultAgentId(cfg),
+    );
+    const requestedAgentId = labelAgentIdParam ? normalizeAgentId(labelAgentIdParam) : undefined;
+
+    if (restrictToSpawned && requestedAgentId && requestedAgentId !== requesterAgentId) {
+      return {
+        ok: false,
+        result: jsonResult({
+          runId: crypto.randomUUID(),
+          status: "forbidden",
+          error: "Sandboxed sessions_send label lookup is limited to this agent",
+        }),
+      };
+    }
+
+    if (requesterAgentId && requestedAgentId && requestedAgentId !== requesterAgentId) {
+      if (!a2aPolicy.enabled) {
+        return {
+          ok: false,
+          result: jsonResult({
+            runId: crypto.randomUUID(),
+            status: "forbidden",
+            error:
+              "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
+          }),
+        };
+      }
+      if (!a2aPolicy.isAllowed(requesterAgentId, requestedAgentId)) {
+        return {
+          ok: false,
+          result: jsonResult({
+            runId: crypto.randomUUID(),
+            status: "forbidden",
+            error: "Agent-to-agent messaging denied by tools.agentToAgent.allow.",
+          }),
+        };
+      }
+    }
+
+    const resolveParams: Record<string, unknown> = {
+      label: labelParam,
+      ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+      ...(restrictToSpawned ? { spawnedBy: effectiveRequesterKey } : {}),
+    };
+    let resolvedKey;
+    try {
+      const resolved = await gatewayCall<{ key: string }>({
+        method: "sessions.resolve",
+        params: resolveParams,
+        timeoutMs: 10_000,
+      });
+      resolvedKey = normalizeOptionalString(resolved?.key) ?? "";
+    } catch (err) {
+      const msg = formatErrorMessage(err);
+      if (restrictToSpawned) {
+        return {
+          ok: false,
+          result: jsonResult({
+            runId: crypto.randomUUID(),
+            status: "forbidden",
+            error: "Session not visible from this sandboxed agent session.",
+          }),
+        };
+      }
+      return {
+        ok: false,
+        result: jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: msg || `No session found with label: ${labelParam}`,
+        }),
+      };
+    }
+
+    if (!resolvedKey) {
+      if (restrictToSpawned) {
+        return {
+          ok: false,
+          result: jsonResult({
+            runId: crypto.randomUUID(),
+            status: "forbidden",
+            error: "Session not visible from this sandboxed agent session.",
+          }),
+        };
+      }
+      return {
+        ok: false,
+        result: jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: `No session found with label: ${labelParam}`,
+        }),
+      };
+    }
+    return { ok: true, sessionKey: resolvedKey };
+  }
+  return {
+    ok: false,
+    result: jsonResult({
+      runId: crypto.randomUUID(),
+      status: "error",
+      error: "Either sessionKey or label is required",
+    }),
+  };
+}
+
+/**
+ * Canonicalize equivalent target selectors (`sessionKey`, `label`, `agentId`) to the
+ * resolved canonical sessionKey before loop admission hashes the call, so rotating
+ * selector forms for one target session share one loop-detection hash. Uses the same
+ * resolution and authorization path as execute(); any failure passes the original
+ * params through unchanged so execute() reports the same error result.
+ */
+async function canonicalizeSessionsSendSelectorForLoopAdmission(
+  args: unknown,
+  opts?: SessionsSendToolOptions,
+): Promise<unknown> {
+  const params = normalizeSessionsSendArguments(args);
+  const sessionKeyParam = readStringParam(params, "sessionKey");
+  if (sessionKeyParam) {
+    return params;
+  }
+  const labelParam = normalizeOptionalString(readStringParam(params, "label"));
+  const labelAgentIdParam = normalizeOptionalString(readStringParam(params, "agentId"));
+  if (!labelParam && !labelAgentIdParam) {
+    return params;
+  }
+  try {
+    const { cfg, mainKey, effectiveRequesterKey, restrictToSpawned } =
+      resolveSessionToolContext(opts);
+    const resolved = await resolveSessionsSendTargetSessionKey({
+      label: labelParam,
+      agentId: labelAgentIdParam,
+      cfg,
+      mainKey,
+      effectiveRequesterKey,
+      restrictToSpawned,
+      a2aPolicy: createAgentToAgentPolicy(cfg),
+      gatewayCall: opts?.callGateway ?? callGateway,
+    });
+    if (!resolved.ok) {
+      return params;
+    }
+    const next: Record<string, unknown> = { ...params, sessionKey: resolved.sessionKey };
+    delete next.label;
+    delete next.agentId;
+    return next;
+  } catch {
+    // Admission preparation must never fail the call; execute() resolves identically.
+    return params;
+  }
+}
+
+export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgentTool {
   return {
     label: "Session Send",
     name: "sessions_send",
@@ -452,6 +658,8 @@ export function createSessionsSendTool(opts?: {
     parameters: SessionsSendToolSchema,
     outputSchema: SessionsSendOutputSchema,
     prepareArguments: normalizeSessionsSendArguments,
+    prepareBeforeToolCallParams: (args) =>
+      canonicalizeSessionsSendSelectorForLoopAdmission(args, opts),
     execute: async (_toolCallId, args) => {
       const params = normalizeSessionsSendArguments(args);
       const gatewayCall = opts?.callGateway ?? callGateway;
@@ -471,108 +679,21 @@ export function createSessionsSendTool(opts?: {
       const labelAgentIdParam = normalizeOptionalString(readStringParam(params, "agentId"));
 
       let sessionKey = sessionKeyParam;
-      if (!sessionKey && !labelParam && labelAgentIdParam) {
-        const agentMainKey = resolveConfiguredAgentMainSessionKey({
-          cfg,
-          agentId: labelAgentIdParam,
-          mainKey,
-        });
-        if (!agentMainKey) {
-          return jsonResult({
-            runId: crypto.randomUUID(),
-            status: "error",
-            error: `agent not found: ${labelAgentIdParam}`,
-          });
-        }
-        sessionKey = agentMainKey;
-      }
-      if (!sessionKey && labelParam) {
-        const requesterAgentId = resolveAgentIdFromSessionKey(
-          effectiveRequesterKey,
-          resolveDefaultAgentId(cfg),
-        );
-        const requestedAgentId = labelAgentIdParam
-          ? normalizeAgentId(labelAgentIdParam)
-          : undefined;
-
-        if (restrictToSpawned && requestedAgentId && requestedAgentId !== requesterAgentId) {
-          return jsonResult({
-            runId: crypto.randomUUID(),
-            status: "forbidden",
-            error: "Sandboxed sessions_send label lookup is limited to this agent",
-          });
-        }
-
-        if (requesterAgentId && requestedAgentId && requestedAgentId !== requesterAgentId) {
-          if (!a2aPolicy.enabled) {
-            return jsonResult({
-              runId: crypto.randomUUID(),
-              status: "forbidden",
-              error:
-                "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
-            });
-          }
-          if (!a2aPolicy.isAllowed(requesterAgentId, requestedAgentId)) {
-            return jsonResult({
-              runId: crypto.randomUUID(),
-              status: "forbidden",
-              error: "Agent-to-agent messaging denied by tools.agentToAgent.allow.",
-            });
-          }
-        }
-
-        const resolveParams: Record<string, unknown> = {
-          label: labelParam,
-          ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-          ...(restrictToSpawned ? { spawnedBy: effectiveRequesterKey } : {}),
-        };
-        let resolvedKey;
-        try {
-          const resolved = await gatewayCall<{ key: string }>({
-            method: "sessions.resolve",
-            params: resolveParams,
-            timeoutMs: 10_000,
-          });
-          resolvedKey = normalizeOptionalString(resolved?.key) ?? "";
-        } catch (err) {
-          const msg = formatErrorMessage(err);
-          if (restrictToSpawned) {
-            return jsonResult({
-              runId: crypto.randomUUID(),
-              status: "forbidden",
-              error: "Session not visible from this sandboxed agent session.",
-            });
-          }
-          return jsonResult({
-            runId: crypto.randomUUID(),
-            status: "error",
-            error: msg || `No session found with label: ${labelParam}`,
-          });
-        }
-
-        if (!resolvedKey) {
-          if (restrictToSpawned) {
-            return jsonResult({
-              runId: crypto.randomUUID(),
-              status: "forbidden",
-              error: "Session not visible from this sandboxed agent session.",
-            });
-          }
-          return jsonResult({
-            runId: crypto.randomUUID(),
-            status: "error",
-            error: `No session found with label: ${labelParam}`,
-          });
-        }
-        sessionKey = resolvedKey;
-      }
-
       if (!sessionKey) {
-        return jsonResult({
-          runId: crypto.randomUUID(),
-          status: "error",
-          error: "Either sessionKey or label is required",
+        const resolvedTarget = await resolveSessionsSendTargetSessionKey({
+          label: labelParam,
+          agentId: labelAgentIdParam,
+          cfg,
+          mainKey,
+          effectiveRequesterKey,
+          restrictToSpawned,
+          a2aPolicy,
+          gatewayCall,
         });
+        if (!resolvedTarget.ok) {
+          return resolvedTarget.result;
+        }
+        sessionKey = resolvedTarget.sessionKey;
       }
       const resolvedSession = await resolveSessionReference({
         sessionKey,
