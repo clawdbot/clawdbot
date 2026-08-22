@@ -16,6 +16,7 @@ import { toOpenAiResponsesUsage } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
+import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
@@ -86,6 +87,7 @@ import {
 } from "./openai-tool-choice.js";
 import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
 
 type OpenResponsesHttpOptions = {
@@ -95,6 +97,7 @@ type OpenResponsesHttpOptions = {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
+  resolveGatewayContext?: GatewayContextResolver;
 };
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
@@ -392,27 +395,34 @@ async function runResponsesAgentCommand(params: {
   senderIsOwner: boolean;
   deps: CliDeps;
   abortSignal?: AbortSignal;
+  resolveGatewayContext?: GatewayContextResolver;
 }) {
-  return agentCommandFromIngress(
-    {
-      message: params.message,
-      images: params.images.length > 0 ? params.images : undefined,
-      clientTools: params.clientTools.length > 0 ? params.clientTools : undefined,
-      extraSystemPrompt: params.extraSystemPrompt || undefined,
-      model: params.modelOverride,
-      streamParams: params.streamParams ?? undefined,
-      sessionKey: params.sessionKey,
-      runId: params.runId,
-      deliver: false,
-      messageChannel: params.messageChannel,
-      senderIsOwner: params.senderIsOwner,
-      bestEffortDeliver: false,
-      allowModelOverride: params.modelOverride !== undefined,
-      abortSignal: params.abortSignal,
-    },
-    defaultRuntime,
-    params.deps,
-  );
+  const run = () =>
+    agentCommandFromIngress(
+      {
+        message: params.message,
+        images: params.images.length > 0 ? params.images : undefined,
+        clientTools: params.clientTools.length > 0 ? params.clientTools : undefined,
+        extraSystemPrompt: params.extraSystemPrompt || undefined,
+        model: params.modelOverride,
+        streamParams: params.streamParams ?? undefined,
+        sessionKey: params.sessionKey,
+        runId: params.runId,
+        deliver: false,
+        messageChannel: params.messageChannel,
+        senderIsOwner: params.senderIsOwner,
+        bestEffortDeliver: false,
+        allowModelOverride: params.modelOverride !== undefined,
+        abortSignal: params.abortSignal,
+      },
+      defaultRuntime,
+      params.deps,
+    );
+  // Deferred dispatches spawned by this run (subagent completion announces)
+  // need the owning Gateway's lifecycle-fenced context resolver at admission.
+  return params.resolveGatewayContext
+    ? withPluginRuntimeGatewayContextResolver(params.resolveGatewayContext, run)
+    : run();
 }
 
 export async function handleOpenResponsesHttpRequest(
@@ -713,6 +723,7 @@ export async function handleOpenResponsesHttpRequest(
         senderIsOwner,
         deps,
         abortSignal: abortController.signal,
+        resolveGatewayContext: opts.resolveGatewayContext,
       });
 
       if (abortController.signal.aborted) {
@@ -1179,6 +1190,7 @@ export async function handleOpenResponsesHttpRequest(
         senderIsOwner,
         deps,
         abortSignal: abortController.signal,
+        resolveGatewayContext: opts.resolveGatewayContext,
       });
 
       if (closed) {

@@ -302,6 +302,7 @@ export async function createGatewayHttpTransport(params: {
       openResponsesEnabled: params.openResponsesEnabled,
       openResponsesConfig: params.openResponsesConfig,
       strictTransportSecurityHeader: params.strictTransportSecurityHeader,
+      getGatewayRequestContext: params.getGatewayRequestContext,
       handleWatchNodeRequest: params.handleWatchNodeRequest,
       handleHooksRequest,
       handleMcpOAuthCallbackRequest,

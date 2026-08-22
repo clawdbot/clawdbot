@@ -7,6 +7,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  bindGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
+import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
   type OperationalRunInstanceRef,
@@ -143,6 +147,14 @@ export function prepareAgentCommandExecutionIdentity(params: {
     operationalRunInstance,
     runId: prepared.runId,
     onAdmitted: async (admittedRunContext) => {
+      // Runs admitted inside a Gateway-owned runtime scope (e.g. the OpenAI-compat
+      // HTTP endpoints) inherit its lifecycle-fenced context resolver so deferred
+      // dispatches (subagent completion announces) can reach the owning instance.
+      const scopedGatewayContextResolver =
+        getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+      if (scopedGatewayContextResolver) {
+        bindGatewayContextResolver(admittedRunContext, scopedGatewayContextResolver);
+      }
       await opts.onAdmittedRunContext?.(admittedRunContext);
       if (
         opts.mainRestartRecoveryAdmitted !== true ||

@@ -16,6 +16,7 @@ import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { toOpenAiChatCompletionsUsage, type OpenAiChatCompletionsUsage } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
+import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -44,6 +45,7 @@ import {
 } from "./agent-prompt.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 import {
   sendJson,
   sendMissingScopeForbidden,
@@ -85,6 +87,7 @@ type OpenAiHttpOptions = {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
+  resolveGatewayContext?: GatewayContextResolver;
 };
 
 type OpenAiChatMessage = {
@@ -1095,7 +1098,13 @@ export async function handleOpenAiHttpRequest(
   if (!stream) {
     const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
     try {
-      const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
+      const result = await (opts.resolveGatewayContext
+        ? // Deferred dispatches spawned by this run (subagent completion announces)
+          // need the owning Gateway's lifecycle-fenced context resolver at admission.
+          withPluginRuntimeGatewayContextResolver(opts.resolveGatewayContext, () =>
+            agentCommandFromIngress(commandInput, defaultRuntime, deps),
+          )
+        : agentCommandFromIngress(commandInput, defaultRuntime, deps));
 
       if (abortController.signal.aborted) {
         return true;
@@ -1380,7 +1389,13 @@ export async function handleOpenAiHttpRequest(
 
   void (async () => {
     try {
-      const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
+      const result = await (opts.resolveGatewayContext
+        ? // Deferred dispatches spawned by this run (subagent completion announces)
+          // need the owning Gateway's lifecycle-fenced context resolver at admission.
+          withPluginRuntimeGatewayContextResolver(opts.resolveGatewayContext, () =>
+            agentCommandFromIngress(commandInput, defaultRuntime, deps),
+          )
+        : agentCommandFromIngress(commandInput, defaultRuntime, deps));
       resultResolved = true;
 
       if (closed) {

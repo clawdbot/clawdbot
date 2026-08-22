@@ -160,6 +160,7 @@ export function createGatewayHttpServer(opts: {
   openAiChatCompletionsConfig?: import("../config/types.gateway.js").GatewayHttpChatCompletionsConfig;
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
+  getGatewayRequestContext?: () => import("./server-methods/types.js").GatewayRequestContext | undefined;
   strictTransportSecurityHeader?: string;
   handleHooksRequest: HooksRequestHandler;
   handleMcpOAuthCallbackRequest?: McpOAuthCallbackHandler;
@@ -453,6 +454,7 @@ export function createGatewayHttpServer(opts: {
         (await getOpenResponsesHttpModule()).handleOpenResponsesHttpRequest(req, res, {
           ...routeAuth,
           config: openResponsesConfig,
+          resolveGatewayContext: opts.getGatewayRequestContext,
         }),
       );
       addAdmittedStage(
@@ -461,6 +463,7 @@ export function createGatewayHttpServer(opts: {
           (await getOpenAiHttpModule()).handleOpenAiHttpRequest(req, res, {
             ...routeAuth,
             config: openAiChatCompletionsConfig,
+            resolveGatewayContext: opts.getGatewayRequestContext,
           }),
       );
       const approvalDocument = isControlUiApprovalDocumentPath({

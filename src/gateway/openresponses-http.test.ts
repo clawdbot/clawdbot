@@ -29,6 +29,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommandMock,
@@ -606,6 +607,25 @@ describe("OpenResponses HTTP API (e2e)", () => {
 
     await expectInvalidRequest(res, /text/);
     expect(agentCommandMock).toHaveBeenCalledTimes(0);
+  });
+
+  it("runs ingress agent commands inside the Gateway context-resolver scope", async () => {
+    testState.agentsConfig = { list: [{ id: "main" }] };
+    resetConfigRuntimeState();
+    agentCommandMock.mockClear();
+    let scopedResolver: (() => unknown) | undefined;
+    agentCommandMock.mockImplementationOnce(async () => {
+      scopedResolver = getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+      return { payloads: [{ text: "hello" }] } as never;
+    });
+    const res = await postResponses(enabledPort, { model: "openclaw", input: "hi" });
+    expect(res.status).toBe(200);
+    await ensureResponseConsumed(res);
+    // Deferred dispatches (subagent completion announces) admitted from this run
+    // resolve the owning Gateway through this scope; without it they fail with
+    // "In-process gateway dispatch requires a gateway request scope or instance binding".
+    expect(typeof scopedResolver).toBe("function");
+    expect(scopedResolver?.()).toBeTruthy();
   });
 
   it("handles OpenResponses request parsing and validation", async () => {
