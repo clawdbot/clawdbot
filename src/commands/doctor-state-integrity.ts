@@ -17,7 +17,6 @@ import {
   resolveSharedAuthStoreOwnership,
   resolveSharedAuthStorePath,
 } from "../agents/auth-profiles/path-resolve.js";
-import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import {
   clearWedgedSubagentRecoveryAbort,
   formatSubagentRecoveryWedgedReason,
@@ -228,7 +227,9 @@ function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgent
         if (
           isSharedAuthStoreOwner({
             ownership: sharedAuthOwnership,
-            agentAuthDbPath: resolveAuthProfileDatabasePath(nestedAgentDir),
+            // Orphan detection owns durable agent directories, not the
+            // process-level auth lease selected by ARXI_AUTH_AGENT_DIR.
+            agentAuthDbPath: path.join(nestedAgentDir, "openclaw-agent.sqlite"),
             sharedAuthDbPath,
           })
         ) {

@@ -282,6 +282,7 @@ describe("doctor state integrity oauth dir checks", () => {
       "OPENCLAW_STATE_DIR",
       "OPENCLAW_OAUTH_DIR",
       "OPENCLAW_AGENT_DIR",
+      "ARXI_AUTH_AGENT_DIR",
     ]);
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-state-integrity-"));
     const stateDir = path.join(tempHome, ".openclaw");
@@ -290,6 +291,7 @@ describe("doctor state integrity oauth dir checks", () => {
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     deleteTestEnvValue("OPENCLAW_OAUTH_DIR");
     deleteTestEnvValue("OPENCLAW_AGENT_DIR");
+    deleteTestEnvValue("ARXI_AUTH_AGENT_DIR");
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     noteMock.mockClear();
   });
@@ -411,7 +413,7 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(text).toContain("Examples: main");
   });
 
-  it("does not let OPENCLAW_AGENT_DIR hide an unconfigured agent dir", async () => {
+  it("does not let an authoritative auth lease hide an unconfigured agent dir", async () => {
     createAgentDir("legacy");
     writeConfigMachineState("auth.sharedStore", { location: "state-db" });
     const legacyAgentDir = path.join(
@@ -421,6 +423,7 @@ describe("doctor state integrity oauth dir checks", () => {
       "agent",
     );
     setTestEnvValue("OPENCLAW_AGENT_DIR", legacyAgentDir);
+    setTestEnvValue("ARXI_AUTH_AGENT_DIR", path.join(tempHome, "runtime-auth"));
 
     const text = await runStateIntegrityText({
       agents: {

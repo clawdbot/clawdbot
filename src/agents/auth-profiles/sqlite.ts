@@ -20,6 +20,7 @@ import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
 import { registerSqliteCacheExitClose } from "../../infra/sqlite-wal.js";
+import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   deferOpenClawAgentPostCommitPublication,
@@ -114,14 +115,14 @@ function resolveAuthProfileDatabaseOptions(
     };
   }
   const dir = resolveUserPath(agentDir);
-  const configuredAuthDir = env.OPENCLAW_AGENT_DIR?.trim();
+  const configuredAuthDir = env.ARXI_AUTH_AGENT_DIR?.trim();
+  const ownerDir = configuredAuthDir ? resolveUserPath(configuredAuthDir, env) : dir;
   return {
     kind: "agent",
-    agentId: resolveRegisteredAgentIdForDir(dir) ?? inferAgentIdFromDir(dir),
-    path: path.join(
-      configuredAuthDir ? resolveUserPath(configuredAuthDir, env) : dir,
-      "openclaw-agent.sqlite",
-    ),
+    agentId: configuredAuthDir
+      ? LEGACY_IMPLICIT_AGENT_ID
+      : (resolveRegisteredAgentIdForDir(ownerDir) ?? inferAgentIdFromDir(ownerDir)),
+    path: path.join(ownerDir, "openclaw-agent.sqlite"),
     env,
   };
 }

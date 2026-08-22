@@ -88,11 +88,11 @@ describe("auth profile path helpers (direct-import coverage attribution)", () =>
     });
   });
 
-  it("relocates agent auth without relocating the agent database", () => {
+  it("relocates Arxi auth without relocating the agent database", () => {
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     const runtimeAgentDir = `${stateDir}-runtime-agent`;
     const runtimeStore = path.join(runtimeAgentDir, "openclaw-agent.sqlite");
-    withEnv({ OPENCLAW_AGENT_DIR: runtimeAgentDir }, () => {
+    withEnv({ ARXI_AUTH_AGENT_DIR: runtimeAgentDir }, () => {
       expect(resolveAuthProfileDatabasePath(agentDir)).toBe(runtimeStore);
       expect(resolveAuthStorePathForDisplay(agentDir)).toBe(runtimeStore);
       expect(resolveAuthStatePathForDisplay(agentDir)).toBe(runtimeStore);

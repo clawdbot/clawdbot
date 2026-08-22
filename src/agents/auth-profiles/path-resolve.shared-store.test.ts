@@ -28,7 +28,12 @@ const persistedStore = {
 
 function makeStateEnv(): NodeJS.ProcessEnv {
   const stateDir = tempDirs.make("openclaw-shared-auth-store-");
-  return { ...process.env, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: undefined };
+  return {
+    ...process.env,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_AGENT_DIR: undefined,
+    ARXI_AUTH_AGENT_DIR: undefined,
+  };
 }
 
 describe("shared auth store path resolution", () => {
@@ -131,7 +136,7 @@ describe("shared auth store path resolution", () => {
   it("keeps an explicit agent directory outside durable shared state", async () => {
     const env = makeStateEnv();
     const runtimeAgentDir = tempDirs.make("openclaw-runtime-auth-");
-    env.OPENCLAW_AGENT_DIR = runtimeAgentDir;
+    env.ARXI_AUTH_AGENT_DIR = runtimeAgentDir;
     writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env });
     const { resolveSharedAuthStoreOwnership, resolveSharedAuthStorePath } =
       await import("./path-resolve.js");

@@ -244,6 +244,7 @@ describe("plugin HTTP suspension admission", () => {
       pauseScheduling: vi.fn(),
       resumeScheduling: vi.fn(),
       getSuspensionBlockerCount: vi.fn(() => 0),
+      getSuspendWakeSnapshot: vi.fn(() => ({ complete: true as const, nextWakeAtMs: null })),
     };
     const context = {
       cron,

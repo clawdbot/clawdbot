@@ -75,6 +75,7 @@ describe("writeOAuthCredentials", () => {
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_AGENT_DIR",
     "OPENCLAW_OAUTH_DIR",
+    "ARXI_AUTH_AGENT_DIR",
   ]);
 
   afterEach(async () => {
@@ -106,6 +107,31 @@ describe("writeOAuthCredentials", () => {
     await expect(readAuthProfilesForAgent(env.agentDir)).rejects.toThrow(
       "Expected SQLite auth profile store",
     );
+  });
+
+  it("keeps default OAuth credentials in the authoritative runtime auth directory", async () => {
+    const env = await setupAuthTestEnv("openclaw-oauth-runtime-");
+    lifecycle.track(env);
+    const durableDefaultAgentDir = path.join(env.stateDir, "agents", "main", "agent");
+    setTestEnvValue("ARXI_AUTH_AGENT_DIR", env.agentDir);
+
+    await writeOAuthCredentials("openai", {
+      refresh: "refresh-runtime",
+      access: "access-runtime",
+      expires: Date.now() + 60_000,
+    });
+
+    const runtimeStore = await readAuthProfilesForAgent<{
+      profiles?: Record<string, OAuthCredentials & { type?: string }>;
+    }>(env.agentDir);
+    expectFields(runtimeStore.profiles?.["openai:default"], {
+      refresh: "refresh-runtime",
+      access: "access-runtime",
+      type: "oauth",
+    });
+    await expect(
+      fs.access(path.join(durableDefaultAgentDir, "openclaw-agent.sqlite")),
+    ).rejects.toThrow();
   });
 
   it("persists primary and main OAuth rows while later siblings inherit", async () => {

@@ -49,7 +49,7 @@ function parseSharedAuthStoreOwnership(value: unknown): SharedAuthStoreOwnership
 export function resolveSharedAuthStoreOwnership(
   env: NodeJS.ProcessEnv = process.env,
 ): SharedAuthStoreOwnership {
-  if (env.OPENCLAW_AGENT_DIR?.trim()) {
+  if (env.ARXI_AUTH_AGENT_DIR?.trim()) {
     return { location: "legacy-main" };
   }
   const databasePath = path.resolve(resolveOpenClawStateSqlitePath(env));
