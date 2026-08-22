@@ -6893,7 +6893,9 @@ Update and merge these partial structured summaries.`,
     const readAgent = readToolUse(await request());
     expect(readAgent.name).toBe("exec");
     const readAgentCode = String(requireRecord(readAgent.input, "exec input").code);
-    expect(readAgentCode).toContain("tools.callValue(target.id, targetArgs)");
+    expect(readAgentCode).toContain("await catalog.search(targetName)");
+    expect(readAgentCode).toContain("await target(targetArgs)");
+    expect(readAgentCode).not.toContain("ALL_TOOLS");
     expect(readAgentCode).toContain("value.content.slice(0, 2048)");
     await expectPlan("read", { path: "AGENT.md" }, String(readAgent.id));
 
@@ -7182,6 +7184,8 @@ Update and merge these partial structured summaries.`,
       const execArgs = outputToolArgsFromItem(execCall);
       expect(execArgs).toMatchObject({ language: "javascript", restartSafe: true });
       expect(execArgs.code).toContain("qa_restart_wait");
+      expect(execArgs.code).toContain('catalog.search("qa_restart_wait")');
+      expect(execArgs.code).toContain("await target({})");
       expect(execArgs.code).toContain(`CHECKPOINT-${checkpoint}`);
 
       const runId = `restart-checkpoint-${checkpoint}`;
@@ -8480,7 +8484,7 @@ Update and merge these partial structured summaries.`,
       input: [
         makeUserInput(prompt),
         makeUserInput(
-          `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} If any tool failed, state that failure plainly and do not claim it succeeded.`,
+          `${QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION} If a tool failed, say so; never claim completion or success.`,
         ),
         failedToolOutput,
       ],

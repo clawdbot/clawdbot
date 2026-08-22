@@ -108,7 +108,22 @@ describe("doctor model catalog credential migration", () => {
     expect(first.migrated).toBe(3);
     expect(first.warnings).toEqual([]);
     expect(cfg.models?.providers?.configured?.apiKey).toBe("configured-secret");
-    expect(loadPersistedAuthProfileStore(agentDir)?.profiles).toMatchObject({
+    // A fresh root records state-db shared ownership, so the migrated credentials persist in the
+    // shared store rather than the agent file. Read through the owner for this state root instead of
+    // pinning the storage layout.
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = state.stateDir;
+    let migratedProfiles: Record<string, unknown>;
+    try {
+      migratedProfiles = loadPersistedAuthProfileStore(undefined)?.profiles ?? {};
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
+    expect(migratedProfiles).toMatchObject({
       "configured:default": {
         type: "api_key",
         provider: "configured",

@@ -3,7 +3,7 @@
  *
  * Wraps old channel send functions in the newer channel message adapter contract.
  */
-import { createMessageReceiptFromOutboundResults } from "./receipt.js";
+import { createMessageReceiptFromOutboundResults, resolveReceiptSourceId } from "./receipt.js";
 import type {
   ChannelMessageAdapterShape,
   ChannelMessageLiveAdapterShape,
@@ -62,20 +62,6 @@ type CreateChannelMessageAdapterFromOutboundParams<TConfig = unknown> = {
   receive?: ChannelMessageReceiveAdapterShape;
 };
 
-function resolveResultMessageId(result: ChannelMessageOutboundBridgeResult): string | undefined {
-  return (
-    result.messageId ??
-    result.receipt?.primaryPlatformMessageId ??
-    result.receipt?.platformMessageIds[0] ??
-    result.chatId ??
-    result.channelId ??
-    result.roomId ??
-    result.conversationId ??
-    result.toJid ??
-    result.pollId
-  );
-}
-
 type MessageSendResultParams = {
   kind: MessageReceiptPartKind;
   normalizeReceiptKind?: boolean;
@@ -100,6 +86,7 @@ function toMessageSendResult(
         threadId: params.threadId == null ? undefined : String(params.threadId),
         replyToId: params.replyToId ?? undefined,
       });
+  const messageId = resolveReceiptSourceId({ ...result, receipt });
   return {
     // Preserve sanctioned owner facts for delivery hooks without exposing private
     // provider fields or trusting a provider-authored channel identity.
@@ -113,11 +100,7 @@ function toMessageSendResult(
     ...(result.timestamp !== undefined ? { timestamp: result.timestamp } : {}),
     ...(result.meta !== undefined ? { meta: result.meta } : {}),
     receipt,
-    ...(resolveResultMessageId({ ...result, receipt })
-      ? {
-          messageId: resolveResultMessageId({ ...result, receipt }),
-        }
-      : {}),
+    ...(messageId ? { messageId } : {}),
   };
 }
 

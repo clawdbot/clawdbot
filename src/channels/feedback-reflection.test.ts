@@ -92,7 +92,10 @@ describe("channel feedback reflection", () => {
         cfg,
         channel: "msteams",
         route: { agentId: "main", sessionKey: params.sessionKey },
-        ctxPayload: expect.objectContaining({ ChatType: "group" }),
+        ctxPayload: expect.objectContaining({
+          ChatType: "group",
+          ConversationRouteContextObserved: false,
+        }),
       }),
     );
     await expect(runChannelFeedbackReflection(params)).resolves.toEqual({ status: "cooldown" });

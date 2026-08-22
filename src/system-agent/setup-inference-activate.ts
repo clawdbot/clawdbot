@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
+import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import {
   type CodexCliApiKeyCredential,
   readCodexCliActiveApiKey,
@@ -125,7 +125,7 @@ async function activateSetupInferenceUnredacted(
   // The source snapshot includes raw compatibility migrations for comparison,
   // while the writer still projects changes back onto the untouched authored bytes.
   const sourceCfg: OpenClawConfig = snapshot.sourceConfig ?? snapshot.config;
-  const routeAgentId = resolveSystemAgentTargetAgentId(cfg, params.agentId);
+  const routeAgentId = resolveAmbientOwnerAgentId(cfg, params.agentId);
   const workspace = params.workspace?.trim()
     ? resolveUserPath(params.workspace)
     : (
@@ -189,7 +189,7 @@ async function activateSetupInferenceUnredacted(
       testPlan = {
         ...plan,
         config: stagedConfig,
-        routeAgentId: resolveSystemAgentTargetAgentId(stagedConfig, params.agentId),
+        routeAgentId: resolveAmbientOwnerAgentId(stagedConfig, params.agentId),
       };
     }
 

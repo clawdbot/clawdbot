@@ -24,6 +24,7 @@ import {
   reviseSkillProposal,
   SkillProposalStaleTargetError,
 } from "../../skills/workshop/service.js";
+import { PROPOSAL_DRAFT_FILE } from "../../skills/workshop/store-record.js";
 import type {
   SkillProposalOrigin,
   SkillProposalReadResult,
@@ -339,7 +340,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         const artifact = resolveProposalInspectArtifact(proposal, artifactPath);
         if (!artifact) {
           const available = [
-            proposal.record.draftFile,
+            PROPOSAL_DRAFT_FILE,
             ...(proposal.record.supportFiles ?? []).map((file) => file.path),
           ];
           throw new ToolInputError(

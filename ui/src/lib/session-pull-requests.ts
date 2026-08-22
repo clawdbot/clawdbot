@@ -303,7 +303,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       typeof document !== "undefined" && document.visibilityState === "hidden" ? [] : watchedKeys();
     const sessionKeySet = new Set(sessionKeys);
     const refreshSessionKeys = [...pendingRefreshKeys].filter((key) => sessionKeySet.has(key));
-    const signature = JSON.stringify(sessionKeys);
+    const signature = JSON.stringify(sessionKeys.toSorted());
     if (
       snapshot.hello === lastHello &&
       signature === lastSignature &&

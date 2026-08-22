@@ -1,5 +1,5 @@
 // Mantis Publish Pr Evidence tests cover mantis publish pr evidence script behavior.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -79,6 +79,12 @@ function writeFixtureManifest() {
 }
 
 describe("scripts/mantis/publish-pr-evidence", () => {
+  it("selects only Mantis-owned status comments", () => {
+    const source = readFileSync("scripts/mantis/publish-pr-evidence.mjs", "utf8");
+
+    expect(source).toContain('.user.login == "openclaw-mantis[bot]"');
+  });
+
   it("renders a manifest-driven PR comment with inline screenshots and video links", () => {
     const manifest = loadEvidenceManifest(writeFixtureManifest());
     const body = renderEvidenceComment({
@@ -482,6 +488,43 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     expect(body).toContain("- Overall: `false`");
     expect(shouldPublishPrComment(manifest, { requestSource: "issue_comment" })).toBe(false);
     expect(shouldPublishPrComment(manifest, { requestSource: "pull_request_target" })).toBe(false);
+  });
+
+  it("publishes a visible blocked stop-report without proof media", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "mantis-evidence-test-"));
+    tempDirs.push(dir);
+    const manifestPath = path.join(dir, "mantis-evidence.json");
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        artifacts: [],
+        comparison: {
+          baseline: { expected: "typed reasoning chunks", status: "blocked" },
+          candidate: { expected: "typed reasoning chunks", status: "blocked" },
+          outcome: "blocked",
+          pass: false,
+        },
+        id: "telegram-desktop-proof",
+        scenario: "telegram-desktop-proof",
+        schemaVersion: 1,
+        summary:
+          "Mantis could not prove this change because the harness cannot emit typed reasoning chunks.",
+        title: "Mantis Telegram Desktop Proof",
+      }),
+    );
+
+    const manifest = loadEvidenceManifest(manifestPath);
+    const body = renderEvidenceComment({
+      manifest,
+      marker: "<!-- mantis-telegram-desktop-proof -->",
+      rawBase: "https://artifacts.openclaw.ai/mantis/telegram-desktop/pr-1/run-1",
+      requestSource: "pull_request_target",
+    });
+
+    expect(body).toContain("- Overall: `blocked`");
+    expect(body).toContain("harness cannot emit typed reasoning chunks");
+    expect(shouldPublishPrComment(manifest, { requestSource: "issue_comment" })).toBe(true);
+    expect(shouldPublishPrComment(manifest, { requestSource: "pull_request_target" })).toBe(true);
   });
 
   it("rejects artifact paths that escape the manifest directory", () => {

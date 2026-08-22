@@ -1,5 +1,5 @@
 // Payload fallback tests cover fallback prompt payloads for isolated cron runs.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
@@ -184,6 +184,39 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
     expect(fallbackRequest.mergeExhaustedResult).toBe(
       mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock,
     );
+  });
+
+  it("marks only later candidates in one prompt as fallback runners", async () => {
+    const onExecutionStarted = vi.fn();
+    const onExecutionPhase = vi.fn();
+    runEmbeddedAgentMock.mockImplementation(async (request) => {
+      request.onExecutionStarted?.();
+      request.onExecutionPhase?.({ phase: "runtime_plugins" });
+      return {
+        payloads: [{ text: "fallback ok" }],
+        meta: { agentMeta: {} },
+      };
+    });
+    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
+      await run(provider, model);
+      const result = await run("openai", "gpt-5");
+      return { result, provider: "openai", model: "gpt-5", attempts: [] };
+    });
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({ onExecutionStarted, onExecutionPhase }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(onExecutionStarted).toHaveBeenCalledTimes(2);
+    expect(onExecutionStarted.mock.calls.map(([info]) => info)).toEqual([
+      expect.objectContaining({ provider: "openai", model: "gpt-5.4" }),
+      expect.objectContaining({ provider: "openai", model: "gpt-5", isFallback: true }),
+    ]);
+    expect(onExecutionPhase.mock.calls.map(([info]) => info)).toEqual([
+      expect.objectContaining({ provider: "openai", model: "gpt-5.4" }),
+      expect.objectContaining({ provider: "openai", model: "gpt-5" }),
+    ]);
   });
 
   it("plans Anthropic fallbacks canonically while executing compatible attempts through Claude CLI", async () => {

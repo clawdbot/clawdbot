@@ -38,6 +38,7 @@ import { normalizeConfigMutationModelRefs } from "./config-cli-model-normalizati
 import {
   formatConfigUnsetMissingPathMessage,
   getAtPath,
+  isConfigSchemaPath,
   parseConfigSetPath,
   unsetAtPath,
 } from "./config-cli-path.js";
@@ -67,6 +68,7 @@ import {
 import { resolveConfigSetMode } from "./config-set-parser.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
+import { quoteCliArg } from "./quote-cli-arg.js";
 
 export { parseConfigSetPath } from "./config-cli-path.js";
 
@@ -171,21 +173,20 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     if (!pluginMetadataSnapshot) {
       throw new Error("Config plugin metadata unavailable; refusing to display config values.");
     }
-    const { uiHints } = buildRuntimeConfigSchemaFromRegistry(
+    const { schema, uiHints } = buildRuntimeConfigSchemaFromRegistry(
       pluginMetadataSnapshot.manifestRegistry,
     );
     const res = getAtPath(redactConfigObject(snapshot.config, uiHints), parsedPath);
     if (!res.found) {
+      const message = isConfigSchemaPath(schema, parsedPath)
+        ? `Config path is valid but unset: ${opts.path}. The runtime default applies until you set an authored value with ${formatCliCommand(`openclaw config set ${quoteCliArg(opts.path)} <value>`)}.`
+        : `Unknown config path: ${opts.path}. Run ${formatCliCommand("openclaw config schema")} to inspect valid paths.`;
       if (opts.json) {
-        writeRuntimeJson(runtime, formatCliJsonFailure(`Config path not found: ${opts.path}`));
+        writeRuntimeJson(runtime, formatCliJsonFailure(message));
         runtime.exit(1);
         return;
       }
-      runtime.error(
-        danger(
-          `Config path not found: ${opts.path}. Run ${formatCliCommand("openclaw config validate")} to inspect config shape.`,
-        ),
-      );
+      runtime.error(danger(message));
       runtime.exit(1);
       return;
     }

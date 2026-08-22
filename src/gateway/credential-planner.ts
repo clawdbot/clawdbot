@@ -2,7 +2,11 @@
 // Classifies local/remote auth inputs before SecretRef resolution.
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { containsEnvVarReference } from "../config/env-substitution.js";
-import { getConfigResolutionFacts, hasUnresolvedConfigPath } from "../config/resolution-facts.js";
+import {
+  getAuthoredConfigSecretRef,
+  getConfigResolutionFacts,
+  hasUnresolvedConfigPath,
+} from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
 
@@ -73,7 +77,10 @@ function resolveConfiguredGatewayCredentialInput(params: {
   path: GatewayCredentialInputPath;
 }): GatewayConfiguredCredentialInput {
   const resolutionFacts = getConfigResolutionFacts(params.config);
-  if (hasUnresolvedConfigPath(params.config, params.path)) {
+  if (
+    hasUnresolvedConfigPath(params.config, params.path) ||
+    getAuthoredConfigSecretRef(params.config, params.path)
+  ) {
     return {
       path: params.path,
       configured: true,

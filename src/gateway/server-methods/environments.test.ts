@@ -44,6 +44,7 @@ type TestWorkerRecord = WorkerEnvironmentRecord &
 type TestWorkerService = {
   list: () => TestWorkerRecord[];
   get: (environmentId: string) => TestWorkerRecord | undefined;
+  supportsExecutionMode: (profileId: string, mode: "worker-turn" | "remote-exec") => boolean;
   listMachineOptions: (
     profileId: string,
   ) => Promise<
@@ -147,6 +148,7 @@ function workerService(overrides: Partial<TestWorkerService> = {}) {
   return {
     list: vi.fn(() => []),
     get: vi.fn(() => undefined),
+    supportsExecutionMode: vi.fn(() => false),
     listMachineOptions: vi.fn(async () => undefined),
     create: vi.fn(async () => workerRecord()),
     destroy: vi.fn(async () => workerRecord({ state: "destroyed" })),
@@ -494,7 +496,7 @@ describe("environment gateway methods", () => {
     expect(worker?.worker).not.toHaveProperty("keyRef");
   });
 
-  it("adds provider machine options to configured profile summaries", async () => {
+  it("adds known provider capabilities to configured profile summaries", async () => {
     const listMachineOptions = vi.fn(async (profileId: string) =>
       profileId === "aws"
         ? [
@@ -511,7 +513,14 @@ describe("environment gateway methods", () => {
     const [ok, payload] = await callEnvironmentMethod(
       "environments.list",
       {},
-      { service: workerService({ listMachineOptions }) },
+      {
+        service: workerService({
+          listMachineOptions,
+          supportsExecutionMode: vi.fn(
+            (profileId, mode) => profileId === "aws" && mode === "remote-exec",
+          ),
+        }),
+      },
     );
 
     expect(ok).toBe(true);
@@ -520,6 +529,7 @@ describe("environment gateway methods", () => {
         {
           id: "aws",
           providerId: "crabbox",
+          executionMode: "remote-exec",
           machines: [
             {
               id: "standard",
@@ -534,6 +544,11 @@ describe("environment gateway methods", () => {
       ],
     });
     expect(listMachineOptions.mock.calls).toEqual([["aws"], ["zeta"]]);
+    expect(
+      (payload as { profiles: Array<Record<string, unknown>> }).profiles.find(
+        (profile) => profile.id === "zeta",
+      ),
+    ).not.toHaveProperty("executionMode");
   });
 
   it.each([

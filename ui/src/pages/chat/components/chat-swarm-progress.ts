@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
+import { isSessionRunActive } from "../../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 
 type SwarmDotStatus = "queued" | "running" | "done" | "failed";
@@ -53,7 +54,7 @@ function swarmDotStatus(row: GatewaySessionRow): SwarmDotStatus | null {
   if (row.status === "queued") {
     return "queued";
   }
-  if (row.status === "running" || row.hasActiveRun === true) {
+  if (isSessionRunActive(row)) {
     return "running";
   }
   if (row.status === "done") {

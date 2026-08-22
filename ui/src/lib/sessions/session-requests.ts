@@ -1,3 +1,4 @@
+import type { SessionsDeleteResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../../src/shared/session-archive-timeout.ts";
 import type {
   SessionBranch,
@@ -18,7 +19,6 @@ import type { SessionPatch } from "./patch.ts";
 import type {
   SessionCompactResult,
   SessionDeleteOptions,
-  SessionDeleteResponse,
   SessionListOptions,
   SessionRequestClient,
   SessionResetOptions,
@@ -159,8 +159,8 @@ export function requestSessionDelete(
   client: SessionRequestClient,
   key: string,
   options: SessionDeleteOptions = {},
-): Promise<SessionDeleteResponse> {
-  return client.request<SessionDeleteResponse>("sessions.delete", {
+): Promise<SessionsDeleteResult> {
+  return client.request<SessionsDeleteResult>("sessions.delete", {
     ...buildSessionRequestParams(key, options.agentId),
     deleteTranscript: options.deleteTranscript ?? true,
     ...(options.expectedSessionId ? { expectedSessionId: options.expectedSessionId } : {}),
@@ -168,7 +168,7 @@ export function requestSessionDelete(
   });
 }
 
-export function confirmsSessionDeletion(response: SessionDeleteResponse): boolean {
+export function confirmsSessionDeletion(response: SessionsDeleteResult): boolean {
   // A successful RPC may be a lifecycle no-op; only confirmed deletion removes state.
   return response.deleted;
 }

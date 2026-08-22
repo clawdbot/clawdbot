@@ -54,6 +54,7 @@ import {
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
+  authorizeOpenAiCompatibleHttpSession,
   isAgentSelectionRequiredError,
   isGatewaySessionKeyOverrideError,
   isInvalidGatewayModelError,
@@ -65,7 +66,11 @@ import {
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
-import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai-compat-errors.js";
+import {
+  isFailedOpenAiAgentRun,
+  resolveOpenAiCompatError,
+  validateOpenAiSamplingParams,
+} from "./openai-compat-errors.js";
 import {
   isToolChoiceConstraintSatisfied,
   resolveUnsatisfiedToolChoiceMessage,
@@ -998,6 +1003,15 @@ export async function handleOpenAiHttpRequest(
     }
     throw err;
   }
+  const sessionAuth = authorizeOpenAiCompatibleHttpSession({
+    agentId,
+    sessionKey,
+    senderIsOwner,
+  });
+  if (!sessionAuth.allowed) {
+    sendMissingScopeForbidden(res, sessionAuth.missingScope);
+    return true;
+  }
   const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
     req,
     agentId,
@@ -1088,7 +1102,7 @@ export async function handleOpenAiHttpRequest(
       }
 
       const meta = (result as { meta?: { error?: unknown; stopReason?: unknown } } | null)?.meta;
-      if (meta?.error || meta?.stopReason === "error") {
+      if (isFailedOpenAiAgentRun(result)) {
         throw new Error("agent run failed");
       }
       const usage = resolveChatCompletionUsage(result);
@@ -1370,6 +1384,12 @@ export async function handleOpenAiHttpRequest(
       resultResolved = true;
 
       if (closed) {
+        return;
+      }
+
+      if (isFailedOpenAiAgentRun(result)) {
+        terminalLifecyclePhase = "error";
+        finishStreamWithError({ message: "internal error", type: "api_error" });
         return;
       }
 

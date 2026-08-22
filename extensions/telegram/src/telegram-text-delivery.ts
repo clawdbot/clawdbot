@@ -106,18 +106,15 @@ export function planTelegramTextDeliveryPages(
     if (richPlan.richMessage.blocks.length === 0 && params.text.trim()) {
       return [plainPage(params.text)];
     }
-    return splitTelegramRichMessageTextChunks({
-      text: params.text,
-      textLimit: maxChars,
-      tableMode: params.tableMode,
-      skipEntityDetection: params.skipEntityDetection,
-    }).map((chunk) => ({
-      plainText: chunk.plainText,
-      sourceText: chunk.plainText,
-      sourceTextMode: "markdown" as const,
-      richMessage: chunk.richMessage,
-      degradationReasons: chunk.degradationReasons,
-    }));
+    return splitTelegramRichMessageTextChunks({ plan: richPlan, textLimit: maxChars }).map(
+      (chunk) => ({
+        plainText: chunk.plainText,
+        sourceText: chunk.plainText,
+        sourceTextMode: "markdown" as const,
+        richMessage: chunk.richMessage,
+        degradationReasons: chunk.degradationReasons,
+      }),
+    );
   }
   if (params.textMode === "plain") {
     return splitTelegramPlainTextChunks(params.text, maxChars)

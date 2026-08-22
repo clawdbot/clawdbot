@@ -48,6 +48,8 @@ function fixtureFiles(): Record<string, string> {
     path.join(repoRoot, "src", "infra", "agent-run-registry.ts"),
   );
   const agentEventsPath = JSON.stringify(path.join(repoRoot, "src", "infra", "agent-events.ts"));
+  const loggingConsolePath = JSON.stringify(path.join(repoRoot, "src", "logging", "console.ts"));
+  const loggingStatePath = JSON.stringify(path.join(repoRoot, "src", "logging", "state.ts"));
 
   return {
     "01-dep.ts": 'export function flavor(): string {\n  return "real";\n}\n',
@@ -161,6 +163,39 @@ function fixtureFiles(): Record<string, string> {
       "});",
       "",
     ].join("\n"),
+    "06-a-console-routing.test.ts": [
+      `import { enableConsoleCapture, routeLogsToStderr } from ${loggingConsolePath};`,
+      `import { loggingState } from ${loggingStatePath};`,
+      'import { expect, it } from "vitest";',
+      'it("latches console capture and stderr routing", () => {',
+      "  const native = console.error;",
+      "  routeLogsToStderr();",
+      "  enableConsoleCapture();",
+      "  expect(loggingState.forceConsoleToStderr).toBe(true);",
+      "  expect(loggingState.consolePatched).toBe(true);",
+      "  expect(console.error).not.toBe(native);",
+      "});",
+      "",
+    ].join("\n"),
+    // Production never unwinds those latches: a stdio MCP server or a `--json`
+    // one-shot owns the console until the process exits. The next file must still
+    // see its own console.error spy, not the previous file's stderr forwarder.
+    "06-b-console-routing.test.ts": [
+      `import { enableConsoleCapture } from ${loggingConsolePath};`,
+      `import { loggingState } from ${loggingStatePath};`,
+      'import { expect, it, vi } from "vitest";',
+      'it("starts from unrouted, unpatched console state", () => {',
+      "  expect(loggingState.forceConsoleToStderr).toBe(false);",
+      "  expect(loggingState.consolePatched).toBe(false);",
+      "  expect(loggingState.rawConsole).toBeNull();",
+      '  const spy = vi.spyOn(console, "error").mockImplementation(() => {});',
+      "  enableConsoleCapture();",
+      '  console.error("routed line");',
+      '  expect(spy.mock.calls).toEqual([["routed line"]]);',
+      "  spy.mockRestore();",
+      "});",
+      "",
+    ].join("\n"),
   };
 }
 
@@ -216,7 +251,7 @@ it("cleans every shared runner surface between files", async () => {
     // The collection failure is intentional. Every behavior test after it must
     // pass; any leaked surface turns the summary into a second failure.
     expect(output).toContain("synthetic collect failure");
-    expect(output).toContain("1 failed | 9 passed");
+    expect(output).toContain("1 failed | 11 passed");
     expect(output).not.toContain("first-file");
   } finally {
     await fs.rm(root, { recursive: true, force: true });

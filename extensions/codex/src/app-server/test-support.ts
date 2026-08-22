@@ -14,13 +14,7 @@ import type { CodexAppServerClientFactory, CodexAppServerClientOptions } from ".
 export function createCodexTestToolTerminalObserver(): NonNullable<
   EmbeddedRunAttemptParams["observeToolTerminal"]
 > {
-  const unresolved = new Map<
-    string,
-    NonNullable<
-      ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>["lastToolError"]
-    >
-  >();
-  let nonMutatingFailure: ReturnType<
+  let lastToolError: ReturnType<
     NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>
   >["lastToolError"];
 
@@ -30,42 +24,22 @@ export function createCodexTestToolTerminalObserver(): NonNullable<
         ? (observation.arguments as Record<string, unknown>)
         : {};
     const action = typeof record.action === "string" ? record.action : undefined;
-    const to = typeof record.to === "string" ? record.to : undefined;
     const mutation = observation.nativeMutation ?? {
       mutatingAction: observation.toolName === "message" && action === "send",
       replaySafe: !(observation.toolName === "message" && action === "send"),
-      actionFingerprint:
-        observation.toolName === "message" && action === "send"
-          ? [`tool=${observation.toolName}`, `action=${action}`, ...(to ? [`to=${to}`] : [])].join(
-              "|",
-            )
-          : undefined,
     };
-    const key = mutation.actionFingerprint ?? `${observation.toolName}:${observation.meta ?? ""}`;
     const executionStarted = observation.executionStarted !== false;
     if (observation.outcome === "failure") {
       const mutatingAction = executionStarted && mutation.mutatingAction;
-      const failure = {
+      lastToolError = {
         toolName: observation.toolName,
         ...(observation.meta ? { meta: observation.meta } : {}),
         ...observation.failure,
         mutatingAction,
-        ...(mutatingAction && mutation.actionFingerprint
-          ? { actionFingerprint: mutation.actionFingerprint }
-          : {}),
       };
-      if (mutatingAction) {
-        unresolved.set(key, failure);
-        nonMutatingFailure = undefined;
-      } else if (unresolved.size === 0) {
-        nonMutatingFailure = failure;
-      }
-    } else if (unresolved.size === 0) {
-      nonMutatingFailure = undefined;
-    } else if (mutation.mutatingAction) {
-      unresolved.delete(key);
+    } else if (lastToolError?.toolName === observation.toolName) {
+      lastToolError = undefined;
     }
-    const lastToolError = [...unresolved.values()].at(-1) ?? nonMutatingFailure;
     return {
       ...(lastToolError ? { lastToolError } : {}),
       executionStarted,

@@ -13,6 +13,7 @@ import type {
   PluginManifestRecord,
   PluginManifestRegistry,
 } from "./manifest-registry.js";
+import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import {
@@ -62,13 +63,17 @@ type ListPluginContributionIdsParams = PluginRegistryContributionOptions & {
   contribution: PluginRegistryContributionKey;
 };
 
-type ResolveManifestContractPluginIdsParams = LoadPluginRegistryParams & {
+type ManifestContractLookupParams = LoadPluginRegistryParams & {
+  manifestRecords?: readonly PluginManifestRecord[];
+};
+
+type ResolveManifestContractPluginIdsParams = ManifestContractLookupParams & {
   contract: PluginManifestContractListKey;
   origin?: PluginOrigin;
   onlyPluginIds?: readonly string[];
 };
 
-type ResolveManifestContractOwnerPluginIdParams = LoadPluginRegistryParams & {
+type ResolveManifestContractOwnerPluginIdParams = ManifestContractLookupParams & {
   contract: PluginManifestContractListKey;
   value: string | undefined;
   origin?: PluginOrigin;
@@ -99,16 +104,44 @@ function listManifestContractValues(
   return plugin.contracts?.[contract] ?? [];
 }
 
-function loadManifestContractRegistry(
-  params: LoadPluginRegistryParams & {
+function loadManifestContractRecords(
+  params: ManifestContractLookupParams & {
     onlyPluginIds?: readonly string[];
   },
-): PluginManifestRegistry {
-  return loadPluginManifestRegistryForPluginRegistry({
-    ...params,
-    pluginIds: params.onlyPluginIds,
-    includeDisabled: true,
-  });
+): readonly PluginManifestRecord[] {
+  let records = params.manifestRecords;
+  if (!records) {
+    const requiresExplicitRegistry =
+      params.index !== undefined ||
+      params.preferPersisted === false ||
+      params.allowCurrent === false ||
+      params.stateDir !== undefined ||
+      params.filePath !== undefined ||
+      params.pluginIndexFilePath !== undefined ||
+      params.installRecords !== undefined ||
+      params.candidates !== undefined ||
+      params.diagnostics !== undefined ||
+      params.discovery !== undefined ||
+      params.now !== undefined;
+    if (requiresExplicitRegistry) {
+      return loadPluginManifestRegistryForPluginRegistry({
+        ...params,
+        pluginIds: params.onlyPluginIds,
+        includeDisabled: true,
+      }).plugins;
+    }
+    records = resolvePluginMetadataSnapshot({
+      config: params.config,
+      env: params.env,
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
+    }).plugins;
+  }
+  if (params.onlyPluginIds === undefined) {
+    return records;
+  }
+  const pluginIds = new Set(params.onlyPluginIds);
+  return records.filter((record) => pluginIds.has(record.id));
 }
 
 function listManifestContributionIds(
@@ -308,8 +341,8 @@ export function resolvePluginContributionOwners(
 export function resolveManifestContractPluginIds(
   params: ResolveManifestContractPluginIdsParams,
 ): string[] {
-  return loadManifestContractRegistry(params)
-    .plugins.filter(
+  return loadManifestContractRecords(params)
+    .filter(
       (plugin) =>
         (!params.origin || plugin.origin === params.origin) &&
         listManifestContractValues(plugin, params.contract).length > 0,
@@ -325,7 +358,7 @@ export function resolveManifestContractOwnerPluginId(
   if (!normalizedValue) {
     return undefined;
   }
-  return loadManifestContractRegistry(params).plugins.find(
+  return loadManifestContractRecords(params).find(
     (plugin) =>
       (!params.origin || plugin.origin === params.origin) &&
       listManifestContractValues(plugin, params.contract).some(

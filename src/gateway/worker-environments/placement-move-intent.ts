@@ -45,6 +45,7 @@ export type WorkerPlacementMoveIntent = {
   sessionId: string;
   source: WorkerPlacementMoveSource;
   target: WorkerPlacementMoveTarget;
+  abandonSource: boolean;
   lastError: string | null;
   createdAtMs: number;
   updatedAtMs: number;
@@ -73,6 +74,7 @@ function ensureWorkerPlacementMoveSchema(db: DatabaseSync): void {
   // Databases that created this table before the column shipped upgrade in place;
   // the column is bare and nullable, so old readers stay compatible.
   ensureColumn(db, "worker_session_placement_moves", "target_machine_class TEXT");
+  ensureColumn(db, "worker_session_placement_moves", "abandon_source INTEGER");
   ensuredMoveSchemaHandles.add(db);
 }
 
@@ -173,6 +175,20 @@ function targetValues(target: WorkerPlacementMoveTarget): {
   throw new Error("Worker placement move target is invalid");
 }
 
+function normalizeAbandonSource(value: number | null): boolean {
+  if (value === null) {
+    return false;
+  }
+  if (value === 1) {
+    return true;
+  }
+  throw new Error("Invalid worker placement move source abandonment value");
+}
+
+function abandonSourceValue(abandonSource: boolean): number | null {
+  return abandonSource ? 1 : null;
+}
+
 function fromRow(row: MoveRow): WorkerPlacementMoveIntent {
   const source = normalizeWorkerPlacementMoveSource({
     generation: row.source_generation,
@@ -204,11 +220,16 @@ function fromRow(row: MoveRow): WorkerPlacementMoveIntent {
   } else {
     throw new Error(`Invalid worker placement move target: ${row.target_kind}`);
   }
+  const abandonSource = normalizeAbandonSource(row.abandon_source);
+  if (abandonSource && target.kind !== "gateway") {
+    throw new Error("Worker placement move source abandonment requires a Gateway target");
+  }
   return {
     operationId: normalizeOperationId(row.operation_id),
     sessionId: required(row.session_id, "move session id"),
     source,
     target,
+    abandonSource,
     lastError: row.last_error,
     createdAtMs: row.created_at_ms,
     updatedAtMs: row.updated_at_ms,
@@ -264,6 +285,9 @@ function deleteExactMove(db: DatabaseSync, intent: WorkerPlacementMoveIntent): v
     .where("source_environment_id", "=", intent.source.environmentId)
     .where("source_owner_epoch", "=", intent.source.ownerEpoch)
     .where("target_kind", "=", values.target_kind);
+  statement = intent.abandonSource
+    ? statement.where("abandon_source", "=", 1)
+    : statement.where("abandon_source", "is", null);
   statement =
     values.target_id === null
       ? statement.where("target_id", "is", null)
@@ -367,6 +391,7 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
       sessionId: string;
       source: WorkerPlacementMoveSource;
       target: WorkerPlacementMoveTarget;
+      abandonSource?: true;
     }): {
       intent: WorkerPlacementMoveIntent;
       placement: WorkerSessionPlacementRecord;
@@ -375,6 +400,10 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
       const sessionId = required(input.sessionId, "move session id");
       const source = normalizeWorkerPlacementMoveSource(input.source);
       const target = normalizeWorkerPlacementMoveTarget(input.target);
+      const abandonSource = input.abandonSource === true;
+      if (abandonSource && target.kind !== "gateway") {
+        throw new Error("Worker placement move source abandonment requires a Gateway target");
+      }
       const operationId = `${MOVE_OPERATION_PREFIX}${generateSecureToken(32)}`;
       return write((db) => {
         const existingRow = findMoveRowBySession(db, sessionId);
@@ -382,7 +411,8 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
           const existing = fromRow(existingRow);
           if (
             !isDeepStrictEqual(existing.source, source) ||
-            !isDeepStrictEqual(existing.target, target)
+            !isDeepStrictEqual(existing.target, target) ||
+            existing.abandonSource !== abandonSource
           ) {
             throw new Error(`Session ${sessionId} already has a conflicting placement move`);
           }
@@ -407,6 +437,7 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
           source_environment_id: source.environmentId,
           source_owner_epoch: source.ownerEpoch,
           ...targetValues(target),
+          abandon_source: abandonSourceValue(abandonSource),
           last_error: null,
           created_at_ms: timestamp,
           updated_at_ms: timestamp,
@@ -427,6 +458,23 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
         );
         return { intent: fromRow(row), placement, joined: false };
       });
+    },
+
+    async preparePlacementMove(
+      input: {
+        sessionId: string;
+        source: WorkerPlacementMoveSource;
+        target: WorkerPlacementMoveTarget;
+        abandonSource?: true;
+      },
+      prepareNew: () => Promise<void>,
+    ) {
+      // Existing durable decisions own retries; asynchronous preparation is
+      // only for minting a new intent and must never run in a SQLite transaction.
+      if (!findMoveRowBySession(read(), required(input.sessionId, "move session id"))) {
+        await prepareNew();
+      }
+      return this.beginPlacementMove(input);
     },
 
     recordPlacementMoveError(input: {
@@ -450,6 +498,9 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
           .where("source_environment_id", "=", intent.source.environmentId)
           .where("source_owner_epoch", "=", intent.source.ownerEpoch)
           .where("target_kind", "=", values.target_kind);
+        statement = intent.abandonSource
+          ? statement.where("abandon_source", "=", 1)
+          : statement.where("abandon_source", "is", null);
         statement =
           values.target_id === null
             ? statement.where("target_id", "is", null)
@@ -505,6 +556,52 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
         if (intent.target.kind === "gateway") {
           deleteExactMove(db, intent);
         }
+        return getRequired(db, intent.sessionId);
+      });
+    },
+
+    completeAbandonedPlacementMoveSourceToLocal(input: {
+      operationId: string;
+      sessionId: string;
+      expectedGeneration: number;
+      expectedRecoveryError: string;
+    }): WorkerSessionPlacementRecord {
+      return write((db) => {
+        const intent = requireExactMove(db, input);
+        if (!intent.abandonSource || intent.target.kind !== "gateway") {
+          throw new Error(`Session ${intent.sessionId} placement move is not an abandonment`);
+        }
+        const current = getRequired(db, intent.sessionId);
+        if (
+          current.state !== "failed" ||
+          current.generation !== input.expectedGeneration ||
+          current.environmentId !== intent.source.environmentId ||
+          current.activeOwnerEpoch !== intent.source.ownerEpoch ||
+          current.recoveryError !== input.expectedRecoveryError ||
+          current.turnClaim !== null
+        ) {
+          throw new Error(
+            `Cannot complete stale abandoned placement move for session ${intent.sessionId}`,
+          );
+        }
+        const values = transitionValues(current, "local", {}, now());
+        const result = executeSqliteQuerySync(
+          db,
+          query(db)
+            .updateTable("worker_session_placements")
+            .set(values)
+            .where("session_id", "=", intent.sessionId)
+            .where("state", "=", "failed")
+            .where("transition_generation", "=", current.generation)
+            .where("environment_id", "=", intent.source.environmentId)
+            .where("active_owner_epoch", "=", intent.source.ownerEpoch)
+            .where("recovery_error", "=", input.expectedRecoveryError)
+            .where("turn_claim_owner", "is", null),
+        );
+        if (result.numAffectedRows !== 1n) {
+          throw new Error(`Session ${intent.sessionId} changed during abandoned placement move`);
+        }
+        deleteExactMove(db, intent);
         return getRequired(db, intent.sessionId);
       });
     },

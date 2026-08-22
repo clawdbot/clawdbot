@@ -9,7 +9,7 @@ import { isRecentOutboundMessageIdentity } from "../message/outbound-echo.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 import {
   EMPTY_CHANNEL_TURN_DISPATCH_COUNTS,
-  hasVisibleChannelTurnDispatchFromReceipt as hasVisibleChannelTurnDispatch,
+  hasVisibleChannelTurnDispatch,
   type ChannelTurnDispatchResultLike,
   type ChannelTurnVisibleDeliverySignals,
 } from "./dispatch-result.js";

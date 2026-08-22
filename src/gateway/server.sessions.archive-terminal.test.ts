@@ -1,6 +1,7 @@
 // Archive terminal tests protect exact durable-session ownership at the RPC boundary.
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, expect, onTestFinished, test, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
 import {
@@ -28,18 +29,24 @@ test("sessions.patch closes only the exact terminal session incarnation", async 
   const replacementOwner = agentTerminalOwner(sessionKey, "S2");
   const unrelatedOwner = agentTerminalOwner("agent:main:unrelated", "U1");
   const [oldPty, replacementPty, unrelatedPty] = [makeFakePty(), makeFakePty(), makeFakePty()];
-  const ptys = [oldPty, replacementPty, unrelatedPty];
-  const manager = new TerminalSessionManager({
-    emit: vi.fn(),
-    spawn: async () => ptys.shift() ?? oldPty,
-  });
+  const drainStarted = createDeferredCore();
+  const killOldPty = oldPty.kill.bind(oldPty);
+  oldPty.kill = () => {
+    killOldPty();
+    drainStarted.resolve();
+  };
+  const manager = new TerminalSessionManager({ emit: vi.fn() });
   await writeSessionStore({
     entries: { [sessionKey]: sessionStoreEntry(oldOwner.agentSessionId) },
   });
   const [oldSession, replacementSession, unrelatedSession] = await Promise.all([
-    manager.open(baseOpenRequest({ owner: oldOwner })),
-    manager.open(baseOpenRequest({ owner: replacementOwner })),
-    manager.open(baseOpenRequest({ owner: unrelatedOwner })),
+    manager.open(baseOpenRequest({ owner: oldOwner, createBackend: async () => oldPty })),
+    manager.open(
+      baseOpenRequest({ owner: replacementOwner, createBackend: async () => replacementPty }),
+    ),
+    manager.open(
+      baseOpenRequest({ owner: unrelatedOwner, createBackend: async () => unrelatedPty }),
+    ),
   ]);
   if (!oldSession.ok || !replacementSession.ok || !unrelatedSession.ok) {
     throw new Error("expected terminal sessions");
@@ -53,8 +60,17 @@ test("sessions.patch closes only the exact terminal session incarnation", async 
   ).finally(() => {
     archiveSettled = true;
   });
+  onTestFinished(async () => {
+    if (!archiveSettled) {
+      oldPty.emitExit(0);
+    }
+    await archivePromise;
+    manager.disposeAll();
+  });
 
-  await vi.waitFor(() => expect(oldPty.killed).toBe(true));
+  // Synchronize on the PTY action itself; cold RPC loading is not lifecycle timing.
+  await drainStarted.promise;
+  expect(oldPty.killed).toBe(true);
   expect(archiveSettled).toBe(false);
   expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
   oldPty.emitExit(0);
@@ -76,5 +92,4 @@ test("sessions.patch closes only the exact terminal session incarnation", async 
   expect(unrelatedPty).toMatchObject({ killed: false, writes: ["unrelated"] });
   expect(manager.size).toBe(2);
   expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
-  manager.disposeAll();
 });

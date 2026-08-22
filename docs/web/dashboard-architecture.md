@@ -165,6 +165,7 @@ Shared infrastructure underneath (this is where the simplification lands):
   - `openclaw.state.emit` — tier 1 session notices (coalesced, size-capped)
   - `openclaw.data.read` — parameterized read-only bindings (existing
     allowlisted read RPC set), resolved gateway-side
+  - `openclaw.action.run` — tier 3 plugin-owned automation
   - `openclaw.cron.trigger` — tier 3 automation
 - **`net` = CSP.** Network reach uses the already-shipped per-widget CSP
   declaration (`connect-src` origins) — the self-updating weather widget
@@ -175,12 +176,14 @@ Shared infrastructure underneath (this is where the simplification lands):
   `pending` on the board: a placeholder card lists them human-readably with
   one-tap **Allow**/**Reject**. Grants are per widget name; for `html` widgets
   they are byte-frozen (sha256), and changed bytes keep the grant only if the
-  declaration shrank.
+  declaration shrank. User-clicked links are ordinary navigation rather than a
+  grant capability and open in a new tab for every rendered widget.
 - **Authoring shim.** The document wrapper injects `window.openclaw.prompt`,
-  `window.openclaw.state`, `window.openclaw.data`, and `window.openclaw.cron`
-  as the stable author API. Dashboard calls share one view-ticket-bound
-  request channel; size reporting and theme tokens remain separate host
-  notifications.
+  `window.openclaw.state`, `window.openclaw.data`, `window.openclaw.action`,
+  `window.openclaw.cron`, and the host-provided
+  `window.openclaw.host.controlUiBaseUrl` as the stable author API. Dashboard
+  calls share one view-ticket-bound request channel; size reporting and theme
+  tokens remain separate host notifications.
 
 ### Plugin capability declarations
 

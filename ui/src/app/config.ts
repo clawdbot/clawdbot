@@ -5,7 +5,7 @@ import {
   type ControlUiBootstrapConfig,
   type ControlUiEmbedSandboxMode,
   type ControlUiPluginFrameGrantAck,
-} from "../../../src/gateway/control-ui-contract.js";
+} from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
 import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
 

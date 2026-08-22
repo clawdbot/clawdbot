@@ -188,10 +188,8 @@ export type TelegramDraftStateSlice = {
 };
 
 export type TelegramProgressStateSlice = {
-  draftEverRendered: boolean;
   finalAnswerDeliveryStarted: boolean;
   finalAnswerDelivered: boolean;
-  sawProgressFinal: boolean;
   verboseProgressActive: () => boolean;
   progressCompositor: TelegramProgressCompositor;
   commentaryProgressEnabled: boolean;

@@ -330,7 +330,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "agents.defaults.systemAgent":
     "Target settings for ambient OpenClaw system-agent and Custodian inference plus selected unscoped operator reads.",
   "agents.defaults.systemAgent.agentId":
-    "Agent whose model and credentials own ambient system-agent and Custodian consults. Also used when models.list, models.authStatus, skills.status, or doctor.memory.status omits agentId; explicit request agentId always wins.",
+    "Agent whose model and credentials own ambient system-agent and Custodian consults. Also used when models.list, models.authStatus, skills.status, doctor.memory.status, or an infer CLI command that resolves agent-owned model or auth state omits agentId or --agent; explicit request agentId always wins.",
   "agents.defaults.authInheritance":
     "Upgrade compatibility owner for the inherited credential store until credentials are relocated per agent.",
   "agents.defaults.authInheritance.agentId":

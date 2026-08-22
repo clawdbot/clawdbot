@@ -1,4 +1,5 @@
 import type {
+  WorkerGitHubPublishParams,
   WorkerConnectParams,
   WorkerLiveEventParams,
   WorkerProtocolCloseReason,
@@ -107,6 +108,12 @@ type WorkerTurnRpcOptions = {
           identity: WorkerConnectionIdentity;
           toolName: "sessions_send";
           request: WorkerSessionsSendParams;
+          signal?: AbortSignal;
+        }
+      | {
+          identity: WorkerConnectionIdentity;
+          toolName: "github_publish";
+          request: WorkerGitHubPublishParams;
           signal?: AbortSignal;
         },
   ) => Promise<WorkerSessionToolResult>;
@@ -319,7 +326,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
   const executeSessionTool = async (
     identity: WorkerConnectionIdentity,
     toolName: WorkerSessionToolName,
-    request: WorkerSessionsSpawnParams | WorkerSessionsSendParams,
+    request: WorkerSessionsSpawnParams | WorkerSessionsSendParams | WorkerGitHubPublishParams,
     signal?: AbortSignal,
   ): Promise<WorkerSessionToolServiceResult> => {
     const validate = () => {
@@ -354,12 +361,20 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
               request: request as WorkerSessionsSpawnParams,
               ...(signal ? { signal } : {}),
             }
-          : {
-              identity,
-              toolName,
-              request: request as WorkerSessionsSendParams,
-              ...(signal ? { signal } : {}),
-            },
+          : toolName === "sessions_send"
+            ? {
+                identity,
+                toolName,
+                request: request as WorkerSessionsSendParams,
+                ...(signal ? { signal } : {}),
+              }
+            : {
+                identity,
+                toolName,
+                // SAFETY: worker-connection validates params with the method-specific schema.
+                request: request as WorkerGitHubPublishParams,
+                ...(signal ? { signal } : {}),
+              },
       );
     } catch {
       return { ok: false, reason: "gateway-unavailable" };

@@ -36,7 +36,11 @@ import { shouldAutoApproveNodePairingFromTrustedCidrs } from "../../node-pairing
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
-import { applyConnectionScopeCap } from "./connect-admission.js";
+import {
+  applyConnectionScopeCap,
+  isStartupNodeBootstrapConnect,
+  rejectGatewayStartupConnect,
+} from "./connect-admission.js";
 import {
   isControlUiOwnerBootstrapProfile,
   isControlUiOperatorBootstrapProfile,
@@ -623,6 +627,14 @@ export async function authorizeGatewayConnectDevice(
 
     const paired = await getPairedDevice(device.id);
     const isPaired = paired?.publicKey === devicePublicKey;
+    if (
+      state.startupPending &&
+      !isStartupNodeBootstrapConnect(connectParams) &&
+      (!paired || !isPaired || !hasEffectivePairedDeviceRole(paired, "node") || !paired.nodeSurface)
+    ) {
+      await rejectGatewayStartupConnect(context);
+      return undefined;
+    }
     const pairingRecordDoesNotAuthorizeSession =
       skipLocalBackendSelfPairing || controlUiPairingKind === "auth-none";
     if (pairingRecordDoesNotAuthorizeSession) {

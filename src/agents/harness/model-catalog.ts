@@ -60,11 +60,14 @@ function mergeHarnessCompat(
   if (observed?.supportedReasoningEfforts?.length === 0) {
     return { ...compat, supportsReasoningEffort: false, supportedReasoningEfforts: [] };
   }
-  const efforts = provider?.supportedReasoningEfforts?.length
-    ? provider.supportedReasoningEfforts
-    : observed?.supportedReasoningEfforts;
-  return efforts
-    ? { ...compat, supportsReasoningEffort: true, supportedReasoningEfforts: [...efforts] }
+  const efforts = [
+    ...new Set([
+      ...(provider?.supportedReasoningEfforts ?? []),
+      ...(observed?.supportedReasoningEfforts ?? []),
+    ]),
+  ];
+  return efforts.length > 0
+    ? { ...compat, supportsReasoningEffort: true, supportedReasoningEfforts: efforts }
     : compat;
 }
 
@@ -72,16 +75,25 @@ function enrichHarnessRows(
   rows: readonly ModelCatalogEntry[],
   snapshot: ModelCatalogSnapshot,
 ): ModelCatalogEntry[] {
-  const donors = new Map<string, ModelCatalogEntry>();
+  const routeDonors = new Map<string, ModelCatalogEntry>();
+  const identityDonors = new Map<string, ModelCatalogEntry>();
   // First donor wins: live snapshot entries take precedence over static rows.
   for (const donor of [...snapshot.entries, ...(snapshot.staticEntries ?? [])]) {
-    const key = resolveModelCatalogIdentityKey(donor);
-    if (!donors.has(key)) {
-      donors.set(key, donor);
+    const routeKey = routeVariantKey(donor);
+    const identityKey = resolveModelCatalogIdentityKey(donor);
+    if (!routeDonors.has(routeKey)) {
+      routeDonors.set(routeKey, donor);
+    }
+    if (!identityDonors.has(identityKey)) {
+      identityDonors.set(identityKey, donor);
     }
   }
   return rows.map((entry) => {
-    const donor = donors.get(resolveModelCatalogIdentityKey(entry));
+    const donor =
+      routeDonors.get(routeVariantKey(entry)) ??
+      (entry.api === undefined && entry.baseUrl === undefined
+        ? identityDonors.get(resolveModelCatalogIdentityKey(entry))
+        : undefined);
     if (!donor) {
       return entry;
     }

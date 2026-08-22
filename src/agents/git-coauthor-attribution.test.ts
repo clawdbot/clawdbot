@@ -16,6 +16,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   appendGitCoauthorContext,
   prepareGitCoauthorAttribution,
+  resolveGitCoauthorAttribution,
 } from "./git-coauthor-attribution.js";
 
 afterEach(() => {
@@ -103,6 +104,22 @@ describe("Git co-author attribution", () => {
         sessionKey,
         storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
       });
+      const structured = resolveGitCoauthorAttribution({
+        agentId: "main",
+        config: {
+          tools: {
+            github: {
+              profileId: "ghp_11111111111111111111111111111111",
+              gitAuthor: { email: "custom-author@example.test" },
+            },
+          },
+        },
+        excludeAccountId: 30,
+        currentProfileId: current.id,
+        env: state.env,
+        sessionKey,
+        storePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
+      });
 
       const modelPrompt = appendGitCoauthorContext("commit this", attribution);
       expect(modelPrompt).toContain(
@@ -114,6 +131,14 @@ describe("Git co-author attribution", () => {
       );
       expect(modelPrompt).not.toContain("Co-authored-by: opted-out");
       expect(modelPrompt).not.toContain("Co-authored-by: legacy");
+      expect(structured).toMatchObject({
+        logins: ["grace", "current", "ada"],
+        trailers: [
+          "Co-authored-by: grace <10+grace@users.noreply.github.com>",
+          "Co-authored-by: current <15+current@users.noreply.github.com>",
+          "Co-authored-by: ada <20+ada@users.noreply.github.com>",
+        ],
+      });
       expect(modelPrompt).toContain(
         "3 eligible profile participant(s) have no enabled Git co-author credit and were omitted",
       );

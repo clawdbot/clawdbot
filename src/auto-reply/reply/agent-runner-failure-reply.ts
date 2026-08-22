@@ -8,6 +8,7 @@ import {
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
+import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import {
   describeFailoverError,
   findCliMaxTurnsError,
@@ -158,11 +159,12 @@ export function buildPreflightCompactionFailureText(
   )
     .trim()
     .replace(/\s+/gu, " ");
-  const reasonSuffix = options?.includeDetails && reason ? ` Reason: ${reason}.` : "";
-  return (
-    "⚠️ Context is too large and auto-compaction could not recover this turn." +
-    `${reasonSuffix} Try again, use /compact, or use /new to start a fresh session.`
-  );
+  const isTimeout = classifyCompactionReason(reason) === "timeout";
+  const reasonSuffix = options?.includeDetails && reason && !isTimeout ? ` Reason: ${reason}.` : "";
+  const summary = isTimeout
+    ? "⚠️ Context is too large and auto-compaction timed out before it could finish."
+    : "⚠️ Context is too large and auto-compaction could not recover this turn.";
+  return `${summary}${reasonSuffix} Try again, use /compact, or use /new to start a fresh session.`;
 }
 
 export function buildAuthProfileFailoverFailureText(error: unknown): string | null {
@@ -330,6 +332,7 @@ export function buildEmptyInteractiveReplyPayload(params: {
   hasPendingContinuation: boolean;
   hasExplicitSilentReply: boolean;
   hasCommittedDelivery: boolean;
+  hasIntentionalTerminalCompletion: boolean;
   sessionCtx: ExternalFailureConversationContext;
   cfg?: OpenClawConfig;
 }): ReplyPayload | undefined {
@@ -340,7 +343,8 @@ export function buildEmptyInteractiveReplyPayload(params: {
     params.allowEmptyAssistantReplyAsSilent === true ||
     params.hasPendingContinuation ||
     params.hasExplicitSilentReply ||
-    params.hasCommittedDelivery
+    params.hasCommittedDelivery ||
+    params.hasIntentionalTerminalCompletion
   ) {
     return undefined;
   }

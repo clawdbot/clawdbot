@@ -975,24 +975,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 }
 
 @Suite(.serialized) struct NodeAppModelInvokeTests {
-    @Test @MainActor func `decode params fails without JSON`() {
-        struct RequiredPayload: Decodable {
-            var value: String
-        }
-
-        #expect(throws: Error.self) {
-            _ = try NodeAppModel.decodeParams(RequiredPayload.self, from: nil)
-        }
-    }
-
-    @Test @MainActor func `encode payload emits JSON`() throws {
-        struct Payload: Codable, Equatable {
-            var value: String
-        }
-        let json = try NodeAppModel.encodePayload(Payload(value: "ok"))
-        #expect(json.contains("\"value\""))
-    }
-
     @Test @MainActor func `health summary routes a fixed period to the health service`() async throws {
         let service = MockHealthSummaryService()
         let appModel = NodeAppModel(healthSummaryService: service)

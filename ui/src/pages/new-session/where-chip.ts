@@ -7,7 +7,11 @@ import {
   renderConnectMachineMenuItem,
   renderSessionMenuItem,
 } from "./cloud-target.ts";
-import { projectDevicePlacements, type DevicePlacementOption } from "./device-placement.ts";
+import {
+  projectDevicePlacements,
+  type DevicePlacementOption,
+  type DevicePlacementRequirement,
+} from "./device-placement.ts";
 import type { DraftCloudProfile, DraftEnvironment, DraftMachineOption } from "./discovery.ts";
 
 type WhereChipState = Readonly<{
@@ -26,9 +30,10 @@ export function resolveWhereChip(params: {
   cloudProfileId: string;
   machineClass?: string;
   deviceId: string;
+  devicePlacement?: DevicePlacementRequirement;
   deviceDisabledReason?: string;
 }): WhereChipState {
-  const devices = projectDevicePlacements(params.environments);
+  const devices = projectDevicePlacements(params.environments, params.devicePlacement);
   const device = devices.find((candidate) => candidate.deviceId === params.deviceId);
   const profile = params.cloudProfiles.find((candidate) => candidate.id === params.cloudProfileId);
   if (params.cloudProfileId) {
@@ -82,6 +87,7 @@ export function renderWhereChip(params: {
   deviceId: string;
   worktreeAvailable: boolean;
   cloudDisabledReason?: string;
+  cloudProfileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
   submitting: boolean;
   pendingPlacement: boolean;
   popoverOpen: boolean;
@@ -182,6 +188,7 @@ export function renderWhereChip(params: {
                 icon: icons.server,
                 disabled: !params.worktreeAvailable || Boolean(params.cloudDisabledReason),
                 disabledReason: params.cloudDisabledReason,
+                profileDisabledReason: params.cloudProfileDisabledReason,
                 onSelect: params.onSelectCloudProfile,
               })}
               ${params.cloudProfileId &&

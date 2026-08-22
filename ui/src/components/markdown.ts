@@ -1,5 +1,6 @@
 // Control UI module implements markdown behavior.
 import DOMPurify from "dompurify";
+import { CONTROL_UI_ROOT_PUBLIC_ASSETS } from "../../../src/gateway/control-ui-root-assets.js";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { routeIdFromPath } from "../app-route-paths.ts";
 import { resolveControlUiPaths } from "../app/browser.ts";
@@ -309,20 +310,15 @@ const APP_RESOURCE_ROOT_SEGMENTS = new Set([
   "__openclaw__",
   "_next",
   "api",
-  "apple-touch-icon.png",
   "assets",
   "avatar",
-  "favicon-32.png",
-  "favicon.ico",
-  "favicon.svg",
   "manifest.json",
-  "manifest.webmanifest",
   "media",
   "res",
   "socket.io",
-  "sw.js",
   "static",
   "ws",
+  ...CONTROL_UI_ROOT_PUBLIC_ASSETS,
 ]);
 const APP_RESOURCE_PATH_PREFIXES = [
   ["plugins", "diffs"],
@@ -487,11 +483,6 @@ function installHooks() {
   });
 }
 
-function formatTruncatedMarkdownInput(input: string): string {
-  const truncated = truncateText(input, MARKDOWN_CHAR_LIMIT);
-  return appendMarkdownTruncationNotice(truncated);
-}
-
 function appendMarkdownTruncationNotice(truncated: {
   text: string;
   truncated: boolean;
@@ -586,6 +577,7 @@ function toEscapedPlainTextHtml(value: string, options: MarkdownRenderEnv): stri
 export function toStreamingMarkdownHtml(
   markdownLocal: string,
   options: MarkdownRenderOptions = {},
+  streamKey?: string,
 ): string {
   const renderOptions = normalizeMarkdownRenderOptions(options);
   const rawInput = normalizeMarkdownLineBreaks(
@@ -599,9 +591,14 @@ export function toStreamingMarkdownHtml(
   if (!trimmedInput) {
     return "";
   }
-  const input = formatTruncatedMarkdownInput(trimmedInput);
+  const truncated = truncateText(trimmedInput, MARKDOWN_CHAR_LIMIT);
+  const input = appendMarkdownTruncationNotice(truncated);
 
-  const { boundary, tailRepairStart } = splitStableStreamingMarkdown(input);
+  const { boundary, tailRepairStart } = splitStableStreamingMarkdown(
+    input,
+    streamKey,
+    truncated.text.length,
+  );
   const stableMarkdown = input.slice(0, boundary);
   const streamingTail = input.slice(boundary);
   const stableHtml = boundary > 0 ? toSanitizedMarkdownHtml(stableMarkdown, options) : "";
@@ -610,7 +607,7 @@ export function toStreamingMarkdownHtml(
   }
   const tailHtml =
     tailRepairStart === null
-      ? renderSanitizedMarkdown(streamingTail, renderOptions)
+      ? renderSanitizedMarkdown(streamingTail, { ...renderOptions, streamingOpenFence: true })
       : renderSanitizedMarkdown(
           repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
           renderOptions,

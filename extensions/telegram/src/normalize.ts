@@ -15,25 +15,37 @@ function normalizeTelegramTargetBody(raw: string): string | undefined {
     return undefined;
   }
 
-  const parsed = parseTelegramTarget(trimmed);
-  const normalizedChatId = normalizeTelegramLookupTarget(parsed.chatId);
-  if (!normalizedChatId) {
+  const identity = resolveTelegramTargetIdentity(trimmed);
+  if (!identity) {
     return undefined;
   }
 
   const keepLegacyGroupPrefix = /^group:/i.test(prefixStripped);
   const hasTopicSuffix = /:topic:\d+$/i.test(prefixStripped);
-  const chatSegment = keepLegacyGroupPrefix ? `group:${normalizedChatId}` : normalizedChatId;
-  if (parsed.directMessagesTopicId != null) {
-    return `${chatSegment}:direct-topic:${parsed.directMessagesTopicId}`;
+  const chatSegment = keepLegacyGroupPrefix ? `group:${identity.chatId}` : identity.chatId;
+  if (identity.directMessagesTopicId != null) {
+    return `${chatSegment}:direct-topic:${identity.directMessagesTopicId}`;
   }
-  if (parsed.messageThreadId == null) {
+  if (identity.messageThreadId == null) {
     return chatSegment;
   }
   const threadSuffix = hasTopicSuffix
-    ? `:topic:${parsed.messageThreadId}`
-    : `:${parsed.messageThreadId}`;
+    ? `:topic:${identity.messageThreadId}`
+    : `:${identity.messageThreadId}`;
   return `${chatSegment}${threadSuffix}`;
+}
+
+function resolveTelegramTargetIdentity(raw: string) {
+  const parsed = parseTelegramTarget(raw);
+  const chatId = normalizeTelegramLookupTarget(parsed.chatId);
+  if (!chatId) {
+    return undefined;
+  }
+  return {
+    chatId: normalizeLowercaseStringOrEmpty(chatId),
+    messageThreadId: parsed.messageThreadId,
+    directMessagesTopicId: parsed.directMessagesTopicId,
+  };
 }
 
 export function normalizeTelegramMessagingTarget(raw: string): string | undefined {
@@ -46,4 +58,16 @@ export function normalizeTelegramMessagingTarget(raw: string): string | undefine
 
 export function looksLikeTelegramTargetId(raw: string): boolean {
   return normalizeTelegramTargetBody(raw) !== undefined;
+}
+
+export function telegramMessagingTargetsMatch(target: string, currentTarget: string): boolean {
+  const targetIdentity = resolveTelegramTargetIdentity(target);
+  const currentIdentity = resolveTelegramTargetIdentity(currentTarget);
+  return (
+    targetIdentity !== undefined &&
+    currentIdentity !== undefined &&
+    targetIdentity.chatId === currentIdentity.chatId &&
+    targetIdentity.messageThreadId === currentIdentity.messageThreadId &&
+    targetIdentity.directMessagesTopicId === currentIdentity.directMessagesTopicId
+  );
 }

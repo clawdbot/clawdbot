@@ -37,8 +37,70 @@ export function persistedSteerTargetRunId(message: unknown): string | null {
   return normalizeOptionalString(metadata?.steerTargetRunId) ?? null;
 }
 
+function turnRunId(messages: unknown[]): string | null {
+  for (const message of messages) {
+    const identity = userTurnSendIdentity(message);
+    if (identity?.startsWith("send:")) {
+      return identity.slice("send:".length);
+    }
+  }
+  return null;
+}
+
+function turnSteerTargetRunId(messages: unknown[]): string | null {
+  for (const message of messages) {
+    const targetRunId = persistedSteerTargetRunId(message);
+    if (targetRunId) {
+      return targetRunId;
+    }
+  }
+  return null;
+}
+
+export function indexTurnContinuations<T>(
+  turns: T[][],
+  userMessagesForTurn: (turn: T[]) => unknown[],
+): {
+  continuationTurnIndexes: Map<number, number>;
+  precedingContinuationTurnIndexes: Map<number, number>;
+} {
+  const runTurnIndexes = new Map<string, number>();
+  const steerTurnIndexesByTarget = new Map<string, number[]>();
+  for (const [turnIndex, turn] of turns.entries()) {
+    const userMessages = userMessagesForTurn(turn);
+    const runId = turnRunId(userMessages);
+    if (runId && !runTurnIndexes.has(runId)) {
+      runTurnIndexes.set(runId, turnIndex);
+    }
+    const targetRunId = turnSteerTargetRunId(userMessages);
+    if (targetRunId) {
+      const steerTurns = steerTurnIndexesByTarget.get(targetRunId) ?? [];
+      steerTurns.push(turnIndex);
+      steerTurnIndexesByTarget.set(targetRunId, steerTurns);
+    }
+  }
+
+  const continuationTurnIndexes = new Map<number, number>();
+  const precedingContinuationTurnIndexes = new Map<number, number>();
+  for (const [targetRunId, steerTurnIndexes] of steerTurnIndexesByTarget) {
+    let previousTurnIndex = runTurnIndexes.get(targetRunId);
+    if (previousTurnIndex === undefined) {
+      continue;
+    }
+    for (const steerTurnIndex of steerTurnIndexes) {
+      if (steerTurnIndex <= previousTurnIndex) {
+        continue;
+      }
+      continuationTurnIndexes.set(previousTurnIndex, steerTurnIndex);
+      precedingContinuationTurnIndexes.set(steerTurnIndex, previousTurnIndex);
+      previousTurnIndex = steerTurnIndex;
+    }
+  }
+  return { continuationTurnIndexes, precedingContinuationTurnIndexes };
+}
+
 export function latestPersistedSteerBoundary(
-  messages: unknown[],
+  messages: readonly unknown[],
   activeRunId: string,
 ): { index: number; runId: string } | null {
   for (let index = messages.length - 1; index >= 0; index -= 1) {

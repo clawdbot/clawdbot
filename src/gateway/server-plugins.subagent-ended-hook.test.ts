@@ -259,6 +259,33 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
     expect(request.client.internal?.pluginRuntimeOwnerId).toBe("memory-core");
   });
 
+  test("stamps tool-free subagent runs with a private exact empty cap", async () => {
+    const serverPlugins = await loadServerPlugins();
+    const gatewayScope = await loadGatewayScope();
+    const runtime = serverPlugins.createGatewaySubagentRuntime();
+    const scope = {
+      context: createTestContext("tool-free-plugin-scope", createTestCfg()),
+      pluginId: "memory-core",
+      isWebchatConnect: () => false,
+    } satisfies PluginRuntimeGatewayRequestScope;
+
+    await gatewayScope.withPluginRuntimeGatewayRequestScope(scope, () =>
+      runtime.run({
+        sessionKey: "agent:main:subagent:dreaming-narrative",
+        message: "dream task",
+        deliver: false,
+        disableTools: true,
+      } as Parameters<typeof runtime.run>[0] & { disableTools: true }),
+    );
+
+    const request = lastAgentTurnRequest();
+    expect(
+      (request.client.internal as { pluginSubagentToolsAllow?: string[] }).pluginSubagentToolsAllow,
+    ).toEqual([]);
+    expect(request.params).not.toHaveProperty("disableTools");
+    expect(request.params).not.toHaveProperty("toolsAllow");
+  });
+
   test("does not dispatch when no runtime config is available", async () => {
     const serverPlugins = await loadServerPlugins();
     const runtime = serverPlugins.createGatewaySubagentRuntime();

@@ -295,6 +295,7 @@ export function renderAssistantMessageMarkdown(
   disclosure: AssistantMessageDisclosure | undefined,
   markdownRenderOptions: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
+  streamKey?: string,
 ) {
   const markdown = disclosure?.expanded
     ? (disclosure.markdown ?? previewMarkdown)
@@ -302,7 +303,7 @@ export function renderAssistantMessageMarkdown(
   const renderOptions = disclosure?.expanded
     ? { ...markdownRenderOptions, mode: "document" as const }
     : markdownRenderOptions;
-  const text = renderMarkdownText(markdown, isStreaming, renderOptions, duplicateSuffix);
+  const text = renderMarkdownText(markdown, isStreaming, renderOptions, duplicateSuffix, streamKey);
   if (!disclosure?.onRetryFullMessage) {
     return text;
   }
@@ -328,9 +329,10 @@ export function renderMarkdownText(
   isStreaming: boolean,
   markdownRenderOptions?: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
+  streamKey?: string,
 ) {
   const rendered = isStreaming
-    ? toStreamingMarkdownHtml(markdown, markdownRenderOptions)
+    ? toStreamingMarkdownHtml(markdown, markdownRenderOptions, streamKey)
     : toSanitizedMarkdownHtml(markdown, markdownRenderOptions);
   const content = duplicateSuffix ? appendDuplicateSuffix(rendered, duplicateSuffix) : rendered;
   return html`

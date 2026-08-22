@@ -549,29 +549,23 @@ export async function rotateDeviceToken(
       tokenDelivery?: string;
     }>("device.token.rotate", requestParams);
     const outcome = classifyRotationOutcome(res, requestParams);
-    // A retired epoch stops every state write below, but never the return: the previous
-    // credential is already dead on the server, so discarding this response would leave
-    // the operator locked out with no way to ask for the replacement again.
-    if (!isCurrentNodesRequest(state, client, generation)) {
-      return outcome;
-    }
     if (outcome.delivery === "in-band") {
       const identity = await loadOrCreateDeviceIdentity();
-      if (!isCurrentNodesRequest(state, client, generation)) {
-        return outcome;
-      }
-      const role = res.role ?? params.role;
-      if (res.deviceId === identity.deviceId || params.deviceId === identity.deviceId) {
+      // RPC success retires the old bearer and may immediately reconnect the page.
+      // Commit the exact captured credential scope before fencing render projections.
+      if (res.deviceId === identity.deviceId || requestParams.deviceId === identity.deviceId) {
         storeDeviceAuthToken({
           deviceId: identity.deviceId,
           gatewayUrl,
-          role,
+          role: requestParams.role,
           token: outcome.token,
-          scopes: res.scopes ?? params.scopes ?? [],
+          scopes: res.scopes ?? requestParams.scopes ?? [],
         });
       }
     }
-    await loadDevices(state);
+    if (isCurrentNodesRequest(state, client, generation)) {
+      await loadDevices(state);
+    }
     return outcome;
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
@@ -593,18 +587,14 @@ export async function revokeDeviceToken(
   try {
     const { gatewayUrl, ...requestParams } = params;
     await client.request("device.token.revoke", requestParams);
-    if (!isCurrentNodesRequest(state, client, generation)) {
-      return;
-    }
     const identity = await loadOrCreateDeviceIdentity();
-    if (!isCurrentNodesRequest(state, client, generation)) {
-      return;
-    }
-    if (params.deviceId === identity.deviceId) {
+    // Clearing the successfully revoked credential belongs to this captured scope,
+    // not to the page generation invalidated by the resulting reconnect.
+    if (requestParams.deviceId === identity.deviceId) {
       clearDeviceAuthToken({
         deviceId: identity.deviceId,
         gatewayUrl,
-        role: params.role,
+        role: requestParams.role,
       });
     }
     if (isCurrentNodesRequest(state, client, generation)) {

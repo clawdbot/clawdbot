@@ -718,6 +718,7 @@ const MessageToolConfigSchema = z
 const GitHubToolIdentitySchema = z
   .object({
     profileId: z.string().regex(MANAGED_GITHUB_PROFILE_ID_PATTERN),
+    kind: z.literal("oauth").optional(),
     gitAuthor: z
       .object({
         name: z.string().trim().min(1).optional(),

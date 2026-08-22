@@ -1788,16 +1788,8 @@
     "target": "llama-server"
   },
   {
-    "source": "llama-server (external llama.cpp)",
-    "target": "llama-server（外部 llama.cpp）"
-  },
-  {
-    "source": "llama-server Provider",
-    "target": "llama-server 提供商"
-  },
-  {
-    "source": "llama.cpp plugin",
-    "target": "llama.cpp 插件"
+    "source": "llama.cpp (managed or existing server)",
+    "target": "llama.cpp（托管或现有服务器）"
   },
   {
     "source": "Local model services",

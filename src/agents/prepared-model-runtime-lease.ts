@@ -83,6 +83,16 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       existing?.needsRefresh &&
       !existing.pending &&
       (existing.provenance === "run" || existing.provenance === "ephemeral");
+    const pluginGenerationChanged =
+      options.pluginGeneration !== undefined &&
+      (existing?.pending ? existing.pendingPluginGeneration : existing?.pluginGeneration) !==
+        options.pluginGeneration;
+    if (existing?.pending && pluginGenerationChanged) {
+      // Do not supersede active discovery. Wait for its owner to settle, then retry against
+      // the published identity so same-generation callers still coalesce.
+      await existing.pending.catch(() => undefined);
+      continue;
+    }
     if (
       context.getGatewayLifecycleActive() &&
       provenance === "run" &&
@@ -114,7 +124,17 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       }
     }
     try {
-      if (existing && !staleDynamicOwner) {
+      if (existing?.pending && !pluginGenerationChanged) {
+        // Matching callers lease the immutable generation they joined even if a queued
+        // mismatched caller publishes the next owner immediately after this one settles.
+        snapshot = await existing.pending;
+        if (existing.snapshot !== snapshot || existing.needsRefresh) {
+          continue;
+        }
+        owner = existing;
+        break;
+      }
+      if (existing && !staleDynamicOwner && !pluginGenerationChanged) {
         snapshot = await context.prepareSnapshot(input);
       } else {
         // Fresh keys publish a first generation; stale dynamic owners publish a distinct

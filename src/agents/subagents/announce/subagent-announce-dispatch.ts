@@ -32,6 +32,8 @@ export type SubagentAnnounceDeliveryResult = {
   path: SubagentDeliveryPath;
   deliveredAt?: number;
   enqueuedAt?: number;
+  /** Direct completion that already sent the yielded requester's visible final. */
+  requesterVisibleFinalDelivered?: true;
   reason?: SubagentAnnounceDeliveryFailureReason;
   error?: string;
   // Stops fallback delivery when ownership changed or another terminal result
