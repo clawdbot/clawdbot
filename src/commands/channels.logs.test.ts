@@ -35,7 +35,7 @@ function logLine(params: {
   plugin?: string;
   message: string;
 }) {
-  return JSON.stringify({
+  return `${JSON.stringify({
     time: "2026-04-25T12:00:00.000Z",
     0: params.message,
     _meta: {
@@ -46,7 +46,7 @@ function logLine(params: {
         ...(params.plugin ? { plugin: params.plugin } : {}),
       }),
     },
-  });
+  })}\n`;
 }
 
 function readJsonPayload() {
@@ -86,7 +86,7 @@ describe("channelsLogsCommand", () => {
         logLine({ plugin: "vendor-external-chat", message: "external sent" }),
         logLine({ plugin: "vendor-external-chat-shadow", message: "shadow sent" }),
         logLine({ module: "gateway/channels/slack/send", message: "slack sent" }),
-      ].join("\n"),
+      ].join(""),
     );
 
     await channelsLogsCommand({ channel: "external-chat", json: true }, runtime);
@@ -119,7 +119,7 @@ describe("channelsLogsCommand", () => {
       [
         logLine({ ...fixture.shadow, message: "shadow" }),
         logLine({ ...fixture.match, message: "match" }),
-      ].join("\n"),
+      ].join(""),
     );
 
     await channelsLogsCommand({ channel: fixture.channel, json: true }, runtime);
@@ -190,7 +190,7 @@ describe("channelsLogsCommand", () => {
         logLine({ module: "gateway/channels/slack/send", message: "first" }),
         logLine({ module: "gateway/channels/external-chat/send", message: "second" }),
         logLine({ module: "gateway/channels/slack/send", message: "third" }),
-      ].join("\n"),
+      ].join(""),
     );
 
     await channelsLogsCommand({ channel: "all", lines: 2, json: true }, runtime);
@@ -207,7 +207,7 @@ describe("channelsLogsCommand", () => {
       ...Array.from({ length: 5000 }, () => filler),
       logLine({ module: "gateway/channels/slack/send", message: "second match" }),
     ];
-    await fs.writeFile(logPath, lines.join("\n"));
+    await fs.writeFile(logPath, lines.join(""));
 
     await channelsLogsCommand({ channel: "slack", lines: 2000, json: true }, runtime);
 
@@ -220,7 +220,7 @@ describe("channelsLogsCommand", () => {
   it("reports when the byte window omits all matching channel records", async () => {
     const omitted = logLine({ module: "gateway/channels/slack/send", message: "omitted" });
     const filler = logLine({ module: "gateway/health", message: "x".repeat(1000) });
-    await fs.writeFile(logPath, `${omitted}\n${filler.repeat(1100)}`);
+    await fs.writeFile(logPath, `${omitted}${filler.repeat(1100)}`);
 
     await channelsLogsCommand({ channel: "slack", json: true }, runtime);
     expect(readJsonPayload()).toMatchObject({ truncated: true, lines: [] });
@@ -255,7 +255,7 @@ describe("channelsLogsCommand", () => {
       [
         logLine({ module: "gateway/channels/slack/send", message: "slack fallback" }),
         logLine({ module: "gateway/channels/external-chat/send", message: "fallback sent" }),
-      ].join("\n"),
+      ].join(""),
     );
     await fs.writeFile(
       staleFile,
