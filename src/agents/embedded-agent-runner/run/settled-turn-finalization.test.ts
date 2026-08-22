@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
+import { RetryableSettledTurnFinalizationAttemptError } from "../../harness/settled-turn-finalization-result.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
@@ -237,5 +238,34 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(result.finalizationOutcome).toBe("failed");
     expect(result.attempt).toBe(attempt);
     expect(result.prepared.payloadsWithToolMedia?.[0]).toMatchObject({ isError: true });
+  });
+
+  it("retries one transient capability-free provider failure and accounts for it", async () => {
+    const attempt = settledFailedAttempt();
+    const failedAttempt = makeEmbeddedRunnerAttempt({
+      terminal: { kind: "timeout", phase: "prompt", source: "idle" },
+      currentAttemptCompletedAssistant: undefined,
+      attemptUsage: { input: 10, output: 2, total: 12 },
+      assistantTurns: 1,
+    });
+    const finalAssistant = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: "Recovered final answer." }],
+    });
+    backendMocks.runSettledFinalization
+      .mockRejectedValueOnce(new RetryableSettledTurnFinalizationAttemptError(failedAttempt))
+      .mockResolvedValueOnce({
+        outcome: "answered",
+        result: { assistant: finalAssistant, usage: finalAssistant.usage },
+      });
+
+    const result = await prepareTerminalWithSettledTurnFinalization(finalizationInput(attempt));
+
+    expect(backendMocks.runSettledFinalization).toHaveBeenCalledTimes(2);
+    expect(result.finalizationOutcome).toBe("answered");
+    expect(result.prepared.payloadsWithToolMedia?.[0]).toMatchObject({
+      text: "Recovered final answer.",
+    });
+    expect(result.prepared.agentMeta).toMatchObject({ assistantTurns: 3 });
+    expect(result.prepared.agentMeta?.usage).toMatchObject({ input: 10, output: 2 });
   });
 });

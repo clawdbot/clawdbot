@@ -1,6 +1,9 @@
 import { markReplyPayloadForSourceSuppressionDelivery } from "../../../auto-reply/reply-payload.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { resolveSettledTurnFinalizationText } from "../../harness/settled-turn-finalization-result.js";
+import {
+  resolveSettledTurnFinalizationText,
+  RetryableSettledTurnFinalizationAttemptError,
+} from "../../harness/settled-turn-finalization-result.js";
 import type {
   AgentHarness,
   AgentHarnessSettledTurnFinalizationResult,
@@ -102,13 +105,32 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       `provider=${errorContext.provider}/${errorContext.model} — running isolated finalization`,
   );
   try {
-    const finalization = await runPreparedSettledTurnFinalization({
-      attempt: input.finalization.preparedAttempt,
-      settledAttempt: initial.attempt,
-      harness: input.finalization.harness,
-      prompt,
-      noteLaneTaskProgress: input.finalization.noteLaneTaskProgress,
-    });
+    const runFinalization = async () =>
+      await runPreparedSettledTurnFinalization({
+        attempt: input.finalization.preparedAttempt,
+        settledAttempt: initial.attempt,
+        harness: input.finalization.harness,
+        prompt,
+        noteLaneTaskProgress: input.finalization.noteLaneTaskProgress,
+      });
+    let finalization;
+    try {
+      finalization = await runFinalization();
+    } catch (error) {
+      if (
+        !(error instanceof RetryableSettledTurnFinalizationAttemptError) ||
+        input.finalization.preparedAttempt.abortSignal?.aborted
+      ) {
+        throw error;
+      }
+      mergeUsageIntoAccumulator(input.terminalBase.usageAccumulator, error.attempt.attemptUsage);
+      mergeAttemptRunStatsIntoAccumulator(input.terminalBase.usageAccumulator, error.attempt);
+      log.warn(
+        `settled-turn finalization hit a transient provider failure: runId=${runParams.runId} ` +
+          `sessionId=${runParams.sessionId} provider=${errorContext.provider}/${errorContext.model} — retrying once`,
+      );
+      finalization = await runFinalization();
+    }
     attempt = finalization.attempt;
     mergeUsageIntoAccumulator(input.terminalBase.usageAccumulator, attempt.attemptUsage);
     mergeAttemptRunStatsIntoAccumulator(input.terminalBase.usageAccumulator, attempt);

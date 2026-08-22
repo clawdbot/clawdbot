@@ -5,6 +5,7 @@ import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-o
 import {
   assertSettledTurnFinalizationResult,
   projectSettledTurnFinalizationAttemptResult,
+  RetryableSettledTurnFinalizationAttemptError,
 } from "./settled-turn-finalization-result.js";
 import type { AgentHarnessSettledTurnFinalizationResult } from "./types.js";
 
@@ -135,7 +136,29 @@ describe("assertSettledTurnFinalizationResult", () => {
     });
   });
 
-  it("rejects a failed full attempt even when it contains visible assistant text", () => {
+  it("marks a prompt failure without a completed assistant as retryable", () => {
+    expect(() =>
+      projectSettledTurnFinalizationAttemptResult(
+        successfulAttempt({
+          terminal: { kind: "failed", source: "prompt", error: new Error("Internal server error") },
+          currentAttemptCompletedAssistant: undefined,
+        }),
+      ),
+    ).toThrow(RetryableSettledTurnFinalizationAttemptError);
+  });
+
+  it("does not retry a non-transient prompt failure", () => {
+    expect(() =>
+      projectSettledTurnFinalizationAttemptResult(
+        successfulAttempt({
+          terminal: { kind: "failed", source: "prompt", error: new Error("invalid API key") },
+          currentAttemptCompletedAssistant: undefined,
+        }),
+      ),
+    ).toThrow("did not complete successfully");
+  });
+
+  it("does not retry a failed full attempt that contains a completed assistant", () => {
     expect(() =>
       projectSettledTurnFinalizationAttemptResult(
         successfulAttempt({
@@ -143,6 +166,19 @@ describe("assertSettledTurnFinalizationResult", () => {
         }),
       ),
     ).toThrow("did not complete successfully");
+  });
+
+  it("does not retry an idle timeout that reported capability activity", () => {
+    expect(() =>
+      projectSettledTurnFinalizationAttemptResult(
+        successfulAttempt({
+          terminal: { kind: "timeout", phase: "prompt", source: "idle" },
+          currentAttemptCompletedAssistant: undefined,
+          toolMetas: [{ toolName: "write" }],
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        }),
+      ),
+    ).toThrow("reported capability activity");
   });
 
   it("rejects a full attempt that compacted before producing its answer", () => {
