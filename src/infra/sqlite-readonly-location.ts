@@ -721,7 +721,7 @@ async function prepareSqliteSnapshotSource(
   if (!journal.isFile()) {
     throw new Error(`SQLite rollback journal must be a regular file: ${journalPath}`);
   }
-  return await prepareSqliteReadOnlyLocationInProcess(canonicalPath);
+  return await prepareSqliteReadOnlyLocation(canonicalPath);
 }
 
 export async function withSqliteSnapshotSource<T>(
