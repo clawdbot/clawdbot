@@ -37,6 +37,7 @@ import {
   uniformOutboundAuditTerminals,
 } from "./outbound-audit.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
+import { normalizeOutboundReplyFacts } from "./reply-policy.js";
 
 const log = createSubsystemLogger("outbound/deliver");
 
@@ -47,8 +48,11 @@ export async function runOutboundDelivery(
 }
 
 export async function runOutboundDeliveryInternal(
-  params: DeliverOutboundPayloadsParams,
+  input: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
+  const { replyToId, replyToMode, ...currentParams } = input;
+  const reply = normalizeOutboundReplyFacts({ reply: input.reply, replyToId, replyToMode });
+  const params = { ...currentParams, ...(reply ? { reply } : {}) };
   const stableIntentId = params.deliveryIntentId?.trim();
   if (stableIntentId) {
     const stableParams =
@@ -230,7 +234,7 @@ async function runOutboundDeliveryWithQueue(
   if (params.requireUnknownSendReconciliation !== false && preparedPayloads.length === 1) {
     const requirements = deriveDurableFinalDeliveryRequirementsForBatch({
       payloads: preparedPayloads,
-      replyToId: params.replyToId,
+      replyToId: params.reply?.replyToId,
       threadId: params.threadId,
       silent: params.silent,
       reconcileUnknownSend: true,

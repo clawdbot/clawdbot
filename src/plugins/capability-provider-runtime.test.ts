@@ -1007,29 +1007,33 @@ describe("resolvePluginCapabilityProviders", () => {
     expectActiveRegistryLookup(["openai"]);
   });
 
-  it("loads a voiceModel provider that is missing from an active speech registry", () => {
+  it.each([
+    ["voice model", "speechProviders", { agents: { defaults: { voiceModel: "openai/model" } } }],
+    ["sole Talk speech", "speechProviders", { talk: { providers: { openai: {} } } }],
+    [
+      "Talk speech alias",
+      "speechProviders",
+      { talk: { provider: "voice-alias", providers: { "voice-alias": {} } } },
+    ],
+    [
+      "Talk realtime alias",
+      "realtimeVoiceProviders",
+      { talk: { realtime: { provider: "voice-alias", providers: { "voice-alias": {} } } } },
+    ],
+  ] as const)("loads a missing provider requested by %s", (_source, key, cfg) => {
     const active = createEmptyPluginRegistry();
-    addSpeechProvider(active, "google", { pluginName: "Google", label: "Google" });
+    addCapabilityProvider(active, key, { id: "google" });
     const loaded = createEmptyPluginRegistry();
-    addSpeechProvider(loaded, "openai", { pluginName: "OpenAI", label: "OpenAI" });
+    addCapabilityProvider(loaded, key, { id: "openai", provider: { aliases: ["voice-alias"] } });
     setCapabilityManifestPlugins([
-      { id: "google", contracts: { speechProviders: ["google"] } },
-      { id: "openai", contracts: { speechProviders: ["openai"] } },
+      { id: "google", contracts: { [key]: ["google"] } },
+      { id: "openai", contracts: { [key]: ["openai", "voice-alias"] } },
     ]);
     mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
       params === undefined ? active : loaded,
     );
 
-    const providers = resolvePluginCapabilityProviders({
-      key: "speechProviders",
-      cfg: {
-        agents: {
-          defaults: {
-            voiceModel: { primary: "openai/gpt-4o-mini-tts" },
-          },
-        },
-      } as OpenClawConfig,
-    });
+    const providers = resolvePluginCapabilityProviders({ key, cfg: cfg as OpenClawConfig });
 
     expectResolvedCapabilityProviderIds(providers, ["google", "openai"]);
     expectActiveRegistryLookup(["openai"]);

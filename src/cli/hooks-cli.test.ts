@@ -3,12 +3,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HookStatusReport } from "../hooks/hooks-status.js";
-import {
-  formatHookInfo,
-  formatHooksCheck,
-  formatHooksList,
-  registerHooksCli,
-} from "./hooks-cli.js";
+import { formatHookInfo, formatHooksCheck, formatHooksList } from "./hooks-cli.format.js";
+import { registerHooksCli } from "./hooks-cli.js";
 import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 
 const runPluginInstallCommandMock = vi.hoisted(() => vi.fn());

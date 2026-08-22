@@ -16,7 +16,7 @@ Manage Talk voice selection (list/set).
 
 ## Surface
 
-commands: `/voice`
+slash commands: `/voice`
 
 <!-- openclaw-plugin-reference:manual-start -->
 

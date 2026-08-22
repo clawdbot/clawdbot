@@ -299,6 +299,24 @@ describe("resolveDiscordMessageText", () => {
     expect(text).toContain("Forwarded title\nForwarded details");
   });
 
+  it("preserves text from later embeds in forwarded message snapshots", () => {
+    const text = resolveDiscordMessageText(
+      asForwardedSnapshotMessage({
+        content: "",
+        embeds: [
+          {},
+          { title: "Forwarded title", description: "Forwarded details" },
+          { description: "Forwarded follow-up" },
+        ],
+      }),
+      { includeForwarded: true },
+    );
+
+    expect(text).toBe(
+      "[Forwarded message from @Bob]\nForwarded title\nForwarded details\nForwarded follow-up",
+    );
+  });
+
   it("includes Components v2 text display content from forwarded snapshots", () => {
     const text = resolveDiscordMessageText(
       asMessage({

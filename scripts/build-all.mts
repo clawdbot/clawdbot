@@ -263,7 +263,6 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
     },
   },
   tsxStep("check-plugin-sdk-exports", "scripts/check-plugin-sdk-exports.mts"),
-  tsxStep("copy-hook-metadata", "scripts/copy-hook-metadata.ts"),
   {
     label: "ui:build",
     kind: "pnpm",
@@ -303,7 +302,6 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
     "runtime-postbuild-stamp",
     "write-plugin-sdk-entry-dts",
     "check-plugin-sdk-exports",
-    "copy-hook-metadata",
     "ui:build",
     "write-build-info",
     "write-cli-startup-metadata",
@@ -319,7 +317,6 @@ export const BUILD_ALL_PROFILES: Record<string, string[]> = {
     "runtime-postbuild-stamp",
     "write-plugin-sdk-entry-dts",
     "check-plugin-sdk-exports",
-    "copy-hook-metadata",
     "ui:build",
     "write-build-info",
     "write-cli-startup-metadata",

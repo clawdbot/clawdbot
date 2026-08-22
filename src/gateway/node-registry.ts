@@ -35,6 +35,7 @@ import {
   forgetNodeRunnerInventory,
   invokePublicNodeRegistry,
   isNodeRegistryPendingInvokeConnectionActive,
+  reconcileNodeRunnerAvailability,
   registerNodeRegistryPrivateRuntime,
   settleNodeRegistryPairingGenerationChange,
 } from "./node-registry-private.js";
@@ -573,6 +574,7 @@ export class NodeRegistry {
     if (replacesPresence) {
       this.publishActiveNodeContext();
     }
+    reconcileNodeRunnerAvailability(this, nodeId);
     return session;
   }
 
@@ -600,6 +602,7 @@ export class NodeRegistry {
         this.authorizedSystemRunEvents.delete(key);
       }
     }
+    reconcileNodeRunnerAvailability(this, nodeId);
     return unregistersCurrentNode ? nodeId : null;
   }
 
@@ -690,6 +693,7 @@ export class NodeRegistry {
         this.authorizedSystemRunEvents.delete(key);
       }
     }
+    reconcileNodeRunnerAvailability(this, node.nodeId);
     this.options.onPairingInvalidated?.({ nodeId: node.nodeId, connId: node.connId });
     return node.lastActiveAtMs !== undefined;
   }
@@ -1063,14 +1067,15 @@ export class NodeRegistry {
     if (generationTransition) {
       const previousPairingGeneration = node.pairingGeneration;
       node.pairingGeneration = generationTransition.nextPairingGeneration;
-      // Protocol features describe this exact live process. Keep the connection
-      // declaration while private proof resolution binds the new generation.
+      // Runner declarations are pairing-generation facts. Retire the old
+      // declaration so the live process must publish for its promoted generation.
       settleNodeRegistryPairingGenerationChange({
         registry: this,
         nodeId,
         connId: node.connId,
         nextPairingGeneration: generationTransition.nextPairingGeneration,
       });
+      reconcileNodeRunnerAvailability(this, nodeId);
       if (previousPairingGeneration) {
         this.options.onPairingGenerationChanged?.({
           nodeId,

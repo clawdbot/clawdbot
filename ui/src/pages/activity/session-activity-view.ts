@@ -447,6 +447,8 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
               class="settings-segmented__btn ${props.filters.time === time
                 ? "settings-segmented__btn--active"
                 : ""}"
+              data-compact-label=${time === "all" ? t(TIME_LABELS[time]) : time}
+              aria-label=${t(TIME_LABELS[time])}
               aria-pressed=${String(props.filters.time === time)}
               @click=${() => props.onFiltersChange({ ...props.filters, time })}
             >

@@ -193,13 +193,13 @@ function renderSkillWorkshopPage(
               },
               onPrev: () => selectRelativeProposal(-1),
               onNext: () => selectRelativeProposal(1),
-              onApply: (key) => {
+              onApply: (decision) => {
                 if (
                   !canCallWorkshopAdminMethod(context.gateway.snapshot, "skills.proposals.apply")
                 ) {
                   return;
                 }
-                void runSkillWorkshopLifecycleAction(state, context, "apply", key).finally(
+                void runSkillWorkshopLifecycleAction(state, context, "apply", decision).finally(
                   requestUpdate,
                 );
                 requestUpdate();
@@ -226,13 +226,13 @@ function renderSkillWorkshopPage(
                 state.skillWorkshopRevisionDraft = "";
                 requestUpdate();
               },
-              onReject: (key) => {
+              onReject: (decision) => {
                 if (
                   !canCallWorkshopAdminMethod(context.gateway.snapshot, "skills.proposals.reject")
                 ) {
                   return;
                 }
-                void runSkillWorkshopLifecycleAction(state, context, "reject", key).finally(
+                void runSkillWorkshopLifecycleAction(state, context, "reject", decision).finally(
                   requestUpdate,
                 );
                 requestUpdate();

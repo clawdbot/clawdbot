@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
+import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { Context, Model } from "../types.js";
 import {
   closeOpenAICodexWebSocketSessions,
@@ -149,6 +150,60 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
         usage: { input: 12, output: 3, totalTokens: 15 },
       },
     });
+  });
+
+  it("reports acceptance before the default WebSocket stream starts", async () => {
+    class AcceptedWebSocket extends EventTarget {
+      constructor() {
+        super();
+        queueMicrotask(() => this.dispatchEvent(new Event("open")));
+      }
+
+      send(): void {
+        queueMicrotask(() => {
+          this.dispatchEvent(
+            Object.assign(new Event("message"), {
+              data: JSON.stringify({
+                type: "response.completed",
+                response: {
+                  id: "resp_ws_accepted",
+                  status: "completed",
+                  output: [],
+                  usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+                },
+              }),
+            }),
+          );
+        });
+      }
+
+      close(): void {}
+    }
+
+    const order: string[] = [];
+    const acceptanceObserver = vi.fn(() => {
+      order.push("accepted");
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("WebSocket", AcceptedWebSocket);
+    vi.stubGlobal("fetch", fetchMock);
+    const options = withProviderAcceptanceObserver(
+      {
+        apiKey: createJwt({
+          "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+        }),
+      },
+      acceptanceObserver,
+    );
+
+    const stream = streamOpenAICodexResponses(model, context, options);
+    for await (const event of stream) {
+      order.push(event.type);
+    }
+
+    expect(order).toEqual(["accepted", "start", "done"]);
+    expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("emits an error for a content-filtered incomplete WebSocket turn", async () => {

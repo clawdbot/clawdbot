@@ -498,7 +498,12 @@ describe("AppSidebar session mutation feedback", () => {
     } as unknown as GatewayBrowserClient);
     harness.deleteSession.mockResolvedValueOnce({
       deleted: true,
-      worktreePreserved: { id: "wt-1", branch: "feature", path: "/tmp/worktree" },
+      worktreePreserved: {
+        id: "wt-1",
+        branch: "feature",
+        path: "/tmp/worktree",
+        reason: "busy",
+      },
     });
     const menu = await openSessionMenu(sidebar, "agent:main:a");
     menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();

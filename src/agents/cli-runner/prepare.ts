@@ -19,6 +19,7 @@ import {
   deactivateMcpLoopbackClientGrantCapture,
   mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
+  transferMcpLoopbackClientGrant,
 } from "../../gateway/mcp-grant-store.js";
 import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
@@ -49,7 +50,10 @@ import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
-import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
+import {
+  resolveAdmittedRunActiveAssertion,
+  resolvePreparedRunAdmission,
+} from "../admitted-run-context.js";
 import { hasAgentRosterProperty, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { hasUsableOAuthCredential } from "../auth-profiles/credential-state.js";
@@ -183,6 +187,7 @@ const defaultPrepareDeps = {
   deactivateMcpLoopbackClientGrantCapture,
   mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
+  transferMcpLoopbackClientGrant,
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
   resolveOpenClawReferencePaths: async (
@@ -780,28 +785,29 @@ export async function prepareCliRunContext(
     });
     return openClawHistoryMessages;
   };
+  const promptBuildHookContext = {
+    runId: params.runId,
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    workspaceDir,
+    modelProviderId: params.provider,
+    modelId,
+    trigger: params.trigger,
+    ...buildAgentHookContextChannelFields(params),
+  };
+  const promptBuildHookRunner = skipsTurnPreparation ? undefined : getGlobalHookRunner();
   const promptBuildHookResult = await (async () => {
     if (skipsTurnPreparation) {
       return undefined;
     }
-    const hookRunner = getGlobalHookRunner();
     try {
       return await resolvePromptBuildHookResult({
         config: params.config ?? getRuntimeConfig(),
         prompt: params.prompt,
         messages: await loadOpenClawHistoryMessages(),
-        hookCtx: {
-          runId: params.runId,
-          agentId: sessionAgentId,
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          workspaceDir,
-          modelProviderId: params.provider,
-          modelId,
-          trigger: params.trigger,
-          ...buildAgentHookContextChannelFields(params),
-        },
-        hookRunner,
+        hookCtx: promptBuildHookContext,
+        hookRunner: promptBuildHookRunner,
         bootstrapContextRunKind: params.bootstrapContextRunKind,
       });
     } catch (error) {
@@ -837,6 +843,8 @@ export async function prepareCliRunContext(
       provider: params.provider,
       modelProvider: backendResolved.modelProvider,
       model: contextModelId,
+      modelContextWindow: params.modelContextWindow,
+      modelContextTokens: params.modelContextTokens,
       allowAsyncLoad: false,
       allowUnscopedModelLookup,
     });
@@ -1077,6 +1085,38 @@ export async function prepareCliRunContext(
       )
     : hookFilteredProjectedTools;
   const promptTools = bundleMcpEnabled ? projectedTools : [];
+  const authorizedPromptBuildResult = await (async () => {
+    const toolAuthorityFingerprint = params.toolAuthorityFingerprint;
+    if (!promptBuildHookRunner || !toolAuthorityFingerprint) {
+      return undefined;
+    }
+    const admittedParams = await admitPreparedParams(params);
+    params = admittedParams;
+    const assertHostActive = resolveAdmittedRunActiveAssertion(
+      admittedParams.admittedRunContext,
+      admittedParams.abortSignal,
+    );
+    if (!assertHostActive) {
+      return undefined;
+    }
+    try {
+      return await promptBuildHookRunner.runAuthorizedPromptBuild(
+        {
+          prompt: params.prompt,
+          messages: await loadOpenClawHistoryMessages(),
+        },
+        promptBuildHookContext,
+        {
+          toolAuthorityFingerprint,
+          activeToolNames: promptTools.map((tool) => tool.name),
+          assertHostActive,
+        },
+      );
+    } catch (error) {
+      cliBackendLog.warn(`authorized CLI prompt-build hook failed: ${String(error)}`);
+      return undefined;
+    }
+  })();
   const messageToolAvailable = promptTools.some(
     (tool) => normalizeToolPolicyName(tool.name) === "message",
   );
@@ -1141,25 +1181,51 @@ export async function prepareCliRunContext(
     };
     const mcpClientGrantCapture =
       mcpClientGrant && mcpLoopbackRuntime
-        ? {
-            activate: (captureKey: string) => {
-              const activated = prepareDeps.activateMcpLoopbackClientGrantCapture({
-                token: mcpClientGrant.token,
-                runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
-                captureKey,
-              });
-              if (!activated) {
-                throw new Error("CLI MCP client grant is no longer valid for this Gateway runtime");
-              }
-            },
-            deactivate: (captureKey: string) => {
-              prepareDeps.deactivateMcpLoopbackClientGrantCapture({
-                token: mcpClientGrant.token,
-                runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
-                captureKey,
-              });
-            },
-          }
+        ? (() => {
+            let activeToken = mcpClientGrant.token;
+            return {
+              transportToken: mcpClientGrant.token,
+              adoptProcessToken: (processToken: string) => {
+                if (activeToken === processToken) {
+                  return;
+                }
+                if (
+                  !prepareDeps.transferMcpLoopbackClientGrant({
+                    sourceToken: mcpClientGrant.token,
+                    targetToken: processToken,
+                    runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
+                  })
+                ) {
+                  throw new Error(
+                    "CLI MCP client grant could not transfer onto the live process bearer",
+                  );
+                }
+                activeToken = processToken;
+              },
+              revokeProcessToken: () => {
+                prepareDeps.revokeMcpLoopbackClientGrant(activeToken);
+              },
+              activate: (captureKey: string) => {
+                const activated = prepareDeps.activateMcpLoopbackClientGrantCapture({
+                  token: activeToken,
+                  runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
+                  captureKey,
+                });
+                if (!activated) {
+                  throw new Error(
+                    "CLI MCP client grant is no longer valid for this Gateway runtime",
+                  );
+                }
+              },
+              deactivate: (captureKey: string) => {
+                prepareDeps.deactivateMcpLoopbackClientGrantCapture({
+                  token: activeToken,
+                  runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
+                  captureKey,
+                });
+              },
+            };
+          })()
         : undefined;
     let mcpClientGrantRevoked = false;
     const cleanupMcpClientGrant = mcpClientGrant
@@ -1218,6 +1284,7 @@ export async function prepareCliRunContext(
       provider: params.provider,
       modelId,
       contextTokenBudget: contextWindowInfo.tokens,
+      thinkingLevel: params.thinkLevel === "ultra" ? "max" : params.thinkLevel,
       authProfileId: effectiveAuthProfileId,
       executionMode,
       toolAvailability: params.cliToolAvailability
@@ -1558,11 +1625,23 @@ export async function prepareCliRunContext(
     if (!skipsTurnPreparation) {
       try {
         const hookResult = promptBuildHookResult;
-        if (hookResult?.prependContext) {
-          preparedPrompt = `${hookResult.prependContext}\n\n${preparedPrompt}`;
+        const prependContext = [
+          hookResult?.prependContext,
+          authorizedPromptBuildResult?.prependContext,
+        ]
+          .filter((value): value is string => Boolean(value?.trim()))
+          .join("\n\n");
+        const appendContext = [
+          hookResult?.appendContext,
+          authorizedPromptBuildResult?.appendContext,
+        ]
+          .filter((value): value is string => Boolean(value?.trim()))
+          .join("\n\n");
+        if (prependContext) {
+          preparedPrompt = `${prependContext}\n\n${preparedPrompt}`;
         }
-        if (hookResult?.appendContext) {
-          preparedPrompt = `${preparedPrompt}\n\n${hookResult.appendContext}`;
+        if (appendContext) {
+          preparedPrompt = `${preparedPrompt}\n\n${appendContext}`;
         }
         const hookSystemPrompt = hookResult?.systemPrompt?.trim();
         if (hookSystemPrompt) {

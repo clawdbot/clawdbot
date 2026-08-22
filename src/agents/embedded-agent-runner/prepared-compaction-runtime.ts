@@ -101,6 +101,10 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
     effectiveCwd,
     effectiveSkillAgentId,
   } = prepared;
+  const sessionPermissionPolicy =
+    params.sessionEntry?.permissionMode && params.sessionEntry.sessionRoot
+      ? { mode: params.sessionEntry.permissionMode, root: params.sessionEntry.sessionRoot }
+      : undefined;
   let restoreSkillEnv: (() => void) | undefined;
   let bundleMcpRuntime: Awaited<ReturnType<typeof createBundleMcpToolRuntime>> | undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
@@ -315,6 +319,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
             elevated: params.bashElevated,
           },
           sandbox,
+          sessionPermissionPolicy,
           messageProvider: resolvedMessageProvider,
           clientCaps: params.clientCaps,
           chatType: params.chatType,
@@ -506,6 +511,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       config: params.config,
       agentId: sessionAgentId,
       sessionKey: params.sessionKey,
+      permissionMode: sessionPermissionPolicy?.mode,
       sandboxAvailable: sandbox?.enabled === true,
       execOverrides: params.execOverrides,
     });

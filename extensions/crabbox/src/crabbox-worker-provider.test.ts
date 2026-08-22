@@ -1,8 +1,15 @@
+import fs from "node:fs";
 import path from "node:path";
-import type { WorkerProfile, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
+import { fileURLToPath } from "node:url";
+import {
+  type WorkerProfile,
+  type WorkerProvider,
+  WorkerProviderError,
+} from "openclaw/plugin-sdk/plugin-entry";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as doctorRuntime from "./crabbox-worker-doctor-runtime.js";
 import {
   findCrabboxBinary,
@@ -20,6 +27,9 @@ const LEASE_ID = "cbx_6071fc2062a6";
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 const OPENCLAW_ROOT = path.resolve(path.sep, "workspace", "openclaw");
 const SIBLING_BINARY = path.resolve(OPENCLAW_ROOT, "../crabbox/bin/crabbox");
+const WORKER_WALLPAPER_PATH = fileURLToPath(
+  new URL("../assets/openclaw-worker-wallpaper.png", import.meta.url),
+);
 const INSPECT_FAILURE_PREFIX = "Crabbox inspect failed with exit code 2: ";
 const PROFILE = {
   provider: "aws",
@@ -27,6 +37,7 @@ const PROFILE = {
   ttl: "24h",
   idleTimeout: "60m",
 };
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type CrabboxWorkerProviderDependencies = NonNullable<
   Parameters<typeof createCrabboxWorkerProvider>[0]
@@ -74,6 +85,7 @@ function providerWithRawRunner(
     pathEnv: "",
     isExecutable: (candidate) => candidate === SIBLING_BINARY,
     sleep: async () => {},
+    wallpaperPath: WORKER_WALLPAPER_PATH,
     ...(warn ? { warn } : {}),
   });
   return {
@@ -144,7 +156,6 @@ describe("Crabbox worker provider", () => {
         ]),
       });
     });
-
     expect(provider.supportedExecutionModes).toEqual(["worker-turn"]);
     expect(await provider.listMachineOptions?.(PROFILE)).toEqual([
       { id: "tiny", label: "Tiny", cpu: 8, memoryGb: 16 },
@@ -316,6 +327,28 @@ describe("Crabbox worker provider", () => {
     expect(warn).toHaveBeenCalledTimes(warns ? 1 : 0);
   });
 
+  it.each([
+    {
+      name: "non-PNG bytes",
+      bytes: Buffer.from("not a PNG"),
+      message: "Crabbox worker wallpaper is not a PNG",
+    },
+    {
+      name: "wrong PNG dimensions",
+      bytes: (() => {
+        const bytes = fs.readFileSync(WORKER_WALLPAPER_PATH);
+        bytes.writeUInt32BE(1023, 16);
+        return bytes;
+      })(),
+      message: "Crabbox worker wallpaper must be 1024x576; got 1023x576",
+    },
+  ])("rejects $name during provider registration", ({ bytes, message }) => {
+    const tempDir = tempDirs.make("openclaw-crabbox-wallpaper-");
+    const wallpaperPath = path.join(tempDir, "wallpaper.png");
+    fs.writeFileSync(wallpaperPath, bytes);
+    expect(() => createCrabboxWorkerProvider({ wallpaperPath })).toThrow(message);
+  });
+
   it("returns the environment-bound node after enrollment", async () => {
     let warmed = false;
     const provider = providerWithRunner(async (argv) => {
@@ -352,7 +385,7 @@ describe("Crabbox worker provider", () => {
     });
 
     await expect(
-      provider.provision(PROFILE, OPERATION_ID, {
+      provider.provision({ ...PROFILE, desktop: true }, OPERATION_ID, {
         beginNodeEnrollment: async () => ({
           mode: "resume",
           deviceId: "device-bound",
@@ -362,8 +395,145 @@ describe("Crabbox worker provider", () => {
           waitForDeviceId: async () => "device-bound",
         }),
       }),
-    ).resolves.toMatchObject({ node: { deviceId: "device-bound" } });
-    const setup = calls.find((call) => call.argv[1] === "run")?.options.input ?? "";
+    ).resolves.toMatchObject({
+      node: { deviceId: "device-bound" },
+      desktop: {
+        protocol: "rfb",
+        port: 5900,
+        apps: [{ id: "browser" }, { id: "terminal" }],
+      },
+    });
+    const desktopSetup = calls.find(
+      (call) =>
+        call.argv[1] === "run" && String(call.options.input).includes("openclaw-worker-browser"),
+    )?.options.input;
+    const desktopSetupText = String(desktopSetup);
+    expect(desktopSetupText).toContain("worker_user=$(id -un)");
+    expect(desktopSetupText).toContain('worker_home=$(getent passwd "$worker_uid"');
+    expect(desktopSetupText).toContain(`worker-browser/${LEASE_ID}`);
+    const desktopSetupLines = desktopSetupText.split("\n");
+    for (const expectedLine of [
+      '[ -r /var/lib/crabbox/desktop.env ] || { echo "Crabbox desktop environment is unavailable" >&2; exit 1; }',
+      "grep -Fx 'CRABBOX_DESKTOP_ENV=xfce' /var/lib/crabbox/desktop.env >/dev/null || { echo \"Crabbox desktop environment is not XFCE\" >&2; exit 1; }",
+      "grep -Fx 'DISPLAY=:99' /var/lib/crabbox/desktop.env >/dev/null || { echo \"Crabbox XFCE display is not :99\" >&2; exit 1; }",
+      "export DISPLAY=:99",
+    ]) {
+      expect(desktopSetupLines.filter((line) => line === expectedLine)).toHaveLength(3);
+    }
+    expect(desktopSetupText).not.toContain(". /var/lib/crabbox/desktop.env");
+    expect(desktopSetupText).not.toContain("/var/lib/crabbox/browser.env");
+    expect(desktopSetupLines).not.toContain("export DISPLAY");
+    expect(desktopSetupText).toContain(
+      'mapfile -t session_pids < <(pgrep -u "$worker_uid" -x xfce4-session || true)',
+    );
+    expect(desktopSetupText).toContain("Expected exactly one worker-owned XFCE session");
+    expect(desktopSetupText).toContain('session_pid="${session_pids[0]}"');
+    expect(desktopSetupText).toContain('read_xfce_process_environment "$session_pid"');
+    expect(desktopSetupText).toContain(
+      'mapfile -t renderer_pids < <(pgrep -u "$worker_uid" -x xfdesktop || true)',
+    );
+    expect(desktopSetupText).toContain('renderer_pid="${renderer_pids[0]}"');
+    expect(desktopSetupText).toContain('read_xfce_process_environment "$renderer_pid"');
+    expect(desktopSetupText).toContain('exec 8<"/proc/$process_pid/environ"');
+    for (const [name, target] of [
+      ["DISPLAY", "process_display"],
+      ["DBUS_SESSION_BUS_ADDRESS", "process_dbus"],
+      ["XDG_RUNTIME_DIR", "process_runtime_dir"],
+    ]) {
+      expect(desktopSetupText).toContain(`${name}=*) ${target}="\${process_variable#*=}"`);
+    }
+    expect(desktopSetupText).toContain('[ "$process_display" = ":99" ]');
+    expect(desktopSetupText).toContain('DBUS_SESSION_BUS_ADDRESS="$process_dbus"');
+    expect(desktopSetupLines).toContain("unset XDG_RUNTIME_DIR");
+    expect(desktopSetupText).toContain('XDG_RUNTIME_DIR="$process_runtime_dir"');
+    expect(desktopSetupText).toContain('[ -n "$DBUS_SESSION_BUS_ADDRESS" ]');
+    expect(desktopSetupText).not.toContain("SESSION_MANAGER");
+    expect(desktopSetupText).toContain(
+      '[ "$process_display" = "$DISPLAY" ] && [ "$process_dbus" = "$DBUS_SESSION_BUS_ADDRESS" ]',
+    );
+    expect(desktopSetupText).toContain(
+      'case "$XDG_RUNTIME_DIR" in ""|/*) ;; *) echo "XFCE session has an invalid XDG_RUNTIME_DIR"',
+    );
+    expect(desktopSetupText).toContain("export DBUS_SESSION_BUS_ADDRESS");
+    expect(desktopSetupText).toContain('[ -z "$XDG_RUNTIME_DIR" ] || export XDG_RUNTIME_DIR');
+    for (const signal of ["TERM", "KILL"]) {
+      expect(desktopSetupText).toContain(`pkill -${signal} -u "$worker_uid" -x xfdesktop || true`);
+    }
+    expect(desktopSetupText).toContain('pgrep -u "$worker_uid" -x xfdesktop >/dev/null || break');
+    expect(desktopSetupText).toContain(
+      'nohup xfdesktop >"$worker_home/.cache/openclaw/xfdesktop.log" 2>&1 </dev/null &',
+    );
+    expect(desktopSetupText).toMatch(
+      /for _attempt in \$\(seq 1 \d+\); do bind_xfdesktop_renderer && break; sleep 0\.1; done/u,
+    );
+    expect(desktopSetupText).toContain(
+      "XFCE desktop renderer did not converge on the worker session",
+    );
+    expect(desktopSetupText).not.toMatch(/(?:^|\n)\s*(?:\.|source)\s+[^\n]*\/proc\//u);
+    expect(desktopSetupText).not.toMatch(/(?:^|\n)\s*eval(?:\s|$)/u);
+    expect(desktopSetupText).not.toMatch(/(?:^|\n)\s*(?:\.|source)\s+[^\n]*\.env/u);
+    expect(desktopSetupText).toContain(
+      "nohup /usr/local/bin/crabbox-browser --remote-debugging-address=127.0.0.1",
+    );
+    expect(desktopSetupText).toMatch(/for required_command in [^\n;]*python3[^\n;]*; do/u);
+    expect(desktopSetupText).toContain(
+      "base64.b64decode(sys.stdin.buffer.read().strip(),validate=True)",
+    );
+    const wallpaperPayload =
+      /<<'WORKER_WALLPAPER_B64_EOF'\n(?<payload>[A-Za-z0-9+/=]+)\nWORKER_WALLPAPER_B64_EOF/u.exec(
+        desktopSetupText,
+      )?.groups?.payload;
+    expect(wallpaperPayload).toBeDefined();
+    expect(
+      Buffer.from(wallpaperPayload ?? "", "base64").equals(fs.readFileSync(WORKER_WALLPAPER_PATH)),
+    ).toBe(true);
+    expect(desktopSetupText).toContain("xrandr --listmonitors");
+    expect(desktopSetupText).toContain('printf "/backdrop/screen0/monitor%s/workspace%s');
+    expect(desktopSetupText).toContain(
+      'wallpaper_path="$worker_home/.local/share/backgrounds/openclaw-worker.png"',
+    );
+    expect(desktopSetupText).toContain('for backdrop in "${backdrop_roots[@]}"; do');
+    const sessionExportIndex = desktopSetupText.indexOf("export DBUS_SESSION_BUS_ADDRESS");
+    const sessionExtractionIndex = desktopSetupText.indexOf(
+      'read_xfce_process_environment "$session_pid"',
+    );
+    const terminateRendererIndex = desktopSetupText.indexOf(
+      'pkill -TERM -u "$worker_uid" -x xfdesktop',
+    );
+    const killRendererIndex = desktopSetupText.indexOf('pkill -KILL -u "$worker_uid" -x xfdesktop');
+    const launchRendererIndex = desktopSetupText.indexOf("nohup xfdesktop");
+    const convergeRendererIndex = desktopSetupText.indexOf(
+      'bind_xfdesktop_renderer || { echo "XFCE desktop renderer did not converge',
+    );
+    const firstXfconfIndex = desktopSetupText.indexOf("xfconf-query -c xfce4-desktop");
+    const xrandrIndex = desktopSetupText.indexOf("xrandr --listmonitors");
+    const lastImageIndex = desktopSetupText.indexOf('-p "$backdrop/last-image"');
+    const saveRendererIndex = desktopSetupText.indexOf(
+      'renderer_pid_before_reload="$renderer_pid"',
+    );
+    const reloadRendererIndex = desktopSetupText.indexOf("xfdesktop --reload");
+    const verifyRendererIndex = desktopSetupText.indexOf(
+      '[ "$renderer_pid" = "$renderer_pid_before_reload" ]',
+    );
+    expect(sessionExtractionIndex).toBeGreaterThan(-1);
+    expect(sessionExportIndex).toBeGreaterThan(sessionExtractionIndex);
+    expect(terminateRendererIndex).toBeGreaterThan(sessionExportIndex);
+    expect(killRendererIndex).toBeGreaterThan(terminateRendererIndex);
+    expect(launchRendererIndex).toBeGreaterThan(killRendererIndex);
+    expect(convergeRendererIndex).toBeGreaterThan(launchRendererIndex);
+    expect(firstXfconfIndex).toBeGreaterThan(convergeRendererIndex);
+    expect(xrandrIndex).toBeGreaterThan(sessionExportIndex);
+    expect(lastImageIndex).toBeGreaterThan(-1);
+    expect(saveRendererIndex).toBeGreaterThan(lastImageIndex);
+    expect(reloadRendererIndex).toBeGreaterThan(saveRendererIndex);
+    expect(verifyRendererIndex).toBeGreaterThan(reloadRendererIndex);
+    expect(desktopSetupText.slice(reloadRendererIndex, verifyRendererIndex)).toContain(
+      "bind_xfdesktop_renderer",
+    );
+    expect(desktopSetupText).not.toMatch(/pkill -(?:TERM|KILL) -x xfdesktop/u);
+    const setup = calls.find(
+      (call) => call.argv[1] === "run" && String(call.options.input).includes("node run"),
+    )?.options.input;
     expect(String(setup)).toContain("node run --ephemeral --display-name 'Bound worker'");
     expect(String(setup)).not.toContain("config set nodeHost.workerRuns.enabled");
     expect(String(setup)).not.toContain("setup-code");
@@ -574,6 +744,39 @@ describe("Crabbox worker provider", () => {
     expect(calls.some((argv) => argv[1] === "stop" && argv.includes(LEASE_ID))).toBe(true);
   });
 
+  it("preserves the allocated lease and both failures when setup cleanup times out", async () => {
+    let releaseCommitted = false;
+    const provider = providerWithRunner(async (argv) => {
+      if (argv[1] === "inspect") {
+        return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
+      }
+      if (argv[1] === "run") {
+        return commandResult({ code: 7, stderr: "node setup failed" });
+      }
+      if (argv[1] === "stop") {
+        releaseCommitted = true;
+        return commandResult({ code: null, killed: true, termination: "timeout" });
+      }
+      return commandResult();
+    });
+
+    const error = await provider
+      .provision({ ...PROFILE, setup: "install-node" }, OPERATION_ID)
+      .catch((cause: unknown) => cause);
+
+    expect(WorkerProviderError.isCleanupIndeterminate(error)).toBe(true);
+    if (!WorkerProviderError.isCleanupIndeterminate(error)) {
+      throw new Error("expected indeterminate worker cleanup error");
+    }
+    expect(error).toMatchObject({
+      leaseId: LEASE_ID,
+      provisionError: { message: expect.stringContaining("node setup failed") },
+      cleanupError: { message: expect.stringContaining("stop did not exit normally (timeout)") },
+    });
+    expect(error.errors).toEqual([error.provisionError, error.cleanupError]);
+    expect(releaseCommitted).toBe(true);
+  });
+
   it("stops the lease when the profile setup command cannot start", async () => {
     const calls: string[][] = [];
     let warmed = false;
@@ -621,6 +824,7 @@ describe("Crabbox worker provider", () => {
       openclawRoot: OPENCLAW_ROOT,
       pathEnv: "",
       isExecutable: (candidate) => candidate === SIBLING_BINARY,
+      wallpaperPath: WORKER_WALLPAPER_PATH,
     });
 
     await expect(provider.provision(PROFILE, OPERATION_ID)).rejects.toMatchObject({
@@ -651,6 +855,7 @@ describe("Crabbox worker provider", () => {
       openclawRoot: OPENCLAW_ROOT,
       pathEnv: "",
       isExecutable: (candidate) => candidate === SIBLING_BINARY,
+      wallpaperPath: WORKER_WALLPAPER_PATH,
     });
 
     await expect(
@@ -784,10 +989,24 @@ describe("Crabbox worker provider", () => {
         .catch((cause: unknown) => cause);
       expect(error).toBeInstanceOf(Error);
       expect(error).not.toMatchObject({ code: "invalid_profile" });
-      const message = error instanceof Error ? error.message : "";
-      expect(message).toContain(`cleanup is indeterminate during ${failurePoint}`);
-      expect(message).toContain("Crabbox AWS instance profile must be empty for cloud workers");
-      expect(message.length).toBeLessThanOrEqual(512);
+      if (failurePoint === "stop") {
+        expect(WorkerProviderError.isCleanupIndeterminate(error)).toBe(true);
+        if (!WorkerProviderError.isCleanupIndeterminate(error)) {
+          throw new Error("expected indeterminate worker cleanup error");
+        }
+        expect(error).toMatchObject({
+          leaseId: LEASE_ID,
+          provisionError: {
+            message: "Crabbox AWS instance profile must be empty for cloud workers",
+          },
+          cleanupError: { message: expect.stringContaining("stop did not exit normally") },
+        });
+      } else {
+        const message = error instanceof Error ? error.message : "";
+        expect(message).toContain("cleanup is indeterminate during inspect");
+        expect(message).toContain("Crabbox AWS instance profile must be empty for cloud workers");
+        expect(message.length).toBeLessThanOrEqual(512);
+      }
       expect(live).toBe(true);
       expect(calls.map((argv) => argv[1])).toEqual(
         failurePoint === "inspect" ? ["config", "inspect"] : ["config", "inspect", "stop"],
@@ -827,6 +1046,7 @@ describe("Crabbox worker provider", () => {
       pathEnv: "",
       isExecutable: (candidate) => candidate === SIBLING_BINARY,
       sleep: async () => {},
+      wallpaperPath: WORKER_WALLPAPER_PATH,
     });
 
     await expect(provider.provision(PROFILE, OPERATION_ID)).rejects.toMatchObject({
@@ -989,16 +1209,231 @@ describe("Crabbox worker provider", () => {
     );
   });
 
-  it("rejects desktop profiles after node transport convergence", async () => {
-    const provider = providerWithRunner(async () => commandResult());
+  it("rejects desktop profiles outside the supported provider set before allocation", async () => {
+    const runCommand = vi.fn<CrabboxCommandRunner>();
+    const provider = providerWithRunner(runCommand);
 
     await expect(
-      provider.provision({ ...PROFILE, desktop: true }, OPERATION_ID),
+      provider.provision({ ...PROFILE, provider: "azure", desktop: true }, OPERATION_ID),
     ).rejects.toMatchObject({
       code: "invalid_profile",
-      message: "Crabbox desktop profiles are unavailable after node transport convergence",
+      message: "Crabbox desktop profiles support only AWS and coordinator-backed Hetzner",
     });
+    expect(runCommand).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      name: "direct",
+      config: { coordinator: "", brokerMode: "managed" },
+    },
+    {
+      name: "registered",
+      config: {
+        coordinator: "https://coordinator.example.test",
+        brokerMode: "registered",
+      },
+    },
+  ])("rejects a $name Hetzner desktop profile before allocation", async ({ config }) => {
+    const calls: string[][] = [];
+    const provider = providerWithRawRunner(async (argv) => {
+      calls.push(argv);
+      if (argv[1] === "config" && argv[2] === "show") {
+        return commandResult({ stdout: JSON.stringify(config) });
+      }
+      return commandResult();
+    });
+
+    await expect(
+      provider.provision({ ...PROFILE, provider: "hetzner", desktop: true }, OPERATION_ID),
+    ).rejects.toMatchObject({
+      code: "invalid_profile",
+      message: "Crabbox Hetzner desktop profiles require a managed coordinator",
+    });
+    expect(calls.map((argv) => argv[1])).toEqual(["config"]);
+  });
+
+  it.each([
+    {
+      name: "direct AWS",
+      providerId: "aws",
+      config: { aws: { instanceProfile: "" }, coordinator: "", brokerMode: "managed" },
+    },
+    {
+      name: "coordinator-backed AWS",
+      providerId: "aws",
+      config: {
+        aws: { instanceProfile: "" },
+        coordinator: "https://coordinator.example.test",
+        brokerMode: "managed",
+      },
+    },
+    {
+      name: "coordinator-backed Hetzner",
+      providerId: "hetzner",
+      config: {
+        coordinator: "https://coordinator.example.test",
+        brokerMode: "managed",
+      },
+    },
+  ])("provisions a node-carried desktop through $name", async ({ config, providerId }) => {
+    const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
+    const setupOrder: string[] = [];
+    const provider = providerWithRawRunner(async (argv, options) => {
+      calls.push({ argv, options });
+      if (argv[1] === "config" && argv[2] === "show") {
+        return commandResult({ stdout: JSON.stringify(config) });
+      }
+      if (argv[1] === "inspect") {
+        return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
+      }
+      if (argv[1] === "run" && String(options.input).includes("openclaw-worker-browser")) {
+        setupOrder.push("desktop");
+      }
+      return commandResult();
+    });
+
+    await expect(
+      provider.provision({ ...PROFILE, provider: providerId, desktop: true }, OPERATION_ID, {
+        beginNodeEnrollment: async () => {
+          setupOrder.push("enrollment");
+          return {
+            mode: "connect" as const,
+            setupCode: "secret-setup-value",
+            setupId: "setup-id",
+            openclawVersion: "2026.8.1",
+            packageSpecs: ["openclaw@2026.8.1"],
+            displayName: "Cloud worker test",
+            waitForDeviceId: async () => "device-1",
+          };
+        },
+      }),
+    ).resolves.toEqual({
+      leaseId: LEASE_ID,
+      node: { deviceId: "device-1" },
+      sharedHost: false,
+      desktop: {
+        protocol: "rfb",
+        port: 5900,
+        passwordFilePath: "/var/lib/crabbox/vnc.password",
+        apps: [
+          {
+            id: "browser",
+            executablePath: "/usr/local/bin/openclaw-worker-browser",
+            cdpPort: 9222,
+          },
+          {
+            id: "terminal",
+            executablePath: "/usr/local/bin/openclaw-worker-terminal",
+          },
+        ],
+      },
+    });
+    expect(calls.find((call) => call.argv[1] === "warmup")).toEqual(
+      expect.objectContaining({
+        options: expect.objectContaining({ timeoutMs: 50 * 60_000 }),
+      }),
+    );
+    expect(calls.find((call) => call.argv[1] === "warmup")?.argv.slice(-4)).toEqual([
+      "--desktop",
+      "--browser",
+      "--desktop-env",
+      "xfce",
+    ]);
+    expect(
+      provider.resolveProvisionTimeoutMs?.({
+        ...PROFILE,
+        provider: providerId,
+        desktop: true,
+      }),
+    ).toBe(72 * 60_000);
+    expect(setupOrder).toEqual(["desktop", "enrollment"]);
+  });
+
+  it.each(["desktop setup", "enrollment preparation", "enrollment completion"] as const)(
+    "stops the fixed desktop lease after permanent %s failure",
+    async (failurePoint) => {
+      const calls: string[][] = [];
+      const provider = providerWithRunner(async (argv, options) => {
+        calls.push(argv);
+        if (argv[1] === "inspect") {
+          return commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) });
+        }
+        if (
+          failurePoint === "desktop setup" &&
+          argv[1] === "run" &&
+          String(options.input).includes("openclaw-worker-browser")
+        ) {
+          return commandResult({ code: 9, stderr: "desktop setup failed" });
+        }
+        return commandResult();
+      });
+
+      await expect(
+        provider.provision({ ...PROFILE, desktop: true }, OPERATION_ID, {
+          beginNodeEnrollment: async () => {
+            if (failurePoint === "enrollment preparation") {
+              throw new Error("enrollment preparation failed");
+            }
+            return {
+              mode: "resume" as const,
+              deviceId: "device-bound",
+              openclawVersion: "2026.8.1",
+              packageSpecs: ["openclaw@2026.8.1"],
+              displayName: "Bound worker",
+              waitForDeviceId: async () => {
+                if (failurePoint === "enrollment completion") {
+                  throw new Error("enrollment completion failed");
+                }
+                return "device-bound";
+              },
+            };
+          },
+        }),
+      ).rejects.toThrow(failurePoint === "desktop setup" ? "setup failed" : failurePoint);
+      expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
+    },
+  );
+
+  it.each(["preparation", "completion"] as const)(
+    "preserves its fixed lease when the Gateway aborts enrollment %s",
+    async (phase) => {
+      const calls: string[][] = [];
+      const controller = new AbortController();
+      const provider = providerWithRunner(async (argv) => {
+        calls.push(argv);
+        return argv[1] === "inspect"
+          ? commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) })
+          : commandResult();
+      });
+
+      await expect(
+        provider.provision(PROFILE, OPERATION_ID, {
+          beginNodeEnrollment: async () => {
+            if (phase === "preparation") {
+              controller.abort();
+              controller.signal.throwIfAborted();
+            }
+            return {
+              mode: "resume" as const,
+              deviceId: "device-bound",
+              openclawVersion: "2026.8.1",
+              packageSpecs: ["openclaw@2026.8.1"],
+              displayName: "Bound worker",
+              signal: controller.signal,
+              waitForDeviceId: async () => {
+                controller.abort();
+                controller.signal.throwIfAborted();
+                return "device-bound";
+              },
+            };
+          },
+        }),
+      ).rejects.toMatchObject({ name: "AbortError" });
+
+      expect(calls.some((argv) => argv[1] === "stop")).toBe(false);
+    },
+  );
 
   it("runs one fixed warmup, ignores its output, and inspects only the canonical id", async () => {
     const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
@@ -1140,23 +1575,33 @@ describe("Crabbox worker provider", () => {
       throw new Error(`unexpected Crabbox command: ${argv[1]}`);
     };
 
-    await expect(providerWithRunner(runCommand).provision(PROFILE, OPERATION_ID)).rejects.toThrow(
-      "did not exit normally (timeout)",
-    );
+    const desktopProfile = { ...PROFILE, desktop: true };
+    await expect(
+      providerWithRunner(runCommand).provision(desktopProfile, OPERATION_ID),
+    ).rejects.toThrow("did not exit normally (timeout)");
     expect(calls.map((argv) => argv[1])).toEqual(["warmup"]);
 
     const restarted = providerWithRunner(runCommand);
-    const lease = await restarted.provision(PROFILE, OPERATION_ID);
-    await restarted.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+    const lease = await restarted.provision(desktopProfile, OPERATION_ID);
+    await restarted.destroy({ leaseId: lease.leaseId, profile: desktopProfile });
 
     expect(creates).toBe(1);
     expect(lease.leaseId).toBe(LEASE_ID);
+    expect(lease.desktop).toMatchObject({
+      protocol: "rfb",
+      port: 5900,
+      apps: [{ id: "browser" }, { id: "terminal" }],
+    });
     expect(live.size).toBe(0);
     expect(calls.filter((argv) => argv[1] === "warmup")).toHaveLength(2);
-    expect(calls.filter((argv) => argv[1] === "inspect")).toEqual([
-      expect.arrayContaining(["--id", LEASE_ID]),
-      expect.arrayContaining(["--id", LEASE_ID]),
-    ]);
+    expect(calls.filter((argv) => argv[1] === "inspect")).toHaveLength(3);
+    expect(calls.filter((argv) => argv[1] === "inspect")).toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining(["--id", LEASE_ID]),
+        expect.arrayContaining(["--id", LEASE_ID]),
+        expect.arrayContaining(["--id", LEASE_ID]),
+      ]),
+    );
     expect(calls.at(-1)).toEqual([SIBLING_BINARY, "stop", "--provider", "aws", "--id", LEASE_ID]);
   });
 
@@ -1342,6 +1787,7 @@ describe("Crabbox worker provider", () => {
       sleep: async () => {
         nowMs += 290_001;
       },
+      wallpaperPath: WORKER_WALLPAPER_PATH,
     });
 
     try {
@@ -1497,6 +1943,7 @@ describe("Crabbox worker provider", () => {
       openclawRoot: OPENCLAW_ROOT,
       pathEnv: "",
       isExecutable: () => false,
+      wallpaperPath: WORKER_WALLPAPER_PATH,
     });
     const lease = lifecycleLease(LEASE_ID, { ...PROFILE, binary, provider: "coder" });
 
@@ -1509,20 +1956,25 @@ describe("Crabbox worker provider", () => {
   });
 
   it.each([
-    { idleTimeout: "1s", idleTimeoutMs: 1_000, intervalMs: 500 },
-    { idleTimeout: "2s", idleTimeoutMs: 2_000, intervalMs: 1_000 },
-    { idleTimeout: "5s", idleTimeoutMs: 5_000, intervalMs: 2_500 },
-    { idleTimeout: "12s", idleTimeoutMs: 12_000, intervalMs: 5_000 },
-    { idleTimeout: "30s", idleTimeoutMs: 30_000, intervalMs: 10_000 },
-    { idleTimeout: "6m", idleTimeoutMs: 360_000, intervalMs: 60_000 },
+    { idleTimeout: "1s", idleTimeoutMs: 1_000, intervalMs: 500, timeoutMs: 500 },
+    { idleTimeout: "2s", idleTimeoutMs: 2_000, intervalMs: 1_000, timeoutMs: 1_000 },
+    { idleTimeout: "5s", idleTimeoutMs: 5_000, intervalMs: 2_500, timeoutMs: 2_500 },
+    { idleTimeout: "12s", idleTimeoutMs: 12_000, intervalMs: 5_000, timeoutMs: 6_000 },
+    { idleTimeout: "30s", idleTimeoutMs: 30_000, intervalMs: 10_000, timeoutMs: 15_000 },
+    { idleTimeout: "6m", idleTimeoutMs: 360_000, intervalMs: 60_000, timeoutMs: 150_000 },
+    { idleTimeout: "45m", idleTimeoutMs: 2_700_000, intervalMs: 60_000, timeoutMs: 150_000 },
   ])(
     "heartbeats an active lease every $intervalMs ms for idleTimeout=$idleTimeout",
-    async ({ idleTimeout, idleTimeoutMs, intervalMs }) => {
+    async ({ idleTimeout, idleTimeoutMs, intervalMs, timeoutMs }) => {
       vi.useFakeTimers();
       const calls: string[][] = [];
+      const heartbeatTimeouts: number[] = [];
       const profile = { ...PROFILE, idleTimeout };
-      const provider = providerWithRunner(async (argv) => {
+      const provider = providerWithRunner(async (argv, options) => {
         calls.push(argv);
+        if (argv[1] === "heartbeat") {
+          heartbeatTimeouts.push(options.timeoutMs);
+        }
         return argv[1] === "inspect"
           ? commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) })
           : commandResult();
@@ -1547,6 +1999,7 @@ describe("Crabbox worker provider", () => {
             "--json",
           ],
         ]);
+        expect(heartbeatTimeouts).toEqual([timeoutMs]);
 
         await vi.advanceTimersByTimeAsync(intervalMs - 1);
         expect(heartbeatCalls()).toHaveLength(1);
@@ -1636,7 +2089,7 @@ describe("Crabbox worker provider", () => {
 
       expect(calls.filter((argv) => argv[1] === "heartbeat")).toHaveLength(1);
       expect(warnings).toEqual([
-        `Crabbox heartbeat is unavailable for worker lease ${LEASE_ID}; upgrade Crabbox to a release that includes \`crabbox heartbeat\` (added after v0.43.0); cloud worker machines may be reaped after 60m of coordinator-idle time`,
+        `Crabbox heartbeat is unavailable for worker lease ${LEASE_ID}; upgrade Crabbox to v0.44.0 or newer for \`crabbox heartbeat\`; cloud worker machines may be reaped after 60m of coordinator-idle time`,
       ]);
     } finally {
       await provider.destroy(lease);

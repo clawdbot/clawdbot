@@ -128,32 +128,129 @@ openclaw-debug-overlay {
   padding: 6px 8px;
 }
 
-.debug-overlay__metrics {
+.debug-overlay__vitals {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
-  margin: 0;
 }
 
-.debug-overlay__metrics > div {
+.debug-overlay__vital {
+  position: relative;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
-  padding: 8px;
+  overflow: hidden;
+  padding: 8px 10px 0;
   background: var(--bg-hover);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  /* currentColor drives every chart part; degraded flips one token below. */
+  color: var(--accent-2);
 }
 
-.debug-overlay__metrics dt {
+.debug-overlay__vital[data-degraded] {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+}
+
+.debug-overlay__head {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.debug-vital__label {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  text-transform: uppercase;
+}
+
+.debug-vital__sub {
   overflow: hidden;
   color: var(--muted);
   font-size: 10px;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.debug-overlay__metrics dd {
-  margin: 3px 0 0;
-  font-size: 12px;
+.debug-vital__value {
+  margin: 3px 0 2px;
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.debug-vital__age {
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.debug-vital__chart {
+  position: relative;
+  margin: auto -10px 0;
+}
+
+.debug-vital__chart svg {
+  display: block;
+  width: 100%;
+  height: 40px;
+}
+
+.debug-vital__chart polyline {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 4px color-mix(in srgb, currentColor 45%, transparent));
+}
+
+.debug-vital__hairline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in srgb, currentColor 40%, transparent);
+  pointer-events: none;
+}
+
+.debug-vital__dot {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  background: currentColor;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.debug-vital__dot--now {
+  box-shadow: 0 0 6px 1px color-mix(in srgb, currentColor 60%, transparent);
+  animation: debug-vital-pulse 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .debug-vital__dot--now {
+    animation: none;
+  }
+}
+
+@keyframes debug-vital-pulse {
+  50% {
+    box-shadow: 0 0 2px 0 color-mix(in srgb, currentColor 30%, transparent);
+  }
+}
+
+.debug-overlay__vitals-footer {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 10px;
+  text-align: right;
 }
 
 .debug-overlay__count,
@@ -196,7 +293,7 @@ openclaw-debug-overlay {
     max-height: calc(100vh - 16px);
   }
 
-  .debug-overlay__metrics {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .debug-overlay__vitals {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

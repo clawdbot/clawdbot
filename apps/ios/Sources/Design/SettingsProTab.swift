@@ -38,7 +38,6 @@ struct SettingsProTab: View {
     @AppStorage("gateway.manual.port") var manualGatewayPort: Int = 18789
     @AppStorage("gateway.manual.tls") var manualGatewayTLS: Bool = true
     @AppStorage("gateway.discovery.debugLogs") var discoveryDebugLogsEnabled: Bool = false
-    @AppStorage("canvas.debugStatusEnabled") var canvasDebugStatusEnabled: Bool = false
     @AppStorage("gateway.setupCode") var setupCode: String = ""
     @AppStorage("gateway.onboardingComplete") var onboardingComplete: Bool = false
     @AppStorage("gateway.hasConnectedOnce") var hasConnectedOnce: Bool = false

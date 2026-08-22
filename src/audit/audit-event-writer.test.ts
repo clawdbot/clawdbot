@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
@@ -459,8 +459,13 @@ describe("audit event writer", () => {
     const { path } = openOpenClawStateDatabase(database);
     const contender = new DatabaseSync(path);
     contender.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    let fakeTimersActive = false;
 
     try {
+      vi.useFakeTimers({
+        toFake: ["setImmediate", "clearImmediate", "setTimeout", "clearTimeout"],
+      });
+      fakeTimersActive = true;
       expect(
         writer.record({
           ...input(),
@@ -468,14 +473,28 @@ describe("audit event writer", () => {
           runId: "sustained-contention",
         }),
       ).toBe(true);
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 1_750);
-      });
+      await vi.advanceTimersByTimeAsync(1_750);
       expect(contentions).toEqual(["audit event persistence delayed by SQLite lock contention"]);
     } finally {
-      contender.exec("ROLLBACK");
-      contender.close();
-      await writer.stop();
+      try {
+        try {
+          contender.exec("ROLLBACK");
+        } finally {
+          contender.close();
+        }
+      } finally {
+        try {
+          const stopPromise = writer.stop();
+          if (fakeTimersActive) {
+            await vi.advanceTimersToNextTimerAsync();
+          }
+          await stopPromise;
+        } finally {
+          if (fakeTimersActive) {
+            vi.useRealTimers();
+          }
+        }
+      }
     }
 
     expect(errors).toEqual([]);

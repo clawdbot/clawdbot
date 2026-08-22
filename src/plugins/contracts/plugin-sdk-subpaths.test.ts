@@ -776,7 +776,10 @@ describe("plugin-sdk subpath exports", () => {
     });
     expectSourceContract("memory-core-host-runtime-core", {
       mentions: ["SILENT_REPLY_TOKEN", "resolveMemorySearchConfig", "MemoryPluginRuntime"],
-      omits: ['export * from "../../packages/memory-host-sdk/src/runtime-core.js";'],
+      omits: [
+        'export * from "../../packages/memory-host-sdk/src/runtime-core.js";',
+        "recordMemoryArtifactWriteProvenance",
+      ],
     });
     expectSourceContract("memory-core-host-runtime-cli", {
       mentions: ["defaultRuntime", "withManager", "withProgressTotals"],
@@ -1255,7 +1258,11 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceMentions("setup-tools", ["formatCliCommand", "detectBinary", "formatDocsLink"]);
     expectSourceMentions("lazy-runtime", ["createLazyRuntimeSurface", "createLazyRuntimeModule"]);
     expectSourceMentions("agent-harness", ["./agent-harness-runtime.js"]);
-    expectSourceMentions("agent-harness-runtime", ["AgentHarness", "EmbeddedAgentCompactResult"]);
+    expectSourceMentions("agent-harness-runtime", [
+      "AgentHarness",
+      "EmbeddedAgentCompactResult",
+      "agentHarnessStructuredInput",
+    ]);
     expectSourceOmitsSnippet("agent-runtime", "./sglang.js");
     expectSourceOmitsSnippet("agent-runtime", "./vllm.js");
     expectSourceOmitsSnippet("agent-runtime", "../../extensions/");

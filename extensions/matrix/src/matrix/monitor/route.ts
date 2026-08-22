@@ -6,7 +6,7 @@ import {
   deriveLastRoutePolicy,
   resolveAgentIdFromSessionKey,
 } from "openclaw/plugin-sdk/routing";
-import { getSessionBindingService } from "openclaw/plugin-sdk/session-binding-runtime";
+import { inspectSessionBindingByConversation } from "openclaw/plugin-sdk/session-binding-runtime";
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixThreadSessionKeys } from "./threads.js";
 
@@ -53,6 +53,7 @@ export function resolveMatrixInboundRoute(params: {
 }): {
   route: MatrixResolvedRoute;
   configuredBinding: ReturnType<typeof resolveConfiguredAcpBindingRecord>;
+  bindingOwnerAvailable: boolean;
   runtimeBindingId: string | null;
 } {
   const baseRoute = params.resolveAgentRoute({
@@ -74,13 +75,15 @@ export function resolveMatrixInboundRoute(params: {
   });
   const bindingConversationId = params.threadId ?? params.roomId;
   const bindingParentConversationId = params.threadId ? params.roomId : undefined;
-  const sessionBindingService = getSessionBindingService();
-  const runtimeBinding = sessionBindingService.resolveByConversation({
+  const bindingRef = {
     channel: "matrix",
     accountId: params.accountId,
     conversationId: bindingConversationId,
     parentConversationId: bindingParentConversationId,
-  });
+  };
+  const bindingInspection = inspectSessionBindingByConversation(bindingRef);
+  const runtimeBinding =
+    bindingInspection.status === "available" ? bindingInspection.binding : null;
   const boundSessionKey = runtimeBinding?.targetSessionKey?.trim();
 
   if (runtimeBinding && boundSessionKey) {
@@ -96,6 +99,7 @@ export function resolveMatrixInboundRoute(params: {
         matchedBy: "binding.channel",
       },
       configuredBinding: null,
+      bindingOwnerAvailable: true,
       runtimeBindingId: runtimeBinding.bindingId,
     };
   }
@@ -168,13 +172,15 @@ export function resolveMatrixInboundRoute(params: {
         }),
       },
       configuredBinding,
-      runtimeBindingId: null,
+      bindingOwnerAvailable: bindingInspection.status === "available",
+      runtimeBindingId: runtimeBinding?.bindingId ?? null,
     };
   }
 
   return {
     route: routeWithDmScope,
     configuredBinding,
-    runtimeBindingId: null,
+    bindingOwnerAvailable: bindingInspection.status === "available",
+    runtimeBindingId: runtimeBinding?.bindingId ?? null,
   };
 }

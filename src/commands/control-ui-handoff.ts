@@ -5,13 +5,12 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { resolveGatewayPort } from "../config/config.js";
 import type { GatewayTlsConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
-import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
-import { resolveGatewayAuth } from "../gateway/auth.js";
+import { resolveGatewayInteractiveSurfaceAuth } from "../gateway/auth-surface-resolution.js";
 import {
   CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM,
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
 } from "../gateway/control-ui-contract.js";
+import { createGatewayCredentialPlan } from "../gateway/credential-planner.js";
 import { CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS } from "../infra/control-ui-assets.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
 import { readResponseTextSnippet } from "../infra/http-body.js";
@@ -38,20 +37,17 @@ export async function resolveControlUiHandoffTarget(params: {
   const customBindHost = config.gateway?.customBindHost;
   const tlsConfig = config.gateway?.tls;
   const tlsEnabled = tlsConfig?.enabled === true;
-  const resolvedToken = await resolveGatewayAuthToken({ cfg: config, env, envFallback: "always" });
-  const resolvedAuth = resolveGatewayAuth({
-    authConfig: config.gateway?.auth,
+  const credentialPlan = createGatewayCredentialPlan({ config, env });
+  const resolvedAuth = await resolveGatewayInteractiveSurfaceAuth({
+    config,
     env,
-    tailscaleMode: config.gateway?.tailscale?.mode,
+    surface: "local",
   });
-  const passwordSecretRefConfigured = Boolean(
-    resolveSecretInputRef({
-      value: config.gateway?.auth?.password,
-      defaults: config.secrets?.defaults,
-    }).ref,
-  );
+  const authMode =
+    config.gateway?.auth?.mode ??
+    (credentialPlan.localPassword.value || credentialPlan.envPassword ? "password" : "token");
   const gatewayAuthHandoff =
-    resolvedAuth.mode === "password" && !passwordSecretRefConfigured
+    authMode === "password" && !credentialPlan.localPassword.hasSecretRef
       ? resolvedAuth.password
       : undefined;
 
@@ -96,10 +92,10 @@ export async function resolveControlUiHandoffTarget(params: {
   documentUrl.search = "";
   documentUrl.hash = "";
 
-  const token = resolvedToken.token ?? "";
+  const token = credentialPlan.localToken.value ?? credentialPlan.envToken ?? "";
   // Legacy JSON consumers still need the shared-token URL for their Gateway RPC;
   // browser delivery separately uses a single-use bootstrap and never this URL.
-  const includeTokenInUrl = Boolean(token) && !resolvedToken.secretRefConfigured;
+  const includeTokenInUrl = Boolean(token) && !credentialPlan.localToken.hasSecretRef;
   const dashboardUrl = includeTokenInUrl
     ? `${links.httpUrl}#token=${encodeURIComponent(token)}`
     : links.httpUrl;
@@ -109,7 +105,7 @@ export async function resolveControlUiHandoffTarget(params: {
     basePath,
     bind,
     links,
-    authMode: resolvedAuth.mode,
+    authMode,
     gatewayAuthHandoff,
     includeTokenInUrl,
     dashboardUrl,

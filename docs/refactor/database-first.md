@@ -1188,10 +1188,9 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   stay temp materializations because channel delivery still needs a file path;
   their expiry metadata is SQLite-owned without JSON sidecars.
 - Canvas managed documents now use shared SQLite `plugin_blob_entries` instead
-  of a default `state/canvas/documents` directory. The Canvas host serves those
-  blobs directly; local files are created only for explicit `host.root`
-  operator content or temporary materialization when a downstream media reader
-  requires a path.
+  of a default `state/canvas/documents` directory. The hosted document route
+  serves those blobs directly; local files are created only for temporary
+  materialization when a downstream media reader requires a path.
 - File Transfer audit decisions now use shared SQLite `plugin_state_entries`
   instead of the unbounded `audit/file-transfer.jsonl` runtime log. Doctor
   imports the legacy JSONL audit file into plugin state and removes the source

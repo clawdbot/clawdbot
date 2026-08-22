@@ -581,8 +581,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     agentHarnessId?: string;
     fallbackNotice?: FallbackNoticeState;
     contextTokens?: number;
-    /** Origin of the persisted context window; absent on legacy/unproven rows. */
-    contextTokensSource?: "runtime" | "runtime-configured" | "resolved";
+    /** Origin of the persisted context window; `resolved` is legacy/unverified. */
+    contextTokensSource?: "runtime" | "runtime-configured" | "resolved" | "resolved-v1";
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;
     compactionCheckpoints?: SessionCompactionCheckpoint[];

@@ -412,6 +412,7 @@ class CronPage extends OpenClawLightDomElement {
           jobsEnabledFilter: this.cron.cronJobsEnabledFilter,
           jobsScheduleKindFilter: this.cron.cronJobsScheduleKindFilter,
           jobsLastStatusFilter: this.cron.cronJobsLastStatusFilter,
+          jobsTriggerFilter: this.cron.cronJobsTriggerFilter,
           jobsSortBy: this.cron.cronJobsSortBy,
           jobsSortDir: this.cron.cronJobsSortDir,
           editingJob: this.cron.cronEditingJob,
@@ -475,6 +476,7 @@ class CronPage extends OpenClawLightDomElement {
               updateCronJobsFilter(cronState, {
                 cronJobsScheduleKindFilter: "all",
                 cronJobsLastStatusFilter: "all",
+                cronJobsTriggerFilter: "all",
                 cronJobsSortBy: "nextRunAtMs",
                 cronJobsSortDir: "asc",
               });

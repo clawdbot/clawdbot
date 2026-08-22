@@ -77,8 +77,14 @@ export function withPluginRuntimeGatewayRequestScope<T>(
 export function withPluginRuntimeGatewayContextResolver<T>(
   resolveGatewayContext: GatewayContextResolver,
   run: () => T,
+  options?: { inheritRequestScope?: boolean },
 ): T {
-  const current = pluginRuntimeGatewayRequestScope.getStore();
+  // Scheduler-owned work must not retain the request-local client or context
+  // that happened to exist when its timer was armed.
+  const current =
+    options?.inheritRequestScope === false
+      ? undefined
+      : pluginRuntimeGatewayRequestScope.getStore();
   const scoped: PluginRuntimeGatewayRequestScope = {
     ...current,
     isWebchatConnect: current?.isWebchatConnect ?? (() => false),

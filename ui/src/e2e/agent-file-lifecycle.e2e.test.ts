@@ -212,6 +212,74 @@ suite.define(() => {
     );
   });
 
+  it("refreshes the active file while preserving a dirty draft", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: [
+            "agents.files.get",
+            "agents.files.list",
+            "agents.files.set",
+            "agents.list",
+          ],
+          methodResponses: {
+            "agents.list": {
+              defaultId: "main",
+              mainKey: "main",
+              scope: "agent",
+              agents: [{ id: "main", name: "Main" }],
+            },
+            "agents.files.get": fileGetResponses("server revision 1"),
+            "agents.files.list": fileListResponses,
+          },
+          operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+        });
+
+        await page.goto(`${suite.server.baseUrl}settings/agents/main/files`);
+        const editor = page.locator(".agent-file-textarea");
+        const fileSection = page.locator(".settings-section").filter({
+          has: page.getByRole("heading", { name: "Core files" }),
+        });
+        const refresh = fileSection.getByRole("button", { name: "Refresh" });
+        const fileActions = page.locator(".agent-file-actions");
+        const reset = fileActions.getByRole("button", { name: "Reset" });
+        const save = fileActions.getByRole("button", { name: "Save" });
+        await expect.poll(() => editor.inputValue()).toBe("server revision 1");
+        expect(await gateway.getRequests("agents.files.get")).toHaveLength(1);
+
+        await gateway.setMethodResponse("agents.files.get", fileGetResponses("server revision 2"));
+        await refresh.click();
+        await expect
+          .poll(async () => (await gateway.getRequests("agents.files.get")).length)
+          .toBe(2);
+        await expect.poll(() => editor.inputValue()).toBe("server revision 2");
+        await expect.poll(() => editor.isEnabled()).toBe(true);
+        await capture(page, "04-refresh-adopts-authoritative-content.png");
+
+        await editor.fill("local dirty draft");
+        await gateway.setMethodResponse("agents.files.get", fileGetResponses("server revision 3"));
+        await refresh.click();
+        await expect
+          .poll(async () => (await gateway.getRequests("agents.files.get")).length)
+          .toBe(3);
+        await expect.poll(() => editor.inputValue()).toBe("local dirty draft");
+        await expect.poll(() => editor.isEnabled()).toBe(true);
+        await expect.poll(() => reset.isEnabled()).toBe(true);
+        await capture(page, "05-refresh-preserves-dirty-draft.png");
+        await reset.click();
+        await expect.poll(() => editor.inputValue()).toBe("server revision 3");
+        await expect.poll(() => reset.isDisabled()).toBe(true);
+        await expect.poll(() => save.isDisabled()).toBe(true);
+        await capture(page, "06-reset-uses-refreshed-authoritative-content.png");
+      },
+    );
+  });
+
   it("reads and saves the selected agent workspace through an isolated Gateway", async () => {
     const port = await getFreePort();
     const state = await createOpenClawTestState({
@@ -293,7 +361,7 @@ suite.define(() => {
           await expect
             .poll(() => readFile(path.join(mainWorkspace, "AGENTS.md"), "utf8"))
             .toBe("# Saved through real Gateway\n");
-          await capture(page, "04-real-gateway-main-save.png");
+          await capture(page, "07-real-gateway-main-save.png");
         },
       );
     } finally {

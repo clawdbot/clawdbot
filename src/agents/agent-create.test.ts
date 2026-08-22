@@ -256,6 +256,27 @@ describe("createAgent", () => {
     });
   });
 
+  it("creates main when an unarmed scan proves every legacy store clean", async () => {
+    mocks.config = { agents: { entries: { robby: { id: "robby" } } } };
+    mocks.migrateLegacyMainSessionKeys.mockResolvedValueOnce({
+      armed: false,
+      changes: [],
+      complete: true,
+      ledgerComplete: false,
+      legacyAgentId: "main",
+      mainKey: "main",
+      outcomes: [{ kind: "no-legacy-rows", detail: "no configured owner" }],
+      warnings: [],
+    });
+
+    await expect(createAgent({ name: "main" })).resolves.toMatchObject({
+      status: "created",
+      agentId: "main",
+    });
+    expect(mocks.resolveSharedAuthStoreOwnership).toHaveBeenCalledOnce();
+    expect(mocks.transformConfigFileWithRetry).toHaveBeenCalledOnce();
+  });
+
   it("defaults the workspace through the agent-scoped resolver", async () => {
     const result = await createAgent({ name: "Researcher" });
 

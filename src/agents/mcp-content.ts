@@ -1,8 +1,53 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentToolResult } from "./runtime/index.js";
+import { isToolResultError } from "./tool-result-error.js";
+import { toToolSearchJsonSafe } from "./tool-search-json.js";
 
 type McpAgentContentBlock = AgentToolResult<unknown>["content"][number];
+
+// Guest values stay private; snapshots move ownership until the bridge consumes them.
+const mcpCodeModeGuestResults = new WeakMap<AgentToolResult<unknown>, unknown>();
+
+export function setMcpCodeModeGuestResult(
+  result: AgentToolResult<unknown>,
+  value: unknown,
+): AgentToolResult<unknown> {
+  mcpCodeModeGuestResults.set(result, value);
+  return result;
+}
+
+export function setMcpCodeModeGuestResultFromAgentResult(
+  result: AgentToolResult<unknown>,
+): AgentToolResult<unknown> {
+  return setMcpCodeModeGuestResult(result, {
+    content: result.content,
+    isError: isToolResultError(result),
+  });
+}
+
+export function transferMcpCodeModeGuestResult(
+  source: AgentToolResult<unknown>,
+  target: AgentToolResult<unknown>,
+): AgentToolResult<unknown> {
+  if (mcpCodeModeGuestResults.has(source)) {
+    mcpCodeModeGuestResults.set(target, mcpCodeModeGuestResults.get(source));
+    mcpCodeModeGuestResults.delete(source);
+  }
+  return target;
+}
+
+export function consumeMcpCodeModeGuestResult(result: AgentToolResult<unknown>): unknown {
+  const value = mcpCodeModeGuestResults.get(result);
+  if (!mcpCodeModeGuestResults.delete(result)) {
+    return undefined;
+  }
+  const safe = toToolSearchJsonSafe(value);
+  if (isRecord(safe)) {
+    delete safe._meta;
+  }
+  return safe;
+}
 
 function stringifyMcpContent(value: unknown): string {
   try {
@@ -87,7 +132,7 @@ export function projectMcpCallToolResult(
 ): AgentToolResult<unknown> {
   const isError = result.isError === true;
   const content = projectMcpCallToolResultContent(result);
-  return {
+  const projected: AgentToolResult<unknown> = {
     content:
       content.length > 0
         ? content
@@ -107,4 +152,11 @@ export function projectMcpCallToolResult(
       ...(isError ? { status: "error" } : {}),
     },
   };
+  return setMcpCodeModeGuestResult(projected, {
+    content: Array.isArray(result.content) ? result.content : [],
+    ...(result.structuredContent !== undefined
+      ? { structuredContent: result.structuredContent }
+      : {}),
+    ...(typeof result.isError === "boolean" ? { isError: result.isError } : {}),
+  });
 }

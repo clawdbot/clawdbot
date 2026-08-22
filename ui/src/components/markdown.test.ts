@@ -445,13 +445,35 @@ PY
       expect(expand?.getAttribute("aria-label")).toBe("Show 1 hidden line");
     });
 
-    it("collapses on line count alone, not on JSON detection", () => {
+    it.each(["text", "md", "markdown", "TEXT", "Markdown title=notes"])(
+      "keeps long %s fences fully visible",
+      (info) => {
+        const fragment = htmlFragment(
+          toSanitizedMarkdownHtml(`\`\`\`${info}\n${"prose line\n".repeat(20)}\`\`\``, {
+            codeBlockInteraction: "interactive",
+          }),
+        );
+
+        expect(fragment.querySelector(".code-block-wrapper.is-collapsible")).toBeNull();
+        expect(fragment.querySelector(".code-block-expand")).toBeNull();
+        expect(fragment.querySelector("pre code")?.textContent).toContain("prose line");
+      },
+    );
+
+    it.each([
+      { info: "json", content: '"value",\n'.repeat(20) },
+      { info: "bash", content: "echo hi\n".repeat(20) },
+      { info: "", content: "unlabeled line\n".repeat(20) },
+    ])("keeps long $info fences collapsible", ({ info, content }) => {
       const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(`\`\`\`bash\n${"echo hi\n".repeat(20)}\`\`\``, {
+        toSanitizedMarkdownHtml(`\`\`\`${info}\n${content}\`\`\``, {
           codeBlockInteraction: "interactive",
         }),
       );
 
+      expect(fragment.querySelector(".code-block-wrapper.is-collapsible")).toBeInstanceOf(
+        HTMLDivElement,
+      );
       expect(fragment.querySelector(".code-block-expand")?.textContent).toContain(
         "13 hidden lines",
       );

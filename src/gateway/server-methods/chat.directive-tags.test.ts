@@ -554,21 +554,26 @@ vi.mock("../../plugins/hook-runner-global.js", () => {
   };
 });
 
-vi.mock("../../sessions/transcript-events.js", () => ({
-  emitSessionTranscriptUpdate: vi.fn(
-    (update: {
-      sessionFile?: string;
-      target?: { agentId: string; sessionId: string; sessionKey: string };
-      agentId?: string;
-      sessionId?: string;
-      sessionKey?: string;
-      message?: unknown;
-      messageId?: string;
-    }) => {
-      mockState.emittedTranscriptUpdates.push(update);
-    },
-  ),
-}));
+vi.mock("../../sessions/transcript-events.js", async (importOriginal) => {
+  const { resolveTerminalAssistantTranscriptRunId } =
+    await importOriginal<typeof import("../../sessions/transcript-events.js")>();
+  return {
+    resolveTerminalAssistantTranscriptRunId,
+    emitSessionTranscriptUpdate: vi.fn(
+      (update: {
+        sessionFile?: string;
+        target?: { agentId: string; sessionId: string; sessionKey: string };
+        agentId?: string;
+        sessionId?: string;
+        sessionKey?: string;
+        message?: unknown;
+        messageId?: string;
+      }) => {
+        mockState.emittedTranscriptUpdates.push(update);
+      },
+    ),
+  };
+});
 
 vi.mock("../../agents/sandbox/context.js", async () => {
   const original = await vi.importActual<typeof import("../../agents/sandbox/context.js")>(
@@ -3353,7 +3358,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       });
 
       const messages = await readActiveAssistantTranscriptMessages();
-      expect(messages).toHaveLength(2);
       expect(messages.map((message) => message.idempotencyKey)).toEqual([
         "older-distinct-assistant",
         "runtime-owned-assistant",

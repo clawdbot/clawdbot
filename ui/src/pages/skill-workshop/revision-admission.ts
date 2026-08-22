@@ -1,3 +1,4 @@
+import { readSkillProposalRevisionChangedError } from "@openclaw/gateway-protocol";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type {
   SkillWorkshopRevisionAdmissionBinding,
@@ -13,7 +14,7 @@ export async function requestSkillWorkshopRevisionAdmission(params: {
   materialize: (
     binding: SkillWorkshopRevisionAdmissionBinding,
   ) => SkillWorkshopRevisionAdmissionEntry | null;
-}): Promise<{ sessionKey: string }> {
+}) {
   const source = params.context.gateway.snapshot;
   const client = source.client;
   if (!client) {
@@ -56,20 +57,31 @@ export async function requestSkillWorkshopRevisionAdmission(params: {
   if (!target) {
     throw new Error("Revision request was interrupted before admission.");
   }
-  const result = await client.request<{
-    status: "started" | "in_flight" | "ok" | "timeout" | "error";
-  }>("skills.proposals.requestRevision", {
-    agentId: normalizeAgentId(entry.proposalOriginAgentId ?? entry.proposalAgentId),
-    targetAgentId: target.targetAgentId,
-    proposalId: entry.proposalId,
-    expectedRevisionHash: entry.expectedRevisionHash,
-    instructions: entry.instructions,
-    sessionKey: target.sessionKey,
-    ...(target.sessionId ? { sessionId: target.sessionId } : {}),
-    idempotencyKey: entry.idempotencyKey,
-  });
+  const result = await client
+    .request<{ status: "started" | "in_flight" | "ok" | "timeout" | "error" }>(
+      "skills.proposals.requestRevision",
+      {
+        agentId: normalizeAgentId(entry.proposalOriginAgentId ?? entry.proposalAgentId),
+        targetAgentId: target.targetAgentId,
+        proposalId: entry.proposalId,
+        expectedRevisionHash: entry.expectedRevisionHash,
+        instructions: entry.instructions,
+        sessionKey: target.sessionKey,
+        ...(target.sessionId ? { sessionId: target.sessionId } : {}),
+        idempotencyKey: entry.idempotencyKey,
+      },
+    )
+    .catch((error: unknown) => {
+      if (readSkillProposalRevisionChangedError(error)) {
+        return { status: "revision-changed" as const };
+      }
+      throw error;
+    });
+  if (result.status === "revision-changed") {
+    return result;
+  }
   if (result.status !== "started" && result.status !== "in_flight" && result.status !== "ok") {
     throw new Error(`Gateway returned ${result.status} before admitting the revision request.`);
   }
-  return { sessionKey: target.sessionKey };
+  return { sessionKey: target.sessionKey, status: "admitted" as const };
 }

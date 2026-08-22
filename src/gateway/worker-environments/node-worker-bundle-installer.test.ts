@@ -57,6 +57,7 @@ describe("Gateway node worker bundle installer", () => {
       }),
     }));
     const transport: NodeWorkerSupervisorTransport = {
+      hasCurrentRunner: () => false,
       listCurrentNodes: async () => [node],
       isCurrent: (candidate) => candidate === node,
       invoke,
@@ -90,6 +91,7 @@ describe("Gateway node worker bundle installer", () => {
       generateToken: () => "B".repeat(43),
     });
     const transport: NodeWorkerSupervisorTransport = {
+      hasCurrentRunner: () => false,
       listCurrentNodes: async () => [node],
       isCurrent: () => true,
       invoke: async () => ({
@@ -122,6 +124,7 @@ describe("Gateway node worker bundle installer", () => {
       payloadJSON: JSON.stringify((request.params as { build: typeof artifact }).build),
     }));
     const transport: NodeWorkerSupervisorTransport = {
+      hasCurrentRunner: () => false,
       listCurrentNodes: async () => [advertising, legacy],
       isCurrent: () => true,
       invoke,

@@ -97,8 +97,11 @@ suite.define(() => {
       const actionOnlyLink = actionOnlyRow.locator(".sidebar-recent-session__link");
       const actionOnlyPin = actionOnlyRow.getByRole("button", { name: "Pin session" });
       await expect
+        .poll(() => actionOnlyRow.getAttribute("class"))
+        .toContain("sidebar-recent-session--single-line");
+      await expect
         .poll(() => actionOnlyLink.evaluate((element) => getComputedStyle(element).paddingRight))
-        .toBe("4px");
+        .toBe("2px");
       const restingTextBounds = await actionOnlyText.boundingBox();
 
       await actionOnlyRow.hover();
@@ -142,7 +145,10 @@ suite.define(() => {
       if (!nameBounds || !pinBounds || !menuBounds) {
         throw new Error("Expected visible hovered action geometry");
       }
-      expect(nameBounds.y + nameBounds.height / 2).toBeLessThan(pinBounds.y + pinBounds.height / 2);
+      expect(nameBounds.y + nameBounds.height / 2).toBeCloseTo(
+        pinBounds.y + pinBounds.height / 2,
+        1,
+      );
       expect(pinBounds.x + pinBounds.width).toBeLessThanOrEqual(menuBounds.x);
 
       await page.mouse.move(0, 0);
@@ -159,8 +165,9 @@ suite.define(() => {
       if (!focusedNameBounds || !focusedPinBounds || !focusedMenuBounds) {
         throw new Error("Expected visible focused action geometry");
       }
-      expect(focusedNameBounds.y + focusedNameBounds.height / 2).toBeLessThan(
+      expect(focusedNameBounds.y + focusedNameBounds.height / 2).toBeCloseTo(
         focusedPinBounds.y + focusedPinBounds.height / 2,
+        1,
       );
       expect(focusedPinBounds.x + focusedPinBounds.width).toBeLessThanOrEqual(focusedMenuBounds.x);
     } finally {
@@ -356,21 +363,43 @@ suite.define(() => {
         .poll(() => state.locator("[data-session-pr-state='open']").isVisible())
         .toBe(true);
       await expect.poll(() => state.locator(".session-run-spinner").isVisible()).toBe(true);
-      await expect.poll(() => state.locator(".session-unread-dot").isVisible()).toBe(true);
-      const [endcapBounds, openPullRequestBounds, spinnerBounds, unreadBounds] = await Promise.all([
-        row.locator(".sidebar-recent-session__details-endcap").boundingBox(),
-        state.locator("[data-session-pr-state='open'] svg").boundingBox(),
-        state.locator(".session-run-spinner").boundingBox(),
-        state.locator(".session-unread-dot").boundingBox(),
-      ]);
-      if (!endcapBounds || !openPullRequestBounds || !spinnerBounds || !unreadBounds) {
-        throw new Error("Expected visible combined session state geometry");
-      }
-      for (const iconBounds of [openPullRequestBounds, spinnerBounds, unreadBounds]) {
-        expect(iconBounds.x).toBeGreaterThanOrEqual(endcapBounds.x);
-        expect(iconBounds.x + iconBounds.width).toBeLessThanOrEqual(
-          endcapBounds.x + endcapBounds.width,
+      await expect.poll(() => state.locator(".session-unread-dot").count()).toBe(0);
+      const stateLayout = await row.evaluate((element) => {
+        const endcap = element.querySelector<HTMLElement>(
+          ".sidebar-recent-session__details-endcap",
         );
+        const atoms = Array.from(
+          element.querySelectorAll<HTMLElement>(
+            ".session-row-state :is([data-session-pr-state='open'], .session-run-spinner)",
+          ),
+        );
+        if (!endcap || atoms.length !== 2) {
+          throw new Error("Expected visible session state geometry");
+        }
+        const layoutLeft = (node: HTMLElement) => {
+          let left = 0;
+          for (
+            let current: HTMLElement | null = node;
+            current;
+            current = current.offsetParent as HTMLElement | null
+          ) {
+            left += current.offsetLeft;
+          }
+          return left;
+        };
+        const endcapLeft = layoutLeft(endcap);
+        return {
+          endcapLeft,
+          endcapRight: endcapLeft + endcap.offsetWidth,
+          atoms: atoms.map((atom) => ({
+            left: layoutLeft(atom),
+            right: layoutLeft(atom) + atom.offsetWidth,
+          })),
+        };
+      });
+      for (const atom of stateLayout.atoms) {
+        expect(atom.left).toBeGreaterThanOrEqual(stateLayout.endcapLeft);
+        expect(atom.right).toBeLessThanOrEqual(stateLayout.endcapRight);
       }
       const link = row.locator(".sidebar-recent-session__link");
       const rowText = row.locator(".sidebar-recent-session__text");
@@ -378,7 +407,7 @@ suite.define(() => {
       const menu = row.getByRole("button", { name: "Open session menu" });
       await expect
         .poll(() => link.evaluate((element) => getComputedStyle(element).paddingRight))
-        .toBe("4px");
+        .toBe("2px");
 
       const [restingTextBounds, restingStateBounds, restingPinBounds, restingMenuBounds] =
         await Promise.all([

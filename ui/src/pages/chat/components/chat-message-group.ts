@@ -91,7 +91,7 @@ type RenderMessageGroupOptions = {
   userAvatar?: string | null;
   showAvatarGutter?: boolean;
   showAssistantAvatar?: boolean;
-  basePath?: string;
+  resourceBasePath?: string;
   localMediaPreviewRoots?: readonly string[];
   assistantAttachmentAuthToken?: string | null;
   resolveArtifactDownload?: ArtifactDownloadResolver;
@@ -172,7 +172,7 @@ function buildGroupedMessageRenderOptions(
     onRequestOpenImage: opts.onRequestOpenImage,
     onOpenImage: opts.onOpenImage,
     canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
-    basePath: opts.basePath,
+    resourceBasePath: opts.resourceBasePath,
     localMediaPreviewRoots: opts.localMediaPreviewRoots,
     assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
     resolveArtifactDownload: opts.resolveArtifactDownload,
@@ -432,6 +432,21 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const hasUserFooterActions =
     normalizedRole === "user" &&
     Boolean((footerActionDetails?.replyTarget && opts.onReply) || opts.onRewind);
+  const userFooterActions = hasUserFooterActions
+    ? html`
+        <div
+          class="chat-group-footer-actions"
+          data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
+        >
+          ${footerActionDetails?.replyTarget && opts.onReply
+            ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
+            : nothing}
+          ${opts.onRewind
+            ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled))
+            : nothing}
+        </div>
+      `
+    : nothing;
 
   // Attributed (logged-in) senders tint their bubbles with the same stable
   // identity hue as their avatar initials; CSS owns per-theme lightness so
@@ -464,7 +479,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               name: opts.userName ?? null,
               avatar: opts.userAvatar ?? null,
             },
-            opts.basePath,
+            opts.resourceBasePath,
             opts.assistantAttachmentAuthToken,
             group.sender,
           )
@@ -516,37 +531,25 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               : ""}"
           >
             <div class="chat-group-footer__meta">
-              ${hasUserFooterActions
-                ? html`
-                    <div
-                      class="chat-group-footer-actions"
-                      data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
-                    >
-                      ${footerActionDetails?.replyTarget && opts.onReply
-                        ? renderReplyButton(footerActionDetails.replyTarget, opts.onReply)
-                        : nothing}
-                      ${opts.onRewind
-                        ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled))
-                        : nothing}
-                    </div>
-                  `
-                : nothing}
+              ${isPeerGroup ? nothing : userFooterActions}
               ${normalizedRole === "user" && !showAvatarGutter
                 ? renderChatAuthorAvatar(group.sender)
                 : nothing}
               <span class="chat-sender-name">${who}</span>
               ${renderMessageMeta(group.timestamp, meta)}
             </div>
-            ${normalizedRole !== "user" && footerActionDetails
-              ? html`
-                  <div
-                    class="chat-group-footer-actions"
-                    data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
-                  >
-                    ${renderMessageActionButtons(footerActionDetails, opts)}
-                  </div>
-                `
-              : nothing}
+            ${isPeerGroup
+              ? userFooterActions
+              : normalizedRole !== "user" && footerActionDetails
+                ? html`
+                    <div
+                      class="chat-group-footer-actions"
+                      data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
+                    >
+                      ${renderMessageActionButtons(footerActionDetails, opts)}
+                    </div>
+                  `
+                : nothing}
           </div>`}
     </div>
   `;

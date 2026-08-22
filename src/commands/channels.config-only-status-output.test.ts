@@ -203,6 +203,16 @@ function requireReadOnlyPluginListCall(): unknown[] {
 }
 
 describe("config-only channels status output", () => {
+  it("guides operators when no channels are configured", async () => {
+    activeChannelPlugins.splice(0);
+
+    const output = await formatLocalStatusSummary({ channels: {} });
+
+    expect(output).toContain(
+      "- no configured chat channels (run `openclaw channels list --all` to see installable channels)",
+    );
+  });
+
   it("sanitizes channel and account display names in terminal output", async () => {
     const control = "\u001B]0;channels-status-injection\u0007";
     registerSingleTestPlugin(

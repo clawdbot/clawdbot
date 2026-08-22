@@ -70,12 +70,9 @@ suite.define(() => {
         const menuTrigger = activePane.getByRole("button", {
           name: "Actions for Terminal continuation",
         });
-        await menuTrigger.click();
+        await menuTrigger.press("Enter");
         const dropdown = menuTrigger.locator("xpath=ancestor::wa-dropdown");
         const action = dropdown.getByText("Continue in terminal…", { exact: true });
-        expect(await dropdown.evaluate((element) => (element as { open?: boolean }).open)).toBe(
-          true,
-        );
         await action.waitFor({ state: "visible" });
         await page.screenshot({ path: path.join(artifactDir, "01-menu.png"), fullPage: true });
         await action.click();
@@ -97,7 +94,7 @@ suite.define(() => {
         await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(command);
 
         await dialog.getByRole("button", { name: "Close" }).click();
-        await menuTrigger.click();
+        await menuTrigger.press("Enter");
         await action.click();
         await dialog.waitFor({ state: "visible" });
         const socketCount = await gateway.getSocketCount();

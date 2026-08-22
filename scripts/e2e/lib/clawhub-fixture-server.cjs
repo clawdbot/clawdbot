@@ -699,6 +699,7 @@ profiles["catalog-search"] = {
     skills: [
       {
         score: 99,
+        source: "clawhub",
         slug: "calendar-skill",
         ownerHandle: "acme",
         displayName: "Calendar Skill",

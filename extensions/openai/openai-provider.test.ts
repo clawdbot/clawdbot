@@ -1766,6 +1766,74 @@ describe("buildOpenAIProvider", () => {
     ).toEqual({ effort: "high", transport: "sse" });
   });
 
+  it("delegates an unlisted first-party model to its explicitly selected Codex runtime", () => {
+    const provider = buildOpenAIProvider();
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-future",
+      modelRegistry: { find: () => null },
+      agentRuntimeId: "codex",
+    } as never);
+
+    expect(model).toMatchObject({
+      provider: "openai",
+      id: "gpt-future",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+    });
+    expect(
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openai",
+          modelId: "gpt-future",
+          agentRuntime: "codex",
+          api: model?.api,
+          compat: model?.compat,
+        } as never)
+        ?.levels.map((level) => level.id),
+    ).toContain("max");
+    expect(
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openai",
+          modelId: "gpt-future",
+          agentRuntime: "codex",
+        } as never)
+        ?.levels.map((level) => level.id),
+    ).toEqual(expect.arrayContaining(["xhigh", "max"]));
+  });
+
+  it("does not invent an unlisted model for authored Platform credentials", () => {
+    const provider = buildOpenAIProvider();
+
+    expect(
+      provider.resolveDynamicModel?.({
+        provider: "openai",
+        modelId: "gpt-future",
+        modelRegistry: { find: () => null },
+        agentRuntimeId: "codex",
+        authProfileId: "openai:platform",
+        authProfileMode: "api_key",
+        providerConfig: {
+          auth: "api-key",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+        },
+      } as never),
+    ).toBeUndefined();
+    expect(
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openai",
+          modelId: "gpt-future",
+          agentRuntime: "codex",
+          api: "openai-responses",
+        } as never)
+        ?.levels.map((level) => level.id),
+    ).not.toContain("max");
+  });
+
   it("restores gpt-5.3-codex-spark only through ChatGPT/Codex OAuth routing", () => {
     const provider = buildOpenAIProvider();
 
@@ -1929,33 +1997,12 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
-  it.each([
-    {
-      id: "gpt-5.6",
-      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
-      thinkingLevelMap: { off: "none", xhigh: "xhigh", max: "max" },
-    },
-    {
-      id: "gpt-5.6-sol",
-      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
-      thinkingLevelMap: { off: "none", xhigh: "xhigh", max: "max" },
-    },
-    {
-      id: "gpt-5.6-terra",
-      cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 },
-      thinkingLevelMap: { off: "none", xhigh: "xhigh", max: "max" },
-    },
-    {
-      id: "gpt-5.6-luna",
-      cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
-      thinkingLevelMap: { off: "none", xhigh: "xhigh", max: "max" },
-    },
-  ])("resolves $id locally with direct API metadata", ({ id, cost, thinkingLevelMap }) => {
+  it("synthesizes the gpt-5.6 alias from the nearest direct API template", () => {
     const provider = buildOpenAIProvider();
 
     const model = provider.resolveDynamicModel?.({
       provider: "openai",
-      modelId: id,
+      modelId: "gpt-5.6",
       modelRegistry: {
         find: (_provider: string, templateId: string) =>
           templateId === "gpt-5.5"
@@ -1977,16 +2024,57 @@ describe("buildOpenAIProvider", () => {
     } as never);
 
     expectFields(model, {
-      id,
+      id: "gpt-5.6",
       provider: "openai",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
       contextWindow: 1_050_000,
       contextTokens: 272_000,
       maxTokens: 128_000,
-      cost,
-      thinkingLevelMap,
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+      thinkingLevelMap: { off: "none", xhigh: "xhigh", max: "max" },
     });
+  });
+
+  it.each([
+    {
+      id: "gpt-5.6-sol",
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+    },
+    {
+      id: "gpt-5.6-terra",
+      cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 },
+    },
+    {
+      id: "gpt-5.6-luna",
+      cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
+    },
+  ])("preserves exact registry metadata for $id", ({ id, cost }) => {
+    const provider = buildOpenAIProvider();
+    const exactModel = {
+      id,
+      name: id,
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      cost,
+      contextWindow: 1_050_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+      compat: { supportedReasoningEfforts: ["registry-exact"] },
+    };
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: id,
+      modelRegistry: {
+        find: (_provider: string, templateId: string) => (templateId === id ? exactModel : null),
+      } as never,
+    } as never);
+
+    expect(model).toBe(exactModel);
   });
 
   it("resolves gpt-5.5-pro locally", () => {

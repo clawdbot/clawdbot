@@ -15,11 +15,13 @@ const smokeEntryPath = path.join(repoRoot, "dist", "plugins", "build-smoke-entry
 assert.ok(fs.existsSync(smokeEntryPath), `missing build output: ${smokeEntryPath}`);
 
 const {
+  buildPluginRuntimeLoadOptions,
   clearPluginCommands,
   getPluginCommandSpecs,
   getPluginModuleLoaderStats,
   loadOpenClawPlugins,
   matchPluginCommand,
+  resolvePluginRuntimeLoadContext,
 } = await import(pathToFileURL(smokeEntryPath).href);
 
 assert.equal(typeof loadOpenClawPlugins, "function", "built loader export missing");
@@ -126,24 +128,28 @@ assert.equal(
 clearPluginCommands();
 
 const smsStatsBefore = getPluginModuleLoaderStats();
-const smsRegistry = loadOpenClawPlugins({
-  cache: false,
-  preferBuiltPluginArtifacts: true,
-  workspaceDir: tempRoot,
-  env: {
-    ...process.env,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "dist-runtime", "extensions"),
-  },
-  config: {
-    plugins: {
-      enabled: true,
-      allow: ["sms"],
-      entries: {
-        sms: { enabled: true },
+// Prepared runtimes carry this context into late, plugin-scoped loads. Prove that the load-options
+// projection retains the built-artifact choice instead of reopening source transformation.
+const smsRegistry = loadOpenClawPlugins(
+  buildPluginRuntimeLoadOptions(
+    resolvePluginRuntimeLoadContext({
+      config: {
+        plugins: {
+          enabled: true,
+          allow: ["sms"],
+          entries: { sms: { enabled: true } },
+        },
       },
-    },
-  },
-});
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "extensions"),
+      },
+      preferBuiltPluginArtifacts: true,
+      workspaceDir: tempRoot,
+    }),
+    { cache: false, onlyPluginIds: ["sms"] },
+  ),
+);
 const smsRecord = smsRegistry.plugins.find((entry: { id: string }) => entry.id === "sms");
 assert.ok(smsRecord, "SMS plugin missing from registry");
 assert.equal(smsRecord.status, "loaded", smsRecord.error ?? "SMS plugin failed to load");

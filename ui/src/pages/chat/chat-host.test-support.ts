@@ -36,6 +36,7 @@ type RequestMock = ReturnType<typeof makeRequestMock>;
 type TestChatHost = Omit<ChatHost, "settings"> & {
   applySettings: (patch: Partial<UiSettings>) => void;
   basePath: string;
+  resourceBasePath: string;
   chatAvatarUrl: string | null;
   chatAvatarSource?: string | null;
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
@@ -134,6 +135,7 @@ export function makeChatHost(
     lastError: null,
     sessionKey: "agent:main",
     basePath: "",
+    resourceBasePath: "",
     hello: sessionMutationGatewayHello(),
     chatAvatarUrl: null,
     chatAvatarSource: null,

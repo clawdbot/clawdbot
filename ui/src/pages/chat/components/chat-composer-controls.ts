@@ -36,7 +36,7 @@ export type ChatRunControlsProps = {
   onDictationPointerDown?: (event: PointerEvent) => void;
   onPrimaryActionPointerDown?: (event: PointerEvent) => void;
   onAbort?: () => void;
-  onSend: () => void;
+  onSend: (submissionAction?: Event) => void;
   onToggleVoice?: () => void;
   onToggleCamera?: () => void;
   microphonePicker?: TemplateResult | typeof nothing;
@@ -222,8 +222,8 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const activeRunActionTooltip = queueSteerShortcutAvailable
     ? `${activeRunActionLabel} ⏎ · ${t("chat.queue.steer")} ${t("chat.sendShortcutModifierEnter")}`
     : activeRunActionLabel;
-  // Lit passes the click event to handlers; keep it out of the scalar send override.
-  const send = () => props.onSend();
+  // Preserve the click identity without mistaking it for a follow-up mode.
+  const send = (event: Event) => props.onSend(event);
   const abortAction = props.canAbort
     ? html`
         <openclaw-tooltip .content=${t("chat.runControls.stop")}>

@@ -23,7 +23,6 @@ import {
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
 import { applyChatAgentsList, syncSelectedSessionMessageSubscription } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
-import { moveChatPanePlacement, reclaimChatPanePlacement } from "./chat-pane-placement.ts";
 import {
   applySelectedSessionProjection,
   resolveAssistantAttachmentAuthToken,
@@ -70,7 +69,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         this.headerPlacementMovingKey = movingKey;
       }
     };
-    await moveChatPanePlacement({
+    const params = {
       client: scope.client,
       connectionGeneration: scope.generation,
       gatewaySnapshot: scope.context.gateway.snapshot,
@@ -78,10 +77,12 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       row,
       isCurrent: () => this.ownsHeaderOutcomeScope(scope),
       onMovingChange,
-      publishError: (error) => this.publishHeaderError(error, scope.headerOutcomeOwner),
-      refreshReplacement: (agentId) => scope.sessions.refreshReplacement(agentId),
+      publishError: (error: unknown) => this.publishHeaderError(error, scope.headerOutcomeOwner),
+      refreshReplacement: (agentId?: string | null) => scope.sessions.refreshReplacement(agentId),
       requestUpdate: () => this.requestUpdate(),
-    });
+    };
+    const { moveChatPanePlacement } = await import("./chat-pane-placement.runtime.ts");
+    await moveChatPanePlacement(params);
   }
 
   protected async reclaimHeaderPlacement(row: GatewaySessionRow): Promise<void> {
@@ -96,7 +97,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         this.headerPlacementReclaimingKey = reclaimingKey;
       }
     };
-    await reclaimChatPanePlacement({
+    const params = {
       client: scope.client,
       connectionGeneration: scope.generation,
       gatewaySnapshot: scope.context.gateway.snapshot,
@@ -104,10 +105,12 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       row,
       isCurrent: () => this.ownsHeaderOutcomeScope(scope),
       onReclaimingChange,
-      publishError: (error) => this.publishHeaderError(error, scope.headerOutcomeOwner),
-      refreshReplacement: (agentId) => scope.sessions.refreshReplacement(agentId),
+      publishError: (error: unknown) => this.publishHeaderError(error, scope.headerOutcomeOwner),
+      refreshReplacement: (agentId?: string | null) => scope.sessions.refreshReplacement(agentId),
       requestUpdate: () => this.requestUpdate(),
-    });
+    };
+    const { reclaimChatPanePlacement } = await import("./chat-pane-placement.runtime.ts");
+    await reclaimChatPanePlacement(params);
   }
 
   protected applySessionsState(stateValue: ApplicationContext["sessions"]["state"]) {

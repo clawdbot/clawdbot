@@ -912,6 +912,60 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.scopes).toEqual(expectedScopes);
   });
 
+  it.each([
+    [
+      "device dispatch",
+      "sessions.dispatch",
+      { key: "agent:main:thread", deviceId: "device-1" },
+      ["operator.write"],
+    ],
+    [
+      "profile dispatch",
+      "sessions.dispatch",
+      { key: "agent:main:thread", profileId: "development" },
+      ["operator.admin"],
+    ],
+    [
+      "gateway move",
+      "sessions.move",
+      {
+        key: "agent:main:thread",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "gateway" },
+      },
+      ["operator.write"],
+    ],
+    [
+      "device move",
+      "sessions.move",
+      {
+        key: "agent:main:thread",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "device", deviceId: "device-1" },
+      },
+      ["operator.write"],
+    ],
+    [
+      "profile move",
+      "sessions.move",
+      {
+        key: "agent:main:thread",
+        expected: { generation: 1, environmentId: "environment-1", ownerEpoch: 1 },
+        target: { kind: "profile", profileId: "development" },
+      },
+      ["operator.admin"],
+    ],
+  ] as const)(
+    "selects least-privilege CLI scopes for %s",
+    async (_name, method, params, scopes) => {
+      setLocalLoopbackGatewayConfig();
+
+      await callGatewayCli({ method, params });
+
+      expect(lastClientOptions?.scopes).toEqual(scopes);
+    },
+  );
+
   it("keeps legacy broad scopes for unclassified explicit CLI methods", async () => {
     setLocalLoopbackGatewayConfig();
 
@@ -1100,6 +1154,30 @@ describe("callGateway url resolution", () => {
       env: process.env,
     });
     expect(loadOriginDeviceTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("isolates the accepted-hello observer from the RPC", async () => {
+    let observedHello: HelloOk | undefined;
+    const onHelloOk = vi.fn((hello: HelloOk) => {
+      observedHello = hello;
+      throw new Error("observer failed");
+    });
+
+    await expect(
+      callGateway({
+        method: "status",
+        scopes: ["operator.read"],
+        sharedStateMode: "read-only",
+        preauthHandshakeTimeoutMs: 2_345,
+        onHelloOk,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(onHelloOk).toHaveBeenCalledOnce();
+    expect(observedHello).toEqual(makeStubGatewayHello());
+    expect(lastRequestOptions?.method).toBe("status");
+    expect(lastClientOptions?.sharedStateMode).toBe("read-only");
+    expect(lastClientOptions?.preauthHandshakeTimeoutMs).toBe(2_345);
   });
 
   it("uses stored device auth for the exact normalized url override origin", async () => {
@@ -1949,6 +2027,8 @@ describe("callGateway error details", () => {
         error = caught;
       });
       expect(isGatewayTransportError(error)).toBe(true);
+      expect(error).toMatchObject({ kind: "closed" });
+      expect(error).not.toHaveProperty("code");
       const message = (error as Error).message;
       expect(message).toContain(`Gateway not reachable at ws://127.0.0.1:18789 (${code}).`);
       expect(message).toContain(

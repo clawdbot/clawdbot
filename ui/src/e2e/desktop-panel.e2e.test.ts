@@ -289,6 +289,25 @@ suite.define(() => {
     });
   });
 
+  it("opens the selected desktop source in a focused window", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      await installMockGateway(page, {
+        featureMethods: ["environments.list", "desktop.observe"],
+        methodResponses: {
+          "sessions.list": sessionsList("local"),
+          "environments.list": { environments: [] },
+        },
+      });
+      await openDesktopPanel(page);
+      const popupPromise = page.waitForEvent("popup");
+      await page.getByRole("link", { name: "Open desktop in new window", exact: true }).click();
+      const popup = await popupPromise;
+      await popup.waitForLoadState("domcontentloaded");
+      expect(new URL(popup.url()).pathname).toBe("/focus/desktop");
+      await popup.close();
+    });
+  });
+
   it("keeps a right-docked desktop above bottom-docked panels", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       await installMockGateway(page, {

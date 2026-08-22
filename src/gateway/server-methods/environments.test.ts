@@ -44,6 +44,7 @@ type TestWorkerRecord = WorkerEnvironmentRecord &
 type TestWorkerService = {
   list: () => TestWorkerRecord[];
   get: (environmentId: string) => TestWorkerRecord | undefined;
+  supportsExecutionMode: (profileId: string, mode: "worker-turn" | "remote-exec") => boolean;
   listMachineOptions: (
     profileId: string,
   ) => Promise<
@@ -147,6 +148,7 @@ function workerService(overrides: Partial<TestWorkerService> = {}) {
   return {
     list: vi.fn(() => []),
     get: vi.fn(() => undefined),
+    supportsExecutionMode: vi.fn(() => false),
     listMachineOptions: vi.fn(async () => undefined),
     create: vi.fn(async () => workerRecord()),
     destroy: vi.fn(async () => workerRecord({ state: "destroyed" })),
@@ -320,6 +322,38 @@ describe("environment gateway methods", () => {
     });
   });
 
+  it("projects durable offline session-host identity through list and status without slots", async () => {
+    vi.mocked(listNodePairing).mockResolvedValue({
+      paired: [
+        {
+          nodeId: "node-offline-host",
+          displayName: "Offline Host",
+          commands: ["system.run"],
+          sessionHost: true,
+        },
+      ],
+    } as never);
+
+    const [, listPayload] = await callEnvironmentMethod(
+      "environments.list",
+      {},
+      { connectedNodes: [] },
+    );
+    const [, statusPayload] = await callEnvironmentMethod(
+      "environments.status",
+      { environmentId: "node:node-offline-host" },
+      { connectedNodes: [] },
+    );
+    const listed = (
+      listPayload as { environments: Array<Record<string, unknown>> }
+    ).environments.find((environment) => environment.id === "node:node-offline-host");
+
+    expect(listed).toMatchObject({ status: "unavailable", sessionHost: true });
+    expect(listed).not.toHaveProperty("workerSlots");
+    expect(statusPayload).toMatchObject({ status: "unavailable", sessionHost: true });
+    expect(statusPayload).not.toHaveProperty("workerSlots");
+  });
+
   it("projects the same exact slots and redacted bundle status through list and status", async () => {
     vi.mocked(collectNodeWorkerCapacityByNodeId).mockReturnValue(
       new Map([["node-live", { total: 2, available: 1 }]]),
@@ -462,7 +496,7 @@ describe("environment gateway methods", () => {
     expect(worker?.worker).not.toHaveProperty("keyRef");
   });
 
-  it("adds provider machine options to configured profile summaries", async () => {
+  it("adds known provider capabilities to configured profile summaries", async () => {
     const listMachineOptions = vi.fn(async (profileId: string) =>
       profileId === "aws"
         ? [
@@ -479,7 +513,14 @@ describe("environment gateway methods", () => {
     const [ok, payload] = await callEnvironmentMethod(
       "environments.list",
       {},
-      { service: workerService({ listMachineOptions }) },
+      {
+        service: workerService({
+          listMachineOptions,
+          supportsExecutionMode: vi.fn(
+            (profileId, mode) => profileId === "aws" && mode === "remote-exec",
+          ),
+        }),
+      },
     );
 
     expect(ok).toBe(true);
@@ -488,6 +529,7 @@ describe("environment gateway methods", () => {
         {
           id: "aws",
           providerId: "crabbox",
+          executionMode: "remote-exec",
           machines: [
             {
               id: "standard",
@@ -502,6 +544,11 @@ describe("environment gateway methods", () => {
       ],
     });
     expect(listMachineOptions.mock.calls).toEqual([["aws"], ["zeta"]]);
+    expect(
+      (payload as { profiles: Array<Record<string, unknown>> }).profiles.find(
+        (profile) => profile.id === "zeta",
+      ),
+    ).not.toHaveProperty("executionMode");
   });
 
   it.each([

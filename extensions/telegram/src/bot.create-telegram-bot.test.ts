@@ -3910,7 +3910,7 @@ describe("createTelegramBot", () => {
     expect(payload.MessageThreadId).toBe(77);
     expect(payload.OriginatingTo).toBe(`telegram:${chatId}:direct-topic:77`);
     expect(payload.SessionKey).toContain("agent:channel-topic-agent:");
-    expect(payload.SessionKey).toContain(":topic:77");
+    expect(payload.SessionKey).toContain(":direct-topic:77");
   });
 
   it.each([
@@ -4234,7 +4234,7 @@ describe("createTelegramBot", () => {
       accountId: "default",
       chatId: -1001234567890,
       isGroup: true,
-      resolvedThreadId: 99,
+      threadSpec: { id: 99, scope: "forum" },
     });
 
     expect(result.route.sessionKey).toContain(testCase.expectedSessionKeyFragment);
@@ -4701,19 +4701,18 @@ describe("createTelegramBot", () => {
       isForum: true,
       messageThreadId,
     });
-    const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
     const route = resolveTelegramConversationRoute({
       cfg: {},
       accountId: "default",
       chatId: -1001234567890,
       isGroup: true,
-      resolvedThreadId,
+      threadSpec,
     });
 
     const expectedGroupFrom = `telegram:group:-1001234567890:topic:${expectedTopicId}`;
     expect(route.route.sessionKey).toContain(expectedGroupFrom);
-    expect(buildTelegramGroupFrom(-1001234567890, resolvedThreadId)).toBe(expectedGroupFrom);
-    expect(buildTypingThreadParams(resolvedThreadId)).toEqual({
+    expect(buildTelegramGroupFrom(-1001234567890, threadSpec)).toBe(expectedGroupFrom);
+    expect(buildTypingThreadParams(threadSpec.id)).toEqual({
       message_thread_id: expectedTopicId,
     });
   });
@@ -4738,22 +4737,19 @@ describe("createTelegramBot", () => {
       isForum,
       messageThreadId: undefined,
     });
-    const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
     const route = resolveTelegramConversationRoute({
       cfg: {},
       accountId: "default",
       chatId,
       isGroup: true,
-      resolvedThreadId,
+      threadSpec,
     });
 
     expect(getChatSpy).toHaveBeenCalledOnce();
     expect(getChatSpy).toHaveBeenCalledWith(chatId);
     expect(route.route.sessionKey).toContain(`telegram:group:${chatId}:topic:1`);
-    expect(buildTelegramGroupFrom(chatId, resolvedThreadId)).toBe(
-      `telegram:group:${chatId}:topic:1`,
-    );
-    expect(buildTypingThreadParams(resolvedThreadId)).toEqual({ message_thread_id: 1 });
+    expect(buildTelegramGroupFrom(chatId, threadSpec)).toBe(`telegram:group:${chatId}:topic:1`);
+    expect(buildTypingThreadParams(threadSpec.id)).toEqual({ message_thread_id: 1 });
   });
   const allowFromEdgeCases: MessagePolicyCase[] = [
     makeMessagePolicyCase({

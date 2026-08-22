@@ -70,6 +70,21 @@ describe("renderTable", () => {
     vi.restoreAllMocks();
   });
 
+  it("renders fitting ASCII cells without grapheme segmentation", () => {
+    const segment = vi.spyOn(Intl.Segmenter.prototype, "segment");
+
+    const out = renderTable({
+      border: "ascii",
+      columns: [{ key: "Name", header: "Name" }],
+      rows: [{ Name: "alpha" }, { Name: "beta" }],
+    });
+
+    expect(out).toBe(
+      ["+-------+", "| Name  |", "+-------+", "| alpha |", "| beta  |", "+-------+", ""].join("\n"),
+    );
+    expect(segment).not.toHaveBeenCalled();
+  });
+
   it.each(["$&", "$`", "$'", "$$"])(
     "displays a literal %s home path in terminal tables",
     (pattern) => {

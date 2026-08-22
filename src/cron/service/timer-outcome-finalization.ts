@@ -16,12 +16,8 @@ import { emit, type CronServiceState, type DeferredCronNotifications } from "./s
 import { ensureLoaded, publishCronRuntimeRows, runPostPersistCronNotifications } from "./store.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
 import type { CronTriggerEvalOutcome, TimedCronRunOutcome } from "./timer-execution-timeout.js";
-import {
-  applyOutcomeToAuthoritativeJob,
-  applyOutcomeToStoredJob,
-  emitCronOutcomeEventForJob,
-  recordCronOutcomeForJob,
-} from "./timer-outcomes.js";
+import { emitCronOutcomeEventForJob, recordCronOutcomeForJob } from "./timer-outcome-events.js";
+import { applyOutcomeToAuthoritativeJob, applyOutcomeToStoredJob } from "./timer-outcomes.js";
 
 type CronTaskRunFinalizationOutcome = {
   jobId: string;

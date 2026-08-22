@@ -105,6 +105,21 @@ describe("chat Swarm progress", () => {
     expect(container.querySelector("[data-test-id=chat-swarm]")).toBeNull();
   });
 
+  it("keeps registry-active terminal workers completed and hides finished groups", () => {
+    const running = session({ key: "running", status: "running" });
+    const completed = session({ key: "completed", status: "done", hasActiveRun: true });
+    const failed = session({ key: "failed", status: "failed", hasActiveRun: true });
+    const container = renderProgress([running, completed, failed]);
+
+    expect(container.textContent?.replace(/\s+/g, " ")).toContain("1 Running · 1 Done · 1 Failed");
+
+    render(
+      renderChatSwarmProgress({ sessionKey: parentSessionKey, sessions: [completed, failed] }),
+      container,
+    );
+    expect(container.querySelector("[data-test-id=chat-swarm]")).toBeNull();
+  });
+
   it("buckets children by phase, labels the default bucket, and shows the latest log", () => {
     const container = renderProgress([
       session({ key: "unphased", label: "Older child", status: "running" }),

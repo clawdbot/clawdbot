@@ -5,7 +5,6 @@ import { icons } from "./icons.ts";
 import {
   renderSessionAttentionIcon,
   renderSessionState,
-  renderSessionUnreadState,
 } from "./session-attention-presentation.ts";
 import {
   renderSessionGlyph,
@@ -33,7 +32,7 @@ function renderGlyphBadge(
   session: SidebarRecentSession,
   pullRequestState: SessionPullRequestIndicatorState,
 ): SessionGlyphContent {
-  if (session.unread) {
+  if (session.unread && !session.hasActiveRun) {
     return renderSessionUnreadBadge();
   }
   if (pullRequestState === "none") {
@@ -81,16 +80,10 @@ function renderSessionTrailingState(
   pullRequestState: SessionPullRequestIndicatorState,
 ) {
   const sessionState = renderSessionState(session, false);
-  const concurrentUnreadState = session.hasActiveRun ? renderSessionUnreadState(session) : nothing;
-  if (
-    pullRequestState === "none" &&
-    sessionState === nothing &&
-    concurrentUnreadState === nothing
-  ) {
+  if (pullRequestState === "none" && sessionState === nothing) {
     return nothing;
   }
-  return html`${renderPullRequestIndicator(pullRequestState, false)} ${sessionState}
-  ${concurrentUnreadState}`;
+  return html`${renderPullRequestIndicator(pullRequestState, false)} ${sessionState}`;
 }
 
 function renderPersistentSessionIcon(icon: string) {

@@ -211,6 +211,10 @@ class TooltipProvider extends OpenClawLitElement {
 class Tooltip extends OpenClawLitElement {
   @property() content = "";
 
+  @property({ type: Boolean }) describe = true;
+
+  @property({ type: Boolean }) disabled = false;
+
   /** Let a reveal-only trigger open on click instead of dismissing. */
   @property({ type: Boolean, attribute: "open-on-click" }) openOnClick = false;
 
@@ -289,6 +293,9 @@ class Tooltip extends OpenClawLitElement {
     this.attachTrigger();
     this.syncDescription();
     this.syncWebAwesomeTooltip();
+    if (this.disabled) {
+      this.close();
+    }
   }
 
   override disconnectedCallback() {
@@ -478,7 +485,7 @@ class Tooltip extends OpenClawLitElement {
   };
 
   private scheduleOpen() {
-    if (this.webAwesomeTooltip?.open || this.openTimer !== null) {
+    if (this.disabled || this.webAwesomeTooltip?.open || this.openTimer !== null) {
       return;
     }
     const provider = this.tooltipProvider;
@@ -491,7 +498,13 @@ class Tooltip extends OpenClawLitElement {
 
   private show() {
     const tooltip = this.webAwesomeTooltip;
-    if (!tooltip || !this.triggerElement || !this.tooltipText || this.isRedundant()) {
+    if (
+      this.disabled ||
+      !tooltip ||
+      !this.triggerElement ||
+      !this.tooltipText ||
+      this.isRedundant()
+    ) {
       return;
     }
     this.clearTimers(false);
@@ -540,6 +553,10 @@ class Tooltip extends OpenClawLitElement {
   }
 
   private syncDescription() {
+    if (!this.describe) {
+      this.restoreDescription();
+      return;
+    }
     const trigger = this.resolveDescribedElement();
     if (!trigger) {
       return;

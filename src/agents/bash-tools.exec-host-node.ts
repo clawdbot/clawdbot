@@ -111,6 +111,11 @@ async function assertCurrentNodeGatewayPolicyAllowsDispatch(params: {
 export async function executeNodeHostCommand(
   params: ExecuteNodeHostCommandParams,
 ): Promise<AgentToolResult<ExecToolDetails>> {
+  const target = await resolveNodeExecutionTarget(params);
+  params.signal?.throwIfAborted();
+  if (params.bypassHostApprovalFloors) {
+    return await invokeNodeSystemRunDirect({ request: params, target });
+  }
   const { hostSecurity, hostAsk, askFallback } =
     await execHostShared.resolveExecHostApprovalContext({
       agentId: params.agentId,
@@ -118,8 +123,6 @@ export async function executeNodeHostCommand(
       ask: params.ask,
       host: "node",
     });
-  const target = await resolveNodeExecutionTarget(params);
-  params.signal?.throwIfAborted();
   if (
     shouldSkipNodeApprovalPrepare({
       hostSecurity,

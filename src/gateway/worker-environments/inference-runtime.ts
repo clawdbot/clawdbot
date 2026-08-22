@@ -8,7 +8,6 @@ import type {
   WorkerInferenceTerminalOutcome,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
-  resolveAgentConfig,
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
@@ -380,27 +379,16 @@ async function resolveApprovedModel(params: {
         manifestPlugins: manifestSnapshot.plugins,
         ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
       });
-      const agentModels = resolveAgentConfig(lifecycleConfig, target.agentId)?.models;
-      const aliasConfig = agentModels
-        ? {
-            ...lifecycleConfig,
-            agents: {
-              ...lifecycleConfig.agents,
-              defaults: {
-                ...lifecycleConfig.agents?.defaults,
-                models: { ...lifecycleConfig.agents?.defaults?.models, ...agentModels },
-              },
-            },
-          }
-        : lifecycleConfig;
       const aliasIndex = buildModelAliasIndex({
-        cfg: aliasConfig,
+        cfg: lifecycleConfig,
+        agentId: target.agentId,
         defaultProvider: defaultModel.provider,
         manifestPlugins: manifestSnapshot.plugins,
         ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
       });
       const resolved = resolveModelRefFromString({
-        cfg: aliasConfig,
+        cfg: lifecycleConfig,
+        agentId: target.agentId,
         raw: rawRef,
         defaultProvider: defaultModel.provider,
         aliasIndex,

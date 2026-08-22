@@ -12,7 +12,6 @@ import { transitionPendingSkillProposalToStale } from "./apply-transition.js";
 import { dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
 import {
-  readProposalSupportFiles,
   SkillProposalDraftMissingError,
   readSkillProposal,
   readSkillProposalManifest,
@@ -113,10 +112,7 @@ export async function inspectSkillProposal(
   if (!read) {
     return null;
   }
-  return await hydrateProposalSupportFiles(
-    await reconcilePendingCreateProposal(read, options),
-    options.env,
-  );
+  return await reconcilePendingCreateProposal(read, options);
 }
 
 export async function resolvePendingSkillProposal(input: {
@@ -267,19 +263,6 @@ async function reconcilePendingCreateProposal(
     });
   }
   return reconciled.read;
-}
-
-async function hydrateProposalSupportFiles(
-  read: SkillProposalReadResult,
-  env?: NodeJS.ProcessEnv,
-): Promise<SkillProposalReadResult> {
-  const supportFiles = await readProposalSupportFiles(read.record, storeOptions(env));
-  return supportFiles.length === 0
-    ? read
-    : {
-        ...read,
-        supportFiles: supportFiles.map((file) => ({ path: file.path, content: file.content })),
-      };
 }
 
 function proposalMatchesName(

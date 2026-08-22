@@ -1,3 +1,8 @@
+import {
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+} from "./stale-chunk-reload.ts";
+
 type CustomElementModuleLoader = () => Promise<unknown>;
 
 const pendingLoads = new Map<string, Promise<void>>();
@@ -36,7 +41,159 @@ export type OptionalCustomElement = {
 
 type UpdatingHost = {
   requestUpdate: () => unknown;
+  readonly updateComplete?: Promise<unknown>;
 };
+
+type LazyCustomElementRequestState =
+  | { status: "loading"; element: OptionalCustomElement }
+  | {
+      status: "error";
+      element: OptionalCustomElement;
+      error: unknown;
+      stale: boolean;
+    };
+
+type LazyCustomElementRequest = LazyCustomElementRequestState & {
+  action?: () => void;
+};
+
+/** Owns visible lazy-element requests while global registration stays deduplicated by tag. */
+export class LazyCustomElementRequestController {
+  private current: LazyCustomElementRequest | undefined;
+  private readonly preloads = new Set<string>();
+  private active: OptionalCustomElement | undefined;
+  private activeDismissed = false;
+
+  constructor(
+    private readonly host: UpdatingHost,
+    private readonly onClose?: () => void,
+    private readonly retryStale = retryStaleChunkReloadWhenReachable,
+  ) {}
+
+  get visibleState(): LazyCustomElementRequestState | undefined {
+    return this.current;
+  }
+
+  preload(element: OptionalCustomElement): void {
+    if (isOptionalElementDefined(element) || this.preloads.has(element.tagName)) {
+      return;
+    }
+    this.preloads.add(element.tagName);
+    void ensureCustomElementDefined(element.tagName, element.loadModule)
+      .then(
+        () => this.host.requestUpdate(),
+        () => undefined,
+      )
+      .finally(() => this.preloads.delete(element.tagName));
+  }
+
+  request(element: OptionalCustomElement, action?: () => void): void {
+    const request = {
+      action,
+      element,
+      status: "loading",
+    } satisfies LazyCustomElementRequest;
+    this.current = request;
+    this.host.requestUpdate();
+    this.load(request);
+  }
+
+  requestWhileActive(element: OptionalCustomElement, active: boolean): void {
+    if (active) {
+      if (this.active !== element) {
+        this.active = element;
+        this.activeDismissed = false;
+      }
+    } else if (this.active === element) {
+      this.active = undefined;
+      this.activeDismissed = false;
+    }
+    if (!active && this.current?.element === element) {
+      this.abandon();
+    } else {
+      this.pumpActive();
+    }
+  }
+
+  retry(): void {
+    const request = this.current;
+    if (request?.status !== "error") {
+      return;
+    }
+    const retryRequest = {
+      action: request.action,
+      element: request.element,
+      status: "loading",
+    } satisfies LazyCustomElementRequest;
+    this.current = retryRequest;
+    this.host.requestUpdate();
+    void (request.stale ? this.retryStale() : Promise.resolve(false)).then((reloading) => {
+      if (!reloading && this.current === retryRequest) {
+        this.load(retryRequest);
+      }
+    });
+  }
+
+  close(): void {
+    if (this.current) {
+      if (this.current.element === this.active) {
+        this.activeDismissed = true;
+      }
+      this.onClose?.();
+      this.abandon();
+    }
+  }
+
+  abandon(): void {
+    if (this.current) {
+      this.current = undefined;
+      this.host.requestUpdate();
+      this.pumpActive();
+    }
+  }
+
+  private pumpActive(): void {
+    if (
+      this.active &&
+      !this.activeDismissed &&
+      !this.current &&
+      !isOptionalElementDefined(this.active)
+    ) {
+      this.request(this.active);
+    }
+  }
+
+  private load(request: LazyCustomElementRequest): void {
+    void ensureCustomElementDefined(request.element.tagName, request.element.loadModule).then(
+      async () => {
+        if (this.current !== request) {
+          return;
+        }
+        this.host.requestUpdate();
+        await this.host.updateComplete;
+        if (this.current === request) {
+          request.action?.();
+          if (this.current === request) {
+            this.abandon();
+          }
+        }
+      },
+      (error: unknown) => {
+        if (this.current !== request) {
+          return;
+        }
+        this.current = {
+          action: request.action,
+          element: request.element,
+          error,
+          stale: isStaleChunkImportError(error),
+          status: "error",
+        };
+        this.host.requestUpdate();
+      },
+    );
+  }
+}
 
 export const COMMAND_PALETTE_ELEMENT = {
   tagName: "openclaw-command-palette",
@@ -101,47 +258,6 @@ export const EXEC_APPROVAL_ELEMENT = {
   loadModule: () => import("../components/exec-approval.ts"),
 } satisfies OptionalCustomElement;
 
-const hostElementLoads = new WeakMap<UpdatingHost, Map<string, Promise<void>>>();
-
 export function isOptionalElementDefined(element: OptionalCustomElement): boolean {
   return customElements.get(element.tagName) !== undefined;
-}
-
-export function ensureOptionalElementForHost(
-  host: UpdatingHost,
-  element: OptionalCustomElement,
-): Promise<void> {
-  if (isOptionalElementDefined(element)) {
-    host.requestUpdate();
-    return Promise.resolve();
-  }
-  const existingLoads = hostElementLoads.get(host);
-  const loads = existingLoads ?? new Map<string, Promise<void>>();
-  if (!existingLoads) {
-    hostElementLoads.set(host, loads);
-  }
-  const pending = loads.get(element.tagName);
-  if (pending) {
-    return pending;
-  }
-  const load = ensureCustomElementDefined(element.tagName, element.loadModule)
-    .then(() => {
-      host.requestUpdate();
-    })
-    .catch((error: unknown) => {
-      console.error(`[openclaw] failed to load ${element.label}`, error);
-      throw error;
-    })
-    .finally(() => {
-      loads.delete(element.tagName);
-    });
-  loads.set(element.tagName, load);
-  return load;
-}
-
-export function preloadOptionalElement(host: UpdatingHost, element: OptionalCustomElement): void {
-  if (isOptionalElementDefined(element)) {
-    return;
-  }
-  void ensureOptionalElementForHost(host, element).catch(() => undefined);
 }

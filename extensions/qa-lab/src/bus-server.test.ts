@@ -128,6 +128,34 @@ describe("qa-bus server", () => {
     await expect(response.json()).resolves.toEqual({ error: requestError.message });
   });
 
+  it("normalizes direct-message aliases at HTTP ingress without accepting unknown kinds", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    stops.push(bus["stop"]);
+
+    for (const kind of ["direct", "dm"]) {
+      const response = await postQaBusJson(bus.baseUrl, "/v1/inbound/message", {
+        conversation: { id: "alice", kind },
+        senderId: "alice",
+        text: `hello from ${kind}`,
+      });
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        message: { conversation: { id: "alice", kind: "direct" } },
+      });
+    }
+
+    const rejected = await postQaBusJson(bus.baseUrl, "/v1/inbound/message", {
+      conversation: { id: "alice", kind: "private" },
+      senderId: "alice",
+      text: "must not be accepted",
+    });
+
+    expect(rejected.status).toBe(400);
+    expect(state.getSnapshot().messages).toHaveLength(2);
+  });
+
   it("wakes matching polls and fences late polls and writes during shutdown", async () => {
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });

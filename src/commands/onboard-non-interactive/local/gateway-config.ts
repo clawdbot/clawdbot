@@ -8,11 +8,35 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { formatCliCommand } from "../../../cli/command-format.js";
 import { formatInvalidPortOption } from "../../../cli/error-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { isValidEnvSecretRefId, resolveSecretInputRef } from "../../../config/types.secrets.js";
+import {
+  isValidEnvSecretRefId,
+  resolveSecretInputRef,
+  type SecretRef,
+} from "../../../config/types.secrets.js";
+import { provisionGatewayTokenStoreRef } from "../../../gateway/auth-token-store-ref.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
+import { createGatewayEnvSecretRef } from "../../../secrets/ref-contract.js";
 import { normalizeGatewayTokenInput, randomToken } from "../../onboard-helpers.js";
 import type { OnboardOptions } from "../../onboard-types.js";
+
+/** Resolves what `gateway.auth.token` should hold once setup owns the token value. */
+function resolveGeneratedTokenInput(params: {
+  config: OpenClawConfig;
+  secretInputMode: OnboardOptions["secretInputMode"];
+  token: string | undefined;
+  ambientEnvOnly: boolean;
+}): SecretRef | string {
+  if (params.secretInputMode !== "ref") {
+    return params.token ?? randomToken();
+  }
+  if (params.ambientEnvOnly) {
+    return createGatewayEnvSecretRef(params.config, "OPENCLAW_GATEWAY_TOKEN");
+  }
+  return provisionGatewayTokenStoreRef({
+    config: params.config,
+    ...(params.token ? { token: params.token } : {}),
+  }).ref;
+}
 
 /** Applies gateway CLI options to the pending config and returns normalized runtime settings. */
 export function applyNonInteractiveGatewayConfig(params: {
@@ -56,7 +80,11 @@ export function applyNonInteractiveGatewayConfig(params: {
     opts.gatewayToken !== undefined || opts.gatewayTokenRefEnv !== undefined;
   let authMode =
     explicitAuthMode ??
-    (hasExplicitTokenAuthInput ? "token" : existingGateway?.auth?.mode) ??
+    (hasExplicitTokenAuthInput
+      ? "token"
+      : opts.gatewayPassword !== undefined
+        ? "password"
+        : existingGateway?.auth?.mode) ??
     "token";
   const tailscaleMode = opts.tailscale ?? existingGateway?.tailscale?.mode ?? "off";
 
@@ -91,7 +119,8 @@ export function applyNonInteractiveGatewayConfig(params: {
   // plaintext > ambient OPENCLAW_GATEWAY_TOKEN > randomToken(). Ambient env
   // must not rotate a token already written to disk — a stale shell or
   // launchd env var otherwise breaks already-paired clients.
-  let gatewayToken = explicitGatewayToken || existingPlaintextToken || envGatewayToken || undefined;
+  const gatewayToken =
+    explicitGatewayToken || existingPlaintextToken || envGatewayToken || undefined;
   const gatewayTokenRefEnv = normalizeOptionalString(opts.gatewayTokenRefEnv ?? "") ?? "";
 
   if (authMode === "token") {
@@ -129,13 +158,7 @@ export function applyNonInteractiveGatewayConfig(params: {
           auth: {
             ...nextConfig.gateway?.auth,
             mode: "token",
-            token: {
-              source: "env",
-              provider: resolveDefaultSecretProviderAlias(nextConfig, "env", {
-                preferFirstProviderForSource: true,
-              }),
-              id: gatewayTokenRefEnv,
-            },
+            token: createGatewayEnvSecretRef(nextConfig, gatewayTokenRefEnv),
           },
         },
       };
@@ -156,9 +179,18 @@ export function applyNonInteractiveGatewayConfig(params: {
         },
       };
     } else {
-      if (!gatewayToken) {
-        gatewayToken = randomToken();
-      }
+      // `--secret-input-mode ref` covers the gateway token too. An ambient
+      // OPENCLAW_GATEWAY_TOKEN keeps its env ref so a later rotation still wins;
+      // copying it into the store would silently pin the stale value. Anything else
+      // is a value setup itself holds, with nothing for an env/file/exec ref to point
+      // at, so the shared secret store keeps it and config keeps only the reference.
+      const tokenInput = resolveGeneratedTokenInput({
+        config: nextConfig,
+        secretInputMode: opts.secretInputMode,
+        token: gatewayToken,
+        ambientEnvOnly:
+          !explicitGatewayToken && !existingPlaintextToken && Boolean(envGatewayToken),
+      });
       nextConfig = {
         ...nextConfig,
         gateway: {
@@ -166,7 +198,7 @@ export function applyNonInteractiveGatewayConfig(params: {
           auth: {
             ...nextConfig.gateway?.auth,
             mode: "token",
-            token: gatewayToken,
+            token: tokenInput,
           },
         },
       };
@@ -194,7 +226,14 @@ export function applyNonInteractiveGatewayConfig(params: {
         auth: {
           ...nextConfig.gateway?.auth,
           mode: "password",
-          ...(input !== undefined ? { password } : {}),
+          ...(input !== undefined
+            ? {
+                password:
+                  opts.secretInputMode === "ref"
+                    ? createGatewayEnvSecretRef(nextConfig, "OPENCLAW_GATEWAY_PASSWORD")
+                    : password,
+              }
+            : {}),
         },
       },
     };

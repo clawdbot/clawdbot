@@ -39,6 +39,8 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
   initialLocationReady: Promise<RouteLocation>;
   installLocation?: (location: RouteLocation) => void | Promise<void>;
   shouldInstallLocation?: () => boolean;
+  redirect?: () => void;
+  onInitialDecision?: () => void;
 }): Promise<() => void> {
   const initialLocation = await params.initialLocationReady;
   if (
@@ -52,17 +54,23 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
     }
   }
   if (!params.enabled) {
+    params.onInitialDecision?.();
     return () => undefined;
   }
   return startModelSetupFirstRunRedirect({
     context: params.context,
     isStillDefaultLanding: () => locationsMatch(params.history.location(), initialLocation),
+    redirect:
+      params.redirect ?? (() => params.context.replace("model-setup", { search: "?firstRun=1" })),
+    onInitialDecision: params.onInitialDecision ?? (() => undefined),
   });
 }
 
 function startModelSetupFirstRunRedirect(params: {
   context: ApplicationContext<RouteId>;
   isStillDefaultLanding: () => boolean;
+  redirect: () => void;
+  onInitialDecision: () => void;
 }): () => void {
   let detection:
     | {
@@ -73,16 +81,33 @@ function startModelSetupFirstRunRedirect(params: {
     | undefined;
   let redirected = false;
   let disposed = false;
+  let initialDecisionSettled = false;
+  const settleInitialDecision = () => {
+    if (!initialDecisionSettled) {
+      initialDecisionSettled = true;
+      params.onInitialDecision();
+    }
+  };
   const handleSnapshot: Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0] = (
     snapshot,
   ) => {
+    if (redirected) {
+      return;
+    }
+    if (snapshot.phase !== "connected" || !snapshot.client) {
+      // A build fence can move a previously authenticated client straight into
+      // reconnecting or reload-required, while a terminal first attempt returns
+      // to stopped. Do not hold the router when the shell needs to present recovery.
+      if (snapshot.hello || snapshot.phase === "reload-required" || snapshot.phase === "stopped") {
+        settleInitialDecision();
+      }
+      return;
+    }
     if (
-      redirected ||
-      snapshot.phase !== "connected" ||
-      !snapshot.client ||
       !hasOperatorAdminAccess(snapshot.hello?.auth ?? null) ||
       isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") !== true
     ) {
+      settleInitialDecision();
       return;
     }
     const agentId = params.context.agentSelection.state.selectedId;
@@ -118,8 +143,9 @@ function startModelSetupFirstRunRedirect(params: {
         cacheModelSetupDetection(connection, result);
         if (!result.setupComplete && !redirected && params.isStillDefaultLanding()) {
           redirected = true;
-          params.context.replace("model-setup", { search: "?firstRun=1" });
+          params.redirect();
         }
+        settleInitialDecision();
       })
       .catch(() => {
         if (disposed || detection !== attempt) {
@@ -130,6 +156,8 @@ function startModelSetupFirstRunRedirect(params: {
         detection = { ...attempt, phase: attempt.attempts < 2 ? "retry-ready" : "settled" };
         if (detection.phase === "retry-ready" && params.isStillDefaultLanding()) {
           handleSnapshot(params.context.gateway.snapshot);
+        } else {
+          settleInitialDecision();
         }
       });
   };
@@ -142,5 +170,6 @@ function startModelSetupFirstRunRedirect(params: {
     disposed = true;
     unsubscribe();
     unsubscribeSelection();
+    settleInitialDecision();
   };
 }

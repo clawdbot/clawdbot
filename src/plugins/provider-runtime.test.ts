@@ -2041,7 +2041,7 @@ describe("provider-runtime", () => {
       { pluginId: "demo", providerIds: ["demo"] },
     ]);
     resolveExternalAuthProfileProviderPluginIdsMock.mockReturnValue(["demo"]);
-    const prepareDynamicModel = vi.fn(async () => undefined);
+    const prepareDynamicModel = vi.fn(async () => MODEL);
     const createStreamFn = vi.fn(() => vi.fn());
     const sanitizeReplayHistory = vi.fn(
       async ({
@@ -2245,12 +2245,14 @@ describe("provider-runtime", () => {
       }),
     ).toBe("DEMO_PROFILE");
 
-    await prepareProviderDynamicModel({
-      provider: DEMO_PROVIDER_ID,
-      context: createDemoRuntimeContext({
-        modelRegistry: EMPTY_MODEL_REGISTRY,
+    expect(
+      await prepareProviderDynamicModel({
+        provider: DEMO_PROVIDER_ID,
+        context: createDemoRuntimeContext({
+          modelRegistry: EMPTY_MODEL_REGISTRY,
+        }),
       }),
-    });
+    ).toEqual(MODEL);
 
     expect(
       resolveProviderReasoningOutputModeWithPlugin({

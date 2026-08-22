@@ -841,10 +841,10 @@ openclaw-session-progress-hovercard-provider {
   width: min(440px, calc(100vw - 24px));
   min-height: 112px;
   padding: 16px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 88%, transparent);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--card) 96%, var(--bg) 4%);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--overlay-shadow);
   color: var(--text);
   font-family: var(--font-body);
   /* Interactive by design: hover intent and text selection both need the card to
@@ -1678,7 +1678,9 @@ select.input {
   color: var(--muted);
 }
 
-.lazy-view-error__action {
+.lazy-view-error__actions {
+  display: flex;
+  gap: 8px;
   margin-top: 8px;
 }
 
@@ -3737,10 +3739,10 @@ td.data-table-key-col {
   max-height: 320px;
   overflow-y: auto;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
   color: var(--text);
 }
 

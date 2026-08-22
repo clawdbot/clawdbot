@@ -51,7 +51,11 @@ import {
   resolveTelegramRichMessagePlaceholder,
   resolveTelegramRichMessageText,
 } from "./bot/body-helpers.js";
-import { buildTelegramGroupPeerId, buildTelegramInboundOriginTarget } from "./bot/helpers.js";
+import {
+  buildTelegramGroupPeerId,
+  buildTelegramInboundOriginTarget,
+  type TelegramThreadSpec,
+} from "./bot/helpers.js";
 import { renderTelegramTextEntities } from "./bot/inbound-text-entities.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
@@ -146,6 +150,7 @@ export async function resolveTelegramInboundBody(params: {
   sessionKey?: string;
   resolvedThreadId?: number;
   replyThreadId?: number;
+  threadSpec: TelegramThreadSpec;
   originatingTo?: string;
   routeAgentId?: string;
   effectiveGroupAllow: NormalizedAllowFrom;
@@ -172,6 +177,7 @@ export async function resolveTelegramInboundBody(params: {
     sessionKey,
     resolvedThreadId,
     replyThreadId,
+    threadSpec,
     originatingTo: providedOriginatingTo,
     routeAgentId,
     effectiveGroupAllow,
@@ -188,7 +194,7 @@ export async function resolveTelegramInboundBody(params: {
   const botUsername = normalizeOptionalLowercaseString(primaryCtx.me?.username);
   const mentionRegexes = buildMentionRegexes(cfg, routeAgentId, {
     provider: "telegram",
-    conversationId: isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId),
+    conversationId: isGroup ? buildTelegramGroupPeerId(chatId, threadSpec) : String(chatId),
     providerPolicy: providerMentionPatterns,
   });
   const messageTextParts = getTelegramTextParts(msg);
@@ -224,8 +230,9 @@ export async function resolveTelegramInboundBody(params: {
     includeDmAllowForGroupCommands: false,
   });
   const commandAuthorized = commandGate.authorized;
-  const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : undefined;
-  const originatingTo = providedOriginatingTo ?? buildTelegramInboundOriginTarget(chatId);
+  const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, threadSpec) : undefined;
+  const originatingTo =
+    providedOriginatingTo ?? buildTelegramInboundOriginTarget(chatId, threadSpec);
 
   const primaryMedia = resolveTelegramPrimaryMedia(msg);
   const nativeMediaFacts =

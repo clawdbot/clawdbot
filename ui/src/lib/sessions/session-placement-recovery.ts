@@ -10,7 +10,7 @@ export type SessionPlacementTarget =
   | { kind: "profile"; profileId: string; machineClass?: string }
   | { kind: "device"; deviceId: string };
 
-export type SessionPlacementCreateParams = SessionCreateParams & {
+export type SessionPlacementCreateParams = Omit<SessionCreateParams, "execNode"> & {
   key?: string;
   agentId: string;
   message: "";
@@ -41,7 +41,6 @@ const PLACEMENT_CREATE_STRING_FIELDS = [
   "worktreeBaseRef",
   "worktreeName",
   "cwd",
-  "execNode",
   "catalogId",
   "projectId",
 ] as const;
@@ -72,8 +71,7 @@ export function parseSessionPlacementCreateParams(
     record.worktree !== true ||
     (record.incognito !== undefined && record.incognito !== true) ||
     (record.visibility !== undefined && record.visibility !== "draft") ||
-    (record.projectId !== undefined &&
-      (record.cwd !== undefined || record.execNode !== undefined)) ||
+    (record.projectId !== undefined && record.cwd !== undefined) ||
     PLACEMENT_CREATE_STRING_FIELDS.some(
       (key) => record[key] !== undefined && !isNonEmptyString(record[key]),
     )

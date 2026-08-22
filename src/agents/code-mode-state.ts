@@ -4,6 +4,7 @@ import {
   resolveExpiresAtMsFromDurationSeconds,
 } from "@openclaw/normalization-core/number-coercion";
 import { runBridgeRequest } from "./code-mode-bridge.js";
+import type { CodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import {
@@ -41,6 +42,7 @@ type CodeModeRunState = {
   expiresAt: number;
   agentWaitRetainUntil?: number;
   runtime: ToolSearchRuntime;
+  catalogProjection: CodeModeCatalogProjection;
   namespaceRuntime: CodeModeNamespaceRuntime;
 };
 
@@ -233,6 +235,7 @@ export function snapshotState(params: {
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
   runtime: ToolSearchRuntime;
+  catalogProjection: CodeModeCatalogProjection;
   namespaceRuntime: CodeModeNamespaceRuntime;
   output: unknown[];
   deliveredOutputCount?: number;
@@ -257,7 +260,11 @@ export function snapshotState(params: {
       pending,
       replaySafe:
         params.replaySafe &&
-        pendingBridgeRequestsReplaySafe(params.pendingRequests, params.runtime),
+        pendingBridgeRequestsReplaySafe(
+          params.pendingRequests,
+          params.runtime,
+          params.catalogProjection,
+        ),
     });
   } catch (error) {
     cancelPendingBridgeStates(pending);
@@ -268,6 +275,7 @@ export function snapshotState(params: {
 export function pendingBridgeRequestsReplaySafe(
   pending: readonly PendingBridgeRequest[],
   runtime: ToolSearchRuntime,
+  catalogProjection: CodeModeCatalogProjection,
 ): boolean {
   return pending.every((request) => {
     if (
@@ -282,11 +290,15 @@ export function pendingBridgeRequestsReplaySafe(
     ) {
       return true;
     }
-    if (request.method !== "call" && request.method !== "callValue") {
+    if (request.method !== "callValue") {
       return false;
     }
-    const id = Array.isArray(request.args) ? request.args[0] : undefined;
-    return typeof id === "string" && runtime.isReplaySafeExactId(id);
+    const callableName = Array.isArray(request.args) ? request.args[0] : undefined;
+    if (typeof callableName !== "string") {
+      return false;
+    }
+    const binding = catalogProjection.byCallableName.get(callableName);
+    return binding ? runtime.isReplaySafeExactId(binding.id) : false;
   });
 }
 
@@ -305,6 +317,7 @@ export function createPendingBridgeStates(params: {
   pendingRequests: PendingBridgeRequest[];
   config: CodeModeConfig;
   runtime: ToolSearchRuntime;
+  catalogProjection: CodeModeCatalogProjection;
   namespaceRuntime: CodeModeNamespaceRuntime;
   parentToolCallId: string;
   codeModeRunId: string;
@@ -324,6 +337,7 @@ export function createPendingBridgeStates(params: {
       ...request,
       promise: runBridgeRequest({
         runtime: params.runtime,
+        catalogProjection: params.catalogProjection,
         namespaceRuntime: params.namespaceRuntime,
         parentToolCallId: params.parentToolCallId,
         codeModeRunId: params.codeModeRunId,
@@ -367,6 +381,7 @@ export function storeSnapshotState(params: {
   ctx: ToolSearchToolContext;
   config: CodeModeConfig;
   runtime: ToolSearchRuntime;
+  catalogProjection: CodeModeCatalogProjection;
   namespaceRuntime: CodeModeNamespaceRuntime;
   output: unknown[];
   deliveredOutputCount?: number;
@@ -400,6 +415,7 @@ export function storeSnapshotState(params: {
     expiresAt,
     agentWaitRetainUntil,
     runtime: params.runtime,
+    catalogProjection: params.catalogProjection,
     namespaceRuntime: params.namespaceRuntime,
   });
   scheduleActiveRunExpiry();

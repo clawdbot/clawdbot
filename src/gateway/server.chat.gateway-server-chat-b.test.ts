@@ -1,11 +1,13 @@
 // Gateway chat integration tests cover dashboard chat requests, transcript
 // history limits, model overrides, inbound dispatch, and streaming event fanout.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { createSessionsHistoryTool } from "../agents/tools/sessions-history-tool.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
@@ -683,7 +685,122 @@ async function prepareMainHistoryHarness(params: {
   return sessionDir;
 }
 
+async function prepareUnconfiguredAcpHarnessSession(options?: { withMetadata?: boolean }) {
+  openDirectChatSession();
+  const sessionKey = `agent:codex:acp:${randomUUID()}`;
+  const config: OpenClawConfig = {
+    agents: { entries: { main: { default: true } } },
+    acp: { enabled: true, backend: "acpx", allowedAgents: ["codex"] },
+  };
+  testState.agentsConfig = config.agents;
+  await writeGatewayConfig(config);
+  if (options?.withMetadata === false) {
+    await writeSessionStore({
+      agentId: "codex",
+      entries: {
+        [sessionKey]: {
+          sessionId: "sess-acp-codex",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+  } else {
+    await upsertAcpSessionMeta({
+      sessionKey,
+      agentId: "codex",
+      cfg: getRuntimeConfig(),
+      now: () => 1,
+      mutate: () => ({
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: sessionKey,
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      }),
+    });
+  }
+  return sessionKey;
+}
+
 describe("gateway server chat", () => {
+  test.each(["chat.history", "chat.startup"] as const)(
+    "%s reads a persisted ACP harness session without configuring its harness as an ordinary agent",
+    async (method) => {
+      try {
+        const sessionKey = await prepareUnconfiguredAcpHarnessSession();
+        const responses: CapturedChatResponse[] = [];
+        await callDirectChat(method, {
+          id: `acp-harness-${method}`,
+          params: { sessionKey },
+          respond: captureChatResponse(responses),
+          context: createDirectChatContext({ getRuntimeConfig }),
+        });
+
+        expect(responses).toHaveLength(1);
+        expect(responses[0]?.ok, JSON.stringify(responses[0]?.error ?? null)).toBe(true);
+      } finally {
+        testState.agentsConfig = undefined;
+        resetDirectChatSession();
+      }
+    },
+  );
+
+  test("chat.send accepts a persisted ACP harness without configuring it as an ordinary agent", async () => {
+    try {
+      const sessionKey = await prepareUnconfiguredAcpHarnessSession();
+      const responses: CapturedChatResponse[] = [];
+      const context = createDirectChatContext({ getRuntimeConfig });
+      await callDirectChat("chat.send", {
+        id: "acp-harness-send",
+        params: {
+          sessionKey,
+          message: "continue the bound ACP session",
+          idempotencyKey: "acp-harness-send",
+        },
+        respond: captureChatResponse(responses),
+        context,
+      });
+
+      expect(responses).toHaveLength(1);
+      expect(responses[0]?.ok, JSON.stringify(responses[0]?.error ?? null)).toBe(true);
+      expect(responses[0]?.payload).toMatchObject({ status: "started" });
+      await waitForFast(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
+    } finally {
+      testState.agentsConfig = undefined;
+      resetDirectChatSession();
+    }
+  });
+
+  test("chat.send rejects an unconfigured ACP-shaped session without authoritative ACP metadata", async () => {
+    try {
+      const sessionKey = await prepareUnconfiguredAcpHarnessSession({ withMetadata: false });
+      const responses: CapturedChatResponse[] = [];
+      await callDirectChat("chat.send", {
+        id: "acp-harness-forged",
+        params: {
+          sessionKey,
+          message: "reject an unconfirmed ACP session",
+          idempotencyKey: "acp-harness-forged",
+        },
+        respond: captureChatResponse(responses),
+        context: createDirectChatContext({ getRuntimeConfig }),
+      });
+
+      expect(responses).toHaveLength(1);
+      expect(responses[0]).toMatchObject({
+        ok: false,
+        error: { message: 'Agent "codex" no longer exists in configuration' },
+      });
+    } finally {
+      testState.agentsConfig = undefined;
+      resetDirectChatSession();
+    }
+  });
+
   test.each(["chat.history", "chat.startup"] as const)(
     "%s projects the session's durable worker placement",
     async (method) => {

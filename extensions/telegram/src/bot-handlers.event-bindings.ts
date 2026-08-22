@@ -1,7 +1,6 @@
 import type { ChatMember, ReactionTypeEmoji } from "grammy/types";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramAccount } from "./accounts.js";
 import type { TelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
@@ -11,12 +10,7 @@ import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
-import {
-  buildTelegramGroupPeerId,
-  buildTelegramParentPeer,
-  resolveTelegramThreadSpec,
-  type TelegramThreadSpec,
-} from "./bot/helpers.js";
+import { resolveTelegramThreadSpec, type TelegramThreadSpec } from "./bot/helpers.js";
 import { resolveTelegramConversationRoute } from "./conversation-route.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { getPreparedTelegramPollAnswer } from "./poll-answer-context.js";
@@ -180,34 +174,15 @@ export function createTelegramEventBindings({
           }
         }
 
-        const resolvedThreadId = eventAuthContext.resolvedThreadId;
-        let sessionKey: string;
-        if (recoveredThreadSpec) {
-          // Scoped topics must retain topic agents and conversation bindings.
-          sessionKey = resolveTelegramConversationRoute({
-            cfg: eventAuthContext.cfg,
-            accountId,
-            chatId,
-            isGroup,
-            resolvedThreadId,
-            replyThreadId: recoveredThreadSpec.id,
-            senderId,
-            topicAgentId: eventAuthContext.topicConfig?.agentId,
-          }).route.sessionKey;
-        } else {
-          // Direct chats and non-forum groups retain their established peer route.
-          const peerId = isGroup
-            ? buildTelegramGroupPeerId(chatId, resolvedThreadId)
-            : String(chatId);
-          const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
-          sessionKey = resolveAgentRoute({
-            cfg: eventAuthContext.cfg,
-            channel: "telegram",
-            accountId,
-            peer: { kind: isGroup ? "group" : "direct", id: peerId },
-            parentPeer,
-          }).sessionKey;
-        }
+        const sessionKey = resolveTelegramConversationRoute({
+          cfg: eventAuthContext.cfg,
+          accountId,
+          chatId,
+          isGroup,
+          threadSpec: recoveredThreadSpec ?? eventAuthContext.threadSpec,
+          senderId,
+          topicAgentId: eventAuthContext.topicConfig?.agentId,
+        }).route.sessionKey;
 
         const senderName = user
           ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || user.username
