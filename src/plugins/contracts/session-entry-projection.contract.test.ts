@@ -23,6 +23,7 @@ import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { setActivePluginRegistry } from "../runtime.js";
 import { createPluginRecord } from "../status.test-fixtures.js";
 import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
+import type { OpenClawPluginApi } from "../types.js";
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
@@ -103,6 +104,72 @@ describe("plugin session extension SessionEntry projection", () => {
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     clearPluginHostRuntimeState();
+  });
+
+  it("lets a plugin access only its own durable session extension", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    let ownerApi: OpenClawPluginApi | undefined;
+    let otherApi: OpenClawPluginApi | undefined;
+    for (const [id, capture] of [
+      ["owner-plugin", (api: OpenClawPluginApi) => (ownerApi = api)],
+      ["other-plugin", (api: OpenClawPluginApi) => (otherApi = api)],
+    ] as const) {
+      registerTestPlugin({
+        registry,
+        config,
+        record: createPluginRecord({ id, name: id }),
+        register(api) {
+          capture(api);
+          api.session.state.registerSessionExtension({
+            namespace: "workflow",
+            description: `${id} workflow`,
+          });
+        },
+      });
+    }
+    setActivePluginRegistry(registry.registry);
+
+    await withProjectionSessionStore(
+      "openclaw-host-hooks-plugin-access-",
+      async ({ storePath, tempConfig }) => {
+        Object.assign(config, tempConfig);
+        await updateSessionStore(storePath, (store) => {
+          store["agent:main:main"] = {
+            sessionId: "session-id",
+            updatedAt: Date.now(),
+          } as unknown as SessionEntry;
+        });
+        await expect(
+          ownerApi?.session.state.setSessionExtension({
+            sessionKey: "agent:main:main",
+            namespace: "workflow",
+            value: { checkpoint: "PR117" },
+          }),
+        ).resolves.toEqual({ checkpoint: "PR117" });
+        expect(
+          ownerApi?.session.state.getSessionExtension({
+            sessionKey: "agent:main:main",
+            namespace: "workflow",
+          }),
+        ).toEqual({ checkpoint: "PR117" });
+        expect(
+          otherApi?.session.state.getSessionExtension({
+            sessionKey: "agent:main:main",
+            namespace: "workflow",
+          }),
+        ).toBeUndefined();
+        await ownerApi?.session.state.clearSessionExtension({
+          sessionKey: "agent:main:main",
+          namespace: "workflow",
+        });
+        expect(
+          ownerApi?.session.state.getSessionExtension({
+            sessionKey: "agent:main:main",
+            namespace: "workflow",
+          }),
+        ).toBeUndefined();
+      },
+    );
   });
 
   it("mirrors projected values to SessionEntry[slotKey] and clears them on unset", async () => {

@@ -76,4 +76,35 @@ describe("plugin api lifecycle", () => {
     expect(result).toBeUndefined();
     expect(registerSessionExtension).not.toHaveBeenCalled();
   });
+
+  it("keeps plugin-owned session state access callable after registration", async () => {
+    const getSessionExtension = vi.fn(() => ({ checkpoint: "PR117" }));
+    const setSessionExtension = vi.fn(async ({ value }) => value);
+    const clearSessionExtension = vi.fn(async () => {});
+    const api = captureRegisteredPluginApi({
+      getSessionExtension,
+      setSessionExtension,
+      clearSessionExtension,
+    });
+
+    expect(
+      api.session.state.getSessionExtension({
+        sessionKey: "agent:main:main",
+        namespace: "workflow",
+      }),
+    ).toEqual({ checkpoint: "PR117" });
+    await expect(
+      api.session.state.setSessionExtension({
+        sessionKey: "agent:main:main",
+        namespace: "workflow",
+        value: { checkpoint: "PR118" },
+      }),
+    ).resolves.toEqual({ checkpoint: "PR118" });
+    await expect(
+      api.session.state.clearSessionExtension({
+        sessionKey: "agent:main:main",
+        namespace: "workflow",
+      }),
+    ).resolves.toBeUndefined();
+  });
 });

@@ -19,12 +19,15 @@ type PluginApiLifecyclePolicy = {
 
 const PLUGIN_API_METHOD_POLICIES: Partial<Record<PluginApiMethodName, PluginApiLifecyclePolicy>> = {
   clearRunContext: { phase: "runtime", lateCallable: true },
+  clearSessionExtension: { phase: "runtime", lateCallable: true },
   emitAgentEvent: { phase: "runtime", lateCallable: true },
   enqueueNextTurnInjection: { phase: "runtime", lateCallable: true },
   getRunContext: { phase: "runtime", lateCallable: true },
+  getSessionExtension: { phase: "runtime", lateCallable: true },
   sendSessionAttachment: { phase: "runtime", lateCallable: true },
   scheduleSessionTurn: { phase: "runtime", lateCallable: true },
   setRunContext: { phase: "runtime", lateCallable: true },
+  setSessionExtension: { phase: "runtime", lateCallable: true },
   unscheduleSessionTurnsByTag: { phase: "runtime", lateCallable: true },
 };
 

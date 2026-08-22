@@ -10,9 +10,11 @@ export type OpenClawPluginApiWithoutFacades = Omit<OpenClawPluginApi, keyof Plug
 type PluginApiFacadeSource = Pick<
   OpenClawPluginApi,
   | "clearRunContext"
+  | "clearSessionExtension"
   | "emitAgentEvent"
   | "enqueueNextTurnInjection"
   | "getRunContext"
+  | "getSessionExtension"
   | "registerAgentEventSubscription"
   | "registerControlUiDescriptor"
   | "registerRuntimeLifecycle"
@@ -22,6 +24,7 @@ type PluginApiFacadeSource = Pick<
   | "scheduleSessionTurn"
   | "sendSessionAttachment"
   | "setRunContext"
+  | "setSessionExtension"
   | "unscheduleSessionTurnsByTag"
 >;
 
@@ -32,6 +35,9 @@ export function attachPluginApiFacades<T extends object>(
   api.session = {
     state: {
       registerSessionExtension: (...args) => api.registerSessionExtension(...args),
+      getSessionExtension: (...args) => api.getSessionExtension(...args),
+      setSessionExtension: (...args) => api.setSessionExtension(...args),
+      clearSessionExtension: (...args) => api.clearSessionExtension(...args),
     },
     workflow: {
       enqueueNextTurnInjection: (...args) => api.enqueueNextTurnInjection(...args),

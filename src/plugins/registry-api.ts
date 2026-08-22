@@ -14,7 +14,11 @@ import {
   schedulePluginSessionTurn,
   unschedulePluginSessionTurnsByTag,
 } from "./host-hook-scheduled-turns.js";
-import { enqueuePluginNextTurnInjection } from "./host-hook-state.js";
+import {
+  enqueuePluginNextTurnInjection,
+  getPluginSessionExtensionStateSync,
+  patchPluginSessionExtension,
+} from "./host-hook-state.js";
 import { isPluginRegistryActivated, isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistrars } from "./registry-registrars.js";
 import type { PluginRuntimeResolver } from "./registry-runtime.js";
@@ -161,6 +165,7 @@ export function createPluginApiFactory(
       !isPluginRegistryRetired(registry) &&
       (isActivatingLoadedRecord() ||
         (isPluginRegistryActivated(registry) && isLoadedRecordInRegistry()));
+    const resolveCurrentConfig = () => registryParams.runtime.config?.current?.() ?? params.config;
     return buildPluginApi({
       id: record.id,
       name: record.name,
@@ -243,6 +248,37 @@ export function createPluginApiFactory(
                 registerAgentToolResultMiddleware(record, handler, options, params.hookPolicy);
               },
               registerSessionExtension: (extension) => registerSessionExtension(record, extension),
+              getSessionExtension: ({ sessionKey, namespace }) => {
+                const pluginState = getPluginSessionExtensionStateSync({
+                  cfg: resolveCurrentConfig() as OpenClawConfig,
+                  pluginId: record.id,
+                  sessionKey,
+                });
+                return pluginState?.[namespace];
+              },
+              setSessionExtension: async ({ sessionKey, namespace, value }) => {
+                const result = await patchPluginSessionExtension({
+                  cfg: resolveCurrentConfig() as OpenClawConfig,
+                  pluginId: record.id,
+                  sessionKey,
+                  namespace,
+                  value,
+                });
+                if (!result.ok || result.value === undefined) {
+                  throw new Error(result.ok ? "session extension write failed" : result.error);
+                }
+                return result.value;
+              },
+              clearSessionExtension: async ({ sessionKey, namespace }) => {
+                const result = await patchPluginSessionExtension({
+                  cfg: resolveCurrentConfig() as OpenClawConfig,
+                  pluginId: record.id,
+                  sessionKey,
+                  namespace,
+                  unset: true,
+                });
+                if (!result.ok) throw new Error(result.error);
+              },
               enqueueNextTurnInjection: (injection) => {
                 if (params.hookPolicy?.allowPromptInjection === false) {
                   pushDiagnostic({

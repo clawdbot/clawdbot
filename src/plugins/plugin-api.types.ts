@@ -101,6 +101,19 @@ export type PluginTextTransformRegistration = PluginTextTransforms;
 type OpenClawPluginSessionStateApi = {
   /** Register plugin-owned session state projected into Gateway session rows. */
   registerSessionExtension: (extension: PluginSessionExtensionRegistration) => void;
+  /** Read one JSON-compatible session extension owned by the current plugin. */
+  getSessionExtension: (params: {
+    sessionKey: string;
+    namespace: string;
+  }) => PluginJsonValue | undefined;
+  /** Persist one JSON-compatible session extension owned by the current plugin. */
+  setSessionExtension: (params: {
+    sessionKey: string;
+    namespace: string;
+    value: PluginJsonValue;
+  }) => Promise<PluginJsonValue>;
+  /** Clear one session extension owned by the current plugin. */
+  clearSessionExtension: (params: { sessionKey: string; namespace: string }) => Promise<void>;
 };
 
 type OpenClawPluginSessionWorkflowApi = {
@@ -337,6 +350,19 @@ export type OpenClawPluginApi = {
    * @deprecated Use `api.session.state.registerSessionExtension(...)`.
    */
   registerSessionExtension: (extension: PluginSessionExtensionRegistration) => void;
+  /** @deprecated Use `api.session.state.getSessionExtension(...)`. */
+  getSessionExtension: (params: {
+    sessionKey: string;
+    namespace: string;
+  }) => PluginJsonValue | undefined;
+  /** @deprecated Use `api.session.state.setSessionExtension(...)`. */
+  setSessionExtension: (params: {
+    sessionKey: string;
+    namespace: string;
+    value: PluginJsonValue;
+  }) => Promise<PluginJsonValue>;
+  /** @deprecated Use `api.session.state.clearSessionExtension(...)`. */
+  clearSessionExtension: (params: { sessionKey: string; namespace: string }) => Promise<void>;
   /**
    * Queue one plugin-owned context injection for the next agent turn in a session.
    * @deprecated Use `api.session.workflow.enqueueNextTurnInjection(...)`.
