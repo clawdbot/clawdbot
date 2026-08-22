@@ -224,7 +224,7 @@ In `prefer` mode, hidden sub-agents are for internal legwork that the user does 
   ACP-only. Streams ACP run output to the parent session when `runtime: "acp"`; omit for native sub-agent spawns.
 </ParamField>
 <ParamField path="execution" type="object">
-  Optional execution placement request for the child run. The current release supports local process execution and rejects unsupported backend types at spawn time instead of silently falling back.
+  Optional execution placement request for the child run. Unavailable with `visible: true`. The current release supports local process execution and rejects unsupported backend types at spawn time instead of silently falling back.
 </ParamField>
 <ParamField path="execution.backend" type="string" default='"local"'>
   Execution placement backend id. Defaults to the built-in local process backend.

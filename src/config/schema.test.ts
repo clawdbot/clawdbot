@@ -636,6 +636,17 @@ describe("config schema", () => {
         },
       }),
     ).toThrow();
+
+    expect(() =>
+      OpenClawSchema.parse({
+        agents: {
+          entries: { main: { default: true } },
+          executionBackends: {
+            local: { type: "process", profiles: { " small ": {} } },
+          },
+        },
+      }),
+    ).toThrow();
   });
 
   it("merges plugin ui hints", () => {

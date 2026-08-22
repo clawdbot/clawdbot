@@ -209,14 +209,16 @@
           "type": "string"
         },
         "execution": {
-          "description": "Optional execution placement request. This release supports local process execution and rejects non-process backend types at spawn time.",
+          "description": "Execution placement; only local process is supported in this release and execution is unavailable with visible=true.",
           "properties": {
             "backend": {
-              "description": "Execution placement backend id. Defaults to the built-in \"local\" process backend.",
+              "description": "Execution placement backend id.",
+              "maxLength": 128,
               "type": "string"
             },
             "profile": {
-              "description": "Optional profile id within the selected execution backend. Profiles are validated and recorded for status/readback.",
+              "description": "Optional execution profile id.",
+              "maxLength": 128,
               "type": "string"
             }
           },

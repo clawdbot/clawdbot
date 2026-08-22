@@ -176,7 +176,10 @@ function createSessionsSpawnToolSchema(params: {
           backend: Type.Optional(Type.String({ maxLength: 128, description: "Execution placement backend id." })),
           profile: Type.Optional(Type.String({ maxLength: 128, description: "Optional execution profile id." })),
         },
-        { description: "Execution placement; only local process is supported in this release." },
+        {
+          description:
+            "Execution placement; only local process is supported in this release and execution is unavailable with visible=true.",
+        },
       ),
     ),
     ...(params.threadAvailable

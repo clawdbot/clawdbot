@@ -8,10 +8,15 @@ import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 const ExecutionBackendProfileSchema = z
   .object({ label: z.string().optional(), resources: z.record(z.string(), z.unknown()).optional() })
   .catchall(z.unknown());
+const ExecutionBackendProfileKeySchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .refine((value) => value === value.trim(), "execution profile keys must not have leading or trailing whitespace");
 const ExecutionBackendSchema = z
   .object({
     type: z.enum(["process", "container", "kubernetes"]),
-    profiles: z.record(z.string().min(1).max(128), ExecutionBackendProfileSchema).optional(),
+    profiles: z.record(ExecutionBackendProfileKeySchema, ExecutionBackendProfileSchema).optional(),
   })
   .strict();
 
