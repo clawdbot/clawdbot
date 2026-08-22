@@ -117,7 +117,7 @@ class ResizableDivider extends OpenClawLitElement {
     super.disconnectedCallback();
     this.removeEventListener("pointerdown", this.handlePointerDown);
     this.removeEventListener("keydown", this.handleKeyDown);
-    this.stopDragging();
+    this.finishDragging(new Event("disconnect"));
   }
 
   protected override updated() {

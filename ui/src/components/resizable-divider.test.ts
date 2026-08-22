@@ -268,4 +268,21 @@ describe("resizable-divider", () => {
     dispatchPointer(document, "pointermove", 220);
     expect(resized).not.toHaveBeenCalled();
   });
+
+  it("commits the final pointer position when disconnected", async () => {
+    const divider = await renderDivider();
+    const resized = vi.fn();
+    const resizeEnded = vi.fn();
+    divider.setPointerCapture = vi.fn();
+    divider.releasePointerCapture = vi.fn();
+    divider.addEventListener("resize", resized);
+    divider.addEventListener("resize-end", resizeEnded);
+
+    dispatchPointer(divider, "pointerdown", 100);
+    dispatchPointer(document, "pointermove", 120);
+    divider.remove();
+
+    expectLastResizeRatio(resized, 0.65);
+    expectLastResizeRatio(resizeEnded, 0.65);
+  });
 });
