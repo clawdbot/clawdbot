@@ -10,7 +10,7 @@ import { formatByteSize } from "@openclaw/normalization-core";
 import type { Static, TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
-import { toErrorObject } from "../infra/errors.js";
+import { hasErrnoCode, toErrorObject } from "../infra/errors.js";
 import {
   canonicalPathFromExistingAncestor,
   root as fsRoot,
@@ -1298,7 +1298,7 @@ async function openHostFileForUpdate(resolved: string) {
     // Rollback requires the original bytes; unreadable files must fail before mutation.
     return existing.isFile() ? await fs.open(resolved, "r+") : undefined;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return undefined;
     }
     throw error;
