@@ -1,6 +1,7 @@
 // Ollama stream runtime implements native transport behavior.
 import { randomUUID } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
   parseJsonObjectPreservingUnsafeIntegers,
   parseJsonPreservingUnsafeIntegers,
@@ -52,6 +53,7 @@ import {
 } from "./stream-compat.js";
 import { OLLAMA_INCOMPLETE_STREAM_ERROR } from "./stream-contract.js";
 import { checkNdjsonRecordCap } from "./stream-ndjson-cap.js";
+import type { OllamaLocalService } from "./stream-registration.js";
 
 export {
   createConfiguredOllamaCompatStreamWrapper,
@@ -964,6 +966,7 @@ function resolveOllamaRequestTimeoutMs(
 function createRawOllamaStreamFn(
   baseUrl: string,
   defaultHeaders?: Record<string, string>,
+  localService?: OllamaLocalService,
 ): StreamFn {
   const chatUrl = resolveOllamaChatUrl(baseUrl);
   const ssrfPolicy = buildOllamaBaseUrlSsrFPolicy(chatUrl);
@@ -1032,8 +1035,27 @@ function createRawOllamaStreamFn(
         ) {
           headers.Authorization = `Bearer ${options.apiKey}`;
         }
+        const requestTimeoutMs = resolveOllamaRequestTimeoutMs(
+          model,
+          options as { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
+        );
 
-        const { response, release, refreshTimeout } = await fetchWithSsrFGuard({
+        // Acquire after request composition and release after guarded cleanup;
+        // reversing either boundary can leak the lease or stop inference mid-stream.
+        const acquisitionDeadline = localService
+          ? buildTimeoutAbortSignal({
+              timeoutMs: requestTimeoutMs,
+              signal: options?.signal,
+              operation: "ollama-stream.local-service",
+            })
+          : undefined;
+        const localServiceLease = await localService
+          ?.acquire(
+            { providerId: localService.providerId, baseUrl, headers },
+            acquisitionDeadline?.signal,
+          )
+          .finally(acquisitionDeadline?.cleanup);
+        const guardedFetch = await fetchWithSsrFGuard({
           url: chatUrl,
           init: {
             method: "POST",
@@ -1042,12 +1064,13 @@ function createRawOllamaStreamFn(
           },
           policy: ssrfPolicy,
           ...(options?.signal ? { signal: options.signal } : {}),
-          timeoutMs: resolveOllamaRequestTimeoutMs(
-            model,
-            options as { requestTimeoutMs?: unknown; timeoutMs?: unknown } | undefined,
-          ),
+          timeoutMs: requestTimeoutMs,
           auditContext: "ollama-stream.chat",
+        }).catch((error) => {
+          localServiceLease?.release();
+          throw error;
         });
+        const { response, release, refreshTimeout } = guardedFetch;
 
         try {
           await notifyProviderHttpResponse({ options, response, model });
@@ -1355,7 +1378,11 @@ function createRawOllamaStreamFn(
             message: assistantMessage,
           });
         } finally {
-          await release();
+          try {
+            await release();
+          } finally {
+            localServiceLease?.release();
+          }
         }
       } catch (err) {
         const stopReason = options?.signal?.aborted ? "aborted" : "error";
@@ -1389,14 +1416,15 @@ export function createOllamaStreamFn(
 
 export function createConfiguredOllamaStreamFn(params: {
   model: { baseUrl?: string; headers?: unknown };
+  localService?: OllamaLocalService;
   providerBaseUrl?: string;
 }): StreamFn {
-  return createOllamaStreamFn(
-    resolveOllamaBaseUrlForRun({
-      modelBaseUrl: readStringValue(params.model.baseUrl),
-      providerBaseUrl: params.providerBaseUrl,
-    }),
-    resolveOllamaModelHeaders(params.model),
+  const baseUrl = resolveOllamaBaseUrlForRun({
+    modelBaseUrl: readStringValue(params.model.baseUrl),
+    providerBaseUrl: params.providerBaseUrl,
+  });
+  return createPlainTextToolCallCompatWrapper(
+    createRawOllamaStreamFn(baseUrl, resolveOllamaModelHeaders(params.model), params.localService),
   );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

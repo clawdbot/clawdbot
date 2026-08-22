@@ -806,42 +806,46 @@ async function augmentConfiguredOllamaCatalogModels(params: {
 }
 
 // Local and cloud own distinct auth/catalog policy but share native transport and replay rules.
-const OLLAMA_SHARED_PROVIDER_HOOKS = {
-  ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
-  createStreamFn: ({ config, model, provider }) => {
-    if (model.api !== "ollama") {
-      return undefined;
-    }
-    return createLazyConfiguredOllamaStreamFn({
-      model,
-      providerBaseUrl:
-        readProviderBaseUrl(
-          resolveConfiguredOllamaProviderConfig({ config, providerId: provider }),
-        ) ?? (provider === OLLAMA_CLOUD_PROVIDER_ID ? OLLAMA_CLOUD_BASE_URL : undefined),
-    });
-  },
-  buildReplayPolicy: ({ modelApi }) =>
-    modelApi === "ollama"
-      ? buildNativeOllamaReplayPolicy()
-      : buildOpenAICompatibleReplayPolicy(modelApi),
-  resolveReasoningOutputMode: () => "native",
-  resolveThinkingProfile: resolveOllamaThinkingProfile,
-  wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,
-  matchesContextOverflowError: ({ errorMessage }) =>
-    matchesOllamaContextOverflowError(errorMessage),
-  classifyFailoverReason: ({ errorMessage }) => classifyOllamaFailoverReason(errorMessage),
-} satisfies Pick<
-  ProviderPlugin,
-  | "createStreamFn"
-  | "normalizeToolSchemas"
-  | "inspectToolSchemas"
-  | "buildReplayPolicy"
-  | "resolveReasoningOutputMode"
-  | "resolveThinkingProfile"
-  | "wrapStreamFn"
-  | "matchesContextOverflowError"
-  | "classifyFailoverReason"
->;
+const createOllamaSharedProviderHooks = (
+  acquireLocalService: OpenClawPluginApi["runtime"]["llm"]["acquireLocalService"],
+) =>
+  ({
+    ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
+    createStreamFn: ({ config, model, provider }) => {
+      if (model.api !== "ollama") {
+        return undefined;
+      }
+      return createLazyConfiguredOllamaStreamFn({
+        model,
+        localService: { providerId: provider, acquire: acquireLocalService },
+        providerBaseUrl:
+          readProviderBaseUrl(
+            resolveConfiguredOllamaProviderConfig({ config, providerId: provider }),
+          ) ?? (provider === OLLAMA_CLOUD_PROVIDER_ID ? OLLAMA_CLOUD_BASE_URL : undefined),
+      });
+    },
+    buildReplayPolicy: ({ modelApi }) =>
+      modelApi === "ollama"
+        ? buildNativeOllamaReplayPolicy()
+        : buildOpenAICompatibleReplayPolicy(modelApi),
+    resolveReasoningOutputMode: () => "native",
+    resolveThinkingProfile: resolveOllamaThinkingProfile,
+    wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,
+    matchesContextOverflowError: ({ errorMessage }) =>
+      matchesOllamaContextOverflowError(errorMessage),
+    classifyFailoverReason: ({ errorMessage }) => classifyOllamaFailoverReason(errorMessage),
+  }) satisfies Pick<
+    ProviderPlugin,
+    | "createStreamFn"
+    | "normalizeToolSchemas"
+    | "inspectToolSchemas"
+    | "buildReplayPolicy"
+    | "resolveReasoningOutputMode"
+    | "resolveThinkingProfile"
+    | "wrapStreamFn"
+    | "matchesContextOverflowError"
+    | "classifyFailoverReason"
+  >;
 
 export default definePluginEntry({
   id: "ollama",
@@ -849,6 +853,7 @@ export default definePluginEntry({
   description: "Bundled Ollama provider plugin",
   register(api: OpenClawPluginApi) {
     const startupPluginConfig = (api.pluginConfig ?? {}) as OllamaPluginConfig;
+    const providerHooks = createOllamaSharedProviderHooks(api.runtime.llm.acquireLocalService);
     if (api.registrationMode === "full") {
       void checkWsl2CrashLoopRiskLazily(api);
     }
@@ -926,7 +931,7 @@ export default definePluginEntry({
           provider: buildStaticOllamaCloudProvider(),
         }),
       },
-      ...OLLAMA_SHARED_PROVIDER_HOOKS,
+      ...providerHooks,
       resolveDynamicModel: ({ provider, modelId }) => {
         const cloudProvider = buildStaticOllamaCloudProvider();
         const model = cloudProvider.models?.find((entry) => entry.id === modelId);
@@ -1090,7 +1095,7 @@ export default definePluginEntry({
         const { ensureOllamaModelPulled } = await loadOllamaSetup();
         await ensureOllamaModelPulled({ config, model, prompter });
       },
-      ...OLLAMA_SHARED_PROVIDER_HOOKS,
+      ...providerHooks,
       augmentModelCatalog: async (ctx) =>
         await augmentConfiguredOllamaCatalogModels({
           config: ctx.config,
