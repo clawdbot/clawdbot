@@ -80,7 +80,7 @@ export async function planTrackedClawHubSkillState(params: {
       ok: false,
       code: "ambiguous",
       error: link.valid
-        ? `Skill ${JSON.stringify(slug)} has no complete installed-file digest.`
+        ? `Skill ${JSON.stringify(slug)} was installed before OpenClaw recorded file fingerprints, so local changes cannot be detected.`
         : link.reason,
     };
   }

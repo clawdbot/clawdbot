@@ -15,7 +15,7 @@ import {
   fetchClawHubSkillVerification,
   type ClawHubSkillVerificationResponse,
 } from "../../infra/clawhub-skills.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage, isErrno } from "../../infra/errors.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
 import { withClawPackageLifecycleLease } from "../../state/claw-package-lifecycle-lease.js";
@@ -371,7 +371,7 @@ async function guardTrackedSkillLocalState(params: {
   try {
     await fs.lstat(targetDir);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (isErrno(error) && error.code === "ENOENT") {
       return { ok: true, plan: undefined };
     }
     return { ok: false, error: String(error) };
