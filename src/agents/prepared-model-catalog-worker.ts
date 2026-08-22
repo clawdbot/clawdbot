@@ -18,7 +18,10 @@ import {
   type PreparedModelRuntimeAuthScope,
 } from "./prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
-import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
+import {
+  PreparedModelCatalogGenerationMismatchError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "./prepared-model-runtime.errors.js";
 import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.js";
 import { markPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
@@ -59,6 +62,11 @@ export type PreparedModelWorkerResult =
       generationFingerprint: string;
       authStore: AuthProfileStore;
       authModes: PreparedAgentCredentialModes;
+    }>
+  | Readonly<{
+      status: "generation-mismatch";
+      generationFingerprint: string;
+      reconstructedFingerprint: string;
     }>
   | Readonly<{ status: "failed"; error: string }>;
 
@@ -174,36 +182,45 @@ export function createPreparedModelCatalogWorker(params: {
       throw superseded();
     }
   };
-  const pool = new WorkerTaskPool<PreparedModelWorkerRequest, PreparedModelWorkerResult>({
-    workerUrl: resolveRuntimeWorkerUrl({
-      currentModuleUrl: import.meta.url,
-      sourceWorkerName: "prepared-model-catalog.worker",
-      distWorkerPath: "agents/prepared-model-catalog.worker.js",
-    }),
-    maxWorkers: 1,
-    // Recreating this worker would import changed plugin code under the old generation.
-    // Only the lifecycle owner may retire it; crashes close the generation permanently.
-    idleTimeoutMs: 0,
-    restartOnError: false,
-    workerOptions: {
-      workerData: params.input,
-      // Establish state/config environment before worker module initialization reads process.env.
-      env: { ...process.env, ...params.input.input.env },
-    },
-    validateResult: (message) => {
-      assertCurrent();
-      if (
-        message.status === "ok" &&
-        message.generationFingerprint !== params.input.generationFingerprint
-      ) {
-        throw new Error("prepared model catalog worker returned a stale generation");
-      }
-    },
-  });
+  let pool: WorkerTaskPool<PreparedModelWorkerRequest, PreparedModelWorkerResult> | undefined;
+  let terminalError: Error | undefined;
+  const createPool = () =>
+    new WorkerTaskPool<PreparedModelWorkerRequest, PreparedModelWorkerResult>({
+      workerUrl: resolveRuntimeWorkerUrl({
+        currentModuleUrl: import.meta.url,
+        sourceWorkerName: "prepared-model-catalog.worker",
+        distWorkerPath: "agents/prepared-model-catalog.worker.js",
+      }),
+      maxWorkers: 1,
+      // Recreating this worker would import changed plugin code under the old generation.
+      // Only the lifecycle owner may retire it; crashes close the generation permanently.
+      idleTimeoutMs: 0,
+      restartOnError: false,
+      workerOptions: {
+        workerData: params.input,
+        // Establish state/config environment before worker module initialization reads process.env.
+        env: { ...process.env, ...params.input.input.env },
+      },
+      validateResult: (message) => {
+        assertCurrent();
+        if (
+          message.status === "ok" &&
+          message.generationFingerprint !== params.input.generationFingerprint
+        ) {
+          throw new Error("prepared model catalog worker returned a stale generation");
+        }
+      },
+    });
+  const retire = (error: Error) => {
+    const closing = pool;
+    pool = undefined;
+    return closing?.close(error) ?? Promise.resolve();
+  };
   const stop = (error: Error) => {
     clearInterval(generationPoll);
     generationPoll = undefined;
-    return pool.close(error);
+    terminalError ??= error;
+    return retire(error);
   };
   const request = async (
     value: PreparedModelWorkerRequest,
@@ -211,13 +228,16 @@ export function createPreparedModelCatalogWorker(params: {
     let message: PreparedModelWorkerResult;
     try {
       assertCurrent();
+      if (terminalError) {
+        throw terminalError;
+      }
       generationPoll ??= setInterval(() => {
         if (!params.isCurrent()) {
           void stop(superseded());
         }
       }, PREPARED_MODEL_CATALOG_WORKER_GENERATION_POLL_MS);
       generationPoll.unref();
-      message = await pool.run(
+      message = await (pool ??= createPool()).run(
         () => {
           assertCurrent();
           return value;
@@ -231,6 +251,18 @@ export function createPreparedModelCatalogWorker(params: {
     }
     if (message.status === "failed") {
       throw new Error(message.error);
+    }
+    if (message.status === "generation-mismatch") {
+      // Facts from another generation must never be published as this one. Retire the worker
+      // only; the next request rebuilds one from the same lifecycle plan instead of wedging
+      // the generation behind a cached terminal error.
+      const mismatch = new PreparedModelCatalogGenerationMismatchError(
+        params.input.input.agentDir,
+        message.generationFingerprint,
+        message.reconstructedFingerprint,
+      );
+      await retire(mismatch);
+      throw mismatch;
     }
     return message;
   };
