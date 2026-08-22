@@ -378,6 +378,7 @@ describe("session sharing policy", () => {
   it("keeps incognito admin-only while treating identityless connections as owner-equivalent", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:dashboard:incognito-private";
+      const sessionAlias = "dashboard:incognito-private";
       const entry = {
         sessionId: "session-incognito",
         updatedAt: 1,
@@ -392,6 +393,13 @@ describe("session sharing policy", () => {
       const solo = client({});
       const cfg = {};
       const context = { chatAbortControllers: new Map(), getRuntimeConfig: () => cfg } as never;
+      const directRequests = (requestedKey: string) => [
+        { method: "chat.history", requestParams: { sessionKey: requestedKey } },
+        { method: "chat.send", requestParams: { sessionKey: requestedKey } },
+        { method: "sessions.get", requestParams: { key: requestedKey } },
+        { method: "sessions.preview", requestParams: { keys: [requestedKey] } },
+        { method: "sessions.search", requestParams: { sessionKeys: [requestedKey] } },
+      ];
 
       for (const visibleClient of [admin, solo]) {
         expect(isListed(visibleClient, sessionKey, entry)).toBe(true);
@@ -402,14 +410,17 @@ describe("session sharing policy", () => {
             sessionKeys: [sessionKey],
           }),
         ).toBe(true);
-        expect(
-          resolveSessionMutationAuthorization({
-            client: visibleClient,
-            method: "chat.send",
-            requestParams: { sessionKey },
-            context,
-          }).error,
-        ).toBeNull();
+        for (const requestedKey of [sessionKey, sessionAlias]) {
+          for (const request of directRequests(requestedKey)) {
+            expect(
+              resolveSessionMutationAuthorization({
+                client: visibleClient,
+                ...request,
+                context,
+              }).error,
+            ).toBeNull();
+          }
+        }
       }
 
       for (const hiddenClient of [owner, viewer]) {
@@ -421,17 +432,20 @@ describe("session sharing policy", () => {
             sessionKeys: [sessionKey],
           }),
         ).toBe(false);
-        expect(
-          resolveSessionMutationAuthorization({
-            client: hiddenClient,
-            method: "chat.send",
-            requestParams: { sessionKey },
-            context,
-          }).error,
-        ).toMatchObject({
-          code: "INVALID_REQUEST",
-          message: `Incognito session "${sessionKey}" was not found.`,
-        });
+        for (const requestedKey of [sessionKey, sessionAlias]) {
+          for (const request of directRequests(requestedKey)) {
+            expect(
+              resolveSessionMutationAuthorization({
+                client: hiddenClient,
+                ...request,
+                context,
+              }).error,
+            ).toMatchObject({
+              code: "INVALID_REQUEST",
+              message: `Incognito session "${requestedKey}" was not found.`,
+            });
+          }
+        }
       }
     });
   });

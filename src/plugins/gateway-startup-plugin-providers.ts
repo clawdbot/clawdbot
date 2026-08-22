@@ -85,11 +85,21 @@ type ManifestModelProviderLookup = {
 function buildManifestModelProviderLookup(
   manifestRegistry: PluginManifestRegistry,
   config: OpenClawConfig,
+  modelIdsByProvider: ReadonlyMap<string, ReadonlySet<string>>,
 ): ManifestModelProviderLookup {
-  const modelApis = new Map(
-    planEffectiveModelCatalogRows({ registry: manifestRegistry, config }).rows.flatMap((row) =>
-      row.api ? [[row.mergeKey, row.api] as const] : [],
+  const providerFilters = [...modelIdsByProvider.keys()];
+  const mergeKeyFilter = new Set(
+    [...modelIdsByProvider].flatMap(([providerId, modelIds]) =>
+      [...modelIds].map((modelId) => buildModelCatalogMergeKey(providerId, modelId)),
     ),
+  );
+  const modelApis = new Map(
+    planEffectiveModelCatalogRows({
+      registry: manifestRegistry,
+      config,
+      providerFilters,
+      mergeKeyFilter,
+    }).rows.flatMap((row) => (row.api ? [[row.mergeKey, row.api] as const] : [])),
   );
   return {
     modelApis,
@@ -104,7 +114,6 @@ export function collectConfiguredAgentModelProviderIds(
   manifestRegistry: PluginManifestRegistry,
 ): ReadonlySet<string> {
   const modelIdsByProvider = new Map<string, Set<string>>();
-  const manifestModelProviders = buildManifestModelProviderLookup(manifestRegistry, config);
   const addModelProviderRefs = (value: unknown) => {
     for (const { providerId, modelId } of listModelProviderRefParts(value)) {
       const modelIds = modelIdsByProvider.get(providerId) ?? new Set<string>();
@@ -134,6 +143,15 @@ export function collectConfiguredAgentModelProviderIds(
     addModelProviderRefs(agent.utilityModel);
     addModelMapProviderIds(agent.models);
   }
+
+  if (modelIdsByProvider.size === 0) {
+    return new Set();
+  }
+  const manifestModelProviders = buildManifestModelProviderLookup(
+    manifestRegistry,
+    config,
+    modelIdsByProvider,
+  );
 
   return new Set(
     [...modelIdsByProvider.entries()]

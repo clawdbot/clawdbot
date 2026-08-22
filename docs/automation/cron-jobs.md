@@ -141,12 +141,14 @@ An event trigger adds a headless condition script to an `every`, `cron`, or `str
   schedule: { kind: "every", everyMs: 30000 },
   trigger: {
     // Fires only when the observed status differs from the last evaluation.
-    script: "const res = await tools.call('exec', { command: 'gh pr checks 123 --json state -q \\'.[].state\\' | sort -u' }); const status = String(res?.result?.details?.aggregated ?? '').trim(); json({ fire: status !== trigger.state?.status, message: `PR 123 CI: ${trigger.state?.status ?? 'unknown'} -> ${status}`, state: { status } });",
+    script: "const res = await exec({ command: 'gh pr checks 123 --json state -q \\'.[].state\\' | sort -u' }); const status = String(res?.aggregated ?? '').trim(); json({ fire: status !== trigger.state?.status, message: `PR 123 CI: ${trigger.state?.status ?? 'unknown'} -> ${status}`, state: { status } });",
     once: false,
   },
   payload: { kind: "agentTurn", message: "Investigate the CI status change." },
 }
 ```
+
+When upgrading, run `openclaw doctor --fix` to migrate persisted trigger scripts that call `tools.call('exec', args)` and read the legacy `.result.details` envelope. Doctor leaves custom or ambiguous legacy scripts unchanged and identifies each affected job for manual conversion; standalone script payloads are not migrated.
 
 The script must return `{ fire, message?, state? }`. The previous JSON state is available as the deeply frozen `trigger.state`; stream gates also receive the current batch as `trigger.streamBatch`. Return a new `state` value to persist it. State is capped at 16 KB. When a firing result includes `message`, the scheduler appends it to the system-event text or agent-turn message before execution. `once: true` disables the job after its first successful fired payload.
 
@@ -301,18 +303,18 @@ envelope continue their ordinary non-app behavior; recreate or reauthorize one
 only when it needs Codex app access. See
 [Native Codex plugins](/plugins/codex-native-plugins#scheduled-automations).
 
-| Style           | `--session` value   | Runs in                     | Best for                        |
-| --------------- | ------------------- | --------------------------- | ------------------------------- |
-| Main session    | `main`              | Owning agent's main session | Reminders, system events        |
-| Isolated        | `isolated`          | Dedicated `cron:<jobId>`    | Reports, background chores      |
-| Current session | `current`           | Bound at creation time      | Context-aware recurring work    |
-| Custom session  | `session:custom-id` | Persistent named session    | Workflows that build on history |
+| Style           | `--session` value   | Runs in                                              | Best for                        |
+| --------------- | ------------------- | ---------------------------------------------------- | ------------------------------- |
+| Main session    | `main`              | Owning agent's main session                          | Reminders, system events        |
+| Isolated        | `isolated`          | Dedicated `cron:<jobId>`                             | Reports, background chores      |
+| Current session | `current`           | Detached; commits to the creation-bound conversation | Context-aware recurring work    |
+| Custom session  | `session:custom-id` | Persistent named session                             | Workflows that build on history |
 
 Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events and heartbeats still default to `main`; command and script payloads still default to `isolated`.
 
 <AccordionGroup>
-  <Accordion title="Main session vs isolated vs custom">
-    **Main session** jobs enqueue a system event into the owning agent's main session and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). The event is processed with that session's existing context and last delivery context. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+  <Accordion title="Main session vs current vs isolated vs custom">
+    **Main session** jobs enqueue a system event into the owning agent's main session and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). The event is processed with that session's existing context and last delivery context. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Current-session** jobs execute in a detached run session, read a bounded tail of the conversation captured when the job was created, and commit the final visible assistant result back to that exact conversation. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
     Main-session automation events are self-contained system-event reminders. They do not automatically include the default heartbeat prompt or the heartbeat monitor scratch; say it explicitly in the automation event text if a reminder should consult that context.
 
@@ -341,6 +343,12 @@ Agent-turn jobs default to the creating conversation when the create request car
 | `announce` | Fallback-deliver final text to the target if the agent did not send |
 | `webhook`  | POST finished event payload to a URL                                |
 | `none`     | No runner fallback delivery                                         |
+
+For a `current` job using `announce` (the default), the final assistant result is a first-class session completion, not a WebChat-specific outbound message. OpenClaw waits for active turns in the creation-bound conversation, verifies that the same session generation still owns the key, and commits the result through the canonical transcript writer with cron job/run provenance and a job/run idempotency key. A retry cannot append the same result twice.
+
+WebChat receives the committed `session.message` event immediately. The same assistant result comes from `chat.history` after a refresh or reconnect; no follow-up user message is required. Delivery is successful only after that transcript/event commit succeeds.
+
+If the bound conversation is an external channel, OpenClaw also performs its normal durable channel send. That send still happens at most once, and the required session commit does not create a second external message. A verified `message` tool send suppresses the automatic channel resend but does not suppress the session commit. The run is reported delivered only after both the external recipient handoff (when required) and the canonical session commit succeed.
 
 <Warning>
   Every outbound automation webhook uses the strict SSRF guard. Loopback,
@@ -842,7 +850,7 @@ Disable automations: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
   </Accordion>
   <Accordion title="Maintenance">
-    `cron.sessionRetention` (default `24h`, `false` or `"0h"` disables) prunes isolated run-session entries. Run history keeps the newest 2000 terminal rows per job; lost rows retain their 24-hour cleanup window.
+    `cron.sessionRetention` (default `24h`, `false` or `"0h"` disables) prunes isolated run-session entries. Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
   </Accordion>
   <Accordion title="Legacy store migration">
     On upgrade, run `openclaw doctor --fix` to import historical `~/.openclaw/cron/jobs.json`, `jobs-state.json`, `jobs-quarantine.json`, and `runs/*.jsonl` files into SQLite and archive the originals with a `.migrated` suffix. Malformed job rows remain recoverable in SQLite while valid jobs keep running.

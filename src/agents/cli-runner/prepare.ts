@@ -19,6 +19,7 @@ import {
   deactivateMcpLoopbackClientGrantCapture,
   mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
+  transferMcpLoopbackClientGrant,
 } from "../../gateway/mcp-grant-store.js";
 import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
@@ -186,6 +187,7 @@ const defaultPrepareDeps = {
   deactivateMcpLoopbackClientGrantCapture,
   mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
+  transferMcpLoopbackClientGrant,
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
   resolveOpenClawReferencePaths: async (
@@ -841,6 +843,8 @@ export async function prepareCliRunContext(
       provider: params.provider,
       modelProvider: backendResolved.modelProvider,
       model: contextModelId,
+      modelContextWindow: params.modelContextWindow,
+      modelContextTokens: params.modelContextTokens,
       allowAsyncLoad: false,
       allowUnscopedModelLookup,
     });
@@ -1177,25 +1181,51 @@ export async function prepareCliRunContext(
     };
     const mcpClientGrantCapture =
       mcpClientGrant && mcpLoopbackRuntime
-        ? {
-            activate: (captureKey: string) => {
-              const activated = prepareDeps.activateMcpLoopbackClientGrantCapture({
-                token: mcpClientGrant.token,
-                runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
-                captureKey,
-              });
-              if (!activated) {
-                throw new Error("CLI MCP client grant is no longer valid for this Gateway runtime");
-              }
-            },
-            deactivate: (captureKey: string) => {
-              prepareDeps.deactivateMcpLoopbackClientGrantCapture({
-                token: mcpClientGrant.token,
-                runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
-                captureKey,
-              });
-            },
-          }
+        ? (() => {
+            let activeToken = mcpClientGrant.token;
+            return {
+              transportToken: mcpClientGrant.token,
+              adoptProcessToken: (processToken: string) => {
+                if (activeToken === processToken) {
+                  return;
+                }
+                if (
+                  !prepareDeps.transferMcpLoopbackClientGrant({
+                    sourceToken: mcpClientGrant.token,
+                    targetToken: processToken,
+                    runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
+                  })
+                ) {
+                  throw new Error(
+                    "CLI MCP client grant could not transfer onto the live process bearer",
+                  );
+                }
+                activeToken = processToken;
+              },
+              revokeProcessToken: () => {
+                prepareDeps.revokeMcpLoopbackClientGrant(activeToken);
+              },
+              activate: (captureKey: string) => {
+                const activated = prepareDeps.activateMcpLoopbackClientGrantCapture({
+                  token: activeToken,
+                  runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
+                  captureKey,
+                });
+                if (!activated) {
+                  throw new Error(
+                    "CLI MCP client grant is no longer valid for this Gateway runtime",
+                  );
+                }
+              },
+              deactivate: (captureKey: string) => {
+                prepareDeps.deactivateMcpLoopbackClientGrantCapture({
+                  token: activeToken,
+                  runtimeOwnerToken: mcpLoopbackRuntime.ownerToken,
+                  captureKey,
+                });
+              },
+            };
+          })()
         : undefined;
     let mcpClientGrantRevoked = false;
     const cleanupMcpClientGrant = mcpClientGrant
@@ -1254,6 +1284,7 @@ export async function prepareCliRunContext(
       provider: params.provider,
       modelId,
       contextTokenBudget: contextWindowInfo.tokens,
+      thinkingLevel: params.thinkLevel === "ultra" ? "max" : params.thinkLevel,
       authProfileId: effectiveAuthProfileId,
       executionMode,
       toolAvailability: params.cliToolAvailability

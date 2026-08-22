@@ -1,11 +1,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import type { Duplex, Readable, Writable } from "node:stream";
+import type { Duplex, Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { toErrorObject } from "../../infra/errors.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { onDecodedOutput } from "../decoded-output.js";
 import { addSecretInputStdio, writeSecretInputToChild } from "../spawn-secret-input.js";
+import { createManagedChildStdin } from "./adapters/child-stdin.js";
 import { toStringEnv } from "./adapters/env.js";
 import {
   encodeServiceChildMessage,
@@ -13,7 +14,7 @@ import {
   type ServiceChildRelayMessage,
   type ServiceChildStart,
 } from "./service-child-protocol.js";
-import type { ManagedRunStdin, SpawnProcessAdapter, SpawnSecretInput } from "./types.js";
+import type { SpawnProcessAdapter, SpawnSecretInput } from "./types.js";
 
 type ServiceAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
 type AuthorityState = "starting" | "active" | "closing" | "closed" | "identity-lost";
@@ -49,101 +50,57 @@ function reserveStdioEntry(stdio: StdioEntry[], value: StdioEntry): number {
   return fd;
 }
 
-function createManagedStdin(stream: Writable | null): ManagedRunStdin | undefined {
-  if (!stream) {
-    return undefined;
-  }
-  let ended = stream.writableEnded || stream.writableFinished;
-  let destroyed = stream.destroyed;
-  stream.once("finish", () => {
-    ended = true;
-  });
-  stream.once("close", () => {
-    ended = true;
-    destroyed = true;
-  });
-  stream.once("error", () => {
-    destroyed = true;
-  });
-  return {
-    get destroyed() {
-      return destroyed || stream.destroyed;
-    },
-    get writable() {
-      return !destroyed && !ended && stream.writable;
-    },
-    get writableEnded() {
-      return ended || stream.writableEnded;
-    },
-    get writableFinished() {
-      return stream.writableFinished;
-    },
-    write(data, callback) {
-      if (destroyed || ended || !stream.writable) {
-        callback?.(new Error("stdin is not writable"));
-        return;
-      }
-      try {
-        stream.write(data, callback);
-      } catch (error) {
-        callback?.(toErrorObject(error, "stdin write failed"));
-      }
-    },
-    end() {
-      ended = true;
-      stream.end();
-    },
-    destroy() {
-      ended = true;
-      destroyed = true;
-      stream.destroy();
-    },
-  };
-}
-
 function createOutputRelay(stream: Readable) {
   const listeners = new Set<(chunk: string) => void>();
-  const pending: string[] = [];
+  const rawListeners = new Set<(chunk: Buffer) => void>();
+  const pending: Array<string | Buffer> = [];
   let pendingBytes = 0;
   let active = false;
-  const activate = (deliver: boolean) => {
+  const deliver = (chunk: string | Buffer) => {
+    if (typeof chunk === "string") {
+      listeners.forEach((listener) => listener(chunk));
+    } else {
+      rawListeners.forEach((listener) => listener(chunk));
+    }
+  };
+  const activate = (keepOutput: boolean) => {
     if (active) {
       return;
     }
     active = true;
-    if (deliver) {
-      for (const text of pending) {
-        for (const listener of listeners) {
-          listener(text);
-        }
-      }
+    if (keepOutput) {
+      pending.forEach(deliver);
     }
     pending.length = 0;
     pendingBytes = 0;
     stream.resume();
   };
-  onDecodedOutput(stream, (text) => {
+  const enqueue = (chunk: string | Buffer) => {
     if (active) {
-      for (const listener of listeners) {
-        listener(text);
-      }
+      deliver(chunk);
       return;
     }
-    pending.push(text);
-    pendingBytes += Buffer.byteLength(text);
-    // Bound host memory while retaining the rest in the native pipe until subscription.
-    if (pendingBytes >= stream.readableHighWaterMark) {
-      stream.pause();
+    pending.push(chunk);
+    if (Buffer.isBuffer(chunk)) {
+      pendingBytes += chunk.length;
+      if (pendingBytes >= stream.readableHighWaterMark) {
+        stream.pause();
+      }
     }
-  });
+  };
+  onDecodedOutput(stream, enqueue, enqueue);
   return {
-    subscribe: (listener: (chunk: string) => void) => {
+    subscribe: (listener: (chunk: string) => void, onRaw?: (chunk: Buffer) => void) => {
       listeners.add(listener);
+      if (onRaw) {
+        rawListeners.add(onRaw);
+      }
       activate(true);
     },
     drain: () => activate(false),
     clear: () => {
       listeners.clear();
+      rawListeners.clear();
       pending.length = 0;
       pendingBytes = 0;
     },
@@ -215,6 +172,8 @@ export async function createServiceChildRelayAdapter(params: {
   let rejectWait: ((error: Error) => void) | undefined;
   let waitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | undefined;
   let waitSettled = false;
+  const extinction = createDeferredCore();
+  void extinction.promise.catch(() => undefined);
 
   const settleWait = () => {
     if (waitSettled) {
@@ -256,6 +215,7 @@ export async function createServiceChildRelayAdapter(params: {
       rejectStartup(waitError);
     }
     settleWait();
+    extinction.reject(waitError);
   };
 
   let pending = "";
@@ -314,6 +274,7 @@ export async function createServiceChildRelayAdapter(params: {
     state = "closed";
     rootResult ??= { code: null, signal: requestedSignal ?? null };
     settleWait();
+    extinction.resolve();
   });
   control.on("error", (error) => {
     loseIdentity(error.message);
@@ -368,7 +329,7 @@ export async function createServiceChildRelayAdapter(params: {
     throw startupError ?? secretDeliveryError;
   }
 
-  const stdin = createManagedStdin(relay.stdin);
+  const stdin = createManagedChildStdin(relay.stdin);
   if (params.input !== undefined) {
     stdin?.write(params.input);
     stdin?.end();
@@ -417,6 +378,7 @@ export async function createServiceChildRelayAdapter(params: {
       });
       return await waitPromise;
     },
+    waitForExtinction: () => extinction.promise,
     kill,
     dispose: () => {
       stdoutRelay.clear();

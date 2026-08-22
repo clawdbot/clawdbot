@@ -18,6 +18,7 @@ import {
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
@@ -39,6 +40,7 @@ import {
 } from "./client.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
+  isCodexPairedNodeRemoteExecPlacementSandbox,
   isCodexRemoteExecPlacementSandbox,
   isCodexSandboxExecServerEnabled,
   readCodexPluginConfig,
@@ -51,6 +53,7 @@ import {
 import {
   resolveCodexExternalSandboxPolicyForOpenClawSandbox,
   resolveCodexMessageToolProvider,
+  resolveCodexNodePlacementToolConstructionPlan,
   resolveCodexSandboxEnvironmentSelection,
   shouldEnableCodexAppServerNativeToolSurface,
   shouldRequireCodexSandboxExecServerEnvironment,
@@ -171,6 +174,7 @@ export async function runCodexAppServerSideQuestion(
   params: AgentHarnessSideQuestionParamsV2,
   options: {
     bindingStore: CodexAppServerBindingStore;
+    runtime?: PluginRuntime;
     pluginConfig?: unknown;
     /** Private app-server request identity; public side-run identity remains params.model. */
     runtimeModelId?: string;
@@ -194,6 +198,11 @@ export async function runCodexAppServerSideQuestion(
   if (!binding?.threadId) {
     throw new Error(
       "Codex /btw needs an active Codex thread. Send a normal message first, then try /btw again.",
+    );
+  }
+  if (isCodexPairedNodeRemoteExecPlacementSandbox(params.sandbox)) {
+    throw new Error(
+      "Normal Codex turns are supported on paired devices, but /btw is not yet bound to the active placement.",
     );
   }
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
@@ -413,9 +422,10 @@ export async function runCodexAppServerSideQuestion(
     if (!sandboxEnvironment) {
       return;
     }
+    const environment = sandboxEnvironment;
     sandboxEnvironment = undefined;
     sandboxEnvironmentClient = undefined;
-    await releaseCodexSandboxExecServerEnvironment(params.sandbox);
+    await releaseCodexSandboxExecServerEnvironment(params.sandbox, environment);
   };
   const ensureSandboxEnvironment = async (targetClient: CodexAppServerClient) => {
     if (!sandboxEnvironmentRequired || sandboxEnvironmentClient === targetClient) {
@@ -425,9 +435,15 @@ export async function runCodexAppServerSideQuestion(
     const environment = await ensureCodexSandboxExecServerEnvironment({
       client: targetClient,
       sandbox: params.sandbox ?? null,
+      runtime: options.runtime,
       appServerStartOptions: appServer.start,
       timeoutMs: appServer.requestTimeoutMs,
       signal: runAbortController.signal,
+      onExecutionDisconnect: (error) => {
+        collector.reject(error);
+        embeddedAgentLog.warn(error.message);
+        runAbortController.abort("client_closed");
+      },
     });
     if (!environment) {
       throw new Error(
@@ -680,7 +696,7 @@ export async function runCodexAppServerSideQuestion(
       await withLeasedCodexAppServerClientStartSelectionRetry({
         lease: clientLease,
         options: clientOptions,
-        signal: params.opts?.abortSignal,
+        signal: runAbortController.signal,
         run: async (forkClient, requestOptions) => {
           await ensureSandboxEnvironment(forkClient);
           const executionCwd = sandboxEnvironment?.cwd ?? cwd;
@@ -725,7 +741,7 @@ export async function runCodexAppServerSideQuestion(
         threadId: childThreadId,
         items: [sideBoundaryPromptItem()],
       },
-      { timeoutMs: appServer.requestTimeoutMs, signal: params.opts?.abortSignal },
+      { timeoutMs: appServer.requestTimeoutMs, signal: runAbortController.signal },
     );
 
     const effort = usesSupervisionConnection
@@ -771,7 +787,7 @@ export async function runCodexAppServerSideQuestion(
                   },
                 }),
           },
-          { timeoutMs: appServer.requestTimeoutMs, signal: params.opts?.abortSignal },
+          { timeoutMs: appServer.requestTimeoutMs, signal: runAbortController.signal },
         )
         .catch((error: unknown) => {
           if (isCodexAppServerIndeterminateRequestCancellationError(error)) {
@@ -803,7 +819,7 @@ export async function runCodexAppServerSideQuestion(
     let text: string;
     try {
       text = await collector.wait({
-        signal: params.opts?.abortSignal,
+        signal: runAbortController.signal,
         timeoutMs: Math.max(
           appServer.turnCompletionIdleTimeoutMs,
           SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
@@ -1042,6 +1058,10 @@ async function createCodexSideToolBridge(input: {
             sessionKey: sandboxSessionKey,
             workspaceDir: input.cwd,
           });
+    const toolConstructionPlan = resolveCodexNodePlacementToolConstructionPlan(
+      sandbox,
+      input.nativeToolSurfaceEnabled,
+    );
     const allTools = createOpenClawCodingTools({
       agentId: input.sessionAgentId,
       sessionKey: sandboxSessionKey,
@@ -1114,6 +1134,7 @@ async function createCodexSideToolBridge(input: {
         currentChannelId: input.params.currentChannelId,
       }).channelId,
       sandbox,
+      ...(toolConstructionPlan ? { toolConstructionPlan } : {}),
       emitBeforeToolCallDiagnostics: false,
       modelHasVision: runtimeModel.input?.includes("image") ?? false,
       requireExplicitMessageTarget: true,
@@ -1413,7 +1434,7 @@ class CodexSideQuestionCollector {
     settle?.resolve(text);
   }
 
-  private reject(error: string | Error): void {
+  reject(error: string | Error): void {
     this.terminalError = error instanceof Error ? error : new Error(error);
     const settle = this.settle;
     this.settle = undefined;

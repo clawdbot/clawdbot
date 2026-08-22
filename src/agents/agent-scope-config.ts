@@ -1,5 +1,6 @@
 /** Resolves configured agent ids, directories, workspaces, and merged agent defaults. */
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -94,17 +95,12 @@ function stripNullBytes(s: string): string {
 /** Lists valid configured agent entries from config. */
 export function listAgentEntriesWithSource(cfg: OpenClawConfig): ListedAgentEntry[] {
   const roster = readAgentRosterProperty(cfg);
-  if (
-    roster?.kind === "entries" &&
-    roster.value &&
-    typeof roster.value === "object" &&
-    !Array.isArray(roster.value)
-  ) {
+  if (roster?.kind === "entries" && isRecord(roster.value)) {
     return Object.entries(roster.value).flatMap(([id, entry]) =>
-      entry !== null && typeof entry === "object" && !Array.isArray(entry)
+      isRecord(entry)
         ? [
             {
-              entry: { ...(entry as Omit<AgentEntry, "id">), id },
+              entry: { ...entry, id },
               source: { kind: "entries" as const, key: id },
             },
           ]
@@ -286,7 +282,28 @@ export function tryResolveDefaultAgentId(cfg: OpenClawConfig): string | undefine
 
 export function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {
   const id = normalizeAgentId(agentId);
-  return listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === id);
+  // Point lookups are hot; the public list helper must clone every keyed entry.
+  // Traverse the roster directly so a match does not project unrelated agents.
+  const roster = readAgentRosterProperty(cfg);
+  if (roster?.kind === "entries" && isRecord(roster.value)) {
+    const entries = roster.value;
+    for (const key in entries) {
+      if (!Object.hasOwn(entries, key)) {
+        continue;
+      }
+      const entry = entries[key];
+      if (isRecord(entry) && normalizeAgentId(key) === id) {
+        return { ...entry, id: key };
+      }
+    }
+    return undefined;
+  }
+  if (roster?.kind === "list" && Array.isArray(roster.value)) {
+    return (roster.value as AgentEntry[]).find(
+      (entry) => entry !== null && typeof entry === "object" && normalizeAgentId(entry.id) === id,
+    );
+  }
+  return undefined;
 }
 
 /** Resolves the authored entry object for in-place canonical config mutations. */

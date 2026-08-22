@@ -46,10 +46,6 @@ export class UsageRefreshPolicy {
     this.lastLoadedAtMs = value;
   }
 
-  markLoaded(): void {
-    this.lastLoadedAtMs = Date.now();
-  }
-
   resetPayload(): void {
     this.lastLoadedAtMs = null;
     this.reloadPending = false;

@@ -43,6 +43,7 @@ import {
   type DiscordMediaInfo,
 } from "./message-utils.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
+import { buildDiscordRoutePeer } from "./route-resolution.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
 import {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
@@ -88,6 +89,7 @@ export async function buildDiscordMessageProcessContext(params: {
     messageChannelId,
     isGuildMessage,
     isDirectMessage,
+    isGroupDm,
     baseText,
     preflightAudioTranscript,
     threadChannel,
@@ -330,6 +332,11 @@ export async function buildDiscordMessageProcessContext(params: {
   const replyTarget = replyPlan.replyTarget;
   const replyReference = replyPlan.replyReference;
   const autoThreadContext = replyPlan.autoThreadContext;
+  const conversationParentId = threadChannel
+    ? threadParentId
+    : autoThreadContext
+      ? messageChannelId
+      : undefined;
 
   const effectiveFrom = isDirectMessage
     ? `discord:${author.id}`
@@ -372,7 +379,7 @@ export async function buildDiscordMessageProcessContext(params: {
       inboundEventKind: ctx.inboundEventKind,
     },
     {
-      parentId: threadChannel ? threadParentId : undefined,
+      parentId: conversationParentId,
       threadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
     },
   );
@@ -398,15 +405,21 @@ export async function buildDiscordMessageProcessContext(params: {
       isBot: author.bot && !sender.isPluralKit ? true : undefined,
     },
     conversation: {
-      kind: isDirectMessage ? "direct" : "channel",
+      kind: isGroupDm ? "group" : isDirectMessage ? "direct" : "channel",
       id: messageChannelId,
+      routePeer: buildDiscordRoutePeer({
+        isDirectMessage,
+        isGroupDm,
+        directUserId: author.id,
+        conversationId: messageChannelId,
+      }),
       nativeChannelId: messageChannelId,
       avatar: ctx.conversationAvatar,
       label: fromLabel,
       spaceId: isGuildMessage
         ? (guildInfo?.id ?? data.guild?.id ?? data.guild_id ?? guildSlug) || undefined
         : undefined,
-      parentId: threadChannel ? threadParentId : undefined,
+      parentId: conversationParentId,
       threadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
     },
     route: {

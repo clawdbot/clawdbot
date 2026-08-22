@@ -1,9 +1,9 @@
-import fs from "node:fs";
 import {
   rewriteDoctorSessionEntries,
   scanDoctorSessionEntriesTolerant,
 } from "../config/sessions/session-accessor.js";
-import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
+import { stripRuntimeOnlySessionSkillsFields } from "../config/sessions/store-entry-shape.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import {
@@ -11,7 +11,7 @@ import {
   isOpenClawAgentDatabaseOpen,
 } from "../state/openclaw-agent-db.js";
 import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
+import { listExistingAgentDatabaseTargets } from "./doctor-session-sqlite-readers.js";
 
 export type SessionDeliveryStateRepairReport = {
   found: number;
@@ -25,6 +25,33 @@ export function repairCanonicalSessionDeliveryStates(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): SessionDeliveryStateRepairReport {
+  return repairCanonicalSessionEntries({
+    ...params,
+    transform: normalizeLegacySessionEntryDelivery,
+    updateDeliveryProjection: true,
+  });
+}
+
+/** Removes runtime-only skill catalogs from previously persisted session rows. */
+export function repairCanonicalSessionResolvedSkills(params: {
+  apply: boolean;
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): SessionDeliveryStateRepairReport {
+  return repairCanonicalSessionEntries({
+    ...params,
+    transform: stripRuntimeOnlySessionSkillsFields,
+    updateDeliveryProjection: false,
+  });
+}
+
+function repairCanonicalSessionEntries(params: {
+  apply: boolean;
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  transform: (entry: SessionEntry) => SessionEntry;
+  updateDeliveryProjection: boolean;
+}): SessionDeliveryStateRepairReport {
   const targets = listExistingAgentDatabaseTargets(params.cfg, params.env);
   let found = 0;
   let repaired = 0;
@@ -37,19 +64,19 @@ export function repairCanonicalSessionDeliveryStates(params: {
         scanDoctorSessionEntriesTolerant(
           { agentId: target.agentId, env: params.env, storePath: target.storePath },
           ({ entry, recoveredFromProjections, sessionKey }) => {
-            if (!recoveredFromProjections && normalizeLegacySessionEntryDelivery(entry) !== entry) {
+            if (!recoveredFromProjections && params.transform(entry) !== entry) {
               sessionKeys.push(sessionKey);
             }
           },
         );
-        return { found: true, value: sessionKeys.length } as { found: true; value: number };
+        return sessionKeys.length;
       },
     });
-    if (!operation.ok || !operation.value.found) {
+    if (!operation.ok) {
       continue;
     }
-    found += operation.value.value;
-    if (!params.apply || operation.value.value === 0) {
+    found += operation.value;
+    if (!params.apply || operation.value === 0) {
       continue;
     }
     const wasOpen = isOpenClawAgentDatabaseOpen(target.sqlitePath);
@@ -57,8 +84,8 @@ export function repairCanonicalSessionDeliveryStates(params: {
       repaired += rewriteDoctorSessionEntries({
         scope: { agentId: target.agentId, env: params.env, storePath: target.storePath },
         sessionKeys,
-        transform: normalizeLegacySessionEntryDelivery,
-        updateDeliveryProjection: true,
+        transform: params.transform,
+        updateDeliveryProjection: params.updateDeliveryProjection,
       });
     } finally {
       if (!wasOpen) {
@@ -67,19 +94,4 @@ export function repairCanonicalSessionDeliveryStates(params: {
     }
   }
   return { found, repaired, scannedStores: targets.length };
-}
-
-function listExistingAgentDatabaseTargets(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-): Array<{ agentId: string; sqlitePath: string; storePath: string }> {
-  const seenPaths = new Set<string>();
-  return resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env }).flatMap((target) => {
-    const sqlitePath = resolveTargetSqlitePath(target);
-    if (seenPaths.has(sqlitePath) || !fs.existsSync(sqlitePath)) {
-      return [];
-    }
-    seenPaths.add(sqlitePath);
-    return [{ agentId: target.agentId, sqlitePath, storePath: target.storePath }];
-  });
 }

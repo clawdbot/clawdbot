@@ -127,11 +127,12 @@ export function buildWidgetDocument(
     "if(d&&d.get)act=d.get.bind(ua);}catch{}" +
     'post({type:"openclaw:widget-prompt-offer"},"*",[c.port2]);' +
     'post({type:"openclaw:widget-bridge-port-offer"},"*",[b.port2]);' +
-    "let ticket=null;let sequence=0;let hostInitExpired=false;const pending=new Map();const waiting=[];" +
+    "let ticket=null;let controlUiBaseUrl=null;let sequence=0;let hostInitExpired=false;const pending=new Map();const waiting=[];" +
     'const initTimer=later(()=>{hostInitExpired=true;while(waiting.length){const entry=shift.call(waiting);if(entry)entry.reject(new ErrorCtor("widget host capabilities unavailable"));}' +
     'while(promptWaiting.length){const entry=shift.call(promptWaiting);if(entry)entry.reject(new ErrorCtor("widget prompt host unavailable"));}},5000);' +
     'b.port1.addEventListener("message",event=>{const data=event.data;' +
     'if(data?.type==="openclaw:widget-host-init"&&typeof data.ticket==="string"){ticket=data.ticket;' +
+    'const base=data.controlUiBaseUrl;controlUiBaseUrl=typeof base==="string"&&/^https?:\\/\\//.test(base)?base:null;' +
     'bridgePost({type:"openclaw:widget-host-init-ack",ticket});cancel(initTimer);' +
     "while(waiting.length){const entry=shift.call(waiting);if(entry)entry.send();}" +
     "while(promptWaiting.length){const entry=shift.call(promptWaiting);if(entry)entry.send();}return;}" +
@@ -150,9 +151,11 @@ export function buildWidgetDocument(
     'const inline=()=>{promptPost({type:"openclaw:widget-prompt",prompt:value});resolve(true);};' +
     'if(inlinePromptReady)inline();else if(hostInitExpired)reject(new ErrorCtor("widget prompt host unavailable"));' +
     "else push.call(promptWaiting,{send,inline,reject});});};" +
-    "const api=freeze({" +
+    'const host={};define(host,"controlUiBaseUrl",{enumerable:true,get:()=>controlUiBaseUrl});freeze(host);' +
+    "const api=freeze({host," +
     'prompt:freeze({send:sendPrompt}),state:freeze({emit:payload=>request("state.emit",{payload})}),' +
     'data:freeze({read:(bindingId,params)=>request("data.read",{bindingId:stringify(bindingId),params})}),' +
+    'action:freeze({run:(action,params)=>request("action.run",{action:stringify(action),params:params===undefined?{}:params})}),' +
     'cron:freeze({trigger:jobId=>request("cron.trigger",{jobId:stringify(jobId)})})});' +
     'define(window,"openclaw",{value:api,writable:false,configurable:false});' +
     "window.sendPrompt=text=>{void sendPrompt(text);};" +

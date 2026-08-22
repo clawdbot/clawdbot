@@ -386,6 +386,7 @@ describe("OpenClaw shell update affordance", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const shared = {
+      mobileNavLayout: false,
       onboarding: false,
       updateAvailable: {
         currentVersion: "2026.7.1",
@@ -454,28 +455,56 @@ describe("OpenClaw shell update affordance", () => {
     container.remove();
   });
 
-  it("treats a closed mobile drawer as hidden navigation", () => {
-    expect(
-      navigationSurfaceIsHidden({
+  it("keeps attention in the closed mobile drawer while preserving stale-client refresh", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    try {
+      const navigationSurfaceHidden = navigationSurfaceIsHidden({
         onboarding: false,
         navCollapsed: false,
         navDrawerOpen: false,
         mobileNavLayout: true,
-      }),
-    ).toBe(true);
-    expect(
-      navigationSurfaceIsHidden({
-        onboarding: false,
-        navCollapsed: false,
-        navDrawerOpen: true,
+      });
+      expect(navigationSurfaceHidden).toBe(true);
+      const shared = {
+        navigationSurfaceHidden,
         mobileNavLayout: true,
-      }),
-    ).toBe(false);
+        onboarding: false,
+        updateAvailable: {
+          currentVersion: "2026.7.1",
+          latestVersion: "2026.7.2",
+          channel: "stable" as const,
+        },
+        updateBusy: false,
+        canUpdate: true,
+        onUpdate: vi.fn(),
+        refreshRequired: false,
+        onRefresh: vi.fn(),
+      };
+
+      render(renderFloatingUpdateCard(shared), container);
+      expect(
+        container.querySelector("openclaw-sidebar-attention.sidebar-attention--floating"),
+      ).toBeNull();
+
+      render(
+        renderFloatingUpdateCard({ ...shared, updateAvailable: null, refreshRequired: true }),
+        container,
+      );
+      const refreshCard = container.querySelector<
+        HTMLElement & { updateComplete: Promise<boolean> }
+      >("openclaw-sidebar-update-card");
+      await refreshCard?.updateComplete;
+      expect(refreshCard?.querySelector(".sidebar-update-card")).not.toBeNull();
+    } finally {
+      container.remove();
+    }
   });
 
   it("keeps the stale-client refresh visible during onboarding", () => {
     const container = document.createElement("div");
     const shared = {
+      mobileNavLayout: false,
       onboarding: true,
       updateAvailable: null,
       updateBusy: false,

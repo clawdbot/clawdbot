@@ -2,7 +2,7 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   createWizardTestRuntime,
@@ -166,7 +166,7 @@ vi.mock("./onboard-helpers.js", () => ({
 }));
 
 vi.mock("./health.js", () => ({
-  healthCommand: mocks.healthCommand,
+  healthCommandNonExiting: mocks.healthCommand,
 }));
 
 vi.mock("./health-format.js", () => ({
@@ -225,6 +225,7 @@ vi.mock("../config/mutate.js", async () => {
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { maybeInstallDaemon } from "./configure.daemon.js";
 import { runConfigureWizard } from "./configure.wizard.js";
+import { formatHealthCheckFailure } from "./health-format.js";
 
 const createRuntime = createWizardTestRuntime;
 
@@ -411,15 +412,23 @@ describe("runConfigureWizard", () => {
     );
   });
 
-  it.each([false, true])("reports failed remote health checks (reachable: %s)", async (probeOk) => {
+  it.each([
+    ["unreachable gateway", false, new Error("health request failed")],
+    ["health request failure", true, new Error("health request failed")],
+    ["trapped health CLI exit", true, new ExitError(1)],
+  ])("reports failed remote health checks (%s)", async (_reason, probeOk, error) => {
     setupBaseWizardState();
     queueWizardPrompts({ select: ["remote"], confirm: [] });
     mocks.waitForGatewayReachable.mockResolvedValueOnce({ ok: probeOk });
-    mocks.healthCommand.mockRejectedValueOnce(new Error("health request failed"));
+    mocks.healthCommand.mockRejectedValueOnce(error);
 
     await runConfigureWizard({ command: "configure", sections: ["health"] }, createRuntime());
 
     expect(mocks.clackOutro).toHaveBeenCalledWith(expect.stringContaining("health check failed"));
+    if (error instanceof ExitError) {
+      // healthCommand already printed its diagnostic before the trapped exit.
+      expect(formatHealthCheckFailure).not.toHaveBeenCalled();
+    }
   });
 
   it("skips remote health when a configured SecretRef is unresolved", async () => {

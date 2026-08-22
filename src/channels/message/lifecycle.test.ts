@@ -226,6 +226,157 @@ describe("message lifecycle primitives", () => {
     expect(liveState.canFinalizeInPlace).toBe(false);
   });
 
+  it.each(["shared finalizer", "exported adapter"] as const)(
+    "preserves committed normal delivery when preview cleanup fails through the %s",
+    async (entrypoint) => {
+      const events: string[] = [];
+      const cleanupError = new Error("recipient text and fake-secret must stay private");
+      const draft = {
+        flush: vi.fn(async () => undefined),
+        id: () => "preview-cleanup-failure",
+        discardPending: vi.fn(async () => {
+          events.push("discard");
+        }),
+        clear: vi.fn(async () => {
+          events.push("clear");
+          throw cleanupError;
+        }),
+      };
+      const deliverNormally = vi.fn(async () => {
+        events.push("deliver");
+        return true;
+      });
+      const onNormalDelivered = vi.fn(async () => {
+        events.push("commit");
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        const result =
+          entrypoint === "shared finalizer"
+            ? await deliverFinalizableLivePreview({
+                kind: "final",
+                payload: { text: "already delivered" },
+                draft,
+                buildFinalEdit: () => undefined,
+                editFinal: vi.fn(async () => undefined),
+                deliverNormally,
+                onNormalDelivered,
+              })
+            : await deliverWithFinalizableLivePreviewAdapter({
+                kind: "final",
+                payload: { text: "already delivered" },
+                adapter: defineFinalizableLivePreviewAdapter({
+                  draft,
+                  buildFinalEdit: () => undefined,
+                  editFinal: vi.fn(async () => undefined),
+                }),
+                deliverNormally,
+                onNormalDelivered,
+              });
+
+        expect(result.kind).toBe("normal-delivered");
+        expect(events).toEqual(["discard", "deliver", "commit", "clear"]);
+        expect(deliverNormally).toHaveBeenCalledTimes(1);
+        expect(onNormalDelivered).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledExactlyOnceWith(
+          "Live preview cleanup failed after delivery; a stale preview may remain",
+        );
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
+
+  it("keeps intentionally suppressed fallback delivery skipped without post-delivery cleanup", async () => {
+    const clear = vi.fn(async () => {
+      throw new Error("suppressed reply must not be cleaned up as delivered");
+    });
+    const onNormalDelivered = vi.fn(async () => undefined);
+
+    const result = await deliverFinalizableLivePreview({
+      kind: "final",
+      payload: { text: "suppressed" },
+      draft: {
+        flush: vi.fn(async () => undefined),
+        id: () => "suppressed-preview",
+        discardPending: vi.fn(async () => undefined),
+        clear,
+      },
+      buildFinalEdit: () => undefined,
+      editFinal: vi.fn(async () => undefined),
+      deliverNormally: vi.fn(async () => false),
+      onNormalDelivered,
+    });
+
+    expect(result.kind).toBe("normal-skipped");
+    expect(onNormalDelivered).not.toHaveBeenCalled();
+    expect(clear).not.toHaveBeenCalled();
+  });
+
+  it("keeps preview cleanup failures fatal before normal delivery starts", async () => {
+    const deliverNormally = vi.fn(async () => true);
+    const onNormalDelivered = vi.fn(async () => undefined);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await expect(
+        deliverFinalizableLivePreview({
+          kind: "final",
+          payload: { text: "not delivered" },
+          draft: {
+            flush: vi.fn(async () => undefined),
+            id: () => "pre-delivery-preview",
+            clear: vi.fn(async () => {
+              throw new Error("pre-delivery cleanup failed");
+            }),
+          },
+          buildFinalEdit: () => undefined,
+          editFinal: vi.fn(async () => undefined),
+          deliverNormally,
+          onNormalDelivered,
+        }),
+      ).rejects.toThrow("pre-delivery cleanup failed");
+
+      expect(deliverNormally).not.toHaveBeenCalled();
+      expect(onNormalDelivered).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("preserves a delivery-commit failure when later preview cleanup also fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await expect(
+        deliverFinalizableLivePreview({
+          kind: "final",
+          payload: { text: "already accepted" },
+          draft: {
+            flush: vi.fn(async () => undefined),
+            id: () => "commit-failure-preview",
+            discardPending: vi.fn(async () => undefined),
+            clear: vi.fn(async () => {
+              throw new Error("preview cleanup must not replace delivery failure");
+            }),
+          },
+          buildFinalEdit: () => undefined,
+          editFinal: vi.fn(async () => undefined),
+          deliverNormally: vi.fn(async () => true),
+          onNormalDelivered: vi.fn(async () => {
+            throw new Error("delivery commit failed");
+          }),
+        }),
+      ).rejects.toThrow("delivery commit failed");
+
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("does not complete live preview fallback state when normal delivery throws", async () => {
     const discardPending = vi.fn(async () => undefined);
     const clear = vi.fn(async () => undefined);

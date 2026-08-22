@@ -1,5 +1,5 @@
 // Reviewed source inventory for the Arxi host-lifecycle contract.
-export const ARXI_LIFECYCLE_REVIEWED_UPSTREAM_COMMIT = "cd299e6726b1140d5182f4d3bd1cc4f80c896d16";
+export const ARXI_LIFECYCLE_REVIEWED_UPSTREAM_COMMIT = "4e7bf407d19bc96d1e95d48b562d1960de68511d";
 
 export const GATEWAY_LIFECYCLE_ACTIVE_PRODUCERS = [
   { id: "command-queue", countKey: "queueSize" },

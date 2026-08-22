@@ -5,6 +5,7 @@ import {
   errorShape,
   type AuditActivityEventV1,
   type AuditEvent,
+  type AuditRunInspectResult,
   validateAuditActivityListParams,
   validateAuditListParams,
   validateAuditRunInspectParams,
@@ -20,6 +21,7 @@ import type {
 import {
   ExecutionDecisionCursorError,
   isExecutionDecisionCursor,
+  type InternalAuditRunInspectResult,
 } from "../../audit/execution-decision-receipts.js";
 import { inspectExecutionIdentityRun } from "../../audit/execution-identity-context.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -27,6 +29,25 @@ import { assertValidParams } from "./validation.js";
 
 const DEFAULT_AUDIT_LIST_LIMIT = 100;
 const MAX_AUDIT_LIST_LIMIT = 500;
+
+function serializeAuditRunInspectResult(
+  inspected: InternalAuditRunInspectResult,
+): AuditRunInspectResult {
+  const result: AuditRunInspectResult = {
+    schemaVersion: inspected.schemaVersion,
+    run: inspected.run,
+    identity: inspected.identity,
+    decisionDisplays: inspected.decisionDisplays,
+    coverage: inspected.coverage,
+  };
+  if (inspected.nextDecisionCursor !== undefined) {
+    result.nextDecisionCursor = inspected.nextDecisionCursor;
+  }
+  if (inspected.nextExecutionCursor !== undefined) {
+    result.nextExecutionCursor = inspected.nextExecutionCursor;
+  }
+  return result;
+}
 
 /** Preserve the shipped audit.list result shape for run/tool-only clients. */
 function mapLegacyAuditEvent(
@@ -196,17 +217,19 @@ export const auditHandlers: GatewayRequestHandlers = {
     try {
       respond(
         true,
-        inspectExecutionIdentityRun({
-          ...(typeof params.runId === "string"
-            ? {
-                runId: params.runId,
-                ...(executionOffset !== undefined ? { executionOffset } : {}),
-                executionLimit: params.executionLimit ?? 50,
-              }
-            : { executionId: params.executionId! }),
-          ...(decisionCursor !== undefined ? { decisionCursor } : {}),
-          decisionLimit: params.decisionLimit ?? 50,
-        }),
+        serializeAuditRunInspectResult(
+          inspectExecutionIdentityRun({
+            ...(typeof params.runId === "string"
+              ? {
+                  runId: params.runId,
+                  ...(executionOffset !== undefined ? { executionOffset } : {}),
+                  executionLimit: params.executionLimit ?? 50,
+                }
+              : { executionId: params.executionId! }),
+            ...(decisionCursor !== undefined ? { decisionCursor } : {}),
+            decisionLimit: params.decisionLimit ?? 50,
+          }),
+        ),
       );
     } catch (error) {
       if (error instanceof ExecutionDecisionCursorError) {

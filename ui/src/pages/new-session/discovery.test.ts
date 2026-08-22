@@ -101,6 +101,28 @@ describe("readDraftEnvironments", () => {
     ).toEqual([issue]);
   });
 
+  it("normalizes bounded invocable commands separately from declared capabilities", () => {
+    expect(
+      readDraftEnvironments([
+        {
+          id: "node:runner",
+          type: "node",
+          status: "available",
+          capabilities: ["codex.exec-server.stdio.v1", "camera.snap"],
+          invocableCommands: [" z.command ", "camera.snap", "camera.snap", "x".repeat(129), ""],
+        },
+      ]),
+    ).toEqual([
+      {
+        id: "node:runner",
+        type: "node",
+        status: "available",
+        capabilities: ["codex.exec-server.stdio.v1", "camera.snap"],
+        invocableCommands: ["camera.snap", "z.command"],
+      },
+    ]);
+  });
+
   it("keeps the closed environment types while rejecting malformed entries", () => {
     expect(
       readDraftEnvironments([

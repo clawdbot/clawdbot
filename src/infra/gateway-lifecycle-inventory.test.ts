@@ -11,8 +11,10 @@ describe("Arxi lifecycle upgrade inventory", () => {
   it("covers every canonical active-work count", () => {
     const countKeys = Object.keys(createGatewayActiveWorkSnapshot().counts)
       .filter((key) => key !== "totalActive")
-      .sort();
-    const inventoried = GATEWAY_LIFECYCLE_ACTIVE_PRODUCERS.map((entry) => entry.countKey).sort();
+      .toSorted();
+    const inventoried = GATEWAY_LIFECYCLE_ACTIVE_PRODUCERS.map(
+      (entry) => entry.countKey,
+    ).toSorted();
     expect(inventoried).toEqual(countKeys);
   });
 
@@ -23,18 +25,12 @@ describe("Arxi lifecycle upgrade inventory", () => {
   });
 
   it("fails an upstream upgrade until the producer inventory is reviewed", () => {
-    const reviewedMerge = execFileSync(
+    const reviewedParents = execFileSync(
       "git",
-      [
-        "log",
-        "--first-parent",
-        "--merges",
-        "--grep=Merge remote-tracking branch 'upstream/main'",
-        "--format=%H",
-        "-1",
-      ],
+      ["log", "--first-parent", "--merges", "--grep=Merge pinned upstream", "--format=%P", "-1"],
       { encoding: "utf8" },
     ).trim();
-    expect(reviewedMerge).toBe(ARXI_LIFECYCLE_REVIEWED_UPSTREAM_COMMIT);
+    const reviewedUpstreamCommit = reviewedParents.split(/\s+/u)[1];
+    expect(reviewedUpstreamCommit).toBe(ARXI_LIFECYCLE_REVIEWED_UPSTREAM_COMMIT);
   });
 });

@@ -94,6 +94,7 @@ const CHAT_STATE_BY_TERMINAL_CLASSIFICATION = {
   cancellation: "aborted",
   failure: "error",
 } as const;
+const RESTART_RECOVERY_LIFECYCLE_PHASES = new Set(["start", "end", "error"]);
 
 function readChatRunStartupPhase(value: unknown): ChatRunStartupPhase | undefined {
   switch (value) {
@@ -1398,7 +1399,9 @@ export function createAgentEventHandler({
     const projectSessionLifecycle =
       evt.projectSessionLifecycle ?? runContext?.projectSessionLifecycle ?? true;
     const isHeartbeat = runContext?.isHeartbeat;
-    const restartRecoverySessionKey = eventSessionKey ?? sessionKey;
+    const restartRecoverySessionKey = RESTART_RECOVERY_LIFECYCLE_PHASES.has(lifecyclePhase ?? "")
+      ? (eventSessionKey ?? sessionKey)
+      : undefined;
     const restartRecoveryAgentId = evt.agentId ?? sessionAgentId;
     const clientRunId = chatLink?.clientRunId ?? evt.runId;
     const eventRunId = chatLink?.clientRunId ?? evt.runId;

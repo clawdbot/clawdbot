@@ -1099,6 +1099,50 @@ describe("executeSlashCommand directives", () => {
     });
   });
 
+  it("accepts a thinking level advertised only by the active model catalog", async () => {
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main", {
+              model: "gpt-5.6-sol",
+              modelProvider: "openai",
+            }),
+          ],
+        };
+      }
+      if (method === "sessions.patch") {
+        return { ok: true, ...((payload ?? {}) as object) };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      createTestGatewayClient(request),
+      "agent:main:main",
+      "think",
+      "ultra",
+      {
+        chatModelCatalog: [
+          {
+            id: "gpt-5.6-sol",
+            name: "GPT-5.6 Sol",
+            provider: "openai",
+            reasoning: true,
+            thinkingLevels: [{ id: "ultra", label: "ultra" }],
+          },
+        ],
+      },
+    );
+
+    expect(result.content).toBe(t("chat.commandResults.thinking.set", { level: "**ultra**" }));
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "agent:main:main",
+      thinkingLevel: "ultra",
+    });
+    expectNoRequestCall(request, "models.list");
+  });
+
   it("clears thinking override for /think default", async () => {
     const request = vi.fn(async (method: string, payload?: unknown) => {
       if (method === "sessions.patch") {

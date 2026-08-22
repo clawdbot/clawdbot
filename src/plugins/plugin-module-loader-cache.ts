@@ -4,7 +4,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { createJiti } from "jiti";
 import { toSafeImportPath } from "../shared/import-specifier.js";
-import { tryNativeRequireJavaScriptModule } from "./native-module-require.js";
+import {
+  clearNativeRequireJavaScriptModuleCache,
+  tryNativeRequireJavaScriptModule,
+} from "./native-module-require.js";
 import { PluginLruCache } from "./plugin-cache-primitives.js";
 import { installOpenClawInternalCorePackageNativeResolver } from "./plugin-sdk-native-resolver.js";
 import {
@@ -115,6 +118,24 @@ export function createPluginModuleLoaderCache(
   maxEntries = DEFAULT_PLUGIN_MODULE_LOADER_CACHE_ENTRIES,
 ): PluginModuleLoaderCache {
   return new PluginLruCache<PluginModuleLoader>(maxEntries);
+}
+
+/** Evicts loader closures and native modules, including bundled chunks hoisted into dist. */
+export function clearPluginModuleLoaderLifecycleCache(params: {
+  moduleLoaders: PluginModuleLoaderCache;
+  moduleRoots: Map<string, string>;
+}): void {
+  params.moduleLoaders.clear();
+  for (const [modulePath, rootDir] of params.moduleRoots) {
+    const extensionsDir = path.basename(rootDir) === "extensions" ? rootDir : path.dirname(rootDir);
+    const distDir = path.dirname(extensionsDir);
+    const dependencyRoot =
+      path.basename(extensionsDir) === "extensions" && path.basename(distDir) === "dist"
+        ? distDir
+        : rootDir;
+    clearNativeRequireJavaScriptModuleCache(modulePath, { dependencyRoot });
+  }
+  params.moduleRoots.clear();
 }
 
 function toSourceTransformImportPath(specifier: string): string {

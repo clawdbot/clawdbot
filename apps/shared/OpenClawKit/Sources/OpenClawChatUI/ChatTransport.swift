@@ -706,7 +706,10 @@ public protocol OpenClawChatTransport: Sendable {
         worktreeBaseRef: String?) async throws -> OpenClawChatCreateSessionResponse
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload
-    func gatewayAdvertisesProgressCardStore() async -> Bool?
+    /// Tri-state hello-catalog negotiation: true/false when the connected
+    /// gateway's advertised method set answers, nil when no catalog is known
+    /// (disconnected, pre-catalog gateway, or non-gateway transport).
+    func gatewayAdvertisesMethod(_ method: String) async -> Bool?
     func fetchProgressCard(sessionKey: String) async throws -> ProgressCard?
     func requestFullMessage(sessionKey: String, messageID: String) async throws -> OpenClawChatMessage?
     func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice]
@@ -805,7 +808,7 @@ public protocol OpenClawChatTransport: Sendable {
 }
 
 extension OpenClawChatTransport {
-    public func gatewayAdvertisesProgressCardStore() async -> Bool? {
+    public func gatewayAdvertisesMethod(_: String) async -> Bool? {
         nil
     }
 

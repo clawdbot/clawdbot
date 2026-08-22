@@ -184,6 +184,7 @@ describe("BoardWidgetSandboxHost", () => {
       sandboxOrigin: "https://sandbox.example",
       sandboxUrl: SANDBOX_URL,
       sourceOrigin: "https://gateway.example",
+      controlUiBaseUrl: "https://control.example/openclaw",
       resolveFrameUrl: () => "/widget",
       confirmPrompt: () => true,
       onFrameUrl: vi.fn(),
@@ -218,7 +219,11 @@ describe("BoardWidgetSandboxHost", () => {
 
     expect(hostMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: { type: "openclaw:widget-host-init", ticket: "ticket" },
+        data: {
+          type: "openclaw:widget-host-init",
+          ticket: "ticket",
+          controlUiBaseUrl: "https://control.example/openclaw",
+        },
       }),
     );
   });

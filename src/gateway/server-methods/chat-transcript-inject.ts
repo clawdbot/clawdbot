@@ -12,7 +12,7 @@ type AssistantMessageContent = Extract<AppendMessageArg, { role: "assistant" }>[
 /** Metadata persisted on gateway-injected assistant messages that mark a stopped run. */
 type GatewayInjectedAbortMeta = {
   aborted: true;
-  origin: "rpc" | "stop-command";
+  origin: "rpc" | "stop-command" | "placement-abandon";
   runId: string;
 };
 
@@ -151,6 +151,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
       },
       {
         updateMode: "inline",
+        ...(params.abortMeta ? { runId: params.abortMeta.runId } : {}),
         touchSessionEntry: Boolean(params.storePath && params.sessionId && params.sessionKey),
         ...(params.config ? { config: params.config } : {}),
         messages: [

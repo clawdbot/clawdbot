@@ -218,6 +218,7 @@ describe("CodexAppServerClient", () => {
     await expect(request).rejects.toHaveProperty("name", "CodexAppServerRpcError");
     await expect(request).rejects.toHaveProperty("code", -32601);
     await expect(request).rejects.toHaveProperty("message", "Method not found");
+    await expect(request).rejects.toHaveProperty("method", "future/method");
   });
 
   it("retries transient app-server overload errors", async () => {
@@ -331,7 +332,7 @@ describe("CodexAppServerClient", () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.147.0 (macOS; test)" },
+      result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
     });
 
     await expect(initializing).resolves.toBeUndefined();
@@ -436,28 +437,32 @@ describe("CodexAppServerClient", () => {
     expect(harness.writes).toHaveLength(1);
   });
 
-  it.each(["0.148.0-alpha.9", "0.148.0-alpha.15", "0.148.0-alpha.23", "0.148.0", "1.0.0"])(
-    "accepts a newer app-server version %s for normal startup validation",
-    async (newerVersion) => {
-      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
-      const { harness, initializing, outbound } = startInitialize();
-      harness.send({
-        id: outbound.id,
-        result: { userAgent: `openclaw/${newerVersion} (macOS; test)` },
-      });
+  it.each([
+    ["0.148.0-alpha.23", 0],
+    ["0.148.0", 0],
+    ["1.0.0", 1],
+  ])("accepts app-server version %s for normal startup validation", async (version, warnings) => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const { harness, initializing, outbound } = startInitialize();
+    harness.send({
+      id: outbound.id,
+      result: { userAgent: `openclaw/${version} (macOS; test)` },
+    });
 
-      await expect(initializing).resolves.toBeUndefined();
-      expect(harness.client.getServerVersion()).toBe(newerVersion);
-      expect(JSON.parse(harness.writes[1] ?? "{}")).toEqual({ method: "initialized" });
+    await expect(initializing).resolves.toBeUndefined();
+    expect(harness.client.getServerVersion()).toBe(version);
+    expect(JSON.parse(harness.writes[1] ?? "{}")).toEqual({ method: "initialized" });
+    expect(warn).toHaveBeenCalledTimes(warnings);
+    if (warnings > 0) {
       expect(warn).toHaveBeenCalledWith(
         "codex app-server is newer than OpenClaw's managed runtime; continuing with normal startup validation",
         {
-          detectedVersion: newerVersion,
+          detectedVersion: version,
           validatedVersion: CODEX_APP_SERVER_VERSION,
         },
       );
-    },
-  );
+    }
+  });
 
   it.each(["0.147.00", "0.148.0-alpha..9", "0.148.0-alpha.09"])(
     "blocks malformed app-server version %s during initialize",

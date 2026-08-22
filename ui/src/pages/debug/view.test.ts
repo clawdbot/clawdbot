@@ -1,10 +1,11 @@
 // Control UI tests cover debug behavior.
-import { render } from "lit";
+import { render, type LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import "./debug-overlay.ts";
 import "./debug-page.ts";
 import { renderDebug } from "./view.ts";
 
@@ -34,6 +35,12 @@ type TestDebugPage = HTMLElement & {
   loadDiagnostics: () => Promise<void>;
 };
 
+type TestDebugOverlay = HTMLElement & {
+  readonly updateComplete: Promise<boolean>;
+  context: ApplicationContext;
+  toggle: () => void;
+};
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -44,9 +51,9 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-async function mountDebugPage(
+function createDebugApplicationContext(
   request: (method: string) => Promise<unknown>,
-): Promise<TestDebugPage> {
+): ApplicationContext {
   const client = { request } as unknown as GatewayBrowserClient;
   const gateway = {
     snapshot: { phase: "connected", client } as ApplicationGatewaySnapshot,
@@ -58,8 +65,14 @@ async function mountDebugPage(
     state: { selectedId: "main" },
     subscribe: () => () => undefined,
   } as unknown as ApplicationContext["agentSelection"];
+  return { agentSelection, basePath: "", gateway } as ApplicationContext;
+}
+
+async function mountDebugPage(
+  request: (method: string) => Promise<unknown>,
+): Promise<TestDebugPage> {
   const page = document.createElement("openclaw-debug-page") as TestDebugPage;
-  page.context = { agentSelection, basePath: "", gateway } as ApplicationContext;
+  page.context = createDebugApplicationContext(request);
   document.body.append(page);
   await vi.waitFor(() => expect(page.debugStatus).not.toBeNull());
   return page;
@@ -334,5 +347,98 @@ describe("DebugPage", () => {
 
     expect(page.debugDiagnosticsError).toContain("background snapshots unavailable");
     expect(page.debugCallError).toContain("manual request failed");
+  });
+});
+
+describe("DebugOverlay", () => {
+  it("graphs bounded status samples without clamping CPU and resets history on reopen", async () => {
+    vi.useFakeTimers();
+    let sampleCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "status") {
+        sampleCount += 1;
+        return {
+          eventLoop: {
+            utilization: 0.42,
+            cpuCoreRatio: 1 + sampleCount / 10,
+            delayP99Ms: 10 + sampleCount,
+            delayMaxMs: 87,
+          },
+          processMemory: {
+            rssBytes: (400 + sampleCount) * 1_048_576,
+            heapUsedBytes: 100 * 1_048_576,
+            heapTotalBytes: 200 * 1_048_576,
+          },
+        };
+      }
+      if (method === "sessions.list") {
+        return { sessions: [] };
+      }
+      return diagnosticResponse(method);
+    });
+    const overlay = document.createElement("openclaw-debug-overlay") as TestDebugOverlay;
+    overlay.context = createDebugApplicationContext(request);
+    document.body.append(overlay);
+
+    try {
+      overlay.toggle();
+      await vi.advanceTimersByTimeAsync(0);
+      await overlay.updateComplete;
+
+      const vitalUpdated = async () => {
+        await overlay.updateComplete;
+        for (const tile of overlay.querySelectorAll("openclaw-debug-sparkline")) {
+          await (tile as LitElement).updateComplete;
+        }
+      };
+      await vitalUpdated();
+
+      // One sample: tiles show current values, charts wait for a second point.
+      expect(overlay.querySelectorAll(".debug-overlay__vital")).toHaveLength(3);
+      expect(normalizedText(overlay.querySelector(".debug-overlay__vital--cpu"))).toContain(
+        "loop 42%",
+      );
+      expect(overlay.querySelector(".debug-vital__chart")).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await vitalUpdated();
+
+      expect(normalizedText(overlay.querySelector(".debug-overlay__vital--cpu"))).toContain("120%");
+      expect(normalizedText(overlay.querySelector(".debug-overlay__vital--memory"))).toContain(
+        "402 MB",
+      );
+      expect(normalizedText(overlay.querySelector(".debug-overlay__vital--memory"))).toContain(
+        "heap 100 MB",
+      );
+      expect(normalizedText(overlay.querySelector(".debug-overlay__vital--delay"))).toContain(
+        "12ms",
+      );
+      expect(normalizedText(overlay.querySelector(".debug-overlay__vital--delay"))).toContain(
+        "max 87ms",
+      );
+      expect(overlay.querySelectorAll(".debug-vital__chart")).toHaveLength(3);
+      // Healthy event loop: no tile carries the degraded tint.
+      expect(overlay.querySelector(".debug-overlay__vital[data-degraded]")).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(180_000);
+      await vitalUpdated();
+
+      const points = overlay
+        .querySelector(".debug-overlay__vital--cpu polyline")
+        ?.getAttribute("points")
+        ?.split(" ");
+      expect(points).toHaveLength(90);
+
+      overlay.toggle();
+      overlay.toggle();
+      await vi.advanceTimersByTimeAsync(0);
+      await vitalUpdated();
+
+      expect(overlay.querySelectorAll(".debug-overlay__vital")).toHaveLength(3);
+      expect(overlay.querySelector(".debug-vital__chart")).toBeNull();
+    } finally {
+      overlay.remove();
+      vi.useRealTimers();
+    }
   });
 });

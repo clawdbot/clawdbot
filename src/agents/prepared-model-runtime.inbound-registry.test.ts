@@ -16,6 +16,7 @@ import {
   registerPreparedModelRuntimePublicationListener,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
+import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
 
 const mocks = getPreparedModelRuntimeMocks();
 
@@ -195,6 +196,9 @@ describe("prepared reply dispatch runtime", () => {
       pluginGeneration: configuredRuntimeBefore.pluginGeneration,
     });
     const dynamicSelectedBefore = dynamicLease.snapshot.pluginRegistry;
+    expect(getPreparedPluginRuntimeLoadContext(dynamicSelectedBefore)).toMatchObject({
+      preferBuiltPluginArtifacts: true,
+    });
     dynamicLease.release();
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
     expect(dynamicPreparationRegistries.every(Boolean)).toBe(true);

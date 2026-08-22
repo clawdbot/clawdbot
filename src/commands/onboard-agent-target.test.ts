@@ -11,6 +11,7 @@ import {
   applyAgentModelDefaults,
   ensureOnboardingAgentWorkspace,
   resolveOnboardingAgentTarget,
+  resolveOnboardingSetupTarget,
   resolveSystemAgentOnboardingTarget,
 } from "./onboard-agent-target.js";
 
@@ -69,6 +70,76 @@ describe("onboarding agent target", () => {
     expect(resolveSystemAgentOnboardingTarget(config)).toMatchObject({
       agentId: "main",
       workspaceDir: "/srv/main",
+    });
+  });
+
+  it("uses the system agent for explicit fleets without changing legacy ownership", () => {
+    const entries = {
+      main: { workspace: "/srv/main" },
+      ops: { default: true, workspace: "/srv/ops" },
+    };
+    const pendingAgent = { name: "robby", workspaceDir: "/srv/robby" };
+
+    expect(
+      resolveOnboardingSetupTarget(
+        {
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "main" } },
+            entries,
+          },
+        },
+        pendingAgent,
+      ),
+    ).toMatchObject({ agentId: "main", workspaceDir: "/srv/main" });
+    expect(
+      resolveOnboardingSetupTarget(
+        {
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "main" } },
+            entries: { main: { default: true } },
+          },
+        },
+        pendingAgent,
+      ),
+    ).toMatchObject({ agentId: "main" });
+    expect(resolveOnboardingSetupTarget({ agents: { entries } })).toMatchObject({
+      agentId: "ops",
+      workspaceDir: "/srv/ops",
+    });
+  });
+
+  it("resolves a pending first agent without nesting the selected workspace", async () => {
+    const stateDir = tempDirs.make("openclaw-pending-onboard-target-");
+    const workspaceDir = path.join(stateDir, "requested-workspace");
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      for (const entries of [undefined, { main: {} }, { main: { default: true } }] as const) {
+        const config = {
+          agents: { defaults: { workspace: workspaceDir }, ...(entries ? { entries } : {}) },
+        };
+
+        expect(resolveOnboardingSetupTarget(config, { name: " Robby! ", workspaceDir })).toEqual({
+          agentId: "robby",
+          agentDir: path.join(stateDir, "agents", "robby", "agent"),
+          workspaceDir,
+        });
+        expect(resolveOnboardingSetupTarget(config)).toMatchObject({
+          agentId: "main",
+          workspaceDir,
+        });
+      }
+      expect(
+        resolveOnboardingSetupTarget({
+          agents: {
+            entries: { main: { default: true, name: "Authored main", workspace: "/srv/main" } },
+          },
+        }),
+      ).toMatchObject({ agentId: "main", workspaceDir: "/srv/main" });
+      expect(
+        resolveOnboardingSetupTarget({ agents: { entries: { main: { default: false } } } }),
+      ).toMatchObject({ agentId: "main" });
     });
   });
 

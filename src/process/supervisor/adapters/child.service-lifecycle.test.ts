@@ -135,6 +135,7 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
 
     expect(elapsed).toBeLessThan(300);
     expect(isAlive(descendantPid)).toBe(true);
+    await adapter.waitForExtinction?.();
     await waitFor(() => !isAlive(descendantPid));
   });
 

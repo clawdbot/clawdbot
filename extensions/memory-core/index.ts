@@ -99,7 +99,6 @@ function createLazyStandingIntentTool(
   reportUnavailable: (reason: string) => void,
 ): AnyAgentTool | null {
   if (ctx.senderIsOwner !== true) {
-    reportUnavailable("owner authorization is unavailable for this turn");
     return null;
   }
   const cfg = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;

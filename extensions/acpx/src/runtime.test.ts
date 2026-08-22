@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { RequestedModelUnsupportedError } from "acpx/runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AcpRuntimeError,
@@ -938,6 +939,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("adds Codex wrapper stderr tail to generic startTurn failure results", async () => {
+    const promptStarted = createDeferred<void>();
     const wrapperRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-"));
     await fs.writeFile(
       path.join(wrapperRoot, "codex-acp-wrapper.stderr.lease-start-turn.log"),
@@ -963,6 +965,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     vi.spyOn(delegate, "startTurn").mockImplementation(
       (input): AcpRuntimeTurn => ({
         requestId: input.requestId,
+        promptStarted: promptStarted.promise,
         events: (async function* () {
           yield {
             type: "text_delta" as const,
@@ -993,10 +996,19 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       mode: "prompt",
       requestId: "turn-1",
     });
+    expect(turn.promptStarted).toBeDefined();
+    let submitted = false;
+    const observedPromptStarted = turn.promptStarted.then(() => {
+      submitted = true;
+    });
     const events: AcpRuntimeEvent[] = [];
     for await (const event of turn.events) {
       events.push(event);
     }
+    expect(submitted).toBe(false);
+    promptStarted.resolve();
+    await observedPromptStarted;
+    expect(submitted).toBe(true);
 
     await expect(turn.result).resolves.toMatchObject({
       status: "failed",
@@ -1054,6 +1066,13 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       requestId: "turn-1",
     });
 
+    const promptStarted = turn.promptStarted;
+    expect(promptStarted).toBeDefined();
+    await expect(promptStarted).rejects.toMatchObject({
+      name: "AcpRuntimeError",
+      code: "ACP_TURN_FAILED",
+      message: expect.stringContaining("adapter failed before returning turn"),
+    });
     await expect(turn.result).rejects.toMatchObject({
       name: "AcpRuntimeError",
       code: "ACP_TURN_FAILED",
@@ -1082,6 +1101,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     const startTurn = vi.spyOn(delegate, "startTurn").mockImplementation(
       (input): AcpRuntimeTurn => ({
         requestId: input.requestId,
+        promptStarted: Promise.resolve(),
         events: (async function* () {
           yield { type: "done" as const, stopReason: "end_turn" };
         })(),
@@ -2780,6 +2800,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       });
       return {
         requestId: input.requestId,
+        promptStarted: Promise.resolve(),
         events: (async function* () {})(),
         result: Promise.resolve({ status: "completed" }),
         cancel: vi.fn(async () => {}),
@@ -2827,6 +2848,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       expectPendingLease();
       return {
         requestId: input.requestId,
+        promptStarted: Promise.resolve(),
         events: (async function* () {})(),
         result: Promise.resolve({ status: "completed" }),
         cancel: vi.fn(async () => {}),

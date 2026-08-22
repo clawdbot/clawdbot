@@ -247,7 +247,7 @@ async function handleChatHistoryRequest({
   const selectedAgent = validateChatSelectedAgent({
     cfg,
     requestedSessionKey: sessionKey,
-    agentId: requestedAgentId,
+    explicitAgentId: agentIdOverride,
   });
   if (!selectedAgent.ok) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));

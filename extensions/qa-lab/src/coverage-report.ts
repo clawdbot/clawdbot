@@ -3,6 +3,7 @@ import {
   normalizeOptionalString as stringifyConfigValue,
   normalizeStringEntriesLower,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRepoRootRelativeRef } from "./cli-paths.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import {
   readQaScorecardTaxonomyReport,
@@ -168,7 +169,18 @@ export function findQaScenarioMatches(
   return scenarios
     .filter((scenario) => {
       const haystack = scenarioSearchText(scenario);
-      return tokens.every((token) => haystack.includes(token));
+      return tokens.every((token) => {
+        if (haystack.includes(token)) {
+          return true;
+        }
+        const executionPathQuery = token.replaceAll("\\", "/");
+        return (
+          executionPathQuery.includes("/") &&
+          isRepoRootRelativeRef(executionPathQuery) &&
+          scenario.execution.kind !== "flow" &&
+          normalizeSearchText(scenario.execution.path).includes(executionPathQuery)
+        );
+      });
     })
     .map(summarizeScenarioSearchMatch)
     .toSorted((left, right) => left.id.localeCompare(right.id));

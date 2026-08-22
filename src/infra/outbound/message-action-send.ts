@@ -483,20 +483,22 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   delete params.voiceProvider;
   delete params.voiceId;
   throwIfAborted(abortSignal);
-  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
-    cfg,
-    agentId,
-    mediaSources: collectActionMediaSourceHints(params, ctx.extraActionMediaSourceParamKeys, {
-      structuredAttachments: "all",
-    }),
-    sessionKey: input.sessionKey,
-    messageProvider: input.sessionKey ? undefined : channel,
-    accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
-    requesterSenderId: input.requesterSenderId,
-    requesterSenderName: input.requesterSenderName,
-    requesterSenderUsername: input.requesterSenderUsername,
-    requesterSenderE164: input.requesterSenderE164,
-  });
+  const mediaAccess =
+    input.mediaAccess ??
+    resolveAgentScopedOutboundMediaAccess({
+      cfg,
+      agentId,
+      mediaSources: collectActionMediaSourceHints(params, ctx.extraActionMediaSourceParamKeys, {
+        structuredAttachments: "all",
+      }),
+      sessionKey: input.sessionKey,
+      messageProvider: input.sessionKey ? undefined : channel,
+      accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
+      requesterSenderId: input.requesterSenderId,
+      requesterSenderName: input.requesterSenderName,
+      requesterSenderUsername: input.requesterSenderUsername,
+      requesterSenderE164: input.requesterSenderE164,
+    });
 
   // Required queue persistence is itself an ownership decision: neither the
   // remote gateway action nor a provider-native action may bypass core queueing.
@@ -597,6 +599,9 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       deliveryIntentId: input.deliveryIntentId,
       deliveryCompletion: input.deliveryCompletion,
       onDeliveryIntent: input.onDeliveryIntent,
+      onPlatformSendDispatch: input.onPlatformSendDispatch,
+      skipQueue: input.skipQueue,
+      onDeliveryAttempt: input.onDeliveryAttempt,
       // Identified platform evidence is the first success proof on the core
       // path; commit the route here so the transcript mirror (which runs later
       // in the same delivery) can resolve a just-created session entry.

@@ -768,6 +768,33 @@ describe("gateway auth", () => {
     ).resolves.toMatchObject({ ok: true, method: "password" });
   });
 
+  it("uses password auth for tailnet peers on managed Funnel", async () => {
+    const req = createTailscaleForwardedReq(false);
+    markGatewayIngressTransport(req, { kind: "managed-tailscale", mode: "funnel" });
+
+    await expect(
+      authorizeWsControlUiGatewayConnect({
+        auth: { mode: "password", password: "secret", allowTailscale: false },
+        connectAuth: { password: "secret" },
+        req,
+      }),
+    ).resolves.toMatchObject({ ok: true, method: "password" });
+  });
+
+  it("requires the Funnel password when Tailscale header auth is explicitly enabled", async () => {
+    const req = createTailscaleForwardedReq(false);
+    markGatewayIngressTransport(req, { kind: "managed-tailscale", mode: "funnel" });
+
+    await expect(
+      authorizeWsControlUiGatewayConnect({
+        auth: { mode: "password", password: "secret", allowTailscale: true },
+        connectAuth: null,
+        tailscaleWhois: createTailscaleWhois(),
+        req,
+      }),
+    ).resolves.toMatchObject({ ok: false, reason: "password_missing" });
+  });
+
   it("allows an origin-less same-origin image through the profile avatar surface", async () => {
     const limiter = createLimiterSpy();
     const req = createTailscaleForwardedReq();

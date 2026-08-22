@@ -485,8 +485,10 @@ catalog, API-key auth, and dynamic model resolution.
     });
     ```
 
-    If resolving requires a network call, use `prepareDynamicModel` for async
-    warm-up - `resolveDynamicModel` runs again after it completes.
+    If resolving requires a network call, return the requested model directly
+    from `prepareDynamicModel`. OpenClaw applies the same configured overrides
+    and normalization as synchronous dynamic resolution. Existing hooks that
+    return nothing still retry `resolveDynamicModel` after preparation.
 
   </Step>
 
@@ -683,7 +685,7 @@ catalog, API-key auth, and dynamic model resolution.
       | `resolveExternalAuthProfiles` | Overlay provider-owned external auth profiles for CLI/app-managed credentials |
       | `shouldDeferSyntheticProfileAuth` | Lower synthetic stored-profile placeholders behind env/config auth |
       | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
-      | `prepareDynamicModel` | Async metadata fetch before resolving |
+      | `prepareDynamicModel` | Return an asynchronously discovered model, or warm reusable metadata before sync resolution |
       | `normalizeResolvedModel` | Transport rewrites before the runner |
       | `normalizeToolSchemas` | Provider-owned tool-schema cleanup before registration |
       | `inspectToolSchemas` | Provider-owned tool-schema diagnostics |

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { AgentDeletionCommitUncertainError } from "../../agents/agent-lifecycle-registry.js";
 import {
   openOpenClawStateDatabase,
@@ -66,11 +67,32 @@ describe("scheduled tool policy provenance", () => {
       throw new TypeError("authority closed");
     });
 
-    await expect(writeScratch(state, job.id, { content: "notes", commitGuard })).rejects.toThrow(
-      "authority closed",
-    );
+    const scratchBlockerEntered = createDeferred();
+    const releaseScratchBlocker = createDeferred();
+    const scratchBlocker = updateWithPrecondition(state, job.id, {}, async () => {
+      scratchBlockerEntered.resolve();
+      await releaseScratchBlocker.promise;
+    });
+    await scratchBlockerEntered.promise;
+    const scratchWrite = writeScratch(state, job.id, { content: "notes", commitGuard });
+    expect(commitGuard).not.toHaveBeenCalled();
+    releaseScratchBlocker.resolve();
+    await scratchBlocker;
+    await expect(scratchWrite).rejects.toThrow("authority closed");
     expect(readCronJobScratchState(storePath, job.id)).toEqual({ currentRevision: 0 });
-    await expect(remove(state, job.id, { commitGuard })).rejects.toThrow("authority closed");
+
+    const removeBlockerEntered = createDeferred();
+    const releaseRemoveBlocker = createDeferred();
+    const removeBlocker = updateWithPrecondition(state, job.id, {}, async () => {
+      removeBlockerEntered.resolve();
+      await releaseRemoveBlocker.promise;
+    });
+    await removeBlockerEntered.promise;
+    const removal = remove(state, job.id, { commitGuard });
+    expect(commitGuard).toHaveBeenCalledOnce();
+    releaseRemoveBlocker.resolve();
+    await removeBlocker;
+    await expect(removal).rejects.toThrow("authority closed");
     expect(state.store?.jobs.some((entry) => entry.id === job.id)).toBe(true);
     expect(commitGuard).toHaveBeenCalledTimes(2);
     if (state.timer) {

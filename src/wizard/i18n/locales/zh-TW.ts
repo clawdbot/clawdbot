@@ -94,6 +94,8 @@ export const zh_TW = {
       tokenPlaceholder: "多機器或非 loopback 存取需要使用",
       tokenPrompt: "Gateway 權杖",
       tokenPromptGenerate: "Gateway 權杖（留空則產生）",
+      tokenStoreProvisioned:
+        "已產生 Gateway 權杖並以 {name} 存入 OpenClaw 祕密儲存。設定中只保留參照；可用 `openclaw secrets store list` 檢視。",
       websocketUrl: "Gateway WebSocket URL",
     },
     gatewayTailscale: {
@@ -1122,6 +1124,8 @@ export const zh_TW = {
       optionalApps: "可選應用",
       outroDashboardLink: "Onboarding 完成。使用上面的 dashboard 連結控制 OpenClaw。",
       outroDashboardOpened: "Onboarding 完成。Dashboard 已開啟；保留該分頁以控制 OpenClaw。",
+      outroHealthCheckFailed:
+        "Onboarding 完成，但閘道健康檢查失敗。請先解決上面的問題，再用 {command} 驗證。",
       outroSeeded: "Onboarding 完成。Web UI 已在背景初始化，可隨時用上面的 dashboard 連結開啟。",
       quickstartNodeRuntime: "QuickStart 使用 Node 執行 Gateway 服務（穩定且受支援）。",
       reinstall: "重新安裝",

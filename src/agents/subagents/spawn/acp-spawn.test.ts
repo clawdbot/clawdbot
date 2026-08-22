@@ -2,9 +2,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpInitializeSessionInput } from "../../../acp/control-plane/manager.types.js";
+import {
+  registerAcpRuntimeBackend,
+  testing as acpRuntimeRegistryTesting,
+} from "../../../acp/runtime/registry.js";
 import { createExecutionIdentityAdmissionToken } from "../../../audit/execution-identity-admission.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -703,6 +708,7 @@ function enableTelegramCurrentConversationBindings(): void {
 
 describe("spawnAcpDirect", () => {
   beforeEach(() => {
+    acpRuntimeRegistryTesting.resetAcpRuntimeBackendsForTests();
     replaceSpawnConfig(createDefaultSpawnConfig());
     hoisted.areHeartbeatsEnabledMock.mockReset().mockReturnValue(true);
     hoisted.getChannelPluginMock.mockReset().mockReturnValue(undefined);
@@ -852,6 +858,7 @@ describe("spawnAcpDirect", () => {
   });
 
   afterEach(() => {
+    acpRuntimeRegistryTesting.resetAcpRuntimeBackendsForTests();
     sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
   });
 
@@ -998,51 +1005,142 @@ describe("spawnAcpDirect", () => {
     }
   });
 
-  it("allows ACP resume IDs recorded for the requester session", async () => {
-    const resumeSessionId = "codex-inner-resume";
-    const ownedSessionKey = "agent:codex:acp:owned";
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      [ownedSessionKey]: {
-        sessionId: "sess-owned",
-        updatedAt: Date.now(),
-        spawnedBy: "agent:main:main",
-      } satisfies SessionEntry,
-    });
-    hoisted.readAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
-      const params = paramsUnknown as { sessionKey?: string };
-      return params.sessionKey === ownedSessionKey
-        ? {
-            backend: "acpx",
-            agent: "codex",
-            runtimeSessionName: "codex",
-            identity: {
-              state: "resolved",
-              source: "ensure",
-              agentSessionId: resumeSessionId,
-              acpxSessionId: "acpx-owned",
-              lastUpdatedAt: Date.now(),
-            },
-            mode: "oneshot",
-            state: "idle",
-            lastActivityAt: Date.now(),
-          }
-        : undefined;
-    });
+  it.each([
+    {
+      scenario: "explicit global backend accepts its owner",
+      persistedBackend: "acpx",
+      accepted: true,
+      expectedBackend: "acpx",
+    },
+    {
+      scenario: "explicit global backend rejects another owner",
+      persistedBackend: "fallback",
+      accepted: false,
+      expectedBackend: "acpx",
+    },
+    {
+      scenario: "target agent backend overrides the global backend",
+      persistedBackend: "fallback",
+      targetBackend: "fallback",
+      accepted: true,
+      expectedBackend: "fallback",
+    },
+    {
+      scenario: "target agent backend rejects the global backend owner",
+      persistedBackend: "acpx",
+      targetBackend: "fallback",
+      accepted: false,
+      expectedBackend: "fallback",
+    },
+    {
+      scenario: "auto-selected healthy backend rejects another owner",
+      persistedBackend: "fallback",
+      autoSelectBackend: true,
+      accepted: false,
+      expectedBackend: "primary",
+    },
+    {
+      scenario: "auto-selected healthy backend accepts its owner",
+      persistedBackend: "primary",
+      autoSelectBackend: true,
+      accepted: true,
+      expectedBackend: "primary",
+    },
+  ])(
+    "allows requester-owned ACP resume IDs only for the effective backend ($scenario)",
+    async ({ persistedBackend, targetBackend, autoSelectBackend, accepted, expectedBackend }) => {
+      if (targetBackend) {
+        replaceSpawnConfig({
+          ...hoisted.state.cfg,
+          agents: {
+            ...hoisted.state.cfg.agents,
+            list: [
+              {
+                id: "reviewer",
+                runtime: {
+                  type: "acp",
+                  acp: { agent: "codex", backend: targetBackend },
+                },
+              },
+            ],
+          },
+        });
+      }
+      if (autoSelectBackend) {
+        const { backend: _configuredBackend, ...acpWithoutBackend } = hoisted.state.cfg.acp ?? {};
+        replaceSpawnConfig({ ...hoisted.state.cfg, acp: acpWithoutBackend });
+        const runtime: AcpRuntime = {
+          async ensureSession(input) {
+            return {
+              sessionKey: input.sessionKey,
+              backend: "primary",
+              runtimeSessionName: input.sessionKey,
+            };
+          },
+          async *runTurn() {},
+          async cancel() {},
+          async close() {},
+        };
+        registerAcpRuntimeBackend({ id: "unhealthy", runtime, healthy: () => false });
+        registerAcpRuntimeBackend({ id: "primary", runtime, healthy: () => true });
+        registerAcpRuntimeBackend({ id: "fallback", runtime, healthy: () => true });
+      }
 
-    const result = await spawnAcpDirect(
-      {
-        task: "Resume owned ACP session",
-        agentId: "codex",
-        resumeSessionId,
-      },
-      {
-        agentSessionKey: "agent:main:main",
-      },
-    );
+      const resumeSessionId = "codex-inner-resume";
+      const ownedSessionKey = "agent:codex:acp:owned";
+      hoisted.loadSessionStoreMock.mockReturnValue({
+        [ownedSessionKey]: {
+          sessionId: "sess-owned",
+          updatedAt: Date.now(),
+          spawnedBy: "agent:main:main",
+        } satisfies SessionEntry,
+      });
+      hoisted.readAcpSessionMetaMock.mockImplementation((paramsUnknown: unknown) => {
+        const params = paramsUnknown as { sessionKey?: string };
+        return params.sessionKey === ownedSessionKey
+          ? {
+              backend: persistedBackend,
+              agent: "codex",
+              runtimeSessionName: "codex",
+              identity: {
+                state: "resolved",
+                source: "ensure",
+                agentSessionId: resumeSessionId,
+                acpxSessionId: "acpx-owned",
+                lastUpdatedAt: Date.now(),
+              },
+              mode: "oneshot",
+              state: "idle",
+              lastActivityAt: Date.now(),
+            }
+          : undefined;
+      });
 
-    expectAcceptedSpawn(result);
-    expectInitializeSessionFields({ resumeSessionId });
-  });
+      const result = await spawnAcpDirect(
+        {
+          task: "Resume owned ACP session",
+          agentId: targetBackend ? "reviewer" : "codex",
+          resumeSessionId,
+        },
+        {
+          agentSessionKey: "agent:main:main",
+        },
+      );
+
+      if (accepted) {
+        expectAcceptedSpawn(result);
+        expectInitializeSessionFields({ resumeSessionId, backendId: expectedBackend });
+        return;
+      }
+
+      expectRecordFields(result, {
+        status: "forbidden",
+        errorCode: "resume_forbidden",
+      });
+      expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+      expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects ACP resume IDs not recorded for the requester session", async () => {
     const otherSessionKey = "agent:codex:acp:other";

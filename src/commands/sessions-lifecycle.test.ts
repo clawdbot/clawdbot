@@ -4,10 +4,15 @@ import { sessionsArchiveCommand, sessionsDeleteCommand } from "./sessions-lifecy
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   confirm: vi.fn(),
+  getRuntimeConfig: vi.fn(),
 }));
 
 vi.mock("../cli/gateway-rpc.js", () => ({
   callGatewayFromCliWithTransport: mocks.callGateway,
+}));
+
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
 vi.mock("../wizard/clack-prompter.js", () => ({
@@ -35,6 +40,58 @@ describe("sessions lifecycle commands", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.confirm.mockResolvedValue(true);
+    mocks.getRuntimeConfig.mockReturnValue({
+      agents: { entries: { main: {}, work: {} } },
+    });
+  });
+
+  it.each([
+    ["archive", sessionsArchiveCommand, {} as Record<string, unknown>],
+    ["delete", sessionsDeleteCommand, { yes: true } as Record<string, unknown>],
+  ])(
+    "%s rejects an unconfigured --agent before contacting the gateway",
+    async (_label, command, extra) => {
+      const runtime = createRuntime();
+      await command(
+        { keys: ["agent:ghost:main"], agent: "ghost", json: true, ...extra } as never,
+        runtime as never,
+      );
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(runtime.writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ok: false,
+          results: [
+            expect.objectContaining({
+              error: expect.stringContaining('Unknown agent id "ghost"'),
+            }),
+          ],
+        }),
+        2,
+      );
+    },
+  );
+
+  it.each([
+    ["archive", sessionsArchiveCommand, {} as Record<string, unknown>],
+    ["delete", sessionsDeleteCommand, { yes: true } as Record<string, unknown>],
+  ])("%s rejects a blank --agent", async (_label, command, extra) => {
+    const runtime = createRuntime();
+    await command(
+      { keys: ["agent:main:main"], agent: "   ", json: true, ...extra } as never,
+      runtime as never,
+    );
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ok: false,
+        results: [
+          expect.objectContaining({
+            error: expect.stringContaining("--agent must not be blank"),
+          }),
+        ],
+      }),
+      2,
+    );
   });
 
   it("archives through sessions.patch and emits the stable JSON envelope", async () => {

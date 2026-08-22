@@ -195,6 +195,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
 
     let forcedReason: TerminationReason | null = startingRun.terminationReason ?? null;
     let settled = false;
+    let extinguished = false;
     let stdout = "";
     let stderr = "";
     let stdoutListener = input.onStdout;
@@ -222,7 +223,9 @@ export function createProcessSupervisor(): ProcessSupervisor {
     let cancelAdapter: ((reason: TerminationReason) => void) | null = null;
 
     const requestCancel = (reason: TerminationReason) => {
-      setForcedReason(reason);
+      if (!settled) {
+        setForcedReason(reason);
+      }
       cancelAdapter?.(reason);
     };
     startingRun.cancel = requestCancel;
@@ -292,6 +295,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
               argv: input.argv,
               cwd: input.cwd,
               env: input.env,
+              exactEnv: input.exactEnv,
               windowsVerbatimArguments: input.windowsVerbatimArguments,
               input: input.input,
               stdinMode: input.stdinMode,
@@ -303,7 +307,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
         ...(forcedReason ? { terminationReason: forcedReason } : {}),
       });
 
-      const clearTimers = () => {
+      const clearTimers = (includeForceKill = true) => {
         if (timeoutTimer) {
           clearTimeout(timeoutTimer);
           timeoutTimer = null;
@@ -312,14 +316,24 @@ export function createProcessSupervisor(): ProcessSupervisor {
           clearTimeout(noOutputTimer);
           noOutputTimer = null;
         }
-        if (forceKillTimer) {
+        if (includeForceKill && forceKillTimer) {
           clearTimeout(forceKillTimer);
           forceKillTimer = null;
         }
       };
 
+      const releaseAuthority = () => {
+        if (extinguished) {
+          return;
+        }
+        extinguished = true;
+        clearTimers();
+        adapter.dispose();
+        active.delete(runId);
+      };
+
       cancelAdapter = (reason: TerminationReason) => {
-        if (settled || cancelRequested) {
+        if (extinguished || cancelRequested) {
           return;
         }
         cancelRequested = true;
@@ -335,7 +349,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
         }
         adapter.kill("SIGTERM");
         forceKillTimer = setTimeout(() => {
-          if (!settled) {
+          if (!extinguished) {
             adapter.kill("SIGKILL");
           }
         }, GRACEFUL_CANCEL_TIMEOUT_MS);
@@ -359,20 +373,29 @@ export function createProcessSupervisor(): ProcessSupervisor {
         );
       }
 
+      const onRawOutput = (listener?: (chunk: Buffer) => void) =>
+        listener &&
+        ((chunk: Buffer) => {
+          listener(chunk);
+          touchOutput();
+        });
+      const rawInput = input.mode === "child" ? input : undefined;
       adapter.onStdout((chunk) => {
         if (captureOutput) {
           stdout = appendCapturedOutput(stdout, chunk, "stdout", maxCapturedOutputChars);
         }
         stdoutListener?.(chunk);
         touchOutput();
-      });
+      }, onRawOutput(rawInput?.onStdoutRaw));
       adapter.onStderr((chunk) => {
         if (captureOutput) {
           stderr = appendCapturedOutput(stderr, chunk, "stderr", maxCapturedOutputChars);
         }
         stderrListener?.(chunk);
         touchOutput();
-      });
+      }, onRawOutput(rawInput?.onStderrRaw));
+
+      const adapterExtinction = adapter.waitForExtinction?.();
 
       const waitPromise = (async (): Promise<RunExit> => {
         const result = await adapter.wait();
@@ -383,9 +406,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
         });
         const terminalReason = forcedReason ?? deadlineReason;
         settled = true;
-        clearTimers();
-        adapter.dispose();
-        active.delete(runId);
+        clearTimers(false);
 
         const reason: TerminationReason =
           terminalReason ?? (result.signal != null ? ("signal" as const) : ("exit" as const));
@@ -405,13 +426,19 @@ export function createProcessSupervisor(): ProcessSupervisor {
           exitCode: exit.exitCode,
           exitSignal: exit.exitSignal,
         });
+        if (!adapterExtinction) {
+          releaseAuthority();
+        }
         return exit;
       })().catch((err: unknown) => {
         if (!settled) {
           settled = true;
-          clearTimers();
-          active.delete(runId);
-          adapter.dispose();
+          clearTimers(false);
+          if (adapterExtinction) {
+            adapter.kill("SIGKILL");
+          } else {
+            releaseAuthority();
+          }
           registry.finalize(runId, {
             reason: "spawn-error",
             exitCode: null,
@@ -421,12 +448,23 @@ export function createProcessSupervisor(): ProcessSupervisor {
         throw err;
       });
 
+      const extinctionPromise = adapterExtinction
+        ? Promise.allSettled([waitPromise, adapterExtinction]).then(([, extinction]) => {
+            releaseAuthority();
+            if (extinction.status === "rejected") {
+              throw extinction.reason;
+            }
+          })
+        : undefined;
+      void extinctionPromise?.catch(() => undefined);
+
       const managedRun: ManagedRun = {
         runId,
         pid: adapter.pid,
         startedAtMs,
         stdin: adapter.stdin,
         wait: async () => await waitPromise,
+        ...(extinctionPromise ? { waitForExtinction: async () => await extinctionPromise } : {}),
         cancel: (reason = "manual-cancel") => {
           requestCancel(reason);
         },

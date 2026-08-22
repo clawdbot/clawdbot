@@ -448,6 +448,16 @@ function createAccounting(
 }
 
 describe("resolveFollowupDeliveryDecision", () => {
+  const sourceReplyTarget = {
+    tool: "message",
+    provider: "discord",
+    to: "channel:C1",
+    text: "Still working",
+  };
+  const progressTarget = { ...sourceReplyTarget, sourceReplyFinal: false };
+  const finalTarget = { ...sourceReplyTarget, sourceReplyFinal: true };
+  const progressPayload = { text: "Still working", sourceReplyFinal: false };
+
   it("delivers a yield acknowledgment after accepting a child spawn", () => {
     const execution = createSettledExecution();
     if (execution.outcome.kind === "settled") {
@@ -764,6 +774,49 @@ describe("resolveFollowupDeliveryDecision", () => {
       payloads: [{ text: "terminal failure", isError: true }],
     });
   });
+
+  it.each([
+    ["progress-only target", { messagingToolSentTargets: [progressTarget] }, true],
+    ["progress-only source payload", { messagingToolSourceReplyPayloads: [progressPayload] }, true],
+    ["final source reply", { messagingToolSentTargets: [finalTarget] }, false],
+    ["legacy target", { messagingToolSentTargets: [sourceReplyTarget] }, false],
+    ["legacy source reply", { didDeliverSourceReplyViaMessageTool: true }, false],
+    ["legacy outbound send", { didSendViaMessagingTool: true }, false],
+    ["deterministic approval prompt", { didSendDeterministicApprovalPrompt: true }, false],
+    [
+      "visible progress with yield acknowledgment",
+      {
+        meta: { durationMs: 0, yielded: true, yieldAcknowledgment: "Still working" },
+        messagingToolSentTargets: [progressTarget],
+      },
+      false,
+    ],
+  ])(
+    "accounts for %s before suppressing an empty follow-up",
+    (_label, evidence, expectFallback) => {
+      const execution = createSettledExecution();
+      if (execution.outcome.kind === "settled") {
+        Object.assign(execution.outcome.result, evidence);
+      }
+
+      const decision = resolveFollowupDeliveryDecision({
+        turn: createTurn(),
+        execution,
+        accounting: createAccounting(),
+      });
+
+      expect(decision).toMatchObject(
+        expectFallback
+          ? {
+              kind: "deliver",
+              payloads: [
+                { text: expect.stringContaining("did not produce a visible reply"), isError: true },
+              ],
+            }
+          : { kind: "suppress", reason: "silent" },
+      );
+    },
+  );
 
   it.each([
     { label: "accidental", intentionalTerminalCompletion: undefined },

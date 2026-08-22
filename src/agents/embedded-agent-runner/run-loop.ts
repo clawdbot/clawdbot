@@ -221,7 +221,7 @@ export async function runPreparedEmbeddedLoop(
   let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
   // Presentation survives retry attempts, but a newer tool result must clear stale text.
   const terminalToolPresentation = createTerminalToolPresentationTracker();
-  const turnTaintState = createAgentTurnTaintState();
+  const turnTaintState = createAgentTurnTaintState(params.initialTurnTainted === true);
   const observeToolOutcome = (observation: ToolOutcomeObservation): void => {
     terminalToolPresentation.observe(observation);
     turnTaintState.observe(observation);
@@ -578,33 +578,21 @@ export async function runPreparedEmbeddedLoop(
         reportedModelRef,
         finalAssistantVisibleText,
         finalAssistantRawText,
-        payloads,
         payloadsWithToolMedia,
-        timedOutDuringPrompt,
         recoveredFinalAssistantPayloadsAfterPromptTimeout,
-        hasSuccessfulFinalAssistantAfterPromptTimeout,
-        hasPartialAssistantTextAfterPromptTimeout,
         attemptToolSummary,
         failureSignal,
+        terminalToolFailure,
       } = terminalPrepared;
 
       const terminalTimeoutResult = resolveEmbeddedRunTerminalTimeout({
-        timedOutDuringPrompt,
-        hasSuccessfulFinalAssistantAfterPromptTimeout,
+        terminalPrepared,
         shouldSurfaceCodexCompletionTimeout: recovery.shouldSurfaceCodexCompletionTimeout,
         attempt: terminalAttempt,
-        hasPartialAssistantTextAfterPromptTimeout,
-        payloads,
-        payloadsWithToolMedia,
         terminalState: resolvedTerminalState,
         resolveReplayInvalid: resolveReplayInvalidForAttempt,
         setTerminalLifecycleMeta,
         startedAtMs: started,
-        agentMeta,
-        finalAssistantVisibleText,
-        finalAssistantRawText,
-        attemptToolSummary,
-        failureSignal,
       });
       if (terminalTimeoutResult) {
         return terminalTimeoutResult;
@@ -631,6 +619,7 @@ export async function runPreparedEmbeddedLoop(
         agentMeta,
         attemptToolSummary,
         failureSignal,
+        terminalToolFailure,
         maxReasoningOnlyRetryAttempts,
         maxEmptyResponseRetryAttempts,
         attemptCompactionCount: terminalAttemptCompactionCount,

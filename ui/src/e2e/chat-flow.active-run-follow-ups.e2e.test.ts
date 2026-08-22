@@ -183,12 +183,26 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await page.locator(".chat-tool-msg-summary", { hasText: "Exec" }).waitFor();
       await page.getByRole("button", { name: "Stop generating" }).waitFor();
-      let toolSequence = 0;
+      let agentSequence = 0;
+      const commentaryText = "The active commentary stays visible.";
+      await gateway.emitGatewayEvent("agent", {
+        data: {
+          kind: "preamble",
+          itemId: "active-commentary",
+          progressText: commentaryText,
+        },
+        runId,
+        seq: ++agentSequence,
+        sessionKey: "main",
+        stream: "item",
+        ts: Date.now(),
+      });
+      await page.getByText(commentaryText, { exact: true }).waitFor();
       const emitTool = (data: Record<string, unknown>) =>
         gateway.emitGatewayEvent("agent", {
           data,
           runId,
-          seq: ++toolSequence,
+          seq: ++agentSequence,
           sessionKey: "main",
           stream: "tool",
           ts: Date.now(),
@@ -213,6 +227,7 @@ suite.define(() => {
         steerParams.idempotencyKey,
         "steer chat send idempotency key",
       );
+      await expect.poll(() => page.getByText(commentaryText, { exact: true }).count()).toBe(1);
       await gateway.resolveDeferred("chat.send", { runId: steerRunId, status: "started" });
       const steerUser = {
         __openclaw: {

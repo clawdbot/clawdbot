@@ -170,6 +170,7 @@ function scopeByLabel(label: string, output: Record<string, unknown> = writtenJs
 
 function resetLocalSnapshot() {
   localSnapshot.exists = true;
+  localSnapshot.raw = "{}";
   localSnapshot.hash = "hash-local";
   localSnapshot.file = { version: 1, agents: {} };
 }
@@ -220,6 +221,7 @@ vi.mock("../infra/exec-approvals.js", async () => {
         const next = update(structuredClone(localSnapshot.file));
         if (next !== null) {
           localSnapshot.file = next;
+          localSnapshot.raw = JSON.stringify(next);
           localSnapshot.hash = "hash-local-written";
         }
         return structuredClone(localSnapshot);
@@ -351,6 +353,37 @@ describe("exec approvals CLI", () => {
     const wildcard = requireRecord(agents["*"], "JSON wildcard agent");
     const allowlist = requireArray(wildcard.allowlist, "JSON wildcard allowlist");
     expect(requireRecord(allowlist[0], "JSON allowlist entry").pattern).toBe(pattern);
+  });
+
+  it("redacts the socket token from local get JSON while preserving its path", async () => {
+    localSnapshot.file = {
+      version: 1,
+      socket: { path: "/tmp/local-exec-approvals.sock", token: "fixture-token" },
+      agents: {},
+    };
+
+    await runApprovalsCommand(["approvals", "get", "--json"]);
+
+    const output = writtenJson();
+    const file = requireRecord(output.file, "JSON approvals file");
+    expect(file.socket).toEqual({ path: "/tmp/local-exec-approvals.sock" });
+    expect(JSON.stringify(output)).not.toContain('"token"');
+  });
+
+  it("redacts the socket token from local write JSON while preserving its path", async () => {
+    localSnapshot.file = {
+      version: 1,
+      socket: { path: "/tmp/local-exec-approvals.sock", token: "fixture-token" },
+      agents: {},
+    };
+
+    await runApprovalsCommand(["approvals", "allowlist", "add", "/usr/bin/uname", "--json"]);
+
+    const output = writtenJson();
+    const file = requireRecord(output.file, "JSON approvals file");
+    expect(file.socket).toEqual({ path: "/tmp/local-exec-approvals.sock" });
+    expect(output.raw).toBeUndefined();
+    expect(JSON.stringify(output)).not.toContain('"token"');
   });
 
   it("adds effective policy to json output", async () => {
@@ -876,11 +909,16 @@ describe("exec approvals CLI", () => {
     });
   });
 
-  it("defaults allowlist add to wildcard agent", async () => {
+  it.each([
+    { label: "by default", agentArgs: [] as string[], agentKey: "*" },
+    { label: "for the explicit wildcard", agentArgs: ["--agent", "*"], agentKey: "*" },
+    { label: "for a configured agent", agentArgs: ["--agent", "main"], agentKey: "main" },
+  ])("adds an allowlist entry $label", async ({ agentArgs, agentKey }) => {
+    readBestEffortConfig.mockResolvedValue({ agents: { list: [{ id: "main" }] } });
     const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals);
     updateExecApprovals.mockClear();
 
-    await runApprovalsCommand(["approvals", "allowlist", "add", "/usr/bin/uname"]);
+    await runApprovalsCommand(["approvals", "allowlist", "add", "/usr/bin/uname", ...agentArgs]);
 
     expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "exec.approvals.set")).toBe(
       false,
@@ -889,11 +927,55 @@ describe("exec approvals CLI", () => {
     expect(updateExecApprovals).toHaveBeenCalledWith(
       expect.objectContaining({ baseHash: "hash-local" }),
     );
-    if (requireRecord(saved.agents, "saved agents")["*"] === undefined) {
-      throw new Error("Expected wildcard exec approval agent entry");
+    if (requireRecord(saved.agents, "saved agents")[agentKey] === undefined) {
+      throw new Error(`Expected ${agentKey} exec approval agent entry`);
     }
+    expect(readBestEffortConfig).toHaveBeenCalledTimes(agentKey === "main" ? 1 : 0);
     expect(loggedOutput()).toContain("Writing local approvals.");
   });
+
+  it.each(["add", "remove"])(
+    "rejects an unknown agent before allowlist %s persistence",
+    async (operation) => {
+      readBestEffortConfig.mockResolvedValue({ agents: { list: [{ id: "main" }] } });
+      const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals);
+      updateExecApprovals.mockClear();
+
+      await expect(
+        runApprovalsCommand([
+          "approvals",
+          "allowlist",
+          operation,
+          "/usr/bin/uname",
+          "--agent",
+          "nope-agent",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(runtimeErrors).toStrictEqual([
+        'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
+      ]);
+      expect(updateExecApprovals).not.toHaveBeenCalled();
+      expect(localSnapshot.file.agents).toEqual({});
+      expect(loggedOutput()).not.toContain("Writing local approvals.");
+    },
+  );
+
+  it.each(["add", "remove"])(
+    "rejects a blank agent before allowlist %s persistence",
+    async (operation) => {
+      const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals);
+      updateExecApprovals.mockClear();
+
+      await expect(
+        runApprovalsCommand(["approvals", "allowlist", operation, "/usr/bin/uname", "--agent", ""]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(runtimeErrors).toStrictEqual(["--agent must not be blank"]);
+      expect(updateExecApprovals).not.toHaveBeenCalled();
+      expect(localSnapshot.file.agents).toEqual({});
+    },
+  );
 
   it.each([
     {

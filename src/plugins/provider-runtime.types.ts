@@ -41,11 +41,10 @@ export type ProviderResolveDynamicModelContext = {
 };
 
 /**
- * Optional async warm-up for dynamic model resolution.
+ * Optional async preparation for dynamic model resolution.
  *
- * Called only from async model resolution paths, before retrying
- * `resolveDynamicModel`. This is the place to refresh caches or fetch provider
- * metadata over the network.
+ * Called only from async model resolution paths. Providers can return the
+ * requested model directly or refresh reusable metadata before the sync retry.
  */
 export type ProviderPrepareDynamicModelContext = ProviderResolveDynamicModelContext;
 

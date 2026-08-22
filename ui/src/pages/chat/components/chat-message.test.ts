@@ -917,6 +917,38 @@ describe("grouped chat rendering", () => {
     expect(order).toEqual(["Reply to message", "Rewind", "name", "time"]);
   });
 
+  it("orders peer footer actions after the sender name and timestamp", () => {
+    const container = document.createElement("div");
+    const message = createUserMessage("Peer footer order.");
+    const group = createMessageGroup(message, "user", {
+      sender: { id: "peer-user", name: "Peer User" },
+      senderLabel: "Peer User",
+    });
+    render(
+      renderTestMessageGroup(group, {
+        onReply: vi.fn(),
+        onRewind: vi.fn(),
+        userId: "current-user",
+      }),
+      container,
+    );
+
+    const footer = expectElement(container, ".chat-group--peer .chat-group-footer", HTMLElement);
+    const order = [
+      ...footer.querySelectorAll<HTMLElement>("button, .chat-sender-name, .chat-group-timestamp"),
+    ].map((element) => {
+      if (element.classList.contains("chat-sender-name")) {
+        return "name";
+      }
+      if (element.classList.contains("chat-group-timestamp")) {
+        return "time";
+      }
+      return element.getAttribute("aria-label");
+    });
+
+    expect(order).toEqual(["name", "time", "Reply to message", "Rewind"]);
+  });
+
   it("keeps hidden assistant thinking out of inline reply context", () => {
     const container = document.createElement("div");
     const onReply = vi.fn();

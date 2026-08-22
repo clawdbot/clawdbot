@@ -42,7 +42,7 @@ type PluginRegistryInstallMigrationPreflight =
       current: InstalledPluginIndex;
     }
   | {
-      action: "migrate";
+      action: "initialize" | "migrate";
       filePath: string;
     };
 
@@ -87,10 +87,10 @@ export function preflightPluginRegistryInstallMigration(
   if (persistedState.status === "invalid") {
     throw new InvalidPluginInstallRecordStateError(invalidPersistedInstallRecordMessage(filePath));
   }
-  if (
-    params.config &&
-    inspectShippedPluginInstallConfigRecords(params.config).status === "invalid"
-  ) {
+  const configInstallState = params.config
+    ? inspectShippedPluginInstallConfigRecords(params.config)
+    : undefined;
+  if (configInstallState?.status === "invalid") {
     throw new InvalidPluginInstallRecordStateError(INVALID_CONFIG_INSTALL_RECORD_MESSAGE);
   }
   const pathExists = params.existsSync ?? fs.existsSync;
@@ -103,9 +103,18 @@ export function preflightPluginRegistryInstallMigration(
         current: currentRegistry,
       };
     }
+    // Install records without a readable index is a half-written registry, not a fresh root:
+    // report it as a migration so doctor keeps warning and rebuilds from what survived.
+    if (persistedState.status !== "missing") {
+      return { action: "migrate", filePath };
+    }
   }
+  const hasConfigInstallRecords =
+    configInstallState?.status === "valid" && Object.keys(configInstallState.records).length > 0;
+  // Only a caller that supplied config can prove nothing is left to migrate. Without config, or with
+  // retired plugins.installs records still present, stay on "migrate" so the warning is not lost.
   return {
-    action: "migrate",
+    action: params.config && !hasConfigInstallRecords ? "initialize" : "migrate",
     filePath,
   };
 }

@@ -44,6 +44,8 @@ export type ManagedRun = {
   startedAtMs: number;
   stdin?: ManagedRunStdin;
   wait: () => Promise<RunExit>;
+  /** Present only when tree cleanup can outlive the root process result. */
+  waitForExtinction?: () => Promise<void>;
   cancel: (reason?: TerminationReason) => void;
   /** Stop delivering output callbacks before owner teardown kills the child. */
   detachOutput?: () => void;
@@ -68,9 +70,10 @@ export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
   pid?: number;
   stdin?: ManagedRunStdin;
   oomScoreWrapperSelected?: boolean;
-  onStdout: (listener: (chunk: string) => void) => void;
-  onStderr: (listener: (chunk: string) => void) => void;
+  onStdout: (listener: (chunk: string) => void, onRaw?: (chunk: Buffer) => void) => void;
+  onStderr: (listener: (chunk: string) => void, onRaw?: (chunk: Buffer) => void) => void;
   wait: () => Promise<{ code: number | null; signal: WaitSignal }>;
+  waitForExtinction?: () => Promise<void>;
   kill: (signal?: NodeJS.Signals) => void;
   dispose: () => void;
 };
@@ -101,10 +104,14 @@ type SpawnBaseInput = {
 type SpawnChildInput = SpawnBaseInput & {
   mode: "child";
   argv: string[];
+  /** Preserve a caller-prepared environment without environment-mutating spawn wrappers. */
+  exactEnv?: true;
   windowsVerbatimArguments?: boolean;
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
   secretInput?: SpawnSecretInput;
+  onStdoutRaw?: (chunk: Buffer) => void;
+  onStderrRaw?: (chunk: Buffer) => void;
 };
 
 type SpawnPtyInput = SpawnBaseInput & {

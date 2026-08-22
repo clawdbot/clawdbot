@@ -48,8 +48,10 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node environment
+        id: setup-node-env
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: ${{ github.event_name == 'workflow_dispatch' && 'read-write' || 'restore' }}
           install-bun: "false"
           install-trufflehog: "true"
 
@@ -143,7 +145,7 @@ jobs:
           test -f dist/control-ui/index.html
 
       - name: Save dist build cache
-        if: steps.dist-cache.outputs.cache-hit != 'true'
+        if: steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.dist-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |

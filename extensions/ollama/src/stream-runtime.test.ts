@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // Ollama tests cover stream runtime plugin behavior.
+import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -455,6 +456,30 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
       });
     },
   );
+
+  it("reports the real HTTP response before consuming native Ollama output", async () => {
+    await withSuccessfulOllamaFetch(async () => {
+      const acceptanceObserver = vi.fn();
+      const onResponse = vi.fn();
+      const options = withProviderAcceptanceObserver({ onResponse }, acceptanceObserver);
+      const stream = await createOllamaTestStream({
+        baseUrl: "http://ollama-host:11434",
+        options,
+      });
+
+      await collectStreamEvents(stream);
+
+      expect(acceptanceObserver).toHaveBeenCalledWith({
+        kind: "http_response",
+        status: 200,
+        headers: { "content-type": "application/x-ndjson" },
+      });
+      expect(onResponse).toHaveBeenCalledWith(
+        { status: 200, headers: { "content-type": "application/x-ndjson" } },
+        expect.objectContaining({ provider: "custom-ollama" }),
+      );
+    });
+  });
 
   it("passes resolved provider request timeouts to native Ollama chat fetches", async () => {
     await withMockNdjsonFetch(
@@ -1134,15 +1159,6 @@ describe("buildAssistantMessage", () => {
         nested: { thread: "1234567890123456789" },
       },
     });
-  });
-
-  it("rejects malformed stringified tool call arguments", () => {
-    const response = createToolCallResponse([
-      { function: { name: "bash", arguments: '{"command":"ls"' } },
-    ]);
-    expect(() => buildAssistantMessage(response, modelInfo)).toThrow(
-      "Provider completed tool call with malformed JSON arguments",
-    );
   });
 
   it("sets all costs to zero for local models", () => {

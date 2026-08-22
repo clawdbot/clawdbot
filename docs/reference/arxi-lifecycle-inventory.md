@@ -32,5 +32,6 @@ heartbeat inputs are either active blockers or external events; declarative
 heartbeat schedules are cron-owned.
 
 `gateway-lifecycle-inventory.test.ts` compares the declared active categories
-with the canonical snapshot and pins the reviewed upstream merge. Any upstream
-upgrade therefore fails until this inventory and the wake mapping are reviewed.
+with the canonical snapshot and pins reviewed upstream commit
+`4e7bf407d19bc96d1e95d48b562d1960de68511d`. Any upstream upgrade therefore
+fails until this inventory and the wake mapping are reviewed.

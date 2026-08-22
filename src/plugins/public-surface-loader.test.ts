@@ -301,6 +301,39 @@ describe("bundled plugin public surface loader", () => {
     },
   );
 
+  it("reloads a replaced installed public artifact and its dependencies after plugin metadata changes", async () => {
+    const publicSurfaceLoader = await importFreshModule<
+      typeof import("./public-surface-loader.js")
+    >(import.meta.url, "./public-surface-loader.js?scope=installed-artifact-replacement");
+    const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
+    const tempRoot = fs.realpathSync(tempDirs.make("openclaw-public-surface-replacement-"));
+    const pluginRoot = path.join(tempRoot, "installed-plugin");
+    const modulePath = path.join(pluginRoot, "api.js");
+    const dependencyPath = path.join(pluginRoot, "dependency.js");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(path.join(pluginRoot, "package.json"), '{"type":"commonjs"}\n', "utf8");
+
+    const writeArtifact = (marker: string) => {
+      fs.writeFileSync(dependencyPath, `module.exports = ${JSON.stringify(marker)};\n`, "utf8");
+      fs.writeFileSync(modulePath, 'module.exports = { marker: require("./dependency.js") };\n');
+    };
+    const loadArtifact = () =>
+      publicSurfaceLoader.loadPluginPublicArtifactModuleSync<{ marker: string }>({
+        pluginRoot,
+        artifactBasename: "api.js",
+      }).marker;
+
+    writeArtifact("retired");
+    expect(loadArtifact()).toBe("retired");
+
+    writeArtifact("replacement");
+    expect(loadArtifact()).toBe("retired");
+
+    clearPluginMetadataLifecycleCaches();
+
+    expect(loadArtifact()).toBe("replacement");
+  });
+
   it.runIf(process.platform !== "win32")(
     "allows hardlinked bundled public artifacts under the trusted bundled root",
     async () => {

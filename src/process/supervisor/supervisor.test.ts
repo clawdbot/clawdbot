@@ -143,24 +143,66 @@ describe("process supervisor", () => {
     expect(adapter.disposeMock).toHaveBeenCalledTimes(1);
   });
 
-  it("passes private secret input to the child adapter", async () => {
+  it.each([
+    { outcome: "process-tree extinction", failure: false },
+    { outcome: "cleanup identity loss", failure: true },
+  ])("retains root-result cancellation ownership until $outcome", async ({ failure }) => {
+    const extinction = createDeferred();
+    const adapter = Object.assign(createStubChildAdapter(), {
+      waitForExtinction: () => extinction.promise,
+    });
+    createChildAdapterMock.mockResolvedValue(adapter);
+    const supervisor = createProcessSupervisor();
+    const run = await spawnChild(supervisor, {
+      sessionId: "root-result-before-extinction",
+      scopeKey: "scope:root-result-before-extinction",
+      argv: createSilentIdleArgv(),
+    });
+    adapter.emitStdout("authentic root output");
+    adapter.settle(23);
+    const root = await run.wait();
+
+    expect(root).toMatchObject({ reason: "exit", exitCode: 23, stdout: "authentic root output" });
+    expect(adapter.disposeMock).not.toHaveBeenCalled();
+    supervisor.cancelScope("scope:root-result-before-extinction");
+    expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM");
+    expect(supervisor.getRecord(run.runId)).toMatchObject({
+      state: "exited",
+      terminationReason: "exit",
+      exitCode: 23,
+    });
+
+    if (failure) {
+      extinction.reject(new Error("cleanup identity lost"));
+      await expect(run.waitForExtinction?.()).rejects.toThrow("cleanup identity lost");
+    } else {
+      extinction.resolve();
+      await expect(run.waitForExtinction?.()).resolves.toBeUndefined();
+    }
+    expect(adapter.disposeMock).toHaveBeenCalledOnce();
+    await expect(run.wait()).resolves.toBe(root);
+    supervisor.cancel(run.runId);
+    expect(adapter.killMock).toHaveBeenCalledOnce();
+  });
+
+  it("passes private secret input and exact environment to the child adapter", async () => {
     const adapter = createStubChildAdapter();
     createChildAdapterMock.mockResolvedValue(adapter);
-    const secretInput = {
-      fd: 3,
-      createData: () => Buffer.from("secret"),
-    };
+    const secretInput = { fd: 3, createData: () => Buffer.from("secret") };
 
     const supervisor = createProcessSupervisor();
     const run = await spawnChild(supervisor, {
       sessionId: "s1",
       argv: createWriteStdoutArgv("ok"),
+      exactEnv: true,
       secretInput,
     });
     adapter.settle(0);
     await run.wait();
 
-    expect(createChildAdapterMock).toHaveBeenCalledWith(expect.objectContaining({ secretInput }));
+    expect(createChildAdapterMock).toHaveBeenCalledWith(
+      expect.objectContaining({ exactEnv: true, secretInput }),
+    );
   });
 
   it("enforces no-output timeout for silent processes", async () => {
