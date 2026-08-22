@@ -11,7 +11,6 @@ import {
   hasIntentionalTerminalCompletion,
 } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
-import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { logVerbose } from "../../globals.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -364,10 +363,9 @@ async function sendFollowupPayloads(params: {
             : "dispatcher";
     await typing.signalTextDelta(payload.text);
     if (route !== "origin") {
-      const settled = await settleProgressVisibilityCallbackResult(
-        defaults.opts?.onBlockReply?.(payload),
-      );
-      visibleDelivery ||= settled.visible;
+      await defaults.opts?.onBlockReply?.(payload);
+      const delivered = (await defaults.opts?.settleBlockReplyDelivery?.(payload)) === true;
+      visibleDelivery = delivered || visibleDelivery;
     } else if (isRoutableChannel(originatingChannel) && originatingTo) {
       const metadata = getReplyPayloadMetadata(payload);
       const result = await routeReply({
@@ -394,10 +392,9 @@ async function sendFollowupPayloads(params: {
         const routeError = result.error ?? "no visible delivery";
         logVerbose(`followup queue: route-reply failed: ${routeError}`);
         if (sameChannelOrigin && defaults.opts?.onBlockReply) {
-          const settled = await settleProgressVisibilityCallbackResult(
-            defaults.opts.onBlockReply(payload),
-          );
-          visibleDelivery = settled.visible || visibleDelivery;
+          await defaults.opts.onBlockReply(payload);
+          visibleDelivery =
+            (await defaults.opts.settleBlockReplyDelivery?.(payload)) === true || visibleDelivery;
         } else if (defaults.opts?.onBlockReply) {
           crossChannelFailures.push(payload);
         } else {
@@ -423,15 +420,15 @@ async function sendFollowupPayloads(params: {
     (terminalFailure || (crossChannelFailures.length > 0 && !deliveredCrossChannelOrigin)) &&
     defaults.opts?.onBlockReply
   ) {
-    const settled = await settleProgressVisibilityCallbackResult(
-      defaults.opts.onBlockReply({
-        text:
-          "Follow-up completed, but OpenClaw could not deliver it to the originating channel. " +
-          "The reply content was not forwarded to this channel to avoid cross-channel misdelivery.",
-        isError: true,
-      }),
-    );
-    visibleDelivery = settled.visible || visibleDelivery;
+    const diagnostic = {
+      text:
+        "Follow-up completed, but OpenClaw could not deliver it to the originating channel. " +
+        "The reply content was not forwarded to this channel to avoid cross-channel misdelivery.",
+      isError: true,
+    };
+    await defaults.opts.onBlockReply(diagnostic);
+    visibleDelivery =
+      (await defaults.opts.settleBlockReplyDelivery?.(diagnostic)) === true || visibleDelivery;
   }
   return visibleDelivery;
 }
