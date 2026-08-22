@@ -18,7 +18,6 @@ import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
-import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.os.Build
 import android.os.Bundle
@@ -46,8 +45,6 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -72,6 +69,7 @@ import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -137,20 +135,34 @@ private data class TalkStatus(
   val awaitingAgent: Boolean = false,
 )
 
-private sealed interface RealtimePlaybackItem {
+/** Assistant render work that arrived before the media engine was ready. */
+private sealed interface PreStartRenderItem {
   data class Audio(
-    val bytes: ByteArray,
-  ) : RealtimePlaybackItem
+    val pcm: ByteArray,
+  ) : PreStartRenderItem
 
   data class Mark(
-    val name: String,
-  ) : RealtimePlaybackItem
+    val markId: Long,
+  ) : PreStartRenderItem
 }
 
+/** A route change the platform reported, stamped with the session that saw it. */
+private data class PendingRouteChange(
+  val sessionId: String,
+  val route: RealtimeRouteProfile,
+)
+
+/** Everything the engine's input stream is opened for. Changing any of it reopens the stream. */
+private data class RealtimeInputSelection(
+  val route: RealtimeRouteProfile,
+  val inputPreset: RealtimeInputPreset,
+  val inputDeviceId: Int,
+)
+
+/** One Gateway playback barrier that the device reached. */
 private data class PendingRealtimePlaybackMark(
   val sessionId: String,
   val name: String,
-  var targetFrame: Long? = null,
 )
 
 private class PushToTalkAudioSource(
@@ -220,11 +232,27 @@ class TalkModeManager internal constructor(
   private val realtimeCaptureDispatcher: CoroutineDispatcher = Dispatchers.IO,
   private val realtimePlaybackDispatcher: CoroutineDispatcher = Dispatchers.IO,
   private val realtimeMarkAcknowledger: (suspend (sessionId: String, markName: String) -> Unit)? = null,
+  // The realtime data plane. TalkMode owns the conversation; the engine owns
+  // the audio, and swapping the implementation is how a device that cannot run
+  // the native full-duplex path still holds a conversation. Tests inject one;
+  // production builds it in [createRealtimeMediaEngine].
+  private val realtimeMediaEngineFactory: (() -> RealtimeMediaEngine)? = null,
 ) {
   companion object {
     private const val tag = "TalkMode"
     private const val realtimeSampleRateHz = 24_000
     private const val realtimeAudioFrameMs = 100
+
+    // The device rate to ask for. Android's own communication pipelines run at
+    // 48 kHz on essentially every current device, and the engine converts
+    // explicitly when the device negotiates something else.
+    private const val realtimeRequestedDeviceRateHz = 48_000
+    private const val realtimeMediaControlTickMs = 10L
+    private const val realtimeMediaSnapshotEveryTicks = 5L
+
+    // Two seconds of wire audio: enough to cover a slow device stream open
+    // without letting a stuck startup accumulate a reply's worth of PCM.
+    private const val preStartAssistantAudioBytes = 24_000 * 2 * 2
     private const val chatFinalWaitMs = 45_000L
     private const val maxCachedRunCompletions = 128
     private const val maxConversationEntries = 40
@@ -342,8 +370,6 @@ class TalkModeManager internal constructor(
   private val audioInputGeneration = AtomicLong(0L)
 
   @Volatile private var realtimeSessionId: String? = null
-  private var realtimeCaptureJob: Job? = null
-  private var realtimeAppendJob: Job? = null
   private val realtimeCapturePauseLock = Any()
   private var realtimeCapturePause: RealtimeCapturePause? = null
 
@@ -376,19 +402,58 @@ class TalkModeManager internal constructor(
   private var realtimeUserEntryAwaitingFinal = false
   private var realtimeUserEntryAwaitingFinalStartedAtMs: Long? = null
   private var realtimeAssistantEntryId: String? = null
-  private val realtimePlaybackLock = Any()
-  private var realtimeAudioTrack: AudioTrack? = null
-  private var realtimeAudioQueue: Channel<RealtimePlaybackItem>? = null
-  private var realtimeAudioWriterJob: Job? = null
-  private var realtimePlaybackIdleJob: Job? = null
-  private var realtimeWrittenFrames = 0L
-  private val pendingRealtimePlaybackMarks = LinkedHashMap<String, PendingRealtimePlaybackMark>()
+
+  // Realtime PCM ownership lives in the media engine. What stays here is the
+  // conversational identity of that audio: which response it belongs to, and
+  // which Gateway barrier name a completed engine barrier answers.
+  private val mediaEngineLock = Any()
+
+  @Volatile private var mediaEngine: RealtimeMediaEngine? = null
+  private var mediaControlJob: Job? = null
+
+  @Volatile private var mediaSessionOwner: Long = 0
+
+  @Volatile private var routeController: RealtimeRouteController? = null
+
+  @Volatile private var renderGeneration: Long = 0
+
+  @Volatile private var lastAppliedInputKey: String? = null
+
+  // Carries the session it was observed under. A route callback that fires
+  // during teardown would otherwise land in the next session and tell a fresh
+  // engine it is on a headset while the output is actually the loudspeaker.
+  private val pendingRoute = AtomicReference<PendingRouteChange?>(null)
+
+  // What the engine's input stream was last opened for. The control loop
+  // compares against it so a device-list change that resolves to the same
+  // microphone does not reopen the streams and leave an audible gap.
+  private var currentInputSelection: RealtimeInputSelection? = null
+
+  // The Gateway's name for each barrier the engine tracks by id. Owned by
+  // [mediaEngineLock] together with [renderGeneration], because a discard has to
+  // resolve exactly the barriers that belong to the generation it is ending.
+  private val markNamesById = mutableMapOf<Long, String>()
+
+  // The provider's response id on the most recent assistant audio, and the one
+  // a clear cancelled. Deltas of a cancelled response can still be in flight
+  // when the clear lands, and this is what tells them apart from the next
+  // response's.
+  @Volatile private var lastRealtimeResponseId: String? = null
+
+  @Volatile private var cancelledRealtimeResponseId: String? = null
+
+  // Assistant audio and barriers that arrived while the engine was starting,
+  // in arrival order. A barrier answered out of this order would tell the
+  // Gateway that audio still sitting in this list had already played.
+  private val preStartRenderItems = mutableListOf<PreStartRenderItem>()
+  private val markIdSequence = AtomicLong(0)
+  private val uplinkBuffer = ByteArray(NativeRealtimeMediaEngine.UPLINK_DRAIN_BYTES)
+  private val audioSessionPolicy by lazy {
+    RealtimeAudioSessionPolicy(context.getSystemService(Context.AUDIO_SERVICE) as AudioManager)
+  }
 
   @Volatile private var pendingRealtimeOutputClear: CompletableDeferred<Unit>? = null
   private val realtimeOutputCancellationMutex = Mutex()
-
-  @Volatile
-  private var realtimePlaybackEndsAtMs = 0L
 
   @Volatile
   private var realtimeOutputSuppressed = false
@@ -999,7 +1064,7 @@ class TalkModeManager internal constructor(
   }
 
   private fun start() {
-    if (realtimeSessionId != null || realtimeCaptureJob?.isActive == true) return
+    if (realtimeSessionId != null || mediaControlJob?.isActive == true) return
     if (scope.coroutineContext[Job]?.isActive == false) return
     val generation = startGeneration.incrementAndGet()
     stopRequested = false
@@ -1228,86 +1293,532 @@ class TalkModeManager internal constructor(
         )
     }
 
-  /** Caller holds [realtimeCapturePauseLock] so PTT cannot miss newly installed jobs. */
+  /** What the locked open produced, or null when the session ended before it ran. */
+  private class RealtimeMediaStartup(
+    val engine: RealtimeMediaEngine,
+    val controller: RealtimeRouteController,
+    val route: RealtimeRouteProfile,
+    val selection: RealtimeInputSelection,
+  )
+
+  /** Caller holds [realtimeCapturePauseLock] so PTT cannot miss a newly installed engine. */
   @SuppressLint("MissingPermission")
   private fun startRealtimeCaptureLocked(sessionId: String) {
-    realtimeCaptureJob?.cancel()
-    realtimeAppendJob?.cancel()
-    val inputGeneration = audioInputGeneration.incrementAndGet()
+    mediaControlJob?.cancel()
     onAppliedAudioInputChanged(null)
-    val audioFrames =
-      Channel<ByteArray>(
-        capacity = 4,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST,
-      )
-    realtimeAppendJob =
+
+    mediaControlJob =
       gatewayWorkScope.launch(realtimeCaptureDispatcher) {
-        for (frame in audioFrames) {
-          if (realtimeSessionId != sessionId) continue
-          if (isRealtimePlaybackActive()) continue
-          val audioBase64 = Base64.encodeToString(frame, Base64.NO_WRAP)
-          val params =
-            buildJsonObject {
-              put("sessionId", JsonPrimitive(sessionId))
-              put("audioBase64", JsonPrimitive(audioBase64))
-              put("timestamp", JsonPrimitive(SystemClock.elapsedRealtime()))
-            }
-          try {
-            sendGatewayRequestFrame(
-              "talk.session.appendAudio",
-              params.toString(),
-              timeoutMs = 8_000,
-            ) { error ->
-              Log.w(tag, "realtime appendAudio failed: ${error.message}")
-              failRealtimeRelay(sessionId, error.message)
-            }
-          } catch (err: Throwable) {
-            if (err is CancellationException) throw err
-            Log.w(tag, "realtime appendAudio failed: ${err.message ?: err::class.simpleName}")
-            failRealtimeRelay(sessionId, err.message ?: err::class.simpleName ?: "request failed")
-          }
-        }
-      }
-    realtimeCaptureJob =
-      gatewayWorkScope.launch(realtimeCaptureDispatcher) {
-        var audioInput: AndroidAudioInputSession? = null
+        // Nothing is acquired until the body runs, so a job cancelled before
+        // its first statement has nothing to give back.
+        var startup: RealtimeMediaStartup? = null
+        var owned = false
+        var flushFailure: String? = null
         try {
-          val frameBytes = realtimeSampleRateHz * 2 * realtimeAudioFrameMs / 1000
-          val openedAudioInput =
-            AndroidAudioInputSession.open(
-              context,
-              realtimeSampleRateHz,
-              frameBytes,
-              preferredAudioInputDevice(),
-              { key ->
-                if (audioInputGeneration.get() == inputGeneration) onAppliedAudioInputChanged(key)
-              },
-            )
-          audioInput = openedAudioInput
-          val buffer = ByteArray(frameBytes)
-          audioInput.startRecording()
-          while (coroutineContext.isActive && _isEnabled.value && realtimeSessionId == sessionId) {
-            val read = audioInput.read(buffer, 0, buffer.size)
-            if (read <= 0) continue
-            _inputLevel.value = TalkAudioLevel.smoothed(_inputLevel.value, TalkAudioLevel.pcm16Level(buffer, read))
-            if (!shouldAppendRealtimeCapturedFrame(read)) continue
-            audioFrames.trySend(buffer.copyOf(read))
+          // Every device acquisition happens under the lock teardown holds,
+          // with the session rechecked inside it. Opening exclusive streams for
+          // a session that has already ended takes the streams the next one is
+          // about to ask for. None of this suspends, so the lock is held only
+          // for as long as the open itself.
+          val opened =
+            synchronized(realtimeCapturePauseLock) {
+              if (realtimeSessionId != sessionId) return@launch
+              openRealtimeMediaLocked(sessionId)
+            }
+          if (opened == null) {
+            failRealtimeRelay(sessionId, "audio engine unavailable")
+            return@launch
           }
+          startup = opened
+          // Published only after the streams are running, and only if this
+          // session is still the current one.
+          owned =
+            synchronized(mediaEngineLock) {
+              if (realtimeSessionId != sessionId) {
+                false
+              } else {
+                mediaEngine = opened.engine
+                // Recorded with the engine it describes, never separately: a
+                // startup that lost this race would otherwise leave its
+                // selection behind, and the next route change would compare
+                // against it and decide nothing needed reopening.
+                currentInputSelection = opened.selection
+                // Publication and handoff are one critical section. A live
+                // audio event that saw a published engine between them would
+                // overtake the audio that was buffered before it.
+                flushFailure = flushPendingAssistantAudioLocked(opened.engine)
+                true
+              }
+            }
+          if (!owned) return@launch
+          val startupFailure = flushFailure
+          if (startupFailure != null) {
+            // Reported outside the critical section above, never inside it.
+            failRealtimeRelay(sessionId, startupFailure)
+            return@launch
+          }
+          Log.d(
+            tag,
+            "realtime media engine started route=${opened.route.name} " +
+              "concurrentCapture=${opened.engine.supportsConcurrentCapture}",
+          )
+          runRealtimeMediaControlLoop(sessionId, opened.engine)
         } catch (err: Throwable) {
           if (err is CancellationException) throw err
-          Log.w(tag, "realtime capture failed: ${err.message ?: err::class.simpleName}")
-          failRealtimeRelay(sessionId, err.message ?: err::class.simpleName ?: "capture failed")
+          // `finally` gives back the engine and the controller, but nothing
+          // else here reports the failure: the relay session, the audio session
+          // and the Listening state stay published, and this job's parent is a
+          // SupervisorJob. Talk would look live with no microphone and no
+          // reason shown, which is the silent-failure class root AGENTS.md puts
+          // above a crash.
+          Log.w(tag, "realtime media engine failed: ${err.message ?: err::class.simpleName}")
+          failRealtimeRelay(sessionId, err.message ?: "audio engine failed to start")
         } finally {
-          audioFrames.close()
-          audioInput?.close()
-          _inputLevel.value = 0f
+          // Whatever ended this job — failure, cancellation or a lost publish
+          // race — an engine nobody owns must not keep its device streams.
+          val unowned = startup
+          if (!owned && unowned != null) {
+            withContext(NonCancellable) { unowned.engine.release() }
+            unowned.controller.close()
+          }
         }
       }
   }
 
-  private fun shouldAppendRealtimeCapturedFrame(length: Int): Boolean = !isRealtimePlaybackActive() && length > 0
+  /**
+   * Opens the device for one session: audio session, route controller, engine.
+   *
+   * Returns null when neither the native engine nor the half-duplex fallback
+   * would start, which the caller reports as a media failure. Caller holds
+   * [realtimeCapturePauseLock].
+   */
+  @SuppressLint("MissingPermission")
+  private fun openRealtimeMediaLocked(sessionId: String): RealtimeMediaStartup? {
+    val owner = audioSessionPolicy.acquire()
+    mediaSessionOwner = owner
+    val controller =
+      RealtimeRouteController(
+        context = context,
+        sessionPolicy = audioSessionPolicy,
+        onRouteChanged = { profile ->
+          // Applying a route change can reopen the device streams, which must
+          // not happen on the platform's callback thread. The serialized
+          // control loop picks it up on its next tick, and the session stamp
+          // is what lets it reject one that belongs to a session that ended.
+          pendingRoute.set(PendingRouteChange(sessionId = sessionId, route = profile))
+        },
+      )
+    routeController = controller
+    var engine = createRealtimeMediaEngine()
+    // Everything acquired past this point is given back here if the open
+    // throws: the caller has no handle to it until this returns, so nothing
+    // else can.
+    try {
+      val route = controller.start(owner)
+      var selection =
+        RealtimeInputSelection(
+          route = route,
+          inputPreset = realtimeInputPresetForRoute(route, unprocessedCaptureSupported()),
+          inputDeviceId = engineInputDeviceId(engine),
+        )
+      val started =
+        engine.start(
+          RealtimeMediaConfig(
+            wireInputHz = realtimeSampleRateHz,
+            wireOutputHz = realtimeSampleRateHz,
+            requestedDeviceHz = realtimeRequestedDeviceRateHz,
+            route = route,
+            inputPreset = selection.inputPreset,
+            preferredInputDeviceId = selection.inputDeviceId,
+          ),
+        )
+      if (!started) {
+        // The native library loaded but its streams would not open — a route,
+        // sharing mode or device the low-latency path cannot take. That is
+        // exactly what the half-duplex fallback exists for, so the session
+        // degrades instead of ending.
+        Log.w(tag, "native realtime media engine did not start; using the half-duplex fallback")
+        engine.release()
+        engine = createFallbackRealtimeMediaEngine()
+        if (!engine.start(
+            RealtimeMediaConfig(
+              wireInputHz = realtimeSampleRateHz,
+              wireOutputHz = realtimeSampleRateHz,
+              requestedDeviceHz = realtimeSampleRateHz,
+              route = route,
+              inputPreset = RealtimeInputPreset.VoiceCommunication,
+            ),
+          )
+        ) {
+          Log.w(tag, "realtime media fallback failed to start")
+          currentInputSelection = null
+          engine.release()
+          controller.close()
+          return null
+        }
+        // The fallback opens with the platform's own communication preset and
+        // picks its microphone itself, so what the control loop must not reopen
+        // is that, not what the native engine was asked for.
+        selection =
+          selection.copy(
+            inputPreset = RealtimeInputPreset.VoiceCommunication,
+            inputDeviceId = RealtimeMediaConfig.UNSPECIFIED_DEVICE_ID,
+          )
+      }
+      return RealtimeMediaStartup(engine, controller, route, selection)
+    } catch (err: Throwable) {
+      engine.release()
+      controller.close()
+      throw err
+    }
+  }
 
-  private fun isRealtimePlaybackActive(): Boolean = _isSpeaking.value || SystemClock.elapsedRealtime() < realtimePlaybackEndsAtMs
+  /**
+   * The one control loop that moves audio and outcomes between the media engine
+   * and the Gateway. It is the only place that serializes engine control, so no
+   * two coroutines can race the device streams.
+   */
+  private suspend fun runRealtimeMediaControlLoop(
+    sessionId: String,
+    engine: RealtimeMediaEngine,
+  ) {
+    var tick = 0L
+    while (currentCoroutineContext().isActive && realtimeSessionId == sessionId) {
+      applyPendingRoute(sessionId, engine)
+      drainRealtimeUplinkFrames(sessionId, engine)
+      drainRealtimeMarkEvents(sessionId, engine)
+      drainRealtimeMediaTelemetry(sessionId, engine)
+      // Audio is drained every tick because a late uplink frame is a late
+      // word. The snapshot only feeds UI state, so it runs at a rate the
+      // waveform can use rather than at the audio rate.
+      if (tick % realtimeMediaSnapshotEveryTicks == 0L) applyRealtimeMediaSnapshot(sessionId, engine)
+      tick += 1
+      delay(realtimeMediaControlTickMs)
+    }
+  }
+
+  /**
+   * Applies a route change the platform reported, on the control loop.
+   *
+   * The microphone preset belongs to the route, so a change reopens the input
+   * stream. A failure here is a media failure: the session would otherwise keep
+   * running with the previous route's echo assumptions.
+   */
+  private fun applyPendingRoute(
+    sessionId: String,
+    engine: RealtimeMediaEngine,
+  ) {
+    val pending = pendingRoute.getAndSet(null) ?: return
+    // A route observed under a session that has ended says nothing about the
+    // route this one is on.
+    if (pending.sessionId != sessionId) return
+    val route = pending.route
+    val inputPreset = realtimeInputPresetForRoute(route, unprocessedCaptureSupported())
+    // Re-resolved on every change rather than kept from startup: the operator's
+    // microphone preference is stored as a stable key, but it resolves to an
+    // `AudioDeviceInfo.id` that is assigned per boot, so a device unplugged and
+    // plugged back in is the same preference under a different id. An engine
+    // that does not apply the id is not told one, and none is recorded as
+    // applied for it — the fallback resolves the preference itself when it
+    // opens, so claiming its id here would be a claim about a device nothing
+    // switched to.
+    val inputDeviceId = engineInputDeviceId(engine)
+    val appliedInput = RealtimeInputSelection(route, inputPreset, inputDeviceId)
+    // The controller reports the route again when the device set changes, so
+    // that a re-resolve happens. Reopening streams that would come back
+    // identical is an audible gap for nothing.
+    if (appliedInput == currentInputSelection) return
+    val applied =
+      engine.setRoute(
+        route = route,
+        inputPreset = inputPreset,
+        preferredInputDeviceId = inputDeviceId,
+      )
+    if (!applied) {
+      Log.w(tag, "realtime media route change to ${route.name} failed")
+      failRealtimeRelay(sessionId, "audio route change failed")
+      return
+    }
+    currentInputSelection = appliedInput
+  }
+
+  private suspend fun drainRealtimeUplinkFrames(
+    sessionId: String,
+    engine: RealtimeMediaEngine,
+  ) {
+    while (true) {
+      val byteCount = engine.drainUplink(uplinkBuffer)
+      if (byteCount <= 0) return
+      if (realtimeSessionId != sessionId) return
+      val audioBase64 = Base64.encodeToString(uplinkBuffer, 0, byteCount, Base64.NO_WRAP)
+      val params =
+        buildJsonObject {
+          put("sessionId", JsonPrimitive(sessionId))
+          put("audioBase64", JsonPrimitive(audioBase64))
+          put("timestamp", JsonPrimitive(SystemClock.elapsedRealtime()))
+        }
+      try {
+        sendGatewayRequestFrame(
+          "talk.session.appendAudio",
+          params.toString(),
+          timeoutMs = 8_000,
+        ) { error ->
+          Log.w(tag, "realtime appendAudio failed: ${error.message}")
+          failRealtimeRelay(sessionId, error.message)
+        }
+      } catch (err: Throwable) {
+        if (err is CancellationException) throw err
+        Log.w(tag, "realtime appendAudio failed: ${err.message ?: err::class.simpleName}")
+        failRealtimeRelay(sessionId, err.message ?: err::class.simpleName ?: "request failed")
+        return
+      }
+    }
+  }
+
+  private fun drainRealtimeMarkEvents(
+    sessionId: String,
+    engine: RealtimeMediaEngine,
+  ) {
+    // The drain and the name lookup share the lock that owns the render
+    // generation, so a discard cannot take a barrier's name between the engine
+    // reporting its outcome and this resolving it.
+    val resolved =
+      synchronized(mediaEngineLock) {
+        engine.drainMarkEvents().mapNotNull { event ->
+          val name = markNamesById.remove(event.markId) ?: return@mapNotNull null
+          // Every resolved barrier is answered, whatever the outcome. The
+          // acknowledgement releases the provider's playback gate rather than
+          // claiming the audio was heard: xAI holds the next response until its
+          // mark queue drains, and only an acknowledgement drains it
+          // (`extensions/xai/realtime-voice-protocol.ts`). A barrier the device
+          // will never reach still has to be answered or the conversation stops
+          // after the first barge-in.
+          if (event.outcome != RealtimeMarkOutcome.Completed) {
+            Log.d(tag, "realtime mark $name resolved as ${event.outcome.name}")
+          }
+          PendingRealtimePlaybackMark(sessionId = sessionId, name = name)
+        }
+      }
+    acknowledgeRealtimePlaybackMarks(resolved)
+  }
+
+  private fun drainRealtimeMediaTelemetry(
+    sessionId: String,
+    engine: RealtimeMediaEngine,
+  ) {
+    for (event in engine.drainTelemetry()) {
+      when (event.kind) {
+        RealtimeMediaEventKind.StreamError -> {
+          // Recovery is the control owner's job; the realtime callback only
+          // reported the fault. A recovery that fails must end the session
+          // rather than leave Talk apparently listening with closed streams.
+          Log.w(tag, "realtime media stream error code=${event.detailA} input=${event.detailB == 1L}")
+          val native = engine as? NativeRealtimeMediaEngine
+          val recovered = native?.restartStreams() ?: false
+          // The loop's own session, never the current one: a drain that runs
+          // after teardown would otherwise end the conversation that replaced
+          // it because *this* engine could not reopen its streams.
+          if (!recovered) failRealtimeRelay(sessionId, "audio device stopped and could not be reopened")
+        }
+        RealtimeMediaEventKind.ReadinessChanged,
+        RealtimeMediaEventKind.RouteChanged,
+        RealtimeMediaEventKind.AcousticProcessorReset,
+        RealtimeMediaEventKind.DeviceEpochBegan,
+        RealtimeMediaEventKind.FallbackEngaged,
+        -> Log.d(tag, "realtime media ${event.kind.name} a=${event.detailA} b=${event.detailB}")
+        RealtimeMediaEventKind.RenderQueueOverflow,
+        RealtimeMediaEventKind.UplinkQueueOverflow,
+        RealtimeMediaEventKind.ReferenceTimelineUnderrun,
+        RealtimeMediaEventKind.AcousticProcessorFault,
+        -> Log.w(tag, "realtime media ${event.kind.name} a=${event.detailA} b=${event.detailB}")
+        else -> Unit
+      }
+    }
+  }
+
+  private fun applyRealtimeMediaSnapshot(
+    sessionId: String,
+    engine: RealtimeMediaEngine,
+  ) {
+    val snapshot = engine.snapshot()
+    // Cancelling the control loop is not a join, so this can be an old loop
+    // reading a retired engine while a replacement session is already running.
+    // Publishing that would overwrite the new session's speaking state, levels
+    // and applied microphone with the previous engine's.
+    if (realtimeSessionId != sessionId) return
+    // A dropped outcome leaves its Gateway barrier waiting with nothing left to
+    // resolve it, so the session ends with a reason rather than a provider turn
+    // that never finishes. Read from the snapshot the loop already takes, not
+    // from the drain: an outcome can be dropped in a tick that hands back no
+    // events at all, and a drop is permanent once it has happened.
+    if (snapshot.render.markEventOverflows > 0) {
+      Log.w(tag, "realtime playback barrier outcomes were dropped")
+      failRealtimeRelay(sessionId, "playback barrier outcomes were lost")
+      return
+    }
+    val speaking = snapshot.renderPresenting
+    if (_isSpeaking.value != speaking) {
+      _isSpeaking.value = speaking
+      if (speaking) {
+        setStatus(nativeText("Speaking…"))
+      } else if (_isEnabled.value && realtimeSessionId != null) {
+        setStatus(nativeText("Listening"))
+      }
+    }
+    _outputLevel.value = snapshot.renderLevel
+    _inputLevel.value = snapshot.captureLevel
+    // Only an engine that owns the device selection reports it here. The
+    // fallback opens the recorder itself and reports what it routed to through
+    // `onAppliedAudioInputChanged`; its snapshot carries no device id, and
+    // publishing that as "nothing applied" would blank the microphone the
+    // operator can see is in use, about fifty milliseconds after it appeared.
+    if (!engine.appliesInputDeviceSelection) return
+    // Report the microphone the platform actually routed to, not the one that
+    // was requested: a rejected preference must show as unapplied.
+    val appliedInputKey =
+      snapshot.device.inputDeviceId
+        .takeIf { it != RealtimeMediaConfig.UNSPECIFIED_DEVICE_ID }
+        ?.let { deviceId ->
+          val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+          audioManager
+            .getDevices(AudioManager.GET_DEVICES_INPUTS)
+            .firstOrNull { it.id == deviceId }
+            ?.let(::audioInputDeviceKey)
+        }
+    if (appliedInputKey != lastAppliedInputKey) {
+      lastAppliedInputKey = appliedInputKey
+      onAppliedAudioInputChanged(appliedInputKey.takeIf { it == preferredAudioInputDevice() })
+    }
+  }
+
+  /**
+   * The native full-duplex engine when the device can run it, and the safe
+   * half-duplex path when it cannot. A device without the native library is not
+   * a broken device; it is a device that talks one way at a time.
+   */
+  private fun createRealtimeMediaEngine(): RealtimeMediaEngine {
+    realtimeMediaEngineFactory?.let { return it() }
+    NativeRealtimeMediaEngine.createOrNull()?.let { return it }
+    return createFallbackRealtimeMediaEngine()
+  }
+
+  private fun createFallbackRealtimeMediaEngine(): RealtimeMediaEngine {
+    realtimeMediaEngineFactory?.let { return it() }
+    return LegacyRealtimeMediaEngine(
+      context = context,
+      preferredAudioInputDevice = preferredAudioInputDevice,
+      onAppliedAudioInputChanged = onAppliedAudioInputChanged,
+      onInputLevel = { level -> _inputLevel.value = level },
+      onOutputLevel = { level -> _outputLevel.value = level },
+    )
+  }
+
+  /**
+   * Hands the engine the assistant audio that arrived while it was starting.
+   *
+   * The relay session is published before the device streams are open, so the
+   * provider can begin speaking into a window where there is nowhere to put the
+   * audio. Dropping it there loses the opening of the reply, which is the most
+   * noticeable part of it.
+   */
+  private fun flushPendingAssistantAudio(
+    sessionId: String,
+    engine: RealtimeMediaEngine,
+  ) {
+    // Held across the submissions, not just the copy. A live audio event that
+    // slipped between the two would overtake buffered audio and complete a
+    // barrier ahead of the audio it belongs behind.
+    val failure = synchronized(mediaEngineLock) { flushPendingAssistantAudioLocked(engine) }
+    reportRealtimeMediaFailure(sessionId, failure)
+  }
+
+  /**
+   * Hands the engine everything held for it, and returns the reason the session
+   * must end, or null.
+   *
+   * The reason is returned rather than acted on because the caller holds
+   * [mediaEngineLock]. `failRealtimeRelay` tears the media engine down, which
+   * takes this lock again and [realtimeCapturePauseLock] with it — re-entering
+   * this critical section in the middle of a flush, and taking the two locks in
+   * the opposite order from the teardown path.
+   */
+  private fun flushPendingAssistantAudioLocked(engine: RealtimeMediaEngine): String? {
+    val queued = preStartRenderItems.toList()
+    preStartRenderItems.clear()
+    if (queued.isEmpty()) return null
+    if (renderGeneration == 0L) renderGeneration = engine.beginRenderGeneration()
+    var failure: String? = null
+    for (item in queued) {
+      when (item) {
+        is PreStartRenderItem.Audio ->
+          if (!engine.submitAssistantAudio(renderGeneration, item.pcm)) {
+            // The same fact as the live submission path: audio that never
+            // reaches the device, with a barrier still queued behind it, would
+            // let the Gateway be told the turn played in full.
+            Log.w(tag, "realtime render queue rejected ${item.pcm.size} buffered bytes")
+            failure = failure ?: "assistant playback queue overflowed"
+          }
+        is PreStartRenderItem.Mark ->
+          if (!engine.submitMark(item.markId)) {
+            // Nothing left will resolve it, and the Gateway would wait on a
+            // turn that cannot finish.
+            markNamesById.remove(item.markId)
+            Log.w(tag, "realtime render stream refused a buffered playback barrier")
+            failure = failure ?: "assistant playback queue overflowed"
+          }
+      }
+    }
+    return failure
+  }
+
+  /**
+   * Ends the session that produced a media fault. Never called under
+   * [mediaEngineLock].
+   *
+   * The session is passed rather than read: the failure is reported after the
+   * lock is released, and a teardown in between would otherwise let an old
+   * session's rejected audio end the conversation that replaced it.
+   */
+  private fun reportRealtimeMediaFailure(
+    sessionId: String,
+    reason: String?,
+  ) {
+    if (reason == null) return
+    failRealtimeRelay(sessionId, reason)
+  }
+
+  /** The device id to hand this engine: none for one that does not apply it. */
+  private fun engineInputDeviceId(engine: RealtimeMediaEngine): Int =
+    if (engine.appliesInputDeviceSelection) {
+      resolvePreferredInputDeviceId()
+    } else {
+      RealtimeMediaConfig.UNSPECIFIED_DEVICE_ID
+    }
+
+  /**
+   * Resolves the operator's chosen microphone to a device id for this session.
+   *
+   * `AudioDeviceInfo.id` is per-boot, so the stored preference is re-resolved
+   * every session rather than persisted as an id.
+   */
+  private fun resolvePreferredInputDeviceId(): Int {
+    val key = preferredAudioInputDevice() ?: return RealtimeMediaConfig.UNSPECIFIED_DEVICE_ID
+    val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    val inputs = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS).toList()
+    return resolvePreferredAudioInput(inputs, key)?.id ?: RealtimeMediaConfig.UNSPECIFIED_DEVICE_ID
+  }
+
+  private fun unprocessedCaptureSupported(): Boolean {
+    val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    return audioManager.getProperty(AudioManager.PROPERTY_SUPPORT_AUDIO_SOURCE_UNPROCESSED)?.toBooleanStrictOrNull() == true
+  }
+
+  /**
+   * True while assistant audio the device has not finished presenting is still
+   * in flight. Derived from the device's own presentation position, never from
+   * how much audio a write call accepted.
+   */
+  private fun isRealtimePlaybackActive(): Boolean = synchronized(mediaEngineLock) { mediaEngine }?.snapshot()?.renderPresenting == true
 
   private fun handleRealtimeTalkEvent(payloadJson: String?) {
     if (payloadJson.isNullOrBlank()) return
@@ -1338,6 +1849,16 @@ class TalkModeManager internal constructor(
       }
       "audio" -> {
         if (realtimeOutputSuppressed) return
+        val responseId = obj["responseId"].asStringOrNull()
+        // A delta the provider had already put on the wire when the response
+        // was cancelled arrives after the clear that cancelled it. It carries
+        // the response it belongs to, so it is refused by name rather than by
+        // timing; audio for the next response has a different id and plays.
+        if (responseId != null && responseId == cancelledRealtimeResponseId) {
+          Log.d(tag, "realtime audio for cancelled response $responseId dropped")
+          return
+        }
+        if (responseId != null) lastRealtimeResponseId = responseId
         finishRealtimeConversationEntry(VoiceConversationRole.User)
         val audioBase64 = obj["audioBase64"].asStringOrNull() ?: return
         val bytes =
@@ -1347,12 +1868,26 @@ class TalkModeManager internal constructor(
             Log.w(tag, "realtime audio decode failed: ${err.message ?: err::class.simpleName}")
             return
           }
-        playRealtimeAudio(bytes)
+        playRealtimeAudio(sessionId, bytes)
       }
       "clear" -> {
-        val marks = takePendingRealtimePlaybackMarks()
-        stopRealtimePlayback()
-        acknowledgeRealtimePlaybackMarks(marks)
+        // Cancelling a response is a content decision, not an acoustic one:
+        // the engine discards what the device has not reached and keeps its
+        // echo adaptation, because the room did not change between sentences.
+        // Named so the deltas of this response that are still in flight can be
+        // refused when they land. A provider that does not identify its
+        // responses leaves this null, and then in-flight deltas are genuinely
+        // indistinguishable from the next response's: they are submitted under
+        // the generation this clear just began, so a late one is played. The
+        // generation check bounds what is already queued, not what has not
+        // arrived. Fencing unkeyed audio after a clear would need a boundary
+        // signal that an unkeyed stream does not have — a timer would be the
+        // write-acceptance estimate this design exists to remove, and dropping
+        // until the next identified response would drop the whole next reply.
+        // Both shipped providers set `response_id`, so this is the degenerate
+        // case rather than the normal one.
+        cancelledRealtimeResponseId = lastRealtimeResponseId
+        acknowledgeRealtimePlaybackMarks(discardRealtimeRender(sessionId))
         pendingRealtimeOutputClear?.complete(Unit)
       }
       "mark" -> {
@@ -1383,8 +1918,6 @@ class TalkModeManager internal constructor(
         }
         if (isFinal && role == "user") {
           setStatus(nativeText("Thinking…"), awaitingAgent = true)
-        } else if (isFinal && role == "assistant") {
-          scheduleRealtimePlaybackIdle()
         }
       }
       "toolCall" -> {
@@ -1434,152 +1967,152 @@ class TalkModeManager internal constructor(
       put("final", JsonPrimitive(true))
     }.toString()
 
-  private fun playRealtimeAudio(bytes: ByteArray) {
+  private fun playRealtimeAudio(
+    sessionId: String,
+    bytes: ByteArray,
+  ) {
     if (!playbackEnabled || realtimeOutputSuppressed || bytes.isEmpty()) return
-    val queue = ensureRealtimeAudioQueue()
-    if (!queue.trySend(RealtimePlaybackItem.Audio(bytes)).isSuccess) {
-      Log.w(tag, "realtime audio queue full")
-    }
+    val failure =
+      synchronized(mediaEngineLock) {
+        // Rechecked inside the critical section that owns the render state. The
+        // caller's check happened before teardown could take this lock, so an
+        // event that lost that race would otherwise queue the previous
+        // session's audio for the engine the next one just published.
+        if (realtimeSessionId != sessionId) return
+        val engine =
+          mediaEngine ?: run {
+            // The engine is still starting. Hold a bounded amount so the
+            // opening of the reply survives; past the bound the drop is
+            // reported rather than silent.
+            val bufferedBytes = preStartRenderItems.filterIsInstance<PreStartRenderItem.Audio>().sumOf { it.pcm.size }
+            if (bufferedBytes + bytes.size <= preStartAssistantAudioBytes) {
+              preStartRenderItems.add(PreStartRenderItem.Audio(bytes))
+              return@synchronized null
+            }
+            // The reply would be silently truncated: the audio never reaches
+            // the device, but a later barrier would still complete and tell the
+            // Gateway the turn played in full.
+            Log.w(tag, "realtime pre-start buffer full; dropped ${bytes.size} bytes")
+            return@synchronized "audio engine did not start in time"
+          }
+        if (renderGeneration == 0L) renderGeneration = engine.beginRenderGeneration()
+        if (engine.submitAssistantAudio(renderGeneration, bytes)) {
+          null
+        } else {
+          // Part of the reply will never be rendered, and a later barrier would
+          // still complete once the audio in front of it drained — telling the
+          // Gateway the turn finished when the middle of it was never played.
+          Log.w(tag, "realtime render queue rejected ${bytes.size} bytes")
+          "assistant playback queue overflowed"
+        }
+      }
+    // Outside the critical section: ending the session tears the engine down,
+    // which takes this lock and the pause lock in the opposite order.
+    reportRealtimeMediaFailure(sessionId, failure)
   }
 
   private fun queueRealtimePlaybackMark(
     sessionId: String,
     markName: String,
   ) {
-    synchronized(realtimePlaybackLock) {
-      pendingRealtimePlaybackMarks[markName] =
-        PendingRealtimePlaybackMark(
-          sessionId = sessionId,
-          name = markName,
-        )
-    }
-    if (!ensureRealtimeAudioQueue().trySend(RealtimePlaybackItem.Mark(markName)).isSuccess) {
-      val mark = synchronized(realtimePlaybackLock) { pendingRealtimePlaybackMarks.remove(markName) }
-      acknowledgeRealtimePlaybackMarks(listOfNotNull(mark))
-    }
-  }
-
-  private fun ensureRealtimeAudioQueue(): Channel<RealtimePlaybackItem> =
-    synchronized(realtimePlaybackLock) {
-      realtimeAudioQueue
-        ?: Channel<RealtimePlaybackItem>(Channel.UNLIMITED).also { queue ->
-          realtimeAudioQueue = queue
-          realtimeAudioWriterJob =
-            gatewayWorkScope.launch(realtimePlaybackDispatcher) {
-              for (item in queue) {
-                when (item) {
-                  is RealtimePlaybackItem.Audio -> {
-                    if (!playbackEnabled || realtimeOutputSuppressed || realtimeSessionId == null) continue
-                    try {
-                      writeRealtimeAudio(item.bytes)
-                    } catch (err: CancellationException) {
-                      throw err
-                    } catch (err: Throwable) {
-                      Log.w(tag, "realtime audio playback failed: ${err.message ?: err::class.java.simpleName}")
-                    }
-                  }
-                  is RealtimePlaybackItem.Mark -> prepareRealtimePlaybackMark(item.name)
-                }
-              }
-            }
+    val markId = markIdSequence.incrementAndGet()
+    val refused =
+      synchronized(mediaEngineLock) {
+        // Same boundary as the audio path: a barrier from a session that has
+        // ended must not be tracked against the one that replaced it.
+        if (realtimeSessionId != sessionId) return
+        // Recorded under the lock that owns the render generation. A discard
+        // resolves every name it finds, so a name published outside the lock
+        // could be answered before its barrier was ever submitted.
+        markNamesById[markId] = markName
+        val engine =
+          mediaEngine ?: run {
+            // Audio may already be buffered ahead of this barrier. Answering it
+            // now would tell the Gateway that audio which has not been
+            // submitted, let alone presented, had already played.
+            preStartRenderItems.add(PreStartRenderItem.Mark(markId))
+            return
+          }
+        if (engine.submitMark(markId)) {
+          false
+        } else {
+          // Acknowledging here would tell the Gateway that playback reached the
+          // barrier when audio queued in front of it may still be pending, so
+          // the name is dropped inside the same transition that failed to
+          // record it.
+          markNamesById.remove(markId)
+          true
         }
-    }
-
-  private fun writeRealtimeAudio(bytes: ByteArray) {
-    synchronized(realtimePlaybackLock) {
-      val track =
-        realtimeAudioTrack ?: run {
-          val minBuffer =
-            AudioTrack.getMinBufferSize(
-              realtimeSampleRateHz,
-              AudioFormat.CHANNEL_OUT_MONO,
-              AudioFormat.ENCODING_PCM_16BIT,
-            )
-          val bufferSizeBytes =
-            maxOf(
-              minBuffer * 2,
-              realtimeSampleRateHz * 2 * realtimePlaybackBufferMs / 1000,
-              bytes.size * 4,
-            )
-          val created =
-            AudioTrack
-              .Builder()
-              .setAudioAttributes(
-                AudioAttributes
-                  .Builder()
-                  .setUsage(AudioAttributes.USAGE_MEDIA)
-                  .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                  .build(),
-              ).setAudioFormat(
-                AudioFormat
-                  .Builder()
-                  .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                  .setSampleRate(realtimeSampleRateHz)
-                  .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                  .build(),
-              ).setTransferMode(AudioTrack.MODE_STREAM)
-              .setBufferSizeInBytes(bufferSizeBytes)
-              .build()
-          realtimeAudioTrack = created
-          realtimeWrittenFrames = 0L
-          created
-        }
-      var writtenBytes = 0
-      while (writtenBytes < bytes.size) {
-        val written = track.write(bytes, writtenBytes, bytes.size - writtenBytes)
-        if (written <= 0) {
-          Log.w(tag, "realtime audio write failed: $written")
-          break
-        }
-        writtenBytes += written
       }
-      if (writtenBytes <= 0) return
-      if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
-        track.play()
-      }
-      // Blocking MODE_STREAM writes are playback-paced once the track buffer
-      // fills, so per-write metering tracks what the speaker actually plays.
-      _outputLevel.value =
-        TalkAudioLevel.smoothed(_outputLevel.value ?: 0f, TalkAudioLevel.pcm16Level(bytes, writtenBytes))
-      _isSpeaking.value = true
-      setStatus(nativeText("Speaking…"))
-      val durationMs = ((writtenBytes / 2.0) / realtimeSampleRateHz * 1000.0).toLong()
-      realtimeWrittenFrames += writtenBytes / 2L
-      val now = SystemClock.elapsedRealtime()
-      realtimePlaybackEndsAtMs = maxOf(now, realtimePlaybackEndsAtMs) + durationMs
-      scheduleRealtimePlaybackIdle()
+    if (refused) {
+      // The stream is far past its bounds by the time this happens, so the
+      // session ends with a reason rather than reporting playback that did not
+      // occur.
+      Log.w(tag, "realtime render stream refused playback barrier $markName")
+      failRealtimeRelay(sessionId, "assistant playback queue overflowed")
     }
   }
 
-  private fun prepareRealtimePlaybackMark(markName: String) {
-    val completed =
-      synchronized(realtimePlaybackLock) {
-        val mark = pendingRealtimePlaybackMarks[markName] ?: return
-        mark.targetFrame = realtimeWrittenFrames
-        takeCompletedRealtimePlaybackMarksLocked()
-      }
-    acknowledgeRealtimePlaybackMarks(completed)
-    scheduleRealtimePlaybackIdle()
+  private fun stopRealtimePlayback() {
+    acknowledgeRealtimePlaybackMarks(discardRealtimeRender(realtimeSessionId))
+    _isSpeaking.value = false
+    _outputLevel.value = null
+    // Restored here because `stopSpeaking` cannot: it only repairs the status
+    // when it is the one that clears `_isSpeaking`, and this already did. Left
+    // out, turning playback off leaves the UI reading "Speaking…" with nothing
+    // playing.
+    if (_isEnabled.value) setStatus(nativeText("Listening"))
   }
 
-  private fun takeCompletedRealtimePlaybackMarksLocked(): List<PendingRealtimePlaybackMark> {
-    val playedFrames = realtimeAudioTrack?.playbackHeadPosition?.toLong()?.and(0xffff_ffffL) ?: realtimeWrittenFrames
-    val completed =
-      pendingRealtimePlaybackMarks.values.filter { mark ->
-        val targetFrame = mark.targetFrame
-        targetFrame != null && playedFrames >= targetFrame
+  /**
+   * Discards every assistant sound this session has not presented and opens the
+   * render generation that follows it.
+   *
+   * The discard, the generation it installs and the barrier bookkeeping are one
+   * transition under [mediaEngineLock]. Submitting audio that read the previous
+   * generation between them is refused by the engine and reported as a lost
+   * reply, and a barrier queued between them could lose the name the Gateway is
+   * waiting on.
+   *
+   * Returns the barriers to answer. Nothing outstanding at this point can ever
+   * be presented — including a barrier still held for an engine that has not
+   * started, which will never produce an outcome of its own — so each one is
+   * resolved here rather than left for an event that is not coming.
+   */
+  private fun discardRealtimeRender(sessionId: String?): List<PendingRealtimePlaybackMark> =
+    synchronized(mediaEngineLock) {
+      preStartRenderItems.clear()
+      val engine = mediaEngine
+      engine?.clearRender()
+      // The outcomes this discard just produced are superseded by the sweep
+      // below; draining them keeps them out of the next generation's drain.
+      engine?.drainMarkEvents()
+      // What the device already holds is not discarded. On the fallback the
+      // engine's own `clearRender` pauses and flushes the `AudioTrack`, which
+      // is where a large backlog can sit. On the native path the render queue
+      // *is* the timeline and the residue is one low-latency output buffer;
+      // flushing that would reset the stream's frame-position origin, which is
+      // the coordinate every pending barrier is expressed in. Accepted: a
+      // fraction of a buffer of already-cancelled audio rather than a device
+      // clock epoch change on every mute.
+      renderGeneration = engine?.beginRenderGeneration() ?: 0
+      if (sessionId == null) {
+        markNamesById.clear()
+        return@synchronized emptyList()
       }
-    completed.forEach { pendingRealtimePlaybackMarks.remove(it.name) }
-    return completed
-  }
-
-  private fun takePendingRealtimePlaybackMarks(): List<PendingRealtimePlaybackMark> =
-    synchronized(realtimePlaybackLock) {
-      val marks = pendingRealtimePlaybackMarks.values.toList()
-      pendingRealtimePlaybackMarks.clear()
-      marks
+      val resolved = markNamesById.values.map { PendingRealtimePlaybackMark(sessionId = sessionId, name = it) }
+      markNamesById.clear()
+      resolved
     }
 
+  /**
+   * Releases these playback barriers at the Gateway.
+   *
+   * An acknowledgement means the barrier is resolved and will produce nothing
+   * further, not that the audio behind it was heard; the provider gates its
+   * next response on the barrier, so one that was cancelled still has to be
+   * answered.
+   */
   private fun acknowledgeRealtimePlaybackMarks(marks: List<PendingRealtimePlaybackMark>) {
     for (mark in marks) {
       gatewayWorkScope.launch {
@@ -1603,65 +2136,57 @@ class TalkModeManager internal constructor(
     }
   }
 
-  private fun scheduleRealtimePlaybackIdle() {
-    realtimePlaybackIdleJob?.cancel()
-    realtimePlaybackIdleJob =
-      gatewayWorkScope.launch {
-        while (true) {
-          delay(20)
-          val (completed, idle) =
-            synchronized(realtimePlaybackLock) {
-              val playbackTimeElapsed = SystemClock.elapsedRealtime() >= realtimePlaybackEndsAtMs
-              val completed = takeCompletedRealtimePlaybackMarksLocked()
-              // AudioTrack may lag the duration estimate by its device buffer. Keep
-              // polling until queued marks prove the speaker reached the barrier.
-              val awaitingPlaybackMark = pendingRealtimePlaybackMarks.values.any { it.targetFrame != null }
-              val playbackIdle = playbackTimeElapsed && !awaitingPlaybackMark
-              if (playbackIdle) {
-                _isSpeaking.value = false
-                _outputLevel.value = null
-              }
-              completed to playbackIdle
-            }
-          acknowledgeRealtimePlaybackMarks(completed)
-          if (idle) {
-            if (_isEnabled.value && realtimeSessionId != null) {
-              setStatus(nativeText("Listening"))
-            }
-            return@launch
-          }
-        }
-      }
-  }
-
-  private fun stopRealtimePlayback() {
-    val audioQueue = realtimeAudioQueue
-    val audioWriterJob = realtimeAudioWriterJob
-    realtimeAudioQueue = null
-    realtimeAudioWriterJob = null
-    audioQueue?.close()
-    audioWriterJob?.cancel()
-    realtimePlaybackIdleJob?.cancel()
-    realtimePlaybackIdleJob = null
-    realtimePlaybackEndsAtMs = 0L
-    synchronized(realtimePlaybackLock) {
-      realtimeAudioTrack?.let { track ->
-        try {
-          track.pause()
-          track.flush()
-          track.stop()
-        } catch (_: Throwable) {
-        }
-        track.release()
-      }
-      realtimeAudioTrack = null
-      realtimeWrittenFrames = 0L
+  /**
+   * Releases the media engine and everything the session opened around it.
+   *
+   * Caller holds [realtimeCapturePauseLock]: the fields read here — the control
+   * job, the route controller, the audio-session owner — are the same ones
+   * [startRealtimeCaptureLocked] writes under that lock, and a teardown that
+   * raced a start would release the new session's resources.
+   */
+  private fun stopRealtimeMediaEngine(sessionId: String?) {
+    val engine: RealtimeMediaEngine?
+    synchronized(mediaEngineLock) {
+      engine = mediaEngine
+      mediaEngine = null
     }
+    mediaControlJob?.cancel()
+    mediaControlJob = null
+    routeController?.close()
+    routeController = null
+    engine?.release()
+    // The engine is gone, so nothing here can ever be presented — the same
+    // condition a clear creates, and answered the same way. Push-to-talk tears
+    // the engine down while the relay session keeps running, so dropping these
+    // names would leave the provider holding a barrier that nothing left in the
+    // process can resolve.
+    val orphaned =
+      synchronized(mediaEngineLock) {
+        preStartRenderItems.clear()
+        renderGeneration = 0
+        lastRealtimeResponseId = null
+        cancelledRealtimeResponseId = null
+        val resolved =
+          if (sessionId == null) {
+            emptyList()
+          } else {
+            markNamesById.values.map { PendingRealtimePlaybackMark(sessionId = sessionId, name = it) }
+          }
+        markNamesById.clear()
+        resolved
+      }
+    acknowledgeRealtimePlaybackMarks(orphaned)
+    pendingRoute.set(null)
+    currentInputSelection = null
+    if (lastAppliedInputKey != null) {
+      lastAppliedInputKey = null
+      onAppliedAudioInputChanged(null)
+    }
+    audioSessionPolicy.release(mediaSessionOwner)
+    mediaSessionOwner = 0
     _isSpeaking.value = false
     _outputLevel.value = null
-    if (_isEnabled.value) {
-      setStatus(nativeText("Listening"))
-    }
+    _inputLevel.value = 0f
   }
 
   private fun stopRealtimeRelay(
@@ -1673,34 +2198,30 @@ class TalkModeManager internal constructor(
     // Preserve the canonical status as one value so cleanup cannot split its
     // user-visible text from typed failure and awaiting-agent semantics.
     val status = currentStatus
-    val (sessionId, captureJobs) =
+    // Ending the session and releasing what it owns are one critical section,
+    // under the lock that also serializes engine start. Split in two, a
+    // re-enable between them publishes a new session into the same fields, and
+    // this teardown then closes the replacement's route controller, cancels its
+    // control job and releases its audio session — leaving a live session with
+    // no media. The id is captured rather than re-read for the same reason: the
+    // barriers swept here belong to the session being ended.
+    val sessionId =
       synchronized(realtimeCapturePauseLock) {
         val currentSessionId = realtimeSessionId
-        val currentCaptureJobs = realtimeCaptureJob to realtimeAppendJob
         realtimeSessionId = null
-        realtimeCaptureJob = null
-        realtimeAppendJob = null
         realtimeCapturePause = null
-        currentSessionId to currentCaptureJobs
+        realtimeOutputSuppressed = false
+        pendingRealtimeOutputClear?.cancel()
+        pendingRealtimeOutputClear = null
+        realtimeAgentCoordinator.endSession(currentSessionId)
+        realtimeUserEntryId = null
+        realtimeUserEntryAwaitingFinal = false
+        realtimeUserEntryAwaitingFinalStartedAtMs = null
+        realtimeAssistantEntryId = null
+        _speechActive.value = false
+        stopRealtimeMediaEngine(currentSessionId)
+        currentSessionId
       }
-    realtimeOutputSuppressed = false
-    pendingRealtimeOutputClear?.cancel()
-    pendingRealtimeOutputClear = null
-    if (cancelCapture) {
-      captureJobs.first?.cancel()
-    }
-    if (cancelAppend) {
-      captureJobs.second?.cancel()
-    }
-    realtimeAgentCoordinator.endSession(sessionId)
-    realtimeUserEntryId = null
-    realtimeUserEntryAwaitingFinal = false
-    realtimeUserEntryAwaitingFinalStartedAtMs = null
-    realtimeAssistantEntryId = null
-    takePendingRealtimePlaybackMarks()
-    _speechActive.value = false
-    _inputLevel.value = 0f
-    stopRealtimePlayback()
     if (preserveStatus) {
       setStatus(status)
     }
@@ -1713,20 +2234,21 @@ class TalkModeManager internal constructor(
   }
 
   internal suspend fun pauseRealtimeCaptureForPushToTalk(captureId: String) {
-    val captureJobs =
+    val controlJob =
       synchronized(realtimeCapturePauseLock) {
         val currentSessionId = realtimeSessionId
-        val currentCaptureJobs = realtimeCaptureJob to realtimeAppendJob
         realtimeCapturePause = RealtimeCapturePause(sessionId = currentSessionId, pttCaptureId = captureId)
         realtimeOutputSuppressed = true
-        realtimeCaptureJob = null
-        realtimeAppendJob = null
-        currentCaptureJobs
+        val job = mediaControlJob
+        mediaControlJob = null
+        job
       }
-    stopRealtimePlayback()
-    val (captureJob, appendJob) = captureJobs
-    captureJob?.cancelAndJoin()
-    appendJob?.cancelAndJoin()
+    // Push-to-talk takes the microphone, so the realtime engine releases both
+    // device streams before the recognizer opens its own.
+    controlJob?.cancelAndJoin()
+    // Push-to-talk keeps the relay session, so its barriers are still owed an
+    // answer.
+    synchronized(realtimeCapturePauseLock) { stopRealtimeMediaEngine(realtimeSessionId) }
     // Stop input first so no frame can create new provider output while the
     // cancellation boundary is being established.
     if (!cancelRealtimeOutput(reason = "android-push-to-talk")) {
@@ -1767,7 +2289,7 @@ class TalkModeManager internal constructor(
           return@synchronized RealtimeCaptureResume.Skipped
         }
         if (!isConnected()) return@synchronized RealtimeCaptureResume.Disconnected
-        if (realtimeCaptureJob?.isActive == true || realtimeAppendJob?.isActive == true) {
+        if (mediaControlJob?.isActive == true) {
           realtimeCapturePause = null
           return@synchronized RealtimeCaptureResume.Skipped
         }

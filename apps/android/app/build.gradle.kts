@@ -127,6 +127,9 @@ ksp {
 
 android {
   namespace = "ai.openclaw.app"
+  // The realtime media engine is built from source by `src/main/cpp`. Pinning
+  // the NDK keeps the shipped native code reproducible across machines.
+  ndkVersion = "27.3.13750724"
   // AndroidX Core 1.19 and Lifecycle 2.11 require API 37 compilation.
   // targetSdk stays separate so runtime behavior changes remain an explicit migration.
   compileSdk = 37
@@ -163,6 +166,13 @@ android {
     ndk {
       // Support all major ABIs — native libs are tiny (~47 KB per ABI)
       abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+    }
+    externalNativeBuild {
+      cmake {
+        // Oboe's prefab module is published against c++_shared, and the engine
+        // passes std::shared_ptr across that boundary.
+        arguments += listOf("-DANDROID_STL=c++_shared")
+      }
     }
   }
 
@@ -207,10 +217,19 @@ android {
     }
   }
 
+  externalNativeBuild {
+    cmake {
+      path = file("src/main/cpp/CMakeLists.txt")
+      version = "3.22.1"
+    }
+  }
+
   buildFeatures {
     compose = true
     buildConfig = true
     resValues = true
+    // Required to consume Oboe's prefab-published native module.
+    prefab = true
   }
 
   androidResources {
@@ -248,6 +267,11 @@ android {
   }
 
   packaging {
+    jniLibs {
+      // Uncompressed and page-aligned native libraries are what lets Android
+      // map them directly, including on 16 KB page-size devices.
+      useLegacyPackaging = false
+    }
     resources {
       excludes +=
         setOf(
@@ -367,6 +391,7 @@ dependencies {
   implementation(libs.media3.exoplayer)
   implementation(libs.media3.session)
   implementation(libs.media3.ui)
+  implementation(libs.oboe)
   implementation(libs.bcprov)
   implementation(libs.coil.compose)
   implementation(libs.coil.svg)
@@ -397,6 +422,7 @@ dependencies {
   testRuntimeOnly(libs.junit.vintage.engine)
 
   androidTestImplementation(libs.androidx.test.ext.junit)
+  androidTestImplementation(libs.androidx.test.rules)
   androidTestImplementation(libs.androidx.test.runner)
   androidTestImplementation(libs.androidx.uiautomator)
 }

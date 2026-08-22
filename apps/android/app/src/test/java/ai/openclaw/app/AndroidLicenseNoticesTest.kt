@@ -36,6 +36,7 @@ class AndroidLicenseNoticesTest {
 
     assertEquals(
       listOf(
+        "Abseil",
         "AndroidX Compose",
         "AndroidX Media3",
         "AndroidX Room",
@@ -48,8 +49,14 @@ class AndroidLicenseNoticesTest {
         "Kotlin Libraries",
         "Manrope",
         "nibor autolink",
+        "Oboe",
         "OkHttp and Okio",
+        "Ooura FFT",
+        "PFFFT",
+        "RNNoise",
         "SLF4J API",
+        "spl_sqrt_floor",
+        "WebRTC Audio Processing",
       ),
       licenses.map { license -> license.title },
     )
@@ -61,5 +68,13 @@ class AndroidLicenseNoticesTest {
     assertTrue(licenses.any { license -> license.text.contains("MIT License") })
     assertTrue(licenses.any { license -> license.text.contains("Bouncy Castle Licence") })
     assertTrue(licenses.any { license -> license.title == "Coil" && license.text.contains("Coil Contributors") })
+    // The native engine compiles these into `libopenclaw_media.so`, so their
+    // notices ship with the app rather than only WebRTC's top-level one.
+    assertTrue(licenses.any { license -> license.title == "PFFFT" && license.text.contains("Julien Pommier") })
+    assertTrue(licenses.any { license -> license.title == "RNNoise" && license.text.contains("Xiph.Org") })
+    assertTrue(licenses.any { license -> license.title == "Ooura FFT" && license.text.contains("Takuya OOURA") })
+    assertTrue(
+      licenses.any { license -> license.title == "spl_sqrt_floor" && license.text.contains("Wilco Dijkstra") },
+    )
   }
 }

@@ -10,9 +10,11 @@ import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.verbatimText
 import android.Manifest
 import android.content.ComponentName
+import android.content.Context
 import android.content.IntentFilter
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.os.Bundle
-import android.os.SystemClock
 import android.speech.RecognitionListener
 import android.speech.RecognitionService
 import android.speech.SpeechRecognizer
@@ -26,6 +28,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -37,6 +40,7 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -47,8 +51,11 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.AudioDeviceInfoBuilder
+import org.robolectric.util.ReflectionHelpers
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -474,26 +481,6 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun realtimePlaybackMarkAcknowledgesAfterQueuedAudioBarrier() =
-    runTest {
-      val acknowledgements = mutableListOf<Pair<String, String>>()
-      val manager =
-        createManager(
-          scope = this,
-          realtimePlaybackDispatcher = StandardTestDispatcher(testScheduler),
-          realtimeMarkAcknowledger = { sessionId, markName ->
-            acknowledgements += sessionId to markName
-          },
-        )
-      setPrivateField(manager, "realtimeSessionId", "relay-1")
-
-      manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"mark","markName":"audio-1"}""")
-      runCurrent()
-
-      assertEquals(listOf("relay-1" to "audio-1"), acknowledgements)
-    }
-
-  @Test
   fun realtimeTranscriptsPopulateVoiceConversation() {
     val manager = createRealtimeManager()
 
@@ -789,39 +776,199 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun realtimeAudioFramesStreamUntilPlaybackStarts() {
-    val manager = createManager()
+  fun realtimeAudioIsSubmittedUnderTheCurrentRenderGeneration() {
+    val engine = FakeRealtimeMediaEngine()
+    val manager = createManager(realtimeMediaEngine = engine)
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+    setPrivateField(manager, "mediaEngine", engine)
 
-    assertFalse(shouldAppendRealtimeCapturedFrame(manager, 0))
-    assertTrue(shouldAppendRealtimeCapturedFrame(manager, 16))
-    assertTrue(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+    manager.realtimeEvent(audioEvent("relay-1", byteArrayOf(1, 2, 3, 4)))
+    assertEquals(1, engine.submittedAudio.size)
+    val firstGeneration = engine.submittedAudio[0].first
 
-    setPrivateField(manager, "realtimePlaybackEndsAtMs", SystemClock.elapsedRealtime() + 1_000)
-
-    assertFalse(shouldAppendRealtimeCapturedFrame(manager, 4_800))
-
-    setPrivateField(manager, "realtimePlaybackEndsAtMs", SystemClock.elapsedRealtime() - 1)
-
-    assertTrue(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+    // A clear opens the next generation, and audio after it must not carry the
+    // cancelled one — that is what let cancelled assistant speech resume.
+    manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"clear"}""")
+    manager.realtimeEvent(audioEvent("relay-1", byteArrayOf(5, 6, 7, 8)))
+    assertEquals(2, engine.submittedAudio.size)
+    assertTrue(engine.submittedAudio[1].first > firstGeneration)
+    assertEquals(1, engine.clearCount)
   }
 
   @Test
-  fun pushToTalkPauseWaitsForRealtimeCaptureJobs() =
+  fun assistantAudioArrivingBeforeTheEngineStartsIsNotLost() =
     runTest {
-      val manager = createManager()
-      val captureJob = Job()
-      val appendJob = Job()
-      setPrivateField(manager, "realtimeCaptureJob", captureJob)
-      setPrivateField(manager, "realtimeAppendJob", appendJob)
-      setMutableStateFlow(manager, "_isEnabled", true)
+      val engine = FakeRealtimeMediaEngine()
+      val manager = createManager(scope = this, realtimeMediaEngine = engine)
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      // The engine is not published yet — exactly the window between the relay
+      // session being announced and the device streams opening.
+
+      manager.realtimeEvent(audioEvent("relay-1", byteArrayOf(1, 2, 3, 4)))
+      assertEquals(0, engine.submittedAudio.size)
+
+      flushPendingAssistantAudio(manager, "relay-1", engine)
+      assertEquals(1, engine.submittedAudio.size)
+      assertEquals(4, engine.submittedAudio[0].second.size)
+    }
+
+  @Test
+  fun aBarrierBufferedBeforeStartupIsNotAnsweredAheadOfItsAudio() =
+    runTest {
+      val acknowledgements = mutableListOf<Pair<String, String>>()
+      val engine = FakeRealtimeMediaEngine()
+      val manager =
+        createManager(
+          scope = this,
+          realtimeMediaEngine = engine,
+          realtimeMarkAcknowledger = { sessionId, markName -> acknowledgements += sessionId to markName },
+        )
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+      manager.realtimeEvent(audioEvent("relay-1", byteArrayOf(1, 2, 3, 4)))
+      manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"mark","markName":"audio-1"}""")
+      runCurrent()
+      // Answering the barrier now would claim the buffered audio had played.
+      assertEquals(emptyList<Pair<String, String>>(), acknowledgements)
+      assertEquals(0, engine.submittedMarks.size)
+
+      flushPendingAssistantAudio(manager, "relay-1", engine)
+      // It reaches the engine behind its audio, in arrival order.
+      assertEquals(1, engine.submittedAudio.size)
+      assertEquals(1, engine.submittedMarks.size)
+    }
+
+  @Test
+  fun audioBufferedBeforeStartupIsDiscardedByAnInterruption() =
+    runTest {
+      val engine = FakeRealtimeMediaEngine()
+      val manager = createManager(scope = this, realtimeMediaEngine = engine)
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+      manager.realtimeEvent(audioEvent("relay-1", byteArrayOf(1, 2, 3, 4)))
+      // The user interrupts before the device streams finished opening.
+      manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"clear"}""")
+      flushPendingAssistantAudio(manager, "relay-1", engine)
+
+      // Cancelled audio must not arrive one device-open later.
+      assertEquals(0, engine.submittedAudio.size)
+    }
+
+  @Test
+  fun aRefusedPlaybackBarrierIsNeverAcknowledgedAsPlayed() =
+    runTest {
+      val acknowledgements = mutableListOf<Pair<String, String>>()
+      val engine = FakeRealtimeMediaEngine(markSubmissionSucceeds = false)
+      val manager =
+        createManager(
+          scope = this,
+          realtimeMediaEngine = engine,
+          realtimeMarkAcknowledger = { sessionId, markName -> acknowledgements += sessionId to markName },
+        )
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(manager, "mediaEngine", engine)
+
+      manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"mark","markName":"audio-1"}""")
+      runCurrent()
+
+      // Audio queued in front of the barrier may still be pending, so claiming
+      // the device reached it would be a lie to the Gateway.
+      assertEquals(emptyList<Pair<String, String>>(), acknowledgements)
+    }
+
+  @Test
+  fun aPlaybackBarrierIsNotAnsweredUntilTheEngineResolvesIt() =
+    runTest {
+      val acknowledgements = mutableListOf<Pair<String, String>>()
+      val engine = FakeRealtimeMediaEngine()
+      val manager =
+        createManager(
+          scope = this,
+          realtimeMediaEngine = engine,
+          realtimeMarkAcknowledger = { sessionId, markName -> acknowledgements += sessionId to markName },
+        )
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(manager, "mediaEngine", engine)
+
+      manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"mark","markName":"audio-1"}""")
+      runCurrent()
+      // The barrier is queued in the engine, not answered.
+      assertEquals(emptyList<Pair<String, String>>(), acknowledgements)
+      assertEquals(1, engine.submittedMarks.size)
+
+      engine.markEvents += RealtimeMarkEvent(engine.submittedMarks[0], RealtimeMarkOutcome.Completed)
+      drainMarkEvents(manager, "relay-1", engine)
+      runCurrent()
+      assertEquals(listOf("relay-1" to "audio-1"), acknowledgements)
+    }
+
+  @Test
+  fun aBarrierInvalidatedByTheEngineIsStillAnsweredToTheGateway() =
+    runTest {
+      val acknowledgements = mutableListOf<Pair<String, String>>()
+      val engine = FakeRealtimeMediaEngine()
+      val manager =
+        createManager(
+          scope = this,
+          realtimeMediaEngine = engine,
+          realtimeMarkAcknowledger = { sessionId, markName -> acknowledgements += sessionId to markName },
+        )
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(manager, "mediaEngine", engine)
+
+      manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"mark","markName":"audio-1"}""")
+      runCurrent()
+      engine.markEvents += RealtimeMarkEvent(engine.submittedMarks[0], RealtimeMarkOutcome.InvalidatedByEpoch)
+      drainMarkEvents(manager, "relay-1", engine)
+      runCurrent()
+
+      // The acknowledgement releases the provider's playback gate; it is not a
+      // claim that the audio was heard. A provider that holds its next response
+      // until the barrier drains would otherwise never speak again.
+      assertEquals(listOf("relay-1" to "audio-1"), acknowledgements)
+    }
+
+  @Test
+  fun aBarrierHeldForAnEngineThatNeverStartedIsAnsweredWhenTheResponseIsCleared() =
+    runTest {
+      val acknowledgements = mutableListOf<Pair<String, String>>()
+      val manager =
+        createManager(
+          scope = this,
+          realtimeMarkAcknowledger = { sessionId, markName -> acknowledgements += sessionId to markName },
+        )
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      // No engine published: the barrier is held with the audio in front of it.
+      manager.realtimeEvent(audioEvent("relay-1", byteArrayOf(1, 2, 3, 4)))
+      manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"mark","markName":"audio-1"}""")
+      runCurrent()
+      assertEquals(emptyList<Pair<String, String>>(), acknowledgements)
+
+      manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"clear"}""")
+      runCurrent()
+
+      // The engine never saw this barrier, so no outcome is coming for it. The
+      // interruption discarded the audio behind it, which makes the barrier
+      // resolved — dropping it instead would hold the provider's next response.
+      assertEquals(listOf("relay-1" to "audio-1"), acknowledgements)
+    }
+
+  @Test
+  fun pushToTalkPauseReleasesTheRealtimeMediaEngine() =
+    runTest {
+      val engine = FakeRealtimeMediaEngine()
+      val manager = createManager(scope = this, realtimeMediaEngine = engine)
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(manager, "mediaEngine", engine)
+      setPrivateField(manager, "mediaControlJob", Job())
 
       manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      runCurrent()
 
-      assertTrue(captureJob.isCancelled)
-      assertTrue(appendJob.isCancelled)
-      assertNull(readPrivateField(manager, "realtimeCaptureJob"))
-      assertNull(readPrivateField(manager, "realtimeAppendJob"))
-      assertTrue(readPrivateField(manager, "realtimeCapturePause") != null)
+      // Push-to-talk takes the microphone, so both device streams are released
+      // before the recognizer opens its own.
+      assertTrue(engine.released)
+      assertNull(readPrivateField(manager, "mediaEngine"))
     }
 
   @Test
@@ -929,9 +1076,346 @@ class TalkModeManagerTest {
 
       assertNull(readPrivateField(manager, "realtimeCapturePause"))
       assertTrue(manager.isListening.value)
-      assertTrue((readPrivateField(manager, "realtimeCaptureJob") as Job).isActive)
-      assertTrue((readPrivateField(manager, "realtimeAppendJob") as Job).isActive)
+      assertTrue((readPrivateField(manager, "mediaControlJob") as Job).isActive)
       manager.stopAllCapture()
+    }
+
+  @Test
+  fun bufferedAssistantAudioTheEngineRefusesEndsTheSession() =
+    runTest {
+      val engine = FakeRealtimeMediaEngine(audioSubmissionSucceeds = false)
+      val manager = createManager(scope = this, realtimeMediaEngine = engine)
+      setMutableStateFlow(manager, "_isEnabled", true)
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      // Audio and a barrier arrive while the engine is still starting.
+      manager.realtimeEvent(audioEvent("relay-1", byteArrayOf(1, 2, 3, 4)))
+      manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"mark","markName":"audio-1"}""")
+      runCurrent()
+
+      flushPendingAssistantAudio(manager, "relay-1", engine)
+      runCurrent()
+
+      // The barrier behind that audio would otherwise still resolve and report
+      // a turn as played in full when the middle of it never reached the
+      // device — the same fact the live submission path already ends on.
+      assertFalse(manager.isEnabled.value)
+      assertTrue(manager.statusText.value.contains("assistant playback queue overflowed"))
+    }
+
+  @Test
+  fun aRejectedSubmissionFromAnEndedSessionNeverEndsItsReplacement() =
+    runTest {
+      val engine = FakeRealtimeMediaEngine(audioSubmissionSucceeds = false)
+      val manager = createManager(scope = this, realtimeMediaEngine = engine)
+      setMutableStateFlow(manager, "_isEnabled", true)
+      setPrivateField(manager, "realtimeSessionId", "relay-2")
+      // No engine published, so the audio is held rather than submitted.
+      manager.realtimeEvent(audioEvent("relay-2", byteArrayOf(1, 2, 3, 4)))
+      runCurrent()
+
+      // The old session's held audio is flushed after the replacement started,
+      // and the engine refuses it.
+      flushPendingAssistantAudio(manager, "relay-1", engine)
+      runCurrent()
+
+      // The refusal belongs to "relay-1"; ending "relay-2" for it would kill a
+      // conversation that is working.
+      assertTrue(manager.isEnabled.value)
+    }
+
+  @Test
+  fun theFallbacksAppliedMicrophoneSurvivesTheSnapshotTick() =
+    runTest {
+      val applied = mutableListOf<String?>()
+      val engine = FakeRealtimeMediaEngine(appliesInputDevice = false)
+      val manager =
+        createManager(scope = this, realtimeMediaEngine = engine, onAppliedAudioInputChanged = { applied += it })
+      setMutableStateFlow(manager, "_isEnabled", true)
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(manager, "mediaEngine", engine)
+      // The capture session reported the microphone it opened, moments ago.
+      setPrivateField(manager, "lastAppliedInputKey", "usb|mic")
+
+      applyRealtimeMediaSnapshot(manager, "relay-1", engine)
+      runCurrent()
+
+      // The fallback's snapshot carries no device id because it does not own
+      // the selection; publishing that would blank the microphone the capture
+      // session had just reported.
+      assertEquals(emptyList<String?>(), applied)
+    }
+
+  @Test
+  fun aSnapshotFromARetiredEngineNeverOverwritesTheNewSession() =
+    runTest {
+      val engine = FakeRealtimeMediaEngine()
+      val manager = createManager(scope = this, realtimeMediaEngine = engine)
+      setMutableStateFlow(manager, "_isEnabled", true)
+      setPrivateField(manager, "realtimeSessionId", "relay-2")
+      setPrivateField(manager, "mediaEngine", engine)
+      setMutableStateFlow(manager, "_isSpeaking", true)
+
+      // The old loop is still inside its snapshot when the session moved on.
+      applyRealtimeMediaSnapshot(manager, "relay-1", engine)
+      runCurrent()
+
+      // The retired engine reports nothing presenting; publishing that would
+      // tell the new session it had stopped speaking.
+      assertTrue(manager.isSpeaking.value)
+    }
+
+  @Test
+  fun aStreamFaultOnARetiredEngineNeverEndsTheSessionThatReplacedIt() =
+    runTest {
+      val engine = FakeRealtimeMediaEngine()
+      val manager = createManager(scope = this, realtimeMediaEngine = engine)
+      setMutableStateFlow(manager, "_isEnabled", true)
+      setPrivateField(manager, "realtimeSessionId", "relay-2")
+      setPrivateField(manager, "mediaEngine", engine)
+      engine.telemetry += RealtimeMediaEvent(RealtimeMediaEventKind.StreamError, 1, 0, 0, 0)
+
+      // The old loop drains its engine's telemetry after teardown, while a
+      // replacement relay is already running.
+      drainRealtimeMediaTelemetry(manager, "relay-1", engine)
+      runCurrent()
+
+      // The fault belongs to the retired engine; ending "relay-2" because of it
+      // would kill a conversation that is working.
+      assertTrue(manager.isEnabled.value)
+    }
+
+  @Test
+  fun endingTheRelayAnswersTheBarriersItsEngineStillHeld() =
+    runTest {
+      val acknowledgements = mutableListOf<Pair<String, String>>()
+      val engine = FakeRealtimeMediaEngine()
+      val manager =
+        createManager(
+          scope = this,
+          realtimeMediaEngine = engine,
+          realtimeMarkAcknowledger = { sessionId, markName -> acknowledgements += sessionId to markName },
+        )
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(manager, "mediaEngine", engine)
+      manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"mark","markName":"audio-1"}""")
+      runCurrent()
+
+      manager.stopAllCapture()
+      runCurrent()
+
+      // Teardown clears the session id before sweeping the barriers, so the
+      // sweep has to be told which session they belonged to — otherwise they
+      // are erased and the provider's playback gate never opens.
+      assertEquals(listOf("relay-1" to "audio-1"), acknowledgements)
+    }
+
+  @Test
+  fun audioFromAnEndedSessionNeverReachesTheEngineThatReplacedIt() =
+    runTest {
+      val engine = FakeRealtimeMediaEngine()
+      val manager = createManager(scope = this, realtimeMediaEngine = engine)
+      setPrivateField(manager, "realtimeSessionId", "relay-2")
+      setPrivateField(manager, "mediaEngine", engine)
+
+      // A `talk.event` from the previous session that lost the teardown race.
+      playRealtimeAudio(manager, "relay-1", byteArrayOf(1, 2, 3, 4))
+      queueRealtimePlaybackMark(manager, "relay-1", "audio-old")
+      runCurrent()
+
+      // Neither the audio nor the barrier belongs to the session that is live.
+      assertEquals(0, engine.submittedAudio.size)
+      assertEquals(0, engine.submittedMarks.size)
+
+      playRealtimeAudio(manager, "relay-2", byteArrayOf(5, 6, 7, 8))
+      runCurrent()
+      assertEquals(1, engine.submittedAudio.size)
+    }
+
+  @Test
+  fun audioFromTheResponseAClearCancelledIsRefusedWhenItLandsLate() =
+    runTest {
+      val engine = FakeRealtimeMediaEngine()
+      val manager = createManager(scope = this, realtimeMediaEngine = engine)
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(manager, "mediaEngine", engine)
+
+      manager.realtimeEvent(audioEventForResponse("relay-1", "resp-1", byteArrayOf(1, 2, 3, 4)))
+      runCurrent()
+      assertEquals(1, engine.submittedAudio.size)
+
+      manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"clear"}""")
+      runCurrent()
+
+      // A delta of the cancelled response that was already on the wire.
+      manager.realtimeEvent(audioEventForResponse("relay-1", "resp-1", byteArrayOf(5, 6, 7, 8)))
+      runCurrent()
+      assertEquals(1, engine.submittedAudio.size)
+
+      // The next response plays: it is a different response, not a later time.
+      manager.realtimeEvent(audioEventForResponse("relay-1", "resp-2", byteArrayOf(9, 10, 11, 12)))
+      runCurrent()
+      assertEquals(2, engine.submittedAudio.size)
+    }
+
+  @Test
+  fun turningPlaybackOffLeavesTheStatusOnListening() =
+    runTest {
+      val engine = FakeRealtimeMediaEngine()
+      val manager = createManager(scope = this, realtimeMediaEngine = engine)
+      setMutableStateFlow(manager, "_isEnabled", true)
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(manager, "mediaEngine", engine)
+      setMutableStateFlow(manager, "_isSpeaking", true)
+      setMutableStateFlow(manager, "_statusText", nativeText("Speaking…"))
+
+      manager.setPlaybackEnabled(false)
+      runCurrent()
+
+      // `stopSpeaking` only repairs the status when it is the one that clears
+      // `_isSpeaking`; this path already did, so the UI would otherwise read
+      // "Speaking…" with nothing playing.
+      assertFalse(manager.isSpeaking.value)
+      assertEquals("Listening", manager.statusText.value)
+    }
+
+  @Test
+  fun anEngineThatDoesNotApplyADeviceIdIsNeverToldOne() =
+    runTest {
+      val audioManager = RuntimeEnvironment.getApplication().getSystemService(Context.AUDIO_SERVICE) as AudioManager
+      val shadowAudioManager = shadowOf(audioManager)
+      val mic = inputDevice(AudioDeviceInfo.TYPE_USB_HEADSET, id = 21)
+      shadowAudioManager.setInputDevices(listOf(mic))
+      val key = audioInputDeviceKey(mic.type, mic.address.orEmpty(), mic.productName.toString())
+
+      // The half-duplex fallback resolves the operator's microphone itself when
+      // it opens the recorder, and does not reopen it mid-session.
+      val engine = FakeRealtimeMediaEngine(appliesInputDevice = false)
+      val manager = createManager(scope = this, realtimeMediaEngine = engine, preferredAudioInputDevice = { key })
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(manager, "mediaEngine", engine)
+
+      setPendingRoute(manager, "relay-1", RealtimeRouteProfile.BuiltInSpeaker)
+      applyPendingRoute(manager, "relay-1", engine)
+
+      // Recording 21 as applied would be a claim about a device nothing
+      // switched to, and would suppress the next attempt.
+      assertEquals(RealtimeMediaConfig.UNSPECIFIED_DEVICE_ID, engine.inputDeviceId)
+      shadowAudioManager.setInputDevices(emptyList())
+    }
+
+  @Test
+  fun pushToTalkTeardownAnswersTheBarriersItsEngineCanNoLongerReach() =
+    runTest {
+      val acknowledgements = mutableListOf<Pair<String, String>>()
+      val engine = FakeRealtimeMediaEngine()
+      val manager =
+        createManager(
+          scope = this,
+          realtimeMediaEngine = engine,
+          realtimeMarkAcknowledger = { sessionId, markName -> acknowledgements += sessionId to markName },
+        )
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(manager, "mediaEngine", engine)
+      setPrivateField(manager, "mediaControlJob", Job())
+      manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"mark","markName":"audio-1"}""")
+      runCurrent()
+      assertEquals(emptyList<Pair<String, String>>(), acknowledgements)
+
+      // Push-to-talk takes the microphone: the engine goes away while the relay
+      // session keeps running.
+      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      runCurrent()
+
+      // Nothing left in the process can resolve that barrier, and the provider
+      // holds its next response behind it until it is answered.
+      assertEquals(listOf("relay-1" to "audio-1"), acknowledgements)
+    }
+
+  @Test
+  fun aRepluggedMicrophoneIsReResolvedRatherThanReappliedByItsOldId() =
+    runTest {
+      val audioManager = RuntimeEnvironment.getApplication().getSystemService(Context.AUDIO_SERVICE) as AudioManager
+      val shadowAudioManager = shadowOf(audioManager)
+      val first = inputDevice(AudioDeviceInfo.TYPE_USB_HEADSET, id = 11)
+      shadowAudioManager.setInputDevices(listOf(first))
+      val key = audioInputDeviceKey(first.type, first.address.orEmpty(), first.productName.toString())
+
+      val engine = FakeRealtimeMediaEngine()
+      val manager = createManager(scope = this, realtimeMediaEngine = engine, preferredAudioInputDevice = { key })
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(manager, "mediaEngine", engine)
+
+      setPendingRoute(manager, "relay-1", RealtimeRouteProfile.BuiltInSpeaker)
+      applyPendingRoute(manager, "relay-1", engine)
+      assertEquals(11, engine.inputDeviceId)
+
+      // The same microphone unplugged and plugged back in: the operator's
+      // preference is unchanged, but the platform hands out a new per-boot id.
+      shadowAudioManager.setInputDevices(listOf(inputDevice(AudioDeviceInfo.TYPE_USB_HEADSET, id = 12)))
+      setPendingRoute(manager, "relay-1", RealtimeRouteProfile.BuiltInSpeaker)
+      applyPendingRoute(manager, "relay-1", engine)
+
+      // Reapplying the id the session opened with would point the stream at a
+      // device that is gone.
+      assertEquals(12, engine.inputDeviceId)
+      assertEquals(2, engine.routeChanges)
+
+      // Nothing changed this time, so the streams are not reopened for nothing.
+      setPendingRoute(manager, "relay-1", RealtimeRouteProfile.BuiltInSpeaker)
+      applyPendingRoute(manager, "relay-1", engine)
+      assertEquals(2, engine.routeChanges)
+      shadowAudioManager.setInputDevices(emptyList())
+    }
+
+  @Test
+  fun aDroppedPlaybackBarrierOutcomeEndsTheSessionEvenWhenNoEventDrains() =
+    runTest {
+      val engine = FakeRealtimeMediaEngine()
+      val manager = createManager(scope = this, realtimeMediaEngine = engine)
+      setMutableStateFlow(manager, "_isEnabled", true)
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(manager, "mediaEngine", engine)
+      // The engine dropped an outcome; the ring has since been emptied, so the
+      // next drain hands back nothing at all.
+      engine.markEventOverflows = 1
+      engine.markEvents.clear()
+
+      applyRealtimeMediaSnapshot(manager, "relay-1", engine)
+      runCurrent()
+
+      // A dropped outcome is permanent: the barrier it belonged to can never be
+      // answered, so the turn would hang rather than finish.
+      assertFalse(manager.isEnabled.value)
+      assertTrue(manager.statusText.value.contains("playback barrier outcomes were lost"))
+    }
+
+  @Test
+  fun aMediaEngineThatThrowsWhileStartingEndsTheSessionWithAReason() =
+    runTest {
+      val engine = FakeRealtimeMediaEngine(startFailure = IllegalStateException("audio device busy"))
+      val manager =
+        createManager(
+          scope = this,
+          realtimeMediaEngine = engine,
+          realtimeCaptureDispatcher = StandardTestDispatcher(testScheduler),
+        )
+      setMutableStateFlow(manager, "_isEnabled", true)
+      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      val pause = readPrivateField(manager, "realtimeCapturePause")!!
+      setPrivateField(pause, "sessionId", "relay-1")
+      setPrivateField(pause, "restartRelay", true)
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+
+      manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
+      runCurrent()
+
+      // The engine is released either way. Without the failure being reported,
+      // Talk stays published as listening with no microphone and no reason —
+      // the silent-failure class the product doctrine puts above a crash.
+      assertTrue(engine.released)
+      assertFalse(manager.isListening.value)
+      assertFalse(manager.isEnabled.value)
+      assertTrue(manager.statusText.value.contains("audio device busy"))
     }
 
   @Test
@@ -1052,8 +1536,7 @@ class TalkModeManagerTest {
       assertTrue(stoppedByRelay)
       assertEquals("Gateway not connected", manager.statusText.value)
       assertNull(readPrivateField(manager, "realtimeSessionId"))
-      assertNull(readPrivateField(manager, "realtimeCaptureJob"))
-      assertNull(readPrivateField(manager, "realtimeAppendJob"))
+      assertNull(readPrivateField(manager, "mediaControlJob"))
     }
 
   @Test
@@ -1068,6 +1551,14 @@ class TalkModeManagerTest {
       assertEquals(45_000, currentTime)
     }
 
+  private val sessionScopes = mutableListOf<CoroutineScope>()
+
+  @After
+  fun cancelLeakedSessionScopes() {
+    sessionScopes.forEach { it.cancel() }
+    sessionScopes.clear()
+  }
+
   private fun createManager(
     talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(),
     talkAudioPlayer: TalkAudioPlaying? = null,
@@ -1077,11 +1568,19 @@ class TalkModeManagerTest {
     realtimeCaptureDispatcher: CoroutineDispatcher = Dispatchers.IO,
     realtimePlaybackDispatcher: CoroutineDispatcher = Dispatchers.IO,
     realtimeMarkAcknowledger: (suspend (String, String) -> Unit)? = null,
+    realtimeMediaEngine: RealtimeMediaEngine? = null,
+    preferredAudioInputDevice: () -> String? = { null },
+    onAppliedAudioInputChanged: (String?) -> Unit = {},
   ): TalkModeManager {
     val app = RuntimeEnvironment.getApplication()
+    // Tracked so it is cancelled with the test. Left running, its coroutines
+    // outlive the Robolectric environment they hold a Context from, and the
+    // exception that follows is reported against whichever test starts next.
+    val sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    sessionScopes += sessionScope
     val session =
       GatewaySession(
-        scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+        scope = sessionScope,
         identityStore = testDeviceIdentityStore(app),
         deviceAuthStore = DeviceAuthStore(SecurePrefs(app, app.getSharedPreferences("talk-mode-test-${System.nanoTime()}", 0))),
         onConnected = {},
@@ -1099,7 +1598,148 @@ class TalkModeManagerTest {
       realtimeCaptureDispatcher = realtimeCaptureDispatcher,
       realtimePlaybackDispatcher = realtimePlaybackDispatcher,
       realtimeMarkAcknowledger = realtimeMarkAcknowledger,
+      preferredAudioInputDevice = preferredAudioInputDevice,
+      onAppliedAudioInputChanged = onAppliedAudioInputChanged,
+      realtimeMediaEngineFactory = { realtimeMediaEngine ?: FakeRealtimeMediaEngine() },
     )
+  }
+
+  private fun audioEventForResponse(
+    sessionId: String,
+    responseId: String,
+    pcm: ByteArray,
+  ): String {
+    val encoded = android.util.Base64.encodeToString(pcm, android.util.Base64.NO_WRAP)
+    return """{"relaySessionId":"$sessionId","type":"audio","responseId":"$responseId","audioBase64":"$encoded"}"""
+  }
+
+  private fun audioEvent(
+    sessionId: String,
+    pcm: ByteArray,
+  ): String {
+    val encoded = android.util.Base64.encodeToString(pcm, android.util.Base64.NO_WRAP)
+    return """{"relaySessionId":"$sessionId","type":"audio","audioBase64":"$encoded"}"""
+  }
+
+  private fun flushPendingAssistantAudio(
+    manager: TalkModeManager,
+    sessionId: String,
+    engine: RealtimeMediaEngine,
+  ) {
+    val method =
+      manager.javaClass.getDeclaredMethod(
+        "flushPendingAssistantAudio",
+        String::class.java,
+        RealtimeMediaEngine::class.java,
+      )
+    method.isAccessible = true
+    method.invoke(manager, sessionId, engine)
+  }
+
+  private fun drainMarkEvents(
+    manager: TalkModeManager,
+    sessionId: String,
+    engine: RealtimeMediaEngine,
+  ) {
+    val method =
+      manager.javaClass.getDeclaredMethod(
+        "drainRealtimeMarkEvents",
+        String::class.java,
+        RealtimeMediaEngine::class.java,
+      )
+    method.isAccessible = true
+    method.invoke(manager, sessionId, engine)
+  }
+
+  private fun playRealtimeAudio(
+    manager: TalkModeManager,
+    sessionId: String,
+    pcm: ByteArray,
+  ) {
+    val method = manager.javaClass.getDeclaredMethod("playRealtimeAudio", String::class.java, ByteArray::class.java)
+    method.isAccessible = true
+    method.invoke(manager, sessionId, pcm)
+  }
+
+  private fun queueRealtimePlaybackMark(
+    manager: TalkModeManager,
+    sessionId: String,
+    markName: String,
+  ) {
+    val method =
+      manager.javaClass.getDeclaredMethod("queueRealtimePlaybackMark", String::class.java, String::class.java)
+    method.isAccessible = true
+    method.invoke(manager, sessionId, markName)
+  }
+
+  private fun drainRealtimeMediaTelemetry(
+    manager: TalkModeManager,
+    sessionId: String,
+    engine: RealtimeMediaEngine,
+  ) {
+    val method =
+      manager.javaClass.getDeclaredMethod(
+        "drainRealtimeMediaTelemetry",
+        String::class.java,
+        RealtimeMediaEngine::class.java,
+      )
+    method.isAccessible = true
+    method.invoke(manager, sessionId, engine)
+  }
+
+  private fun applyPendingRoute(
+    manager: TalkModeManager,
+    sessionId: String,
+    engine: RealtimeMediaEngine,
+  ) {
+    val method =
+      manager.javaClass.getDeclaredMethod(
+        "applyPendingRoute",
+        String::class.java,
+        RealtimeMediaEngine::class.java,
+      )
+    method.isAccessible = true
+    method.invoke(manager, sessionId, engine)
+  }
+
+  private fun applyRealtimeMediaSnapshot(
+    manager: TalkModeManager,
+    sessionId: String,
+    engine: RealtimeMediaEngine,
+  ) {
+    val method =
+      manager.javaClass.getDeclaredMethod(
+        "applyRealtimeMediaSnapshot",
+        String::class.java,
+        RealtimeMediaEngine::class.java,
+      )
+    method.isAccessible = true
+    method.invoke(manager, sessionId, engine)
+  }
+
+  private fun setPendingRoute(
+    manager: TalkModeManager,
+    sessionId: String,
+    route: RealtimeRouteProfile,
+  ) {
+    val pendingClass = Class.forName("ai.openclaw.app.voice.PendingRouteChange")
+    val ctor = pendingClass.declaredConstructors.first()
+    ctor.isAccessible = true
+    val pending = ctor.newInstance(sessionId, route)
+    val ref = readPrivateField(manager, "pendingRoute") as AtomicReference<*>
+    val setter = AtomicReference::class.java.getMethod("set", Any::class.java)
+    setter.invoke(ref, pending)
+  }
+
+  private fun inputDevice(
+    type: Int,
+    id: Int,
+  ): AudioDeviceInfo {
+    val device = AudioDeviceInfoBuilder.newBuilder().setType(type).build()
+    val port = ReflectionHelpers.getField<Any>(device, "mPort")
+    val handle = ReflectionHelpers.getField<Any>(port, "mHandle")
+    ReflectionHelpers.setField(handle, "mId", id)
+    return device
   }
 
   private fun createRealtimeManager(): TalkModeManager = createManager().also { setPrivateField(it, "realtimeSessionId", "relay-1") }
@@ -1242,4 +1882,124 @@ private class FakeTalkAudioPlayer : TalkAudioPlaying {
   override fun stop() {
     stopped = true
   }
+}
+
+/**
+ * Stands in for the realtime data plane so TalkMode's conversational ownership
+ * can be tested without a device stream. It records what it was asked to do
+ * rather than simulating audio: what these tests protect is which generation an
+ * assistant chunk carries and when a barrier may be reported as played.
+ */
+internal class FakeRealtimeMediaEngine(
+  private val routeChangeSucceeds: Boolean = true,
+  private val markSubmissionSucceeds: Boolean = true,
+  private val audioSubmissionSucceeds: Boolean = true,
+  private val appliesInputDevice: Boolean = true,
+  private val startFailure: Throwable? = null,
+) : RealtimeMediaEngine {
+  val submittedAudio = mutableListOf<Pair<Long, ByteArray>>()
+  val submittedMarks = mutableListOf<Long>()
+  val markEvents = mutableListOf<RealtimeMarkEvent>()
+  val telemetry = mutableListOf<RealtimeMediaEvent>()
+  var markEventOverflows = 0L
+  var clearCount = 0
+    private set
+  var released = false
+    private set
+  var route: RealtimeRouteProfile = RealtimeRouteProfile.Unknown
+    private set
+  var inputPreset: RealtimeInputPreset? = null
+    private set
+  var inputDeviceId: Int = RealtimeMediaConfig.UNSPECIFIED_DEVICE_ID
+    private set
+  var routeChanges = 0
+    private set
+
+  private var generation = 1L
+
+  override val supportsConcurrentCapture: Boolean = true
+
+  override val appliesInputDeviceSelection: Boolean = appliesInputDevice
+
+  override fun start(config: RealtimeMediaConfig): Boolean {
+    startFailure?.let { throw it }
+    route = config.route
+    return true
+  }
+
+  override fun stop() = Unit
+
+  override fun release() {
+    released = true
+  }
+
+  override fun setRoute(
+    route: RealtimeRouteProfile,
+    inputPreset: RealtimeInputPreset,
+    preferredInputDeviceId: Int,
+  ): Boolean {
+    this.route = route
+    this.inputPreset = inputPreset
+    this.inputDeviceId = preferredInputDeviceId
+    routeChanges += 1
+    return routeChangeSucceeds
+  }
+
+  override fun beginRenderGeneration(): Long = ++generation
+
+  override fun submitAssistantAudio(
+    generation: Long,
+    pcm: ByteArray,
+  ): Boolean {
+    if (!audioSubmissionSucceeds) return false
+    submittedAudio += generation to pcm
+    return true
+  }
+
+  override fun clearRender() {
+    clearCount += 1
+  }
+
+  override fun submitMark(markId: Long): Boolean {
+    if (!markSubmissionSucceeds) return false
+    submittedMarks += markId
+    return true
+  }
+
+  override fun drainUplink(into: ByteArray): Int = 0
+
+  override fun drainMarkEvents(): List<RealtimeMarkEvent> {
+    val drained = markEvents.toList()
+    markEvents.clear()
+    return drained
+  }
+
+  override fun drainTelemetry(): List<RealtimeMediaEvent> {
+    val drained = telemetry.toList()
+    telemetry.clear()
+    return drained
+  }
+
+  override fun snapshot(): RealtimeMediaSnapshot =
+    RealtimeMediaSnapshot(
+      readiness = RealtimeMediaReadiness.FullDuplexReady,
+      route = route,
+      echoControlOwner = RealtimeEchoControlOwner.PlatformVoiceCommunication,
+      renderPresenting = false,
+      captureEligibleNow = true,
+      rates = RealtimeMediaRates(24_000, 24_000, 48_000, 48_000, 48_000, 48_000),
+      deviceClockEpoch = 1,
+      renderContentGeneration = generation,
+      captureEligibilityGeneration = 1,
+      acousticProcessorLifetime = 0,
+      measuredStreamDelayMs = 40,
+      render = RealtimeRenderStats(0, 0, 0, 0, 0, 0, 0, 0, markEventOverflows),
+      capture = RealtimeCaptureStats(0, 0, 0, 0, 0, 0, 0, 0),
+      acoustic = RealtimeAcousticStats(false, 0, 0, 0, 0, 0, null, null, null),
+      referenceRingDroppedSamples = 0,
+      telemetryDroppedEvents = 0,
+      device = RealtimeDeviceStreamStats(192, 192, 0, 0, true, 0),
+      renderLevel = null,
+      captureLevel = 0f,
+    )
 }

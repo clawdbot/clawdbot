@@ -1,5 +1,8 @@
 .gradle/
 **/build/
+# Gradle's externalNativeBuild scratch directory.
+.cxx/
+**/.cxx/
 local.properties
 .idea/
 **/*.iml

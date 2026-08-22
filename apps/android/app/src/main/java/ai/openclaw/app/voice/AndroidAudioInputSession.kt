@@ -40,6 +40,12 @@ internal class AndroidAudioInputSession private constructor(
       preferredDeviceKey: String? = null,
       onAppliedPreferredDeviceChanged: (String?) -> Unit = {},
       setPreferredDevice: ((AudioDeviceInfo?) -> Boolean)? = null,
+      // Recognition by default, which is what dictation and push-to-talk want:
+      // the least preprocessed microphone the platform will give. A caller whose
+      // echo protection *is* the platform's voice pipeline asks for
+      // communication instead, and gets what it asked for rather than a
+      // reported preset nothing applied.
+      audioSource: Int = MediaRecorder.AudioSource.VOICE_RECOGNITION,
     ): AndroidAudioInputSession {
       val minBuffer =
         AudioRecord.getMinBufferSize(
@@ -53,7 +59,7 @@ internal class AndroidAudioInputSession private constructor(
       val audioRecord =
         AudioRecord
           .Builder()
-          .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+          .setAudioSource(audioSource)
           .setAudioFormat(
             AudioFormat
               .Builder()
@@ -157,11 +163,32 @@ internal class AndroidAudioInputSession private constructor(
     Log.d(tag, "capture started preferred=${preferredInputType ?: "default"} routed=${audioRecord.routedDevice?.type ?: "pending"}")
   }
 
+  /** The audio source this recorder was opened with. */
+  val requestedAudioSource: Int
+    get() = audioRecord.audioSource
+
   fun read(
     buffer: ByteArray,
     offset: Int,
     size: Int,
   ): Int = checkAudioRecordReadResult(audioRecord.read(buffer, offset, size))
+
+  /**
+   * Returns a blocked [read] without tearing the recorder down.
+   *
+   * `Thread.interrupt` does not return a thread from `AudioRecord.read`; only
+   * stopping the recorder does. Releasing it from another thread while a read
+   * is in flight is what this avoids — the reading thread keeps ownership of
+   * the teardown through [close].
+   */
+  fun stopRecording() {
+    synchronized(lock) {
+      if (closed) return
+      if (audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+        runCatching { audioRecord.stop() }
+      }
+    }
+  }
 
   private fun openRoute() {
     audioManager.registerAudioDeviceCallback(deviceCallback, callbackHandler)

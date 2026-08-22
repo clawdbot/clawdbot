@@ -5,6 +5,7 @@ import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.os.Looper
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -230,6 +231,25 @@ class AndroidAudioInputSessionTest {
     val unknown = runCatching { checkAudioRecordReadResult(-99) }.exceptionOrNull()
     assertTrue(unknown is IllegalStateException)
     assertEquals("microphone read failed: code=-99", unknown?.message)
+  }
+
+  @Test
+  fun theCommunicationSourceIsAppliedWhenTheCallerAsksForIt() {
+    // The half-duplex fallback has no canceller of its own, so the platform's
+    // voice pipeline is its only echo protection; a hardcoded recognition
+    // source would turn that off while the engine reported otherwise.
+    val session =
+      AndroidAudioInputSession.open(
+        context,
+        sampleRateHz = 24_000,
+        frameBytes = 4_800,
+        audioSource = MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+      )
+    try {
+      assertEquals(MediaRecorder.AudioSource.VOICE_COMMUNICATION, session.requestedAudioSource)
+    } finally {
+      session.close()
+    }
   }
 
   private fun audioDevice(type: Int): AudioDeviceInfo {

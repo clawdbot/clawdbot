@@ -46,9 +46,9 @@ runs:
       uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
       with:
         path: ~/.android-sdk
-        key: ${{ runner.os }}-android-sdk-v1-cmdline-14742923-platform-37.0-build-tools-36.0.0
+        key: ${{ runner.os }}-android-sdk-v2-cmdline-14742923-platform-37.0-build-tools-36.0.0-ndk-27.3.13750724-cmake-3.22.1
         restore-keys: |
-          ${{ runner.os }}-android-sdk-v1-
+          ${{ runner.os }}-android-sdk-v2-
 
     - name: Setup Android SDK command-line tools
       shell: bash
@@ -79,10 +79,15 @@ runs:
         # sdkmanager closes stdin after accepting every license, which gives yes SIGPIPE.
         # Preserve sdkmanager's status so a real license failure still stops the job.
         yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null || [[ "${PIPESTATUS[1]}" -eq 0 ]]
+        # The NDK and CMake versions are pinned by apps/android/app/build.gradle.kts;
+        # the app builds its realtime media library from source, so a runner
+        # without them cannot start the Android build at all.
         sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
           "platform-tools" \
           "platforms;android-37.0" \
-          "build-tools;36.0.0"
+          "build-tools;36.0.0" \
+          "ndk;27.3.13750724" \
+          "cmake;3.22.1"
 
     - name: Save Android SDK cache
       if: inputs.cache-mode == 'read-write' && steps.android-sdk-cache.outputs.cache-hit != 'true'
