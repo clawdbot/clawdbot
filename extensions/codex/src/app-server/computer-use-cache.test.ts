@@ -220,6 +220,33 @@ describe("Codex Computer Use shared plugin cache", () => {
     ).resolves.toContain('"version":"1.0.857"');
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects a symlinked managed cache parent without touching its external target",
+    async () => {
+      const root = tempDirs.make("openclaw-computer-use-cache-link-");
+      const agentDir = path.join(root, "agent");
+      const codexHome = path.join(agentDir, "codex-home");
+      const bundledMarketplacePath = path.join(root, "bundled-marketplace");
+      const external = path.join(root, "external-cache");
+      await writeBundledComputerUsePlugin(bundledMarketplacePath, "2.0.0");
+      await fs.mkdir(codexHome, { recursive: true });
+      await fs.mkdir(external, { recursive: true });
+      await fs.writeFile(path.join(external, "sentinel"), "outside");
+      await fs.symlink(external, path.join(codexHome, "plugins"), "dir");
+
+      await expect(
+        ensureCodexComputerUseSharedPluginCache({
+          codexHome,
+          ownershipRoot: agentDir,
+          bundledMarketplacePath,
+          config: computerUseConfig(),
+        }),
+      ).rejects.toThrow(/symlink|real directories/u);
+      await expect(fs.readFile(path.join(external, "sentinel"), "utf8")).resolves.toBe("outside");
+      await expect(fs.access(path.join(external, "cache"))).rejects.toThrow();
+    },
+  );
+
   it("leaves cache entries alone in independent mode", async () => {
     const root = tempDirs.make("openclaw-computer-use-cache-");
     const result = await ensureCodexComputerUseSharedPluginCache({

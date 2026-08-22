@@ -2,7 +2,6 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -31,16 +30,9 @@ const CLIENT_RELATIVE_PATH = path.join(
 );
 const COPY_TIMEOUT_MS = 120_000;
 const INSPECT_TIMEOUT_MS = 30_000;
-const COMPLETED_SYNC_CACHE_MAX_ENTRIES = 64;
 const activeInstalls = new Map<
   string,
   { syncKey: string; promise: Promise<CodexComputerUseServiceStatus> }
->();
-const completedSyncs = new Map<
-  string,
-  Pick<CodexComputerUseServiceStatus, "targetPath" | "sourcePath" | "sourceBuild"> & {
-    syncKey: string;
-  }
 >();
 
 type CodexComputerUseServiceStatus = {
@@ -96,19 +88,6 @@ export async function ensureCodexComputerUseServiceApp(params: {
     params.sourceAppCandidates ??
     resolveMacOSDesktopCodexComputerUseServiceAppCandidates(platform, params.appServerCommand);
   const syncKey = [targetPath, ...candidates].join("\0");
-  const completed = completedSyncs.get(targetPath);
-  if (completed?.syncKey === syncKey) {
-    // Keep frequently reused homes while bounding dynamic-agent history.
-    completedSyncs.delete(targetPath);
-    completedSyncs.set(targetPath, completed);
-    return {
-      status: "already_current",
-      changed: false,
-      targetPath: completed.targetPath,
-      sourcePath: completed.sourcePath,
-      sourceBuild: completed.sourceBuild,
-    };
-  }
   const active = activeInstalls.get(targetPath);
   if (active) {
     if (active.syncKey === syncKey) {
@@ -116,9 +95,6 @@ export async function ensureCodexComputerUseServiceApp(params: {
     }
     await active.promise.catch(() => undefined);
     return await ensureCodexComputerUseServiceApp(params);
-  }
-  if (completed) {
-    completedSyncs.delete(targetPath);
   }
   const install = ensureCodexComputerUseServiceAppOnce({
     ...params,
@@ -128,18 +104,6 @@ export async function ensureCodexComputerUseServiceApp(params: {
     targetPath,
     platform,
     sourceAppCandidates: candidates,
-  }).then((result) => {
-    if (isCompletedSyncStatus(result.status)) {
-      completedSyncs.delete(targetPath);
-      completedSyncs.set(targetPath, {
-        syncKey,
-        targetPath: result.targetPath,
-        sourcePath: result.sourcePath,
-        sourceBuild: result.sourceBuild,
-      });
-      pruneMapToMaxSize(completedSyncs, COMPLETED_SYNC_CACHE_MAX_ENTRIES);
-    }
-    return result;
   });
   const activeEntry = { syncKey, promise: install };
   activeInstalls.set(targetPath, activeEntry);
@@ -150,10 +114,6 @@ export async function ensureCodexComputerUseServiceApp(params: {
   };
   void install.then(clearActive, clearActive);
   return await install;
-}
-
-function isCompletedSyncStatus(status: CodexComputerUseServiceStatus["status"]): boolean {
-  return status === "installed" || status === "refreshed" || status === "already_current";
 }
 
 async function ensureCodexComputerUseServiceAppOnce(params: {

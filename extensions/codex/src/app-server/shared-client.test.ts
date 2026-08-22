@@ -1,6 +1,7 @@
 // Codex tests cover shared client plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocketServer, type RawData } from "ws";
@@ -13,6 +14,7 @@ import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from
 
 const mocks = vi.hoisted(() => ({
   bridgeCodexAppServerStartOptions: vi.fn(async ({ startOptions }) => startOptions),
+  reconcileCodexComputerUseStartArtifacts: vi.fn(async () => undefined),
   applyCodexAppServerAuthProfile: vi.fn(
     async (_params?: {
       agentDir?: string;
@@ -46,13 +48,19 @@ const mocks = vi.hoisted(() => ({
   ),
   resolveManagedCodexAppServerStartOptions: vi.fn(async (startOptions) => startOptions),
   resolveManagedCodexNativeCommand: vi.fn((command: string) => `${command}.native`),
+  isManagedCodexDesktopCommand: vi.fn((command: string) => command.startsWith("/Applications/")),
   embeddedAgentLog: { debug: vi.fn(), warn: vi.fn() },
   resolveDefaultAgentDir: vi.fn(() => "/tmp/openclaw-agent"),
+  desktopGeneration: undefined as { epoch: number; fingerprint: string } | undefined,
+  desktopGenerationCurrent: true,
+  waitForCodexDesktopGeneration: vi.fn(),
 }));
+mocks.waitForCodexDesktopGeneration.mockImplementation(async () => mocks.desktopGeneration);
 
 vi.mock("./auth-bridge.js", () => ({
   applyCodexAppServerAuthProfile: mocks.applyCodexAppServerAuthProfile,
   bridgeCodexAppServerStartOptions: mocks.bridgeCodexAppServerStartOptions,
+  reconcileCodexComputerUseStartArtifacts: mocks.reconcileCodexComputerUseStartArtifacts,
   resolveCodexAppServerAuthProfileIdForAgent: mocks.resolveCodexAppServerAuthProfileIdForAgent,
   resolveCodexAppServerAuthProfileStore: mocks.resolveCodexAppServerAuthProfileStore,
   resolveCodexAppServerPreparedAuthProfileSnapshot:
@@ -65,8 +73,17 @@ vi.mock("./auth-bridge.js", () => ({
 }));
 
 vi.mock("./managed-binary.js", () => ({
+  isManagedCodexDesktopCommand: mocks.isManagedCodexDesktopCommand,
   resolveManagedCodexAppServerStartOptions: mocks.resolveManagedCodexAppServerStartOptions,
   resolveManagedCodexNativeCommand: mocks.resolveManagedCodexNativeCommand,
+}));
+
+vi.mock("./desktop-generation.js", () => ({
+  isCodexDesktopGenerationCurrent: (generation: { epoch: number; fingerprint: string }) =>
+    mocks.desktopGenerationCurrent &&
+    generation.epoch === mocks.desktopGeneration?.epoch &&
+    generation.fingerprint === mocks.desktopGeneration?.fingerprint,
+  waitForCodexDesktopGeneration: mocks.waitForCodexDesktopGeneration,
 }));
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
@@ -101,6 +118,7 @@ let releaseCodexAppServerClientLease: typeof import("./shared-client.js").releas
 let resolveCodexNativeConfigFenceKey: typeof import("./shared-client.js").resolveCodexNativeConfigFenceKey;
 let resolveCodexAppServerSpawnIdentity: typeof import("./shared-client.js").resolveCodexAppServerSpawnIdentity;
 let retireSharedCodexAppServerClientIfCurrent: typeof import("./shared-client.js").retireSharedCodexAppServerClientIfCurrent;
+let retireSharedCodexAppServerClientsBeforeDesktopGeneration: typeof import("./shared-client.js").retireSharedCodexAppServerClientsBeforeDesktopGeneration;
 let resetSharedCodexAppServerClientForTests: typeof import("./shared-client.js").resetSharedCodexAppServerClientForTests;
 let withLeasedCodexAppServerClientStartSelectionRetry: typeof import("./shared-client.js").withLeasedCodexAppServerClientStartSelectionRetry;
 
@@ -222,6 +240,7 @@ describe("shared Codex app-server client", () => {
       resolveCodexNativeConfigFenceKey,
       resolveCodexAppServerSpawnIdentity,
       retireSharedCodexAppServerClientIfCurrent,
+      retireSharedCodexAppServerClientsBeforeDesktopGeneration,
       resetSharedCodexAppServerClientForTests,
       withLeasedCodexAppServerClientStartSelectionRetry,
     } = await import("./shared-client.js"));
@@ -232,6 +251,7 @@ describe("shared Codex app-server client", () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
     mocks.bridgeCodexAppServerStartOptions.mockClear();
+    mocks.reconcileCodexComputerUseStartArtifacts.mockClear();
     mocks.applyCodexAppServerAuthProfile.mockClear();
     mocks.applyCodexAppServerAuthProfile.mockResolvedValue(undefined);
     mocks.resolveCodexAppServerAuthProfileIdForAgent.mockClear();
@@ -260,6 +280,10 @@ describe("shared Codex app-server client", () => {
     mocks.resolveManagedCodexAppServerStartOptions.mockImplementation(
       async (startOptions) => startOptions,
     );
+    mocks.desktopGeneration = undefined;
+    mocks.desktopGenerationCurrent = true;
+    mocks.waitForCodexDesktopGeneration.mockReset();
+    mocks.waitForCodexDesktopGeneration.mockImplementation(async () => mocks.desktopGeneration);
     mocks.resolveManagedCodexNativeCommand.mockClear();
     mocks.resolveManagedCodexNativeCommand.mockImplementation(
       (command: string) => `${command}.native`,
@@ -2042,6 +2066,225 @@ describe("shared Codex app-server client", () => {
 
     expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(true);
     expect(first.process.stdin.destroyed).toBe(true);
+  });
+
+  it("waits for a dirty desktop generation before reusing a warm managed client", async () => {
+    const generation = { epoch: 1, fingerprint: "desktop-x" };
+    mocks.desktopGeneration = generation;
+    mocks.resolveManagedCodexAppServerStartOptions.mockImplementation(async (startOptions) => ({
+      ...startOptions,
+      command: "/Applications/ChatGPT.app/Contents/Resources/codex",
+      commandSource: "resolved-managed" as const,
+    }));
+    const harness = createClientHarness();
+    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(harness.client);
+    const config = {};
+    const startOptions: CodexAppServerStartOptions = {
+      transport: "stdio",
+      homeScope: "agent",
+      command: "codex",
+      commandSource: "managed",
+      managedCommandOrder: "desktop-first",
+      args: ["app-server"],
+      headers: {},
+    };
+    const options = { config, startOptions, agentDir: "/tmp/openclaw-agent" };
+
+    const firstAcquire = getLeasedSharedCodexAppServerClient(options);
+    await sendInitializeResult(harness, "openclaw/0.148.0 (macOS; test)");
+    const first = await firstAcquire;
+    const dirty = createDeferred<typeof generation>();
+    mocks.desktopGenerationCurrent = false;
+    mocks.waitForCodexDesktopGeneration.mockReturnValue(dirty.promise);
+    let settled = false;
+    const secondAcquire = getLeasedSharedCodexAppServerClient(options).then((client) => {
+      settled = true;
+      return client;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(startSpy).toHaveBeenCalledOnce();
+    mocks.desktopGenerationCurrent = true;
+    dirty.resolve(generation);
+    await expect(secondAcquire).resolves.toBe(first);
+    expect(startSpy).toHaveBeenCalledOnce();
+    expect(releaseLeasedSharedCodexAppServerClient(first)).toBe(true);
+    expect(releaseLeasedSharedCodexAppServerClient(first)).toBe(true);
+  });
+
+  it("bounds a dirty desktop generation wait by the acquisition abort signal", async () => {
+    mocks.desktopGeneration = { epoch: 1, fingerprint: "desktop-x" };
+    mocks.waitForCodexDesktopGeneration.mockReturnValue(new Promise(() => {}));
+    const abort = new AbortController();
+    const acquire = getLeasedSharedCodexAppServerClient({
+      timeoutMs: 1_000,
+      abandonSignal: abort.signal,
+      startOptions: {
+        transport: "stdio",
+        homeScope: "agent",
+        command: "codex",
+        commandSource: "managed",
+        managedCommandOrder: "desktop-first",
+        args: ["app-server"],
+        headers: {},
+      },
+    });
+
+    abort.abort();
+
+    await expect(acquire).rejects.toThrow("codex app-server initialize aborted");
+  });
+
+  it("drains active desktop generation X while new acquisitions use Y", async () => {
+    const generationX = { epoch: 1, fingerprint: "desktop-x" };
+    const generationY = { epoch: 2, fingerprint: "desktop-y" };
+    mocks.desktopGeneration = generationX;
+    mocks.resolveManagedCodexAppServerStartOptions.mockImplementation(async (startOptions) => ({
+      ...startOptions,
+      command: "/Applications/ChatGPT.app/Contents/Resources/codex",
+      commandSource: "resolved-managed" as const,
+    }));
+    const first = createClientHarness();
+    const second = createClientHarness();
+    const startSpy = vi
+      .spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(first.client)
+      .mockReturnValueOnce(second.client);
+    const config = {};
+    const startOptions: CodexAppServerStartOptions = {
+      transport: "stdio",
+      homeScope: "agent",
+      command: "codex",
+      commandSource: "managed",
+      managedCommandOrder: "desktop-first",
+      args: ["app-server"],
+      headers: {},
+    };
+    const options = { config, startOptions, agentDir: "/tmp/openclaw-agent" };
+
+    const firstAcquire = getLeasedSharedCodexAppServerClient(options);
+    const siblingAcquire = getLeasedSharedCodexAppServerClient(options);
+    await sendInitializeResult(first, "openclaw/0.148.0 (macOS; test)");
+    const clientX = await firstAcquire;
+    await expect(siblingAcquire).resolves.toBe(clientX);
+    const pending = clientX.request("test/pending", {});
+    await vi.waitFor(() => expect(first.writes.length).toBeGreaterThanOrEqual(2));
+
+    mocks.desktopGeneration = generationY;
+    retireSharedCodexAppServerClientsBeforeDesktopGeneration(generationY);
+    const replacementAcquire = getLeasedSharedCodexAppServerClient(options);
+    await sendInitializeResult(second, "openclaw/0.148.0 (macOS; test)");
+    const clientY = await replacementAcquire;
+    expect(clientY).toBe(second.client);
+    expect(clientY).not.toBe(clientX);
+    expect(startSpy).toHaveBeenCalledTimes(2);
+    expect(first.process.stdin.destroyed).toBe(false);
+
+    const pendingRequest = JSON.parse(first.writes.at(-1) ?? "{}") as { id?: number };
+    first.send({ id: pendingRequest.id, result: { ok: true } });
+    await expect(pending).resolves.toEqual({ ok: true });
+    expect(releaseLeasedSharedCodexAppServerClient(clientX)).toBe(true);
+    expect(first.process.stdin.destroyed).toBe(false);
+    expect(releaseLeasedSharedCodexAppServerClient(clientX)).toBe(true);
+    expect(first.process.stdin.destroyed).toBe(true);
+    expect(second.process.stdin.destroyed).toBe(false);
+    expect(releaseLeasedSharedCodexAppServerClient(clientY)).toBe(true);
+  });
+
+  it("binds a package-first acquisition when its actual fallback is a desktop app", async () => {
+    const generationX = { epoch: 1, fingerprint: "desktop-x" };
+    const generationY = { epoch: 2, fingerprint: "desktop-y" };
+    mocks.desktopGeneration = generationX;
+    mocks.resolveManagedCodexAppServerStartOptions.mockImplementation(async (startOptions) => ({
+      ...startOptions,
+      command: "/cache/openclaw/codex",
+      commandSource: "resolved-managed" as const,
+      managedFallbackCommandPaths: ["/Applications/Codex.app/Contents/Resources/codex"],
+    }));
+    const packageX = createClientHarness();
+    const desktopX = createClientHarness();
+    const packageY = createClientHarness();
+    const desktopY = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(packageX.client)
+      .mockReturnValueOnce(desktopX.client)
+      .mockReturnValueOnce(packageY.client)
+      .mockReturnValueOnce(desktopY.client);
+    const options = {
+      config: {},
+      agentDir: "/tmp/openclaw-agent",
+      startOptions: {
+        transport: "stdio" as const,
+        homeScope: "agent" as const,
+        command: "codex",
+        commandSource: "managed" as const,
+        managedCommandOrder: "package-first" as const,
+        args: ["app-server"],
+        headers: {},
+      },
+    };
+
+    const firstAcquire = getLeasedSharedCodexAppServerClient(options);
+    await sendInitializeResult(packageX, "openclaw/0.124.9 (macOS; test)");
+    await sendInitializeResult(desktopX, "openclaw/0.148.0 (macOS; test)");
+    const clientX = await firstAcquire;
+
+    mocks.desktopGeneration = generationY;
+    retireSharedCodexAppServerClientsBeforeDesktopGeneration(generationY);
+    const replacementAcquire = getLeasedSharedCodexAppServerClient(options);
+    await sendInitializeResult(packageY, "openclaw/0.124.9 (macOS; test)");
+    await sendInitializeResult(desktopY, "openclaw/0.148.0 (macOS; test)");
+    const clientY = await replacementAcquire;
+
+    expect(clientX).toBe(desktopX.client);
+    expect(clientY).toBe(desktopY.client);
+    expect(mocks.reconcileCodexComputerUseStartArtifacts).toHaveBeenCalledTimes(2);
+    expect(mocks.reconcileCodexComputerUseStartArtifacts).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        startOptions: expect.objectContaining({
+          command: "/Applications/Codex.app/Contents/Resources/codex",
+        }),
+      }),
+    );
+    expect(desktopX.process.stdin.destroyed).toBe(false);
+    expect(releaseLeasedSharedCodexAppServerClient(clientX)).toBe(true);
+    expect(desktopX.process.stdin.destroyed).toBe(true);
+    expect(releaseLeasedSharedCodexAppServerClient(clientY)).toBe(true);
+  });
+
+  it("does not publish a desktop client superseded during initialization", async () => {
+    const generationX = { epoch: 1, fingerprint: "desktop-x" };
+    mocks.desktopGeneration = generationX;
+    mocks.resolveManagedCodexAppServerStartOptions.mockImplementation(async (startOptions) => ({
+      ...startOptions,
+      command: "/Applications/ChatGPT.app/Contents/Resources/codex",
+      commandSource: "resolved-managed" as const,
+    }));
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(harness.client);
+    const acquire = getLeasedSharedCodexAppServerClient({
+      config: {},
+      agentDir: "/tmp/openclaw-agent",
+      startOptions: {
+        transport: "stdio",
+        homeScope: "agent",
+        command: "codex",
+        commandSource: "managed",
+        managedCommandOrder: "desktop-first",
+        args: ["app-server"],
+        headers: {},
+      },
+    });
+    await vi.waitFor(() => expect(harness.writes).toHaveLength(1));
+
+    mocks.desktopGeneration = { epoch: 2, fingerprint: "desktop-y" };
+    await sendInitializeResult(harness, "openclaw/0.148.0 (macOS; test)");
+
+    const error = await acquire.catch((caught: unknown) => caught);
+    expect(isCodexAppServerStartSelectionChangedError(error)).toBe(true);
+    expect(mocks.applyCodexAppServerAuthProfile).not.toHaveBeenCalled();
+    expect(harness.process.stdin.destroyed).toBe(true);
   });
 
   it("globally disposes a gracefully detached client with an explicit retain", async () => {

@@ -3,6 +3,9 @@
  * app-server sessions.
  */
 import { existsSync } from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { describeControlFailure } from "./capabilities.js";
 import {
   isCodexAppServerConnectionClosedError,
@@ -10,6 +13,12 @@ import {
   isCodexAppServerIndeterminateTransportError,
   type CodexAppServerClient,
 } from "./client.js";
+import {
+  ensureCodexManagedBundledMarketplace,
+  resolveCodexManagedBundledMarketplacePath,
+} from "./computer-use-marketplace.js";
+import { assertNotSymlink } from "./computer-use-service-path.js";
+import { ensureCodexComputerUseServiceApp } from "./computer-use-service.js";
 import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
@@ -31,6 +40,7 @@ import type {
 import { requestCodexAppServerJson } from "./request.js";
 import {
   getLeasedSharedCodexAppServerClient,
+  readCodexAppServerClientProcessIdentity,
   releaseLeasedSharedCodexAppServerClient,
   resolveCodexNativeConfigFenceKey,
 } from "./shared-client.js";
@@ -371,17 +381,30 @@ async function inspectCodexComputerUseWithoutFence(
 ): Promise<CodexComputerUseStatus> {
   const request = createComputerUseRequest(params);
   if (params.installPlugin) {
+    if (!resolveCodexComputerUseConfig({ pluginConfig: params.pluginConfig }).autoInstall) {
+      await prepareExplicitManagedComputerUseInstall(params);
+    }
     await request<JsonValue>("experimentalFeature/enablement/set", {
       enablement: { plugins: true },
     } satisfies CodexRequestObject);
   }
 
+  const managedMarketplacePath = await resolveClientManagedBundledMarketplacePath(
+    params.client,
+    params.agentDir,
+  );
+  if (params.installPlugin && managedMarketplacePath) {
+    const codexHome = params.client?.getRuntimeIdentity()?.codexHome;
+    if (codexHome) {
+      await assertNotSymlink(path.join(codexHome, "config.toml"), "Codex config");
+    }
+  }
   const marketplace = await resolveMarketplaceRef({
     request,
     config: params.computerUseConfig,
     allowAdd: params.installPlugin,
     signal: params.signal,
-    defaultBundledMarketplacePath: params.defaultBundledMarketplacePath,
+    defaultBundledMarketplacePath: params.defaultBundledMarketplacePath ?? managedMarketplacePath,
     defaultBundledMarketplacePathCandidates: params.defaultBundledMarketplacePathCandidates,
   });
   if (!marketplace.marketplace) {
@@ -410,6 +433,62 @@ async function inspectCodexComputerUseWithoutFence(
     installPlugin: params.installPlugin,
     releaseNativeConfigFence: params.releaseNativeConfigFence,
   });
+}
+
+async function prepareExplicitManagedComputerUseInstall(
+  params: CodexComputerUseInspectionParams,
+): Promise<void> {
+  if (
+    !params.client ||
+    !params.agentDir ||
+    params.computerUseConfig.marketplaceSource ||
+    params.computerUseConfig.marketplacePath ||
+    params.computerUseConfig.marketplaceName
+  ) {
+    return;
+  }
+  const codexHome = params.client.getRuntimeIdentity()?.codexHome;
+  const command = readCodexAppServerClientProcessIdentity(params.client)?.nativeCommand;
+  if (!codexHome || !command) {
+    return;
+  }
+  const expectedHome = resolveCodexAppServerHomeDir(params.agentDir);
+  const [actualRealHome, expectedRealHome] = await Promise.all([
+    fs.realpath(codexHome).catch(() => undefined),
+    fs.realpath(expectedHome).catch(() => undefined),
+  ]);
+  if (!actualRealHome || actualRealHome !== expectedRealHome) {
+    return;
+  }
+  await ensureCodexManagedBundledMarketplace({
+    codexHome,
+    ownershipRoot: params.agentDir,
+    appServerCommand: command,
+  });
+  await ensureCodexComputerUseServiceApp({
+    codexHome,
+    ownershipRoot: params.agentDir,
+    appServerCommand: command,
+  });
+}
+
+async function resolveClientManagedBundledMarketplacePath(
+  client: CodexAppServerClient | undefined,
+  agentDir: string | undefined,
+): Promise<string | undefined> {
+  const codexHome = client?.getRuntimeIdentity()?.codexHome;
+  if (!codexHome || !agentDir) {
+    return undefined;
+  }
+  const [actualRealHome, expectedRealHome] = await Promise.all([
+    fs.realpath(codexHome).catch(() => undefined),
+    fs.realpath(resolveCodexAppServerHomeDir(agentDir)).catch(() => undefined),
+  ]);
+  if (!actualRealHome || actualRealHome !== expectedRealHome) {
+    return undefined;
+  }
+  const managedPath = resolveCodexManagedBundledMarketplacePath(codexHome);
+  return existsSync(managedPath) ? managedPath : undefined;
 }
 
 async function ensureComputerUsePlugin(params: {
@@ -777,6 +856,9 @@ function resolveBundledComputerUseMarketplacePath(params: {
     return existsSync(params.defaultBundledMarketplacePath)
       ? params.defaultBundledMarketplacePath
       : undefined;
+  }
+  if (!params.defaultBundledMarketplacePathCandidates) {
+    return undefined;
   }
   return resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath({
     candidates: params.defaultBundledMarketplacePathCandidates,

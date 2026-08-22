@@ -33,12 +33,15 @@ import {
 } from "./auth-start-options.js";
 import type { CodexAppServerClient } from "./client.js";
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
+import { ensureCodexManagedBundledMarketplace } from "./computer-use-marketplace.js";
+import { ensureOwnedCodexHome } from "./computer-use-service-path.js";
 import { ensureCodexComputerUseServiceApp } from "./computer-use-service.js";
 import {
   resolveCodexComputerUseConfig,
   type CodexAppServerHomeScope,
   type CodexAppServerStartOptions,
 } from "./config.js";
+import { resolveMacOSDesktopCodexAppPathCandidates } from "./desktop-app-paths.js";
 import {
   isJsonObject,
   type CodexChatgptAuthTokensRefreshResponse,
@@ -525,28 +528,7 @@ async function withCodexHomeEnvironment(
   const nativeHome = startOptions.env?.[HOME_ENV_VAR]?.trim()
     ? startOptions.env[HOME_ENV_VAR]
     : undefined;
-  await fs.mkdir(codexHome, { recursive: true });
-  const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
-  await ensureCodexComputerUseSharedPluginCache({
-    codexHome,
-    config: computerUseConfig,
-  });
-  const ownsIsolatedCodexHome =
-    startOptions.homeScope !== "user" && !startOptions.env?.[CODEX_HOME_ENV_VAR]?.trim();
-  if (computerUseConfig.enabled && computerUseConfig.autoInstall && ownsIsolatedCodexHome) {
-    try {
-      await ensureCodexComputerUseServiceApp({
-        codexHome,
-        ownershipRoot: agentDir,
-        appServerCommand: startOptions.command,
-      });
-    } catch (error) {
-      throw new AgentHarnessPreflightError("Codex Computer Use client provisioning failed.", {
-        cause: error,
-        scope: "harness",
-      });
-    }
-  }
+  await reconcileCodexComputerUseStartArtifacts({ startOptions, agentDir, pluginConfig });
   if (nativeHome) {
     await fs.mkdir(nativeHome, { recursive: true });
   }
@@ -565,6 +547,68 @@ async function withCodexHomeEnvironment(
     delete nextStartOptions.clearEnv;
   }
   return nextStartOptions;
+}
+
+/** Reconciles Computer Use artifacts for the exact managed command about to start. */
+export async function reconcileCodexComputerUseStartArtifacts(params: {
+  startOptions: CodexAppServerStartOptions;
+  agentDir: string;
+  pluginConfig?: unknown;
+  ownsIsolatedCodexHome?: boolean;
+}): Promise<void> {
+  if (params.startOptions.transport !== "stdio") {
+    return;
+  }
+  const codexHome = resolveCodexAppServerLocalHomeDir(params.startOptions, params.agentDir);
+  const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig: params.pluginConfig });
+  const ownsIsolatedCodexHome =
+    params.ownsIsolatedCodexHome ??
+    (params.startOptions.homeScope !== "user" &&
+      !params.startOptions.env?.[CODEX_HOME_ENV_VAR]?.trim());
+  const shouldProvisionComputerUse =
+    computerUseConfig.enabled && computerUseConfig.autoInstall && ownsIsolatedCodexHome;
+  if (shouldProvisionComputerUse) {
+    await ensureOwnedCodexHome(codexHome, params.agentDir);
+  } else {
+    await fs.mkdir(codexHome, { recursive: true });
+  }
+  const desktopCandidates = resolveMacOSDesktopCodexAppPathCandidates();
+  const exactDesktopCandidate = desktopCandidates.find(
+    (candidate) =>
+      path.resolve(candidate.appServerCommandPath) === path.resolve(params.startOptions.command),
+  );
+  await ensureCodexComputerUseSharedPluginCache({
+    codexHome,
+    config: computerUseConfig,
+    ...(ownsIsolatedCodexHome ? { ownershipRoot: params.agentDir } : {}),
+    ...(exactDesktopCandidate
+      ? { bundledMarketplacePath: exactDesktopCandidate.bundledMarketplacePath }
+      : {}),
+  });
+  if (!shouldProvisionComputerUse) {
+    return;
+  }
+  try {
+    await ensureCodexManagedBundledMarketplace({
+      codexHome,
+      ownershipRoot: params.agentDir,
+      appServerCommand: params.startOptions.command,
+      ...(exactDesktopCandidate ? { candidates: [exactDesktopCandidate] } : {}),
+    });
+    await ensureCodexComputerUseServiceApp({
+      codexHome,
+      ownershipRoot: params.agentDir,
+      appServerCommand: params.startOptions.command,
+      ...(exactDesktopCandidate
+        ? { sourceAppCandidates: exactDesktopCandidate.computerUseServiceAppPaths }
+        : {}),
+    });
+  } catch (error) {
+    throw new AgentHarnessPreflightError("Codex Computer Use client provisioning failed.", {
+      cause: error,
+      scope: "harness",
+    });
+  }
 }
 
 function withoutClearedCodexHomeEnv(clearEnv: string[] | undefined): string[] | undefined {

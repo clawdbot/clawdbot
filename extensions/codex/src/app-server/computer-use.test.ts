@@ -11,7 +11,12 @@ import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-suppor
 const requestCodexAppServerJsonMock = vi.hoisted(() => vi.fn());
 const sharedClientMocks = vi.hoisted(() => ({
   getLeasedSharedCodexAppServerClient: vi.fn(),
+  readCodexAppServerClientProcessIdentity: vi.fn(),
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
+}));
+const managedProvisioningMocks = vi.hoisted(() => ({
+  ensureCodexManagedBundledMarketplace: vi.fn(),
+  ensureCodexComputerUseServiceApp: vi.fn(),
 }));
 
 vi.mock("./request.js", () => ({
@@ -21,6 +26,17 @@ vi.mock("./request.js", () => ({
 vi.mock("./shared-client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared-client.js")>()),
   ...sharedClientMocks,
+}));
+
+vi.mock("./computer-use-marketplace.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./computer-use-marketplace.js")>()),
+  ensureCodexManagedBundledMarketplace:
+    managedProvisioningMocks.ensureCodexManagedBundledMarketplace,
+}));
+
+vi.mock("./computer-use-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./computer-use-service.js")>()),
+  ensureCodexComputerUseServiceApp: managedProvisioningMocks.ensureCodexComputerUseServiceApp,
 }));
 
 import {
@@ -80,7 +96,10 @@ describe("Codex Computer Use setup", () => {
     vi.useRealTimers();
     requestCodexAppServerJsonMock.mockReset();
     sharedClientMocks.getLeasedSharedCodexAppServerClient.mockReset();
+    sharedClientMocks.readCodexAppServerClientProcessIdentity.mockReset();
     sharedClientMocks.releaseLeasedSharedCodexAppServerClient.mockReset();
+    managedProvisioningMocks.ensureCodexManagedBundledMarketplace.mockReset();
+    managedProvisioningMocks.ensureCodexComputerUseServiceApp.mockReset();
   });
 
   it("stays disabled until configured", async () => {
@@ -127,6 +146,7 @@ describe("Codex Computer Use setup", () => {
     const client = {
       request,
       closeAndRunAfterExit: vi.fn(),
+      getRuntimeIdentity: vi.fn(() => undefined),
     };
     sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValueOnce(client);
     const install = installCodexComputerUse({ pluginConfig: {}, agentDir });
@@ -997,6 +1017,50 @@ describe("Codex Computer Use setup", () => {
     expect(request).toHaveBeenCalledWith("plugin/install", {
       marketplacePath: `${bundledMarketplacePath}/.agents/plugins/marketplace.json`,
       pluginName: "computer-use",
+    });
+  });
+
+  it("provisions the managed wrapper and service for an explicit isolated-home install", async () => {
+    const root = tempDirs.make("openclaw-codex-explicit-install-");
+    const agentDir = path.join(root, "agent");
+    const codexHome = path.join(agentDir, "codex-home");
+    const managedMarketplacePath = path.join(
+      codexHome,
+      ".tmp",
+      "bundled-marketplaces",
+      "openai-bundled",
+    );
+    fs.mkdirSync(managedMarketplacePath, { recursive: true });
+    const harness = createClientHarness();
+    vi.spyOn(harness.client, "getRuntimeIdentity").mockReturnValue({
+      serverVersion: "0.148.0",
+      codexHome,
+    });
+    sharedClientMocks.readCodexAppServerClientProcessIdentity.mockReturnValue({
+      clientId: "client-explicit-install",
+      command: "/Applications/ChatGPT.app/Contents/Resources/codex",
+      nativeCommand: "/Applications/ChatGPT.app/Contents/Resources/codex",
+      argsFingerprint: "args",
+    });
+    const request = createBundledMarketplaceComputerUseRequest(managedMarketplacePath);
+
+    const status = await installCodexComputerUse({
+      agentDir,
+      client: harness.client,
+      request,
+      pluginConfig: { computerUse: { enabled: true, autoInstall: false } },
+    });
+
+    expect(status.ready).toBe(true);
+    expect(managedProvisioningMocks.ensureCodexManagedBundledMarketplace).toHaveBeenCalledWith({
+      codexHome,
+      ownershipRoot: agentDir,
+      appServerCommand: "/Applications/ChatGPT.app/Contents/Resources/codex",
+    });
+    expect(managedProvisioningMocks.ensureCodexComputerUseServiceApp).toHaveBeenCalledWith({
+      codexHome,
+      ownershipRoot: agentDir,
+      appServerCommand: "/Applications/ChatGPT.app/Contents/Resources/codex",
     });
   });
 

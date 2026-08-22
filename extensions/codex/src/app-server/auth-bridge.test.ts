@@ -31,6 +31,7 @@ const oauthMocks = vi.hoisted(() => ({
 }));
 
 const computerUseServiceMocks = vi.hoisted(() => ({
+  ensureCodexManagedBundledMarketplace: vi.fn(async () => undefined),
   ensureCodexComputerUseServiceApp: vi.fn(async () => ({
     status: "already_current" as const,
     changed: false,
@@ -128,6 +129,11 @@ vi.mock("./computer-use-service.js", () => ({
   ensureCodexComputerUseServiceApp: computerUseServiceMocks.ensureCodexComputerUseServiceApp,
 }));
 
+vi.mock("./computer-use-marketplace.js", () => ({
+  ensureCodexManagedBundledMarketplace:
+    computerUseServiceMocks.ensureCodexManagedBundledMarketplace,
+}));
+
 afterEach(() => {
   vi.unstubAllEnvs();
   clearRuntimeAuthProfileStoreSnapshots();
@@ -135,6 +141,7 @@ afterEach(() => {
   providerRuntimeMocks.formatProviderAuthProfileApiKeyWithPlugin.mockReset();
   providerRuntimeMocks.refreshProviderOAuthCredentialWithPlugin.mockClear();
   computerUseServiceMocks.ensureCodexComputerUseServiceApp.mockClear();
+  computerUseServiceMocks.ensureCodexManagedBundledMarketplace.mockClear();
 });
 
 function createStartOptions(
@@ -364,6 +371,11 @@ describe("bridgeCodexAppServerStartOptions", () => {
         ownershipRoot: agentDir,
         appServerCommand: startOptions.command,
       });
+      expect(computerUseServiceMocks.ensureCodexManagedBundledMarketplace).toHaveBeenCalledWith({
+        codexHome,
+        ownershipRoot: agentDir,
+        appServerCommand: startOptions.command,
+      });
     });
   });
 
@@ -376,6 +388,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       });
 
       expect(computerUseServiceMocks.ensureCodexComputerUseServiceApp).not.toHaveBeenCalled();
+      expect(computerUseServiceMocks.ensureCodexManagedBundledMarketplace).not.toHaveBeenCalled();
     });
   });
 
@@ -391,6 +404,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       });
 
       expect(computerUseServiceMocks.ensureCodexComputerUseServiceApp).not.toHaveBeenCalled();
+      expect(computerUseServiceMocks.ensureCodexManagedBundledMarketplace).not.toHaveBeenCalled();
     });
   });
 
@@ -405,6 +419,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
       });
 
       expect(computerUseServiceMocks.ensureCodexComputerUseServiceApp).not.toHaveBeenCalled();
+      expect(computerUseServiceMocks.ensureCodexManagedBundledMarketplace).not.toHaveBeenCalled();
     });
   });
 

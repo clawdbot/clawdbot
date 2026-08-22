@@ -121,13 +121,13 @@ OpenClaw-owned isolated agent homes. User-scoped homes and explicit
 The agent directory is the trusted ownership boundary. Within it, native-service
 provisioning rejects symlinked Codex-home, `computer-use`, and service-app paths,
 and revalidates the owned parent around each staged swap.
-On macOS, when no matching
-marketplace is registered and a standard desktop app bundle exists, OpenClaw
-also tries to register the bundled Codex marketplace from
-`/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled`, with
-`/Applications/Codex.app/Contents/Resources/plugins/openai-bundled` retained
-as a fallback for legacy standalone installs. If setup still cannot make the
-MCP server available, the turn fails before the thread starts.
+On macOS, OpenClaw exposes the selected desktop app's bundled marketplace
+through a real, isolated-home-owned wrapper at
+`$CODEX_HOME/.tmp/bundled-marketplaces/openai-bundled`. Codex reserves that
+path for the `openai-bundled` marketplace; the wrapper links only the manifest
+and plugin directory from the selected standard desktop app. OpenClaw then asks
+Codex app-server to register the wrapper. If setup still cannot make the MCP
+server available, the turn fails before the thread starts.
 Strict readiness failures are harness preflight failures, so model fallback
 does not repeat the same local readiness sequence for every Codex candidate.
 A candidate resolved to another harness remains eligible and enters that
@@ -155,10 +155,26 @@ OpenClaw serializes native Codex config reads and Computer Use installation
 inside one running Gateway. A separate Codex process or another Gateway is not
 part of that fence. After changing native Codex plugin config outside the
 Gateway, restart the Gateway and start a new chat before relying on the new
-selection. Restart the Gateway after updating the selected ChatGPT or Codex
-desktop app as well; cold app-server startup then verifies and, when needed,
-refreshes each isolated home's signed Computer Use service before launching it.
-Warm clients are intentionally not polled for desktop bundle changes.
+selection.
+
+The Gateway watches all standard ChatGPT and Codex desktop candidates that can
+supply the app-server or Computer Use artifacts. It does not poll the request path. After a detected update
+settles, existing turns continue on their current app-server generation, while
+new acquisitions wait for the new generation. OpenClaw then retires the old
+app-server gracefully, refreshes the signed Computer Use service and managed
+marketplace wrapper for eligible isolated homes, and starts the first new turn
+on the replacement. If the bundle changes again during startup, OpenClaw fences
+the stale client before login or `thread/start` and uses the
+normal bounded startup retry.
+
+This makes the first new request after a detected, settled standard desktop
+replacement transparent under normal updater behavior. It is not a general
+retry promise for unrelated Computer Use transport failures. A watcher failure
+or an unsupported out-of-band path can still require a Gateway restart.
+`autoInstall: false` continues to prohibit automatic native-service and
+marketplace provisioning. `autoRepair` controls only the one-time stale MCP
+child repair after a failed readiness probe; it does not control desktop
+generation convergence.
 
 ## Commands
 
@@ -225,19 +241,17 @@ Codex desktop builds use the same layout under `Codex.app`:
 ```
 
 When `computerUse.autoInstall` is true and no marketplace containing
-`computer-use` is registered, OpenClaw tries to add the first standard
-bundled marketplace root that exists:
+`computer-use` is registered, OpenClaw selects the first valid standard desktop
+bundle in the same ChatGPT-then-Codex order and creates this reserved local wrapper:
 
 ```text
-/Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled
-/Applications/Codex.app/Contents/Resources/plugins/openai-bundled
+$CODEX_HOME/.tmp/bundled-marketplaces/openai-bundled
 ```
 
-You can also register it explicitly from a shell with Codex:
-
-```bash
-codex plugin marketplace add /Applications/ChatGPT.app/Contents/Resources/plugins/openai-bundled
-```
+Do not add the `/Applications/.../openai-bundled` root directly under the
+reserved `openai-bundled` name. Codex accepts that reserved marketplace only
+from its managed path under `CODEX_HOME`; OpenClaw owns the wrapper lifecycle
+for isolated homes.
 
 If you use a nonstandard Codex app path, run `/codex computer-use install
 --source <marketplace-root>` once, or set `computerUse.marketplacePath` to a
