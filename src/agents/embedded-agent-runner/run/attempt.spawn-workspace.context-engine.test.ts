@@ -2017,9 +2017,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
   });
 
-  it("keeps current inbound context visible on runtime-only turns", async () => {
+  it("keeps current inbound context hidden on runtime-only turns", async () => {
     hoisted.sessionManager.getHeader.mockReturnValue({ version: 4 });
     let seenPrompt: string | undefined;
+    let seenMessages: unknown[] | undefined;
 
     const result = await createContextEngineAttemptRunner({
       contextEngine: createContextEngineBootstrapAndAssemble(),
@@ -2047,6 +2048,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
       sessionPrompt: async (session, prompt) => {
         seenPrompt = prompt;
+        seenMessages = [...session.messages];
         session.messages = [
           ...session.messages,
           { role: "assistant", content: "done", timestamp: 2 },
@@ -2054,13 +2056,20 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(seenPrompt).toContain("Reply target of current user message:");
-    expect(seenPrompt).toContain("Hello from the replied message");
-    expect(seenPrompt).toContain("Continue the OpenClaw runtime event.");
+    expect(seenPrompt).toBe("Continue the OpenClaw runtime event.");
+    expect(seenPrompt).not.toContain("Reply target of current user message:");
+    expect(seenPrompt).not.toContain("Hello from the replied message");
+    const runtimeContext = findRecord(
+      requireRecords(seenMessages, "seen messages"),
+      (message) => message.customType === "openclaw.runtime-context",
+      "runtime context message",
+    );
+    expect(runtimeContext.content).toContain("Reply target of current user message:");
+    expect(runtimeContext.content).toContain("Hello from the replied message");
     expect(result.finalPromptText).toBe(seenPrompt);
     const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
-    expect(contextCompiled?.data?.prompt).toContain("Hello from the replied message");
+    expect(contextCompiled?.data?.prompt).not.toContain("Hello from the replied message");
     expect(contextCompiled?.data?.systemPrompt).toContain("runtime bare mention event");
     expect(contextCompiled?.data?.systemPrompt).not.toContain("Hello from the replied message");
     expect(contextCompiled?.data?.systemPrompt).not.toContain(

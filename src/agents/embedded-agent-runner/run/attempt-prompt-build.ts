@@ -67,7 +67,6 @@ import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
 import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import {
-  buildCurrentInboundPrompt,
   buildRuntimeContextCustomMessage,
   buildRuntimeContextMessageContent,
   resolveRuntimeContextPromptParts,
@@ -486,22 +485,15 @@ export function prepareEmbeddedAttemptPromptContext(input: {
     fragments: eventFragments,
     allowRuntimeOnly: !attempt.suppressNextUserMessagePersistence,
   });
-  const inlineContext = promptSubmission.runtimeOnly ? attempt.currentInboundContext : undefined;
-  const promptForSession = buildCurrentInboundPrompt({
-    context: inlineContext,
-    prompt: promptSubmission.prompt,
-  });
-  const promptForModel = buildCurrentInboundPrompt({
-    context: inlineContext,
-    prompt: promptSubmission.modelPrompt ?? promptSubmission.prompt,
-  });
-  const fragments: RuntimeContextFragment[] = [
-    ...((escapedProjection ? attempt.currentInboundContext?.fragments : undefined) ??
-      (attempt.currentInboundContext?.text
-        ? [{ kind: "conversation-data" as const, text: attempt.currentInboundContext.text }]
-        : [])),
-    ...eventFragments,
-  ];
+  // Channel inbound metadata always rides the hidden runtime-context carrier;
+  // it never joins the visible user turn, including runtime-only wakes.
+  const inboundContextFragments: RuntimeContextFragment[] =
+    (escapedProjection ? attempt.currentInboundContext?.fragments : undefined) ??
+    (attempt.currentInboundContext?.text
+      ? [{ kind: "conversation-data" as const, text: attempt.currentInboundContext.text }]
+      : []);
+  const promptForSession = promptSubmission.prompt;
+  const promptForModel = promptSubmission.modelPrompt ?? promptSubmission.prompt;
   const currentUserTimestampOverride =
     !input.isRawModelRun && typeof preparedUserTurnTimestamp === "number"
       ? {
@@ -540,8 +532,10 @@ export function prepareEmbeddedAttemptPromptContext(input: {
           agentId: input.sessionAgentId,
         });
   const contextFragments = promptSubmission.runtimeOnly
-    ? runtimeFacts
-    : [...fragments, ...runtimeFacts];
+    ? // Runtime-only event context already rides the active system prompt; only its
+      // channel inbound context uses the carrier, or the event reaches the model twice.
+      [...inboundContextFragments, ...runtimeFacts]
+    : [...inboundContextFragments, ...eventFragments, ...runtimeFacts];
   const runtimeContextForHook =
     contextFragments
       .map((fragment) => fragment.text)
