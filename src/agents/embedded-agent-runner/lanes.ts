@@ -18,14 +18,6 @@ export function resolveGlobalLane(lane?: string) {
   return cleaned ? cleaned : CommandLane.Main;
 }
 
-/**
- * Keeps heartbeat execution serialized per session without occupying the
- * process-wide inbound lane while the embedded run is in progress.
- */
-export function resolveEmbeddedRunGlobalLane(params: { isHeartbeat: boolean }) {
-  return params.isHeartbeat ? CommandLane.CronNested : CommandLane.Main;
-}
-
 export function resolveEmbeddedSessionLane(key: string) {
   return resolveSessionLane(key);
 }
