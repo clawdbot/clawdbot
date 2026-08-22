@@ -1,10 +1,10 @@
-import type { DelegateArtifactRecipientProjectionV1 } from "./delegate-artifacts.js";
 /**
  * Internal runtime event prompt formatting.
  * Sanitizes background task completion events into protected runtime-context
  * blocks or plain prompt text.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { DelegateArtifactRecipientProjectionV1 } from "./delegate-artifacts.js";
 import {
   formatGeneratedAttachmentLines,
   mediaUrlsFromGeneratedAttachments,

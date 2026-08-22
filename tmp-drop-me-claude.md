@@ -737,3 +737,18 @@ Durable artifacts:
 `/home/figs/.copilot/session-state/fb697b5e-c2b3-42f8-89e8-904d36834ca0/files/gate-2.7-final.{log,exit}`
 and
 `/home/figs/.copilot/session-state/fb697b5e-c2b3-42f8-89e8-904d36834ca0/files/gate-2.7-final/classification.tsv`.
+
+## 2026-08-22T05:06:00Z - Gate 3 tracked formatting repair
+
+The first full `pnpm check` reached its final format stage after all preflight
+guards, production/test typechecks, and core/extension/script lint passed. It
+found one tracked candidate defect: `src/agents/internal-events.ts` retained a
+type import before its module comment, contrary to the current import sorter.
+The formatter moves that import below the module comment without changing code
+or runtime bytes.
+
+The same formatter invocation also named local untracked GitNexus skills and
+workorder/dispatch files. They are required local tooling, explicitly excluded
+from candidate history, and are not candidate failures. Full committed-tree
+format proof must ignore only those exact untracked paths while leaving every
+tracked file visible.
