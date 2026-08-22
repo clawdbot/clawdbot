@@ -339,6 +339,12 @@ describe("plugin contract boundary invariants", () => {
     expect(offenders).toStrictEqual([]);
   });
 
+  it("keeps Claude live-session timing out of the public CLI backend config", () => {
+    expect(readRepoSource("src/plugins/cli-backend.types.ts")).not.toContain(
+      "toolActiveNoOutputTimeoutMs",
+    );
+  });
+
   it("keeps plugin contract tests off bundled path helpers unless the test is explicitly about paths", () => {
     const files = listTsFiles("src/plugins/contracts", { testOnly: true });
     const offenders = files.filter((file) => {

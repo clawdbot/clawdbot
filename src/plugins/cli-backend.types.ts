@@ -85,11 +85,6 @@ export type CliBackendConfig = {
         maxMs?: number;
       };
     };
-    /** Reliability tuning that applies only to long-lived CLI sessions. */
-    liveSession?: {
-      /** No-output allowance in ms while a live-session tool call is reported in flight. */
-      toolActiveNoOutputTimeoutMs?: number;
-    };
   };
 };
 

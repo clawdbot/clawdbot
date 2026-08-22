@@ -105,17 +105,14 @@ export function resolveCliNoOutputTimeoutMs(params: {
  * the overall run timeout.
  */
 export function resolveCliToolActiveNoOutputTimeoutMs(params: {
-  backend: CliBackendConfig;
   timeoutMs: number;
   noOutputTimeoutMs: number;
 }): number {
-  const configured = params.backend.reliability?.liveSession?.toolActiveNoOutputTimeoutMs;
-  const base =
-    typeof configured === "number" && Number.isFinite(configured) && configured > 0
-      ? Math.max(CLI_WATCHDOG_MIN_TIMEOUT_MS, Math.floor(configured))
-      : CLI_TOOL_ACTIVE_NO_OUTPUT_TIMEOUT_DEFAULT_MS;
   const cap = Math.max(CLI_WATCHDOG_MIN_TIMEOUT_MS, params.timeoutMs - 1_000);
-  return Math.min(Math.max(base, params.noOutputTimeoutMs), cap);
+  return Math.min(
+    Math.max(CLI_TOOL_ACTIVE_NO_OUTPUT_TIMEOUT_DEFAULT_MS, params.noOutputTimeoutMs),
+    cap,
+  );
 }
 
 export function resolveCliRunTimeoutOverrideMs(params: {

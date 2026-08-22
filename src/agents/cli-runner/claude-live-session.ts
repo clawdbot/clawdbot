@@ -397,7 +397,6 @@ async function runSerializedClaudeTurn(
   const toolActiveNoOutputTimeoutMs =
     params.toolActiveNoOutputTimeoutMs ??
     resolveCliToolActiveNoOutputTimeoutMs({
-      backend: params.context.preparedBackend.backend,
       timeoutMs: params.context.params.timeoutMs,
       noOutputTimeoutMs: params.noOutputTimeoutMs,
     });
