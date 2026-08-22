@@ -15,6 +15,22 @@ private final class UnusedPCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
     }
 }
 
+@MainActor
+private final class DrainingPCMStreamingAudioPlayer: PCMStreamingAudioPlaying {
+    func play(stream: AsyncThrowingStream<Data, Error>, sampleRate: Double) async -> StreamingPlaybackResult {
+        do {
+            for try await _ in stream {}
+            return StreamingPlaybackResult(finished: true, interruptedAt: nil)
+        } catch {
+            return StreamingPlaybackResult(finished: false, interruptedAt: nil)
+        }
+    }
+
+    func stop() -> Double? {
+        nil
+    }
+}
+
 private actor RealtimeRelayStartupBarrier {
     private var entered = false
     private var enteredWaiter: CheckedContinuation<Void, Never>?
@@ -59,6 +75,75 @@ private actor RealtimeRelayStartupRequestLog {
 
 @MainActor
 struct RealtimeTalkRelaySessionTests {
+    @Test func `delayed cancellation remains bound to the output turn it stopped`() async throws {
+        let requestStarted = RealtimeRelayStartupBarrier()
+        let requestRecorded = RealtimeRelayStartupBarrier()
+        let requests = RealtimeRelayStartupRequestLog()
+        let transport = RealtimeTalkRelaySession.StartupTransport(
+            subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+            request: { method, paramsJSON, _ in
+                if method == "talk.session.cancelOutput" {
+                    await requestStarted.suspend()
+                }
+                await requests.record(method: method, paramsJSON: paramsJSON)
+                if method == "talk.session.cancelOutput" {
+                    await requestRecorded.suspend()
+                }
+                return Data("{\"ok\":true}".utf8)
+            })
+        let session = RealtimeTalkRelaySession(
+            gateway: GatewayNodeSession(),
+            options: .init(sessionKey: "main", provider: "xai", model: nil, voice: nil),
+            pcmPlayer: DrainingPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onSpeakingChanged: { _ in },
+            startupTransport: transport)
+        defer { session.stop() }
+        session._test_setRelaySessionId("relay-1")
+
+        await session._test_handleGatewayEvent(Self.audioEvent(turnId: "turn-a"))
+        session.cancelOutput(reason: "barge-in")
+        await requestStarted.waitUntilEntered()
+
+        await session._test_handleGatewayEvent(Self.audioEvent(turnId: "turn-b"))
+        await requestStarted.release()
+        await requestRecorded.waitUntilEntered()
+        await requestRecorded.release()
+
+        let request = try #require(await requests.snapshot().first)
+        let paramsData = try #require(request.paramsJSON?.data(using: .utf8))
+        let params = try #require(JSONSerialization.jsonObject(with: paramsData) as? [String: String])
+        #expect(request.method == "talk.session.cancelOutput")
+        #expect(params["turnId"] == "turn-a")
+    }
+
+    @Test func `id less replacement cannot reuse the prior output turn`() async {
+        let requests = RealtimeRelayStartupRequestLog()
+        let transport = RealtimeTalkRelaySession.StartupTransport(
+            subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+            request: { method, paramsJSON, _ in
+                await requests.record(method: method, paramsJSON: paramsJSON)
+                return Data("{\"ok\":true}".utf8)
+            })
+        let session = RealtimeTalkRelaySession(
+            gateway: GatewayNodeSession(),
+            options: .init(sessionKey: "main", provider: "xai", model: nil, voice: nil),
+            pcmPlayer: DrainingPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onSpeakingChanged: { _ in },
+            startupTransport: transport)
+        defer { session.stop() }
+        session._test_setRelaySessionId("relay-1")
+
+        await session._test_handleGatewayEvent(Self.audioEvent(turnId: "turn-a"))
+        await session._test_handleGatewayEvent(Self.audioEvent(turnId: nil))
+
+        #expect(session._test_isOutputPlaying())
+        #expect(!session.cancelOutput(reason: "barge-in"))
+        #expect(!session._test_isOutputPlaying())
+        #expect(await requests.snapshot().isEmpty)
+    }
+
     @Test func `output playback finish clears barge in start time`() {
         var speakingStates: [Bool] = []
         let session = RealtimeTalkRelaySession(
@@ -342,5 +427,22 @@ struct RealtimeTalkRelaySessionTests {
         await send.value
 
         #expect(await requests.snapshot().isEmpty)
+    }
+
+    private static func audioEvent(turnId: String?) -> EventFrame {
+        var payload: [String: Any] = [
+            "relaySessionId": "relay-1",
+            "type": "audio",
+            "audioBase64": Data([0x01, 0x02]).base64EncodedString(),
+        ]
+        if let turnId {
+            payload["talkEvent"] = ["turnId": turnId]
+        }
+        return EventFrame(
+            type: "event",
+            event: "talk.event",
+            payload: AnyCodable(payload),
+            seq: nil,
+            stateversion: nil)
     }
 }
