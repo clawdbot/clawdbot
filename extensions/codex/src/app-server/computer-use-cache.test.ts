@@ -179,6 +179,90 @@ describe("Codex Computer Use shared plugin cache", () => {
     ).resolves.toBe(undefined);
   });
 
+  it("refreshes same-version cache bytes for a new desktop generation", async () => {
+    const root = tempDirs.make("openclaw-computer-use-cache-generation-");
+    const bundledMarketplacePath = path.join(root, "Codex.app", "plugins", "openai-bundled");
+    const bundledPluginRoot = path.join(bundledMarketplacePath, "plugins", "computer-use");
+    await writeBundledComputerUsePlugin(bundledMarketplacePath, "1.0.857");
+    await fs.writeFile(path.join(bundledPluginRoot, "generation.txt"), "generation-y");
+    const codexHome = path.join(root, "agent", "codex-home");
+    const activeCachePath = path.join(
+      codexHome,
+      "plugins",
+      "cache",
+      "openai-bundled",
+      "computer-use",
+      "1.0.857",
+    );
+    await fs.mkdir(path.join(activeCachePath, ".codex-plugin"), { recursive: true });
+    await fs.writeFile(
+      path.join(activeCachePath, ".codex-plugin", "plugin.json"),
+      JSON.stringify({ name: "computer-use", version: "1.0.857" }),
+    );
+    await fs.writeFile(path.join(activeCachePath, "generation.txt"), "generation-x");
+
+    const result = await ensureCodexComputerUseSharedPluginCache({
+      codexHome,
+      bundledMarketplacePath,
+      config: computerUseConfig(),
+      forceRefresh: true,
+    });
+
+    expect(result).toMatchObject({ status: "shared", changed: true, version: "1.0.857" });
+    await expect(fs.readFile(path.join(activeCachePath, "generation.txt"), "utf8")).resolves.toBe(
+      "generation-y",
+    );
+  });
+
+  it("leaves same-version cache bytes intact when the generation is stale before publication", async () => {
+    const root = tempDirs.make("openclaw-computer-use-cache-stale-");
+    const bundledMarketplacePath = path.join(root, "Codex.app", "plugins", "openai-bundled");
+    const bundledPluginRoot = path.join(bundledMarketplacePath, "plugins", "computer-use");
+    await writeBundledComputerUsePlugin(bundledMarketplacePath, "1.0.857");
+    await fs.writeFile(path.join(bundledPluginRoot, "generation.txt"), "generation-y");
+    const codexHome = path.join(root, "agent", "codex-home");
+    const activeCachePath = path.join(
+      codexHome,
+      "plugins",
+      "cache",
+      "openai-bundled",
+      "computer-use",
+      "1.0.857",
+    );
+    await fs.mkdir(path.join(activeCachePath, ".codex-plugin"), { recursive: true });
+    await fs.writeFile(
+      path.join(activeCachePath, ".codex-plugin", "plugin.json"),
+      JSON.stringify({ name: "computer-use", version: "1.0.857" }),
+    );
+    await fs.writeFile(path.join(activeCachePath, "generation.txt"), "generation-x");
+
+    let currentnessChecks = 0;
+    await expect(
+      ensureCodexComputerUseSharedPluginCache({
+        codexHome,
+        bundledMarketplacePath,
+        config: computerUseConfig(),
+        forceRefresh: true,
+        assertCurrent: () => {
+          currentnessChecks += 1;
+          if (currentnessChecks === 2) {
+            throw new Error("desktop generation is stale");
+          }
+        },
+      }),
+    ).rejects.toThrow("desktop generation is stale");
+    expect(currentnessChecks).toBe(2);
+
+    await expect(fs.readFile(path.join(activeCachePath, "generation.txt"), "utf8")).resolves.toBe(
+      "generation-x",
+    );
+    expect(
+      (await fs.readdir(path.dirname(activeCachePath))).filter((entry) =>
+        entry.startsWith(".1.0.857"),
+      ),
+    ).toEqual([]);
+  });
+
   it("refreshes a stale copied cache entry with the bundled version", async () => {
     const root = tempDirs.make("openclaw-computer-use-cache-");
     const bundledMarketplacePath = path.join(root, "Codex.app", "plugins", "openai-bundled");

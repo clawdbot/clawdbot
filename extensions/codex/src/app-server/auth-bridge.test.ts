@@ -7,6 +7,7 @@ import {
   loadAuthProfileStoreForSecretsRuntime,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +15,7 @@ import {
   applyCodexAppServerAuthProfile,
   bridgeCodexAppServerStartOptions,
   refreshCodexAppServerAuthTokens,
+  reconcileCodexComputerUseStartArtifacts,
   resolveCodexAppServerAuthAccountCacheKey,
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileStore,
@@ -24,18 +26,49 @@ import {
   resolveCodexAppServerPreparedApiKeyCacheKey,
 } from "./auth-bridge.js";
 import type { CodexAppServerStartOptions } from "./config.js";
+import { resolveMacOSDesktopCodexAppPathCandidates } from "./desktop-app-paths.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 const oauthMocks = vi.hoisted(() => ({
   refreshOpenAICodexToken: vi.fn(),
 }));
 
+type MockDesktopCandidate = ReturnType<typeof resolveMacOSDesktopCodexAppPathCandidates>[number];
+type MockCacheResult = {
+  status: "independent" | "shared";
+  changed: boolean;
+  message: string;
+  removedStaleVersions: string[];
+  warnings: string[];
+};
+
 const computerUseServiceMocks = vi.hoisted(() => ({
-  ensureCodexManagedBundledMarketplace: vi.fn(async () => undefined),
-  ensureCodexComputerUseServiceApp: vi.fn(async () => ({
-    status: "already_current" as const,
+  ensureCodexComputerUseSharedPluginCache: vi.fn<
+    (_params: { forceRefresh?: boolean }) => Promise<MockCacheResult>
+  >(async () => ({
+    status: "independent",
     changed: false,
+    message: "independent",
+    removedStaleVersions: [],
+    warnings: [],
   })),
+  ensureCodexManagedBundledMarketplace: vi.fn<(_params?: unknown) => Promise<string | undefined>>(
+    async () => undefined,
+  ),
+  ensureCodexComputerUseServiceApp: vi.fn<
+    (_params?: unknown) => Promise<{
+      status: "already_current" | "source_missing";
+      changed: boolean;
+    }>
+  >(async () => ({ status: "already_current", changed: false })),
+  resolveCodexManagedBundledMarketplaceSource: vi.fn<
+    (params: {
+      candidates?: readonly MockDesktopCandidate[];
+    }) => Promise<MockDesktopCandidate | undefined>
+  >(async (params) => params.candidates?.[0]),
+  resolveCodexComputerUseServiceAppSourcePath: vi.fn<
+    (params: { sourceAppCandidates?: readonly string[] }) => Promise<string | undefined>
+  >(async (params) => params.sourceAppCandidates?.[0]),
 }));
 
 const providerRuntimeMocks = vi.hoisted(() => ({
@@ -127,11 +160,20 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
 
 vi.mock("./computer-use-service.js", () => ({
   ensureCodexComputerUseServiceApp: computerUseServiceMocks.ensureCodexComputerUseServiceApp,
+  resolveCodexComputerUseServiceAppSourcePath:
+    computerUseServiceMocks.resolveCodexComputerUseServiceAppSourcePath,
 }));
 
 vi.mock("./computer-use-marketplace.js", () => ({
   ensureCodexManagedBundledMarketplace:
     computerUseServiceMocks.ensureCodexManagedBundledMarketplace,
+  resolveCodexManagedBundledMarketplaceSource:
+    computerUseServiceMocks.resolveCodexManagedBundledMarketplaceSource,
+}));
+
+vi.mock("./computer-use-cache.js", () => ({
+  ensureCodexComputerUseSharedPluginCache:
+    computerUseServiceMocks.ensureCodexComputerUseSharedPluginCache,
 }));
 
 afterEach(() => {
@@ -142,6 +184,22 @@ afterEach(() => {
   providerRuntimeMocks.refreshProviderOAuthCredentialWithPlugin.mockClear();
   computerUseServiceMocks.ensureCodexComputerUseServiceApp.mockClear();
   computerUseServiceMocks.ensureCodexManagedBundledMarketplace.mockClear();
+  computerUseServiceMocks.ensureCodexComputerUseSharedPluginCache.mockReset();
+  computerUseServiceMocks.ensureCodexComputerUseSharedPluginCache.mockResolvedValue({
+    status: "independent",
+    changed: false,
+    message: "independent",
+    removedStaleVersions: [],
+    warnings: [],
+  });
+  computerUseServiceMocks.resolveCodexManagedBundledMarketplaceSource.mockReset();
+  computerUseServiceMocks.resolveCodexManagedBundledMarketplaceSource.mockImplementation(
+    async (params) => params.candidates?.[0],
+  );
+  computerUseServiceMocks.resolveCodexComputerUseServiceAppSourcePath.mockReset();
+  computerUseServiceMocks.resolveCodexComputerUseServiceAppSourcePath.mockImplementation(
+    async (params: { sourceAppCandidates?: readonly string[] }) => params.sourceAppCandidates?.[0],
+  );
 });
 
 function createStartOptions(
@@ -357,31 +415,36 @@ describe("bridgeCodexAppServerStartOptions", () => {
 
   it("provisions the native Computer Use client before auto-install startup", async () => {
     await withTempDir("openclaw-codex-computer-use-service-", async (agentDir) => {
+      computerUseServiceMocks.ensureCodexManagedBundledMarketplace.mockResolvedValueOnce(
+        "/managed/openai-bundled",
+      );
       const startOptions = createStartOptions();
       const codexHome = resolveCodexAppServerHomeDir(agentDir);
 
-      await bridgeCodexAppServerStartOptions({
+      await reconcileCodexComputerUseStartArtifacts({
         startOptions,
         agentDir,
         pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
       });
 
-      expect(computerUseServiceMocks.ensureCodexComputerUseServiceApp).toHaveBeenCalledWith({
-        codexHome,
-        ownershipRoot: agentDir,
-        appServerCommand: startOptions.command,
-      });
-      expect(computerUseServiceMocks.ensureCodexManagedBundledMarketplace).toHaveBeenCalledWith({
-        codexHome,
-        ownershipRoot: agentDir,
-        appServerCommand: startOptions.command,
-      });
+      expect(computerUseServiceMocks.ensureCodexComputerUseServiceApp).toHaveBeenCalledWith(
+        expect.objectContaining({
+          codexHome,
+          ownershipRoot: agentDir,
+        }),
+      );
+      expect(computerUseServiceMocks.ensureCodexManagedBundledMarketplace).toHaveBeenCalledWith(
+        expect.objectContaining({
+          codexHome,
+          ownershipRoot: agentDir,
+        }),
+      );
     });
   });
 
   it("does not provision the native client without auto-install authorization", async () => {
     await withTempDir("openclaw-codex-computer-use-service-", async (agentDir) => {
-      await bridgeCodexAppServerStartOptions({
+      await reconcileCodexComputerUseStartArtifacts({
         startOptions: createStartOptions(),
         agentDir,
         pluginConfig: { computerUse: { enabled: true, autoInstall: false } },
@@ -392,12 +455,136 @@ describe("bridgeCodexAppServerStartOptions", () => {
     });
   });
 
+  it("rejects a desktop candidate whose exact bundled marketplace is unavailable", async () => {
+    await withTempDir("openclaw-codex-computer-use-source-missing-", async (agentDir) => {
+      computerUseServiceMocks.resolveCodexManagedBundledMarketplaceSource.mockResolvedValueOnce(
+        undefined,
+      );
+
+      await expect(
+        reconcileCodexComputerUseStartArtifacts({
+          startOptions: createStartOptions({
+            command: "/Applications/ChatGPT.app/Contents/Resources/codex",
+          }),
+          agentDir,
+          pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
+        }),
+      ).rejects.toMatchObject({
+        code: "CODEX_COMPUTER_USE_CANDIDATE_ARTIFACTS_UNAVAILABLE",
+      });
+      expect(computerUseServiceMocks.ensureCodexComputerUseServiceApp).not.toHaveBeenCalled();
+      expect(computerUseServiceMocks.ensureCodexManagedBundledMarketplace).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects a desktop candidate whose exact signed service is unavailable", async () => {
+    await withTempDir("openclaw-codex-computer-use-service-missing-", async (agentDir) => {
+      computerUseServiceMocks.resolveCodexComputerUseServiceAppSourcePath.mockResolvedValueOnce(
+        undefined,
+      );
+
+      await expect(
+        reconcileCodexComputerUseStartArtifacts({
+          startOptions: createStartOptions({
+            command: "/Applications/ChatGPT.app/Contents/Resources/codex",
+          }),
+          agentDir,
+          pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
+        }),
+      ).rejects.toMatchObject({
+        code: "CODEX_COMPUTER_USE_CANDIDATE_ARTIFACTS_UNAVAILABLE",
+      });
+      expect(computerUseServiceMocks.ensureCodexManagedBundledMarketplace).not.toHaveBeenCalled();
+      expect(computerUseServiceMocks.ensureCodexComputerUseServiceApp).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    { marketplaceSource: "file:///tmp/custom-marketplace" },
+    { marketplacePath: "/tmp/custom-marketplace/marketplace.json" },
+    { marketplaceName: "custom-marketplace" },
+  ])("keeps an exact desktop candidate with configured marketplace selection", async (selector) => {
+    await withTempDir("openclaw-codex-computer-use-custom-source-", async (agentDir) => {
+      await expect(
+        reconcileCodexComputerUseStartArtifacts({
+          startOptions: createStartOptions({
+            command: "/Applications/ChatGPT.app/Contents/Resources/codex",
+          }),
+          agentDir,
+          pluginConfig: {
+            computerUse: { enabled: true, autoInstall: true, ...selector },
+          },
+        }),
+      ).resolves.toBeUndefined();
+      expect(computerUseServiceMocks.ensureCodexManagedBundledMarketplace).not.toHaveBeenCalled();
+      expect(computerUseServiceMocks.ensureCodexComputerUseServiceApp).toHaveBeenCalledOnce();
+    });
+  });
+
+  it.each(["marketplace", "service"] as const)(
+    "keeps package fallback artifacts on one complete desktop owner when ChatGPT lacks %s",
+    async (missingArtifact) => {
+      await withTempDir("openclaw-codex-computer-use-package-owner-", async (agentDir) => {
+        const candidates = resolveMacOSDesktopCodexAppPathCandidates("darwin");
+        const codexCandidate = candidates.find((candidate) => candidate.appName === "Codex.app");
+        if (!codexCandidate) {
+          throw new Error("expected Codex.app candidate");
+        }
+        computerUseServiceMocks.resolveCodexManagedBundledMarketplaceSource.mockImplementation(
+          async (params) => {
+            const candidate = params.candidates?.[0];
+            return missingArtifact === "marketplace" && candidate?.appName === "ChatGPT.app"
+              ? undefined
+              : candidate;
+          },
+        );
+        computerUseServiceMocks.resolveCodexComputerUseServiceAppSourcePath.mockImplementation(
+          async (params: { sourceAppCandidates?: readonly string[] }) => {
+            const source = params.sourceAppCandidates?.[0];
+            return missingArtifact === "service" && source?.includes("ChatGPT.app")
+              ? undefined
+              : source;
+          },
+        );
+        computerUseServiceMocks.ensureCodexManagedBundledMarketplace.mockResolvedValueOnce(
+          "/managed/openai-bundled",
+        );
+
+        await reconcileCodexComputerUseStartArtifacts({
+          startOptions: createStartOptions({ command: "/cache/openclaw/codex" }),
+          agentDir,
+          pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
+        });
+
+        expect(computerUseServiceMocks.ensureCodexManagedBundledMarketplace).toHaveBeenCalledWith(
+          expect.objectContaining({
+            candidates: [codexCandidate],
+            appServerCommand: codexCandidate.appServerCommandPath,
+          }),
+        );
+        expect(computerUseServiceMocks.ensureCodexComputerUseServiceApp).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sourceAppCandidates: codexCandidate.computerUseServiceAppPaths,
+            appServerCommand: codexCandidate.appServerCommandPath,
+          }),
+        );
+        expect(
+          computerUseServiceMocks.ensureCodexComputerUseSharedPluginCache,
+        ).toHaveBeenCalledWith(
+          expect.objectContaining({
+            bundledMarketplacePath: codexCandidate.bundledMarketplacePath,
+          }),
+        );
+      });
+    },
+  );
+
   it("does not replace the native service app for user-scoped homes", async () => {
     await withTempDir("openclaw-codex-computer-use-user-home-", async (root) => {
       const codexHome = path.join(root, "user-codex-home");
       vi.stubEnv("CODEX_HOME", codexHome);
 
-      await bridgeCodexAppServerStartOptions({
+      await reconcileCodexComputerUseStartArtifacts({
         startOptions: createStartOptions({ homeScope: "user" }),
         agentDir: path.join(root, "agent"),
         pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
@@ -412,7 +599,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
     await withTempDir("openclaw-codex-computer-use-explicit-home-", async (root) => {
       const codexHome = path.join(root, "explicit-codex-home");
 
-      await bridgeCodexAppServerStartOptions({
+      await reconcileCodexComputerUseStartArtifacts({
         startOptions: createStartOptions({ env: { CODEX_HOME: codexHome } }),
         agentDir: path.join(root, "agent"),
         pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
@@ -424,17 +611,126 @@ describe("bridgeCodexAppServerStartOptions", () => {
   });
 
   it("classifies native client provisioning failures as harness preflight", async () => {
+    computerUseServiceMocks.ensureCodexManagedBundledMarketplace.mockResolvedValueOnce(
+      "/managed/openai-bundled",
+    );
     computerUseServiceMocks.ensureCodexComputerUseServiceApp.mockRejectedValueOnce(
       new Error("copy failed"),
     );
 
     await expect(
-      bridgeCodexAppServerStartOptions({
+      reconcileCodexComputerUseStartArtifacts({
         startOptions: createStartOptions(),
         agentDir: "/tmp/openclaw-codex-computer-use-failed",
         pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
       }),
     ).rejects.toMatchObject({ name: "AgentHarnessPreflightError", scope: "harness" });
+  });
+
+  it("refreshes shared cache once per selected desktop source generation", async () => {
+    await withTempDir("openclaw-codex-computer-use-cache-owner-", async (agentDir) => {
+      computerUseServiceMocks.ensureCodexComputerUseSharedPluginCache.mockResolvedValue({
+        status: "shared",
+        changed: true,
+        message: "shared",
+        removedStaleVersions: [],
+        warnings: [],
+      });
+      const startOptions = createStartOptions({
+        command: "/Applications/ChatGPT.app/Contents/Resources/codex",
+      });
+      const pluginConfig = {
+        computerUse: {
+          enabled: true,
+          autoInstall: false,
+          pluginCacheMode: "shared" as const,
+        },
+      };
+
+      await reconcileCodexComputerUseStartArtifacts({
+        startOptions,
+        agentDir,
+        pluginConfig,
+        desktopGeneration: { epoch: 1, fingerprint: "desktop-x" },
+      });
+      await reconcileCodexComputerUseStartArtifacts({
+        startOptions,
+        agentDir,
+        pluginConfig,
+        desktopGeneration: { epoch: 1, fingerprint: "desktop-x" },
+      });
+      await reconcileCodexComputerUseStartArtifacts({
+        startOptions,
+        agentDir,
+        pluginConfig,
+        desktopGeneration: { epoch: 2, fingerprint: "desktop-y" },
+      });
+
+      expect(
+        computerUseServiceMocks.ensureCodexComputerUseSharedPluginCache.mock.calls.map(
+          ([params]) => params.forceRefresh,
+        ),
+      ).toEqual([true, false, true]);
+    });
+  });
+
+  it("does not let a stale desktop generation publish artifacts after its successor", async () => {
+    await withTempDir("openclaw-codex-computer-use-generation-", async (agentDir) => {
+      const firstMarketplaceStarted = createDeferred<void>();
+      const releaseFirstMarketplace = createDeferred<void>();
+      let activeMarketplaceCalls = 0;
+      let maxActiveMarketplaceCalls = 0;
+      computerUseServiceMocks.ensureCodexManagedBundledMarketplace
+        .mockImplementationOnce(async () => {
+          activeMarketplaceCalls += 1;
+          maxActiveMarketplaceCalls = Math.max(maxActiveMarketplaceCalls, activeMarketplaceCalls);
+          firstMarketplaceStarted.resolve();
+          try {
+            await releaseFirstMarketplace.promise;
+            return "/managed/openai-bundled";
+          } finally {
+            activeMarketplaceCalls -= 1;
+          }
+        })
+        .mockImplementationOnce(async () => {
+          activeMarketplaceCalls += 1;
+          maxActiveMarketplaceCalls = Math.max(maxActiveMarketplaceCalls, activeMarketplaceCalls);
+          activeMarketplaceCalls -= 1;
+          return "/managed/openai-bundled";
+        });
+      let currentEpoch = 1;
+      const startOptions = createStartOptions();
+      const first = reconcileCodexComputerUseStartArtifacts({
+        startOptions,
+        agentDir,
+        pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
+        desktopGeneration: { epoch: 1, fingerprint: "desktop-x" },
+        assertCurrent: () => {
+          if (currentEpoch !== 1) {
+            throw new Error("desktop generation X is stale");
+          }
+        },
+      });
+      await firstMarketplaceStarted.promise;
+      currentEpoch = 2;
+      const second = reconcileCodexComputerUseStartArtifacts({
+        startOptions,
+        agentDir,
+        pluginConfig: { computerUse: { enabled: true, autoInstall: true } },
+        desktopGeneration: { epoch: 2, fingerprint: "desktop-y" },
+        assertCurrent: () => {
+          if (currentEpoch !== 2) {
+            throw new Error("desktop generation Y is stale");
+          }
+        },
+      });
+      releaseFirstMarketplace.resolve();
+
+      await expect(first).rejects.toThrow("desktop generation X is stale");
+      await expect(second).resolves.toBeUndefined();
+      expect(maxActiveMarketplaceCalls).toBe(1);
+      expect(computerUseServiceMocks.ensureCodexComputerUseServiceApp).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("uses the native user Codex home for coexistence mode", async () => {

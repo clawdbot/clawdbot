@@ -13,8 +13,13 @@ import { createClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from "./version.js";
 
 const mocks = vi.hoisted(() => ({
+  CodexComputerUseCandidateArtifactsUnavailableError: class extends Error {
+    readonly code = "CODEX_COMPUTER_USE_CANDIDATE_ARTIFACTS_UNAVAILABLE";
+  },
   bridgeCodexAppServerStartOptions: vi.fn(async ({ startOptions }) => startOptions),
-  reconcileCodexComputerUseStartArtifacts: vi.fn(async () => undefined),
+  reconcileCodexComputerUseStartArtifacts: vi.fn(
+    async (_params?: { startOptions: { command: string } }) => undefined,
+  ),
   applyCodexAppServerAuthProfile: vi.fn(
     async (_params?: {
       agentDir?: string;
@@ -87,6 +92,15 @@ vi.mock("./desktop-generation.js", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
+  AgentHarnessPreflightError: class extends Error {
+    readonly scope: string;
+
+    constructor(message: string, options: { scope: string; cause?: unknown }) {
+      super(message, { cause: options.cause });
+      this.name = "AgentHarnessPreflightError";
+      this.scope = options.scope;
+    }
+  },
   embeddedAgentLog: mocks.embeddedAgentLog,
   formatErrorMessage: (error: unknown) => String(error),
   OPENCLAW_VERSION: "test",
@@ -489,6 +503,60 @@ describe("shared Codex app-server client", () => {
     expect(harness.stdinDestroyed).toBe(false);
     expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
     await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true));
+  });
+
+  it("falls back before starting a desktop candidate with incomplete Computer Use artifacts", async () => {
+    const pluginLocal = createClientHarness();
+    const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(pluginLocal.client);
+    mocks.reconcileCodexComputerUseStartArtifacts
+      .mockRejectedValueOnce(
+        new mocks.CodexComputerUseCandidateArtifactsUnavailableError(
+          "desktop artifacts unavailable",
+        ),
+      )
+      .mockResolvedValueOnce(undefined);
+    const startOptions = configureManagedDesktopFallback();
+
+    const acquire = getSharedCodexAppServerClient({ startOptions, timeoutMs: 1_000 });
+    await sendInitializeResult(pluginLocal, "openclaw/0.147.0 (macOS; test)");
+    const client = await acquire;
+
+    expect(client).toBe(pluginLocal.client);
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    expect(startSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "/cache/openclaw/codex" }),
+    );
+    expect(mocks.reconcileCodexComputerUseStartArtifacts).toHaveBeenCalledTimes(2);
+    expect(mocks.reconcileCodexComputerUseStartArtifacts.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        startOptions: expect.objectContaining({
+          command: "/Applications/Codex.app/Contents/Resources/codex",
+        }),
+      }),
+    );
+    expect(mocks.reconcileCodexComputerUseStartArtifacts.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        startOptions: expect.objectContaining({ command: "/cache/openclaw/codex" }),
+      }),
+    );
+  });
+
+  it("classifies terminal incomplete Computer Use artifacts as harness preflight", async () => {
+    mocks.reconcileCodexComputerUseStartArtifacts.mockRejectedValueOnce(
+      new mocks.CodexComputerUseCandidateArtifactsUnavailableError("desktop artifacts unavailable"),
+    );
+
+    await expect(
+      getSharedCodexAppServerClient({
+        startOptions: {
+          transport: "stdio",
+          command: "/Applications/Codex.app/Contents/Resources/codex",
+          commandSource: "config",
+          args: ["app-server"],
+          headers: {},
+        },
+      }),
+    ).rejects.toMatchObject({ name: "AgentHarnessPreflightError", scope: "harness" });
   });
 
   it("reuses the successful managed fallback after desktop initialize is unsupported", async () => {
@@ -2136,6 +2204,78 @@ describe("shared Codex app-server client", () => {
     await expect(acquire).rejects.toThrow("codex app-server initialize aborted");
   });
 
+  it("does not start a client after its sole waiter abandons artifact reconciliation", async () => {
+    const reconcileStarted = createDeferred<void>();
+    const releaseReconcile = createDeferred<void>();
+    const reconcileFinished = createDeferred<void>();
+    mocks.reconcileCodexComputerUseStartArtifacts.mockImplementationOnce(
+      async (value?: unknown) => {
+        const params = value as { assertCurrent?: () => void };
+        reconcileStarted.resolve();
+        await releaseReconcile.promise;
+        try {
+          params.assertCurrent?.();
+        } finally {
+          reconcileFinished.resolve();
+        }
+      },
+    );
+    const startSpy = vi.spyOn(CodexAppServerClient, "start");
+    const abort = new AbortController();
+    const acquire = getLeasedSharedCodexAppServerClient({
+      config: {},
+      agentDir: "/tmp/openclaw-agent",
+      startOptions: {
+        transport: "stdio",
+        homeScope: "agent",
+        command: "codex",
+        commandSource: "managed",
+        args: ["app-server"],
+        headers: {},
+      },
+      timeoutMs: 1_000,
+      abandonSignal: abort.signal,
+    });
+    await reconcileStarted.promise;
+
+    abort.abort();
+    await expect(acquire).rejects.toThrow("codex app-server initialize aborted");
+    releaseReconcile.resolve();
+    await reconcileFinished.promise;
+    await Promise.resolve();
+    expect(startSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not start a client abandoned after reconciliation's final currentness check", async () => {
+    const abort = new AbortController();
+    mocks.reconcileCodexComputerUseStartArtifacts.mockImplementationOnce(
+      async (value?: unknown) => {
+        const params = value as { assertCurrent?: () => void };
+        params.assertCurrent?.();
+        abort.abort();
+      },
+    );
+    const startSpy = vi.spyOn(CodexAppServerClient, "start");
+
+    await expect(
+      getLeasedSharedCodexAppServerClient({
+        config: {},
+        agentDir: "/tmp/openclaw-agent",
+        startOptions: {
+          transport: "stdio",
+          homeScope: "agent",
+          command: "codex",
+          commandSource: "managed",
+          args: ["app-server"],
+          headers: {},
+        },
+        timeoutMs: 1_000,
+        abandonSignal: abort.signal,
+      }),
+    ).rejects.toThrow("codex app-server initialize aborted");
+    expect(startSpy).not.toHaveBeenCalled();
+  });
+
   it("drains active desktop generation X while new acquisitions use Y", async () => {
     const generationX = { epoch: 1, fingerprint: "desktop-x" };
     const generationY = { epoch: 2, fingerprint: "desktop-y" };
@@ -2239,14 +2379,16 @@ describe("shared Codex app-server client", () => {
 
     expect(clientX).toBe(desktopX.client);
     expect(clientY).toBe(desktopY.client);
-    expect(mocks.reconcileCodexComputerUseStartArtifacts).toHaveBeenCalledTimes(2);
-    expect(mocks.reconcileCodexComputerUseStartArtifacts).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        startOptions: expect.objectContaining({
-          command: "/Applications/Codex.app/Contents/Resources/codex",
-        }),
-      }),
-    );
+    expect(
+      mocks.reconcileCodexComputerUseStartArtifacts.mock.calls.map(
+        ([params]) => params?.startOptions.command,
+      ),
+    ).toEqual([
+      "/cache/openclaw/codex",
+      "/Applications/Codex.app/Contents/Resources/codex",
+      "/cache/openclaw/codex",
+      "/Applications/Codex.app/Contents/Resources/codex",
+    ]);
     expect(desktopX.process.stdin.destroyed).toBe(false);
     expect(releaseLeasedSharedCodexAppServerClient(clientX)).toBe(true);
     expect(desktopX.process.stdin.destroyed).toBe(true);

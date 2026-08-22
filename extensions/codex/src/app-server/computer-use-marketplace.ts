@@ -14,7 +14,10 @@ import {
 } from "./desktop-app-paths.js";
 
 const MARKETPLACE_NAME = "openai-bundled";
-const activeInstalls = new Map<string, Promise<string | undefined>>();
+const activeInstalls = new Map<
+  string,
+  { sourcePath: string; promise: Promise<string | undefined> }
+>();
 
 export function resolveCodexManagedBundledMarketplacePath(codexHome: string): string {
   return path.join(codexHome, ".tmp", "bundled-marketplaces", MARKETPLACE_NAME);
@@ -25,9 +28,11 @@ export async function ensureCodexManagedBundledMarketplace(params: {
   ownershipRoot: string;
   appServerCommand?: string;
   candidates?: readonly MacOSDesktopCodexAppPathCandidate[];
+  ownershipCandidates?: readonly MacOSDesktopCodexAppPathCandidate[];
+  assertCurrent?: () => void;
 }): Promise<string | undefined> {
   const candidates = params.candidates ?? resolveMacOSDesktopCodexAppPathCandidates();
-  const source = await resolveSource({ ...params, candidates });
+  const source = await resolveCodexManagedBundledMarketplaceSource({ ...params, candidates });
   if (!source) {
     return undefined;
   }
@@ -40,24 +45,26 @@ export async function ensureCodexManagedBundledMarketplace(params: {
   });
   const physicalTargetPath = path.join(parent.realPath, MARKETPLACE_NAME);
   await assertNotSymlink(physicalTargetPath, "managed bundled marketplace");
-  if (await wrapperMatches(physicalTargetPath, source.bundledMarketplacePath)) {
-    return targetPath;
-  }
   const active = activeInstalls.get(physicalTargetPath);
   if (active) {
-    return await active;
+    if (active.sourcePath === source.bundledMarketplacePath) {
+      return await active.promise;
+    }
+    await active.promise.catch(() => undefined);
+    return await ensureCodexManagedBundledMarketplace(params);
   }
-
-  const install = publishManagedWrapper({
+  const install = reconcileManagedWrapper({
     parent,
     physicalTargetPath,
     targetPath,
     source,
-    candidates,
+    ownershipCandidates: params.ownershipCandidates ?? candidates,
+    assertCurrent: params.assertCurrent,
   });
-  activeInstalls.set(physicalTargetPath, install);
+  const activeEntry = { sourcePath: source.bundledMarketplacePath, promise: install };
+  activeInstalls.set(physicalTargetPath, activeEntry);
   const clearActive = () => {
-    if (activeInstalls.get(physicalTargetPath) === install) {
+    if (activeInstalls.get(physicalTargetPath) === activeEntry) {
       activeInstalls.delete(physicalTargetPath);
     }
   };
@@ -65,14 +72,25 @@ export async function ensureCodexManagedBundledMarketplace(params: {
   return await install;
 }
 
+async function reconcileManagedWrapper(
+  params: Parameters<typeof publishManagedWrapper>[0],
+): Promise<string> {
+  if (await wrapperMatches(params.physicalTargetPath, params.source.bundledMarketplacePath)) {
+    return params.targetPath;
+  }
+  return await publishManagedWrapper(params);
+}
+
 async function publishManagedWrapper(params: {
   parent: Awaited<ReturnType<typeof prepareOwnedServiceParent>>;
   physicalTargetPath: string;
   targetPath: string;
   source: MacOSDesktopCodexAppPathCandidate;
-  candidates: readonly MacOSDesktopCodexAppPathCandidate[];
+  ownershipCandidates: readonly MacOSDesktopCodexAppPathCandidate[];
+  assertCurrent?: () => void;
 }): Promise<string> {
-  const { parent, physicalTargetPath, targetPath, source, candidates } = params;
+  const { parent, physicalTargetPath, targetPath, source, ownershipCandidates, assertCurrent } =
+    params;
 
   const stagingPath = await fs.mkdtemp(path.join(parent.realPath, `.${MARKETPLACE_NAME}.staging-`));
   const backupPath = path.join(
@@ -103,16 +121,18 @@ async function publishManagedWrapper(params: {
     if (existing && !existing.isDirectory()) {
       throw new Error(`Managed bundled marketplace must be a real directory: ${targetPath}`);
     }
-    if (existing && !(await wrapperMatchesAnySource(physicalTargetPath, candidates))) {
+    if (existing && !(await wrapperMatchesAnySource(physicalTargetPath, ownershipCandidates))) {
       throw new Error(
         `Refusing to replace an unowned bundled marketplace directory: ${targetPath}`,
       );
     }
     if (existing) {
+      assertCurrent?.();
       await fs.rename(physicalTargetPath, backupPath);
       backupCreated = true;
       await assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
     }
+    assertCurrent?.();
     await fs.rename(stagingPath, physicalTargetPath);
     await assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
     if (backupCreated) {
@@ -152,21 +172,14 @@ async function publishManagedWrapper(params: {
   }
 }
 
-async function resolveSource(params: {
+export async function resolveCodexManagedBundledMarketplaceSource(params: {
   appServerCommand?: string;
   candidates?: readonly MacOSDesktopCodexAppPathCandidate[];
 }): Promise<MacOSDesktopCodexAppPathCandidate | undefined> {
   const candidates = params.candidates ?? resolveMacOSDesktopCodexAppPathCandidates();
   const command = params.appServerCommand && path.resolve(params.appServerCommand);
   const ordered = command
-    ? [
-        ...candidates.filter(
-          (candidate) => path.resolve(candidate.appServerCommandPath) === command,
-        ),
-        ...candidates.filter(
-          (candidate) => path.resolve(candidate.appServerCommandPath) !== command,
-        ),
-      ]
+    ? candidates.filter((candidate) => path.resolve(candidate.appServerCommandPath) === command)
     : candidates;
   for (const candidate of ordered) {
     if (await isExpectedMarketplace(candidate.bundledMarketplacePath)) {

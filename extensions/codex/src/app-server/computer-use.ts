@@ -5,6 +5,7 @@
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { reconcileCodexComputerUseStartArtifacts } from "./auth-bridge.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { describeControlFailure } from "./capabilities.js";
 import {
@@ -13,12 +14,8 @@ import {
   isCodexAppServerIndeterminateTransportError,
   type CodexAppServerClient,
 } from "./client.js";
-import {
-  ensureCodexManagedBundledMarketplace,
-  resolveCodexManagedBundledMarketplacePath,
-} from "./computer-use-marketplace.js";
+import { resolveCodexManagedBundledMarketplacePath } from "./computer-use-marketplace.js";
 import { assertNotSymlink } from "./computer-use-service-path.js";
-import { ensureCodexComputerUseServiceApp } from "./computer-use-service.js";
 import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
@@ -40,7 +37,9 @@ import type {
 } from "./protocol.js";
 import { requestCodexAppServerJson } from "./request.js";
 import {
+  assertCodexAppServerClientStartSelectionCurrent,
   getLeasedSharedCodexAppServerClient,
+  readCodexAppServerClientDesktopGeneration,
   readCodexAppServerClientProcessIdentity,
   releaseLeasedSharedCodexAppServerClient,
   resolveCodexNativeConfigFenceKey,
@@ -448,8 +447,9 @@ async function prepareExplicitManagedComputerUseInstall(
   ) {
     return;
   }
-  const codexHome = params.client.getRuntimeIdentity()?.codexHome;
-  const processIdentity = readCodexAppServerClientProcessIdentity(params.client);
+  const client = params.client;
+  const codexHome = client.getRuntimeIdentity()?.codexHome;
+  const processIdentity = readCodexAppServerClientProcessIdentity(client);
   const command =
     processIdentity?.nativeCommand ??
     (processIdentity && isManagedCodexDesktopCommand(processIdentity.command, "darwin")
@@ -458,6 +458,7 @@ async function prepareExplicitManagedComputerUseInstall(
   if (!codexHome || !command) {
     return;
   }
+  const desktopGeneration = readCodexAppServerClientDesktopGeneration(client);
   const expectedHome = resolveCodexAppServerHomeDir(params.agentDir);
   const [actualRealHome, expectedRealHome] = await Promise.all([
     fs.realpath(codexHome).catch(() => undefined),
@@ -466,15 +467,21 @@ async function prepareExplicitManagedComputerUseInstall(
   if (!actualRealHome || actualRealHome !== expectedRealHome) {
     return;
   }
-  await ensureCodexManagedBundledMarketplace({
-    codexHome,
-    ownershipRoot: params.agentDir,
-    appServerCommand: command,
-  });
-  await ensureCodexComputerUseServiceApp({
-    codexHome,
-    ownershipRoot: params.agentDir,
-    appServerCommand: command,
+  await reconcileCodexComputerUseStartArtifacts({
+    startOptions: {
+      transport: "stdio",
+      command,
+      commandSource: "resolved-managed",
+      args: ["app-server"],
+      headers: {},
+      env: { CODEX_HOME: codexHome },
+    },
+    agentDir: params.agentDir,
+    pluginConfig: { computerUse: { ...params.computerUseConfig, autoInstall: true } },
+    ownsIsolatedCodexHome: true,
+    ...(desktopGeneration ? { desktopGeneration } : {}),
+    forceCacheRefresh: true,
+    assertCurrent: () => assertCodexAppServerClientStartSelectionCurrent({ client }),
   });
 }
 

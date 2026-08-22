@@ -41,6 +41,8 @@ export async function ensureCodexComputerUseSharedPluginCache(params: {
   bundledMarketplacePath?: string;
   bundledMarketplacePathCandidates?: readonly string[];
   ownershipRoot?: string;
+  assertCurrent?: () => void;
+  forceRefresh?: boolean;
 }): Promise<CodexComputerUsePluginCacheRepairResult> {
   if (!params.config.enabled) {
     return skippedCacheResult(
@@ -83,6 +85,8 @@ export async function ensureCodexComputerUseSharedPluginCache(params: {
   const changed = await ensureRealDirectoryCopy(cachePath, sourcePluginRoot, version, {
     codexHome: params.codexHome,
     ownershipRoot: params.ownershipRoot,
+    assertCurrent: params.assertCurrent,
+    forceRefresh: params.forceRefresh,
   });
   return {
     status: "shared",
@@ -132,7 +136,12 @@ async function ensureRealDirectoryCopy(
   cachePath: string,
   sourcePluginRoot: string,
   version: string,
-  boundary: { codexHome: string; ownershipRoot?: string },
+  boundary: {
+    codexHome: string;
+    ownershipRoot?: string;
+    assertCurrent?: () => void;
+    forceRefresh?: boolean;
+  },
 ): Promise<boolean> {
   const cacheRoot = path.dirname(cachePath);
   const ownedParent = boundary.ownershipRoot
@@ -151,7 +160,7 @@ async function ensureRealDirectoryCopy(
   const stat = await fs.lstat(physicalCachePath).catch(() => undefined);
   if (stat?.isDirectory() && !stat.isSymbolicLink()) {
     const cachedVersion = await readBundledPluginVersion(physicalCachePath);
-    if (cachedVersion === version) {
+    if (cachedVersion === version && !boundary.forceRefresh) {
       return false;
     }
   }
@@ -170,6 +179,7 @@ async function ensureRealDirectoryCopy(
       await assertDirectoryIdentityStable(ownedParent, "Computer Use plugin cache parent");
     }
     if (stat) {
+      boundary.assertCurrent?.();
       await fs.rename(physicalCachePath, backupPath);
       backupCreated = true;
     }
@@ -177,6 +187,7 @@ async function ensureRealDirectoryCopy(
       if (ownedParent) {
         await assertDirectoryIdentityStable(ownedParent, "Computer Use plugin cache parent");
       }
+      boundary.assertCurrent?.();
       await fs.rename(stagedPath, physicalCachePath);
     } catch (error) {
       if (backupCreated) {

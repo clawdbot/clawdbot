@@ -595,6 +595,44 @@ describe("Codex Computer Use native service", () => {
     await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
   });
 
+  it("leaves the prior service intact when its generation becomes stale before publication", async () => {
+    const root = tempDirs.make("openclaw-computer-use-service-stale-");
+    const firstSourcePath = path.join(root, "first", "Codex Computer Use.app");
+    const secondSourcePath = path.join(root, "second", "Codex Computer Use.app");
+    const codexHome = path.join(root, "codex-home");
+    const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
+    await writeServiceFixture(firstSourcePath, CURRENT_IDENTITY);
+    await writeServiceFixture(secondSourcePath, UNEXPECTED_IDENTITY);
+    await ensureCodexComputerUseServiceApp({
+      codexHome,
+      platform: "darwin",
+      sourceAppCandidates: [firstSourcePath],
+      copyServiceApp: copyServiceFixture,
+      inspectServiceApp: inspectServiceFixture,
+    });
+
+    let currentnessChecks = 0;
+    await expect(
+      ensureCodexComputerUseServiceApp({
+        codexHome,
+        platform: "darwin",
+        sourceAppCandidates: [secondSourcePath],
+        copyServiceApp: copyServiceFixture,
+        inspectServiceApp: inspectServiceFixture,
+        assertCurrent: () => {
+          currentnessChecks += 1;
+          if (currentnessChecks === 2) {
+            throw new Error("desktop generation is stale");
+          }
+        },
+      }),
+    ).rejects.toThrow("desktop generation is stale");
+    expect(currentnessChecks).toBe(2);
+
+    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
+    await expect(findInstallDebris(path.dirname(targetPath))).resolves.toEqual([]);
+  });
+
   it("does not provision the macOS service on other platforms", async () => {
     const inspectServiceApp = vi.fn();
     const result = await ensureCodexComputerUseServiceApp({

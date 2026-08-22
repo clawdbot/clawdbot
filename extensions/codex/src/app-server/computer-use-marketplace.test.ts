@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ensureCodexManagedBundledMarketplace,
@@ -10,6 +11,10 @@ import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
 describe("managed Codex bundled marketplace", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
   it("publishes a real reserved root with links to the selected desktop marketplace", async () => {
     const root = tempDirs.make("openclaw-codex-marketplace-");
@@ -60,6 +65,189 @@ describe("managed Codex bundled marketplace", () => {
     expect(results).toEqual([target, target, target]);
     expect(await fs.readlink(path.join(target, "plugins"))).toBe(
       path.join(candidate.bundledMarketplacePath, "plugins"),
+    );
+    expect(
+      (await fs.readdir(path.dirname(target))).filter((entry) =>
+        entry.startsWith(".openai-bundled"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("converges a concurrent replacement to the newly selected desktop source", async () => {
+    const root = tempDirs.make("openclaw-codex-marketplace-transition-");
+    const firstCandidate = await writeCandidate(path.join(root, "first"));
+    const secondCandidate = await writeCandidate(path.join(root, "second"));
+    const agentDir = path.join(root, "agent");
+    const codexHome = path.join(agentDir, "codex-home");
+    const target = resolveCodexManagedBundledMarketplacePath(codexHome);
+    const firstPublishStarted = createDeferred<void>();
+    const releaseFirstPublish = createDeferred<void>();
+    const rename = fs.rename.bind(fs);
+    let heldFirstPublish = false;
+    vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      if (!heldFirstPublish && destination === target) {
+        heldFirstPublish = true;
+        firstPublishStarted.resolve();
+        await releaseFirstPublish.promise;
+      }
+      return await rename(source, destination);
+    });
+
+    const first = ensureCodexManagedBundledMarketplace({
+      codexHome,
+      ownershipRoot: agentDir,
+      appServerCommand: firstCandidate.appServerCommandPath,
+      candidates: [firstCandidate],
+      ownershipCandidates: [firstCandidate, secondCandidate],
+    });
+    await firstPublishStarted.promise;
+    const second = ensureCodexManagedBundledMarketplace({
+      codexHome,
+      ownershipRoot: agentDir,
+      appServerCommand: secondCandidate.appServerCommandPath,
+      candidates: [secondCandidate],
+      ownershipCandidates: [firstCandidate, secondCandidate],
+    });
+    releaseFirstPublish.resolve();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([target, target]);
+    expect(await fs.readlink(path.join(target, "plugins"))).toBe(
+      path.join(secondCandidate.bundledMarketplacePath, "plugins"),
+    );
+    expect(
+      (await fs.readdir(path.dirname(target))).filter((entry) =>
+        entry.startsWith(".openai-bundled"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("does not let a matching fast path outrun a conflicting publication", async () => {
+    const root = tempDirs.make("openclaw-codex-marketplace-conflict-");
+    const firstCandidate = await writeCandidate(path.join(root, "first"));
+    const secondCandidate = await writeCandidate(path.join(root, "second"));
+    const agentDir = path.join(root, "agent");
+    const codexHome = path.join(agentDir, "codex-home");
+    const target = resolveCodexManagedBundledMarketplacePath(codexHome);
+    const ownershipCandidates = [firstCandidate, secondCandidate];
+    await ensureCodexManagedBundledMarketplace({
+      codexHome,
+      ownershipRoot: agentDir,
+      candidates: [secondCandidate],
+      ownershipCandidates,
+    });
+
+    const firstStagingStarted = createDeferred<void>();
+    const releaseFirstStaging = createDeferred<void>();
+    const createStagingDir = fs.mkdtemp.bind(fs);
+    vi.spyOn(fs, "mkdtemp").mockImplementationOnce(async (prefix, options) => {
+      firstStagingStarted.resolve();
+      await releaseFirstStaging.promise;
+      return await createStagingDir(prefix, options);
+    });
+    const first = ensureCodexManagedBundledMarketplace({
+      codexHome,
+      ownershipRoot: agentDir,
+      candidates: [firstCandidate],
+      ownershipCandidates,
+    });
+    await firstStagingStarted.promise;
+    const lstat = fs.lstat.bind(fs);
+    let firstReleased = false;
+    let targetChecksBeforeRelease = 0;
+    vi.spyOn(fs, "lstat").mockImplementation(async (filePath, options) => {
+      if (path.resolve(String(filePath)) === target && !firstReleased) {
+        targetChecksBeforeRelease += 1;
+        if (targetChecksBeforeRelease > 1) {
+          throw new Error("conflicting wrapper fast path ran before active publication settled");
+        }
+        setImmediate(() => {
+          firstReleased = true;
+          releaseFirstStaging.resolve();
+        });
+      }
+      return await lstat(filePath, options);
+    });
+    const second = ensureCodexManagedBundledMarketplace({
+      codexHome,
+      ownershipRoot: agentDir,
+      candidates: [secondCandidate],
+      ownershipCandidates,
+    });
+    const results = await Promise.allSettled([first, second]);
+
+    expect(targetChecksBeforeRelease).toBe(1);
+    expect(results).toEqual([
+      { status: "fulfilled", value: target },
+      { status: "fulfilled", value: target },
+    ]);
+    expect(await fs.readlink(path.join(target, "plugins"))).toBe(
+      path.join(secondCandidate.bundledMarketplacePath, "plugins"),
+    );
+  });
+
+  it("replaces a prior owned wrapper when desktop app selection changes", async () => {
+    const root = tempDirs.make("openclaw-codex-marketplace-owner-transition-");
+    const firstCandidate = await writeCandidate(path.join(root, "first"));
+    const secondCandidate = await writeCandidate(path.join(root, "second"));
+    const agentDir = path.join(root, "agent");
+    const codexHome = path.join(agentDir, "codex-home");
+    const target = resolveCodexManagedBundledMarketplacePath(codexHome);
+    const ownershipCandidates = [firstCandidate, secondCandidate];
+
+    await ensureCodexManagedBundledMarketplace({
+      codexHome,
+      ownershipRoot: agentDir,
+      appServerCommand: firstCandidate.appServerCommandPath,
+      candidates: [firstCandidate],
+      ownershipCandidates,
+    });
+    await ensureCodexManagedBundledMarketplace({
+      codexHome,
+      ownershipRoot: agentDir,
+      appServerCommand: secondCandidate.appServerCommandPath,
+      candidates: [secondCandidate],
+      ownershipCandidates,
+    });
+
+    expect(await fs.readlink(path.join(target, "plugins"))).toBe(
+      path.join(secondCandidate.bundledMarketplacePath, "plugins"),
+    );
+  });
+
+  it("leaves the prior wrapper intact when its generation becomes stale before publication", async () => {
+    const root = tempDirs.make("openclaw-codex-marketplace-stale-");
+    const firstCandidate = await writeCandidate(path.join(root, "first"));
+    const secondCandidate = await writeCandidate(path.join(root, "second"));
+    const agentDir = path.join(root, "agent");
+    const codexHome = path.join(agentDir, "codex-home");
+    const target = resolveCodexManagedBundledMarketplacePath(codexHome);
+    const ownershipCandidates = [firstCandidate, secondCandidate];
+    await ensureCodexManagedBundledMarketplace({
+      codexHome,
+      ownershipRoot: agentDir,
+      candidates: [firstCandidate],
+      ownershipCandidates,
+    });
+
+    let currentnessChecks = 0;
+    await expect(
+      ensureCodexManagedBundledMarketplace({
+        codexHome,
+        ownershipRoot: agentDir,
+        candidates: [secondCandidate],
+        ownershipCandidates,
+        assertCurrent: () => {
+          currentnessChecks += 1;
+          if (currentnessChecks === 2) {
+            throw new Error("desktop generation is stale");
+          }
+        },
+      }),
+    ).rejects.toThrow("desktop generation is stale");
+    expect(currentnessChecks).toBe(2);
+
+    expect(await fs.readlink(path.join(target, "plugins"))).toBe(
+      path.join(firstCandidate.bundledMarketplacePath, "plugins"),
     );
     expect(
       (await fs.readdir(path.dirname(target))).filter((entry) =>

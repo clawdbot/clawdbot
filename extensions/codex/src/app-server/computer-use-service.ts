@@ -64,6 +64,25 @@ type ServiceAppSnapshot = {
   filesystemKey?: string;
 };
 
+/** Finds the first signed native service from one ordered desktop owner set. */
+export async function resolveCodexComputerUseServiceAppSourcePath(params: {
+  platform?: NodeJS.Platform;
+  appServerCommand?: string;
+  sourceAppCandidates?: readonly string[];
+  inspectServiceApp?: InspectServiceApp;
+}): Promise<string | undefined> {
+  const platform = params.platform ?? process.platform;
+  if (platform !== "darwin") {
+    return undefined;
+  }
+  const candidates =
+    params.sourceAppCandidates ??
+    resolveMacOSDesktopCodexComputerUseServiceAppCandidates(platform, params.appServerCommand);
+  return (
+    await findUsableServiceApp(candidates, params.inspectServiceApp ?? inspectTrustedServiceApp)
+  )?.path;
+}
+
 /** Synchronizes the CODEX_HOME native client with the selected signed desktop distribution. */
 export async function ensureCodexComputerUseServiceApp(params: {
   codexHome: string;
@@ -73,6 +92,7 @@ export async function ensureCodexComputerUseServiceApp(params: {
   sourceAppCandidates?: readonly string[];
   copyServiceApp?: CopyServiceApp;
   inspectServiceApp?: InspectServiceApp;
+  assertCurrent?: () => void;
 }): Promise<CodexComputerUseServiceStatus> {
   const platform = params.platform ?? process.platform;
   if (platform !== "darwin") {
@@ -126,6 +146,7 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
   sourceAppCandidates?: readonly string[];
   copyServiceApp?: CopyServiceApp;
   inspectServiceApp?: InspectServiceApp;
+  assertCurrent?: () => void;
 }): Promise<CodexComputerUseServiceStatus> {
   const inspectServiceApp = params.inspectServiceApp ?? inspectTrustedServiceApp;
   const candidates = params.sourceAppCandidates ?? [];
@@ -187,6 +208,7 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
     await assertNotSymlink(operationTargetPath, "Computer Use service target");
     if (await pathExists(operationTargetPath)) {
       await assertOwnedServiceParentStable(ownedParent);
+      params.assertCurrent?.();
       await fs.rename(operationTargetPath, backupPath);
       await assertOwnedServiceParentStable(ownedParent);
       backupCreated = true;
@@ -218,6 +240,7 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
     }
     try {
       await assertOwnedServiceParentStable(ownedParent);
+      params.assertCurrent?.();
       await fs.rename(stagedPath, operationTargetPath);
       await assertOwnedServiceParentStable(ownedParent);
     } catch (error) {
