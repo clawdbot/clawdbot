@@ -103,9 +103,14 @@ sha256="$(sha256sum "$script" | cut -d ' ' -f 1)"
 $lane mock --lane baseline --script "$script" "$sha256"
 tool_sent="$($lane send --lane baseline --text '@{sut} inspect the staged PDF with the pdf tool')"
 tool_message_id="$(jq -er '.sent.messageId' <<<"$tool_sent")"
+$lane observe --lane baseline --seconds 120 --until-provider-requests 3
+requests="$($lane requests --lane baseline)"
+jq -e '[.requests[] | .body.input[]? | select(.type == "function_call_output"
+  and .call_id == "call_mantis_pdf_exec")] | length > 0' <<<"$requests"
 $lane finish --lane baseline --focus-message-id "$tool_message_id"
 ```
 
-The follow-up provider request carries
-`{"type":"function_call_output","call_id":"call_mantis_pdf_exec","output":"<serialized exec result>"}`.
-Repeat the same script, turn, and finish for `candidate`.
+`finish` tears the lane down, so wait for the cumulative provider-request count
+(staging turn, exec turn, follow-up) and assert the recorded
+`function_call_output` before finishing; its `output` carries the serialized
+exec result. Repeat the same script, turn, wait, and assertions for `candidate`.
