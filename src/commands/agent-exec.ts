@@ -19,6 +19,7 @@ import type {
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayLockIdentity, GatewayLockOptions } from "../infra/gateway-lock.js";
 import { writeRuntimeJson, writeRuntimeStdout, type RuntimeEnv } from "../runtime.js";
+import { resolveAgentExecRequestedToolPolicies } from "./agent-exec-tool-policy.js";
 
 const AGENT_EXEC_MESSAGE_MAX_BYTES = 4 * 1024 * 1024;
 const AGENT_EXEC_DEFAULT_TIMEOUT_SECONDS = 600;
@@ -271,19 +272,18 @@ function exitCodeForEnvelope(envelope: AgentExecEnvelope): 0 | 1 | 2 {
 function normalizeCodeMode(
   value: AgentExecCliOptions["codeMode"],
 ): false | "auto" | true | undefined {
-  if (value === undefined) {
-    return undefined;
+  switch (value) {
+    case undefined:
+      return undefined;
+    case "direct":
+      return false;
+    case "auto":
+      return "auto";
+    case "code":
+      return true;
+    default:
+      throw new Error("--code-mode must be one of direct, auto, code.");
   }
-  if (value === "direct") {
-    return false;
-  }
-  if (value === "auto") {
-    return "auto";
-  }
-  if (value === "code") {
-    return true;
-  }
-  throw new Error("--code-mode must be one of direct, auto, code.");
 }
 
 /**
@@ -333,33 +333,12 @@ function buildExecRunOverlay(params: {
   opts: Pick<AgentExecCliOptions, "alsoAllowTool" | "codeMode" | "localModelLean">;
 }): OpenClawConfig {
   const codeMode = normalizeCodeMode(params.opts.codeMode);
-  const requestedTools = params.opts.alsoAllowTool?.map((value) => value.trim()) ?? [];
-  if (requestedTools.some((value) => !value)) {
-    throw new Error("--also-allow-tool requires a non-empty tool name.");
-  }
-  const globalAllow = params.base.tools?.allow ?? [];
-  const requestedToolPolicy =
-    requestedTools.length === 0
-      ? undefined
-      : globalAllow.length > 0
-        ? { allow: [...new Set([...globalAllow, ...requestedTools])] }
-        : {
-            alsoAllow: [...new Set([...(params.base.tools?.alsoAllow ?? []), ...requestedTools])],
-          };
-  const selectedAgentTools = params.agentId
-    ? params.base.agents?.entries?.[params.agentId]?.tools
-    : undefined;
-  const selectedAgentAllow = selectedAgentTools?.allow ?? [];
-  const selectedAgentRequestedToolPolicy =
-    requestedTools.length === 0 || !selectedAgentTools
-      ? undefined
-      : selectedAgentAllow.length > 0
-        ? { allow: [...new Set([...selectedAgentAllow, ...requestedTools])] }
-        : selectedAgentTools.alsoAllow !== undefined
-          ? {
-              alsoAllow: [...new Set([...selectedAgentTools.alsoAllow, ...requestedTools])],
-            }
-          : undefined;
+  const { requestedToolPolicy, selectedAgentRequestedToolPolicy } =
+    resolveAgentExecRequestedToolPolicies({
+      base: params.base,
+      agentId: params.agentId,
+      requestedToolNames: params.opts.alsoAllowTool,
+    });
   // A per-agent `workspace` outranks `agents.defaults`, so pinning only the
   // defaults would let an inherited entry silently run the turn against a
   // different repository. Override every configured entry as well.
