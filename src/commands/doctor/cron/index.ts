@@ -299,7 +299,7 @@ export async function collectLegacyCronStoreHealthFindings(params: {
           message: `${pluralize(names.length, "tool-bearing automation")} ${description}.`,
           path: sqliteStorePath,
           requirement,
-          fixHint: `Review with ${formatCliCommand("openclaw automations list")} and reauthorize with ${formatCliCommand("openclaw automations edit <id> --tools <tool,...>")}.`,
+          fixHint: `Review with ${formatCliCommand("openclaw automations list --all")} and reauthorize with ${formatCliCommand("openclaw automations edit <id> --tools <tool,...>")}.`,
         }),
       );
     }

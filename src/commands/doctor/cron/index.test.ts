@@ -311,6 +311,41 @@ describe("collectLegacyCronStoreHealthFindings", () => {
     ).resolves.toEqual([]);
   });
 
+  it("includes disabled authority debt in the remediation inventory", async () => {
+    const storePath = await makeTempStorePath();
+    const legacyAuthorityJob = {
+      owner: { agentId: "main", sessionKey: "agent:main:discord:group:ops" },
+      payload: { kind: "agentTurn", message: "run", toolsAllow: ["write"] },
+    };
+    await writeCurrentCronStore(storePath, [
+      createCurrentCronJob({
+        ...legacyAuthorityJob,
+        id: "legacy-authority-enabled",
+        name: "Enabled authority debt",
+      }),
+      createCurrentCronJob({
+        ...legacyAuthorityJob,
+        id: "legacy-authority-disabled",
+        name: "Disabled authority debt",
+        enabled: false,
+      }),
+    ]);
+
+    const findings = await collectLegacyCronStoreHealthFindings({
+      cfg: createCronConfig(storePath),
+    });
+    const finding = findings.find(
+      ({ requirement }) => requirement === "cron-scheduled-authority-reauthorization",
+    );
+
+    expect(finding).toEqual(
+      expect.objectContaining({
+        message: "2 tool-bearing automations require explicit scheduled authority reauthorization.",
+        fixHint: expect.stringContaining("openclaw automations list --all"),
+      }),
+    );
+  });
+
   it("reports a legacy quarantine sidecar without creating or modifying a SQLite database", async () => {
     const storePath = await makeTempStorePath();
     vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(path.dirname(storePath)));
