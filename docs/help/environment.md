@@ -219,11 +219,11 @@ A missing or empty variable remains visible as `${VAR_NAME}` and emits a warning
 
 See [Configuration: Env var substitution](/gateway/configuration-reference#env-var-substitution) for full details.
 
-This only applies to string values inside `openclaw.json`. It does not run on environment variable values themselves, so `${VAR}` written inside an `.env` file (for example `OPENCLAW_WORKSPACE_DIR=${XDG_CONFIG_HOME}/workspace`) stays literal.
+This applies to string values in `openclaw.json` and in any file it pulls in through `$include`, because substitution runs over the config tree after includes resolve. It does not run on environment variable values themselves, so `${VAR}` written inside an `.env` file (for example `OPENCLAW_WORKSPACE_DIR=${XDG_CONFIG_HOME}/workspace`) reaches OpenClaw literally.
 
-Since nothing expands these values, give path variables fully-resolved absolute paths. `OPENCLAW_WORKSPACE_DIR` does not expand a leading `~` either, because it goes straight to `path.resolve`. `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` do expand `~`. A workspace-local `.env` file drops the entire `OPENCLAW_*` namespace, since it is untrusted input, so set these variables in the trusted global `.env` at `$OPENCLAW_STATE_DIR/.env`, or `~/.openclaw/.env` by default.
+Since OpenClaw does not expand these values, give path variables fully-resolved absolute paths. `OPENCLAW_WORKSPACE_DIR` does not expand a leading `~` either, because it goes straight to `path.resolve`. `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` do expand `~`. A workspace-local `.env` file drops the entire `OPENCLAW_*` namespace, since it is untrusted input, so set these variables in the trusted global `.env` at `$OPENCLAW_STATE_DIR/.env`, or `~/.openclaw/.env` by default.
 
-Docker handles the two halves in separate places. Compose interpolates `${VAR}` inside `docker-compose.yml`, including the `volumes:` entries, but not inside an `.env` file loaded through `env_file:`. The bundled `docker-compose.yml` then pins the container-side paths in its `environment:` block, so `OPENCLAW_WORKSPACE_DIR` from the project `.env` picks which host directory gets bind-mounted rather than the path OpenClaw resolves inside the container. That one stays `/home/node/.openclaw/workspace`.
+Docker Compose is a separate layer with its own rules. It interpolates `${VAR}` inside `docker-compose.yml`, including the `volumes:` entries, and it also expands values in an `.env` file loaded through `env_file:`. Only OpenClaw's own dotenv loader leaves them literal. The bundled `docker-compose.yml` then pins the container-side paths in its `environment:` block, so `OPENCLAW_WORKSPACE_DIR` from the project `.env` picks which host directory gets bind-mounted rather than the path OpenClaw resolves inside the container. That one stays `/home/node/.openclaw/workspace`.
 
 ## Secret refs vs `${ENV}` strings
 
