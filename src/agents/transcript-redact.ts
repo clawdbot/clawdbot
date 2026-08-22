@@ -8,9 +8,9 @@ import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provid
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readLoggingConfig } from "../logging/config.js";
 import {
-  redactSensitiveFieldValueWithConfig,
+  redactModelVisibleSensitiveFieldValueWithConfig,
+  redactModelVisibleToolPayloadTextWithConfig,
   redactSensitiveText,
-  redactToolPayloadTextWithConfig,
 } from "../logging/redact.js";
 import type { ProviderEndpointClass } from "./provider-attribution.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
@@ -35,7 +35,7 @@ function isTranscriptRedactionDisabled(cfg?: OpenClawConfig): boolean {
 }
 
 function redactTranscriptText(value: string, cfg?: OpenClawConfig): string {
-  return redactToolPayloadTextWithConfig(value, resolveTranscriptLoggingConfig(cfg));
+  return redactModelVisibleToolPayloadTextWithConfig(value, resolveTranscriptLoggingConfig(cfg));
 }
 
 function redactTranscriptStructuredFieldValue(
@@ -46,7 +46,11 @@ function redactTranscriptStructuredFieldValue(
   // Preserve pagination state only in transcripts; value-pattern and global log redaction remain.
   return /^(?:next[_-]?)?page[_-]?token$|^page[_-]?cursor$/i.test(key)
     ? redactTranscriptText(value, cfg)
-    : redactSensitiveFieldValueWithConfig(key, value, resolveTranscriptLoggingConfig(cfg));
+    : redactModelVisibleSensitiveFieldValueWithConfig(
+        key,
+        value,
+        resolveTranscriptLoggingConfig(cfg),
+      );
 }
 
 function isPlainTranscriptObject(value: object): value is Record<string, unknown> {

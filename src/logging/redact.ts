@@ -920,6 +920,17 @@ function resolveToolPayloadRedaction(
   loggingConfig: LoggingConfig | undefined = readLoggingConfig(),
 ): RedactOptions {
   const userPatterns = loggingConfig?.redactPatterns;
+  const patterns =
+    userPatterns && userPatterns.length > 0
+      ? [...userPatterns, ...DEFAULT_REDACT_PATTERNS]
+      : undefined;
+  return { mode: "tools", patterns };
+}
+
+function resolveModelVisibleToolPayloadRedaction(
+  loggingConfig: LoggingConfig | undefined = readLoggingConfig(),
+): RedactOptions {
+  const userPatterns = loggingConfig?.redactPatterns;
   return {
     mode: "tools",
     patterns:
@@ -953,6 +964,31 @@ export function redactToolPayloadTextWithConfig(
     });
   }
   return redactSensitiveText(text, resolveToolPayloadRedaction(loggingConfig));
+}
+
+// Model-visible tool output commonly contains source code, so its assignment matching is
+// intentionally narrower than diagnostic and logging redaction.
+export function redactModelVisibleToolPayloadText(text: string): string {
+  return redactModelVisibleToolPayloadTextWithConfig(text, readLoggingConfig());
+}
+
+export function redactModelVisibleToolPayloadTextWithConfig(
+  text: string,
+  loggingConfig?: LoggingConfig,
+): string {
+  if (!text) {
+    return text;
+  }
+  const exactRedacted = redactRegisteredSecretValues(text, maskToken);
+  if (isFullContextToolPayloadRedaction(loggingConfig)) {
+    const resolved = resolveRedactOptions(resolveModelVisibleToolPayloadRedaction(loggingConfig));
+    return redactText(exactRedacted, resolved.patterns, {
+      fullContext: true,
+      redactFormBodies: resolved.redactFormBodies,
+      redactStructuredAuthHeaders: resolved.redactStructuredAuthHeaders,
+    });
+  }
+  return redactSensitiveText(text, resolveModelVisibleToolPayloadRedaction(loggingConfig));
 }
 
 export function isSensitiveFieldKey(key: string): boolean {
@@ -1043,6 +1079,18 @@ export function redactSensitiveFieldValueWithConfig(
     key,
     value,
     resolveToolPayloadRedaction(loggingConfig),
+  );
+}
+
+export function redactModelVisibleSensitiveFieldValueWithConfig(
+  key: string,
+  value: string,
+  loggingConfig?: LoggingConfig,
+): string {
+  return redactSensitiveFieldValueWithOptions(
+    key,
+    value,
+    resolveModelVisibleToolPayloadRedaction(loggingConfig),
   );
 }
 
