@@ -353,19 +353,19 @@ describe("gateway register option collisions", () => {
         expectLocalGatewayCall("diagnostics.stability", 19095, { limit: 25 });
       },
     },
-    {
-      name: "falls back for non-decimal usage-cost --days values",
-      argv: ["gateway", "usage-cost", "--days", "1e3", "--json"],
-      assert: () => {
-        expect(callGatewayCli).toHaveBeenCalledTimes(1);
-        const [method, _opts, params] = firstGatewayCall();
-        expect(method).toBe("usage.cost");
-        expect(params).toEqual({ days: 30 });
-      },
-    },
   ])("$name", async ({ argv, assert }) => {
     await sharedProgram.parseAsync(argv, { from: "user" });
     assert();
+  });
+
+  it("rejects non-decimal usage-cost --days values instead of silently defaulting", async () => {
+    await sharedProgram.parseAsync(["gateway", "usage-cost", "--days", "1e3", "--json"], {
+      from: "user",
+    });
+
+    expect(callGatewayCli).not.toHaveBeenCalled();
+    expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining("Invalid --days"));
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it.each([
