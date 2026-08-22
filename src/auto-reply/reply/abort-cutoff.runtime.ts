@@ -1,3 +1,4 @@
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 /** Runtime persistence helper for clearing abort-cutoff state from sessions. */
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -16,17 +17,18 @@ export async function clearAbortCutoffInSessionRuntime(params: {
   }
 
   applyAbortCutoffToSessionEntry(sessionEntry, undefined);
-  const updatedAt = Date.now();
+  // Bookkeeping clear must not consume the legacy updatedAt=0 pending-reset marker.
+  const updatedAt = resolveBookkeepingUpdatedAt(sessionEntry.updatedAt);
   sessionEntry.updatedAt = updatedAt;
   sessionStore[sessionKey] = sessionEntry;
 
   if (storePath) {
     await patchSessionEntryCore(
       { storePath, sessionKey },
-      () => ({
+      (entry) => ({
         abortCutoffMessageSid: undefined,
         abortCutoffTimestamp: undefined,
-        updatedAt,
+        updatedAt: resolveBookkeepingUpdatedAt(entry.updatedAt),
       }),
       { fallbackEntry: sessionEntry },
     );

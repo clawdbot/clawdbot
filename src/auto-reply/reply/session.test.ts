@@ -4444,6 +4444,77 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
+  it("retains the pending-reset marker through owner usage accounting until the rollover", async () => {
+    vi.useFakeTimers();
+    const existingSessionId = "accounting-tombstone-session";
+    let operation: ReturnType<typeof replyRunRegistry.begin> | undefined;
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-accounting-tombstone-");
+      const sessionKey = "agent:main:telegram:dm:accounting-tombstone-user";
+      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: 0,
+        },
+      });
+      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+      operation = replyRunRegistry.begin({
+        sessionKey,
+        sessionId: existingSessionId,
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+
+      const cfg = {
+        session: { store: storePath, reset: { mode: "daily", atHour: 4 } },
+      } as OpenClawConfig;
+      const initTurn = (body: string) =>
+        initSessionState({
+          ctx: {
+            Body: body,
+            RawBody: body,
+            CommandBody: body,
+            From: "user-accounting-tombstone",
+            To: "bot",
+            ChatType: "direct",
+            SessionKey: sessionKey,
+            Provider: "telegram",
+            Surface: "telegram",
+          },
+          cfg,
+          commandAuthorized: true,
+        });
+
+      const deferred = await initTurn("hello while active");
+      expect(deferred.isNewSession).toBe(false);
+      expect(readSessionStoreFast(storePath)[sessionKey]?.updatedAt).toBe(0);
+
+      // The active owner's final usage accounting is bookkeeping: it must not
+      // consume the retained pending-reset marker before the deferred rollover.
+      await persistSessionUsageUpdate({
+        storePath,
+        sessionKey,
+        cfg,
+        usage: { input: 12, output: 4 },
+        modelUsed: "claude",
+        providerUsed: "anthropic",
+      });
+      expect(readSessionStoreFast(storePath)[sessionKey]?.updatedAt).toBe(0);
+
+      operation.complete();
+      const rolledOver = await initTurn("hello after run finished");
+      expect(rolledOver.isNewSession).toBe(true);
+      expect(rolledOver.previousSessionEntry?.sessionId).toBe(existingSessionId);
+      expect(readSessionStoreFast(storePath)[sessionKey]?.updatedAt).toBeGreaterThan(0);
+    } finally {
+      operation?.complete();
+      vi.useRealTimers();
+    }
+  });
+
   it("does not re-arm the pending-reset marker when an explicit reset lands during an active run", async () => {
     vi.useFakeTimers();
     const existingSessionId = "explicit-reset-tombstone-session";

@@ -5,6 +5,7 @@ import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { consolidateLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
@@ -79,7 +80,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     sessionKey &&
     activeSessionEntry.groupActivationNeedsSystemIntro
   ) {
-    const updatedAt = Date.now();
+    const updatedAt = resolveBookkeepingUpdatedAt(activeSessionEntry.updatedAt);
     activeSessionEntry.groupActivationNeedsSystemIntro = false;
     activeSessionEntry.updatedAt = updatedAt;
     activeSessionStore[sessionKey] = activeSessionEntry;
@@ -202,7 +203,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
       : undefined;
     if (fallbackStateEntry) {
       fallbackStateEntry.fallbackNotice = fallbackNotice;
-      fallbackStateEntry.updatedAt = Date.now();
+      fallbackStateEntry.updatedAt = resolveBookkeepingUpdatedAt(fallbackStateEntry.updatedAt);
       activeSessionEntry = fallbackStateEntry;
     }
     if (sessionKey && fallbackStateEntry && activeSessionStore) {

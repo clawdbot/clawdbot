@@ -1,4 +1,5 @@
 // Builds message body text from session state and reply metadata.
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { setAbortMemory } from "./abort-primitives.js";
@@ -32,7 +33,9 @@ export async function applySessionHints(params: {
     // The abort hint is one-shot; clear durable state once it is added.
     const sessionEntry = params.sessionEntryHandle?.getCurrent() ?? params.sessionEntry;
     if (sessionEntry && params.sessionEntryHandle && params.sessionKey) {
-      const updatedAt = Date.now();
+      // Clearing the one-shot hint is bookkeeping: it must not consume the
+      // legacy updatedAt=0 pending-reset marker.
+      const updatedAt = resolveBookkeepingUpdatedAt(sessionEntry.updatedAt);
       params.sessionEntryHandle.patchCurrent({
         abortedLastRun: false,
         updatedAt,
@@ -45,15 +48,15 @@ export async function applySessionHints(params: {
             storePath: params.storePath,
             sessionKey,
           },
-          () => ({
+          (entry) => ({
             abortedLastRun: false,
-            updatedAt,
+            updatedAt: resolveBookkeepingUpdatedAt(entry.updatedAt),
           }),
           { fallbackEntry: params.sessionEntryHandle.getCurrent() ?? sessionEntry },
         );
       }
     } else if (sessionEntry && params.sessionStore && params.sessionKey) {
-      const updatedAt = Date.now();
+      const updatedAt = resolveBookkeepingUpdatedAt(sessionEntry.updatedAt);
       sessionEntry.abortedLastRun = false;
       sessionEntry.updatedAt = updatedAt;
       params.sessionStore[params.sessionKey] = sessionEntry;
@@ -65,9 +68,9 @@ export async function applySessionHints(params: {
             storePath: params.storePath,
             sessionKey,
           },
-          () => ({
+          (entry) => ({
             abortedLastRun: false,
-            updatedAt,
+            updatedAt: resolveBookkeepingUpdatedAt(entry.updatedAt),
           }),
           { fallbackEntry: sessionEntry },
         );

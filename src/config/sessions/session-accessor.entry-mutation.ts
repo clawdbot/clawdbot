@@ -4,6 +4,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { resolveBookkeepingUpdatedAt } from "./reset-policy.js";
 import {
   resolveAccessStorePath,
   loadSessionEntry,
@@ -325,7 +326,12 @@ export async function markSessionAbortTarget(params: {
         const entry = {
           ...currentEntry,
           abortedLastRun: true,
-          updatedAt: params.now?.() ?? Date.now(),
+          // Marking an abort is bookkeeping: it must not consume the legacy
+          // updatedAt=0 pending-reset marker.
+          updatedAt: resolveBookkeepingUpdatedAt(
+            currentEntry.updatedAt,
+            params.now?.() ?? Date.now(),
+          ),
         };
         applySessionAbortCutoff(
           entry,

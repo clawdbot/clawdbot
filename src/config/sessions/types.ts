@@ -753,6 +753,13 @@ function resolveMergedUpdatedAt(
   if (options?.policy === "preserve-activity" && existing) {
     return existingUpdatedAt ?? patchUpdatedAt ?? now;
   }
+  // The legacy updatedAt=0 pending-reset marker (see evaluateSessionFreshness)
+  // is a one-time reset contract: bookkeeping activity touches must not lift it,
+  // or the required reset is silently skipped. Only identity-changing writes
+  // (the rollover that performs the reset) mint a fresh updatedAt.
+  if (existingUpdatedAt === 0 && (!patch.sessionId || patch.sessionId === existing?.sessionId)) {
+    return 0;
+  }
   return Math.max(existingUpdatedAt ?? 0, patchUpdatedAt ?? 0, now);
 }
 

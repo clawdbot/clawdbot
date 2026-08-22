@@ -1,5 +1,6 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
@@ -229,7 +230,9 @@ export async function runReplyAgent(
     if (!activeSessionEntry || !activeSessionStore || !sessionKey) {
       return;
     }
-    const updatedAt = Date.now();
+    // Bookkeeping touches must not consume the legacy updatedAt=0 pending-reset
+    // marker while the owning run is still active.
+    const updatedAt = resolveBookkeepingUpdatedAt(activeSessionEntry.updatedAt);
     activeSessionEntry.updatedAt = updatedAt;
     activeSessionStore[sessionKey] = activeSessionEntry;
     if (storePath) {

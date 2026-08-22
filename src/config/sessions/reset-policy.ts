@@ -131,6 +131,20 @@ function resolveTimestamp(value: number | undefined, now?: number): number | und
   return value;
 }
 
+/**
+ * Resolves the `updatedAt` a bookkeeping write may persist. The legacy
+ * `updatedAt === 0` pending-reset marker (see evaluateSessionFreshness) is a
+ * one-time reset contract: generic bookkeeping timestamps must not consume it,
+ * or the required reset is silently skipped once the active run completes.
+ * Only a rollover that performs the pending reset mints a fresh `updatedAt`.
+ */
+export function resolveBookkeepingUpdatedAt(
+  currentUpdatedAt: number | undefined,
+  now: number = Date.now(),
+): number {
+  return currentUpdatedAt === 0 ? 0 : now;
+}
+
 function normalizeResetAtHour(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return DEFAULT_RESET_AT_HOUR;

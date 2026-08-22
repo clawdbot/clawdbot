@@ -10,6 +10,7 @@ import type { SessionResetType } from "./reset-policy.js";
 /** Public reset policy exports plus helpers that classify direct, group, and thread sessions. */
 export {
   evaluateSessionFreshness,
+  resolveBookkeepingUpdatedAt,
   resolveSessionResetPolicy,
   type SessionFreshness,
   type SessionResetMode,

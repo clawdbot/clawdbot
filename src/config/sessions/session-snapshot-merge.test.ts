@@ -652,3 +652,20 @@ describe("session snapshot merge", () => {
     expect(merged.mainRestartRecovery?.reservation).toBeUndefined();
   });
 });
+
+describe("pending-reset marker retention", () => {
+  it("keeps the legacy updatedAt=0 marker through bookkeeping patches", () => {
+    const tombstoned: SessionEntry = { sessionId: "session-1", updatedAt: 0 };
+    const next = mergeSessionEntry(tombstoned, { label: "touched", updatedAt: Date.now() });
+    expect(next.updatedAt).toBe(0);
+  });
+
+  it("mints a fresh updatedAt when a patch rotates the session identity", () => {
+    const tombstoned: SessionEntry = { sessionId: "session-1", updatedAt: 0 };
+    const next = mergeSessionEntry(tombstoned, {
+      sessionId: "session-2",
+      updatedAt: Date.now(),
+    });
+    expect(next.updatedAt).toBeGreaterThan(0);
+  });
+});

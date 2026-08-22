@@ -21,6 +21,7 @@ import {
 import { inferToolMetaFromArgsCore, isCommandBearingToolCall } from "../../agents/tool-display.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
 import { emitAgentEvent, withAgentRunLifecycleGeneration } from "../../infra/agent-events.js";
@@ -245,7 +246,8 @@ export async function clearCliSessionBindingForRun(params: {
       return;
     }
     clearCliSession(entry, params.provider);
-    entry.updatedAt = updatedAt;
+    // Bookkeeping clear must not consume the legacy updatedAt=0 pending-reset marker.
+    entry.updatedAt = resolveBookkeepingUpdatedAt(entry.updatedAt, updatedAt);
   };
   clearEntry(params.activeSessionEntry);
   clearEntry(params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
