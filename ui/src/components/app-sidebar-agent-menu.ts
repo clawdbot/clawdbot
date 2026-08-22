@@ -52,6 +52,14 @@ const AGENT_VALUE_PREFIX = "agent:";
 const COMMAND_VALUE_PREFIX = "command:";
 const LINK_VALUE_PREFIX = "link:";
 
+function sidebarMenuItems(dropdown: Element | null) {
+  return [
+    ...(dropdown?.querySelectorAll<HTMLElement & { active: boolean }>(
+      ":scope > wa-dropdown-item:not([disabled]), :scope > .sidebar-agent-menu__agent-grid > wa-dropdown-item:not([disabled])",
+    ) ?? []),
+  ];
+}
+
 // Nested overlays bubble lifecycle events through the dropdown. Only the
 // owner's completed hide may remove its menu or consume its Escape state.
 function closeMenuAfterOwnDropdownHide(event: Event, onClose: (restoreFocus?: boolean) => void) {
@@ -66,11 +74,7 @@ function moveSidebarMenuFocus(event: KeyboardEvent): boolean {
     return false;
   }
   const dropdown = (event.currentTarget as HTMLElement).closest("wa-dropdown");
-  const items = [
-    ...(dropdown?.querySelectorAll<HTMLElement & { active: boolean }>(
-      ":scope > wa-dropdown-item:not([disabled]), :scope > .sidebar-agent-menu__agent-grid > wa-dropdown-item:not([disabled])",
-    ) ?? []),
-  ];
+  const items = sidebarMenuItems(dropdown);
   const footer = dropdown?.querySelector<HTMLElement>(".sidebar-identity-menu__footer");
   const controls = [
     ...items,
@@ -96,6 +100,18 @@ function moveSidebarMenuFocus(event: KeyboardEvent): boolean {
   items.forEach((item) => (item.active = item === target));
   target.focus({ preventScroll: true });
   return true;
+}
+
+function focusActiveAgentMenuItem(dropdown: HTMLElement) {
+  const items = sidebarMenuItems(dropdown);
+  const target =
+    items.find((item) => item.classList.contains("sidebar-agent-menu__agent-switch--active")) ??
+    items.find((item) => item.classList.contains("sidebar-agent-menu__agent-switch"));
+  if (!target) {
+    return;
+  }
+  items.forEach((item) => (item.active = item === target));
+  target.focus({ preventScroll: true });
 }
 
 type AgentMenuAgent = {
@@ -333,10 +349,28 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
             (event.currentTarget as HTMLElement)
               .querySelector<HTMLInputElement>(".sidebar-agent-menu__filter input")
               ?.focus();
+          } else {
+            focusActiveAgentMenuItem(event.currentTarget as HTMLElement);
           }
         }}
-        @keydown=${(event: KeyboardEvent) =>
-          trackDropdownKeyboardDismissal(event, params.onTabAway)}
+        @keydown=${(event: KeyboardEvent) => {
+          if (moveSidebarMenuFocus(event)) {
+            return;
+          }
+          const item =
+            event.target instanceof HTMLElement
+              ? event.target.closest<HTMLElement>(
+                  ".sidebar-agent-menu__agent-grid > wa-dropdown-item:not([disabled])",
+                )
+              : null;
+          if ((event.key === "Enter" || event.key === " ") && item) {
+            event.preventDefault();
+            event.stopPropagation();
+            item.click();
+            return;
+          }
+          trackDropdownKeyboardDismissal(event, params.onTabAway);
+        }}
         @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
       >
         <button

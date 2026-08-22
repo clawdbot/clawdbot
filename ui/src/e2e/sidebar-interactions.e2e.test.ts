@@ -194,7 +194,7 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const agentsList = {
-      agents: [{ id: "main" }, { id: "research" }],
+      agents: [{ id: "main" }, { id: "research" }, { id: "forge" }],
       defaultId: "main",
       mainKey: "main",
       scope: "agent",
@@ -215,6 +215,10 @@ suite.define(() => {
                   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
                 name: "Research",
               },
+            },
+            {
+              match: { agentId: "forge" },
+              response: { agentId: "forge", avatar: "", emoji: "🔧", name: "Forge" },
             },
           ],
         },
@@ -239,7 +243,7 @@ suite.define(() => {
       await expect
         .poll(() =>
           researchSwitch.evaluate(
-            (element) => element.parentElement?.matches("wa-dropdown.sidebar-agent-menu") ?? false,
+            (element) => element.parentElement?.matches(".sidebar-agent-menu__agent-grid") ?? false,
           ),
         )
         .toBe(true);
