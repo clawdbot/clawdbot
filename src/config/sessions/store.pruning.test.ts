@@ -605,6 +605,10 @@ describe("pruneStaleModelRunEntries", () => {
     expect(store).toHaveProperty(staleModelRun);
     expect(pruneStaleModelRunEntries(store, null)).toBe(0);
     expect(store).toHaveProperty(staleModelRun);
+    expect(pruneStaleModelRunEntries(store, 0)).toBe(0);
+    expect(store).toHaveProperty(staleModelRun);
+    expect(pruneStaleModelRunEntries(store, -DAY_MS)).toBe(0);
+    expect(store).toHaveProperty(staleModelRun);
   });
 
   it("preserves model-locked harness sessions from model-run pruning", () => {
