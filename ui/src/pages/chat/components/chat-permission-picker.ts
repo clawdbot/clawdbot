@@ -167,7 +167,6 @@ export function renderChatPermissionPicker(params: ChatPermissionPickerProps) {
           </wa-dropdown-item>
         `;
       })}
-      <div class="chat-controls__permission-scope">${t("chat.permissionControls.nextRun")}</div>
       ${params.sessionRoot
         ? html`
             <div

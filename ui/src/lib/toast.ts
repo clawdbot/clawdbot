@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { styleMap } from "lit/directives/style-map.js";
 import { state } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
@@ -10,6 +11,9 @@ export type ToastOptions = {
   /** A template lets a message name a destination the operator can actually open,
    * instead of spelling out a settings path the toast then makes them find. */
   message: string | TemplateResult;
+  /** Positions a compact toast at the top center of the owning surface. */
+  anchor?: Element;
+  icon?: TemplateResult;
   actionLabel?: string;
   onAction?: () => void;
   onDismiss?: (reason: ToastDismissReason) => void;
@@ -83,8 +87,27 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
     if (!toast) {
       return nothing;
     }
+    const anchorRect = toast.anchor?.isConnected ? toast.anchor.getBoundingClientRect() : null;
+    const anchored = anchorRect !== null && anchorRect.width > 0;
     return html`
-      <div class="app-toast" role="status" aria-live="polite" aria-atomic="true">
+      <div
+        class="app-toast ${anchored ? "app-toast--anchored" : ""}"
+        style=${styleMap(
+          anchored
+            ? {
+                "--app-toast-anchor-center": `${anchorRect.left + anchorRect.width / 2}px`,
+                "--app-toast-anchor-top": `${anchorRect.top}px`,
+                "--app-toast-anchor-width": `${anchorRect.width}px`,
+              }
+            : {},
+        )}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        ${toast.icon
+          ? html`<span class="app-toast__icon" aria-hidden="true">${toast.icon}</span>`
+          : nothing}
         <span class="app-toast__message"
           >${typeof toast.message === "string"
             ? formatUiExternalText(toast.message)

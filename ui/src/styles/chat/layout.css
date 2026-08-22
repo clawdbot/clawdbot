@@ -4936,13 +4936,6 @@ button.chat-pr__diff {
   line-height: 1.35;
 }
 
-.chat-controls__permission-scope {
-  padding: 6px 4px 2px;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.35;
-}
-
 .chat-controls__permission-shortcut {
   color: var(--muted);
   font-family: var(--mono);

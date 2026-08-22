@@ -5713,7 +5713,7 @@ export const en: TranslationMap = {
     permissionControls: {
       label: "Permissions",
       help: "Choose permissions for new runs.",
-      nextRun: "New runs use this setting. Existing work keeps its current permissions.",
+      nextRun: "New permissions apply to the next run.",
       default: "Default",
       defaultDescription: "Follow the agent's configured policy.",
       rootLabel: "Root",
