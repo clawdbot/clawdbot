@@ -184,15 +184,14 @@ export class GatewayPendingRequests {
       pending.reject(error);
     }
     this.pending.clear();
-    // IDs are tombstoned only for one socket generation. Retired socket frames
-    // are fenced by GatewayProtocolClient before a replacement generation runs.
+    // Request sequences belong to one socket generation. Retired socket frames
+    // are fenced by GatewayProtocolClient before the sequence restarts.
     this.requestSequence = 0;
   }
 
   private allocateRequestId(): string {
     this.requestSequence += 1;
-    const id = this.opts.createRequestId();
-    return this.requestSequence === 1 ? id : `${id}:${this.requestSequence - 1}`;
+    return `${this.requestSequence}:${this.opts.createRequestId()}`;
   }
 
   private finishTiming(
