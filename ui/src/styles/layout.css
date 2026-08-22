@@ -3596,7 +3596,7 @@ openclaw-sidebar-attention {
   gap: 7px;
   margin: 0;
   color: var(--text-strong);
-  font-size: var(--control-ui-text-sm);
+  font-size: calc(var(--control-ui-text-sm) + 1px);
   font-weight: 650;
   line-height: 1.2;
 }
