@@ -21,6 +21,7 @@ describe("new-session model runtime", () => {
         source: "model" as const,
       },
       executionMode: "worker-turn" as const,
+      executionModes: ["worker-turn"] as const,
       expected:
         "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
     },
@@ -33,10 +34,61 @@ describe("new-session model runtime", () => {
         source: "model" as const,
       },
       executionMode: "worker-turn" as const,
+      executionModes: ["worker-turn"] as const,
       expected: undefined,
     },
     {
-      name: "preserves an unknown provider mode",
+      name: "accepts a worker-turn runtime on a profile supporting both execution modes",
+      runtime: {
+        id: "openclaw",
+        cloudPlacementSupported: true,
+        cloudPlacementExecutionMode: "worker-turn" as const,
+        source: "model" as const,
+      },
+      executionMode: "worker-turn" as const,
+      executionModes: ["worker-turn", "remote-exec"] as const,
+      expected: undefined,
+    },
+    {
+      name: "accepts a remote-exec runtime on the same worker-turn-primary profile",
+      runtime: {
+        id: "codex",
+        cloudPlacementSupported: true,
+        cloudPlacementExecutionMode: "remote-exec" as const,
+        source: "model" as const,
+      },
+      executionMode: "worker-turn" as const,
+      executionModes: ["worker-turn", "remote-exec"] as const,
+      expected: undefined,
+    },
+    {
+      name: "rejects a remote-exec runtime when the current profile supports only worker turns",
+      runtime: {
+        id: "codex",
+        cloudPlacementSupported: true,
+        cloudPlacementExecutionMode: "remote-exec" as const,
+        source: "model" as const,
+      },
+      executionMode: "worker-turn" as const,
+      executionModes: ["worker-turn"] as const,
+      expected:
+        "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
+    },
+    {
+      name: "does not fall back to the primary mode when an explicit mode set is empty",
+      runtime: {
+        id: "codex",
+        cloudPlacementSupported: true,
+        cloudPlacementExecutionMode: "remote-exec" as const,
+        source: "model" as const,
+      },
+      executionMode: "remote-exec" as const,
+      executionModes: [] as const,
+      expected:
+        "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
+    },
+    {
+      name: "rejects a provider that advertises no placement execution mode",
       runtime: {
         id: "codex",
         cloudPlacementSupported: true,
@@ -44,7 +96,8 @@ describe("new-session model runtime", () => {
         source: "model" as const,
       },
       executionMode: undefined,
-      expected: undefined,
+      expected:
+        "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
     },
     {
       name: "retains the existing whole-runtime rejection",
@@ -52,11 +105,12 @@ describe("new-session model runtime", () => {
       executionMode: "worker-turn" as const,
       expected: "The acpx runtime does not support cloud workers.",
     },
-  ])("$name", ({ runtime, executionMode, expected }) => {
+  ])("$name", ({ runtime, executionMode, executionModes, expected }) => {
     const profile: DraftCloudProfile = {
       id: "aws",
       providerId: "crabbox",
       ...(executionMode ? { executionMode } : {}),
+      ...(executionModes === undefined ? {} : { executionModes }),
     };
     const control = new NewSessionModelControl(() => undefined);
     vi.spyOn(control, "resolveAgentRuntime").mockReturnValue(runtime);

@@ -295,6 +295,36 @@ describe("sessions.dispatch", () => {
     );
   });
 
+  it("rejects worker-turn before allocation when its profile supports only remote-exec", async () => {
+    mocks.resolveTarget.mockReturnValue(
+      targetWithEntry({
+        sessionId,
+        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+      }),
+    );
+    const dispatch = vi.fn();
+    const respond = await invoke(
+      makeContext({
+        workerEnvironmentService: {
+          supportsExecutionMode: (_profileId: string, mode: "worker-turn" | "remote-exec") =>
+            mode === "remote-exec",
+        } as never,
+        workerPlacementDispatchService: { dispatch },
+        workerSessionPlacementService: { getMany: () => new Map() },
+      }),
+    );
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: expect.stringContaining("supports worker-turn"),
+      }),
+    );
+  });
+
   it("treats a whitespace-only profile as an omitted dispatch target", async () => {
     mocks.resolveTarget.mockReturnValue(targetWithEntry({ sessionId }));
     const dispatch = vi.fn();
@@ -371,7 +401,7 @@ describe("sessions.dispatch", () => {
     );
   });
 
-  it("dispatches codex sessions in remote-exec mode", async () => {
+  it("dispatches codex sessions through SSH without requiring node command allowlisting", async () => {
     mocks.resolveTarget.mockReturnValue(
       targetWithEntry({
         sessionId,
@@ -388,7 +418,8 @@ describe("sessions.dispatch", () => {
     const respond = await invoke(
       makeContext({
         workerEnvironmentService: {
-          supportsExecutionMode: () => true,
+          supportsExecutionMode: (_profileId: string, mode: "worker-turn" | "remote-exec") =>
+            mode === "remote-exec",
         } as never,
         workerPlacementDispatchService: { dispatch },
         workerSessionPlacementService: { getMany: () => new Map() },
@@ -396,7 +427,13 @@ describe("sessions.dispatch", () => {
     );
 
     expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({ executionMode: "remote-exec" }),
+      expect.objectContaining({
+        executionMode: "remote-exec",
+        devicePlacement: {
+          requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+          consumesWorkerSlot: false,
+        },
+      }),
       expect.any(Function),
       undefined,
     );
@@ -437,7 +474,7 @@ describe("sessions.dispatch", () => {
       expect.objectContaining({
         code: ErrorCodes.INVALID_REQUEST,
         message:
-          "selected cloud worker provider does not support the remote-exec execution mode required by runtime codex; use an approved paired device or a provider that advertises remote-exec",
+          'runtime codex requires a cloud worker provider that supports remote-exec; choose a compatible provider, or select an agent/model route with agentRuntime.id "openclaw"',
       }),
     );
   });
@@ -986,6 +1023,7 @@ describe("sessions.dispatch", () => {
         agentId: "main",
         executionMode: "worker-turn",
         profileId: "test",
+        devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
       }),
       expect.any(Function),
       undefined,

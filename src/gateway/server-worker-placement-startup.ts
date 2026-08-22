@@ -14,6 +14,7 @@ import {
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createGitHubPublicationRuntime } from "./github-publication-runtime.js";
+import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import { createGatewayWorkerPlacementChangePublisher } from "./server-worker-placement-change-events.js";
@@ -175,7 +176,7 @@ export function createGatewayWorkerPlacementRuntime(
       sessionRuntime,
       config: getRuntimeConfig(),
       ...identity,
-      errorMessage: `Session ${identity.sessionKey} changed before paired-device recovery`,
+      errorMessage: `Session ${identity.sessionKey} changed before node-backed placement recovery`,
     });
     const runtime = sessionRuntime.resolveWorkerPlacementSessionRuntime({
       cfg: config,
@@ -187,7 +188,7 @@ export function createGatewayWorkerPlacementRuntime(
       sessionRuntime.resolveWorkerPlacementCapabilities(runtime);
     if (executionMode !== identity.executionMode || !devicePlacement) {
       throw new Error(
-        `runtime ${runtime} no longer supports this paired-device placement; select a compatible runtime or continue on the Gateway`,
+        `runtime ${runtime} no longer supports this node-backed placement; select a compatible runtime or continue on the Gateway`,
       );
     }
     return devicePlacement;
@@ -225,6 +226,25 @@ export function createGatewayWorkerPlacementRuntime(
       environments: params.environments,
       runnerAvailability,
       resolveDevicePlacementRequirement,
+      isCurrentNodePlacement: (node, requirement) => {
+        if (
+          nodeWorkerSupervisorTransport?.isCurrent(
+            node,
+            requirement.consumesWorkerSlot,
+            requirement.requiredNodeCommands,
+          ) !== true
+        ) {
+          return false;
+        }
+        const declaredCommands = [...node.commands];
+        const allowlist = resolveNodeCommandAllowlist(getRuntimeConfig(), {
+          commands: declaredCommands,
+          approvedCommands: declaredCommands,
+        });
+        return requirement.requiredNodeCommands.every(
+          (command) => isNodeCommandAllowed({ command, declaredCommands, allowlist }).ok,
+        );
+      },
       ...workspaceConflictHandlers,
       ...reclaimBarriers,
       runLocalBarrier: async ({
@@ -375,9 +395,20 @@ export function createGatewayWorkerPlacementRuntime(
             await run(worktree.path);
           },
         }),
-      onActivated: (request) => {
-        if (request.deviceId) {
-          void nodeWorkspaceRetention.schedule(request.deviceId);
+      onActivated: ({ sessionId }) => {
+        const placement = params.placements.get(sessionId);
+        if (placement?.state !== "active") {
+          return;
+        }
+        const environment = params.environments.get(placement.environmentId);
+        if (
+          environment?.state === "attached" &&
+          environment.ownerEpoch === placement.activeOwnerEpoch &&
+          environment.attachedSessionIds.length === 1 &&
+          environment.attachedSessionIds[0] === sessionId &&
+          environment.nodeDeviceId
+        ) {
+          void nodeWorkspaceRetention.schedule(environment.nodeDeviceId);
         }
       },
       runMoveBarrier,

@@ -174,7 +174,7 @@ describe("Crabbox worker provider", () => {
         ]),
       });
     });
-    expect(provider.supportedExecutionModes).toEqual(["worker-turn"]);
+    expect(provider.supportedExecutionModes).toEqual(["worker-turn", "remote-exec"]);
     expect(await provider.listMachineOptions?.(PROFILE)).toEqual([
       { id: "tiny", label: "Tiny", cpu: 8, memoryGb: 16 },
       { id: "small", label: "Small", cpu: 16, memoryGb: 32 },
@@ -367,9 +367,15 @@ describe("Crabbox worker provider", () => {
     expect(() => createCrabboxWorkerProvider({ wallpaperPath })).toThrow(message);
   });
 
-  it("returns the environment-bound node after enrollment", async () => {
+  it.each([
+    { name: "the direct-environment default", executionMode: undefined },
+    { name: "an OpenClaw worker turn", executionMode: "worker-turn" },
+    { name: "a Codex remote-exec turn", executionMode: "remote-exec" },
+  ] as const)("returns the same enrolled node transport for $name", async ({ executionMode }) => {
+    const calls: Array<{ argv: string[]; options: Parameters<CrabboxCommandRunner>[1] }> = [];
     let warmed = false;
-    const provider = providerWithRunner(async (argv) => {
+    const provider = providerWithRunner(async (argv, options) => {
+      calls.push({ argv, options });
       if (argv[1] === "warmup") {
         warmed = true;
         return commandResult({ stdout: `leased ${LEASE_ID} slug=test\n` });
@@ -386,11 +392,53 @@ describe("Crabbox worker provider", () => {
         : commandResult({ code: 4, stderr: `lease/server not found: ${argv.at(-2)}` });
     });
 
-    await expect(provider.provision(PROFILE, OPERATION_ID)).resolves.toEqual({
+    const provision =
+      executionMode === undefined
+        ? provider.provision(PROFILE, OPERATION_ID)
+        : provider.provision(PROFILE, OPERATION_ID, { executionMode });
+    await expect(provision).resolves.toEqual({
       leaseId: LEASE_ID,
       node: { deviceId: "device-1" },
       sharedHost: false,
     });
+
+    const enrollmentCall = calls.find(
+      (call) => call.argv[1] === "run" && String(call.options.input).includes("--ephemeral"),
+    );
+    expect(enrollmentCall).toBeDefined();
+    const setup = String(enrollmentCall?.options.input);
+    const setupCodeCleared = "unset CRABBOX_WORKER_SETUP_CODE";
+    expect(setup).toContain(setupCodeCleared);
+    expect(setup.indexOf(setupCodeCleared)).toBeGreaterThan(setup.indexOf('>"$setup_code_file"'));
+    expect(setup.indexOf(setupCodeCleared)).toBeLessThan(setup.indexOf("setsid -f sh -c"));
+    if (executionMode === "remote-exec") {
+      expect(setup).toContain("plugins inspect codex --json");
+      expect(setup).toContain('require("node:child_process").spawnSync');
+      expect(setup).toContain('[launcher,"--version"]');
+      expect(setup).toContain("codex-cli ${runtime.version}");
+      expect(setup).toContain('ln -s "$codex_root" "$state_dir/extensions/codex"');
+      expect(setup).toContain('OPENCLAW_STATE_DIR="$state_dir" openclaw plugins enable codex');
+      expect(setup).toContain(
+        'OPENCLAW_STATE_DIR="$state_dir" npx --yes --package "$package_spec" -- openclaw plugins enable codex',
+      );
+      expect(setup.indexOf("plugins inspect codex --json")).toBeGreaterThan(
+        setup.indexOf(setupCodeCleared),
+      );
+      expect(setup.indexOf("plugins enable codex")).toBeLessThan(
+        setup.lastIndexOf("setsid -f sh -c"),
+      );
+    } else {
+      expect(setup).not.toContain("plugins inspect codex");
+    }
+    expect(setup).not.toContain("plugins install");
+    expect(setup).not.toContain("npm:@openclaw/codex");
+    expect(setup).toContain("connect --target-file");
+    expect(setup).toContain("--ephemeral");
+    expect(setup).not.toContain("secret-setup-value");
+    const commandArguments = calls.flatMap((call) => call.argv);
+    for (const forbiddenArgument of ["remote-exec", "worker-turn", "ssh", "scp", "rsync"]) {
+      expect(commandArguments).not.toContain(forbiddenArgument);
+    }
   });
 
   it("resumes a bound node without replaying the consumed setup code", async () => {

@@ -47,6 +47,8 @@ suite.define(() => {
             {
               id: "aws",
               providerId: "crabbox",
+              executionMode: "worker-turn",
+              executionModes: ["worker-turn"],
               machines: [
                 { id: "standard", label: "Standard", default: true },
                 { id: "fast", label: "Fast" },
@@ -92,7 +94,14 @@ suite.define(() => {
       methodResponses: {
         "environments.list": {
           environments: [],
-          profiles: [{ id: "aws", providerId: "crabbox", executionMode: "worker-turn" }],
+          profiles: [
+            {
+              id: "aws",
+              providerId: "crabbox",
+              executionMode: "worker-turn",
+              executionModes: ["worker-turn"],
+            },
+          ],
         },
         "worktrees.branches": { branches: [], repositoryStatus: "git" },
       },
@@ -113,6 +122,65 @@ suite.define(() => {
       await context.close();
     }
   });
+
+  it.each([
+    { name: "OpenClaw", runtime: "openclaw" },
+    { name: "Codex", runtime: "codex" },
+  ] as const)(
+    "keeps the same multimode Crabbox profile selectable for $name",
+    async ({ runtime }) => {
+      const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, {
+        agentModel: "openai/gpt-5.5",
+        models: [
+          {
+            id: "gpt-5.5",
+            name: "gpt-5.5",
+            provider: "openai",
+            agentRuntime: {
+              id: runtime,
+              cloudPlacementSupported: true,
+              cloudPlacementExecutionMode: runtime === "codex" ? "remote-exec" : "worker-turn",
+              source: "model",
+            },
+          },
+        ],
+        workspace: WORKSPACE,
+        workspaceGit: true,
+        methodResponses: {
+          "environments.list": {
+            environments: [],
+            profiles: [
+              {
+                id: "aws",
+                providerId: "crabbox",
+                executionMode: "worker-turn",
+                executionModes: ["worker-turn", "remote-exec"],
+              },
+            ],
+          },
+          "worktrees.branches": { branches: [], repositoryStatus: "git" },
+        },
+      });
+      try {
+        await page.goto(`${suite.server.baseUrl}new`);
+        await gateway.waitForRequest("environments.list");
+        await gateway.waitForRequest("chat.metadata");
+        await page.locator("#new-session-where-trigger").click();
+
+        const profile = page.locator('[data-value="cloud:aws"]');
+        await profile.waitFor();
+        await expect.poll(() => profile.isEnabled()).toBe(true);
+        await profile.click();
+        await expect
+          .poll(() => page.locator("#new-session-where-trigger").textContent())
+          .toContain("aws");
+      } finally {
+        await context.close();
+      }
+    },
+  );
 
   it("refreshes authoritative device capacity from Gateway topology events", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });

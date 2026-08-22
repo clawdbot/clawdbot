@@ -526,7 +526,7 @@ export function createCrabboxWorkerProvider(
     id: CRABBOX_WORKER_PROVIDER_ID,
     dispose: () => heartbeats.dispose(),
     listMachineOptions,
-    supportedExecutionModes: ["worker-turn"],
+    supportedExecutionModes: ["worker-turn", "remote-exec"],
     provisionBeforeInstallation: true,
     requiresNodeEnrollment: true,
     resolveProvisionTimeoutMs(profile) {
@@ -665,7 +665,11 @@ export function createCrabboxWorkerProvider(
         }
         return await failProvisionAfterCleanup({ ...inspectedParams, id: leaseId }, error);
       }
-      const nodeEnrollmentSetup = createCrabboxNodeEnrollmentSetup({ enrollment, leaseId });
+      const nodeEnrollmentSetup = createCrabboxNodeEnrollmentSetup({
+        enrollment,
+        executionMode: options?.executionMode,
+        leaseId,
+      });
       inspectedParams.inspect = await runProvisionSetupAndWaitReady({
         ...inspectedParams,
         setup: nodeEnrollmentSetup.command,

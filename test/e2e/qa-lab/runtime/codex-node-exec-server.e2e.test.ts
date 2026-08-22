@@ -355,7 +355,7 @@ async function resolveNextApproval(
   }
   expect(pending.request).toMatchObject({
     pluginId: "codex",
-    title: "Run Codex execution on paired device",
+    title: "Run Codex execution on node",
     allowedDecisions: ["allow-once", "deny"],
   });
   await reviewer.request("plugin.approval.resolve", { id: pending.id, decision });
@@ -728,7 +728,7 @@ describe("Codex paired-device exec-server carrier", () => {
         expect(interruptedOutcome).toMatchObject({ status: "error" });
         if (
           typeof interruptedOutcome.error !== "string" ||
-          !/paired.*device disconnected.*fresh attempt/iu.test(interruptedOutcome.error)
+          !/execution node disconnected.*fresh attempt/iu.test(interruptedOutcome.error)
         ) {
           throw new Error(
             `Codex node disconnect omitted actionable guidance: ${JSON.stringify({
@@ -743,7 +743,7 @@ describe("Codex paired-device exec-server carrier", () => {
           );
         }
         expect(interruptedOutcome.error).toEqual(
-          expect.stringMatching(/paired.*device disconnected.*fresh attempt/iu),
+          expect.stringMatching(/execution node disconnected.*fresh attempt/iu),
         );
         await vi.waitFor(
           () => expect(processIsAlive(interruptedProcess)).toBe(false),

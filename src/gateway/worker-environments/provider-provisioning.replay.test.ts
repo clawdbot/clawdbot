@@ -3,13 +3,19 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { WorkerProviderError } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -240,6 +246,20 @@ describe("worker environment service provision replay", () => {
       },
       nodeTunnelManager: nodeTunnelManager as never,
     });
+    bindDeviceWorkerAvailability(restarted, async (nodeId) => ({
+      available: true,
+      node: {
+        nodeId,
+        connId: `conn-${nodeId}`,
+        pairingIdentity: `identity-${nodeId}`,
+        pairingGeneration: `generation-${nodeId}`,
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+        protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+        workerHost: { enabled: true, capacity: { total: 1, available: 1 } },
+        commands: [],
+      },
+    }));
     const recoveryBarrier = vi.fn(async ({ expectedGeneration, environmentId, run }) => {
       expect(placements.get(REQUEST.sessionId)).toMatchObject({
         state: "provisioning",
@@ -255,6 +275,11 @@ describe("worker environment service provision replay", () => {
       placements,
       environments: restarted,
       runnerAvailability: { read: () => undefined, version: () => 0 },
+      resolveDevicePlacementRequirement: async () => ({
+        requiredNodeCommands: [],
+        consumesWorkerSlot: true,
+      }),
+      isCurrentNodePlacement: () => true,
       workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
       runLocalBarrier: async ({ startDispatch }) => startDispatch(),
       runRecoveryBarrier: recoveryBarrier,
