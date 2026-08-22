@@ -136,7 +136,10 @@ describe("scripts/plugin-release-pretag-pack-check.ts real behavior", () => {
         const startedAt = Date.now();
         let thrown: unknown;
         try {
-          await runPluginReleasePretagPackCheck(repoDir, { timeoutMs: 2_000 });
+          // The pretag check starts a real runtime-build process before spawning the packer.
+          // Leave enough startup budget for the nested manifest/CLI boundary to reach the
+          // fixture, while keeping the proof bounded well below the test timeout.
+          await runPluginReleasePretagPackCheck(repoDir, { timeoutMs: 8_000 });
         } catch (error) {
           thrown = error;
         }
@@ -149,7 +152,7 @@ describe("scripts/plugin-release-pretag-pack-check.ts real behavior", () => {
         const proof = {
           timeoutCode: (thrown as { code?: string }).code,
           message: (thrown as Error).message,
-          elapsedWithinBound: Date.now() - startedAt < 15_000,
+          elapsedWithinBound: Date.now() - startedAt < 25_000,
           directExited: !isProcessAlive(directPid),
           descendantExited: !isProcessAlive(descendantPid),
         };
