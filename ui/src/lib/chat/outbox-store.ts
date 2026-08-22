@@ -85,6 +85,9 @@ const storedMainAliasByStorage = new WeakMap<
   Storage,
   Map<string, StoredComposerMainAlias | null>
 >();
+// Projection reads share one normalized snapshot until a canonical write or
+// browser storage event invalidates it; mutation paths still reread for CAS.
+const projectedStoreByStorage = new WeakMap<Storage, Map<string, StoredComposerState>>();
 
 export function subscribeStoredChatOutboxChanges(listener: () => void): () => void {
   storedChatOutboxChangeListeners.add(listener);
@@ -120,6 +123,9 @@ function handleStoredChatOutboxStorageChange(event: StorageEvent): void {
     event.key?.startsWith(STORAGE_KEY_PREFIX) ||
     event.key?.startsWith(LEGACY_STORAGE_KEY_PREFIX)
   ) {
+    if (event.storageArea && event.key) {
+      projectedStoreByStorage.get(event.storageArea)?.delete(event.key);
+    }
     notifyStoredChatOutboxChanges();
   }
 }
@@ -527,11 +533,28 @@ export function readStoredOutboxStore(
   return { version: 2, gatewayOwner: target.gatewayOwner, sessions: {} };
 }
 
+export function readProjectedOutboxStore(
+  storage: Storage,
+  target: ComposerStorageTarget,
+): StoredComposerState {
+  const byKey = projectedStoreByStorage.get(storage);
+  const cached = byKey?.get(target.key);
+  if (cached) {
+    return cached;
+  }
+  const store = readStoredOutboxStore(storage, target);
+  const nextByKey = byKey ?? new Map();
+  nextByKey.set(target.key, store);
+  projectedStoreByStorage.set(storage, nextByKey);
+  return store;
+}
+
 export function writeStoredOutboxStore(
   storage: Storage,
   target: ComposerStorageTarget,
   store: StoredComposerState,
 ): void {
+  projectedStoreByStorage.get(storage)?.delete(target.key);
   const entries = Object.entries(store.sessions);
   const outboxes = entries.filter(([, session]) => session.queue?.length);
   if (outboxes.length > MAX_STORED_SESSIONS) {

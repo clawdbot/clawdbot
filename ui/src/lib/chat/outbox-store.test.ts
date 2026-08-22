@@ -7,6 +7,7 @@ import {
   summarizeStoredChatOutboxes,
 } from "./outbox-store-projection.ts";
 import {
+  readProjectedOutboxStore,
   resolveStoredChatOutboxScope,
   retireStoredComposerDrafts,
   storedChatOutboxScopeKey,
@@ -23,6 +24,38 @@ afterEach(() => {
 });
 
 describe("stored outbox summaries", () => {
+  it("normalizes an unchanged projection once and refreshes after an external write", () => {
+    const unsubscribe = subscribeStoredChatOutboxChanges(() => undefined);
+    const gatewayUrl = "ws://gateway.test/control";
+    const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`;
+    sessionStorage.setItem(
+      storageKey,
+      JSON.stringify({ version: 2, gatewayOwner: gatewayUrl, sessions: {} }),
+    );
+    const target = {
+      gatewayOwner: gatewayUrl,
+      key: storageKey,
+      legacyKey: "unused",
+      legacyOwnerIsUnambiguous: true,
+    };
+    const first = readProjectedOutboxStore(sessionStorage, target);
+    expect(readProjectedOutboxStore(sessionStorage, target)).toBe(first);
+
+    sessionStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        version: 2,
+        gatewayOwner: gatewayUrl,
+        sessions: { "main\u0000agent:main": { draft: "new", updatedAt: 1 } },
+      }),
+    );
+    const storageEvent = new StorageEvent("storage", { key: storageKey });
+    Object.defineProperty(storageEvent, "storageArea", { value: sessionStorage });
+    window.dispatchEvent(storageEvent);
+    expect(readProjectedOutboxStore(sessionStorage, target)).not.toBe(first);
+    unsubscribe();
+  });
+
   it("keeps the exact aliased scope when sessionStorage retirement fails", () => {
     const gatewayUrl = "ws://gateway.test/control";
     const storageKey = `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`;

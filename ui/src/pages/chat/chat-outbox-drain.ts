@@ -1,3 +1,4 @@
+import { computeBackoff } from "@openclaw/retry";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -92,12 +93,12 @@ type StoredChatOutboxDrainLane = {
 
 type StoredChatOutboxClientState = {
   lanes: Map<string, StoredChatOutboxDrainLane>;
-  retryTimers: Map<string, ReturnType<typeof setTimeout>>;
+  retryAttempts: Map<string, number>;
+  retryTimers: Map<string, { timer: ReturnType<typeof setTimeout>; suppressGenericWake: boolean }>;
 };
 
 const STORED_OUTBOX_CONFIRMATION_GRACE_MS = 5_000;
 const STORED_OUTBOX_RETRY_DEFAULT_MS = 500;
-const STORED_OUTBOX_RETRY_MIN_MS = 100;
 const STORED_OUTBOX_RETRY_MAX_MS = 30_000;
 export const UNCONFIRMED_CHAT_SEND_ERROR =
   "Delivery could not be confirmed after reconnect. Check the conversation before retrying.";
@@ -113,6 +114,7 @@ function getStoredChatOutboxClientState(client: GatewayBrowserClient): StoredCha
   }
   const created: StoredChatOutboxClientState = {
     lanes: new Map(),
+    retryAttempts: new Map(),
     retryTimers: new Map(),
   };
   storedChatOutboxClients.set(client, created);
@@ -124,7 +126,7 @@ export function retryableGatewayDelayMs(err: unknown): number | null {
     return null;
   }
   const requested = err.retryAfterMs ?? STORED_OUTBOX_RETRY_DEFAULT_MS;
-  return Math.min(Math.max(requested, STORED_OUTBOX_RETRY_MIN_MS), STORED_OUTBOX_RETRY_MAX_MS);
+  return Math.min(Math.max(requested, 100), STORED_OUTBOX_RETRY_MAX_MS);
 }
 
 export function scheduleStoredChatOutboxRetry(
@@ -132,24 +134,41 @@ export function scheduleStoredChatOutboxRetry(
   scope: StoredChatOutboxScope,
   delayMs: number,
   dependencies: ChatOutboxDrainDependencies,
+  suppressGenericWake = true,
 ) {
   const client = host.client;
   if (!host.connected || !client) {
     return;
   }
   const connectionEpoch = host.connectionEpoch;
-  const timers = getStoredChatOutboxClientState(client).retryTimers;
+  const { retryAttempts, retryTimers } = getStoredChatOutboxClientState(client);
   const key = storedChatOutboxScopeKey(scope);
-  if (timers.has(key)) {
+  if (retryTimers.has(key)) {
     return;
   }
+  const retryDelayMs = suppressGenericWake
+    ? computeBackoff(
+        {
+          initialMs: delayMs,
+          maxMs: STORED_OUTBOX_RETRY_MAX_MS,
+          factor: 2,
+          jitter: 0,
+        },
+        (retryAttempts.get(key) ?? 0) + 1,
+      )
+    : delayMs;
+  if (suppressGenericWake) {
+    retryAttempts.set(key, (retryAttempts.get(key) ?? 0) + 1);
+  } else {
+    retryAttempts.delete(key);
+  }
   const timer = setTimeout(() => {
-    timers.delete(key);
+    retryTimers.delete(key);
     if (host.connected && host.client === client && host.connectionEpoch === connectionEpoch) {
       void scheduleStoredChatOutboxDrain(host, scope, dependencies);
     }
-  }, delayMs);
-  timers.set(key, timer);
+  }, retryDelayMs);
+  retryTimers.set(key, { timer, suppressGenericWake });
 }
 
 function readStoredChatOutbox(
@@ -340,6 +359,7 @@ async function reconcileStoredChatOutboxHead(
           outbox,
           Math.min(STORED_OUTBOX_RETRY_DEFAULT_MS, deadlineMs - now),
           dependencies,
+          false,
         );
         return "blocked";
       }
@@ -643,10 +663,16 @@ export async function scheduleStoredChatOutboxDrain(
     return undefined;
   }
   const key = storedChatOutboxScopeKey(scope);
-  const { lanes, retryTimers } = getStoredChatOutboxClientState(client);
+  const { lanes, retryAttempts, retryTimers } = getStoredChatOutboxClientState(client);
   const retryTimer = retryTimers.get(key);
-  if (retryTimer !== undefined) {
-    clearTimeout(retryTimer);
+  if (retryTimer !== undefined && itemId) {
+    clearTimeout(retryTimer.timer);
+    retryTimers.delete(key);
+    retryAttempts.delete(key);
+  } else if (retryTimer?.suppressGenericWake) {
+    return undefined;
+  } else if (retryTimer !== undefined) {
+    clearTimeout(retryTimer.timer);
     retryTimers.delete(key);
   }
   // Drain ownership follows the live client, never a disconnected pending RPC.
@@ -691,6 +717,9 @@ export async function scheduleStoredChatOutboxDrain(
   })();
   try {
     await lane.promise;
+    if (!retryTimers.has(key)) {
+      retryAttempts.delete(key);
+    }
     return itemId ? lane.outcomes.get(itemId) : undefined;
   } finally {
     if (lanes.get(key) === lane) {

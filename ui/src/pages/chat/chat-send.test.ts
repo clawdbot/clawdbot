@@ -6745,6 +6745,8 @@ describe("handleSendChat", () => {
 
       expect(historyAttempts).toBe(1);
       expect(sendAttempts).toBe(0);
+      await Promise.all(Array.from({ length: 20 }, () => retryReconnectableQueuedChatSends(host)));
+      expect(historyAttempts).toBe(1);
       await vi.advanceTimersByTimeAsync(100);
       // Same fire-and-forget retry hand-off as the send-rejection case above.
       await waitForFast(() => {
