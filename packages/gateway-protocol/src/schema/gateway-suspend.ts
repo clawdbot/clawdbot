@@ -58,9 +58,18 @@ export const GatewaySuspendPrepareBusyResultSchema = closedObject({
   blockers: Type.Array(GatewaySuspendBlockerSchema),
 });
 
+export const GatewaySuspendWakeAtRequirementSchema = closedObject({
+  kind: Type.Literal("at"),
+  atMs: CountSchema,
+});
+
+export const GatewaySuspendWakeExternalEventOnlyRequirementSchema = closedObject({
+  kind: Type.Literal("external-event-only"),
+});
+
 export const GatewaySuspendWakeRequirementSchema = Type.Union([
-  closedObject({ kind: Type.Literal("at"), atMs: CountSchema }),
-  closedObject({ kind: Type.Literal("external-event-only") }),
+  GatewaySuspendWakeAtRequirementSchema,
+  GatewaySuspendWakeExternalEventOnlyRequirementSchema,
 ]);
 
 export const GatewaySuspendPrepareReadyResultSchema = closedObject({

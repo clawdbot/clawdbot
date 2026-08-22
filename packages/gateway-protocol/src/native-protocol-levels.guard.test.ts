@@ -334,6 +334,43 @@ describe("native Gateway protocol levels", () => {
     );
   });
 
+  it("emits the gateway suspension wake policy as a complete Swift union", async () => {
+    const swiftGeneratedPath =
+      "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift";
+    const swiftGenerated = await readRepoFile(swiftGeneratedPath);
+
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /public struct GatewaySuspendWakeAtRequirement: Codable, Sendable \{/,
+      "missing the generated timed wake requirement payload.",
+    );
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /public struct GatewaySuspendWakeExternalEventOnlyRequirement: Codable, Sendable \{/,
+      "missing the generated external-event-only wake requirement payload.",
+    );
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /public enum GatewaySuspendWakeRequirement: Codable, Sendable \{/,
+      "missing the generated wake requirement union.",
+    );
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /case at\(GatewaySuspendWakeAtRequirement\)/,
+      "wake requirement must decode the timed wake policy.",
+    );
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /case externalEventOnly\(GatewaySuspendWakeExternalEventOnlyRequirement\)/,
+      "wake requirement must decode the external-event-only policy.",
+    );
+  });
+
   it("emits the scope upgrade result as a discriminated Swift union", async () => {
     const swiftGeneratedPath =
       "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift";

@@ -1936,6 +1936,99 @@ public struct GatewaySuspendBlocker: Codable, Sendable {
     }
 }
 
+public struct GatewaySuspendWakeAtRequirement: Codable, Sendable {
+    public let kind: String
+    public let atms: Int
+
+    public init(
+        atms: Int
+    )
+    {
+        self.kind = "at"
+        self.atms = atms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case atms = "atMs"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["kind", "atMs"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for GatewaySuspendWakeAtRequirement: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedKind = try container.decode(String.self, forKey: .kind)
+        guard decodedKind == "at" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: container,
+                debugDescription: "Expected kind to equal at"
+            )
+        }
+        self.kind = "at"
+        self.atms = try container.decode(Int.self, forKey: .atms)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("at", forKey: .kind)
+        try container.encode(atms, forKey: .atms)
+    }
+}
+
+public struct GatewaySuspendWakeExternalEventOnlyRequirement: Codable, Sendable {
+    public let kind: String
+
+    public init()
+    {
+        self.kind = "external-event-only"
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+    }
+
+    public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
+        let unexpectedKeys = rawContainer.allKeys
+            .map(\.stringValue)
+            .filter { !Set(["kind"]).contains($0) }
+        if !unexpectedKeys.isEmpty {
+            throw DecodingError.dataCorrupted(
+                .init(
+                    codingPath: rawContainer.codingPath,
+                    debugDescription: "Unexpected keys for GatewaySuspendWakeExternalEventOnlyRequirement: \(unexpectedKeys.sorted().joined(separator: ", "))"
+                )
+            )
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedKind = try container.decode(String.self, forKey: .kind)
+        guard decodedKind == "external-event-only" else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: container,
+                debugDescription: "Expected kind to equal external-event-only"
+            )
+        }
+        self.kind = "external-event-only"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode("external-event-only", forKey: .kind)
+    }
+}
+
 public struct GatewaySuspendPrepareParams: Codable, Sendable {
     public let requestid: String
     public let terminalpolicy: AnyCodable?
@@ -21580,6 +21673,37 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case .projectCloneFailed(let value): try value.encode(to: encoder)
         case .unknownAgentId(let value): try value.encode(to: encoder)
         case .wizardNotFound(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public enum GatewaySuspendWakeRequirement: Codable, Sendable {
+    case at(GatewaySuspendWakeAtRequirement)
+    case externalEventOnly(GatewaySuspendWakeExternalEventOnlyRequirement)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "kind"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "at": self = try .at(GatewaySuspendWakeAtRequirement(from: decoder))
+        case "external-event-only": self = try .externalEventOnly(GatewaySuspendWakeExternalEventOnlyRequirement(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown GatewaySuspendWakeRequirement discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .at(let value): try value.encode(to: encoder)
+        case .externalEventOnly(let value): try value.encode(to: encoder)
         }
     }
 }
