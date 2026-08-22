@@ -100,6 +100,7 @@ function createMockCronService(): CronServiceContract {
       jobs: 0,
       nextWakeAtMs: null,
     })),
+    getSuspendWakeSnapshot: vi.fn(() => ({ complete: false as const })),
     list: vi.fn(async () => []),
     listPage: workflowMocks.cronListPage,
     add: workflowMocks.cronAdd,

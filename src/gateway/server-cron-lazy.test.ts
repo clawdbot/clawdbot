@@ -420,6 +420,7 @@ function createCronService(): GatewayCronServiceContract {
     pauseScheduling: vi.fn(),
     resumeScheduling: vi.fn(),
     status: vi.fn(async () => ({ enabled: true }) as never),
+    getSuspendWakeSnapshot: vi.fn(() => ({ complete: false as const })),
     list: vi.fn(async () => [] as never),
     listPage: vi.fn(async () => ({ items: [], total: 0 }) as never),
     add: vi.fn(async () => ({ ok: true }) as never),
