@@ -237,6 +237,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       ({ isSwarmEnabledInConfig, SwarmRosterHydrator }) => {
         if (
           !this.state ||
+          !this.presented ||
           this.state.connectionEpoch !== sourceEpoch ||
           parentKey !== this.resolveBoardSessionKey()
         ) {
