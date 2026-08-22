@@ -1079,14 +1079,6 @@ extension OnboardingAISetupModel {
             self.finishConnected(kind: kind, activationOwner: activationOwner)
             return nil
         }
-        guard OnboardingSystemAgentResumeStore.markCompleted(
-            ifOwnedBy: context.routeIdentity,
-            activationOwner: activationOwner,
-            defaults: self.defaults)
-        else {
-            self.finishConnected(kind: kind, activationOwner: activationOwner)
-            return nil
-        }
         self.pendingActivationVerification = true
         self.phase = .detecting
         if await self.reconcileActivationAfterGatewayRestart(
@@ -1100,7 +1092,6 @@ extension OnboardingAISetupModel {
             return nil
         }
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return nil }
-        self.retainCompletedReceiptForRetry(context: context)
         self.phase = .ready
         return Self.transportFailure(
             "The Gateway did not finish restarting after AI setup. Try again once it is available.")

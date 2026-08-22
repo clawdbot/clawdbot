@@ -264,13 +264,20 @@ export async function runRemoteGatewayInferenceOnboarding(
     }
     const restartDeadline = Date.now() + GATEWAY_RESTART_WAIT_TIMEOUT_MS;
     let retryDelayMs = 250;
-    let verification: SystemAgentSetupVerifyResult;
+    let verification: SystemAgentSetupVerifyResult | undefined;
     for (;;) {
+      const remainingBeforeAttemptMs = restartDeadline - Date.now();
+      if (activation.gatewayRestartRequired === true && remainingBeforeAttemptMs <= 0) {
+        break;
+      }
       try {
         verification = await request<SystemAgentSetupVerifyResult>({
           method: "openclaw.setup.verify",
           payload: {},
-          timeoutMs: GATEWAY_SETUP_VERIFY_TIMEOUT_MS,
+          timeoutMs:
+            activation.gatewayRestartRequired === true
+              ? Math.min(GATEWAY_SETUP_VERIFY_TIMEOUT_MS, remainingBeforeAttemptMs)
+              : GATEWAY_SETUP_VERIFY_TIMEOUT_MS,
         });
         const retryableResult =
           activation.gatewayRestartRequired === true &&
@@ -297,6 +304,9 @@ export async function runRemoteGatewayInferenceOnboarding(
         await delay(Math.min(requestedDelay, remainingMs));
         retryDelayMs = Math.min(retryDelayMs * 2, 2_000);
       }
+    }
+    if (!verification) {
+      throw new Error("Gateway did not finish restarting before inference verification.");
     }
     assertVerifiedActivation({
       activation,

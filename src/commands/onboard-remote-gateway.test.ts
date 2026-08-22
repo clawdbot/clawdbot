@@ -313,6 +313,56 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
     ]);
   });
 
+  it("bounds a late restart verification call by the remaining deadline", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(45_500).mockReturnValueOnce(1_000);
+    const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
+      if (options.method === "openclaw.setup.detect") {
+        return detectResult();
+      }
+      if (options.method === "openclaw.setup.activate") {
+        return {
+          ok: true,
+          modelRef: "openai/gpt-5.5",
+          latencyMs: 250,
+          lines: ["Default model: openai/gpt-5.5"],
+          gatewayRestartRequired: true,
+        };
+      }
+      if (options.method === "openclaw.setup.verify") {
+        return { ok: true, modelRef: "openai/gpt-5.5", latencyMs: 100 };
+      }
+      throw new Error(`unexpected Gateway method ${options.method}`);
+    });
+    const runGuidedOnboarding: RunGuidedOnboarding = async (_opts, runtime, deps) => {
+      await deps?.detect?.();
+      await deps?.activate?.({
+        kind: "codex-cli",
+        modelRef: "openai/gpt-5.5",
+        surface: "cli",
+        runtime,
+      });
+    };
+
+    try {
+      await runRemoteGatewayInferenceOnboarding(
+        makeTarget(makeLocalConfig(), { token: "selected-token" }),
+        makeRuntime(),
+        {
+          callGateway: asGatewayCall(callGatewayMock),
+          runGuidedOnboarding,
+        },
+      );
+    } finally {
+      now.mockRestore();
+    }
+
+    expect(
+      callGatewayMock.mock.calls.find(
+        ([options]) => options.method === "openclaw.setup.verify",
+      )?.[0].timeoutMs,
+    ).toBe(500);
+  });
+
   it("hands an auth-free Gateway to the TUI as the exact bound route", async () => {
     const callGatewayMock = vi.fn(async (options: CallGatewayCliOptions): Promise<unknown> => {
       if (options.method === "openclaw.setup.detect") {

@@ -660,7 +660,8 @@ private func makeRestartingAISetupSession(
     suiteName: String,
     recorder: AISetupRequestRecorder,
     ownerObservation: ActivationOwnerObservation,
-    postRestartConfiguredModel: String?) -> GatewayTestWebSocketSession
+    postRestartConfiguredModel: String?,
+    replacementGate: AISetupRequestGate? = nil) -> GatewayTestWebSocketSession
 {
     let socketGeneration = AISetupSocketGeneration()
     return GatewayTestWebSocketSession(taskFactory: {
@@ -693,6 +694,9 @@ private func makeRestartingAISetupSession(
             }
             switch request.method {
             case "openclaw.setup.detect":
+                if let replacementGate {
+                    await replacementGate.wait()
+                }
                 let response = postRestartConfiguredModel.map {
                     persistedDetectedSetupResponse(id: request.id, configuredModel: $0)
                 } ?? detectedSetupResponse(
@@ -1288,11 +1292,13 @@ struct OnboardingAISetupTests {
         let defaults = try #require(isolatedAISetupDefaults(suiteName: suiteName))
         let recorder = AISetupRequestRecorder()
         let ownerObservation = ActivationOwnerObservation()
+        let replacementGate = AISetupRequestGate()
         let session = makeRestartingAISetupSession(
             suiteName: suiteName,
             recorder: recorder,
             ownerObservation: ownerObservation,
-            postRestartConfiguredModel: "openai/gpt-5.5")
+            postRestartConfiguredModel: "openai/gpt-5.5",
+            replacementGate: replacementGate)
         let url = try #require(URL(string: "ws://example.invalid"))
         let gateway = makeAISetupGateway(url: url, token: "route-token", session: session)
         let appState = AppState(preview: true)
@@ -1306,7 +1312,14 @@ struct OnboardingAISetupTests {
             dashboardHandoffOpener: { handoffs.append($0) })
 
         await view.aiSetup.detectAndAutoConnect()
-        await view.aiSetup.activate(kind: "codex-cli")
+        let activation = Task { await view.aiSetup.activate(kind: "codex-cli") }
+        await replacementGate.waitUntilStarted()
+        guard case .activating = pendingState(defaults) else {
+            Issue.record("expected restart-required activation to remain pending")
+            return
+        }
+        await replacementGate.release()
+        await activation.value
 
         let activationOwner = try #require(ownerObservation.value())
         #expect(session.snapshotMakeCount() >= 2)
