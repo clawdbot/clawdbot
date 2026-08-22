@@ -8,6 +8,7 @@ import * as ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
   assertControlUiGeneratedArtifactsIsolated,
+  isPinnedArxiUpstreamMerge,
   resolveAllowedGeneratedMixBranch,
   shouldStrictControlUiI18n,
 } from "../../scripts/ci-changed-scope.mjs";
@@ -159,6 +160,62 @@ describe("control-ui-i18n generated ownership", () => {
     expect(resolveAllowedGeneratedMixBranch({ GITHUB_ACTIONS: "true" }, "release/2026.7.3")).toBe(
       "",
     );
+  });
+
+  it("allows a generated mix only for the exact pinned Arxi upstream merge", () => {
+    const tempDirs = createTempDirTracker();
+    const cwd = tempDirs.make("openclaw-arxi-upstream-sync-");
+    const git = (args: string[], input?: string): string => {
+      const result = spawnSync("git", args, { cwd, encoding: "utf8", input });
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout.trim();
+    };
+    try {
+      git(["init", "--initial-branch=main"]);
+      git(["config", "user.email", "arxi-test@example.invalid"]);
+      git(["config", "user.name", "Arxi Test"]);
+      writeFileSync(path.join(cwd, "base.txt"), "base\n", "utf8");
+      git(["add", "--", "base.txt"]);
+      git(["commit", "-m", "base"]);
+      const base = git(["rev-parse", "HEAD"]);
+      const baseTree = git(["rev-parse", "HEAD^{tree}"]);
+      const pin = git(["commit-tree", baseTree, "-p", base], "upstream\n");
+      writeFileSync(path.join(cwd, "ARXI_UPSTREAM_PIN"), `${pin}\n`, "utf8");
+      git(["add", "--", "ARXI_UPSTREAM_PIN"]);
+      const mergeTree = git(["write-tree"]);
+      const head = git(["commit-tree", mergeTree, "-p", base, "-p", pin], "sync\n");
+      const env = {
+        GITHUB_ACTIONS: "true",
+        GITHUB_EVENT_NAME: "pull_request",
+        OPENCLAW_ALLOW_RELEASE_GENERATED_MIX: "true",
+        ARXI_UPSTREAM_SYNC_HEAD_SHA: head,
+        ARXI_UPSTREAM_SYNC_BASE_SHA: base,
+      };
+
+      expect(isPinnedArxiUpstreamMerge(env, cwd)).toBe(true);
+      expect(resolveAllowedGeneratedMixBranch(env, "codex/upstream-sync", cwd)).toBe("main");
+      writeFileSync(path.join(cwd, "repair.txt"), "repair\n", "utf8");
+      git(["add", "--", "repair.txt"]);
+      const repairTree = git(["write-tree"]);
+      const repairedHead = git(["commit-tree", repairTree, "-p", head], "repair\n");
+      const repairedEnv = { ...env, ARXI_UPSTREAM_SYNC_HEAD_SHA: repairedHead };
+      expect(isPinnedArxiUpstreamMerge(repairedEnv, cwd)).toBe(true);
+      const extraMerge = git(
+        ["commit-tree", repairTree, "-p", repairedHead, "-p", pin],
+        "extra merge\n",
+      );
+      expect(
+        isPinnedArxiUpstreamMerge({ ...repairedEnv, ARXI_UPSTREAM_SYNC_HEAD_SHA: extraMerge }, cwd),
+      ).toBe(false);
+      expect(isPinnedArxiUpstreamMerge({ ...env, ARXI_UPSTREAM_SYNC_BASE_SHA: pin }, cwd)).toBe(
+        false,
+      );
+      expect(
+        isPinnedArxiUpstreamMerge({ ...env, OPENCLAW_ALLOW_RELEASE_GENERATED_MIX: "false" }, cwd),
+      ).toBe(false);
+    } finally {
+      tempDirs.cleanup();
+    }
   });
 });
 

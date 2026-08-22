@@ -33,6 +33,7 @@
     "@openclaw/session-url-contract": "workspace:*",
     "@openclaw/uirouter": "0.1.1",
     "@openclaw/workboard-contract": "workspace:*",
+    "@panzoom/panzoom": "4.6.2",
     "@tanstack/lit-virtual": "3.13.36",
     "@tanstack/virtual-core": "3.17.7",
     "dompurify": "3.4.13",
@@ -52,6 +53,7 @@
     "fake-indexeddb": "6.2.5",
     "jsdom": "29.1.1",
     "openclaw": "workspace:*",
+    "pako": "3.0.1",
     "playwright": "1.62.1",
     "vite": "8.1.5",
     "vitest": "4.1.10"

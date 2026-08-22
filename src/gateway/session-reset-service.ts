@@ -3,7 +3,9 @@
 import { randomUUID } from "node:crypto";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manager.runtime-resume-state.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
@@ -1742,7 +1744,17 @@ export async function performGatewaySessionReset(params: {
         // Preserve reset notifications and unbinding order, but finalize the exact
         // old checkout before the fence opens to same-key successors.
         try {
-          await managedWorktrees.removeIfLossless(detachedWorktreeId);
+          if (!(await managedWorktrees.removeIfLossless(detachedWorktreeId))) {
+            const retained = managedWorktrees.findLiveById(detachedWorktreeId);
+            if (retained) {
+              const safePath = truncateUtf16Safe(sanitizeForLog(retained.path), 256);
+              reportLifecycleCleanupError(
+                new Error(
+                  `worktree retained: branch=${retained.branch} path=${safePath} outcome=${retained.runEndCleanup?.outcome}`,
+                ),
+              );
+            }
+          }
         } catch (error) {
           reportLifecycleCleanupError(error);
         }

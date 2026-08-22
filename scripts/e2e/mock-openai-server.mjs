@@ -1,5 +1,6 @@
 // Mock OpenAI-compatible server for broader E2E scenarios.
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { escapeRegExp } from "../lib/regexp.mjs";
@@ -19,9 +20,40 @@ const port =
     : readTcpPortEnv("OPENCLAW_MOCK_OPENAI_PORT");
 const successMarker = process.env.SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const requestLog = process.env.MOCK_REQUEST_LOG;
-const responseChunkDelayMs = process.env.MOCK_RESPONSE_CHUNK_DELAY_MS
+const initialResponseChunkDelayMs = process.env.MOCK_RESPONSE_CHUNK_DELAY_MS
   ? readPositiveIntEnv("MOCK_RESPONSE_CHUNK_DELAY_MS", undefined)
   : 0;
+const responseControl = process.env.MOCK_RESPONSE_CONTROL;
+
+function readCurrentResponse() {
+  if (!responseControl) {
+    return { text: successMarker, chunkDelayMs: initialResponseChunkDelayMs, hold: false };
+  }
+  const value = JSON.parse(readFileSync(responseControl, "utf8"));
+  if (Array.isArray(value.events) && value.events.length > 0) {
+    return { events: value.events, hold: value.hold ?? false };
+  }
+  if (typeof value.text !== "string" || value.text.length === 0 || value.text.length > 100_000) {
+    throw new Error("mock response control text is invalid");
+  }
+  const chunkDelayMs = value.chunkDelayMs ?? 0;
+  if (!Number.isInteger(chunkDelayMs) || chunkDelayMs < 0 || chunkDelayMs > 15 * 60_000) {
+    throw new Error("mock response control chunkDelayMs is invalid");
+  }
+  if (value.hold !== undefined && typeof value.hold !== "boolean") {
+    throw new Error("mock response control hold is invalid");
+  }
+  return { text: value.text, chunkDelayMs, hold: value.hold ?? false };
+}
+
+async function currentResponse() {
+  let response = readCurrentResponse();
+  while (response.hold) {
+    await delay(25);
+    response = readCurrentResponse();
+  }
+  return response;
+}
 
 function splitResponseText(text) {
   if (text.length < 2) {
@@ -95,8 +127,8 @@ function responseEvents(text, deltas = [text]) {
   ];
 }
 
-async function writeDefaultResponseEvents(res, text) {
-  if (responseChunkDelayMs === 0) {
+async function writeDefaultResponseEvents(res, text, chunkDelayMs) {
+  if (chunkDelayMs === 0) {
     writeSse(res, responseEvents(text));
     return;
   }
@@ -109,7 +141,7 @@ async function writeDefaultResponseEvents(res, text) {
   let deltaCount = 0;
   for (const event of events) {
     if (event.type === "response.output_text.delta" && deltaCount > 0) {
-      await delay(responseChunkDelayMs);
+      await delay(chunkDelayMs);
     }
     res.write(`data: ${JSON.stringify(event)}\n\n`);
     if (event.type === "response.output_text.delta") {
@@ -470,7 +502,7 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
         "  rootHasFixture: root.content.includes('fixture'),",
         "  headerHasLookup: api.content.includes('function lookupNote'),",
         "  resultText: result.content?.[0]?.text,",
-        "  allHasMcp: ALL_TOOLS.some((tool) => tool.source === 'mcp'),",
+        "  allHasMcp: catalog.all().some((tool) => tool.source === 'mcp'),",
         "};",
       ].join("\n"),
     });
@@ -568,27 +600,34 @@ const server = http.createServer((req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {
-      const agentBundleEvents = agentPluginBundleEvents(body, bodyText);
-      if (agentBundleEvents) {
-        writeResponsesEvents(res, body.stream, agentBundleEvents);
+      if (!responseControl) {
+        const agentBundleEvents = agentPluginBundleEvents(body, bodyText);
+        if (agentBundleEvents) {
+          writeResponsesEvents(res, body.stream, agentBundleEvents);
+          return;
+        }
+        const appEvents = mcpAppConformanceEvents(body, bodyText);
+        if (appEvents) {
+          writeResponsesEvents(res, body.stream, appEvents);
+          return;
+        }
+        const codeModeEvents = mcpCodeModeApiFileEvents(body, bodyText);
+        if (codeModeEvents) {
+          writeResponsesEvents(res, body.stream, codeModeEvents);
+          return;
+        }
+        const draftEvents = progressDraftEvents(body, bodyText);
+        if (draftEvents) {
+          writeResponsesEvents(res, body.stream, draftEvents);
+          return;
+        }
+      }
+      const response = await currentResponse();
+      if (response.events) {
+        writeResponsesEvents(res, body.stream, response.events);
         return;
       }
-      const appEvents = mcpAppConformanceEvents(body, bodyText);
-      if (appEvents) {
-        writeResponsesEvents(res, body.stream, appEvents);
-        return;
-      }
-      const codeModeEvents = mcpCodeModeApiFileEvents(body, bodyText);
-      if (codeModeEvents) {
-        writeResponsesEvents(res, body.stream, codeModeEvents);
-        return;
-      }
-      const draftEvents = progressDraftEvents(body, bodyText);
-      if (draftEvents) {
-        writeResponsesEvents(res, body.stream, draftEvents);
-        return;
-      }
-      const responseText = resolveResponseText(bodyText);
+      const responseText = responseControl ? response.text : resolveResponseText(bodyText);
       if (body.stream === false) {
         writeJson(res, 200, {
           id: "resp_e2e",
@@ -607,7 +646,7 @@ const server = http.createServer((req, res) => {
         });
         return;
       }
-      await writeDefaultResponseEvents(res, responseText);
+      await writeDefaultResponseEvents(res, responseText, response.chunkDelayMs);
       return;
     }
 
@@ -615,7 +654,7 @@ const server = http.createServer((req, res) => {
       // Progress-draft proof needs assistant content followed by a tool call in
       // one streamed turn: the completions transport tags that leading text as
       // commentary, which channels render as the draft status headline.
-      if (bodyText.includes("OPENCLAW_E2E_DRAFTPROOF")) {
+      if (!responseControl && bodyText.includes("OPENCLAW_E2E_DRAFTPROOF")) {
         const messages = Array.isArray(body.messages) ? body.messages : [];
         const toolTurnDone = messages.some((message) => message?.role === "tool");
         if (!toolTurnDone) {
@@ -635,7 +674,8 @@ const server = http.createServer((req, res) => {
         writeChatCompletion(res, body.stream !== false, "OPENCLAW_E2E_DRAFTPROOF");
         return;
       }
-      const responseText = resolveResponseText(bodyText);
+      const response = await currentResponse();
+      const responseText = responseControl ? response.text : resolveResponseText(bodyText);
       writeChatCompletion(res, body.stream !== false, responseText);
       return;
     }

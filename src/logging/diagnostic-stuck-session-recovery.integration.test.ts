@@ -139,6 +139,74 @@ describe("stuck session recovery integration", () => {
     unsubscribe();
   });
 
+  it.each(["preflight_compacting", "memory_flushing"] as const)(
+    "keeps real queued turns behind healthy %s work",
+    async (phase) => {
+      const sessionKey = `agent:main:healthy-${phase}`;
+      const sessionId = `healthy-${phase}-session`;
+      const lane = resolveEmbeddedSessionLane(sessionKey);
+      const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+      operation.setPhase(phase);
+      const handle = {
+        queueMessage: async () => {},
+        isStreaming: () => false,
+        isCompacting: () => phase === "preflight_compacting",
+        abort: () => {},
+      };
+      setActiveEmbeddedRun(sessionId, handle, sessionKey);
+
+      let releaseActive!: () => void;
+      let markActiveStarted!: () => void;
+      const activeStarted = new Promise<void>((resolve) => {
+        markActiveStarted = resolve;
+      });
+      const active = enqueueCommandInLane(
+        lane,
+        () =>
+          new Promise<void>((resolve) => {
+            releaseActive = resolve;
+            markActiveStarted();
+          }),
+        { warnAfterMs: Number.MAX_SAFE_INTEGER },
+      );
+      const queued = enqueueCommandInLane(lane, async () => "delivered", {
+        warnAfterMs: Number.MAX_SAFE_INTEGER,
+      });
+      await activeStarted;
+      operation.abortSignal.addEventListener(
+        "abort",
+        () => {
+          clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+          operation.complete();
+          releaseActive();
+        },
+        { once: true },
+      );
+
+      try {
+        const outcome = await recoverStuckDiagnosticSession({
+          sessionId,
+          sessionKey,
+          ageMs: 720_000,
+          queueDepth: 1,
+          compactionSafetyTimeoutMs: 900_000,
+          allowActiveAbort: true,
+        });
+
+        expect(operation.abortSignal.aborted).toBe(false);
+        expect(outcome.status).toBe("skipped");
+        await expectPendingAfterEventLoopTurn(queued);
+        expect(getQueueSize(lane)).toBe(2);
+      } finally {
+        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+        operation.complete();
+        releaseActive();
+        await active;
+        await queued;
+      }
+    },
+  );
+
   it("does not reset a blocked lane while a reply operation is still active", async () => {
     const sessionKey = "agent:main:active-reply";
     const sessionId = "active-reply-session";

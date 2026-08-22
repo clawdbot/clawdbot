@@ -4375,7 +4375,7 @@ describe("gateway healthHandlers.status scope handling", () => {
         includeSensitive,
         includeChannelSummary: true,
       });
-      expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
     },
   );
 
@@ -4398,7 +4398,7 @@ describe("gateway healthHandlers.status scope handling", () => {
       includeSensitive: false,
       includeChannelSummary: false,
     });
-    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
   });
 });
 
@@ -4573,6 +4573,53 @@ describe("gateway healthHandlers.health cache freshness", () => {
       code: "UNAVAILABLE",
       message: "Error: collector failed",
     });
+  });
+
+  it("rejects cached health when runtime inspection and refresh both fail", async () => {
+    const cached = createHealthSnapshot({});
+    const refreshHealthSnapshot = vi.fn().mockRejectedValue(new Error("collector failed"));
+    const { respond } = await requestHealthSnapshot({
+      cached,
+      refreshHealthSnapshot,
+      context: {
+        getRuntimeSnapshot: () => {
+          throw new Error("runtime inspection failed");
+        },
+      },
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: "Error: collector failed",
+      }),
+    );
+  });
+
+  it("refreshes cached health when runtime inspection fails", async () => {
+    const cached = createHealthSnapshot({});
+    const fresh = createHealthSnapshot({ ts: cached.ts + 1 });
+    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({
+      cached,
+      fresh,
+      context: {
+        getRuntimeSnapshot: () => {
+          throw new Error("runtime inspection failed");
+        },
+      },
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
   });
 
   it("refreshes cached health when runtime channel lifecycle has changed", async () => {

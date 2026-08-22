@@ -49,7 +49,11 @@ import {
   branchCompactionCheckpointSession,
   restoreCompactionCheckpointSession,
 } from "./session-accessor.sqlite-checkpoint.js";
-import { listSessionEntryRows, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import {
+  listSessionChildEntriesReadOnly,
+  listSessionEntryRows,
+  replaceSessionEntrySync,
+} from "./session-accessor.sqlite-entry.js";
 import { forkSessionEntryFromParentTarget } from "./session-accessor.sqlite-parent-session.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
@@ -2209,6 +2213,14 @@ describe("sqlite session normalization", () => {
       .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
       .run(sessionKey);
 
+    expect(() =>
+      listSessionChildEntriesReadOnly({
+        agentId: "main",
+        env,
+        sessionKey: "agent:main:json-parent",
+        storePath: paths.sqlitePath,
+      }),
+    ).toThrow("openclaw doctor --fix");
     expect(() =>
       listSessionEntryRows({ agentId: "main", env, storePath: paths.sqlitePath }),
     ).toThrow("openclaw doctor --fix");

@@ -1,6 +1,6 @@
 // Chat-item projection, expansion, reply hydration, and guarded row rendering.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { html, nothing, type TemplateResult } from "lit";
+import { nothing, type TemplateResult } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { classifySessionKind } from "../../../../../src/sessions/classify-session-kind.js";
 import { i18n } from "../../../i18n/index.ts";
@@ -463,16 +463,13 @@ export function projectChatTranscript(
     }
     if (item.kind === "work-group") {
       const workExpanded = expandedToolCards.get(item.key) ?? false;
-      return html`
-        ${renderWorkGroupSummary(item, {
-          expanded: workExpanded,
-          onToggle: () => {
-            setExpansionState(expandedToolCards, item.key, !workExpanded);
-            requestUpdate();
-          },
-        })}
-        ${workExpanded ? item.groups.map((group) => renderGroupItem(group)) : nothing}
-      `;
+      return renderWorkGroupSummary(item, {
+        expanded: workExpanded,
+        onToggle: () => {
+          setExpansionState(expandedToolCards, item.key, !workExpanded);
+          requestUpdate();
+        },
+      });
     }
     if (item.kind === "activity-run") {
       const firstGroup = item.groups[0];
@@ -577,11 +574,19 @@ export function projectChatTranscript(
       turnRecapOwnerKey = lastItem.key;
     }
   }
-  const transcriptRows: TranscriptRow<ChatRenderItem>[] = transcriptItems.map((item) => ({
-    kind: "item",
-    key: item.key,
-    item,
-  }));
+  // New row keys measure expanded work immediately; existing keys keep their
+  // cached height until ResizeObserver reports the changed layout.
+  const transcriptRows = transcriptItems.flatMap((item): TranscriptRow<ChatRenderItem>[] =>
+    [{ kind: "item" as const, key: item.key, item }].concat(
+      item.kind === "work-group" && expandedToolCards.get(item.key)
+        ? item.groups.map((group) => ({
+            kind: "item" as const,
+            key: `${item.key}:${group.key}`,
+            item: group,
+          }))
+        : [],
+    ),
+  );
   const realtimeConversation = renderRealtimeTalkConversation(props);
   if (realtimeConversation !== nothing) {
     transcriptRows.push({

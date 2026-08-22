@@ -477,6 +477,7 @@ function resolveChangedBranchName() {
 export function resolveAllowedGeneratedMixBranch(
   env = process.env,
   branchName = resolveChangedBranchName(),
+  cwd = process.cwd(),
 ) {
   if (env.GITHUB_ACTIONS === "true" && env.OPENCLAW_ALLOW_RELEASE_GENERATED_MIX !== "true") {
     return "";
@@ -492,7 +493,71 @@ export function resolveAllowedGeneratedMixBranch(
   ) {
     return branchName;
   }
+  if (isPinnedArxiUpstreamMerge(env, cwd)) {
+    return "main";
+  }
   return "";
+}
+
+/**
+ * Fork sync PRs must retain upstream-owned generated locale artifacts. Permit
+ * that mix only when the same-repository PR first-parent range contains exactly
+ * one merge whose first parent is the exact base and whose second parent
+ * matches the Arxi upstream pin committed at the current head. Ordinary repair
+ * commits may follow that merge, but another merge invalidates the exception.
+ * @param {Readonly<Record<string, string | undefined>>} [env]
+ * @param {string} [cwd]
+ * @returns {boolean}
+ */
+export function isPinnedArxiUpstreamMerge(env = process.env, cwd = process.cwd()) {
+  if (
+    env.GITHUB_ACTIONS !== "true" ||
+    env.GITHUB_EVENT_NAME !== "pull_request" ||
+    env.OPENCLAW_ALLOW_RELEASE_GENERATED_MIX !== "true"
+  ) {
+    return false;
+  }
+  const head = env.ARXI_UPSTREAM_SYNC_HEAD_SHA ?? "";
+  const base = env.ARXI_UPSTREAM_SYNC_BASE_SHA ?? "";
+  const commitPattern = /^[0-9a-f]{40}$/u;
+  if (!commitPattern.test(head) || !commitPattern.test(base)) {
+    return false;
+  }
+  try {
+    const pin = execFileSync("git", ["show", `${head}:ARXI_UPSTREAM_PIN`], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (!commitPattern.test(pin)) {
+      return false;
+    }
+    const mergeCommits = execFileSync(
+      "git",
+      ["rev-list", "--first-parent", "--merges", `${base}..${head}`],
+      {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    )
+      .trim()
+      .split(/\s+/u)
+      .filter(Boolean);
+    if (mergeCommits.length !== 1) {
+      return false;
+    }
+    const parents = execFileSync("git", ["show", "-s", "--format=%P", mergeCommits[0]], {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .trim()
+      .split(/\s+/u);
+    return parents.length === 2 && parents[0] === base && parents[1] === pin;
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -13,7 +13,7 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
+import { placementTurnOwner, type WorkerSessionPlacementIdentity } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
@@ -44,8 +44,8 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
-function advanceToActive() {
-  let placement = store.startDispatch(SESSION);
+function advanceToActive(executionMode: "worker-turn" | "remote-exec" = "worker-turn") {
+  let placement = store.startDispatch({ ...SESSION, executionMode });
   placement = store.transition({
     sessionId: SESSION.sessionId,
     from: "requested",
@@ -121,6 +121,67 @@ it("emits exact worker claim closure after release and owner fencing", () => {
   });
   expect(closed).toHaveBeenLastCalledWith(second);
   expect(closed).toHaveBeenCalledTimes(2);
+  unregister();
+});
+
+it.each([
+  { ownerKind: "worker", executionMode: "worker-turn" },
+  { ownerKind: "local", executionMode: "remote-exec" },
+] as const)("fences the exact $ownerKind claim when reconciliation starts", (scenario) => {
+  const closed = vi.fn();
+  const unregister = store.registerTurnClaimClosedHandler(closed);
+  const active = advanceToActive(scenario.executionMode);
+  const claim = store.claimTurn({
+    ...SESSION,
+    owner: placementTurnOwner(active),
+    claimId: `claim-reconcile-${scenario.ownerKind}`,
+    runId: `run-reconcile-${scenario.ownerKind}`,
+  });
+  const draining = store.startDrain({
+    sessionId: active.sessionId,
+    environmentId: active.environmentId,
+    ownerEpoch: active.activeOwnerEpoch,
+    expectedGeneration: active.generation,
+  });
+  const reconcileInput = {
+    sessionId: active.sessionId,
+    environmentId: active.environmentId,
+    ownerEpoch: active.activeOwnerEpoch,
+    expectedGeneration: draining.generation,
+  };
+
+  expect(() =>
+    store.startReconcile({ ...reconcileInput, ownerEpoch: active.activeOwnerEpoch + 1 }),
+  ).toThrow("Cannot reconcile stale worker placement");
+  expect(store.get(active.sessionId)).toMatchObject({
+    state: "draining",
+    turnClaim: { claimId: claim.claimId, owner: scenario.ownerKind },
+  });
+  expect(closed).not.toHaveBeenCalled();
+
+  const authorizedReconcileInput =
+    scenario.ownerKind === "local"
+      ? { ...reconcileInput, forceLocalClaim: true as const }
+      : reconcileInput;
+  if (scenario.ownerKind === "local") {
+    const preserved = store.get(active.sessionId);
+    expect(() => store.startReconcile(reconcileInput)).toThrow("local turn is active");
+    expect(store.get(active.sessionId)).toEqual(preserved);
+    expect(store.validateTurnClaim(claim)).toBe(true);
+    expect(closed).not.toHaveBeenCalled();
+  }
+
+  expect(store.startReconcile(authorizedReconcileInput)).toMatchObject({
+    state: "reconciling",
+    turnClaim: null,
+  });
+  expect(store.validateTurnClaim(claim)).toBe(false);
+  expect(closed).toHaveBeenCalledExactlyOnceWith(claim);
+  expect(() => store.startReconcile(authorizedReconcileInput)).toThrow(
+    "Cannot reconcile stale worker placement",
+  );
+  expect(() => store.releaseTurn(claim)).toThrow("turn claim changed before release");
+  expect(closed).toHaveBeenCalledOnce();
   unregister();
 });
 

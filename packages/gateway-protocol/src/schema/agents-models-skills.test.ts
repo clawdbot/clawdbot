@@ -271,7 +271,11 @@ describe("ModelsListResultSchema", () => {
         fallback: "openclaw",
         cloudPlacementSupported: true,
         cloudPlacementExecutionMode: "remote-exec",
-        devicePlacementSupported: false,
+        devicePlacementSupported: true,
+        devicePlacement: {
+          requiredNodeCommands: ["runtime.exec-server.v1"],
+          consumesWorkerSlot: false,
+        },
         source: "model",
       },
       thinkingLevels: [
@@ -300,6 +304,48 @@ describe("ModelsListResultSchema", () => {
       ModelsListResultSchema,
       {
         models: [{ ...model, agentRuntime: { id: "codex", source: "unknown" } }],
+      },
+      {
+        models: [
+          {
+            ...model,
+            agentRuntime: {
+              ...model.agentRuntime,
+              devicePlacement: { requiredNodeCommands: ["runtime.exec-server.v1"] },
+            },
+          },
+        ],
+      },
+      {
+        models: [
+          {
+            ...model,
+            agentRuntime: {
+              ...model.agentRuntime,
+              devicePlacement: {
+                requiredNodeCommands: ["x".repeat(129)],
+                consumesWorkerSlot: false,
+              },
+            },
+          },
+        ],
+      },
+      {
+        models: [
+          {
+            ...model,
+            agentRuntime: {
+              ...model.agentRuntime,
+              devicePlacement: {
+                requiredNodeCommands: Array.from(
+                  { length: 33 },
+                  (_, index) => `runtime.${index}.v1`,
+                ),
+                consumesWorkerSlot: false,
+              },
+            },
+          },
+        ],
       },
       { models: [{ ...model, thinkingLevels: [{ id: "", label: "Off" }] }] },
       { models: [{ ...model, input: ["text", "binary"] }] },

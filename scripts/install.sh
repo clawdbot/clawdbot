@@ -3752,7 +3752,9 @@ main() {
     local is_upgrade=false
     if check_existing_openclaw; then
         is_upgrade=true
+        VERIFY_INSTALL=1
     fi
+    configure_install_stage_total
     local should_open_dashboard=false
 
     ui_stage "Preparing environment"
@@ -3825,21 +3827,103 @@ main() {
         fi
     fi
 
-    local config_present=false
+    local config_present=false defer_success=false
     if has_openclaw_config; then
         config_present=true
         refresh_gateway_service_if_loaded
     fi
 
-    local installed_version=""
-    if [[ "$is_upgrade" != "true" ]]; then
-        installed_version="$(resolve_openclaw_version)"
-        echo ""
-        if [[ -n "$installed_version" ]]; then
-            ui_celebrate "🦞 OpenClaw installed successfully (${installed_version})!"
+    if [[ "$is_upgrade" == "true" || "$config_present" == "true" || "$VERIFY_INSTALL" == "1" ]]; then
+        defer_success=true
+    fi
+
+    if [[ "$config_present" == "true" && "$is_upgrade" == "true" ]]; then
+        if has_controlling_tty || [[ "$NO_ONBOARD" == "1" || "$NO_PROMPT" == "1" ]]; then
+            local claw="${OPENCLAW_BIN:-}"
+            if [[ -z "$claw" ]]; then
+                claw="$(resolve_installed_openclaw_bin || true)"
+            fi
+            if [[ -z "$claw" ]]; then
+                ui_info "Skipping doctor (openclaw not on PATH yet)"
+                warn_openclaw_not_found
+                return 0
+            fi
+            local -a doctor_args=("--fix")
+            if [[ "$NO_ONBOARD" == "1" || "$NO_PROMPT" == "1" ]]; then
+                doctor_args+=("--non-interactive")
+            fi
+            ui_info "Running openclaw doctor"
+            local doctor_exit=0
+            if [[ "$NO_ONBOARD" == "1" || "$NO_PROMPT" == "1" ]]; then
+                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/null || doctor_exit=$?
+            else
+                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/tty || doctor_exit=$?
+            fi
+            if (( doctor_exit == 130 )); then
+                abort_install_int
+            fi
+            if (( doctor_exit != 0 )); then
+                ui_warn "Doctor failed; skipping plugin updates"
+                return "$doctor_exit"
+            fi
+            should_open_dashboard=true
+            ui_info "Updating plugins"
+            OPENCLAW_UPDATE_IN_PROGRESS=1 run_with_safe_stdin "$claw" plugins update --all || true
         else
-            ui_celebrate "🦞 OpenClaw installed successfully!"
+            run_doctor || return $?
+            should_open_dashboard=true
+            local user_claw
+            user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
+            ui_info "No TTY; run ${user_claw} plugins update --all manually"
         fi
+    elif [[ "$config_present" == "true" ]]; then
+        ui_info "Config already present; running doctor"
+        run_doctor || return $?
+        should_open_dashboard=true
+        ui_info "Config already present; skipping onboarding"
+    fi
+
+    if [[ "$config_present" == "true" ]]; then
+        local claw="${OPENCLAW_BIN:-}"
+        if [[ -z "$claw" ]]; then
+            claw="$(resolve_installed_openclaw_bin || true)"
+        fi
+        if [[ -n "$claw" ]] && is_gateway_daemon_loaded "$claw"; then
+            local user_claw
+            user_claw="$(openclaw_command_for_user "$claw")"
+            if [[ "$DRY_RUN" == "1" ]]; then
+                ui_info "Gateway daemon detected; would restart (${user_claw} daemon restart)"
+            else
+                ui_info "Gateway daemon detected; restarting"
+                if OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" daemon restart < /dev/null >/dev/null 2>&1; then
+                    ui_success "Gateway restarted"
+                else
+                    ui_warn "Gateway restart failed; try: ${user_claw} daemon restart"
+                fi
+            fi
+        fi
+    fi
+
+    if [[ "$defer_success" == "true" ]] && ! verify_installation "$config_present"; then
+        if [[ "$config_present" != "true" && "$NO_ONBOARD" != "1" ]] && ! is_promptable; then
+            local user_claw
+            user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
+            ui_info "No TTY; run ${user_claw} onboard to finish setup"
+        fi
+        return 1
+    fi
+
+    local installed_version=""
+    installed_version="$(resolve_openclaw_version)"
+    echo ""
+    if [[ -n "$installed_version" ]]; then
+        ui_celebrate "🦞 OpenClaw installed successfully (${installed_version})!"
+    else
+        ui_celebrate "🦞 OpenClaw installed successfully!"
+    fi
+    if [[ "$is_upgrade" == "true" ]]; then
+        ui_info "Upgrade complete"
+    else
         local completion_messages=(
             "Ahh nice, I like it here. Got any snacks? "
             "Home sweet home. Don't worry, I won't rearrange the furniture."
@@ -3893,89 +3977,6 @@ main() {
             user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
             ui_info "No TTY; run ${user_claw} onboard to finish setup"
         fi
-    elif [[ "$is_upgrade" == "true" ]]; then
-        if has_controlling_tty || [[ "$NO_ONBOARD" == "1" || "$NO_PROMPT" == "1" ]]; then
-            local claw="${OPENCLAW_BIN:-}"
-            if [[ -z "$claw" ]]; then
-                claw="$(resolve_installed_openclaw_bin || true)"
-            fi
-            if [[ -z "$claw" ]]; then
-                ui_info "Skipping doctor (openclaw not on PATH yet)"
-                warn_openclaw_not_found
-                return 0
-            fi
-            local -a doctor_args=("--fix")
-            if [[ "$NO_ONBOARD" == "1" || "$NO_PROMPT" == "1" ]]; then
-                doctor_args+=("--non-interactive")
-            fi
-            ui_info "Running openclaw doctor"
-            local doctor_exit=0
-            if [[ "$NO_ONBOARD" == "1" || "$NO_PROMPT" == "1" ]]; then
-                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/null || doctor_exit=$?
-            else
-                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/tty || doctor_exit=$?
-            fi
-            if (( doctor_exit == 130 )); then
-                abort_install_int
-            fi
-            if (( doctor_exit != 0 )); then
-                ui_warn "Doctor failed; skipping plugin updates"
-                return "$doctor_exit"
-            fi
-            should_open_dashboard=true
-            ui_info "Updating plugins"
-            OPENCLAW_UPDATE_IN_PROGRESS=1 run_with_safe_stdin "$claw" plugins update --all || true
-        else
-            run_doctor || return $?
-            should_open_dashboard=true
-            local user_claw
-            user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
-            ui_info "No TTY; run ${user_claw} plugins update --all manually"
-        fi
-    else
-        ui_info "Config already present; running doctor"
-        run_doctor || return $?
-        should_open_dashboard=true
-        ui_info "Config already present; skipping onboarding"
-    fi
-
-    if [[ "$config_present" == "true" ]]; then
-        local claw="${OPENCLAW_BIN:-}"
-        if [[ -z "$claw" ]]; then
-            claw="$(resolve_installed_openclaw_bin || true)"
-        fi
-        if [[ -n "$claw" ]] && is_gateway_daemon_loaded "$claw"; then
-            local user_claw
-            user_claw="$(openclaw_command_for_user "$claw")"
-            if [[ "$DRY_RUN" == "1" ]]; then
-                ui_info "Gateway daemon detected; would restart (${user_claw} daemon restart)"
-            else
-                ui_info "Gateway daemon detected; restarting"
-                if OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" daemon restart < /dev/null >/dev/null 2>&1; then
-                    ui_success "Gateway restarted"
-                else
-                    ui_warn "Gateway restart failed; try: ${user_claw} daemon restart"
-                fi
-            fi
-        fi
-    fi
-
-    if [[ "$is_upgrade" == "true" ]]; then
-        VERIFY_INSTALL=1
-    fi
-    if ! verify_installation "$config_present"; then
-        exit 1
-    fi
-
-    if [[ "$is_upgrade" == "true" ]]; then
-        installed_version="$(resolve_openclaw_version)"
-        echo ""
-        if [[ -n "$installed_version" ]]; then
-            ui_celebrate "🦞 OpenClaw installed successfully (${installed_version})!"
-        else
-            ui_celebrate "🦞 OpenClaw installed successfully!"
-        fi
-        ui_info "Upgrade complete"
     fi
 
     if [[ "$should_open_dashboard" == "true" ]]; then
@@ -3987,7 +3988,6 @@ main() {
 
 if [[ "${OPENCLAW_INSTALL_SH_NO_RUN:-0}" != "1" ]]; then
     parse_args "$@"
-    configure_install_stage_total
     configure_verbose
     main
 fi

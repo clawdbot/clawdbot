@@ -851,6 +851,7 @@ export async function invokeGatewaySuspendPrepare(
         pauseScheduling: vi.fn(),
         resumeScheduling: vi.fn(),
         getSuspensionBlockerCount: () => 0,
+        getSuspendWakeSnapshot: () => ({ complete: true as const, nextWakeAtMs: null }),
       },
     } as unknown as GatewayRequestContext,
     req: { type: "req", id: requestId, method: "gateway.suspend.prepare" },

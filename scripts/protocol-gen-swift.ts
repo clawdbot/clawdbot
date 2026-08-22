@@ -53,6 +53,8 @@ const { writeGeneratedOutput } = (await import(
 };
 
 const STRICT_LITERAL_STRUCTS = new Set([
+  "GatewaySuspendWakeAtRequirement",
+  "GatewaySuspendWakeExternalEventOnlyRequirement",
   "PluginsSessionActionSuccessResult",
   "PluginsSessionActionFailureResult",
   "SessionMoveGatewayTarget",

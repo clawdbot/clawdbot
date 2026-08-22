@@ -494,6 +494,32 @@ export type ChannelMessagingAdapter = {
    * targets before plugin-specific normalization.
    */
   targetPrefixes?: readonly string[];
+  /** Re-resolve the current owner when channel behavior exceeds generic bindings. */
+  resolveConversationRouteOwner?: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+    conversation: {
+      kind: "direct" | "group" | "channel";
+      peerId: string;
+      /** Canonical delivery target when it differs from the routing peer. */
+      target?: string;
+      threadId?: string;
+      nativeChannelId?: string;
+      context?: {
+        parentPeerId?: string;
+        guildId?: string;
+        teamId?: string;
+        memberRoleIds?: string[];
+      };
+    };
+  }) =>
+    // `undefined` delegates to core, `null` denies ownership, and `unavailable`
+    // preserves temporary owner-store outages as retryable delivery failures.
+    | { kind: "agent"; agentId: string }
+    | { kind: "plugin"; pluginId: string; fallbackAgentId: string }
+    | { kind: "unavailable" }
+    | null
+    | undefined;
   /** DM targets rebuilt from session keys require an explicit `user:` kind prefix. */
   directTargetStyle?: "user-prefixed";
   /** Equality rule for ids carried by prefixed outbound targets. */

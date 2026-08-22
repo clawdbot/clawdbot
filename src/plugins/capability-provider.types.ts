@@ -112,24 +112,17 @@ export type WorkerDesktopEndpoint = {
 export type WorkerExecutionMode = "worker-turn" | "remote-exec";
 
 /** Replay-safe node enrollment prepared only after a provider has allocated its machine. */
-export type WorkerNodeEnrollment =
-  | {
-      mode: "connect";
-      setupCode: string;
-      setupId: string;
-      openclawVersion: string;
-      packageSpecs: readonly string[];
-      displayName: string;
-      waitForDeviceId: () => Promise<string>;
-    }
-  | {
-      mode: "resume";
-      deviceId: string;
-      openclawVersion: string;
-      packageSpecs: readonly string[];
-      displayName: string;
-      waitForDeviceId: () => Promise<string>;
-    };
+export type WorkerNodeEnrollment = {
+  openclawVersion: string;
+  packageSpecs: readonly string[];
+  displayName: string;
+  /** Gateway shutdown cancels enrollment without releasing its replay-owned provider lease. */
+  signal?: AbortSignal;
+  waitForDeviceId: () => Promise<string>;
+} & (
+  | { mode: "connect"; setupCode: string; setupId: string }
+  | { mode: "resume"; deviceId: string }
+);
 
 /** Durable lease identity and endpoint returned by a successful provision operation. */
 export type WorkerLease = {
@@ -195,13 +188,15 @@ export class WorkerProviderError extends Error {
   }
 }
 
-/** Cloud-worker lifecycle capability registered by a plugin. */
-export type WorkerProvider = {
+/** Plugin registrations declare exactly one mode; the internal paired-device owner can carry both. */
+export type WorkerProvider<Scope extends "plugin" | "internal" = "plugin"> = {
   id: string;
   /** Process-stable choices available for this profile; omit the hook to hide machine selection. */
   listMachineOptions?: (profile: WorkerProfile) => Promise<readonly WorkerMachineOption[]>;
-  /** Omission advertises no placement support; placement providers declare one transport mode. */
-  supportedExecutionModes?: readonly [WorkerExecutionMode];
+  /** Omission advertises no placement support; external providers declare one transport mode. */
+  supportedExecutionModes?: Scope extends "internal"
+    ? readonly [WorkerExecutionMode] | readonly ["worker-turn", "remote-exec"]
+    : readonly [WorkerExecutionMode];
   /**
    * Provision before preparing an installation when the lease transport decides whether an
    * installation is needed. Defaults to false so SSH providers retain prepare-before-allocation.

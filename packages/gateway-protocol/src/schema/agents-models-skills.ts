@@ -21,6 +21,15 @@ const GatewayAgentRuntimeSchema = closedObject({
   fallback: Type.Optional(Type.Union([Type.Literal("openclaw"), Type.Literal("none")])),
   cloudPlacementSupported: Type.Optional(Type.Boolean()),
   cloudPlacementExecutionMode: Type.Optional(WorkerExecutionModeSchema),
+  devicePlacement: Type.Optional(
+    closedObject({
+      requiredNodeCommands: Type.Array(Type.String({ minLength: 1, maxLength: 128 }), {
+        maxItems: 32,
+        uniqueItems: true,
+      }),
+      consumesWorkerSlot: Type.Boolean(),
+    }),
+  ),
   devicePlacementSupported: Type.Optional(Type.Boolean()),
   source: Type.Union([
     Type.Literal("env"),

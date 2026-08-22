@@ -105,13 +105,17 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
     // waitForPendingEvents, which also awaits pendingPartialReplyTasks; a
     // stalled callback would block the drain until the bounded liveness
     // deadline (120s) elapsed.
-    const onPartialReply = vi.fn(() => new Promise<void>(() => {}));
+    let resolvePartialReply!: () => void;
+    const partialReply = new Promise<void>((resolve) => {
+      resolvePartialReply = resolve;
+    });
+    const onPartialReply = vi.fn(() => partialReply);
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run-stalled-partial-callback",
       onPartialReply,
     });
 
-    // First delta fires the partial-reply callback (stalled, never resolves).
+    // First delta keeps the partial-reply callback pending through the queue-only drain.
     emit({
       type: "message_update",
       message: { role: "assistant" },
@@ -126,26 +130,18 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
       assistantMessageEvent: { type: "text_delta", delta: "answer" },
     });
 
-    // Queue-only drain completes promptly: the event chain is null once both
-    // deltas are processed, regardless of the stalled fan-out callback.
-    await expect(
-      Promise.race([
-        subscription.waitForPendingEvents({ includePartialReplies: false }).then(() => "drained"),
-        new Promise<"timeout">((resolve) => {
-          setTimeout(() => resolve("timeout"), 1000);
-        }),
-      ]),
-    ).resolves.toBe("drained");
+    let broadDrained = false;
+    const broadDrain = subscription.waitForPendingEvents().then(() => {
+      broadDrained = true;
+    });
 
-    // The broad join still observes the stalled callback (proving the two
-    // drains are genuinely distinct and the queue-only split is meaningful).
-    const broad = Promise.race([
-      subscription.waitForPendingEvents().then(() => "drained"),
-      new Promise<"timeout">((resolve) => {
-        setTimeout(() => resolve("timeout"), 1000);
-      }),
-    ]);
-    await expect(broad).resolves.toBe("timeout");
+    // The event chain drains while the broad join still waits for the callback.
+    await subscription.waitForPendingEvents({ includePartialReplies: false });
+    expect(broadDrained).toBe(false);
+
+    resolvePartialReply();
+    await broadDrain;
+    expect(broadDrained).toBe(true);
 
     subscription.unsubscribe();
   });

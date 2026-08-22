@@ -403,7 +403,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("times out isolated agent runs that stall before execution starts (#74803)", async () => {
+  it("lets isolated setup progress use the configured job timeout (#93912)", async () => {
     vi.useFakeTimers();
     try {
       const store = timerRegressionFixtures.makeStorePath();
@@ -451,13 +451,23 @@ describe("cron service timer regressions", () => {
               sessionKey: "agent:main:cron:isolated-pre-model-timeout-74803:run:cron-run-session",
               phase: "runner_entered",
             });
-            onExecutionPhase?.({
-              jobId: "isolated-pre-model-timeout-74803",
-              agentId: "main",
-              sessionId: "cron-run-session",
-              sessionKey: "agent:main:cron:isolated-pre-model-timeout-74803:run:cron-run-session",
-              phase: "context_engine",
-            });
+            for (const phase of [
+              "workspace",
+              "runtime_plugins",
+              "before_agent_reply",
+              "runtime_plugins",
+              "model_resolution",
+              "auth",
+              "context_engine",
+            ] as const) {
+              onExecutionPhase?.({
+                jobId: "isolated-pre-model-timeout-74803",
+                agentId: "main",
+                sessionId: "cron-run-session",
+                sessionKey: "agent:main:cron:isolated-pre-model-timeout-74803:run:cron-run-session",
+                phase,
+              });
+            }
             started.resolve();
             abortSignal?.addEventListener(
               "abort",
@@ -476,16 +486,21 @@ describe("cron service timer regressions", () => {
       await started.promise;
       await vi.advanceTimersByTimeAsync(60_100);
       now += 60_100;
+      expect(abortObserved).toBe(false);
+      expect(cleanupTimedOutAgentRun).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1_139_900);
+      now += 1_139_900;
       await timerPromise;
 
       const job = requireJob(state, "isolated-pre-model-timeout-74803");
       expect(abortObserved).toBe(true);
       expect(job.state.lastStatus).toBe("error");
-      expect(job.state.lastError).toContain("stalled before execution start");
+      expect(job.state.lastError).toContain("job execution timed out");
       expect(job.state.lastError).toContain("context-engine");
       expect(abortReason).toMatchObject({
         name: "TimeoutError",
-        message: expect.stringContaining("context-engine"),
+        message: expect.stringContaining("job execution timed out"),
       });
       expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
       const cleanupArgs = requireRecord(firstMockArg(cleanupTimedOutAgentRun));
@@ -691,7 +706,7 @@ describe("cron service timer regressions", () => {
     },
   );
 
-  it("re-arms the pre-execution watchdog when before_agent_reply does not claim (#82811)", async () => {
+  it("re-arms the pre-execution watchdog when a fallback runner returns to setup (#82811)", async () => {
     vi.useFakeTimers();
     try {
       const store = timerRegressionFixtures.makeStorePath();
@@ -752,6 +767,13 @@ describe("cron service timer regressions", () => {
             onExecutionPhase?.({
               jobId: "isolated-before-agent-reply-unhandled-82811",
               phase: "before_agent_reply",
+            });
+            onExecutionStarted?.({
+              jobId: "isolated-before-agent-reply-unhandled-82811",
+              phase: "runner_entered",
+              isFallback: true,
+              provider: "fallback-provider",
+              model: "fallback-model",
             });
             onExecutionPhase?.({
               jobId: "isolated-before-agent-reply-unhandled-82811",

@@ -164,7 +164,7 @@ export type SessionCapability = {
   reconcile: (
     row: GatewaySessionRow | undefined,
     defaults?: SessionsListResult["defaults"],
-    options?: SessionReconcileOptions,
+    options?: SessionReconcileOptions & { sourceCanonicalListRevision?: number },
   ) => boolean;
   reconcileChanged: (payload: unknown, options?: SessionReconcileOptions) => SessionChangedResult;
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;

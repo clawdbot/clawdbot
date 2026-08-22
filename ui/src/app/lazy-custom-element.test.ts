@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
+import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
   ensureCustomElementDefined,
   LazyCustomElementRequestController,
@@ -82,7 +83,7 @@ describe("optional custom element requests", () => {
     requests.request(element, continuation);
 
     expect(requests.visibleState).toMatchObject({ status: "loading", element });
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(requests.visibleState).toMatchObject({
         status: "error",
         element,
@@ -95,9 +96,83 @@ describe("optional custom element requests", () => {
     requests.retry();
 
     expect(requests.visibleState).toMatchObject({ status: "loading", element });
-    await vi.waitFor(() => expect(continuation).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(continuation).toHaveBeenCalledOnce());
     expect(element.loadModule).toHaveBeenCalledTimes(2);
     expect(requests.visibleState).toBeUndefined();
+  });
+
+  it("resumes an active request after a foreground request replaces its visible slot", async () => {
+    let rejectActive: ((error: Error) => void) | undefined;
+    let resolveForeground: (() => void) | undefined;
+    const { requests } = createRequestHarness();
+    const activeElement = {
+      tagName: uniqueTag(),
+      label: "active panel",
+      loadModule: vi.fn(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectActive = reject;
+          }),
+      ),
+    };
+    const foregroundElement = {
+      tagName: uniqueTag(),
+      label: "command palette",
+      loadModule: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveForeground = () => {
+              customElements.define(foregroundElement.tagName, class extends HTMLElement {});
+              resolve();
+            };
+          }),
+      ),
+    };
+
+    requests.requestWhileActive(activeElement, true);
+    await waitForFast(() => expect(activeElement.loadModule).toHaveBeenCalledOnce());
+    requests.request(foregroundElement);
+    await waitForFast(() => expect(foregroundElement.loadModule).toHaveBeenCalledOnce());
+    resolveForeground?.();
+    await waitForFast(() => expect(requests.visibleState?.element).toBe(activeElement));
+
+    const error = new Error("active chunk unavailable");
+    rejectActive?.(error);
+    await waitForFast(() =>
+      expect(requests.visibleState).toMatchObject({
+        element: activeElement,
+        error,
+        status: "error",
+      }),
+    );
+  });
+
+  it("keeps an active request dismissed until its lifecycle restarts", async () => {
+    const error = new Error("active chunk unavailable");
+    const { requests } = createRequestHarness();
+    const tagName = uniqueTag();
+    const element = {
+      tagName,
+      label: "active panel",
+      loadModule: vi
+        .fn<() => Promise<void>>()
+        .mockRejectedValueOnce(error)
+        .mockImplementationOnce(async () => {
+          customElements.define(tagName, class extends HTMLElement {});
+        }),
+    };
+
+    requests.requestWhileActive(element, true);
+    await waitForFast(() => expect(requests.visibleState?.status).toBe("error"));
+    requests.close();
+    requests.requestWhileActive(element, true);
+
+    expect(requests.visibleState).toBeUndefined();
+    expect(element.loadModule).toHaveBeenCalledOnce();
+
+    requests.requestWhileActive(element, false);
+    requests.requestWhileActive(element, true);
+    await waitForFast(() => expect(element.loadModule).toHaveBeenCalledTimes(2));
   });
 
   it("delegates stale recovery before falling back to the same in-place load", async () => {
@@ -117,12 +192,12 @@ describe("optional custom element requests", () => {
     };
 
     requests.request(element, continuation);
-    await vi.waitFor(() => expect(requests.visibleState?.status).toBe("error"));
+    await waitForFast(() => expect(requests.visibleState?.status).toBe("error"));
     expect(requests.visibleState).toMatchObject({ stale: true });
 
     requests.retry();
 
-    await vi.waitFor(() => expect(continuation).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(continuation).toHaveBeenCalledOnce());
     expect(retryStale).toHaveBeenCalledOnce();
     expect(element.loadModule).toHaveBeenCalledTimes(2);
   });
@@ -148,12 +223,12 @@ describe("optional custom element requests", () => {
 
     requests.request(element, continuation);
     expect(requests.visibleState?.status).toBe("loading");
-    await vi.waitFor(() => expect(element.loadModule).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(element.loadModule).toHaveBeenCalledOnce());
 
     requests.close();
     resolveLoad?.();
 
-    await vi.waitFor(() => expect(customElements.get(element.tagName)).toBeDefined());
+    await waitForFast(() => expect(customElements.get(element.tagName)).toBeDefined());
     expect(requests.visibleState).toBeUndefined();
     expect(continuation).not.toHaveBeenCalled();
   });
@@ -172,11 +247,11 @@ describe("optional custom element requests", () => {
     requests.preload(element);
     requests.preload(element);
 
-    await vi.waitFor(() => expect(element.loadModule).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(element.loadModule).toHaveBeenCalledOnce());
     expect(requests.visibleState).toBeUndefined();
 
     requests.request(element);
-    await vi.waitFor(() => expect(requests.visibleState?.status).toBe("error"));
+    await waitForFast(() => expect(requests.visibleState?.status).toBe("error"));
     expect(element.loadModule).toHaveBeenCalledTimes(2);
   });
 });

@@ -182,6 +182,7 @@ export function buildCronMocks(baseTime: number) {
   }));
   const status: CronStatus = {
     enabled: true,
+    triggersEnabled: true,
     jobs: jobs.length,
     nextWakeAtMs: overdueJob.state?.nextRunAtMs,
   };

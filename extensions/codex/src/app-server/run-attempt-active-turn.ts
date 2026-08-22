@@ -23,6 +23,7 @@ import type { CodexAttemptNotificationController } from "./run-attempt-notificat
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import {
+  codexTranscriptMirrorRuntime,
   createCodexAppServerUserMessagePersistenceNotifier,
   mirrorPromptAtTurnStartBestEffort,
 } from "./transcript-mirror.js";
@@ -55,6 +56,7 @@ export async function activateCodexAttemptTurn(
     bindingIdentity,
     sessionAgentId,
     sandboxSessionKey,
+    contextSessionKey,
     effectiveCwd,
   } = connection;
   const { dynamicToolParams, compactionPlanState, computerContextEpoch, toolBridge } = attemptTools;
@@ -210,12 +212,53 @@ export async function activateCodexAttemptTurn(
       { threadId: resourceState.thread.threadId, turnId: activeTurnId },
     );
   }
+  const notifyUserMessagePersisted = createCodexAppServerUserMessagePersistenceNotifier(params);
+  const promptMirrorPromise = mirrorPromptAtTurnStartBestEffort({
+    params,
+    agentId: sessionAgentId,
+    notifyUserMessagePersisted,
+    sessionKey: sandboxSessionKey,
+    cwd: effectiveCwd,
+    threadId: resourceState.thread.threadId,
+    turnId: activeTurnId,
+    upstreamUserText: turnState.codexTurnPromptText,
+  });
   const activeSteeringQueue = createCodexSteeringQueue({
     client: resourceState.client,
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
     requestTimeoutMs: connection.appServer.requestTimeoutMs,
     signal: runAbortController.signal,
+    beforeConfirmConsumed: async (items) => {
+      const inboundItems = items.filter((item) => item.isInboundUserMessage === true);
+      if (inboundItems.length === 0) {
+        return;
+      }
+      await promptMirrorPromise;
+      const messages = activeProjector.buildSteeringTranscriptPrefix();
+      if (params.sessionTarget && messages.length > 0) {
+        await codexTranscriptMirrorRuntime.mirror({
+          agentId: sessionAgentId,
+          sessionKey: contextSessionKey,
+          sessionId: params.sessionId,
+          storePath: params.sessionTarget.storePath,
+          cwd: effectiveCwd,
+          messages,
+          idempotencyScope: `codex-app-server:${resourceState.thread.threadId}`,
+          config: params.config,
+        });
+      }
+      for (const item of inboundItems) {
+        const recorder = item.userTurnTranscriptRecorder;
+        if (!recorder) {
+          continue;
+        }
+        await recorder.persistApproved();
+        if (!recorder.hasPersisted()) {
+          throw new Error("Codex consumed steering before its user turn was persisted");
+        }
+      }
+    },
   });
   steeringQueueRef.current = activeSteeringQueue;
   const claimPendingUserInputAnswer = async (
@@ -308,17 +351,6 @@ export async function activateCodexAttemptTurn(
     terminalState.terminalOutcomeFrozen = true;
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
   };
-  const notifyUserMessagePersisted = createCodexAppServerUserMessagePersistenceNotifier(params);
-  void mirrorPromptAtTurnStartBestEffort({
-    params,
-    agentId: sessionAgentId,
-    notifyUserMessagePersisted,
-    sessionKey: sandboxSessionKey,
-    cwd: effectiveCwd,
-    threadId: resourceState.thread.threadId,
-    turnId: activeTurnId,
-    upstreamUserText: turnState.codexTurnPromptText,
-  });
   const abortListener = () => {
     if (state.timedOut) {
       void (async () => {

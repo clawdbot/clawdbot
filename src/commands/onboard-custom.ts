@@ -241,6 +241,7 @@ export async function promptCustomApiConfig(params: {
   config: OpenClawConfig;
   target?: OnboardingAgentTarget;
   secretInputMode?: SecretInputMode;
+  setAsPrimary?: boolean;
 }): Promise<CustomApiResult> {
   const { prompter, runtime, config } = params;
 
@@ -415,6 +416,7 @@ export async function promptCustomApiConfig(params: {
     alias: aliasInput,
     supportsImageInput,
     ...(params.target ? { target: params.target } : {}),
+    ...(params.setAsPrimary === false ? { setAsPrimary: false } : {}),
   });
 
   if (result.providerIdRenamedFrom && result.providerId) {

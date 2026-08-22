@@ -345,44 +345,21 @@ export async function createGatewaySession(params: {
   const requestedKey = normalizeOptionalString(params.key);
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
   const projectId = normalizeOptionalString(params.projectId);
-  const explicitAgentId = normalizeOptionalString(params.agentId);
+  const explicitAgentId = params.agentId;
+  const normalizedExplicitAgentId = normalizeOptionalString(explicitAgentId);
   const explicitKeyAgentId = parseAgentSessionKey(requestedKey)?.agentId;
-  if (
-    explicitAgentId &&
-    explicitKeyAgentId &&
-    normalizeAgentId(explicitKeyAgentId) !== normalizeAgentId(explicitAgentId)
-  ) {
-    return {
-      ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `sessions.create key agent (${explicitKeyAgentId}) does not match agentId (${normalizeAgentId(explicitAgentId)})`,
-      ),
-    };
-  }
-  const requestedKeyAgent = requestedKey
-    ? resolveRequestedSessionAgentId(params.cfg, requestedKey, explicitAgentId, {
-        allowUnconfiguredExplicitAgent: true,
-      })
-    : undefined;
-  if (requestedKeyAgent && !requestedKeyAgent.ok) {
-    return requestedKeyAgent;
-  }
-  // Resolve the main alias under an explicit selection before compatibility ownership.
-  const implicitSelectionKey = explicitAgentId
-    ? `agent:${normalizeAgentId(explicitAgentId)}:main`
-    : "main";
-  const implicitAgent = requestedKeyAgent
-    ? undefined
-    : resolveRequestedSessionAgentId(params.cfg, implicitSelectionKey, explicitAgentId, {
-        allowUnconfiguredExplicitAgent: true,
-      });
-  if (implicitAgent && !implicitAgent.ok) {
-    return implicitAgent;
-  }
-  const agentId = normalizeAgentId(
-    explicitAgentId ?? requestedKeyAgent?.agentId ?? implicitAgent?.agentId,
+  const selectedAgent = resolveRequestedSessionAgentId(
+    params.cfg,
+    requestedKey ??
+      (normalizedExplicitAgentId
+        ? `agent:${normalizeAgentId(normalizedExplicitAgentId)}:main`
+        : "main"),
+    explicitAgentId ?? explicitKeyAgentId,
   );
+  if (!selectedAgent.ok) {
+    return selectedAgent;
+  }
+  const agentId = selectedAgent.agentId;
   const catalogModel = normalizeOptionalString(params.catalogTarget?.model);
   const catalogAgentRuntime = normalizeOptionalAgentRuntimeId(params.catalogTarget?.agentRuntime);
   const catalogPluginOwnerId = normalizeOptionalString(params.catalogTarget?.pluginOwnerId);

@@ -65,7 +65,7 @@ const MOCK_ACTOR_MIRA: SessionActorFixture = {
   id: "profile-mira",
   label: "Mira",
 };
-// These actors are also the effective owners because the mock rows are unassigned.
+// Rows carry explicit owners the way the gateway projects createdActor fallbacks.
 const MOCK_SESSION_OWNERS: readonly SessionActorFixture[] = [MOCK_ACTOR_PETER, MOCK_ACTOR_MIRA];
 
 const SESSION_PAGE_SIZE = 50;
@@ -1531,6 +1531,7 @@ async function createChatPickerScenario(
     sessionRow(NARRATION_DEMO_SESSION_KEY, "Sidebar narration demo", baseTime - 15_000, {
       createdActor: MOCK_ACTOR_MIRA,
       hasActiveRun: true,
+      owner: { actor: MOCK_ACTOR_MIRA },
       startedAt: baseTime - 45_000,
       status: "running",
     }),
@@ -1544,10 +1545,12 @@ async function createChatPickerScenario(
       category: "Research",
       createdActor: MOCK_ACTOR_MIRA,
       execCwd: "/Users/peter/Projects/clawdbot",
+      owner: { actor: MOCK_ACTOR_MIRA },
     }),
     sessionRow("agent:main:model-budget", "Model budget review", baseTime - 80_000, {
       category: "Research",
       execCwd: "/Users/peter/Projects/openclaw",
+      owner: { actor: { type: "human", id: "presence-riley", label: "Riley" } },
       status: "failed",
       lastRunError: "Model out of credits: openai/gpt-5.6",
     }),
@@ -1555,6 +1558,7 @@ async function createChatPickerScenario(
       createdActor: MOCK_ACTOR_PETER,
       execCwd: "/Users/peter/Work/openclaw",
       lastReadAt: baseTime - 120_000,
+      owner: { actor: MOCK_ACTOR_PETER },
       observerDigest: {
         headline: "Done: fixed the flaky retry-window test",
         health: "done",
@@ -1787,6 +1791,9 @@ async function createChatPickerScenario(
     // Terminal has a second gate beyond the advertised method (see
     // ui/src/lib/terminal-availability.ts).
     terminalEnabled: true,
+    // The mock rows span several owners; advertise the multi-identity policy
+    // so people-aware UI (People sort, Person grouping) is exercisable here.
+    hasMultipleSessionSharingIdentities: true,
     historyMessages,
     // Lights up the footer facepile and who's-online roster; the email-only
     // entry keeps the roster's no-display-name row exercised.
@@ -2616,7 +2623,12 @@ async function createChatPickerScenario(
         },
       },
       status: {
-        eventLoop: { utilization: 0.42, delayP99Ms: 12, delayMaxMs: 87 },
+        eventLoop: { utilization: 0.42, cpuCoreRatio: 0.24, delayP99Ms: 12, delayMaxMs: 87 },
+        processMemory: {
+          rssBytes: 432 * 1_048_576,
+          heapUsedBytes: 210 * 1_048_576,
+          heapTotalBytes: 280 * 1_048_576,
+        },
         uptimeMs: 5_412_000,
       },
       "last-heartbeat": { ts: baseTime },

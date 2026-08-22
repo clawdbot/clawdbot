@@ -37,7 +37,7 @@ import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equal
 import {
   deleteLegacySessionEntryRows,
   deleteSessionEntryRows,
-  readExactSessionEntryJsonForCanonicalRepair,
+  readExactSessionEntryJson,
   readExactSessionEntryRow,
   readSessionEntryCount,
   readSessionEntryStore,
@@ -210,10 +210,7 @@ function readProjectedRemovalEntry(
         : readExactSessionEntryRow(database, projected.sessionKey)
     )?.entry;
   }
-  if (
-    readExactSessionEntryJsonForCanonicalRepair(database, projected.sessionKey) !==
-    expectedRawEntryJson
-  ) {
+  if (readExactSessionEntryJson(database, projected.sessionKey) !== expectedRawEntryJson) {
     throw new Error(
       `SQLite session entry changed before raw lifecycle removal for ${projected.sessionKey}`,
     );
@@ -342,6 +339,7 @@ export async function applySessionEntryLifecycleMutation(params: {
         sessionKey,
         entry,
         expectedEntry,
+        routeContext,
         resetBoundaryPlan,
       } of projected.upsertedEntries) {
         const sameKeyRemoval = validatedRemovals.find(
@@ -380,6 +378,7 @@ export async function applySessionEntryLifecycleMutation(params: {
           allowStoredAliases: params.allowCanonicalRepair === true,
           preserveNodeSuggestions: params.allowCanonicalRepair === true,
           previousEntry: expectedCurrentEntry ?? null,
+          ...(routeContext !== undefined ? { routeContext } : {}),
         });
         const relatedRemovalKeys = validatedRemovals.flatMap((removal) => {
           const removedSessionId = removal.expectedEntry.sessionId;

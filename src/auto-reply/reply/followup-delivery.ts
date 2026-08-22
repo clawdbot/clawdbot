@@ -5,7 +5,6 @@ import {
   hasCompletedSourceReplyDeliveryEvidence,
   hasCompletedTerminalDeliveryEvidence,
   hasVisibleCommittedMessagingToolDeliveryEvidence,
-  hasVisibleOutboundDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
   hasDeliberateSilentTerminalReply,
@@ -203,10 +202,6 @@ export function resolveFollowupDeliveryDecision(params: {
       resolved: runtimeResolved,
     };
   }
-  const hasCommittedDelivery =
-    hasVisibleOutboundDeliveryEvidence(result) ||
-    hasCommittedSourceReplyDeliveryEvidence(result) ||
-    result.didSendDeterministicApprovalPrompt === true;
   const fallbackPayload = accounting.terminalFailurePayload
     ? isInteractive && !hasCompletedTerminalDeliveryEvidence(result)
       ? sourcePolicy.sourceReplyDeliveryMode === "message_tool_only"
@@ -237,7 +232,7 @@ export function resolveFollowupDeliveryDecision(params: {
         hasPendingContinuation:
           result.meta?.yielded === true || (result.meta?.pendingToolCalls?.length ?? 0) > 0,
         hasExplicitSilentReply: hasDeliberateSilentTerminalReply(result),
-        hasCommittedDelivery,
+        hasCommittedDelivery: hasCompletedTerminalDeliveryEvidence(result),
         hasIntentionalTerminalCompletion: hasIntentionalTerminalCompletion(result),
         sessionCtx: {
           ChatType: turn.queued.originatingChatType,

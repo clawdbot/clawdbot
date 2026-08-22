@@ -12,10 +12,13 @@ import type {
 } from "../plugins/hook-types.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import type { OpenClawPluginServiceContext } from "../plugins/types.js";
 import {
+  GatewayDrainingError,
   getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
@@ -617,6 +620,7 @@ describe("startGatewayPostAttachRuntime", () => {
       delayMs: 0,
       getConfig: expect.any(Function),
       shouldContinue: expect.any(Function),
+      startupCheckedStorePaths: expect.any(Set),
       waitForStart: undefined,
       gatewayRuntime: expect.any(Object),
     });
@@ -1821,6 +1825,84 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
+  it("owns a queued provider auth rewarm rejected by restart drain without warning", async () => {
+    vi.useFakeTimers();
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    const sidecar = testing.scheduleProviderAuthStatePrewarm({
+      getConfig: () => ({}) as never,
+      log,
+      startupWarmEnabled: false,
+    });
+
+    try {
+      await vi.dynamicImportSettled();
+      await waitForGatewayTestState(() => {
+        expect(hoisted.setAuthProfileFailureHook).toHaveBeenCalledOnce();
+      });
+      const failureHook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as
+        | (() => void)
+        | undefined;
+      if (!failureHook) {
+        throw new Error("Expected provider auth failure hook to be registered");
+      }
+
+      failureHook();
+      markGatewayRestartDraining();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.dynamicImportSettled();
+
+      expect(hoisted.warmCurrentProviderAuthStateOffMainThread).not.toHaveBeenCalled();
+      expect(log.warn).not.toHaveBeenCalled();
+      expect(unhandledRejections).toStrictEqual([]);
+    } finally {
+      await sidecar.stop();
+      process.off("unhandledRejection", onUnhandledRejection);
+      resetGatewayWorkAdmission();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { label: "ordinary failure", error: new Error("provider warm failed") },
+    { label: "draining error outside restart", error: new GatewayDrainingError("not draining") },
+  ])("warns for a queued provider auth rewarm $label", async ({ error }) => {
+    vi.useFakeTimers();
+    const log = { info: vi.fn(), warn: vi.fn() };
+    hoisted.warmCurrentProviderAuthStateOffMainThread.mockRejectedValueOnce(error);
+    const sidecar = testing.scheduleProviderAuthStatePrewarm({
+      getConfig: () => ({}) as never,
+      log,
+      startupWarmEnabled: false,
+    });
+
+    try {
+      await vi.dynamicImportSettled();
+      await waitForGatewayTestState(() => {
+        expect(hoisted.setAuthProfileFailureHook).toHaveBeenCalledOnce();
+      });
+      const failureHook = hoisted.setAuthProfileFailureHook.mock.calls[0]?.[0] as
+        | (() => void)
+        | undefined;
+      if (!failureHook) {
+        throw new Error("Expected provider auth failure hook to be registered");
+      }
+
+      failureHook();
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(log.warn).toHaveBeenCalledWith(`provider auth state rewarm failed: ${String(error)}`);
+    } finally {
+      await sidecar.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("delays explicit provider auth prewarm beyond the early post-ready window", async () => {
     expect(testing.providerAuthPrewarmStartDelayMs).toBe(5_000);
   });
@@ -2478,6 +2560,28 @@ describe("startGatewayPostAttachRuntime", () => {
         ["fullCatalogConcurrencyLimitCount", 1],
       ],
     });
+  });
+
+  it("prepares the model runtime with the active Gateway plugin registry", async () => {
+    const pluginRegistry = createPostAttachParams().pluginRegistry;
+    const prewarmPrimaryModel = vi.fn(async () => {
+      expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(pluginRegistry);
+    });
+
+    await startGatewaySidecars({
+      cfg: { hooks: { internal: { enabled: false } } } as never,
+      pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels: vi.fn(async () => {}),
+      log: { warn: vi.fn() },
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      prewarmPrimaryModel,
+    });
+
+    expect(prewarmPrimaryModel).toHaveBeenCalledOnce();
+    expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
   });
 
   it("marks startup main-session orphans before model runtime and channel startup", async () => {

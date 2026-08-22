@@ -340,6 +340,8 @@ export class ChatPane extends ChatPaneLayoutRender {
       sendShortcut: state.settings.chatSendShortcut,
       followUpMode: state.chatFollowUpMode,
       draft: state.chatMessage,
+      modelCatalog: state.chatModelCatalog,
+      modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
       queue: state.chatQueue,
       queuedOutboxCount: state.chatQueue.filter((item) => !item.pendingRunId).length,
       realtimeTalkActive: state.realtimeTalkActive,
@@ -358,7 +360,9 @@ export class ChatPane extends ChatPaneLayoutRender {
       composerHoldToRecord: state.settings.composerHoldToRecord,
       suggestionComposer: suggestionViewer,
       typingActors: multiIdentity ? this.typingActorViews() : [],
-      onTypingChange: typingEnabled ? (typing) => this.sendTypingState(typing) : undefined,
+      onTypingChange: typingEnabled
+        ? (typing, preview) => this.sendTypingState(typing, preview)
+        : undefined,
       canSend: catalogKey
         ? this.catalogSession?.canContinue === true
         : !modelSetupRequired &&
@@ -529,7 +533,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         state.requestUpdate?.();
       },
       onRemoveAttachment: this.removeBrowserAnnotation,
-      onSend: (followUpModeOverride) =>
+      onSend: (followUpModeOverride, submissionAction) =>
         catalogKey
           ? void this.continueCatalogSession(catalogKey)
           : suggestionViewer
@@ -537,6 +541,7 @@ export class ChatPane extends ChatPaneLayoutRender {
             : void state.handleSendChat(
                 undefined,
                 followUpModeOverride ? { followUpMode: followUpModeOverride } : undefined,
+                submissionAction,
               ),
       onCompact: sessionActionCallbacks.onCompact,
       // Checkpoint deep-link carries the archived filter so the row stays findable.

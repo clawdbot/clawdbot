@@ -136,6 +136,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       manifestRegistry,
       metadataSnapshot,
       installRecords: {},
+      preferBuiltPluginArtifacts: false,
     });
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
       allowWorkspaceScopedCurrent: true,
@@ -314,6 +315,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
     const context = resolvePluginRuntimeLoadContext({
       config: { plugins: {} },
       env: { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+      preferBuiltPluginArtifacts: true,
       workspaceDir: "/explicit-workspace",
     });
 
@@ -332,6 +334,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       logger: context.logger,
       manifestRegistry,
       installRecords: {},
+      preferBuiltPluginArtifacts: true,
       cache: false,
       activate: false,
       onlyPluginIds: ["demo"],

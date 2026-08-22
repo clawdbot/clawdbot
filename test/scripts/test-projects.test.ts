@@ -1258,18 +1258,14 @@ describe("scripts/test-projects changed-target routing", () => {
       "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts",
       "test/e2e/qa-lab/runtime/mcp-channels.fixture.ts",
       "test/e2e/qa-lab/runtime/mcp-client-temp-state.fixture.ts",
-      "scripts/e2e/mcp-channels-seed.ts",
-      "scripts/e2e/docker-openai-seed.ts",
       "scripts/e2e/mcp-code-mode-gateway-docker.sh",
       "scripts/e2e/mcp-code-mode-gateway-live-docker.sh",
-      "scripts/e2e/mcp-code-mode-gateway-seed.ts",
       "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
       "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts",
       "scripts/mcp-code-mode-gateway-e2e.ts",
       "scripts/e2e/cron-cli-docker.sh",
       "scripts/e2e/cron-mcp-cleanup-docker.sh",
       "scripts/e2e/cron-mcp-cleanup-docker-client.ts",
-      "scripts/e2e/cron-mcp-cleanup-seed.ts",
     ];
 
     expect(findUnmatchedExplicitTestTargets(targets)).toEqual([]);
@@ -1280,7 +1276,6 @@ describe("scripts/test-projects changed-target routing", () => {
       "test/scripts/plugin-prerelease-test-plan.test.ts",
       "test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts",
       "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
-      "test/scripts/docker-e2e-seeds.test.ts",
       "test/scripts/mcp-code-mode-gateway-client.test.ts",
       "test/scripts/session-log-mentions.test.ts",
       "src/agents/agent-bundle-mcp-runtime.test.ts",
@@ -1678,7 +1673,10 @@ describe("scripts/test-projects changed-target routing", () => {
       buildVitestRunPlans(["src/commands/onboard-non-interactive.test-helpers.ts"]),
       {
         config: "test/vitest/vitest.commands.config.ts",
-        includePatterns: ["src/commands/onboard-non-interactive.gateway.test.ts"],
+        includePatterns: [
+          "src/commands/onboard-non-interactive.gateway-auth-token.test.ts",
+          "src/commands/onboard-non-interactive.gateway.test.ts",
+        ],
       },
     );
   });

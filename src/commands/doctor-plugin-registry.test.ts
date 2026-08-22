@@ -1,7 +1,6 @@
 // Doctor plugin registry tests cover plugin registry checks and repair diagnostics.
 import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -298,14 +297,32 @@ function expectedPluginIndexRecord(params: {
 }
 
 describe("maybeRepairPluginRegistryState", () => {
-  it("maps missing plugin registry state to a structured finding and dry-run effect", async () => {
+  it("distinguishes uninitialized registry state from retired config migration", async () => {
     const stateDir = makeTempDir();
-    const registryPath = resolveInstalledPluginIndexStorePath({ stateDir });
+    await expect(
+      detectPluginRegistryHealthIssues({
+        stateDir,
+        env: hermeticEnv(),
+        config: {},
+        prompter: { shouldRepair: false },
+      }),
+    ).resolves.toEqual([]);
 
+    const migrationStateDir = makeTempDir();
+    const registryPath = resolveInstalledPluginIndexStorePath({ stateDir: migrationStateDir });
     const [issue] = await detectPluginRegistryHealthIssues({
-      stateDir,
+      stateDir: migrationStateDir,
       env: hermeticEnv(),
-      config: {},
+      config: {
+        plugins: {
+          installs: {
+            demo: {
+              source: "path",
+              installPath: migrationStateDir,
+            },
+          },
+        },
+      },
       prompter: { shouldRepair: false },
     });
 
@@ -313,22 +330,6 @@ describe("maybeRepairPluginRegistryState", () => {
       kind: "registry-missing-or-stale",
       path: registryPath,
     });
-    expect(
-      pluginRegistryIssueToHealthFinding(expectDefined(issue, "issue test invariant")),
-    ).toMatchObject({
-      checkId: "core/doctor/plugin-registry",
-      severity: "warning",
-      path: registryPath,
-      fixHint: "Run `openclaw doctor --fix` to rebuild the plugin registry from enabled plugins.",
-    });
-    expect(pluginRegistryIssueToRepairEffect(expectDefined(issue, "issue test invariant"))).toEqual(
-      {
-        kind: "state",
-        action: "would-rebuild-plugin-registry",
-        target: registryPath,
-        dryRunSafe: false,
-      },
-    );
   });
 
   it("maps stale managed npm bundled plugin shadows to structured findings", async () => {

@@ -531,7 +531,7 @@ describe("acp translator stop reason mapping", () => {
     }
   });
 
-  it("rejects a superseded pre-ack prompt when a newer prompt has replaced the session entry", async () => {
+  it("cancels a superseded pre-ack prompt before admitting its replacement", async () => {
     let promptCount = 0;
     const request = vi.fn(async (method: string) => {
       if (method !== "chat.send") {
@@ -550,11 +550,11 @@ describe("acp translator stop reason mapping", () => {
 
     const secondPrompt = promptAgent(agent, sessionId, "second");
 
-    await expect(firstPrompt).rejects.toThrow("gateway closed (1006): connection lost");
+    await expect(firstPrompt).resolves.toEqual({ stopReason: "cancelled" });
     await expect(Promise.race([secondPrompt, Promise.resolve("pending")])).resolves.toBe("pending");
   });
 
-  it("rejects stale pre-ack prompts when a superseded send resolves late", async () => {
+  it("keeps replacement disconnect handling isolated when a cancelled send resolves late", async () => {
     vi.useFakeTimers();
     try {
       let firstSendResolve: (() => void) | undefined;
@@ -583,8 +583,14 @@ describe("acp translator stop reason mapping", () => {
 
       const secondPrompt = promptAgent(agent, sessionId, "second");
       void secondPrompt.catch(() => {});
-      await Promise.resolve();
-      expect(sendCount).toBe(2);
+      await expect(firstPrompt).resolves.toEqual({ stopReason: "cancelled" });
+      await vi.waitFor(() => {
+        expect(sendCount).toBe(2);
+      });
+      expect(request).toHaveBeenCalledWith(
+        "chat.abort",
+        expect.objectContaining({ sessionKey: "agent:main:main", runId: expect.any(String) }),
+      );
 
       resolveFirstSend();
       await Promise.resolve();

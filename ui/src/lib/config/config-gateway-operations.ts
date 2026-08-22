@@ -5,6 +5,7 @@ import type { ConfigSchemaResponse, ConfigSnapshot } from "../../api/types.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { serializeConfigForm } from "../config-form-utils.ts";
 import { formatUiError, formatUiExternalText } from "../format-error.ts";
+import { showToast } from "../toast.ts";
 import {
   adoptConfigSetAck,
   applyConfigSnapshot,
@@ -639,6 +640,21 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
   const isCurrent = () => isCurrentConfigConnection(state, client, connectionEpoch);
   state.lastError = null;
   state.chatError = null;
+  const publishFailure = async (error: string, path?: string | null) => {
+    if (!isCurrent()) {
+      return;
+    }
+    let message = error;
+    if (path) {
+      message += (await copyToClipboard(path))
+        ? `\n\nFile path copied to clipboard: ${path}`
+        : `\n\nFile path: ${path}`;
+    }
+    if (isCurrent()) {
+      state.lastError = formatUiExternalText(message);
+      showToast({ message: state.lastError });
+    }
+  };
   try {
     const res = await client.request<{ ok: boolean; path?: string; error?: string }>(
       "config.openFile",
@@ -648,30 +664,12 @@ export async function openConfigFile(state: RuntimeConfigState): Promise<void> {
       return;
     }
     if (!res.ok) {
-      let errorMessage = formatUiExternalText(res.error, "Failed to open config file");
-      const path = res.path || state.configSnapshot?.path;
-      if (path) {
-        if (await copyToClipboard(path)) {
-          errorMessage += `\n\nFile path copied to clipboard: ${path}`;
-        } else {
-          errorMessage += `\n\nFile path: ${path}`;
-        }
-      }
-      if (isCurrent()) {
-        state.lastError = formatUiExternalText(errorMessage);
-      }
+      await publishFailure(
+        formatUiExternalText(res.error, "Failed to open config file"),
+        res.path || state.configSnapshot?.path,
+      );
     }
   } catch (err) {
-    if (!isCurrent()) {
-      return;
-    }
-    const errorMessage = formatUiError(err);
-    const path = state.configSnapshot?.path;
-    if (path) {
-      await copyToClipboard(path);
-    }
-    if (isCurrent()) {
-      state.lastError = errorMessage;
-    }
+    await publishFailure(formatUiError(err), state.configSnapshot?.path);
   }
 }

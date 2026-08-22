@@ -21,6 +21,7 @@ import {
   presenceViewerLabel,
   projectOnlinePresenceViewers,
 } from "../lib/presence-users.ts";
+import { isSessionRunActive } from "../lib/session-run-state.ts";
 import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
@@ -178,8 +179,14 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
     isSessionRouteId(host.activeRouteId) &&
     areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
   const hasComposerDraft = host.hasSessionDraft(mainKey);
-  const running = mainRow?.hasActiveRun === true;
+  const running = mainRow ? isSessionRunActive(mainRow) : false;
   const unread = mainRow?.unread === true && !active;
+  const activeRunLabel = running ? t("sessionsView.activeRun") : "";
+  const unreadLabel = unread ? t("sessionsView.unread") : "";
+  const homeDescription =
+    attentionLabel || (activeRunLabel && unreadLabel)
+      ? [attentionLabel, activeRunLabel, unreadLabel].filter(Boolean).join(" · ")
+      : "";
   // Home keeps its page/attention glyph leading and shares trailing activity with session rows.
   const homeGlyph = renderSessionGlyph({
     content:
@@ -187,7 +194,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
         ? html`<span class="nav-item__icon" aria-hidden="true">${icons.home}</span>`
         : renderSessionAttentionIcon(attention),
     running: false,
-    badge: unread ? renderSessionUnreadBadge() : nothing,
+    badge: unread && !running ? renderSessionUnreadBadge() : nothing,
   });
   return html`
     <a
@@ -201,7 +208,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
         preferenceDerivedFace: true,
       }).href}
       class="nav-item nav-item--home ${active ? "nav-item--active" : ""}"
-      aria-label=${attentionLabel ? `${t("nav.home")} · ${attentionLabel}` : nothing}
+      aria-label=${homeDescription ? `${t("nav.home")} · ${homeDescription}` : nothing}
       aria-current=${active ? "page" : nothing}
       @click=${(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {

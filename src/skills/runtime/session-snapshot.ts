@@ -68,6 +68,9 @@ export function resolveReusableWorkspaceSkillSnapshot(
       workspaceDir: watcherWorkspaceDir,
       ...(skillRoots ? { executionSkillsDir: skillRoots.executionSkillsDir } : {}),
       config: params.config,
+      ...(params.pluginMetadataSnapshot
+        ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+        : {}),
     });
   }
   const snapshotVersion = params.snapshotVersion ?? getSkillsSnapshotVersion(watcherWorkspaceDir);
@@ -101,6 +104,7 @@ export function resolveReusableWorkspaceSkillSnapshot(
           skillFilter: params.skillFilter,
           skillOverrides: params.skillOverrides,
           eligibility: params.eligibility,
+          pluginMetadataSnapshot: params.pluginMetadataSnapshot,
         })
       : undefined;
     const snapshot = buildSkillSnapshot(params.workspaceDir, {

@@ -9,7 +9,7 @@ import {
   type PreparedModelRuntimeAuthScope,
 } from "../agents/prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
-import { isPreparedModelCatalogFull } from "../agents/prepared-model-runtime.facts.js";
+import { isPreparedModelCatalogFull } from "../agents/prepared-model-runtime.full-catalog.js";
 // Gateway catalog reads use the atomic prepared runtime generation.
 import { getRuntimeConfig } from "../config/io.js";
 import type { PreparedGatewayModelCatalogSnapshot } from "./server-model-catalog-auth.js";

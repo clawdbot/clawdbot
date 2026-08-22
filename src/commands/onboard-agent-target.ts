@@ -48,6 +48,23 @@ export function resolveSystemAgentOnboardingTarget(config: OpenClawConfig): Onbo
   return resolveOnboardingAgentTarget(config, config.agents?.defaults?.systemAgent?.agentId);
 }
 
+/** Resolve onboarding setup to its existing or pending first-agent owner. */
+export function resolveOnboardingSetupTarget(
+  config: OpenClawConfig,
+  pendingAgent?: { name: string; workspaceDir: string },
+): OnboardingAgentTarget {
+  if (config.agents?.ownership === "explicit") {
+    return resolveSystemAgentOnboardingTarget(config);
+  }
+  if (pendingAgent) {
+    return {
+      ...resolveOnboardingAgentTarget(config, pendingAgent.name),
+      workspaceDir: pendingAgent.workspaceDir,
+    };
+  }
+  return resolveOnboardingAgentTarget(config);
+}
+
 export async function ensureOnboardingAgentWorkspace(
   target: OnboardingAgentTarget,
   runtime: RuntimeEnv,

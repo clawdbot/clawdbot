@@ -1063,7 +1063,7 @@ function createGatewayHealthCheck(deps: CoreHealthCheckDeps): SplitHealthCheckDe
   return {
     id: GATEWAY_HEALTH_CHECK_ID,
     kind: "core",
-    description: "Gateway reachability is represented as structured findings.",
+    description: "Authenticated Gateway health and degraded secret owners are structured findings.",
     source: "doctor",
     defaultEnabled: false,
     async detect(ctx) {

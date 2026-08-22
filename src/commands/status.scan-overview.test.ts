@@ -93,6 +93,7 @@ describe("collectStatusScanOverview", () => {
     mocks.readBestEffortConfigSnapshot.mockResolvedValue({
       config: { session: {} },
       sourceConfig: { session: { raw: true } },
+      configDiagnostics: null,
     });
     mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
       resolvedConfig: { session: {} },

@@ -62,6 +62,9 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         var requestData: Data?
         var continuation: CheckedContinuation<Data, Error>?
         var timer: DispatchSourceTimer?
+        /// One requeue budget for the child-exit race: a failed stdin write was
+        /// never delivered, so a single retry on a fresh child cannot duplicate.
+        var redelivered = false
 
         init(
             token: UUID,
@@ -105,6 +108,9 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         {
             self.invocation = invocation
             self.initializeRequestID = initializeRequestID
+            // The App Server child can exit between requests; without this an
+            // in-flight stdin write raises SIGPIPE and kills the app.
+            self.stdinPipe.fileHandleForWriting.disableSIGPIPE()
         }
     }
 
@@ -351,9 +357,19 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
             }
             try self.write(requestData, over: connection)
         } catch {
-            self.finishActive(
-                .failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable),
-                restartConnection: true)
+            // A warm connection can outlive its child; the exit race surfaces
+            // here as EPIPE before termination is observed. The frame was never
+            // delivered, so requeue once onto a fresh child instead of failing.
+            guard !active.redelivered else {
+                self.finishActive(
+                    .failure(MacNodeCodexThreadCatalog.CatalogError.appServerUnavailable),
+                    restartConnection: true)
+                return
+            }
+            active.redelivered = true
+            self.active = nil
+            self.pending.insert(active, at: 0)
+            self.stopConnection(abortive: true)
         }
     }
 

@@ -61,6 +61,7 @@ function listGatewayThinkingLevelOptions(params: {
   model: string;
   modelCatalog?: ModelCatalogEntry[];
   agentRuntime: string;
+  configuredReasoning?: boolean;
   providerPolicySource?: ThinkingProviderPolicySource;
 }) {
   return resolveThinkingProfile({
@@ -68,21 +69,24 @@ function listGatewayThinkingLevelOptions(params: {
     model: params.model,
     catalog: params.modelCatalog,
     agentRuntime: params.agentRuntime,
+    configuredReasoning: params.configuredReasoning,
     providerPolicySource: params.providerPolicySource,
   }).levels.map(({ id, label }) => ({ id, label }));
 }
 
 function resolveGatewaySessionThinkingLevel(params: {
   provider: string;
+  catalogProvider?: string;
   model: string;
   level: NonNullable<ReturnType<typeof normalizeThinkLevel>>;
   modelCatalog?: ModelCatalogEntry[];
   agentRuntime: string;
+  configuredReasoning?: boolean;
   providerPolicySource?: ThinkingProviderPolicySource;
 }) {
   const catalogEntry = params.modelCatalog
     ? findModelCatalogEntry(params.modelCatalog, {
-        provider: params.provider,
+        provider: params.catalogProvider ?? params.provider,
         modelId: params.model,
       })
     : undefined;
@@ -98,6 +102,7 @@ function resolveGatewaySessionThinkingLevel(params: {
     level: params.level,
     catalog: params.modelCatalog,
     agentRuntime: params.agentRuntime,
+    configuredReasoning: params.configuredReasoning,
     providerPolicySource: params.providerPolicySource,
   });
 }
@@ -105,10 +110,12 @@ function resolveGatewaySessionThinkingLevel(params: {
 function resolveGatewaySessionThinkingDefault(params: {
   cfg: OpenClawConfig;
   provider: string;
+  thinkingPolicyProvider?: string;
   model: string;
   agentId?: string;
   modelCatalog?: ModelCatalogEntry[];
   agentRuntime: string;
+  configuredReasoning?: boolean;
   providerPolicySource?: ThinkingProviderPolicySource;
 }) {
   const agentThinkingDefault = params.agentId
@@ -129,11 +136,13 @@ function resolveGatewaySessionThinkingDefault(params: {
       agentRuntime: params.agentRuntime,
     });
   return resolveGatewaySessionThinkingLevel({
-    provider: params.provider,
+    provider: params.thinkingPolicyProvider ?? params.provider,
+    catalogProvider: params.provider,
     model: params.model,
     level: defaultLevel,
     modelCatalog: params.modelCatalog,
     agentRuntime: params.agentRuntime,
+    configuredReasoning: params.configuredReasoning,
     providerPolicySource: params.providerPolicySource,
   });
 }
@@ -144,6 +153,8 @@ export function resolveGatewayModelThinkingProfile(params: {
   provider: string;
   model: string;
   agentRuntime?: string;
+  configuredReasoning?: boolean;
+  thinkingPolicyProvider?: string;
   modelCatalog?: ModelCatalogEntry[];
   rowContext?: SessionListRowContext;
   sessionKey?: string;
@@ -166,27 +177,31 @@ export function resolveGatewayModelThinkingProfile(params: {
       agentId: params.agentId,
       sessionKey: params.sessionKey,
     });
+  const thinkingPolicyProvider = params.thinkingPolicyProvider ?? params.provider;
   if (!params.rowContext) {
     return {
       thinkingLevels: listGatewayThinkingLevelOptions({
-        provider: params.provider,
+        provider: thinkingPolicyProvider,
         model: params.model,
         modelCatalog: params.modelCatalog,
         agentRuntime,
+        configuredReasoning: params.configuredReasoning,
         providerPolicySource: params.providerPolicySource,
       }),
       thinkingDefault: resolveGatewaySessionThinkingDefault({
         cfg: params.cfg,
         provider: params.provider,
+        thinkingPolicyProvider,
         model: params.model,
         agentId: params.agentId,
         modelCatalog: params.modelCatalog,
         agentRuntime,
+        configuredReasoning: params.configuredReasoning,
         providerPolicySource: params.providerPolicySource,
       }),
     };
   }
-  const key = `${normalizeAgentId(params.agentId)}\0${agentRuntime}\0${params.providerPolicySource ?? "active-or-bundled"}\0${createSessionRowModelCacheKey(
+  const key = `${normalizeAgentId(params.agentId)}\0${agentRuntime}\0${normalizeLowercaseStringOrEmpty(thinkingPolicyProvider)}\0${String(params.configuredReasoning)}\0${params.providerPolicySource ?? "active-or-bundled"}\0${createSessionRowModelCacheKey(
     params.provider,
     params.model,
   )}`;
@@ -196,19 +211,22 @@ export function resolveGatewayModelThinkingProfile(params: {
   }
   const metadata = {
     thinkingLevels: listGatewayThinkingLevelOptions({
-      provider: params.provider,
+      provider: thinkingPolicyProvider,
       model: params.model,
       modelCatalog: params.modelCatalog,
       agentRuntime,
+      configuredReasoning: params.configuredReasoning,
       providerPolicySource: params.providerPolicySource,
     }),
     thinkingDefault: resolveGatewaySessionThinkingDefault({
       cfg: params.cfg,
       provider: params.provider,
+      thinkingPolicyProvider,
       model: params.model,
       agentId: params.agentId,
       modelCatalog: params.modelCatalog,
       agentRuntime,
+      configuredReasoning: params.configuredReasoning,
       providerPolicySource: params.providerPolicySource,
     }),
   };

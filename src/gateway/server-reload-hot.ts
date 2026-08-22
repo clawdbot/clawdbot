@@ -120,6 +120,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         deps: params.deps,
         broadcast: params.broadcast,
         env: publication?.runtimeEnv ?? process.env,
+        // Without this a cron hot reload silently drops scheduler gateway
+        // context, so scheduled runs regress to contextless after any reload.
+        ...(params.resolveGatewayContext
+          ? { resolveGatewayContext: params.resolveGatewayContext }
+          : {}),
       });
     }
 
@@ -545,12 +550,16 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         }
         // beforeReplace may have set pluginReloadAborted inside reloadPlugins;
         // skip metadata/runtime updates when the reload was cancelled mid-flight.
-        if (!pluginReloadAborted) {
+        if (!pluginReloadAborted && !isLifecycleReloadAborted()) {
           for (const channel of pluginReloadResult.restartChannels) {
             channelsToRestart.add(channel);
           }
           activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
+          // Only a successfully published replacement can authoritatively retire channel owners.
+          params.pruneInactiveChannelAccountState(activePluginChannelsAfterReload);
           resetPreparedModelRuntimeStateForHotReload();
+        } else {
+          pluginReloadAborted = true;
         }
       }
     }

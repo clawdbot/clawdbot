@@ -900,6 +900,7 @@ describe("resolveIMessageInboundDecision command auth", () => {
     });
 
     expect(ctxPayload.CommandAuthorized).toBe(true);
+    expect(ctxPayload.ConversationRoutePeerId).toBe("+15555550123");
     expect(ctxPayload.CommandSource).toBe("text");
     expect(ctxPayload.CommandTurn).toMatchObject({
       kind: "text-slash",
@@ -954,6 +955,7 @@ describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression
     const decision = {
       kind: "dispatch" as const,
       route: { accountId: "default", agentId: "lobster", sessionKey: "k", mainSessionKey: "mk" },
+      bindingResolution: null,
       isGroup: false,
       sender: "+15555550123",
       senderId: "+15555550123",
