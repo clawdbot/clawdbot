@@ -157,11 +157,20 @@ export async function sendDiscordOutboundPayload(params: {
       }
     }
     for (const mediaUrl of mediaUrls.slice(1)) {
-      lastResult = await sendContext.send(sendContext.target, "", {
-        verbose: false,
-        ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
-        onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
-      });
+      try {
+        lastResult = await sendContext.send(sendContext.target, "", {
+          verbose: false,
+          ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
+          onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
+        });
+      } catch (err) {
+        if (!voiceFailure) {
+          throw err;
+        }
+        // Keep the requested voice failure as the durable outcome while allowing the
+        // remaining media loop to finish; later errors must not hide the primary failure.
+        log.warn("discord remaining media send failed after voice failure", { error: err });
+      }
     }
     if (voiceFailure) {
       throw voiceFailure.error;

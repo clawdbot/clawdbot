@@ -56,6 +56,7 @@ describe("Discord voice fallback delivery safety", () => {
     error: unknown,
     options: {
       additionalMedia?: boolean;
+      additionalMediaFailure?: Error;
       deliveredText?: boolean;
       messageCreateAmbiguous?: boolean;
     } = {},
@@ -67,7 +68,12 @@ describe("Discord voice fallback delivery safety", () => {
       }
       throw error;
     });
+    let textDeliveryCalls = 0;
     const textDelivery = vi.fn(async (_to: string, _text: string, sendOptions?: unknown) => {
+      const callIndex = textDeliveryCalls++;
+      if (options.additionalMediaFailure && callIndex > 0) {
+        throw options.additionalMediaFailure;
+      }
       const result = {
         messageId: "fallback-text",
         channelId: "123456",
@@ -300,6 +306,28 @@ describe("Discord voice fallback delivery safety", () => {
       expect.objectContaining({ mediaUrl: "https://example.test/remaining.png" }),
     );
     expect(onDeliveryResult).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves the voice failure when a remaining media send also fails", async () => {
+    const voiceError = new Error("ffmpeg unavailable");
+    const remainingError = new Error("remaining media unavailable");
+    const { promise, textDelivery, voiceDelivery } = runVoicePayload(voiceError, {
+      additionalMedia: true,
+      additionalMediaFailure: remainingError,
+    });
+
+    await expect(promise).rejects.toBe(voiceError);
+    expect(voiceDelivery).toHaveBeenCalledOnce();
+    expect(textDelivery).toHaveBeenCalledTimes(2);
+    console.log(
+      `discord-voice-partial-proof ${JSON.stringify({
+        voiceAttempt: "failed",
+        fallbackTextDelivered: true,
+        remainingMediaAttempted: true,
+        remainingMediaFailed: true,
+        reportedError: "ffmpeg unavailable",
+      })}`,
+    );
   });
 
   it("keeps an existing transcript when an audio encoder fails before voice delivery", async () => {
