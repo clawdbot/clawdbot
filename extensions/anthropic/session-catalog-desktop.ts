@@ -12,6 +12,7 @@ import {
   desktopSessionsDir,
   readJsonFile,
   setBoundedCache,
+  type CatalogJsonReadBudget,
 } from "./session-catalog-scan.js";
 import {
   createDirtyDirectoryWatch,
@@ -132,6 +133,7 @@ export function parsePullRequestSummary(
 async function readDesktopMetadata(
   homeDir: string,
   forceRefresh?: boolean,
+  budget?: CatalogJsonReadBudget,
 ): Promise<{
   available: boolean;
   customGroups: Map<string, string>;
@@ -153,7 +155,7 @@ async function readDesktopMetadata(
         if (!name.startsWith("local_") || !name.endsWith(".json")) {
           continue;
         }
-        const raw = await readJsonFile(path.join(workspaceDir, name));
+        const raw = await readJsonFile(path.join(workspaceDir, name), { budget });
         if (!isRecord(raw)) {
           continue;
         }
@@ -196,6 +198,7 @@ export const emptyDesktopOverlay: DesktopOverlay = {
 export async function readDesktopOverlay(
   homeDir: string,
   forceRefresh?: boolean,
+  budget?: CatalogJsonReadBudget,
 ): Promise<DesktopOverlay> {
   const entry = desktopOverlays.get(homeDir);
   if (entry?.refreshing) {
@@ -203,7 +206,7 @@ export async function readDesktopOverlay(
       return entry.overlay;
     }
     await entry.overlay;
-    return readDesktopOverlay(homeDir, forceRefresh);
+    return readDesktopOverlay(homeDir, forceRefresh, budget);
   }
   const dirty = entry?.watch?.takeDirty();
   // Groups live in Local Storage outside this watch. Keep the 60s Desktop refresh even
@@ -232,7 +235,7 @@ export async function readDesktopOverlay(
       current.watch = undefined;
       return emptyDesktopOverlay;
     }
-    return readDesktopMetadata(homeDir, forceRefresh);
+    return readDesktopMetadata(homeDir, forceRefresh, budget);
   })().finally(() => {
     current.refreshing = false;
   });

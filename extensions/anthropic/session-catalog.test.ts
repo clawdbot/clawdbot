@@ -18,7 +18,12 @@ import {
   registerClaudeSessionDiscovery,
 } from "./session-catalog-registration.js";
 import { listBoundClaudeSessions } from "./session-catalog-runtime.js";
-import { MAX_CATALOG_JSON_FILE_BYTES, readJsonFile } from "./session-catalog-scan.js";
+import {
+  MAX_CATALOG_JSON_CACHE_BYTES,
+  MAX_CATALOG_JSON_FILE_BYTES,
+  MAX_CATALOG_JSON_SCAN_BYTES,
+  readJsonFile,
+} from "./session-catalog-scan.js";
 import {
   CLAUDE_CLI_NODE_RUN_COMMAND,
   CLAUDE_SESSIONS_LIST_COMMAND,
@@ -2707,6 +2712,79 @@ describe("Claude session catalog", () => {
     expect(openSpy.mock.calls.map(([filePath]) => filePath)).not.toEqual(
       expect.arrayContaining([indexPath, desktopPath]),
     );
+  });
+
+  it("bounds aggregate catalog JSON bytes and weights the parse cache", async () => {
+    const home = await createHome();
+    const smallSessionId = "small-catalog-session";
+    await writeIndexedDesktopSession(home, {
+      sessionId: smallSessionId,
+      localSessionId: "local_small-catalog-session",
+      metadataName: "small-catalog",
+      title: "Small catalog",
+      prompt: "small catalog prompt",
+    });
+    await expect(listLocalClaudeSessionPage({ limit: 100 }, home)).resolves.toEqual({
+      sessions: [
+        expect.objectContaining({
+          threadId: smallSessionId,
+          name: "Small catalog",
+          source: "claude-desktop",
+        }),
+      ],
+    });
+
+    const projectRoot = path.join(home, ".claude", "projects");
+    const largeFileBytes =
+      Math.floor(Math.min(MAX_CATALOG_JSON_CACHE_BYTES, MAX_CATALOG_JSON_SCAN_BYTES) / 5) + 1;
+    const largeIndexPaths: string[] = [];
+    const largeSessionIds: string[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      const sessionId = `large-catalog-session-${index}`;
+      const projectDir = path.join(projectRoot, `project-${index}`);
+      const transcriptPath = path.join(projectDir, `${sessionId}.jsonl`);
+      const indexPath = path.join(projectDir, "sessions-index.json");
+      await fs.mkdir(projectDir, { recursive: true });
+      const entry = {
+        sessionId,
+        fullPath: transcriptPath,
+        summary: sessionId,
+        isSidechain: false,
+      };
+      const prefix = `{"version":1,"entries":${JSON.stringify([entry])},"padding":"`;
+      const suffix = `"}`;
+      const paddingBytes = largeFileBytes - Buffer.byteLength(prefix) - Buffer.byteLength(suffix);
+      await fs.writeFile(indexPath, `${prefix}${"x".repeat(paddingBytes)}${suffix}`);
+      await fs.writeFile(transcriptPath, `${JSON.stringify({ type: "progress", sessionId })}\n`);
+      largeIndexPaths.push(indexPath);
+      largeSessionIds.push(sessionId);
+    }
+
+    const refreshed = await listLocalClaudeSessionPage({ limit: 100 }, home);
+    expect(refreshed.sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          threadId: smallSessionId,
+          name: "Small catalog",
+          source: "claude-desktop",
+        }),
+      ]),
+    );
+    expect(
+      refreshed.sessions.filter((session) => largeSessionIds.includes(session.threadId)),
+    ).toHaveLength(4);
+
+    const openSpy = vi.spyOn(fs, "open");
+    for (const indexPath of largeIndexPaths) {
+      await readJsonFile(indexPath);
+    }
+    openSpy.mockClear();
+    for (const indexPath of largeIndexPaths) {
+      await readJsonFile(indexPath);
+    }
+    expect(
+      openSpy.mock.calls.some(([filePath]) => largeIndexPaths.includes(String(filePath))),
+    ).toBe(true);
   });
 
   it("keeps the catalog JSON cap across a stat-to-open replacement race", async () => {

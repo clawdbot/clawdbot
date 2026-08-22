@@ -18,7 +18,9 @@ import {
   CLAUDE_CATALOG_IO_CONCURRENCY,
   CLAUDE_PARTIAL_SCAN_TTL_MS,
   CLAUDE_SESSION_SCAN_HARD_TTL_MS,
+  createCatalogJsonReadBudget,
   type ClaudeProjectsTreeSnapshot,
+  type CatalogJsonReadBudget,
   type ClaudeSessionScanContext,
   projectsDir,
   readClaudeCatalogMetadata,
@@ -119,7 +121,13 @@ function parseClaudeCatalogTimestampMs(value: unknown): number | undefined {
   return parseDateFirstTimestampMs(value);
 }
 
-async function readIndexRecords(context: ClaudeSessionScanContext) {
+async function readIndexRecords(
+  context: ClaudeSessionScanContext,
+  budget: CatalogJsonReadBudget,
+): Promise<{
+  records: Map<string, CatalogRecord>;
+  sidechainIds: Set<string>;
+}> {
   const records = new Map<string, CatalogRecord>();
   const sidechainIds = new Set<string>();
   if (!context.resolvedRoot) {
@@ -131,6 +139,7 @@ async function readIndexRecords(context: ClaudeSessionScanContext) {
       raw: childNames.includes("sessions-index.json")
         ? await readJsonFile(path.join(directory, "sessions-index.json"), {
             signature: files.get("sessions-index.json"),
+            budget,
             onIoFailure: () => {
               context.complete = false;
             },
@@ -429,14 +438,17 @@ async function discoverCliRecords(
   }
 }
 
-async function scanClaudeSessions(snapshot: ClaudeProjectsTreeSnapshot) {
+async function scanClaudeSessions(
+  snapshot: ClaudeProjectsTreeSnapshot,
+  budget = createCatalogJsonReadBudget(),
+) {
   const context: ClaudeSessionScanContext = {
     ...snapshot,
     complete: true,
     safeFiles: new Map(),
     directoriesByPath: new Map(snapshot.projectDirectories.map((dir) => [dir.directory, dir])),
   };
-  const indexed = await readIndexRecords(context);
+  const indexed = await readIndexRecords(context, budget);
   await discoverCliRecords(context, indexed.records, indexed.sidechainIds);
   return { ...indexed, context };
 }
@@ -494,6 +506,7 @@ async function mergeClaudeSessions(
 async function readCliScan(
   treeSnapshot: ClaudeProjectsTreeSnapshot,
   forceRefresh?: boolean,
+  budget?: CatalogJsonReadBudget,
 ): Promise<ClaudeCliScan> {
   const cacheKey = `${treeSnapshot.root}\0cli`;
   const now = Date.now();
@@ -510,7 +523,7 @@ async function readCliScan(
   const entry = {
     treeStamp: treeSnapshot.treeStamp,
     hardExpiresAt: now + CLAUDE_SESSION_SCAN_HARD_TTL_MS,
-    records: scanClaudeSessions(treeSnapshot),
+    records: scanClaudeSessions(treeSnapshot, budget),
   };
   setBoundedCache(claudeSessionScanCache, cacheKey, entry, MAX_CLAUDE_SESSION_SCAN_CACHE_ENTRIES);
   try {
@@ -532,12 +545,13 @@ export async function listClaudeSessions(
   homeDir = resolveClaudeCatalogHomeDir(),
   options: { forceRefresh?: boolean; configDir?: string; includeDesktop?: boolean } = {},
 ): Promise<CatalogRecord[]> {
+  const budget = createCatalogJsonReadBudget();
   const [cli, desktop] = await Promise.all([
     readProjectsTreeSnapshot(projectsDir(homeDir, options.configDir), options).then((snapshot) =>
-      readCliScan(snapshot, options.forceRefresh),
+      readCliScan(snapshot, options.forceRefresh, budget),
     ),
     options.includeDesktop !== false
-      ? readDesktopOverlay(homeDir, options.forceRefresh)
+      ? readDesktopOverlay(homeDir, options.forceRefresh, budget)
       : emptyDesktopOverlay,
   ]);
   let overlays = mergedScans.get(cli);
