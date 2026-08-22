@@ -8,7 +8,7 @@
  */
 
 import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const M_POLL_START = "m.poll.start" as const;
 const M_POLL_RESPONSE = "m.poll.response" as const;
@@ -121,11 +121,10 @@ export function isPollEventType(eventType: string): boolean {
 }
 
 function getTextContent(text?: unknown): string {
-  if (!text || typeof text !== "object") {
+  if (!isRecord(text)) {
     return "";
   }
-  const content = text as Record<string, unknown>;
-  const value = content["m.text"] ?? content["org.matrix.msc1767.text"] ?? content.body;
+  const value = text["m.text"] ?? text["org.matrix.msc1767.text"] ?? text.body;
   return normalizeOptionalString(value) ?? "";
 }
 
@@ -143,19 +142,14 @@ export function parsePollStart(content: PollStartContent): ParsedPollStart | nul
     return null;
   }
 
-  // Event content is sender-controlled JSON: the declared shape cannot be
-  // trusted, so guard the array and every entry before mapping. Malformed
-  // entries are dropped instead of throwing — a throw here would bubble up
-  // through thread/reply context building and silently drop the whole message.
+  // Sender-controlled event content can violate declared Matrix types; discard
+  // malformed answers here so context building never drops the whole message.
   const rawAnswers: unknown = poll.answers;
   const answers = (Array.isArray(rawAnswers) ? rawAnswers : [])
-    .map((answer) => {
-      const candidate = answer as Partial<PollAnswer> | null | undefined;
-      return {
-        id: typeof candidate?.id === "string" ? candidate.id : "",
-        text: getTextContent(candidate),
-      };
-    })
+    .map((answer) => ({
+      id: isRecord(answer) && typeof answer.id === "string" ? answer.id : "",
+      text: getTextContent(answer),
+    }))
     .filter((answer) => answer.id.trim().length > 0 && answer.text.length > 0);
   if (answers.length === 0) {
     return null;
