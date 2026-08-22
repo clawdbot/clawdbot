@@ -5,6 +5,13 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { buildReplyPayloads } from "../../auto-reply/reply/agent-runner-payloads.js";
+import { mirrorDeliveredReplyToTranscript } from "../../auto-reply/reply/dispatch-from-config.transcript.js";
+import {
+  loadTranscriptEvents,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import { resolveManagedOutgoingMediaArtifactDownload } from "../../gateway/managed-image-attachments.js";
+import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { extractMessagingToolSourceReplyPayload } from "../embedded-agent-messaging-extraction.js";
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
@@ -27,6 +34,9 @@ function createCurrentSourceMessageTool(params: { workspaceDir?: string } = {}) 
     }),
   });
 }
+
+const TINY_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
 
 describe("WebChat message tool internal source reply", () => {
   it("projects a real targetless send and preserves the automatic final reply", async () => {
@@ -129,6 +139,121 @@ describe("WebChat message tool internal source reply", () => {
             media: outsidePath,
           }),
         ).rejects.toThrow(/could not be staged|allowed directory/i);
+      },
+    );
+  });
+
+  it("persists one managed image for overlapping internal source replies", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-internal-source-reply-" },
+      async (state) => {
+        const stateDir = state.stateDir;
+        const workspaceDir = state.workspaceDir;
+        const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+        const sessionKey = "agent:main:webchat:dm:restart-proof";
+        const sessionId = "restart-proof-session";
+        const imagePath = path.join(workspaceDir, "restart-proof.png");
+        await fs.mkdir(workspaceDir, { recursive: true });
+        await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey, storePath },
+          { sessionId, chatType: "direct", updatedAt: 1 },
+        );
+        const config = {
+          agents: {
+            entries: {
+              main: { default: true, workspace: workspaceDir },
+            },
+          },
+        };
+        const tool = createMessageTool({
+          config,
+          currentChannelProvider: "webchat",
+          agentSessionKey: sessionKey,
+          runSessionKey: sessionKey,
+          sessionId,
+          agentId: "main",
+          runId: "restart-proof-run",
+          getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
+          resolveCommandSecretRefsViaGateway: async () => ({
+            resolvedConfig: config,
+            diagnostics: [],
+            targetStatesByPath: {},
+            hadUnresolvedTargets: false,
+          }),
+        });
+
+        const sendParams = {
+          action: "send" as const,
+          message: "Durable image reply",
+          media: imagePath,
+        };
+        const [toolResult, overlappingResult] = await Promise.all([
+          tool.execute("restart-proof-call", sendParams),
+          tool.execute("restart-proof-call", sendParams),
+        ]);
+        const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
+        expect(sourceReply).toMatchObject({ transcriptOwner: true });
+        expect(overlappingResult.details).toMatchObject({
+          idempotencyKey: sourceReply?.idempotencyKey,
+          sourceReplyTranscriptOwner: true,
+        });
+        const sourcePayloads = buildEmbeddedRunPayloads({
+          assistantTexts: [],
+          lastAssistant: undefined,
+          currentAssistant: undefined,
+          sessionKey,
+          agentId: "main",
+          sourceReplyDeliveryMode: "message_tool_only",
+          messagingToolSourceReplyPayloads: sourceReply ? [sourceReply] : [],
+          runId: "restart-proof-run",
+          verboseLevel: "off",
+          reasoningLevel: "off",
+          toolResultFormat: "plain",
+        });
+        const mirror = getReplyPayloadMetadata(
+          sourcePayloads[0] as object,
+        )?.sourceReplyTranscriptMirror;
+        expect(mirror).toMatchObject({ transcriptOwner: true });
+        await mirrorDeliveredReplyToTranscript({
+          metadata: mirror ? { ...mirror, expectedSessionId: sessionId, storePath } : undefined,
+          cfg: config,
+        });
+        const events = await loadTranscriptEvents({
+          agentId: "main",
+          sessionId,
+          sessionKey,
+          storePath,
+        });
+        const assistants = events
+          .map((event) => (event as { message?: Record<string, unknown> }).message)
+          .filter((message) => message?.role === "assistant");
+        expect(assistants).toHaveLength(1);
+        const assistant = assistants[0];
+        const content = Array.isArray(assistant?.content)
+          ? (assistant.content as Array<Record<string, unknown>>)
+          : [];
+        const image = content.find((block) => block.type === "image");
+        expect(toolResult.details).toMatchObject({
+          sourceReplySink: "internal-ui",
+          idempotencyKey: expect.any(String),
+        });
+        expect(content[0]).toEqual({ type: "text", text: "Durable image reply" });
+        expect(image).toMatchObject({
+          type: "image",
+          artifactId: expect.stringMatching(/^artifact_managed_image_/u),
+        });
+        expect(JSON.stringify(assistant)).not.toContain(imagePath);
+        expect(listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(1);
+        await expect(
+          resolveManagedOutgoingMediaArtifactDownload({
+            sessionKey,
+            agentId: "main",
+            artifactId: String(image?.artifactId),
+            stateDir,
+          }),
+        ).resolves.toMatchObject({ type: "image" });
       },
     );
   });
