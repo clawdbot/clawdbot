@@ -1322,7 +1322,6 @@ struct OnboardingAISetupTests {
             systemAgentDefaults: defaults,
             aiSetupRouteIdentityProvider: { "local" },
             dashboardHandoffOpener: { handoffs.append($0) })
-        view.prepareSystemAgentHandoff()
 
         let activation = Task { await view.aiSetup.detectAndAutoConnect() }
         await restartGate.waitUntilStarted()
@@ -1342,6 +1341,7 @@ struct OnboardingAISetupTests {
         ])
         #expect(view.aiSetup.connected)
         #expect(view.aiSetup.selectedKind == "codex-cli")
+        #expect(view.finish())
         #expect(view.finishState.didFinish)
         #expect(handoffs == [.custodianOnboarding])
     }
