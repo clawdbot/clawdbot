@@ -5755,6 +5755,8 @@ export const en: TranslationMap = {
       showInFiles: "Show in Files",
       previousMatch: "Previous match",
       nextMatch: "Next match",
+      source: "Source",
+      preview: "Preview",
       overwrite: "Overwrite",
       viewRawText: "View Raw Text",
       renderedMarkdown: "Rendered Markdown",

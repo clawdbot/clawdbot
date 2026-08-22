@@ -21,6 +21,7 @@ import {
   readFileDraft,
   setFileDraft,
   type FileCopyAction,
+  type FileViewMode,
 } from "./chat-sidebar-file-view.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
 
@@ -48,6 +49,8 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   @state() private fileSearchQuery = "";
   @state() private fileSearchMatchIndex = 0;
   @state() private fileEditorMenuOpen = false;
+  @state() private fileViewMode: FileViewMode = "source";
+  @state() private filePreviewContent = "";
   @state() private fileCopyFeedback = emptyCopyFeedback;
   @state() private fileEditorLoading = false;
   @state() private fileEditing = false;
@@ -96,6 +99,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     this.fileSearchQuery = "";
     this.fileSearchMatchIndex = 0;
     this.fileEditorMenuOpen = false;
+    this.fileViewMode = "source";
     this.clearFileCopyFeedback();
     this.fileCopyFeedback = emptyCopyFeedback;
     this.fileOperationVersion += 1;
@@ -114,6 +118,8 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       setFileDraft(this.content, null);
     }
     this.fileDraftContent = restoredDraft?.content ?? null;
+    this.filePreviewContent =
+      restoredDraft?.content ?? (this.content?.kind === "file" ? this.content.content : "");
     this.fileSavedContent = this.content?.kind === "file" ? this.content.content : "";
     this.fileHash =
       restoredDraft?.expectedHash ??
@@ -365,6 +371,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     if (content?.kind !== "file" || !content.edit || !this.fileEditor) {
       return;
     }
+    this.fileViewMode = "source";
     this.fileSavedContent = content.content;
     this.fileHash = content.edit.hash;
     this.fileDirty = false;
@@ -390,12 +397,14 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     }
     this.fileDirty = false;
     this.fileSaveNotice = null;
+    this.filePreviewContent = this.fileSavedContent;
     this.fileEditing = false;
     this.fileEditor?.setEditable(false);
   };
 
   private updateSavedFile(content: FileSidebarContent, nextContent: string, hash: string) {
     this.fileSavedContent = nextContent;
+    this.filePreviewContent = nextContent;
     this.fileHash = hash;
     this.fileDirty = this.fileEditor?.getContent() !== nextContent;
     const draftContent = this.fileEditor?.getContent();
@@ -573,6 +582,21 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     this.error = null;
   };
 
+  private readonly changeFileViewMode = (mode: FileViewMode) => {
+    const content = this.visibleContent;
+    if (content?.kind !== "file" || this.fileViewMode === mode) {
+      return;
+    }
+    if (mode === "preview") {
+      this.filePreviewContent =
+        this.fileEditor?.getContent() ?? this.fileDraftContent ?? content.content;
+      this.fileSearchOpen = false;
+      this.fileSearchQuery = "";
+      this.fileSearchMatchIndex = 0;
+    }
+    this.fileViewMode = mode;
+  };
+
   private readonly handlePanelClick = (event: MouseEvent) => {
     handleSidebarClick(event, this);
   };
@@ -598,10 +622,12 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         loadingEditor: this.fileEditorLoading,
         mountKey: this.fileOperationVersion,
         matches,
+        previewContent: this.filePreviewContent,
         query: this.fileSearchQuery,
         saveNotice: this.fileSaveNotice,
         saving: this.fileSaving,
         searchOpen: this.fileSearchOpen,
+        viewMode: this.fileViewMode,
         onCopy: this.copyFileValue,
         onDiscard: this.discardFileEdits,
         onEdit: this.editFile,
@@ -618,6 +644,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
           this.fileEditorMenuOpen = open;
         },
         onToggleSearch: this.toggleFileSearch,
+        onViewModeChange: this.changeFileViewMode,
       },
       canvasPluginSurfaceUrl: this.canvasPluginSurfaceUrl,
       embedSandboxMode: this.embedSandboxMode,

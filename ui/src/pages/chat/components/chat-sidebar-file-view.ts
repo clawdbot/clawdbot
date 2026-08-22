@@ -1,6 +1,8 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../../components/icons.ts";
+import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { EditorId } from "../../../lib/editor-links.ts";
@@ -8,6 +10,7 @@ import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 
 type FileSidebarContent = Extract<SidebarContent, { kind: "file" }>;
+export type FileViewMode = "source" | "preview";
 
 type RetainedFileDraft = {
   content: string;
@@ -66,6 +69,13 @@ export function absoluteFilePath(content: FileSidebarContent): string | null {
   return `${content.root.replace(/[\\/]+$/, "")}/${content.path.replace(/^[\\/]+/, "")}`;
 }
 
+export function isMarkdownFile(content: FileSidebarContent): boolean {
+  if (content.language?.toLocaleLowerCase() === "markdown") {
+    return true;
+  }
+  return /\.(?:md|markdown|mdown|mkd|mkdn)$/i.test(content.path || content.name);
+}
+
 export type FileCopyAction = "path" | "contents";
 type FileCopyFeedback = Partial<Record<FileCopyAction, "copied" | "failed">>;
 export const emptyCopyFeedback: FileCopyFeedback = {};
@@ -79,10 +89,12 @@ export type FileViewControls = {
   loadingEditor: boolean;
   mountKey: number;
   matches: number[];
+  previewContent: string;
   query: string;
   saveNotice: { kind: "conflict" } | { kind: "error"; message: string } | null;
   saving: boolean;
   searchOpen: boolean;
+  viewMode: FileViewMode;
   onCopy: (action: FileCopyAction) => void;
   onDiscard: () => void;
   onEdit: () => void;
@@ -97,6 +109,7 @@ export type FileViewControls = {
   onSearchKeydown: (event: KeyboardEvent) => void;
   onEditorMenuOpenChange: (open: boolean) => void;
   onToggleSearch: () => void;
+  onViewModeChange: (mode: FileViewMode) => void;
 };
 
 function renderFileCopyButton(action: FileCopyAction, controls?: FileViewControls) {
@@ -131,6 +144,16 @@ export function renderSidebarFile(
 ) {
   const absolutePath = absoluteFilePath(content);
   const matchNumber = controls?.matches.length ? controls.currentMatchIndex + 1 : 0;
+  const markdownFile = isMarkdownFile(content);
+  const previewing = markdownFile && controls?.viewMode === "preview";
+  const markdownHtml =
+    previewing && controls.previewContent.trim()
+      ? toSanitizedMarkdownHtml(controls.previewContent, {
+          codeBlockInteraction: "interactive",
+          fileLinks: true,
+          sessionLinks: true,
+        })
+      : "";
   return html`
     <section class="sidebar-file-view">
       <div class="sidebar-file-view__path-bar">
@@ -176,17 +199,21 @@ export function renderSidebarFile(
                             </openclaw-tooltip>
                           `
                         : nothing}
-                      <openclaw-tooltip .content=${t("chat.detailPanel.searchInFile")}>
-                        <button
-                          class="btn btn--sm sidebar-file-view__action"
-                          type="button"
-                          aria-label=${t("chat.detailPanel.searchInFile")}
-                          aria-pressed=${String(controls.searchOpen)}
-                          @click=${controls.onToggleSearch}
-                        >
-                          ${icons.search}
-                        </button>
-                      </openclaw-tooltip>
+                      ${previewing
+                        ? nothing
+                        : html`
+                            <openclaw-tooltip .content=${t("chat.detailPanel.searchInFile")}>
+                              <button
+                                class="btn btn--sm sidebar-file-view__action"
+                                type="button"
+                                aria-label=${t("chat.detailPanel.searchInFile")}
+                                aria-pressed=${String(controls.searchOpen)}
+                                @click=${controls.onToggleSearch}
+                              >
+                                ${icons.search}
+                              </button>
+                            </openclaw-tooltip>
+                          `}
                       ${controls.onReveal
                         ? html`
                             <openclaw-tooltip .content=${t("chat.detailPanel.showInFiles")}>
@@ -216,7 +243,33 @@ export function renderSidebarFile(
       ${Object.values(controls?.copyFeedback ?? {}).includes("failed")
         ? html`<div class="file-view__save-notice" role="alert">${t("common.copyFailed")}</div>`
         : nothing}
-      ${controls?.searchOpen
+      ${markdownFile && controls
+        ? html`
+            <div class="sidebar-file-view__tabs" role="tablist" aria-label=${content.name}>
+              <button
+                class="sidebar-file-view__tab"
+                type="button"
+                role="tab"
+                aria-selected=${String(!previewing)}
+                tabindex=${previewing ? -1 : 0}
+                @click=${() => controls.onViewModeChange("source")}
+              >
+                ${t("chat.detailPanel.source")}
+              </button>
+              <button
+                class="sidebar-file-view__tab"
+                type="button"
+                role="tab"
+                aria-selected=${String(previewing)}
+                tabindex=${previewing ? 0 : -1}
+                @click=${() => controls.onViewModeChange("preview")}
+              >
+                ${t("chat.detailPanel.preview")}
+              </button>
+            </div>
+          `
+        : nothing}
+      ${controls?.searchOpen && !previewing
         ? html`
             <div class="file-view__search">
               <input
@@ -285,12 +338,36 @@ export function renderSidebarFile(
             </div>
           `
         : nothing}
-      <div class="file-view">
+      <div class="file-view" ?hidden=${previewing}>
         ${keyed(controls?.mountKey ?? content, html`<div class="file-view__mount"></div>`)}
         ${controls?.loadingEditor
           ? html`<div class="file-view__loading muted">${t("common.loading")}</div>`
           : nothing}
       </div>
+      ${markdownFile && controls
+        ? html`
+            <div
+              class="sidebar-file-preview"
+              role="tabpanel"
+              aria-label=${t("chat.detailPanel.preview")}
+              ?hidden=${!previewing}
+            >
+              ${markdownHtml
+                ? html`
+                    <article
+                      class="sidebar-markdown-reader sidebar-markdown sidebar-file-preview__content"
+                    >
+                      ${unsafeHTML(markdownHtml)}
+                    </article>
+                  `
+                : html`
+                    <div class="sidebar-markdown-empty">
+                      ${t("chat.detailPanel.noPreviewableMarkdown")}
+                    </div>
+                  `}
+            </div>
+          `
+        : nothing}
       ${controls?.editing
         ? nothing
         : html`

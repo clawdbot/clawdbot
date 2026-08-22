@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import "../../../styles.css";
+import "../../../styles/chat.css";
 import "./chat-sidebar.ts";
 
 // The root jsdom ui shard also collects *.browser.test.ts files; CodeMirror
@@ -84,6 +85,47 @@ describe.runIf(browserMode)("chat file editor", () => {
     expect(panel.querySelector(".cm-content")?.textContent).toContain("const second = 2;");
     const target = panel.querySelector(".file-view__line--target");
     expect(target?.getAttribute("data-line")).toBe("2");
+    expect(panel.querySelector('[role="tablist"]')).toBeNull();
+  });
+
+  it("renders Markdown in a responsive preview tab", async () => {
+    const panel = await mountFile({
+      kind: "file",
+      path: "notes/handoff.md",
+      name: "handoff.md",
+      content: `# Audit
+
+This-is-a-single-unbroken-line-${"x".repeat(180)}
+
+- First item
+- Second item`,
+    });
+    panel.style.width = "320px";
+    panel.style.height = "480px";
+
+    const sourceTab = button(panel, "Source");
+    const previewTab = button(panel, "Preview");
+    expect(sourceTab.getAttribute("aria-selected")).toBe("true");
+    expect(previewTab.getAttribute("aria-selected")).toBe("false");
+
+    await userEvent.click(previewTab);
+    await panel.updateComplete;
+
+    const preview = panel.querySelector<HTMLElement>(".sidebar-file-preview");
+    const reader = panel.querySelector<HTMLElement>(".sidebar-file-preview__content");
+    expect(preview?.hidden).toBe(false);
+    expect(panel.querySelector<HTMLElement>(".file-view")?.hidden).toBe(true);
+    expect(reader?.querySelector("h1")?.textContent).toBe("Audit");
+    expect(reader?.querySelectorAll("li")).toHaveLength(2);
+    const previewReader = expectDefined(reader, "Markdown preview content");
+    expect(getComputedStyle(previewReader).overflowWrap).toBe("anywhere");
+    expect(previewReader.scrollWidth).toBeLessThanOrEqual(previewReader.clientWidth + 1);
+
+    await userEvent.click(sourceTab);
+    await panel.updateComplete;
+
+    expect(panel.querySelector<HTMLElement>(".file-view")?.hidden).toBe(false);
+    expect(panel.querySelector(".cm-content")?.textContent).toContain("# Audit");
   });
 
   it("enables save after an edit and keeps the saved content", async () => {

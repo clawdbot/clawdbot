@@ -1628,6 +1628,38 @@ openclaw-session-discussion {
   white-space: nowrap;
 }
 
+.sidebar-file-view__tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 14px;
+  min-width: 0;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--secondary) 54%, transparent);
+}
+
+.sidebar-file-view__tab {
+  padding: 9px 2px 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  font-weight: 600;
+}
+
+.sidebar-file-view__tab[aria-selected="true"] {
+  border-bottom-color: var(--accent);
+  color: var(--text);
+}
+
+.sidebar-file-view__tab:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  outline-offset: -2px;
+}
+
 .sidebar-file-view__actions {
   display: inline-flex;
   flex: 0 0 auto;
@@ -1741,6 +1773,39 @@ openclaw-session-discussion {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+.file-view[hidden],
+.sidebar-file-preview[hidden] {
+  display: none;
+}
+
+.sidebar-file-preview {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px;
+  overflow: auto;
+}
+
+.sidebar-file-preview__content {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.sidebar-file-preview__content :where(h1, h2, h3, h4, h5, h6, p, li, blockquote, details) {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.sidebar-file-preview__content :where(pre, table) {
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .file-view__mount,
