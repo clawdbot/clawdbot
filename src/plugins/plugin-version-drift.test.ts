@@ -323,6 +323,19 @@ describe("detectPluginVersionDrift", () => {
 });
 
 describe("resolvePluginVersionDriftUpdateCommand", () => {
+  it("normalizes a gateway correction version for exact npm package targets", () => {
+    expect(
+      resolvePluginVersionDriftUpdateCommand({
+        pluginId: "brave",
+        installedVersion: "2026.7.0",
+        gatewayVersion: "2026.7.1-2",
+        source: "npm",
+        packageName: "@openclaw/brave-plugin",
+        spec: "@openclaw/brave-plugin@2026.7.0",
+      }),
+    ).toBe("openclaw plugins update @openclaw/brave-plugin@2026.7.1");
+  });
+
   it("uses an exact npm package target when the drifted install is pinned", () => {
     expect(
       resolvePluginVersionDriftUpdateCommand({

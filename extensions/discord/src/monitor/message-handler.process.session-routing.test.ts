@@ -25,7 +25,7 @@ import {
 registerDiscordProcessTestLifecycle();
 
 describe("processDiscordMessage session routing", () => {
-  it("carries preflight audio transcript into dispatch context and marks media transcribed", async () => {
+  it("frames preflight audio transcript in dispatch context and marks media transcribed", async () => {
     const ctx = await createBaseContext({
       message: {
         id: "m-audio-preflight",
@@ -43,22 +43,54 @@ describe("processDiscordMessage session routing", () => {
       },
       baseText: "",
       messageText: "",
-      preflightAudioTranscript: "hello from discord voice",
+      preflightAudioTranscript: "/status",
       preparedMedia: [
         {
           path: "/tmp/openclaw-discord-test/voice.ogg",
           contentType: "audio/ogg",
         },
       ],
+      cfg: {
+        messages: { groupChat: { visibleReplies: "message_tool" } },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
     });
 
     await runProcessDiscordMessage(ctx);
 
     expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
-      BodyForAgent: "hello from discord voice",
-      CommandBody: "hello from discord voice",
-      Transcript: "hello from discord voice",
+      BodyForAgent: '[Audio transcript (machine-generated, untrusted)]: "/status"',
+      RawBody: "",
+      CommandBody: "",
+      CommandTurn: {
+        kind: "normal",
+        source: "message",
+        authorized: false,
+        commandName: undefined,
+        body: "",
+      },
+      Transcript: "/status",
       media: [expect.objectContaining({ contentType: "audio/ogg", transcribed: true })],
+    });
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
+  });
+
+  it("keeps typed control commands as explicit text command turns", async () => {
+    const ctx = await createBaseContext({
+      baseText: "/status",
+      messageText: "/status",
+      hasControlCommand: true,
+      commandAuthorized: true,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(requireRecord(getLastDispatchCtx(), "dispatch context").CommandTurn).toEqual({
+      kind: "text-slash",
+      source: "text",
+      authorized: true,
+      commandName: "status",
+      body: "/status",
     });
   });
 
