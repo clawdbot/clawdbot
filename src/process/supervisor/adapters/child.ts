@@ -84,8 +84,7 @@ function isServiceManagedRuntime(): boolean {
   return Boolean(process.env.OPENCLAW_SERVICE_MARKER?.trim());
 }
 
-export async function createChildAdapter(params: {
-  argv: string[];
+type ChildAdapterInput = {
   /** Own a separately signalable tree whose private IPC channel gates worker startup. */
   ownedWorker?: true;
   /** Preserve the supplied environment exactly by skipping environment-mutating spawn wrappers. */
@@ -97,7 +96,24 @@ export async function createChildAdapter(params: {
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
   secretInput?: SpawnSecretInput;
-}): Promise<WorkerChildAdapter> {
+} & (
+  | { argv: string[]; anchoredShellCommand?: never }
+  | { argv?: never; anchoredShellCommand: string }
+);
+
+export async function createChildAdapter(params: ChildAdapterInput): Promise<WorkerChildAdapter> {
+  if (params.anchoredShellCommand !== undefined) {
+    return await createServiceChildRelayAdapter({
+      command: process.platform === "win32" ? params.anchoredShellCommand : "/bin/sh",
+      args: process.platform === "win32" ? [] : ["-c", params.anchoredShellCommand],
+      windowsShellCommand: process.platform === "win32" ? params.anchoredShellCommand : undefined,
+      cwd: params.cwd,
+      env: params.env,
+      stdinMode: "pipe-closed",
+      oomScoreWrapperSelected: false,
+    });
+  }
+
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
   const invocation = resolveChildInvocation({
     argv: params.argv,

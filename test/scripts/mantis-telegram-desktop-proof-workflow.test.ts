@@ -1001,7 +1001,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(sutScript).not.toContain("...process.env,\n    MOCK_PORT");
     expect(laneScript).toContain("function commandEnv()");
     expect(laneScript).toContain("fs.constants.O_NOFOLLOW");
-    expect(laneScript).toContain("/proc/self/fd/${descriptor}");
+    expect(laneScript).toContain("isSymbolicLink()");
     expect(laneScript).not.toContain("readRecorderSession");
     expect(laneScript).toContain('"artifacts"');
     expect(laneScript).toContain(

@@ -11,6 +11,7 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import type { SessionEntrySummary } from "./session-accessor.sqlite-contract.js";
+import { projectSqliteSessionOwner } from "./session-accessor.sqlite-owner-projection.js";
 import {
   getSessionKysely,
   resolveSqliteScope,
@@ -106,7 +107,7 @@ function hydrateCanonicalRepairEntry(row: CanonicalRepairRow): SessionEntry {
           },
         })
       : undefined;
-  return projectCanonicalSessionEntryShape({
+  const entry = projectCanonicalSessionEntryShape({
     ...record,
     ...(row.status ? { status: row.status } : {}),
     ...(row.current_started_at !== null ? { startedAt: row.current_started_at } : {}),
@@ -141,6 +142,7 @@ function hydrateCanonicalRepairEntry(row: CanonicalRepairRow): SessionEntry {
     sessionId: row.current_session_id,
     updatedAt: row.updated_at,
   });
+  return projectSqliteSessionOwner(entry, row);
 }
 
 function canonicalRepairQuery(database: Pick<OpenClawAgentDatabase, "db">) {

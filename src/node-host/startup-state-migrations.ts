@@ -26,6 +26,9 @@ async function reportMigration(
     for (const change of result?.changes ?? []) {
       log.info(change);
     }
+    for (const notice of result?.notices ?? []) {
+      log.info(notice);
+    }
     for (const warning of result?.warnings ?? []) {
       log.warn(warning);
     }

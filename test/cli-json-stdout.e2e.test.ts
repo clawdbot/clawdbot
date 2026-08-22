@@ -276,6 +276,61 @@ describe("cli json stdout contract", () => {
     );
   });
 
+  it.each([
+    {
+      name: "routed status with JSON before its timeout",
+      args: ["status", "--json", "--timeout", "nope"],
+    },
+    {
+      name: "routed health with JSON after its timeout",
+      args: ["health", "--timeout", "0", "--json"],
+    },
+    {
+      name: "Commander status with JSON after its timeout",
+      args: ["status", "--timeout", "nope", "--json"],
+      commander: true,
+    },
+    {
+      name: "Commander health with JSON before its timeout",
+      args: ["health", "--json", "--timeout", "0"],
+      commander: true,
+    },
+    {
+      name: "routed status through dual-TTY finalization",
+      args: ["status", "--json", "--timeout", "nope"],
+      tty: true,
+    },
+  ])("renders invalid status/health timeouts as canonical JSON for $name", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const preload = `data:text/javascript,${encodeURIComponent(
+          'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true }); Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
+        )}`;
+        const result = runBuiltCli(tempHome, testCase.args, {
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+          OPENCLAW_GATEWAY_PORT: "29791",
+          ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+          ...("tty" in testCase ? { NODE_OPTIONS: `--import=${preload}`, FORCE_COLOR: "1" } : {}),
+        });
+        const message = "--timeout must be a positive integer (milliseconds)";
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stdout, result.stderr).not.toContain("\u001B");
+        expect(result.stdout, result.stderr).not.toContain("\u0007");
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: { type: "cli_error", message },
+        });
+        expect(result.stderr).toContain(message);
+        if ("tty" in testCase) {
+          expect(result.stderr).toContain("\u001B[?25h");
+        }
+      },
+      { prefix: "openclaw-status-health-json-timeout-e2e-" },
+    );
+  });
+
   it("returns one canonical document for a command that previously failed on stderr only", async () => {
     await withTempHome(
       async (tempHome) => {

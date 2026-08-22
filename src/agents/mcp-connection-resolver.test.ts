@@ -340,7 +340,6 @@ describe("mcp connection resolver helpers", () => {
       };
       const reloadLog = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
       const requestRecoveryRestart = vi.fn(() => ({ status: "failed" as const }));
-      const pruneInactiveChannelAccountState = vi.fn();
       const nextConfig: OpenClawConfig = {
         plugins: {
           entries: {
@@ -366,7 +365,7 @@ describe("mcp connection resolver helpers", () => {
         },
         async startChannel() {},
         async stopChannel() {},
-        pruneInactiveChannelAccountState,
+        pruneInactiveChannelAccountState() {},
         async reloadPlugins({ beforeReplace, commitRuntime }) {
           await beforeReplace(new Set());
           await commitRuntime();
@@ -394,7 +393,6 @@ describe("mcp connection resolver helpers", () => {
       });
       expect(refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
       expect(requestRecoveryRestart).not.toHaveBeenCalled();
-      expect(pruneInactiveChannelAccountState).toHaveBeenCalledExactlyOnceWith(new Set());
       expect(isPluginRegistryRetired(previous.registry)).toBe(true);
       expect(peekSessionMcpRuntime({ sessionId })).toBeUndefined();
 

@@ -44,7 +44,7 @@ export type ManagedRun = {
   startedAtMs: number;
   stdin?: ManagedRunStdin;
   wait: () => Promise<RunExit>;
-  /** Present only when tree cleanup can outlive the root process result. */
+  /** The root result may settle before its independently owned descendants exit. */
   waitForExtinction?: () => Promise<void>;
   cancel: (reason?: TerminationReason) => void;
   /** Stop delivering output callbacks before owner teardown kills the child. */
@@ -119,11 +119,17 @@ type SpawnPtyInput = SpawnBaseInput & {
   ptyCommand: string;
 };
 
-export type SpawnInput = SpawnChildInput | SpawnPtyInput;
+type SpawnAnchoredShellInput = SpawnBaseInput & {
+  mode: "anchored-shell";
+  command: string;
+};
+
+export type SpawnInput = SpawnChildInput | SpawnPtyInput | SpawnAnchoredShellInput;
 
 export interface ProcessSupervisor {
   spawn(input: SpawnInput): Promise<ManagedRun>;
   cancel(runId: string, reason?: TerminationReason): void;
   cancelScope(scopeKey: string, reason?: TerminationReason): void;
+  waitForScope?: (scopeKey: string) => Promise<void>;
   getRecord(runId: string): RunRecord | undefined;
 }

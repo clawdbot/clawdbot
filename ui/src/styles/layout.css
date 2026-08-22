@@ -4018,20 +4018,14 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   max-height: 80px;
 }
 
-/* The fixed web chrome sits over the top-left of ordinary page headers too.
-   Settings, mobile drawers, and native hosts own different chrome. */
+/* Keep ordinary page headers below the fixed web chrome instead of shifting
+   their titles away from the page content. Settings, mobile drawers, and
+   native hosts own different chrome. */
 html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
-  .shell:not(.shell--nav-collapsed):not(.shell--mobile-nav):not(.shell--settings)
+  .shell:not(.shell--mobile-nav):not(.shell--settings)
   .content:not(.content--chat)
   .content-header {
-  padding-left: 88px;
-}
-
-html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-web-chrome)
-  .shell--nav-collapsed:not(.shell--mobile-nav):not(.shell--settings)
-  .content:not(.content--chat)
-  .content-header {
-  padding-left: 124px;
+  margin-top: 48px;
 }
 
 .content-header--page + * {

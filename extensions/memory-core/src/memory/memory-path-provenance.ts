@@ -54,8 +54,8 @@ export async function resolveMemoryPathClassification(params: {
         relativePath: normalizedRelativePath,
       })
     : undefined;
-  if (recorded?.originClass === "untrusted") {
-    return { curatedRoot, originClass: "untrusted" };
+  if (recorded) {
+    return { curatedRoot, originClass: recorded.originClass };
   }
   // Workspace memory Markdown is owner-controlled. Flush-recorded provenance
   // still downgrades machine-written untrusted material during ingestion; the
