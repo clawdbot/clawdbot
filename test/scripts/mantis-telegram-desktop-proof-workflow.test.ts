@@ -1128,6 +1128,15 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(wrapper).toContain(
       "--env TELEGRAM_PROXY_RECORD_FILE=/opt/mantis/proxy-control/requests.ndjson",
     );
+    // Candidate code shares the mantis-sut UID with the proxy record sink, so
+    // the SUT container must shadow proxy-control; otherwise the lane under
+    // test could rewrite its own trusted Bot API evidence before publication.
+    const proxyControlShadow =
+      '--mount "type=tmpfs,dst=$runtime_source/proxy-control,tmpfs-size=65536,tmpfs-mode=0000"';
+    expect(wrapper).toContain(proxyControlShadow);
+    expect(wrapper.indexOf(proxyControlShadow)).toBeGreaterThan(
+      wrapper.indexOf('--mount "type=bind,src=$safe_runtime,dst=$runtime_source"'),
+    );
     expect(wrapper).toContain('export TELEGRAM_BOT_TOKEN="$telegram_alias_token"');
     expect(wrapper).not.toContain('export TELEGRAM_BOT_TOKEN="$telegram_bot_token"');
     expect(wrapper).toContain('remove_container_or_fail "${1}-telegram-proxy"');

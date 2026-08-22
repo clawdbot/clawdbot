@@ -904,11 +904,16 @@ case "$command" in
       "$image" node /opt/mantis/telegram-bot-api-proxy.mjs >/dev/null
     "$docker_bin" network connect --alias telegram-api-proxy "$network_name" "$proxy_container_name"
     require_runtime_claim_active "$container_name"
+    # proxy-control holds the proxy's fault rules and recorded Bot API facts.
+    # The SUT runs untrusted candidate code as the same mantis-sut UID, so an
+    # inaccessible tmpfs must shadow the directory inside the runtime mount;
+    # without it the lane under test could rewrite its own trusted evidence.
     "$docker_bin" run --rm --init --name "$container_name" --network "$network_name" \
       "${container_security_args[@]}" "${runtime_resource_args[@]}" \
       --mount "type=bind,src=$repo_root,dst=$repo_root,readonly" \
       --mount "type=bind,src=$mock_server_script,dst=/opt/mantis/mock-openai-server.mjs,readonly" \
       --mount "type=bind,src=$safe_runtime,dst=$runtime_source" \
+      --mount "type=tmpfs,dst=$runtime_source/proxy-control,tmpfs-size=65536,tmpfs-mode=0000" \
       --workdir "$repo_root" \
       --user "$(id -u mantis-sut):$(id -g mantis-sut)" \
       "${docker_env[@]}" \

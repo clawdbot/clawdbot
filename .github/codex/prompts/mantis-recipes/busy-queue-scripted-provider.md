@@ -27,6 +27,7 @@ $lane requests --lane baseline
 $lane finish --lane baseline
 ```
 
-Repeat for `candidate`. Proof facts: provider request log `scriptEntry` values
-show entries 0 then 1; request bodies preserve turn order; session events show
-the slow first and distinct second outcomes without a control-file race.
+Repeat for `candidate`. Proof facts: session events and recorded Bot API
+messages show the slow first and distinct second outcomes without a
+control-file race. The provider request log (`scriptEntry` 0 then 1, turn
+order in bodies) is diagnostic context, not the comparison evidence.
