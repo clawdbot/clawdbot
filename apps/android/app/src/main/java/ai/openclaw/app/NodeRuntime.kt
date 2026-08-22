@@ -2004,8 +2004,11 @@ class NodeRuntime private constructor(
 
   private fun retryGatewaySessionsAfterNetworkRestore() {
     launchGatewayLifecycle {
-      operatorSession.retryAfterNetworkRestore()
-      nodeSession.retryAfterNetworkRestore()
+      gatewaySessionsToWakeOnNetworkRestore(
+        operator = operatorSession,
+        node = nodeSession,
+        secondary = secondaryOperatorSessions.mapValues { (_, runtime) -> runtime.session },
+      ).forEach { it.retryAfterNetworkRestore() }
     }
   }
 
@@ -9229,6 +9232,22 @@ internal fun normalizeOperatorScopes(scopes: List<String>): List<String> =
     .filter { it.isNotEmpty() }
     .distinct()
     .sorted()
+
+/**
+ * Sessions a validated-network restore has to wake: the operator and node pair plus every live
+ * secondary gateway.
+ *
+ * Takes the secondary fleet itself rather than a pre-flattened list, so a caller cannot leave it
+ * out without saying so, and snapshots it here so a fleet edit while the wake is fanning out
+ * cannot make it skip a session. Each session still owns its own desired-connection, auth-pause
+ * and retry state; this only decides who gets told. Generic in the session type for the same
+ * reason ValidatedNetworkState is: the decision can then be tested without an Android runtime.
+ */
+internal fun <T> gatewaySessionsToWakeOnNetworkRestore(
+  operator: T,
+  node: T,
+  secondary: Map<String, T>,
+): List<T> = listOf(operator, node) + secondary.values.toList()
 
 internal fun backgroundGatewayStableIds(
   entries: List<GatewayRegistryEntry>,

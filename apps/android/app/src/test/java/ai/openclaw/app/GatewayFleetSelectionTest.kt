@@ -8,6 +8,7 @@ import ai.openclaw.app.ui.desktopUrl
 import ai.openclaw.app.ui.sessionDashboardUrl
 import ai.openclaw.app.ui.terminalUrl
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -37,6 +38,70 @@ class GatewayFleetSelectionTest {
         foreground = false,
       ),
     )
+  }
+
+  @Test
+  fun networkRestoreWakesTheOperatorNodeAndEverySecondaryGateway() {
+    // The regression this pins: the fan-out used to name only the operator and node pair, so a
+    // secondary gateway kept waiting out its retry timer after the network came back. That cost
+    // at most ~8s before this policy allowed minutes.
+    val operator = session()
+    val node = session()
+    val first = session()
+    val second = session()
+    val third = session()
+
+    val woken =
+      gatewaySessionsToWakeOnNetworkRestore(
+        operator = operator,
+        node = node,
+        secondary = mapOf("a" to first, "b" to second, "c" to third),
+      )
+
+    assertEquals(5, woken.size)
+    assertSame(operator, woken[0])
+    assertSame(node, woken[1])
+    for (secondary in listOf(first, second, third)) {
+      assertTrue("secondary gateway was left out of the wake", woken.any { it === secondary })
+    }
+  }
+
+  @Test
+  fun networkRestoreWakesASingleSecondaryGateway() {
+    val operator = session()
+    val node = session()
+    val only = session()
+
+    val woken =
+      gatewaySessionsToWakeOnNetworkRestore(operator = operator, node = node, secondary = mapOf("only" to only))
+
+    assertEquals(3, woken.size)
+    assertTrue("the one secondary gateway was left out of the wake", woken.any { it === only })
+  }
+
+  @Test
+  fun networkRestoreStillWakesThePrimaryPairWithNoSecondaries() {
+    val operator = session()
+    val node = session()
+
+    val woken = gatewaySessionsToWakeOnNetworkRestore(operator = operator, node = node, secondary = emptyMap())
+
+    assertEquals(listOf(operator, node), woken)
+  }
+
+  @Test
+  fun networkRestoreSnapshotsTheFleetSoALaterEditCannotShrinkIt() {
+    // The fleet is a live ConcurrentHashMap in NodeRuntime; the wake must act on what it captured.
+    val operator = session()
+    val node = session()
+    val leaving = session()
+    val fleet = linkedMapOf("leaving" to leaving)
+
+    val woken = gatewaySessionsToWakeOnNetworkRestore(operator = operator, node = node, secondary = fleet)
+    fleet.clear()
+
+    assertEquals(3, woken.size)
+    assertTrue("the wake list changed when the fleet was edited afterwards", woken.any { it === leaving })
   }
 
   @Test
@@ -114,6 +179,9 @@ class GatewayFleetSelectionTest {
       name = stableId,
     )
 }
+
+/** Stands in for a GatewaySession: the wake decision only cares about session identity. */
+private fun session(): Any = Any()
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
