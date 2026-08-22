@@ -159,4 +159,38 @@ describe("web_search provider-aware model schema", () => {
       required: ["query", "result_depth"],
     });
   });
+
+  it("does not allow provider parameters to override shared properties", () => {
+    const querySchema = { type: "string", minLength: 1 };
+    const countSchema = { type: "number", minimum: 1 };
+    const projected = projectProviderModelSchema(
+      {
+        type: "object",
+        properties: { query: querySchema, count: countSchema },
+        required: ["query"],
+      },
+      {
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "number" },
+            count: { type: "string" },
+            result_depth: { type: "string" },
+          },
+          required: ["count", "result_depth"],
+        },
+        providerParameters: ["query", "count", "result_depth"],
+      },
+    );
+
+    expect(projected).toEqual({
+      type: "object",
+      properties: {
+        query: querySchema,
+        count: countSchema,
+        result_depth: { type: "string" },
+      },
+      required: ["query", "result_depth"],
+    });
+  });
 });

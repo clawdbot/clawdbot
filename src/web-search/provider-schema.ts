@@ -33,6 +33,9 @@ export function projectProviderModelSchema(
   const projectedRequired = new Set(resolveRequiredProperties(baseSchema));
   const providerRequired = new Set(resolveRequiredProperties(providerSchema.parameters));
   for (const parameter of providerSchema.providerParameters) {
+    if (Object.hasOwn(properties, parameter)) {
+      continue;
+    }
     const propertySchema = resolveSchemaProperty(providerSchema.parameters, parameter);
     if (propertySchema === undefined) {
       continue;
