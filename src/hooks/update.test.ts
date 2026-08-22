@@ -1,10 +1,10 @@
 // Hook update tests cover updating installed hook records and config.
-import fs from "node:fs";
-import os from "node:os";
+import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import type { HookNpmIntegrityDriftParams } from "./install.js";
 
 const installHooksFromNpmSpecMock = vi.fn();
@@ -50,9 +50,11 @@ function createHookInstallConfig(params: {
   return {};
 }
 
-function createInstalledHookPackDir(version: string): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hook-pack-"));
-  fs.writeFileSync(
+const tempDirs = createTrackedTempDirs();
+
+async function createInstalledHookPackDir(version: string): Promise<string> {
+  const dir = await tempDirs.make("openclaw-hook-pack-");
+  await fs.writeFile(
     path.join(dir, "package.json"),
     JSON.stringify({ name: "@openclaw/demo-hooks", version }),
   );
@@ -63,6 +65,10 @@ describe("updateNpmInstalledHookPacks", () => {
   beforeEach(() => {
     installHooksFromNpmSpecMock.mockReset();
     hookInstalls = {};
+  });
+
+  afterEach(async () => {
+    await tempDirs.cleanup();
   });
 
   it("aborts exact pinned hook pack updates on integrity drift by default", async () => {
@@ -180,7 +186,7 @@ describe("updateNpmInstalledHookPacks", () => {
   ])(
     "reports hook pack installs that move backwards as downgrades (dryRun: $dryRun)",
     async ({ dryRun, message }) => {
-      const installPath = createInstalledHookPackDir("1.2.3");
+      const installPath = await createInstalledHookPackDir("1.2.3");
       installHooksFromNpmSpecMock.mockResolvedValue({
         ok: true,
         hookPackId: "demo-hooks",
