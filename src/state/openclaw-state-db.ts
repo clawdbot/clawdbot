@@ -381,8 +381,7 @@ function ensureSchema(
 ): void {
   try {
     if (isOpenClawStateSchemaFastPathEligible(db, pathname)) {
-      // Recheck ownership after validation so a durable external claim made
-      // during the lock-free fast path cannot retain a writable handle.
+      // Recheck ownership so a claim made during validation cannot retain a writable handle.
       assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
       return;
     }

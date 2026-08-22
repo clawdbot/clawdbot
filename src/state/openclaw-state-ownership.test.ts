@@ -787,6 +787,9 @@ describe("external shared-state ownership", () => {
       )
       .run(STATE_SUPERVISION_KEY, '{"version":1,"mode":"external"}', Date.now());
     database.db.exec("ALTER TABLE worktrees DROP COLUMN run_end_cleanup_json;");
+    database.db
+      .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
+      .run("2026.7.0");
     closeOpenClawStateDatabaseForTest();
 
     expect(() => openOpenClawStateDatabase({ env: withoutExternalMarker(env) })).toThrow(

@@ -12,6 +12,7 @@ import {
   getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntry,
   terminalizePendingDeliveryQueueEntry,
+  upsertDeliveryQueueEntry,
 } from "../infra/delivery-queue-sqlite.js";
 import {
   executeSqliteQuerySync,
@@ -68,6 +69,12 @@ let canonicalStateDatabaseTemplatePath: string | undefined;
 
 function createTempStateDir(): string {
   return makeTempDir(stateDbTempDirs, "openclaw-state-db-");
+}
+
+function markStateDatabaseAsPreviousAppVersion(database: DatabaseSync): void {
+  database
+    .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
+    .run("2026.7.0");
 }
 
 function createInitialStateSchemaShape() {
@@ -2244,6 +2251,7 @@ describe("openclaw state database", () => {
     const { DatabaseSync } = requireNodeSqlite();
     const legacy = new DatabaseSync(databasePath);
     legacy.exec(`CREATE TABLE ${transientHistoryTable} (path TEXT PRIMARY KEY) STRICT;`);
+    markStateDatabaseAsPreviousAppVersion(legacy);
     legacy.close();
 
     const reopened = openOpenClawStateDatabase(options);
@@ -2957,6 +2965,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path;
         ALTER TABLE claw_installs DROP COLUMN bootstrap_content_digest;
       `);
+      markStateDatabaseAsPreviousAppVersion(shippedSchema);
       expect(readSqliteNumberPragma(shippedSchema, "user_version")).toBe(
         OPENCLAW_STATE_SCHEMA_VERSION,
       );
@@ -2988,6 +2997,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path;
         ALTER TABLE claw_installs DROP COLUMN bootstrap_content_digest;
       `);
+      markStateDatabaseAsPreviousAppVersion(shippedSchema);
     } finally {
       shippedSchema.close();
     }
@@ -3067,6 +3077,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       shippedSchema.exec(`
         ALTER TABLE installed_plugin_index DROP COLUMN workspace_dir;
       `);
+      markStateDatabaseAsPreviousAppVersion(shippedSchema);
       expect(readSqliteNumberPragma(shippedSchema, "user_version")).toBe(
         OPENCLAW_STATE_SCHEMA_VERSION,
       );
@@ -3098,6 +3109,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
         DROP TABLE worker_session_tool_operations;
         DROP TABLE worker_turn_tool_authorities;
       `);
+      markStateDatabaseAsPreviousAppVersion(shippedSchema);
       expect(readSqliteNumberPragma(shippedSchema, "user_version")).toBe(
         OPENCLAW_STATE_SCHEMA_VERSION,
       );
@@ -4065,6 +4077,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const currentSchema = new DatabaseSync(databasePath);
     try {
       currentSchema.exec("DROP INDEX idx_operator_approvals_source_run_resolved;");
+      markStateDatabaseAsPreviousAppVersion(currentSchema);
       expect(currentSchema.prepare("PRAGMA user_version").get()).toEqual({
         user_version: OPENCLAW_STATE_SCHEMA_VERSION,
       });
@@ -5120,6 +5133,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
             100,
           );
         }
+        markStateDatabaseAsPreviousAppVersion(database);
         database.close();
 
         const readStatuses = () =>
@@ -5935,6 +5949,16 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const databasePath = openOpenClawStateDatabase(options).path;
+    upsertDeliveryQueueEntry({
+      queueName: "outbound",
+      entry: {
+        id: "pending-telegram-delivery",
+        enqueuedAt: 1,
+        retryCount: 0,
+      },
+      metadata: { channel: "telegram", target: "chat-1" },
+      stateDir,
+    });
     closeOpenClawStateDatabaseForTest();
 
     const { DatabaseSync } = requireNodeSqlite();
