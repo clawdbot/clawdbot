@@ -145,6 +145,8 @@ export type ProviderCacheTtlEligibilityContext = {
   provider: string;
   modelId: string;
   modelApi?: string;
+  baseUrl?: string;
+  supportsPromptCacheKey?: boolean;
 };
 
 /**

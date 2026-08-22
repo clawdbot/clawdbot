@@ -7,6 +7,7 @@ import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 
 /** Custom transcript marker used to preserve cache-TTL pruning state across attempts. */
 const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
+type CacheTtlEligibility = typeof import("../cache-ttl.js").isCacheTtlEligibleProvider;
 
 /**
  * Combines hook-provided system context with the base prompt while preserving
@@ -62,15 +63,15 @@ function shouldAppendAttemptCacheTtl(params: {
   config?: OpenClawConfig;
   provider: string;
   modelId: string;
-  modelApi?: string;
-  isCacheTtlEligibleProvider: (provider: string, modelId: string, modelApi?: string) => boolean;
+  model?: Parameters<CacheTtlEligibility>[2];
+  isCacheTtlEligibleProvider: CacheTtlEligibility;
 }): boolean {
   if (params.timedOutDuringCompaction || params.compactionOccurredThisAttempt) {
     return false;
   }
   return (
     params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
-    params.isCacheTtlEligibleProvider(params.provider, params.modelId, params.modelApi)
+    params.isCacheTtlEligibleProvider(params.provider, params.modelId, params.model)
   );
 }
 
@@ -88,8 +89,8 @@ export function appendAttemptCacheTtlIfNeeded(params: {
   config?: OpenClawConfig;
   provider: string;
   modelId: string;
-  modelApi?: string;
-  isCacheTtlEligibleProvider: (provider: string, modelId: string, modelApi?: string) => boolean;
+  model?: Parameters<CacheTtlEligibility>[2];
+  isCacheTtlEligibleProvider: CacheTtlEligibility;
   now?: number;
 }): boolean {
   if (!shouldAppendAttemptCacheTtl(params)) {

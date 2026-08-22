@@ -9,6 +9,7 @@ import {
   isAnthropicFamilyCacheTtlEligible,
   isAnthropicModelRef,
 } from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveProviderCacheTtlEligibility } from "../../plugins/provider-runtime.js";
 import { isGooglePromptCacheEligible } from "./prompt-cache-retention.js";
 
@@ -31,7 +32,7 @@ type CacheTtlContext = {
 export function isCacheTtlEligibleProvider(
   provider: string,
   modelId: string,
-  modelApi?: string,
+  model?: ProviderRuntimeModel,
 ): boolean {
   const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
   const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
@@ -40,7 +41,9 @@ export function isCacheTtlEligibleProvider(
     context: {
       provider: normalizedProvider,
       modelId: normalizedModelId,
-      modelApi,
+      modelApi: model?.api,
+      baseUrl: model?.baseUrl,
+      supportsPromptCacheKey: model?.compat?.supportsPromptCacheKey,
     },
   });
   if (pluginEligibility !== undefined) {
@@ -50,10 +53,10 @@ export function isCacheTtlEligibleProvider(
     isAnthropicFamilyCacheTtlEligible({
       provider: normalizedProvider,
       modelId: normalizedModelId,
-      modelApi,
+      modelApi: model?.api,
     }) ||
     (normalizedProvider === "kilocode" && isAnthropicModelRef(normalizedModelId)) ||
-    isGooglePromptCacheEligible({ modelApi, modelId: normalizedModelId })
+    isGooglePromptCacheEligible({ modelApi: model?.api, modelId: normalizedModelId })
   );
 }
 
