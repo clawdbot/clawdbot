@@ -73,6 +73,7 @@ type SharedCodexAppServerClientState = {
   liveClients: Set<CodexAppServerClient>;
   entriesByClient: WeakMap<CodexAppServerClient, SharedCodexAppServerClientEntry>;
   leasedReleases: WeakMap<CodexAppServerClient, Array<() => void>>;
+  desktopGenerationDrainChecks: Set<() => void>;
   warmClientsByConfig?: WeakMap<
     object,
     WeakMap<CodexAppServerStartOptions, Map<string, WarmSharedCodexAppServerClient>>
@@ -134,6 +135,7 @@ function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
     liveClients: new Set(),
     entriesByClient: new WeakMap(),
     leasedReleases: new WeakMap(),
+    desktopGenerationDrainChecks: new Set(),
   };
   return globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE];
 }
@@ -455,14 +457,17 @@ function shouldTrackDesktopGeneration(
   startOptions: CodexAppServerStartOptions,
   pluginConfig: unknown,
 ): boolean {
-  if (startOptions.transport !== "stdio" || startOptions.commandSource !== "managed") {
+  if (startOptions.transport !== "stdio") {
     return false;
   }
-  // An explicitly package-first process can still publish and load Computer Use
-  // artifacts from a desktop app, so it belongs to that desktop generation too.
+  // Computer Use can publish desktop-owned artifacts even when an explicit
+  // package command owns the process, so both must share one generation fence.
+  if (resolveCodexComputerUseConfig({ pluginConfig }).enabled) {
+    return true;
+  }
   return (
-    (startOptions.managedCommandOrder ?? "package-first") === "desktop-first" ||
-    resolveCodexComputerUseConfig({ pluginConfig }).enabled
+    startOptions.commandSource === "managed" &&
+    (startOptions.managedCommandOrder ?? "package-first") === "desktop-first"
   );
 }
 
@@ -946,6 +951,7 @@ function createSharedCodexAppServerClientStartup(params: {
         if (state.entriesByClient.get(closedClient) === params.entry) {
           clearSharedClientEntryIfCurrent(params.key, closedClient);
         }
+        notifyDesktopGenerationDrainChecks(state);
       });
       for (const callback of params.entry.onStartedClientCallbacks) {
         callback(startedClient);
@@ -1059,16 +1065,39 @@ async function startInitializedCodexAppServerClient(params: {
         throw new CodexAppServerStartSelectionChangedError();
       }
     };
+    const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig: params.pluginConfig });
+    const ownsIsolatedCodexHome =
+      params.requestedStartOptions.homeScope !== "user" &&
+      !params.requestedStartOptions.env?.CODEX_HOME?.trim();
+    const needsComputerUseArtifactDrain =
+      desktopGeneration &&
+      ownsIsolatedCodexHome &&
+      computerUseConfig.enabled &&
+      (computerUseConfig.autoInstall || computerUseConfig.pluginCacheMode === "shared");
+    const artifactDrain = needsComputerUseArtifactDrain
+      ? createOlderDesktopGenerationDrainWait({
+          generation: desktopGeneration,
+          startOptions,
+          agentDir: params.agentDir,
+        })
+      : undefined;
     try {
+      if (artifactDrain) {
+        // These artifacts have stable paths per CODEX_HOME. Publish Y only after
+        // every X claimant has stopped reading X, or an active turn can mix both.
+        await withCodexAppServerAcquireDeadline(
+          resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt),
+          artifactDrain.promise,
+          params.abandonSignal,
+        );
+      }
       await reconcileCodexComputerUseStartArtifacts({
         startOptions,
         agentDir: params.agentDir,
         pluginConfig: params.pluginConfig,
         ...(desktopGeneration ? { desktopGeneration } : {}),
         assertCurrent: assertDesktopGenerationCurrent,
-        ownsIsolatedCodexHome:
-          params.requestedStartOptions.homeScope !== "user" &&
-          !params.requestedStartOptions.env?.CODEX_HOME?.trim(),
+        ownsIsolatedCodexHome,
       });
     } catch (error) {
       if (isCodexComputerUseCandidateArtifactsUnavailableError(error)) {
@@ -1081,6 +1110,8 @@ async function startInitializedCodexAppServerClient(params: {
         );
       }
       throw error;
+    } finally {
+      artifactDrain?.cancel();
     }
     const runtimeArtifactModule = params.runtimeArtifactMode
       ? await import("./runtime-artifact.js")
@@ -1280,6 +1311,7 @@ export function resetSharedCodexAppServerClientForTests(): void {
   for (const client of clients) {
     client.close();
   }
+  notifyDesktopGenerationDrainChecks(state);
 }
 
 /** Clears and closes all shared clients. */
@@ -1291,6 +1323,7 @@ export function clearSharedCodexAppServerClient(): void {
   for (const client of clients) {
     client.close();
   }
+  notifyDesktopGenerationDrainChecks(state);
 }
 
 /** Clears and closes the shared entry only if it still owns the supplied client. */
@@ -1411,6 +1444,76 @@ export function retireSharedCodexAppServerClientsBeforeDesktopGeneration(
   }
 }
 
+function createOlderDesktopGenerationDrainWait(params: {
+  generation: CodexDesktopGeneration;
+  startOptions: CodexAppServerStartOptions;
+  agentDir: string;
+}): { promise: Promise<void>; cancel: () => void } {
+  const targetHome = resolveCodexNativeConfigFenceKey({
+    startOptions: params.startOptions,
+    agentDir: params.agentDir,
+  });
+  if (!targetHome) {
+    return { promise: Promise.resolve(), cancel: () => undefined };
+  }
+  const state = getSharedCodexAppServerClientState();
+  let settled = false;
+  let resolveWait!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    resolveWait = resolve;
+  });
+  const cancel = () => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    state.desktopGenerationDrainChecks.delete(check);
+    resolveWait();
+  };
+  const check = () => {
+    if (
+      !hasClaimedOlderDesktopGenerationClient({
+        state,
+        generation: params.generation,
+        targetHome,
+      })
+    ) {
+      cancel();
+    }
+  };
+  state.desktopGenerationDrainChecks.add(check);
+  check();
+  return { promise, cancel };
+}
+
+function hasClaimedOlderDesktopGenerationClient(params: {
+  state: SharedCodexAppServerClientState;
+  generation: CodexDesktopGeneration;
+  targetHome: string;
+}): boolean {
+  for (const client of params.state.liveClients) {
+    const metadata = getCodexAppServerClientStartMetadata().get(client);
+    if (
+      !metadata?.desktopGeneration ||
+      metadata.desktopGeneration.epoch >= params.generation.epoch ||
+      resolveCodexNativeConfigFenceKey({ client }) !== params.targetHome
+    ) {
+      continue;
+    }
+    const entry = params.state.entriesByClient.get(client);
+    if (entry && (entry.activeLeases > 0 || entry.pendingAcquires > 0)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function notifyDesktopGenerationDrainChecks(state: SharedCodexAppServerClientState): void {
+  for (const check of state.desktopGenerationDrainChecks) {
+    check();
+  }
+}
+
 /** Clears a matching shared client and waits for its process to exit. */
 export async function clearSharedCodexAppServerClientIfCurrentAndWait(
   client: CodexAppServerClient | undefined,
@@ -1507,6 +1610,7 @@ function retainPendingSharedClientAcquire(entry: SharedCodexAppServerClientEntry
     released = true;
     entry.pendingAcquires = Math.max(0, entry.pendingAcquires - 1);
     closeRetiredSharedClientEntryIfIdle(entry);
+    notifyDesktopGenerationDrainChecks(getSharedCodexAppServerClientState());
   };
 }
 
@@ -1520,6 +1624,7 @@ function retainSharedClientEntry(entry: SharedCodexAppServerClientEntry): () => 
     released = true;
     entry.activeLeases = Math.max(0, entry.activeLeases - 1);
     closeRetiredSharedClientEntryIfIdle(entry);
+    notifyDesktopGenerationDrainChecks(getSharedCodexAppServerClientState());
   };
 }
 

@@ -158,14 +158,15 @@ Gateway, restart the Gateway and start a new chat before relying on the new
 selection.
 
 The Gateway watches all standard ChatGPT and Codex desktop candidates that can
-supply the app-server or Computer Use artifacts. It does not poll the request path. After a detected update
-settles, existing turns continue on their current app-server generation, while
-new acquisitions wait for the new generation. OpenClaw then retires the old
-app-server gracefully, refreshes the signed Computer Use service and managed
-marketplace wrapper for eligible isolated homes, and starts the first new turn
-on the replacement. If the bundle changes again during startup, OpenClaw fences
-the stale client before login or `thread/start` and uses the
-normal bounded startup retry.
+supply the app-server or Computer Use artifacts. It does not poll the request
+path. After a detected update settles, existing turns continue on their current
+app-server generation and new acquisitions stop using it. For each eligible
+isolated home, OpenClaw waits for the last old-generation turn to release its
+client before refreshing the signed Computer Use service, shared cache, and
+managed marketplace wrapper. Queued new turns then start on the replacement; an
+active turn for another home does not block them. If the bundle changes again
+during startup, OpenClaw fences the stale client before login or `thread/start`
+and uses the normal bounded startup retry.
 
 This makes the first new request after a detected, settled standard desktop
 replacement transparent under normal updater behavior. It is not a general
