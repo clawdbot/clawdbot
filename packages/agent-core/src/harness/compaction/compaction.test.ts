@@ -884,4 +884,70 @@ describe("split-turn compaction", () => {
     expect(streamFn).toHaveBeenCalledTimes(2);
     expect(maxActive).toBe(1);
   });
+  it("keeps the previous summary when only a turn prefix is summarized", async () => {
+    const model: Model = {
+      id: "summary-model",
+      name: "Summary Model",
+      api: "test-api",
+      provider: "test-provider",
+      baseUrl: "https://example.test",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 100_000,
+      maxTokens: 8_000,
+    };
+    const streamFn = vi.fn<StreamFn>(() => {
+      const stream = createAssistantMessageEventStream();
+      const message: AssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "prefix-summary" }],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 1,
+      };
+      stream.push({ type: "done", reason: "stop", message });
+      stream.end();
+      return stream;
+    });
+
+    const result = await compact(
+      {
+        firstKeptEntryId: "kept-entry",
+        messagesToSummarize: [],
+        turnPrefixMessages: [{ role: "user", content: "prefix", timestamp: 2 }],
+        isSplitTurn: true,
+        tokensBefore: 100,
+        previousSummary: "Earlier compacted history.",
+        fileOps: createFileOps(),
+        settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
+      },
+      model,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      streamFn,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(streamFn).toHaveBeenCalledTimes(1);
+    expect(result.value.summary).toContain("Earlier compacted history.");
+    expect(result.value.summary).toContain("prefix-summary");
+    expect(result.value.summary).not.toContain("No prior history.");
+  });
 });
