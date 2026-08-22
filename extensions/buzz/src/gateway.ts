@@ -84,6 +84,7 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
   const profileName = resolveBuzzProfileName({ cfg: ctx.cfg, account, channelIds });
 
   const watermarkStore = openBuzzRecoveryWatermarkStore({
+    accountId: account.accountId,
     onError: (error) => {
       ctx.log?.warn?.(
         `[${account.accountId}] Buzz recovery watermark unavailable: ${error.message}`,
@@ -96,7 +97,6 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
   const commitRecoveryCheckpoint = (channelId: string, seconds: number) => {
     void advanceBuzzRecoveryWatermark({
       store: watermarkStore,
-      accountId: account.accountId,
       channelId,
       seconds,
       onError: reportWatermarkError,
@@ -120,7 +120,6 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
         ? undefined
         : await resolveBuzzColdStartSince({
             store: watermarkStore,
-            accountId: account.accountId,
             channelIds,
             nowSeconds,
             lookbackSeconds: RECONNECT_LOOKBACK_SECONDS,

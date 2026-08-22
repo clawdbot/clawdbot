@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { finalizeEvent, getPublicKey, type Event, type Filter } from "nostr-tools";
+import { finalizeEvent, getPublicKey, Relay, type Event, type Filter } from "nostr-tools";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const relayMocks = vi.hoisted(() => ({
@@ -123,7 +123,6 @@ vi.mock("nostr-tools", async (importOriginal) => {
   };
 });
 
-import { Relay } from "nostr-tools";
 import { startBuzzBus } from "./buzz-bus.js";
 import { createBuzzRoomMembershipTracker } from "./room-membership-tracker.js";
 

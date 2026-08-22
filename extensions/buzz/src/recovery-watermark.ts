@@ -1,29 +1,36 @@
+import { createHash } from "node:crypto";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getBuzzRuntime } from "./runtime.js";
 import { BUZZ_MAX_CONFIGURED_ROOMS } from "./subscription-budget.js";
 
-const WATERMARK_NAMESPACE = "buzz.recovery-watermark";
+const WATERMARK_NAMESPACE_PREFIX = "buzz.recovery-watermark";
 const WATERMARK_MAX_ENTRIES = BUZZ_MAX_CONFIGURED_ROOMS;
 
 export type BuzzRecoveryWatermark = { seconds: number };
 
 export type BuzzRecoveryWatermarkStore = PluginStateKeyedStore<BuzzRecoveryWatermark>;
 
-function roomCursorKey(accountId: string, channelId: string): string {
-  return `room:${accountId}:${channelId}`;
+function roomCursorKey(channelId: string): string {
+  return `room:${channelId}`;
 }
 
-export function openBuzzRecoveryWatermarkStore(params?: {
+function watermarkNamespace(accountId: string): string {
+  const scope = createHash("sha256").update(accountId).digest("hex").slice(0, 16);
+  return `${WATERMARK_NAMESPACE_PREFIX}-${scope}`;
+}
+
+export function openBuzzRecoveryWatermarkStore(params: {
+  accountId: string;
   onError?: (error: Error) => void;
 }): BuzzRecoveryWatermarkStore | undefined {
   try {
     return getBuzzRuntime().state.openKeyedStore<BuzzRecoveryWatermark>({
-      namespace: WATERMARK_NAMESPACE,
+      namespace: watermarkNamespace(params.accountId),
       maxEntries: WATERMARK_MAX_ENTRIES,
       overflowPolicy: "reject-new",
     });
   } catch (error) {
-    params?.onError?.(error instanceof Error ? error : new Error(String(error)));
+    params.onError?.(error instanceof Error ? error : new Error(String(error)));
     return undefined;
   }
 }
@@ -36,13 +43,12 @@ function isUsableWatermark(
 
 export async function resolveBuzzColdStartSince(params: {
   store: BuzzRecoveryWatermarkStore | undefined;
-  accountId: string;
   channelIds: readonly string[];
   nowSeconds: number;
   lookbackSeconds: number;
   onError?: (error: Error) => void;
 }): Promise<Map<string, number>> {
-  const { store, accountId, channelIds, nowSeconds, lookbackSeconds } = params;
+  const { store, channelIds, nowSeconds, lookbackSeconds } = params;
   const sinceByRoom = new Map(channelIds.map((channelId) => [channelId, nowSeconds]));
   if (!store) {
     return sinceByRoom;
@@ -50,7 +56,7 @@ export async function resolveBuzzColdStartSince(params: {
   try {
     const floor = nowSeconds - lookbackSeconds;
     for (const channelId of channelIds) {
-      const key = roomCursorKey(accountId, channelId);
+      const key = roomCursorKey(channelId);
       const persisted = await store.lookup(key);
       if (isUsableWatermark(persisted)) {
         sinceByRoom.set(channelId, Math.min(Math.max(persisted.seconds, floor), nowSeconds));
@@ -163,16 +169,15 @@ export function createBuzzRecoveryFrontier(params: {
 
 export async function advanceBuzzRecoveryWatermark(params: {
   store: BuzzRecoveryWatermarkStore | undefined;
-  accountId: string;
   channelId: string;
   seconds: number;
   onError?: (error: Error) => void;
 }): Promise<void> {
-  const { store, accountId, channelId, seconds } = params;
+  const { store, channelId, seconds } = params;
   if (!store || !Number.isFinite(seconds)) {
     return;
   }
-  const key = roomCursorKey(accountId, channelId);
+  const key = roomCursorKey(channelId);
   const next = { seconds } satisfies BuzzRecoveryWatermark;
   try {
     if (store.update) {

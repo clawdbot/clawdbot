@@ -120,7 +120,11 @@ vi.mock("./inbound.js", () => ({
 }));
 
 import { startBuzzGatewayAccount } from "./gateway.js";
-import { openBuzzRecoveryWatermarkStore, resolveBuzzColdStartSince } from "./recovery-watermark.js";
+import {
+  advanceBuzzRecoveryWatermark,
+  openBuzzRecoveryWatermarkStore,
+  resolveBuzzColdStartSince,
+} from "./recovery-watermark.js";
 import { setBuzzRuntime } from "./runtime.js";
 import { BUZZ_MAX_CONFIGURED_ROOMS } from "./subscription-budget.js";
 import { resolveBuzzAccount } from "./types.js";
@@ -128,6 +132,7 @@ import { resolveBuzzAccount } from "./types.js";
 const BUZZ_MESSAGE_KIND = 9;
 const BUZZ_ROOM_MEMBERSHIP_KIND = 39_002;
 const ACCOUNT_ID = "default";
+const SECOND_ACCOUNT_ID = "second";
 const CHANNEL_ID = "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c";
 const SECOND_CHANNEL_ID = "1b8f5c33-9a21-4d0e-8f77-2b6c1d4e5a90";
 const PRIVATE_KEY = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
@@ -262,8 +267,8 @@ function roomSubscriptionSince(channelId = CHANNEL_ID): number {
 }
 
 async function readWatermark(channelId = CHANNEL_ID): Promise<number | undefined> {
-  const store = openBuzzRecoveryWatermarkStore();
-  return (await store?.lookup(`room:${ACCOUNT_ID}:${channelId}`))?.seconds;
+  const store = openBuzzRecoveryWatermarkStore({ accountId: ACCOUNT_ID });
+  return (await store?.lookup(`room:${channelId}`))?.seconds;
 }
 
 function openProcessBoundary(): void {
@@ -365,7 +370,7 @@ describe("Buzz gateway cold-start recovery", () => {
   });
 
   it("registers a cursor for every supported room", async () => {
-    const store = openBuzzRecoveryWatermarkStore();
+    const store = openBuzzRecoveryWatermarkStore({ accountId: ACCOUNT_ID });
     const channelIds = Array.from(
       { length: BUZZ_MAX_CONFIGURED_ROOMS },
       (_value, index) => `room-${index}`,
@@ -373,7 +378,6 @@ describe("Buzz gateway cold-start recovery", () => {
     const errors: Error[] = [];
     const sinceByRoom = await resolveBuzzColdStartSince({
       store,
-      accountId: ACCOUNT_ID,
       channelIds,
       nowSeconds: START_SECONDS,
       lookbackSeconds: LOOKBACK_SECONDS,
@@ -383,8 +387,60 @@ describe("Buzz gateway cold-start recovery", () => {
     expect(errors).toEqual([]);
     expect(sinceByRoom.size).toBe(BUZZ_MAX_CONFIGURED_ROOMS);
     const lastChannelId = channelIds.at(-1) as string;
-    expect(await store?.lookup(`room:${ACCOUNT_ID}:${lastChannelId}`)).toEqual({
+    expect(await store?.lookup(`room:${lastChannelId}`)).toEqual({
       seconds: START_SECONDS,
+    });
+  });
+
+  it("keeps every supported room for a second account after the first one saturates", async () => {
+    const errors: Error[] = [];
+    const saturate = async (accountId: string) => {
+      const channelIds = Array.from(
+        { length: BUZZ_MAX_CONFIGURED_ROOMS },
+        (_value, index) => `${accountId}-room-${index}`,
+      );
+      const store = openBuzzRecoveryWatermarkStore({ accountId });
+      const sinceByRoom = await resolveBuzzColdStartSince({
+        store,
+        channelIds,
+        nowSeconds: START_SECONDS,
+        lookbackSeconds: LOOKBACK_SECONDS,
+        onError: (error) => errors.push(error),
+      });
+      return { store, sinceByRoom, lastChannelId: channelIds.at(-1) as string };
+    };
+
+    const first = await saturate(ACCOUNT_ID);
+    const second = await saturate(SECOND_ACCOUNT_ID);
+
+    expect(errors).toEqual([]);
+    expect(first.sinceByRoom.size).toBe(BUZZ_MAX_CONFIGURED_ROOMS);
+    expect(second.sinceByRoom.size).toBe(BUZZ_MAX_CONFIGURED_ROOMS);
+    expect(await first.store?.lookup(`room:${first.lastChannelId}`)).toEqual({
+      seconds: START_SECONDS,
+    });
+    expect(await second.store?.lookup(`room:${second.lastChannelId}`)).toEqual({
+      seconds: START_SECONDS,
+    });
+  });
+
+  it("keeps a second account cursor advance out of the first account rooms", async () => {
+    const firstStore = openBuzzRecoveryWatermarkStore({ accountId: ACCOUNT_ID });
+    const secondStore = openBuzzRecoveryWatermarkStore({ accountId: SECOND_ACCOUNT_ID });
+    await advanceBuzzRecoveryWatermark({
+      store: firstStore,
+      channelId: CHANNEL_ID,
+      seconds: START_SECONDS,
+    });
+    await advanceBuzzRecoveryWatermark({
+      store: secondStore,
+      channelId: CHANNEL_ID,
+      seconds: START_SECONDS + 500,
+    });
+
+    expect(await firstStore?.lookup(`room:${CHANNEL_ID}`)).toEqual({ seconds: START_SECONDS });
+    expect(await secondStore?.lookup(`room:${CHANNEL_ID}`)).toEqual({
+      seconds: START_SECONDS + 500,
     });
   });
 
