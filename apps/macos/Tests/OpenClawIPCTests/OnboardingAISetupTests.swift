@@ -1287,13 +1287,13 @@ struct OnboardingAISetupTests {
                             kind: "codex-cli",
                             modelRef: "openai/gpt-5.5")))
                     case "openclaw.setup.activate":
+                        task.emitReceiveSuccess(.data(successfulActivationResponse(
+                            id: request.id,
+                            modelRef: "openai/gpt-5.5",
+                            latencyMs: 42,
+                            gatewayRestartRequired: true)))
                         Task {
                             await restartGate.wait()
-                            task.emitReceiveSuccess(.data(successfulActivationResponse(
-                                id: request.id,
-                                modelRef: "openai/gpt-5.5",
-                                latencyMs: 42,
-                                gatewayRestartRequired: true)))
                             task.emitReceiveFailure()
                         }
                     default:
