@@ -980,19 +980,16 @@ function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): bo
   const reviewId = toTrimmedString(data.reviewId);
   const threadId = toTrimmedString(data.threadId);
   const turnId = toTrimmedString(data.turnId);
-  const startedAtMs =
-    typeof data.startedAtMs === "number" && Number.isFinite(data.startedAtMs)
-      ? data.startedAtMs
-      : undefined;
   const correlationId =
     reviewId ??
-    (threadId && turnId && startedAtMs !== undefined
-      ? `${threadId}:${turnId}:${startedAtMs}`
+    (threadId && turnId && typeof data.startedAtMs === "number" && Number.isFinite(data.startedAtMs)
+      ? `${threadId}:${turnId}:${data.startedAtMs}`
       : String(payload.seq));
+  const noticeNamespace = `${systemNotice ? "system" : "guardian"}:${payload.runId}:`;
   const noticeKey =
     phase === "warning"
-      ? `${systemNotice ? "system" : "guardian"}:${payload.runId}:warning:${payload.seq}`
-      : `${systemNotice ? "system" : "guardian"}:${payload.runId}:${threadId ?? "thread"}:${turnId ?? "turn"}:${correlationId}`;
+      ? `${noticeNamespace}warning:${payload.seq}`
+      : `${noticeNamespace}${threadId ?? "thread"}:${turnId ?? "turn"}:${correlationId}`;
   const current = host.guardianNotices ?? [];
   const kind =
     phase === "strict_review_required"
@@ -1014,27 +1011,25 @@ function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): bo
     // Targeted decisions arrive again as generic tool-review metadata. Keep
     // vendor notices only for strict-review requirements and targetless reviews.
     if (phase === "completed") {
-      host.guardianNotices = (host.guardianNotices ?? []).filter(
-        (candidate) => candidate.key !== noticeKey,
-      );
+      host.guardianNotices = current.filter((candidate) => candidate.key !== noticeKey);
     }
     return true;
   }
-  const command = toTrimmedString(data.command);
-  const riskLevel = toTrimmedString(data.riskLevel);
-  const rationale = toTrimmedString(data.rationale);
-  const message = toTrimmedString(data.message);
   const notice: ChatGuardianNotice = {
     key: noticeKey,
     runId: payload.runId,
     timestamp: typeof payload.ts === "number" ? payload.ts : Date.now(),
     kind,
-    ...(systemNotice ? { source: "system" as const } : {}),
-    ...(command ? { command } : {}),
-    ...(riskLevel ? { riskLevel } : {}),
-    ...(rationale ? { rationale } : {}),
-    ...(message ? { message } : {}),
   };
+  if (systemNotice) {
+    notice.source = "system";
+  }
+  for (const field of ["command", "riskLevel", "rationale", "message"] as const) {
+    const value = toTrimmedString(data[field]);
+    if (value) {
+      notice[field] = value;
+    }
+  }
   const existingIndex = current.findIndex((candidate) => candidate.key === notice.key);
   host.guardianNotices =
     existingIndex === -1

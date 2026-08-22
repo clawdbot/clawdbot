@@ -1,7 +1,5 @@
 // Codex plugin module implements event projector behavior.
 import {
-  embeddedAgentLog,
-  emitAgentEvent as emitGlobalAgentEvent,
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessBeforeCompactionHook,
   type AgentMessage,
@@ -12,8 +10,9 @@ import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce
 import type { AttemptFailureSource, EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { persistCodexContextCompactionActivity } from "./context-compaction-activity.js";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
+import { CodexAsyncDeliveryProjection } from "./event-projector-async-delivery.js";
 import { CodexProjectionDiagnostics } from "./event-projector-diagnostics.js";
-import { CodexEventProjection } from "./event-projector-events.js";
+import { CodexEventProjection, emitCodexAgentEvent } from "./event-projector-events.js";
 import {
   itemName,
   itemStatus,
@@ -65,15 +64,11 @@ export { shouldEmitTranscriptToolProgress } from "./event-projector-tool-progres
 type ApprovalFailure = Exclude<BeforeToolCallFailureDisposition, "blocked">;
 
 export class CodexAppServerEventProjector {
+  private readonly asyncDeliveryProjection: CodexAsyncDeliveryProjection;
   private readonly assistantProjection: CodexAssistantProjection;
   private readonly reasoningProjection: CodexReasoningProjection;
   private readonly activeItemIds = new Set<string>();
   private readonly completedItemIds = new Set<string>();
-  private readonly settledAsyncDeliveryItemIds = new Set<string>();
-  private readonly pendingAsyncDeliveries = new Map<
-    string,
-    Parameters<NonNullable<CodexAppServerEventProjectorOptions["onAsyncDelivery"]>>[0]
-  >();
   private readonly activeCompactionItemIds = new Set<string>();
   private readonly terminalPresentationClearedItemIds = new Set<string>();
   private readonly nativeToolOutcomeOrdinals = new Map<string, number>();
@@ -103,6 +98,12 @@ export class CodexAppServerEventProjector {
     private readonly turnId: string,
     private readonly options: CodexAppServerEventProjectorOptions = {},
   ) {
+    this.asyncDeliveryProjection = new CodexAsyncDeliveryProjection(
+      params,
+      threadId,
+      turnId,
+      options,
+    );
     this.contextTokens = options.initialContextTokens;
     this.contextTokensSource = options.initialContextTokens === undefined ? undefined : "resolved";
     this.diagnostics = new CodexProjectionDiagnostics(threadId, turnId);
@@ -525,16 +526,7 @@ export class CodexAppServerEventProjector {
       this.activeItemIds.delete(itemId);
       this.completedItemIds.add(itemId);
     }
-    if (
-      item?.type === "agentMessage" &&
-      item.delivery === "async" &&
-      !this.canDeliverAsyncUserMessage()
-    ) {
-      embeddedAgentLog.warn("blocked unauthorized codex async user message", {
-        itemId,
-        threadId: this.threadId,
-        turnId: this.turnId,
-      });
+    if (!this.asyncDeliveryProjection.allows(item, true)) {
       return;
     }
     const asyncMessage = this.assistantProjection.recordItemCompleted(
@@ -543,7 +535,7 @@ export class CodexAppServerEventProjector {
       this.activeItemIds,
     );
     if (asyncMessage) {
-      await this.deliverAsyncMessage(asyncMessage);
+      await this.asyncDeliveryProjection.deliver(asyncMessage);
     }
     this.reasoningProjection.recordItem(item);
     await this.generatedMediaProjection.recordNative(item);
@@ -576,7 +568,7 @@ export class CodexAppServerEventProjector {
         itemId,
         timestamp: this.nextTranscriptTimestamp(),
       });
-      this.emitCompactionEnd(itemId, true);
+      this.eventProjection.emitCompactionEnd(itemId, true);
     }
     this.toolProgressProjection.recordToolMeta(item);
     this.toolProgressProjection.rememberCommandAggregateOutputEcho(item);
@@ -626,13 +618,13 @@ export class CodexAppServerEventProjector {
       for (const itemId of failedCompactionItemIds) {
         this.activeItemIds.delete(itemId);
         this.activeCompactionItemIds.delete(itemId);
-        this.emitCompactionEnd(itemId, false);
+        this.eventProjection.emitCompactionEnd(itemId, false);
       }
     }
     const turnItems = turn.items ?? [];
     // Upstream terminal summaries contain only the last assistant item. Keep
     // earlier unsettled deliveries at their producer instead of inferring them.
-    const unsettledAsyncDeliveries = [...this.pendingAsyncDeliveries.values()];
+    const unsettledAsyncDeliveries = this.asyncDeliveryProjection.pending();
     // The final snapshot is authoritative when item notifications were omitted.
     // Only its last relevant tool may change the terminal presentation.
     for (let index = turnItems.length - 1; index >= 0; index -= 1) {
@@ -649,17 +641,13 @@ export class CodexAppServerEventProjector {
       }
     }
     for (const item of turnItems) {
-      if (
-        item.type === "agentMessage" &&
-        item.delivery === "async" &&
-        !this.canDeliverAsyncUserMessage()
-      ) {
+      if (!this.asyncDeliveryProjection.allows(item)) {
         continue;
       }
       this.diagnostics.warnUnknownItemStatus(item);
       const asyncMessage = this.assistantProjection.recordSnapshotItem(item);
       if (asyncMessage) {
-        await this.deliverAsyncMessage(asyncMessage);
+        await this.asyncDeliveryProjection.deliver(asyncMessage);
       }
       this.reasoningProjection.recordItem(item);
       await this.generatedMediaProjection.recordNative(item);
@@ -674,57 +662,11 @@ export class CodexAppServerEventProjector {
     }
     this.toolProgressProjection.approvalTimeoutKinds.clear();
     for (const delivery of unsettledAsyncDeliveries) {
-      await this.deliverAsyncMessage(delivery);
+      await this.asyncDeliveryProjection.deliver(delivery);
     }
     this.assistantProjection.finalizeAnswerCandidate(turn);
     this.activeCompactionItemIds.clear();
     await this.reasoningProjection.maybeEndReasoning();
-  }
-
-  private emitCompactionEnd(itemId: string, completed: boolean): void {
-    this.emitAgentEvent({
-      stream: "compaction",
-      data: {
-        phase: "end",
-        backend: "codex-app-server",
-        completed,
-        threadId: this.threadId,
-        turnId: this.turnId,
-        itemId,
-      },
-    });
-  }
-
-  private async deliverAsyncMessage(delivery: {
-    itemId: string;
-    message: Parameters<
-      NonNullable<CodexAppServerEventProjectorOptions["onAsyncDelivery"]>
-    >[0]["message"];
-    text: string;
-  }): Promise<void> {
-    if (this.settledAsyncDeliveryItemIds.has(delivery.itemId)) {
-      return;
-    }
-    const settlement = await this.options.onAsyncDelivery?.(delivery);
-    if (settlement === "settled") {
-      this.settledAsyncDeliveryItemIds.add(delivery.itemId);
-      this.pendingAsyncDeliveries.delete(delivery.itemId);
-    } else if (settlement === "retry") {
-      this.pendingAsyncDeliveries.set(delivery.itemId, delivery);
-    }
-  }
-
-  private canDeliverAsyncUserMessage(): boolean {
-    if (this.params.disableTools === true) {
-      return false;
-    }
-    if (this.options.asyncUserMessageAllowed !== undefined) {
-      return this.options.asyncUserMessageAllowed;
-    }
-    return (
-      this.params.toolsAllow === undefined ||
-      this.params.toolsAllow.some((name) => name === "*" || name === "message")
-    );
   }
 
   private async emitSnapshotOnlyNativeToolProgress(item: CodexThreadItem): Promise<void> {
@@ -799,25 +741,7 @@ export class CodexAppServerEventProjector {
   private emitAgentEvent(
     event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
   ): void {
-    try {
-      emitGlobalAgentEvent({
-        runId: this.params.runId,
-        stream: event.stream,
-        data: event.data,
-        ...(this.params.sessionKey ? { sessionKey: this.params.sessionKey } : {}),
-      });
-    } catch (error) {
-      embeddedAgentLog.debug("codex app-server global agent event emit failed", { error });
-    }
-    try {
-      const maybePromise = this.params.onAgentEvent?.(event);
-      void Promise.resolve(maybePromise).catch((error: unknown) => {
-        embeddedAgentLog.debug("codex app-server agent event handler rejected", { error });
-      });
-    } catch (error) {
-      // Downstream event consumers must not corrupt the canonical Codex turn projection.
-      embeddedAgentLog.debug("codex app-server agent event handler threw", { error });
-    }
+    emitCodexAgentEvent(this.params, event);
   }
 
   private isHookNotificationForCurrentThread(params: JsonObject): boolean {

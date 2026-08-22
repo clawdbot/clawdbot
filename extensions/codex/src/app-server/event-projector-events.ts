@@ -1,6 +1,8 @@
-import type {
-  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-  ToolProgressDetailMode,
+import {
+  embeddedAgentLog,
+  emitAgentEvent as emitGlobalAgentEvent,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   asFiniteNumber,
@@ -30,6 +32,28 @@ import { readHookOutputEntries, readNullableString } from "./event-projector-val
 import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
+
+/** Downstream event consumers must never corrupt the canonical Codex turn projection. */
+export function emitCodexAgentEvent(params: EmbeddedRunAttemptParams, event: AgentEvent): void {
+  try {
+    emitGlobalAgentEvent({
+      runId: params.runId,
+      stream: event.stream,
+      data: event.data,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    });
+  } catch (error) {
+    embeddedAgentLog.debug("codex app-server global agent event emit failed", { error });
+  }
+  try {
+    const maybePromise = params.onAgentEvent?.(event);
+    void Promise.resolve(maybePromise).catch((error: unknown) => {
+      embeddedAgentLog.debug("codex app-server agent event handler rejected", { error });
+    });
+  } catch (error) {
+    embeddedAgentLog.debug("codex app-server agent event handler threw", { error });
+  }
+}
 
 type NormalizedToolItemProjection = {
   name: string;
@@ -134,6 +158,20 @@ export class CodexEventProjection {
 
   get guardianReviewCount(): number {
     return this.reviewCount;
+  }
+
+  emitCompactionEnd(itemId: string, completed: boolean): void {
+    this.emitAgentEvent({
+      stream: "compaction",
+      data: {
+        phase: "end",
+        backend: "codex-app-server",
+        completed,
+        threadId: this.threadId,
+        turnId: this.turnId,
+        itemId,
+      },
+    });
   }
 
   handleGuardianReview(method: string, params: JsonObject): void {

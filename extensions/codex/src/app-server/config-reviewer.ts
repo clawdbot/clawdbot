@@ -3,7 +3,6 @@ import { homedir as readHomeDir } from "node:os";
 import path from "node:path";
 import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/agent-runtime";
 import { parse as parseToml } from "smol-toml";
-import type { CodexAppServerClient } from "./client.js";
 import type {
   CodexAppServerHomeScope,
   CodexModelBackedReviewerContext,
@@ -17,14 +16,21 @@ import {
   stripTomlLineComments,
 } from "./config-requirements.js";
 import { readNonEmptyString, readRecord } from "./config-utils.js";
+import type { CodexConfigReadParams, CodexConfigReadResponse } from "./protocol-control-plane.js";
 
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 const CODEX_CONFIG_TOML_FILENAME = "config.toml";
-const effectiveReviewerConfigByClient = new WeakMap<object, Promise<void>>();
+const effectiveReviewerConfigByClient = new WeakMap<object, Map<string, Promise<void>>>();
 
 /** Cloud/system config can redirect reviews after local home/profile checks have passed. */
 export async function assertCodexModelBackedReviewerEffectiveConfig(params: {
-  client: Pick<CodexAppServerClient, "request">;
+  client: {
+    request: (
+      method: "config/read",
+      params: CodexConfigReadParams,
+      options: { signal?: AbortSignal },
+    ) => Promise<CodexConfigReadResponse>;
+  };
   approvalsReviewer: string;
   cwd: string;
   signal?: AbortSignal;
@@ -35,10 +41,20 @@ export async function assertCodexModelBackedReviewerEffectiveConfig(params: {
   ) {
     return;
   }
-  let attestation = effectiveReviewerConfigByClient.get(params.client);
+  const effectiveCwd = path.resolve(params.cwd);
+  const cachedClientAttestations = effectiveReviewerConfigByClient.get(params.client);
+  const clientAttestations = cachedClientAttestations ?? new Map<string, Promise<void>>();
+  if (!cachedClientAttestations) {
+    effectiveReviewerConfigByClient.set(params.client, clientAttestations);
+  }
+  let attestation = clientAttestations.get(effectiveCwd);
   if (!attestation) {
     attestation = params.client
-      .request("config/read", { cwd: params.cwd, includeLayers: false }, { signal: params.signal })
+      .request(
+        "config/read",
+        { cwd: effectiveCwd, includeLayers: false },
+        { signal: params.signal },
+      )
       .then((response) => {
         const config = readRecord(response)?.config;
         const effectiveConfig = readRecord(config);
@@ -69,10 +85,10 @@ export async function assertCodexModelBackedReviewerEffectiveConfig(params: {
           );
         }
       });
-    effectiveReviewerConfigByClient.set(params.client, attestation);
+    clientAttestations.set(effectiveCwd, attestation);
     attestation.catch(() => {
-      if (effectiveReviewerConfigByClient.get(params.client) === attestation) {
-        effectiveReviewerConfigByClient.delete(params.client);
+      if (clientAttestations.get(effectiveCwd) === attestation) {
+        clientAttestations.delete(effectiveCwd);
       }
     });
   }

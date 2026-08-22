@@ -4,16 +4,9 @@ import type { CodexAppServerClient } from "./client.js";
 import type { JsonValue } from "./protocol.js";
 import { createClientHarness } from "./test-support.js";
 import { getCodexAppServerTurnRouter, type CodexAppServerServerRequest } from "./turn-router.js";
+import { settleInput, waitForResponse } from "./turn-router.test-support.js";
 
 const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
-
-type ClientHarness = ReturnType<typeof createClientHarness>;
-
-type WireResponse = {
-  id: number | string;
-  result?: unknown;
-  error?: unknown;
-};
 
 describe("CodexAppServerTurnRouter", () => {
   const clients: CodexAppServerClient[] = [];
@@ -27,7 +20,7 @@ describe("CodexAppServerTurnRouter", () => {
     vi.restoreAllMocks();
   });
 
-  function createHarness(): ClientHarness {
+  function createHarness(): ReturnType<typeof createClientHarness> {
     const harness = createClientHarness();
     clients.push(harness.client);
     return harness;
@@ -1099,23 +1092,3 @@ describe("CodexAppServerTurnRouter", () => {
     ).not.toThrow();
   });
 });
-
-async function waitForResponse(harness: ClientHarness, id: number | string): Promise<WireResponse> {
-  let response: WireResponse | undefined;
-  await vi.waitFor(() => {
-    response = harness.writes
-      .map((write) => JSON.parse(write) as WireResponse)
-      .find((candidate) => candidate.id === id);
-    expect(response).toBeDefined();
-  });
-  if (!response) {
-    throw new Error(`missing app-server response for ${id}`);
-  }
-  return response;
-}
-
-async function settleInput(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}

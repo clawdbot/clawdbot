@@ -974,7 +974,7 @@ describe("codex conversation binding", () => {
       modelProvider: "openai",
     });
 
-    expect(result.source.threadId).toBe("thread-old");
+    expect(result).toMatchObject({ source: { threadId: "thread-old" } });
     expect(requests.map((request) => request.method)).toEqual(["thread/resume"]);
     expect(requests[0]?.params.threadId).toBe("thread-old");
     expect(requests[0]?.params).not.toHaveProperty("sandbox");
