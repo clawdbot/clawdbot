@@ -935,10 +935,11 @@ suite.define(() => {
       const params = requireRecord(sendRequest.params);
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
 
+      const initialStream = `I will inspect the file. ${"Prior streamed output. ".repeat(20)}`;
       await gateway.emitGatewayEvent("chat", {
-        deltaText: "I will inspect the file.",
+        deltaText: initialStream,
         message: {
-          content: [{ text: "I will inspect the file.", type: "text" }],
+          content: [{ text: initialStream, type: "text" }],
           role: "assistant",
           timestamp: Date.now(),
         },
@@ -963,6 +964,22 @@ suite.define(() => {
       });
       const toolBubble = page.locator('[data-message-id^="tool:assistant:call-read"]');
       await toolBubble.waitFor({ timeout: 10_000 });
+
+      const nextStream = "```ts\nconst answer = 42;";
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: nextStream,
+        message: {
+          content: [{ text: nextStream, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      await expect
+        .poll(() => page.locator(".chat-bubble.streaming code.language-ts").textContent())
+        .toContain("const answer = 42;");
 
       const visibleOrder = await page.locator(".chat-thread").evaluate((thread: Element) => {
         return Array.from(thread.querySelectorAll(".chat-group")).flatMap((group: Element) => {

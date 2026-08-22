@@ -17,7 +17,6 @@ import {
   type ChatEventPayload,
   type ChatState,
 } from "./chat-history.ts";
-import { replaceChatStream } from "./chat-state-contract.ts";
 import {
   getChatSessionProjection,
   publishChatSessionProjectionMessages,
@@ -66,14 +65,14 @@ function isPendingLocalChatRun(state: ChatState, runId: string): boolean {
 function resolveDeltaChatStreamText(
   currentStream: string | null,
   payload: ChatEventPayload,
-): { replaced: boolean; text: string | null } {
+): string | null {
   const snapshot = payload.message == null ? null : extractText(payload.message);
   if (typeof payload.deltaText === "string") {
     if (payload.replace === true) {
-      return { replaced: currentStream !== null, text: payload.deltaText };
+      return payload.deltaText;
     }
     if (currentStream === null) {
-      return { replaced: false, text: typeof snapshot === "string" ? snapshot : payload.deltaText };
+      return typeof snapshot === "string" ? snapshot : payload.deltaText;
     }
     if (typeof snapshot === "string") {
       const prefixLength = snapshot.length - payload.deltaText.length;
@@ -81,12 +80,12 @@ function resolveDeltaChatStreamText(
         prefixLength !== currentStream.length ||
         snapshot.slice(0, prefixLength) !== currentStream
       ) {
-        return { replaced: true, text: snapshot };
+        return snapshot;
       }
     }
-    return { replaced: false, text: `${currentStream}${payload.deltaText}` };
+    return `${currentStream}${payload.deltaText}`;
   }
-  return { replaced: currentStream !== null, text: typeof snapshot === "string" ? snapshot : null };
+  return typeof snapshot === "string" ? snapshot : null;
 }
 
 function normalizeAssistantMessage(
@@ -367,15 +366,11 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
     const next = resolveDeltaChatStreamText(state.chatStream, payload);
     if (
-      typeof next.text === "string" &&
-      !isSilentReplyStream(next.text) &&
+      typeof next === "string" &&
+      !isSilentReplyStream(next) &&
       !isAssistantHeartbeatAckForDisplay(payload.message)
     ) {
-      if (next.replaced) {
-        replaceChatStream(state, next.text);
-      } else {
-        state.chatStream = next.text;
-      }
+      state.chatStream = next;
     }
   } else if (payload.state === "final") {
     const finalMessage = normalizedFinalMessage;

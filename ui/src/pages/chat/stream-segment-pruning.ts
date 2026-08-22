@@ -7,7 +7,6 @@ import {
   trimAccumulatedStreamPrefix,
   type ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
-import { replaceChatStream } from "./chat-state-contract.ts";
 import { streamCausalInterval, type StreamCausalBoundaryState } from "./stream-causal-boundary.ts";
 import {
   hasAssistantStreamPartReplacement,
@@ -22,7 +21,6 @@ import {
 
 type StreamSegmentPruningState = StreamCausalBoundaryState & {
   chatStream: string | null;
-  chatStreamRevision?: number;
   chatStreamStartedAt: number | null;
   chatToolMessages?: unknown[];
   toolStreamById?: Map<string, unknown>;
@@ -129,7 +127,7 @@ export function pruneHistoryReplacedStreamSegments(
     (_segment, index) => replacedIndexes.has(index),
   );
   if (typeof state.chatStream === "string") {
-    replaceChatStream(state, currentTail);
+    state.chatStream = currentTail;
     if (currentTail === null) {
       state.chatStreamStartedAt = null;
     }

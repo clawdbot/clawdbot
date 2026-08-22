@@ -71,7 +71,6 @@ export type ChatThreadProps = {
   guardianNotices?: ChatGuardianNotice[];
   streamSegments: ChatStreamSegment[];
   stream: string | null;
-  streamRevision?: number;
   streamStartedAt: number | null;
   runId?: string | null;
   runOutputTokens?: number | null;

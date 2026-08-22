@@ -333,7 +333,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       guardianNotices: catalogKey ? [] : state.guardianNotices,
       streamSegments: catalogKey ? [] : state.chatStreamSegments,
       stream: catalogKey ? null : state.chatStream,
-      streamRevision: state.chatStreamRevision ?? 0,
       streamStartedAt: catalogKey ? null : state.chatStreamStartedAt,
       runId: catalogKey ? null : projectionRunId,
       runOutputTokens: catalogKey ? null : runOutputTokens,

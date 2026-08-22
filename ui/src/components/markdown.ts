@@ -483,11 +483,6 @@ function installHooks() {
   });
 }
 
-function formatTruncatedMarkdownInput(input: string): string {
-  const truncated = truncateText(input, MARKDOWN_CHAR_LIMIT);
-  return appendMarkdownTruncationNotice(truncated);
-}
-
 function appendMarkdownTruncationNotice(truncated: {
   text: string;
   truncated: boolean;
@@ -596,9 +591,14 @@ export function toStreamingMarkdownHtml(
   if (!trimmedInput) {
     return "";
   }
-  const input = formatTruncatedMarkdownInput(trimmedInput);
+  const truncated = truncateText(trimmedInput, MARKDOWN_CHAR_LIMIT);
+  const input = appendMarkdownTruncationNotice(truncated);
 
-  const { boundary, tailRepairStart } = splitStableStreamingMarkdown(input, streamKey);
+  const { boundary, tailRepairStart } = splitStableStreamingMarkdown(
+    input,
+    streamKey,
+    truncated.text.length,
+  );
   const stableMarkdown = input.slice(0, boundary);
   const streamingTail = input.slice(boundary);
   const stableHtml = boundary > 0 ? toSanitizedMarkdownHtml(stableMarkdown, options) : "";

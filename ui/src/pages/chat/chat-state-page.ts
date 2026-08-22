@@ -187,7 +187,6 @@ export function createPageState(
     chatRunId: null,
     chatRunUsageById: new Map<string, number>(),
     chatStream: null,
-    chatStreamRevision: 0,
     chatStreamStartedAt: null,
     chatRunStartup: null,
     lastError: null,

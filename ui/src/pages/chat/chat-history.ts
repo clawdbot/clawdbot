@@ -46,7 +46,7 @@ import {
   sleep,
 } from "./chat-history-retry.ts";
 import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
-import { replaceChatStream, type ChatState } from "./chat-state-contract.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
 import {
   getChatSessionProjection,
@@ -1708,7 +1708,7 @@ async function loadChatHistoryUncached(
           prunePersistedToolStreamMessages(state, persistedToolStreamIds);
           clearToolStreamSegments(state);
         }
-        replaceChatStream(state, null);
+        state.chatStream = null;
         state.chatStreamStartedAt = null;
         recordChatHistoryTiming(state, "stream-reset", startedAtMs, {
           requestSessionKey: sessionKey,
@@ -1720,16 +1720,16 @@ async function loadChatHistoryUncached(
       } else if (!state.chatRunId) {
         state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
         maybeResetToolStream(state);
-        replaceChatStream(state, null);
+        state.chatStream = null;
         state.chatStreamStartedAt = null;
       } else if (historyReplacedToolStream) {
         state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
           includeCurrent: false,
           persistCommentary: true,
         });
-        replaceChatStream(
+        state.chatStream = visibleCurrentAssistantStreamTail(
           state,
-          visibleCurrentAssistantStreamTail(state, streamReconciliation.isHiddenStreamText),
+          streamReconciliation.isHiddenStreamText,
         );
         if (state.chatStream === null) {
           state.chatStreamStartedAt = null;
@@ -1745,7 +1745,7 @@ async function loadChatHistoryUncached(
           requirePersistedTool: true,
           persistCommentary: true,
         });
-        replaceChatStream(state, visibleCurrentTail);
+        state.chatStream = visibleCurrentTail;
         if (state.chatStream === null) {
           state.chatStreamStartedAt = null;
         }
@@ -1804,7 +1804,7 @@ async function loadChatHistoryUncached(
           )
         : activeStreamBeforeReset;
       const tail = mergeInFlightAssistantTails(snapshotTail, liveTail);
-      replaceChatStream(state, tail);
+      state.chatStream = tail;
       state.chatStreamStartedAt = snapshotStartedAt ?? state.chatStreamStartedAt ?? Date.now();
       const persistedBoundary = latestPersistedSteerBoundary(state.chatMessages, inFlightRunId);
       if (tail && persistedBoundary) {

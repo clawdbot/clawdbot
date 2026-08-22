@@ -249,16 +249,9 @@ export function renderUserMessageMarkdown(
   },
   markdownRenderOptions: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
-  streamKey?: string,
 ) {
   if (!opts.onToggleUserMessageExpanded) {
-    return renderMarkdownText(
-      markdown,
-      opts.isStreaming,
-      markdownRenderOptions,
-      duplicateSuffix,
-      streamKey,
-    );
+    return renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions, duplicateSuffix);
   }
 
   const disclosureId = `user-message:${messageKey}`;
@@ -273,13 +266,7 @@ export function renderUserMessageMarkdown(
           : ""}"
     >
       <div class="chat-message-disclosure__content" ${ref(userMessageOverflowRef(expanded))}>
-        ${renderMarkdownText(
-          markdown,
-          opts.isStreaming,
-          markdownRenderOptions,
-          duplicateSuffix,
-          streamKey,
-        )}
+        ${renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions, duplicateSuffix)}
       </div>
       <button
         class="chat-message-disclosure__toggle"

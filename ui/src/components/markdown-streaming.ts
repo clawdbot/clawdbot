@@ -118,9 +118,14 @@ type StreamingMarkdownCursor = {
   openFence: FenceMarker | null;
 };
 
-// Live rows can interleave across panes; bounded per-row cursors keep each append incremental.
-// Stream owners change the key when replacing text, so a key is append-only here.
-const streamingSplitCache = new Map<string, StreamingMarkdownCursor>();
+type StreamingMarkdownCacheEntry = {
+  cursor: StreamingMarkdownCursor;
+  markdown: string;
+};
+
+// A reused row key does not imply append-only text: rollovers, snapshots, and
+// completed citation markers can all replace the normalized Markdown prefix.
+const streamingSplitCache = new Map<string, StreamingMarkdownCacheEntry>();
 
 function findStreamingCodeSpans(markdown: string, start: number): Array<[number, number]> {
   return findMarkdownCodeSpans(markdown.slice(start)).map(([from, to]) => [
@@ -192,7 +197,7 @@ function scanStableStreamingMarkdown(
             line,
             detailsStack,
             false,
-            (codeSpans ??= findStreamingCodeSpans(markdownLocal, boundary)),
+            (codeSpans ??= findStreamingCodeSpans(markdownLocal, firstListOffset ?? boundary)),
             index,
           );
         }
@@ -254,13 +259,19 @@ function canResumeStreamingLine(line: string, fence: FenceMarker | null): boolea
 export function splitStableStreamingMarkdown(
   markdownLocal: string,
   streamKey?: string,
+  stablePrefixLength = markdownLocal.length,
 ): StreamingMarkdownSplit {
   if (!streamKey) {
     return scanStableStreamingMarkdown(markdownLocal).result;
   }
-  const scanned = scanStableStreamingMarkdown(markdownLocal, streamingSplitCache.get(streamKey));
+  const stableMarkdown = markdownLocal.slice(0, stablePrefixLength);
+  const cached = streamingSplitCache.get(streamKey);
+  const scanned = scanStableStreamingMarkdown(
+    stableMarkdown,
+    cached && stableMarkdown.startsWith(cached.markdown) ? cached.cursor : undefined,
+  );
   streamingSplitCache.delete(streamKey);
-  streamingSplitCache.set(streamKey, scanned.cursor);
+  streamingSplitCache.set(streamKey, { cursor: scanned.cursor, markdown: stableMarkdown });
   while (streamingSplitCache.size > STREAMING_SPLIT_CACHE_LIMIT) {
     const oldest = streamingSplitCache.keys().next().value;
     if (oldest === undefined) {
@@ -268,7 +279,11 @@ export function splitStableStreamingMarkdown(
     }
     streamingSplitCache.delete(oldest);
   }
-  return scanned.result;
+  // Truncation notices change on every chunk even after their capped content is
+  // fixed; retain the immutable checkpoint and rescan only that short suffix.
+  return stablePrefixLength === markdownLocal.length
+    ? scanned.result
+    : scanStableStreamingMarkdown(markdownLocal, scanned.cursor).result;
 }
 
 // Streaming-tail repair config: math is not rendered by this pipeline, so

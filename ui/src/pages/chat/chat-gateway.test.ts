@@ -600,7 +600,6 @@ describe("handleChatGatewayEvent", () => {
       delta: " reply",
       snapshot: "Live reply",
       expected: "Live reply",
-      replaced: false,
     },
     {
       name: "uses the cumulative snapshot when the first observed delta joins mid-stream",
@@ -608,14 +607,12 @@ describe("handleChatGatewayEvent", () => {
       delta: " reply",
       snapshot: "Live reply",
       expected: "Live reply",
-      replaced: false,
     },
     {
       name: "appends gateway deltaText when no full message snapshot is present",
       previous: "Live",
       delta: " reply",
       expected: "Live reply",
-      replaced: false,
     },
     {
       name: "uses the cumulative snapshot when a missed delta would make append stale",
@@ -623,7 +620,6 @@ describe("handleChatGatewayEvent", () => {
       delta: "!",
       snapshot: "Hello world!",
       expected: "Hello world!",
-      replaced: true,
     },
     {
       name: "uses the cumulative snapshot when a same-length missed replacement changes the prefix",
@@ -631,7 +627,6 @@ describe("handleChatGatewayEvent", () => {
       delta: "E",
       snapshot: "CDE",
       expected: "CDE",
-      replaced: true,
     },
     {
       name: "replaces the stream when gateway deltaText marks a replacement",
@@ -640,15 +635,9 @@ describe("handleChatGatewayEvent", () => {
       snapshot: "ignored snapshot",
       replace: true,
       expected: "Alpha",
-      replaced: true,
     },
-  ])("$name", ({ previous, delta, snapshot, replace, expected, replaced }) => {
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: previous,
-      chatStreamRevision: 7,
-    });
+  ])("$name", ({ previous, delta, snapshot, replace, expected }) => {
+    const state = createState({ sessionKey: "main", chatRunId: "run-1", chatStream: previous });
     const payload: ChatEventPayload = {
       runId: "run-1",
       sessionKey: "main",
@@ -660,7 +649,6 @@ describe("handleChatGatewayEvent", () => {
 
     expect(handleChatGatewayEvent(state, payload)).toBe("delta");
     expect(state.chatStream).toBe(expected);
-    expect(state.chatStreamRevision).toBe(replaced ? 8 : 7);
   });
 
   it("adopts the run id for selected-session live deltas observed from another channel", () => {
@@ -1367,7 +1355,6 @@ describe("handleChatGatewayEvent", () => {
       sessionKey: "main",
       chatRunId: "run-1",
       chatStream: "Alpha beta",
-      chatStreamRevision: 3,
     });
     const payload: ChatEventPayload = {
       runId: "run-1",
@@ -1377,7 +1364,6 @@ describe("handleChatGatewayEvent", () => {
     };
     expect(handleChatGatewayEvent(state, payload)).toBe("delta");
     expect(state.chatStream).toBe("Alpha");
-    expect(state.chatStreamRevision).toBe(4);
   });
 
   it("returns final for another run when payload has no message", () => {

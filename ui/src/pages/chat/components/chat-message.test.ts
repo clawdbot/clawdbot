@@ -1650,18 +1650,15 @@ describe("grouped chat rendering", () => {
     streamingMarkdownRenderMock.mockClear();
 
     render(
-      renderStreamGroup(
-        [
-          {
-            kind: "stream",
-            key: "stream:1",
-            text: "**live**\nreply",
-            startedAt: 1,
-            isStreaming: true,
-          },
-        ],
-        { streamRevision: 4 },
-      ),
+      renderStreamGroup([
+        {
+          kind: "stream",
+          key: "stream:1",
+          text: "**live**\nreply",
+          startedAt: 1,
+          isStreaming: true,
+        },
+      ]),
       container,
     );
 
@@ -1678,7 +1675,7 @@ describe("grouped chat rendering", () => {
         sessionLinks: true,
         tableInteractions: "enabled",
       },
-      ["", "stream:1", "4"].join("\0"),
+      "stream:1",
     );
     const text = container.querySelector(".streaming-markdown");
     expect(text?.textContent).toBe("**live**\nreply");
