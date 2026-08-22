@@ -1,10 +1,14 @@
 import { selectDeliverableSessionsReply } from "../../tools/sessions-send-tokens.js";
-import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import type {
+  SubagentCompletionState,
+  SubagentRunRecord,
+} from "../registry/subagent-registry.types.js";
 
 /** Selects the canonical operator-visible result from captured completion state. */
-export function resolveSubagentCompletionResultText(
-  entry: Pick<SubagentRunRecord, "completion" | "execution">,
-): string | undefined {
+export function resolveSubagentCompletionResultText(entry: {
+  completion?: Pick<SubagentCompletionState, "resultText" | "fallbackResultText" | "terminalReply">;
+  execution: Pick<SubagentRunRecord["execution"], "outcome">;
+}): string | undefined {
   const terminalReply = entry.completion?.terminalReply;
   // Producer-owned terminal evidence outranks retained transcript fallback text.
   // Otherwise an intentionally silent/empty run can leak an older visible reply.
