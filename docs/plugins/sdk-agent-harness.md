@@ -224,6 +224,12 @@ an empty tool list. Disable and attest those native capabilities for the fresh
 turn, use a separate transport that can serialize a true zero-tool request, or
 leave the capability unsupported.
 
+Audit evidence follows the same boundary. OpenClaw can record registered plugin
+ownership and run admission, but it cannot claim an external native side effect
+from an ACP update or transcript. A side effect wholly inside that runtime is
+`unsupported` unless an adapter invokes an OpenClaw-owned callback before the
+action. Do not reconstruct the callback from native tool status events.
+
 ### Delegated execution
 
 A harness owner may set `delegatedExecutionPluginIds` to the ids of trusted

@@ -72,7 +72,12 @@ type TelegramMessageProcessorDeps = Omit<
   buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
   opts: Pick<
     TelegramBotOptions,
-    "token" | "ownerAgentId" | "allowFrom" | "groupAllowFrom" | "replyToMode"
+    | "token"
+    | "ownerAgentId"
+    | "allowFrom"
+    | "groupAllowFrom"
+    | "replyToMode"
+    | "dispatchReplyFromConfig"
   >;
 };
 

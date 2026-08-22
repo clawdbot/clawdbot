@@ -43,6 +43,28 @@
   overflow: hidden;
 }
 
+.control-ui-environment-stripe {
+  position: fixed;
+  z-index: 260;
+  inset: 0 0 auto;
+  height: 2px;
+  background: var(--control-ui-environment-color);
+  pointer-events: none;
+}
+
+.control-ui-environment-pill {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--control-ui-environment-color) 16%, transparent);
+  color: var(--control-ui-environment-ink);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+}
+
 .shell-skip-link {
   position: fixed;
   top: 8px;
@@ -98,6 +120,24 @@
   display: flex;
   align-items: center;
   gap: var(--shell-chrome-controls-gap);
+}
+
+.shell-chrome-controls__nav-toggle[data-env-avatar]::before {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent-subtle) 80%, transparent);
+  color: var(--text-strong);
+  box-shadow: 0 0 0 2px var(--control-ui-environment-color);
+  content: attr(data-env-avatar);
+  font-size: var(--control-ui-text-sm);
+}
+
+.shell-chrome-controls__nav-toggle[data-env-avatar] > svg {
+  display: none;
 }
 
 .shell-chrome-controls__button {
@@ -3402,6 +3442,10 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   object-fit: cover;
 }
 
+.sidebar-agent-card__avatar--environment {
+  box-shadow: 0 0 0 2px var(--control-ui-environment-color);
+}
+
 .sidebar-agent-card__text {
   display: flex;
   flex-direction: column;
@@ -3445,6 +3489,13 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sidebar-agent-card__subtitle-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 5px;
 }
 
 .sidebar-agent-card__menu-unread {
@@ -3973,7 +4024,7 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch--active::part(base) {
 .sidebar-agent-menu {
   --agent-avatar-size: 48px;
   --agent-avatar-glyph-size: 25px;
-  --agent-label-height: 30px;
+  --agent-label-height: calc(30px * var(--control-ui-text-scale));
   --agent-tile-gap: 10px;
   --agent-grid-gap: 4px;
   --agent-tile-padding-block: 8px;
@@ -4002,7 +4053,8 @@ wa-dropdown.sidebar-agent-menu::part(menu) {
   grid-auto-rows: auto;
   align-items: start;
   gap: var(--agent-grid-gap);
-  flex: 0 1 calc(var(--agent-tile-height) + var(--agent-tile-height) + var(--agent-grid-gap));
+  flex: 0 1 auto;
+  max-height: calc(var(--agent-tile-height) + var(--agent-tile-height) + var(--agent-grid-gap));
   min-height: 0;
   overflow-y: auto;
   scrollbar-color: color-mix(in srgb, var(--border) 72%, transparent) transparent;
@@ -4027,29 +4079,6 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   font-weight: 500;
-}
-
-.sidebar-agent-menu__filter {
-  padding: 2px 8px 6px;
-}
-
-.sidebar-agent-menu__filter input {
-  --control-ui-touch-input-size: var(--control-ui-text-sm);
-
-  width: 100%;
-  padding: 5px 8px;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: inherit;
-  font: inherit;
-  font-size: var(--control-ui-text-sm);
-}
-
-.sidebar-agent-menu__empty {
-  padding: 6px 8px;
-  font-size: var(--control-ui-text-sm);
-  color: var(--muted);
 }
 
 /* Identity-menu strip: build identity left, theme switch right. */

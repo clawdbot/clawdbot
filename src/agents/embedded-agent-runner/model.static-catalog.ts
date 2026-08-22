@@ -86,6 +86,8 @@ function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRunt
     input: normalizeStaticCatalogInput(row.input),
     cost: normalizeStaticCatalogCost(row.cost),
     contextWindow: row.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+    contextWindows: row.contextWindows?.map((option) => ({ ...option })),
+    contextWindowDefault: row.contextWindowDefault,
     contextTokens: row.contextTokens,
     maxTokens: row.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
     thinkingLevelMap: row.thinkingLevelMap ? { ...row.thinkingLevelMap } : undefined,

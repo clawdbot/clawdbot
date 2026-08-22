@@ -10,6 +10,7 @@ import {
   normalizeOptionalTrimmedStringList,
   normalizeTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
+import { normalizeModelCatalogContextWindowSelection } from "./model-catalog-context-windows.js";
 import { buildModelCatalogMergeKey, buildModelCatalogRef } from "./model-catalog-refs.js";
 import {
   MODEL_CATALOG_APIS,
@@ -479,6 +480,7 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
   const input = normalizeModelCatalogInputs(value.input);
   const reasoning = typeof value.reasoning === "boolean" ? value.reasoning : undefined;
   const contextWindow = normalizePositiveNumber(value.contextWindow);
+  const contextWindowSelection = normalizeModelCatalogContextWindowSelection(value);
   const contextTokens = normalizePositiveInteger(value.contextTokens);
   const maxTokens = normalizePositiveNumber(value.maxTokens);
   const thinkingLevelMap = normalizeModelCatalogThinkingLevelMap(value.thinkingLevelMap);
@@ -499,6 +501,7 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
     ...(input ? { input } : {}),
     ...(reasoning !== undefined ? { reasoning } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...contextWindowSelection,
     ...(contextTokens !== undefined ? { contextTokens } : {}),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
@@ -694,6 +697,7 @@ export function normalizeModelCatalogProviderRows(params: {
     const baseUrl = normalizeOptionalString(model.baseUrl) ?? providerBaseUrl;
     const headers = mergeStringMaps(providerHeaders, normalizeStringMap(model.headers));
     const contextWindow = normalizePositiveNumber(model.contextWindow);
+    const contextWindowSelection = normalizeModelCatalogContextWindowSelection(model);
     const contextTokens = normalizePositiveInteger(model.contextTokens);
     const maxTokens = normalizePositiveNumber(model.maxTokens);
     const thinkingLevelMap = normalizeModelCatalogThinkingLevelMap(model.thinkingLevelMap);
@@ -718,6 +722,7 @@ export function normalizeModelCatalogProviderRows(params: {
       ...(baseUrl ? { baseUrl } : {}),
       ...(headers ? { headers } : {}),
       ...(contextWindow !== undefined ? { contextWindow } : {}),
+      ...contextWindowSelection,
       ...(contextTokens !== undefined ? { contextTokens } : {}),
       ...(maxTokens !== undefined ? { maxTokens } : {}),
       ...(thinkingLevelMap ? { thinkingLevelMap } : {}),

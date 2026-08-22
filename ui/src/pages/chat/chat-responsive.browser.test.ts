@@ -1273,8 +1273,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   ])("balances completed-work spacing on $label", async ({ width, hasTouch, expectedGap }) => {
     const page = await openBrowserPage(width, 720, { hasTouch, isolated: true });
     try {
+      // Isolate the final-layout contract from the 200ms settle-in transform.
       await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${completedWorkSpacingHtml()}</body></html>`,
+        `<!doctype html><html><head><style>${readUiCss()}</style><style>.chat-group--work { animation: none; }</style></head><body>${completedWorkSpacingHtml()}</body></html>`,
       );
       await waitForLayoutSettled(page, "[data-spacing-row], .chat-group--work");
 
@@ -1299,9 +1300,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         };
       });
 
-      // Browser font metrics can shift subpixel geometry by up to two CSS pixels.
-      expect(Math.abs(gaps.before - expectedGap)).toBeLessThanOrEqual(2);
-      expect(Math.abs(gaps.after - expectedGap)).toBeLessThanOrEqual(2);
+      expect(gaps.before).toBeCloseTo(expectedGap, 0);
+      expect(gaps.after).toBeCloseTo(expectedGap, 0);
     } finally {
       await closeBrowserPage(page);
     }

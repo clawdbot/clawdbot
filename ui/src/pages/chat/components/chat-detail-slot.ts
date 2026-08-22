@@ -5,7 +5,7 @@ import { openSlot, type SidebarLayout } from "../sidebar-layout.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import "./chat-sidebar.ts";
 import { openSessionWorkspaceFile, revealSessionWorkspaceFile } from "./chat-session-workspace.ts";
-import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
+import type { SidebarContent } from "./chat-sidebar.ts";
 import { resetTaskDetail, type TaskDetailHost } from "./chat-task-detail-state.ts";
 import { renderTaskDetailPanel } from "./chat-task-detail.ts";
 import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
@@ -28,7 +28,6 @@ export function renderChatDetailSlot(params: {
   backgroundTasks: BackgroundTasksProps;
   chat: ChatProps;
   content: SidebarContent;
-  fullMessageLoader: SidebarFullMessageLoader | null;
   host: ChatPageHost;
   layout: SidebarLayout;
   transcript: ChatTranscriptController;
@@ -57,7 +56,6 @@ export function renderChatDetailSlot(params: {
       class="chat-sidebar"
       .content=${content}
       .basePath=${params.chat.basePath ?? ""}
-      .loadFullMessage=${params.fullMessageLoader}
       .canvasPluginSurfaceUrl=${host.canvasPluginSurfaceUrl}
       .embedSandboxMode=${host.embedSandboxMode}
       .allowExternalEmbedUrls=${host.allowExternalEmbedUrls}

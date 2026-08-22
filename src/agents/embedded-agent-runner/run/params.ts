@@ -250,6 +250,8 @@ export type RunEmbeddedAgentParams = {
   model?: string;
   /** Vision capability resolved by the run owner from its prepared model catalog. */
   modelHasVision?: boolean;
+  /** Session-selected context-window option id carried by the run owner. */
+  contextWindow?: string;
   /** Route-bound thinking capability resolved from the selected prepared catalog row. */
   modelThinkingCapability?: PreparedModelThinkingCapability;
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */

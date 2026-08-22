@@ -262,6 +262,13 @@ suite.define(() => {
         ].slice(0, 3);
         return {
           columns: grid ? getComputedStyle(grid).gridTemplateColumns.split(" ").length : 0,
+          bottomGap:
+            grid && agentRows.length > 0
+              ? Math.round(
+                  grid.getBoundingClientRect().bottom -
+                    Math.max(...agentRows.map((row) => row.getBoundingClientRect().bottom)),
+                )
+              : Number.NaN,
           widths: agentRows.map((row) => Math.round(row.getBoundingClientRect().width)),
           avatarOffsets: agentRows.map(
             (row) => center(row.querySelector(".sidebar-agent-menu__agent-avatar")) - center(row),
@@ -272,9 +279,30 @@ suite.define(() => {
         };
       });
       expect(gridLayout.columns).toBe(3);
+      expect(gridLayout.bottomGap).toBe(0);
       expect(new Set(gridLayout.widths).size).toBe(1);
       expect(gridLayout.avatarOffsets).toEqual([0, 0, 0]);
       expect(gridLayout.labelOffsets).toEqual([0, 0, 0]);
+      await page.evaluate(() => {
+        document.documentElement.style.setProperty("--control-ui-text-scale", "1.4");
+      });
+      await expect
+        .poll(() =>
+          menu.evaluate((dropdown) => {
+            const grid = dropdown.querySelector(".sidebar-agent-menu__agent-grid");
+            const rows = [
+              ...dropdown.querySelectorAll("wa-dropdown-item.sidebar-agent-menu__agent-switch"),
+            ];
+            if (!grid || rows.length === 0) {
+              return Number.NaN;
+            }
+            return Math.round(
+              grid.getBoundingClientRect().bottom -
+                Math.max(...rows.map((row) => row.getBoundingClientRect().bottom)),
+            );
+          }),
+        )
+        .toBe(0);
       await expect
         .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
         .toBe(true);

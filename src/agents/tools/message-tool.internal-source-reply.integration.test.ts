@@ -12,6 +12,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { resolveManagedOutgoingMediaArtifactDownload } from "../../gateway/managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
+import {
+  onSessionTranscriptUpdate,
+  type SessionTranscriptUpdate,
+} from "../../sessions/transcript-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { extractMessagingToolSourceReplyPayload } from "../embedded-agent-messaging-extraction.js";
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
@@ -143,7 +147,7 @@ describe("WebChat message tool internal source reply", () => {
     );
   });
 
-  it("persists one managed image for overlapping internal source replies", async () => {
+  it("publishes managed images with the current run owner", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-internal-source-reply-" },
       async (state) => {
@@ -152,9 +156,13 @@ describe("WebChat message tool internal source reply", () => {
         const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
         const sessionKey = "agent:main:webchat:dm:restart-proof";
         const sessionId = "restart-proof-session";
-        const imagePath = path.join(workspaceDir, "restart-proof.png");
+        const imagePaths = ["first.png", "second.png"].map((name) => path.join(workspaceDir, name));
         await fs.mkdir(workspaceDir, { recursive: true });
-        await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+        await Promise.all(
+          imagePaths.map((imagePath) =>
+            fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64")),
+          ),
+        );
 
         await replaceSessionEntry(
           { agentId: "main", sessionKey, storePath },
@@ -187,12 +195,14 @@ describe("WebChat message tool internal source reply", () => {
         const sendParams = {
           action: "send" as const,
           message: "Durable image reply",
-          media: imagePath,
+          mediaUrls: imagePaths,
         };
+        const updates: SessionTranscriptUpdate[] = [];
+        const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
         const [toolResult, overlappingResult] = await Promise.all([
           tool.execute("restart-proof-call", sendParams),
           tool.execute("restart-proof-call", sendParams),
-        ]);
+        ]).finally(unsubscribe);
         const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
         expect(sourceReply).toMatchObject({ transcriptOwner: true });
         expect(overlappingResult.details).toMatchObject({
@@ -244,16 +254,34 @@ describe("WebChat message tool internal source reply", () => {
           type: "image",
           artifactId: expect.stringMatching(/^artifact_managed_image_/u),
         });
-        expect(JSON.stringify(assistant)).not.toContain(imagePath);
-        expect(listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(1);
-        await expect(
-          resolveManagedOutgoingMediaArtifactDownload({
-            sessionKey,
-            agentId: "main",
-            artifactId: String(image?.artifactId),
-            stateDir,
-          }),
-        ).resolves.toMatchObject({ type: "image" });
+        expect(content.filter((block) => block.type === "image")).toHaveLength(2);
+        expect(JSON.stringify(assistant)).not.toContain(workspaceDir);
+        expect(listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
+        const published = updates.find(
+          (update) =>
+            update.runId === "restart-proof-run" &&
+            update.message &&
+            typeof update.message === "object" &&
+            (update.message as { role?: unknown }).role === "assistant",
+        );
+        expect(published).toMatchObject({
+          runId: "restart-proof-run",
+          target: { agentId: "main", sessionId, sessionKey },
+        });
+        const publishedContent = (
+          published?.message as { content?: Array<Record<string, unknown>> }
+        )?.content;
+        expect(publishedContent?.filter((block) => block.type === "image")).toHaveLength(2);
+        for (const block of content.filter((entry) => entry.type === "image")) {
+          await expect(
+            resolveManagedOutgoingMediaArtifactDownload({
+              sessionKey,
+              agentId: "main",
+              artifactId: String(block.artifactId),
+              stateDir,
+            }),
+          ).resolves.toMatchObject({ type: "image" });
+        }
       },
     );
   });

@@ -5624,7 +5624,7 @@ describe("grouped chat rendering", () => {
       {
         role: "assistant",
         content: [{ type: "text", text: preview }],
-        __openclaw: { id: "assistant-disclosure-actions", seq: 1 },
+        __openclaw: { id: "assistant-disclosure-actions", seq: 1, truncated: true },
       },
       {
         sessionKey: "agent:main:main",
@@ -5757,7 +5757,7 @@ describe("grouped chat rendering", () => {
       message: {
         role: "assistant",
         content: [{ type: "text", text: "abcde\n...(truncated)..." }],
-        __openclaw: { id: "msg-truncated-marker", seq: 1 },
+        __openclaw: { id: "msg-truncated-marker", seq: 1, truncated: true },
       },
       messageId: "msg-truncated-marker",
     },
@@ -5802,7 +5802,7 @@ describe("grouped chat rendering", () => {
         {
           role: "assistant",
           content: [{ type: "text", text: "abcde\n...(truncated)..." }],
-          __openclaw: { id: "msg-retry-error", seq: 1 },
+          __openclaw: { id: "msg-retry-error", seq: 1, truncated: true },
         },
         {
           sessionKey: "global",
@@ -5828,7 +5828,7 @@ describe("grouped chat rendering", () => {
       {
         role: "assistant",
         content: [{ type: "text", text: "abcde\n...(truncated)..." }],
-        __openclaw: { id: "msg-retry-exhausted", seq: 1 },
+        __openclaw: { id: "msg-retry-exhausted", seq: 1, truncated: true },
       },
       {
         sessionKey: "global",
@@ -5872,7 +5872,7 @@ describe("grouped chat rendering", () => {
     renderAssistantMessage(container, {
       role: "assistant",
       content: [{ type: "text", text: "abcde\n...(truncated)..." }],
-      __openclaw: { id: "msg-no-loader", seq: 1 },
+      __openclaw: { id: "msg-no-loader", seq: 1, truncated: true },
     });
 
     expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();

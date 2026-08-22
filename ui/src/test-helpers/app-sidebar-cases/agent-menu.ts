@@ -533,7 +533,7 @@ describe("AppSidebar agent chip", () => {
     ).toHaveLength(6);
   });
 
-  it("shows pinned agents plus filter for large rosters and filters on input", async () => {
+  it("keeps pinned agents first in large scrollable rosters without a filter", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar, context } = await mountSidebar(
       gateway,
@@ -549,8 +549,7 @@ describe("AppSidebar agent chip", () => {
 
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
-    const input = sidebar.querySelector<HTMLInputElement>(".sidebar-agent-menu__filter input");
-    expect(input).not.toBeNull();
+    expect(sidebar.querySelector(".sidebar-agent-menu__filter")).toBeNull();
     // Pinned agents sort first without hiding the remaining roster.
     const labels = () =>
       [
@@ -572,32 +571,6 @@ describe("AppSidebar agent chip", () => {
       "agent-10",
       "agent-11",
     ]);
-
-    if (!input) {
-      throw new Error("Expected agent menu filter input");
-    }
-    const dropdown = sidebar.querySelector("wa-dropdown");
-    const onDropdownKeydown = vi.fn();
-    dropdown?.addEventListener("keydown", onDropdownKeydown);
-    input.focus();
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-    expect(onDropdownKeydown).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(
-      sidebar.querySelector(
-        ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
-      ),
-    );
-    onDropdownKeydown.mockClear();
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
-    expect(onDropdownKeydown).toHaveBeenCalledOnce();
-    onDropdownKeydown.mockClear();
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
-    expect(onDropdownKeydown).not.toHaveBeenCalled();
-
-    input.value = "agent-11";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    await sidebar.updateComplete;
-    expect(labels()).toEqual(["agent-11"]);
   });
 
   it("keeps the full large roster scrollable when nothing is pinned", async () => {
@@ -613,7 +586,7 @@ describe("AppSidebar agent chip", () => {
 
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
     await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-agent-menu__filter")).not.toBeNull();
+    expect(sidebar.querySelector(".sidebar-agent-menu__filter")).toBeNull();
     expect(
       sidebar.querySelectorAll(
         ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",

@@ -1,5 +1,5 @@
 // Tests dispatch-from-config reply dispatch integration and final payload routing.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import {
@@ -35,6 +35,7 @@ import { createReplyDispatcher } from "./reply-dispatcher.js";
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
+let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
 let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
 let runAfterReplyOperationClear: typeof import("./reply-run-registry.js").runAfterReplyOperationClear;
 let resetReplyRunRegistry: typeof import("./reply-run-registry.test-support.js").testing.resetReplyRunRegistry;
@@ -103,6 +104,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
     const replyRunRegistryModule = await import("./reply-run-registry.js");
     createReplyOperation = replyRunRegistryModule.createReplyOperation;
+    getActiveReplyRunCount = replyRunRegistryModule.getActiveReplyRunCount;
     replyRunRegistry = replyRunRegistryModule.replyRunRegistry;
     runAfterReplyOperationClear = replyRunRegistryModule.runAfterReplyOperationClear;
     const { testing } = await import("./reply-run-registry.test-support.js");
@@ -186,6 +188,13 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       runtimePluginMocks.pluginRegistry,
     );
     resetPluginTtsAndThreadMocks();
+  });
+
+  afterEach(() => {
+    resetReplyRunRegistry();
+    resetInboundDedupe();
+    vi.useRealTimers();
+    clearAgentHarnesses();
   });
 
   it("runs a handled plugin reply hook in the registry scope", async () => {
@@ -838,6 +847,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       releaseOwner.resolve();
       successor?.complete();
       await vi.runOnlyPendingTimersAsync();
+      expect(getActiveReplyRunCount()).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
       vi.useRealTimers();
     }
   });
@@ -1065,6 +1076,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       dispatcher.markComplete();
       await dispatcher.waitForIdle();
       queuedOperation?.complete();
+      expect(getActiveReplyRunCount()).toBe(0);
     }
   });
 });

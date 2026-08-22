@@ -14,6 +14,7 @@ export type SessionPatch = {
   category?: string | null;
   boardFace?: "chat" | "dashboard";
   model?: string | null;
+  contextWindow?: string | null;
   thinkingLevel?: string | null;
   fastMode?: FastMode | null;
   verboseLevel?: string | null;

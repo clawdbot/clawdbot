@@ -506,7 +506,7 @@ export async function startPairedNodeWorkerGateway(params: {
       logging: params.executionIdentity
         ? {
             ...config.logging,
-            audit: { ...config.logging?.audit, executionIdentity: true },
+            audit: { ...config.logging?.audit, enabled: true, executionIdentity: true },
           }
         : config.logging,
       nodeHost: {

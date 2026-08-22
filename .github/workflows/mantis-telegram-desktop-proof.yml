@@ -554,14 +554,14 @@ jobs:
         id: baseline_build_cache
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: .artifacts/mantis-baseline-build.tar
-          key: ${{ runner.os }}-${{ runner.arch }}-mantis-baseline-v3-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}-${{ needs.resolve_request.outputs.baseline_revision }}
+          path: .artifacts/mantis-runtime-build.tar
+          key: ${{ runner.os }}-${{ runner.arch }}-mantis-runtime-v1-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}-${{ needs.resolve_request.outputs.baseline_revision }}
           restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-mantis-baseline-v3-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}-
+            ${{ runner.os }}-${{ runner.arch }}-mantis-runtime-v1-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}-
 
       - name: Prepare baseline and candidate proof builds
         env:
-          BASELINE_BUILD_ARCHIVE: ${{ github.workspace }}/.artifacts/mantis-baseline-build.tar
+          BASELINE_BUILD_ARCHIVE: ${{ github.workspace }}/.artifacts/mantis-runtime-build.tar
           BASELINE_BUILD_CACHE_HIT: ${{ steps.baseline_build_cache.outputs.cache-hit }}
           BASELINE_SHA: ${{ needs.resolve_request.outputs.baseline_revision }}
           CANDIDATE_SHA: ${{ steps.proof_worktrees.outputs.candidate_revision }}
@@ -590,8 +590,8 @@ jobs:
               pnpm-lock.yaml \
               pnpm-workspace.yaml \
               tsconfig.json; then
-            # Observed 2026-08: cache-only seeding still rebuilt tsdown-unified for 3m04s;
-            # its cache contract also requires the live plugin-SDK outputs it will replace.
+            # The runtime graph always rebuilds; seed only trusted build metadata and
+            # live plugin-SDK outputs when the candidate kept the cache engine intact.
             tar --no-same-owner -C "$candidate_root" -xf "$BASELINE_BUILD_ARCHIVE" \
               .artifacts/build-all-cache dist/plugin-sdk
             test -z "$(find "$candidate_root/.artifacts/build-all-cache" -type l -print -quit)"
@@ -625,9 +625,11 @@ jobs:
                 HOME="${RUNNER_TEMP}/mantis-baseline-home" \
                 OPENCLAW_BUILD_PRIVATE_QA=1 \
                 OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 \
+                OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 \
                 PATH="$toolchain_dir:/usr/bin:/bin" \
                 "$toolchain_dir/pnpm" build
               mkdir -p "$(dirname "$BASELINE_BUILD_ARCHIVE")"
+              mkdir -p "$baseline_root/.artifacts/build-all-cache"
               baseline_archive_new="${BASELINE_BUILD_ARCHIVE}.new"
               test ! -e "$baseline_archive_new"
               tar -cf "$baseline_archive_new" \
@@ -642,18 +644,6 @@ jobs:
             test -f dist/control-ui/index.html
             test -f dist/index.js -o -f dist/index.mjs
             build_cache_root="$baseline_root/.artifacts/build-all-cache"
-            for phase in tsdown-ai tsdown-packages tsdown-unified; do
-              stamp="$build_cache_root/$phase/stamp.json"
-              outputs="$build_cache_root/$phase/outputs"
-              test -s "$stamp"
-              jq -e '
-                (.version | type) == "number" and
-                (.signature | type) == "string" and (.signature | length) == 64 and
-                (.outputs | type) == "array" and (.outputs | length) > 0
-              ' "$stamp" >/dev/null
-              test -d "$outputs"
-              test -n "$(find "$outputs" -type f -print -quit)"
-            done
             test -z "$(find "$build_cache_root" -type l -print -quit)"
             test -z "$(find "$build_cache_root" -type f -links +1 -print -quit)"
           }
@@ -692,7 +682,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: .artifacts/mantis-baseline-build.tar
+          path: .artifacts/mantis-runtime-build.tar
           key: ${{ steps.baseline_build_cache.outputs.cache-primary-key }}
 
       - name: Install TDLib and restore Telegram QA user

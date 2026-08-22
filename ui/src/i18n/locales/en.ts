@@ -5661,6 +5661,8 @@ export const en: TranslationMap = {
       defaultWithModel: "Default ({model})",
       defaultWithLevel: "Default ({level})",
       fastHelp: "Fast responses finish sooner and can use more of your usage limits.",
+      contextWindow: "Context window",
+      contextWindowAria: "Context window: {state}",
       speedUnsupported: "Speed control is not supported for this model.",
       contextActiveAndMax: "{active} active · {maximum} max",
       chatOnly: "Chat only",

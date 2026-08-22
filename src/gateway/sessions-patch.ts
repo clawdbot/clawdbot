@@ -77,6 +77,7 @@ import {
   isAgentSessionModelPatchOrigin,
   snapshotAgentModelFallback,
 } from "./session-model-patch-origin.js";
+import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
@@ -691,6 +692,17 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
+  const contextWindowPatch = await applySessionContextWindowPatch({
+    defaultModel: resolvedDefault.model,
+    defaultProvider: resolvedDefault.provider,
+    loadModelCatalog: loadPreparedModelCatalogForPatch,
+    next,
+    patch,
+  });
+  if (!contextWindowPatch.ok) {
+    return invalid(contextWindowPatch.error);
+  }
+
   // A thinkingLevel change made on its own (no model switch) never touches the
   // agent-patch revert marker, so realign its restore target with the user's
   // newer choice; otherwise a later model-failure revert clobbers it.
@@ -700,6 +712,13 @@ export async function projectSessionsPatchEntry(params: {
     next.modelFallback?.source === "agent-patch"
   ) {
     next.modelFallback.prevThinkingLevel = next.thinkingLevel;
+  }
+  if (
+    "contextWindow" in patch &&
+    !("model" in patch) &&
+    next.modelFallback?.source === "agent-patch"
+  ) {
+    next.modelFallback.prevContextWindow = next.contextWindow;
   }
 
   if ("sendPolicy" in patch) {

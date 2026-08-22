@@ -46,8 +46,6 @@ const IDENTITY_MENU_LINKS: ReadonlyArray<{
   },
 ];
 
-/** Above this roster size the chip menu adds filtering and scrolls the grid. */
-const QUICK_SWITCH_VISIBLE_AGENT_LIMIT = 6;
 const AGENT_VALUE_PREFIX = "agent:";
 const COMMAND_VALUE_PREFIX = "command:";
 const LINK_VALUE_PREFIX = "link:";
@@ -175,13 +173,11 @@ type SidebarAgentMenuParams = {
   activeName: string;
   agents: readonly AgentMenuAgent[];
   identities: ReadonlyMap<string, AgentIdentityResult>;
-  filter: string;
   pinnedAgentIds: readonly string[];
   connected: boolean;
   openMode: "hover" | "click";
   agentUnreadCount: (agentId: string) => number;
   agentApprovalCount: (agentId: string) => number;
-  onFilterChange: (next: string) => void;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
   onAfterShow: () => void;
@@ -213,14 +209,9 @@ function isApplePlatform(): boolean {
   return /Mac|iPhone|iPad|iPod/u.test(globalThis.navigator?.platform ?? "");
 }
 
-/** Rows for the chip switcher. Small rosters list everything; larger rosters
-    add filtering while keeping every unpinned option reachable by scrolling. */
 function sidebarAgentMenuRows(params: {
   agents: readonly AgentMenuAgent[];
-  activeId: string;
-  filter: string;
   pinnedAgentIds: readonly string[];
-  identities: ReadonlyMap<string, AgentIdentityResult>;
 }) {
   const { agents } = params;
   const availableIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
@@ -229,26 +220,11 @@ function sidebarAgentMenuRows(params: {
       .map((agentId) => normalizeAgentId(agentId))
       .filter((agentId) => availableIds.has(agentId)),
   );
-  const sorted = agents.toSorted((a, b) => {
+  return agents.toSorted((a, b) => {
     const aPinned = pinnedIds.has(normalizeAgentId(a.id)) ? 0 : 1;
     const bPinned = pinnedIds.has(normalizeAgentId(b.id)) ? 0 : 1;
     return aPinned - bPinned;
   });
-  if (agents.length <= QUICK_SWITCH_VISIBLE_AGENT_LIMIT) {
-    return { rows: sorted, showFilter: false };
-  }
-  const query = params.filter.trim().toLowerCase();
-  if (query) {
-    const rows = sorted.filter((entry) => {
-      const agentId = normalizeAgentId(entry.id);
-      return (
-        agentId.toLowerCase().includes(query) ||
-        normalizeAgentLabel(entry, params.identities.get(agentId)).toLowerCase().includes(query)
-      );
-    });
-    return { rows, showFilter: true };
-  }
-  return { rows: sorted, showFilter: true };
 }
 
 function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
@@ -337,7 +313,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
     return nothing;
   }
   const { activeId, activeName, agents } = params;
-  const { rows, showFilter } = sidebarAgentMenuRows(params);
+  const rows = sidebarAgentMenuRows(params);
   return html`
     <openclaw-menu-surface>
       <wa-dropdown
@@ -387,13 +363,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
           if (params.openMode === "hover") {
             return;
           }
-          if (showFilter) {
-            event.currentTarget
-              .querySelector<HTMLInputElement>(".sidebar-agent-menu__filter input")
-              ?.focus();
-          } else {
-            focusActiveAgentMenuItem(event.currentTarget);
-          }
+          focusActiveAgentMenuItem(event.currentTarget);
         }}
         @keydown=${(event: KeyboardEvent) => {
           if (moveSidebarMenuFocus(event)) {
@@ -429,37 +399,9 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
         ${agents.length > 1
           ? html`
               <div class="sidebar-customize-menu__title">${t("agentChip.agents")}</div>
-              ${showFilter
-                ? html`
-                    <div class="sidebar-agent-menu__filter">
-                      <input
-                        type="text"
-                        .value=${params.filter}
-                        placeholder=${t("agentChip.filterAgents")}
-                        aria-label=${t("agentChip.filterAgents")}
-                        @input=${(event: Event) =>
-                          params.onFilterChange((event.target as HTMLInputElement).value)}
-                        @keydown=${(event: KeyboardEvent) => {
-                          if (moveSidebarMenuFocus(event)) {
-                            return;
-                          }
-                          // Keep editing keys out of Web Awesome's document-level
-                          // menu handler; Escape still dismisses the whole menu.
-                          if (event.key !== "Escape" && event.key !== "Tab") {
-                            event.stopPropagation();
-                          }
-                        }}
-                      />
-                    </div>
-                  `
-                : nothing}
-              ${rows.length > 0
-                ? html`<div class="sidebar-agent-menu__agent-grid">
-                    ${rows.map((entry) => renderAgentRow(entry, params))}
-                  </div>`
-                : html`<div class="sidebar-agent-menu__empty">
-                    ${t("agentChip.noAgentMatches")}
-                  </div>`}
+              <div class="sidebar-agent-menu__agent-grid">
+                ${rows.map((entry) => renderAgentRow(entry, params))}
+              </div>
             `
           : nothing}
         <div class="sidebar-customize-menu__separator" role="separator"></div>

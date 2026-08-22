@@ -2396,7 +2396,7 @@ describe("refreshChatMetadata", () => {
     const refreshSessions = vi.fn().mockResolvedValue(undefined);
     const request = vi.fn(async (method: string, params?: unknown) => {
       expect(method).toBe("models.list");
-      expect(params).toEqual({ view: "configured", agentId: "work" });
+      expect(params).toEqual({ view: "configured", agentId: "work", refresh: true });
       return {
         models: [
           {

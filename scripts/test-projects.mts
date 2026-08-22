@@ -84,13 +84,12 @@ function cleanupVitestRunSpec(spec: VitestRunSpec) {
   }
 }
 
-function runPnpmSpecCommand(spec: VitestRunSpec, pnpmArgs: string[], label: string) {
+function runPnpmSpecCommand(spec: VitestRunSpec, pnpmArgs: string[]) {
   let noOutputTimedOut = false;
   return new Promise<VitestCommandOutcome>((resolve, reject) => {
     const { completion, getForwardedSignal } = spawnWatchedVitestProcess({
       pnpmArgs,
       env: spec.env,
-      label,
       onNoOutputTimeout: () => {
         noOutputTimedOut = true;
       },
@@ -126,16 +125,12 @@ async function runVitestSpec(spec: VitestRunSpec) {
   try {
     if (spec.preflightPnpmArgs) {
       console.error(`[test] preflight ${spec.config}`);
-      const preflightResult = await runPnpmSpecCommand(
-        spec,
-        spec.preflightPnpmArgs,
-        `${spec.config}:preflight`,
-      );
+      const preflightResult = await runPnpmSpecCommand(spec, spec.preflightPnpmArgs);
       if (preflightResult.code !== 0 || preflightResult.signal) {
         return preflightResult;
       }
     }
-    return await runPnpmSpecCommand(spec, spec.pnpmArgs, spec.config);
+    return await runPnpmSpecCommand(spec, spec.pnpmArgs);
   } finally {
     cleanupVitestRunSpec(spec);
   }

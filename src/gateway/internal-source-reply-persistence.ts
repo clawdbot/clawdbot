@@ -82,6 +82,7 @@ export async function persistInternalSourceReply(params: {
   agentId?: string;
   payload: ReplyPayload;
   idempotencyKey?: string;
+  runId?: string;
   sourceReplyFinal?: boolean;
   toolCallId?: string;
   sourceTurnId?: string;
@@ -119,6 +120,7 @@ export async function persistInternalSourceReply(params: {
       ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
       content: prepareGatewayInjectedAssistantContent(content),
       idempotencyKey: params.idempotencyKey,
+      runId: params.runId,
       ...(params.sourceReplyFinal !== undefined
         ? {
             deliveryMirror: {
