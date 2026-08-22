@@ -2,7 +2,12 @@ import { isSilentReplyText } from "../../auto-reply/tokens.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentRunAttemptTerminal } from "../agent-run-terminal-outcome.js";
 import { resolveFinalAssistantVisibleText } from "../embedded-agent-runner/run/helpers.js";
-import { hasTransientRetryEvidence } from "../failover/retry-evidence.js";
+import { classifyFailoverSignal } from "../failover/classify.js";
+import {
+  extractFailoverHttpStatus,
+  hasTransientRetryEvidence,
+  shouldRetryFailoverSignal,
+} from "../failover/retry-evidence.js";
 import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-outcome.js";
 import type {
   AgentHarnessAttemptResult,
@@ -35,6 +40,17 @@ function assistantContainsToolCall(
   return assistant.content.some(
     (block) => block !== null && typeof block === "object" && block.type === "toolCall",
   );
+}
+
+function isRetryableFinalizerPromptFailure(error: unknown): boolean {
+  const message = formatErrorMessage(error);
+  const status = extractFailoverHttpStatus(message);
+  const signal = { message, ...(status === undefined ? {} : { status }) };
+  return shouldRetryFailoverSignal({
+    classification: classifyFailoverSignal(signal),
+    hasTransientEvidence: hasTransientRetryEvidence(signal),
+    signal,
+  });
 }
 
 /**
@@ -138,7 +154,7 @@ export function projectSettledTurnFinalizationAttemptResult(
     ((terminal.kind === "timeout" && terminal.source === "idle") ||
       (terminal.kind === "failed" &&
         terminal.source === "prompt" &&
-        hasTransientRetryEvidence({ message: formatErrorMessage(terminal.error) })))
+        isRetryableFinalizerPromptFailure(terminal.error)))
   ) {
     throw new RetryableSettledTurnFinalizationAttemptError(result);
   }

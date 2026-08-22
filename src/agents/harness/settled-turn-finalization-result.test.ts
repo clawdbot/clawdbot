@@ -147,6 +147,36 @@ describe("assertSettledTurnFinalizationResult", () => {
     ).toThrow(RetryableSettledTurnFinalizationAttemptError);
   });
 
+  it("does not retry a long-window rate limit", () => {
+    expect(() =>
+      projectSettledTurnFinalizationAttemptResult(
+        successfulAttempt({
+          terminal: {
+            kind: "failed",
+            source: "prompt",
+            error: new Error("HTTP 429: quota exceeded; Retry-After: 3600 seconds"),
+          },
+          currentAttemptCompletedAssistant: undefined,
+        }),
+      ),
+    ).toThrow("did not complete successfully");
+  });
+
+  it("retries a short-window rate limit", () => {
+    expect(() =>
+      projectSettledTurnFinalizationAttemptResult(
+        successfulAttempt({
+          terminal: {
+            kind: "failed",
+            source: "prompt",
+            error: new Error("HTTP 429: too many requests; Retry-After: 2 seconds"),
+          },
+          currentAttemptCompletedAssistant: undefined,
+        }),
+      ),
+    ).toThrow(RetryableSettledTurnFinalizationAttemptError);
+  });
+
   it("does not retry a non-transient prompt failure", () => {
     expect(() =>
       projectSettledTurnFinalizationAttemptResult(
