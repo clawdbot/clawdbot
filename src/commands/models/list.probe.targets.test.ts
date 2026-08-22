@@ -177,19 +177,21 @@ async function buildAnthropicPlanFromModelsJsonApiKey(
   apiKey: string | { source: "env"; provider: string; id: string },
   includeDirectKeys = false,
 ) {
-  return await buildProbeTargets({
-    cfg: {
-      models: {
-        providers: {
-          anthropic: {
-            baseUrl: "https://api.anthropic.com/v1",
-            api: "anthropic-messages",
-            apiKey,
-            models: [],
-          },
+  const cfg = {
+    models: {
+      providers: {
+        anthropic: {
+          baseUrl: "https://api.anthropic.com/v1",
+          api: "anthropic-messages",
+          apiKey,
+          models: [],
         },
       },
-    } as OpenClawConfig,
+    },
+  } as OpenClawConfig;
+  setConfigResolutionFacts(cfg, new Set());
+  return await buildProbeTargets({
+    cfg,
     providers: ["anthropic"],
     modelCandidates: ["anthropic/claude-sonnet-4-6"],
     options: {
