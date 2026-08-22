@@ -751,7 +751,9 @@ describe("opencode provider plugin", () => {
       baseUrl: "https://opencode.ai/zen",
       provider: "opencode",
     });
-    const liveOnlyModel = first.models.find((model: { id: string }) => model.id === "gpt-6-experimental");
+    const liveOnlyModel = first.models.find(
+      (model: { id: string }) => model.id === "gpt-6-experimental",
+    );
     expect(liveOnlyModel).toBeDefined();
 
     clearLiveCatalogCacheForTests();
