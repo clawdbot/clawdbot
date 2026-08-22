@@ -778,7 +778,7 @@ jobs:
           openai-api-key: ${{ secrets.OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           prompt-file: .github/codex/prompts/mantis-telegram-desktop-proof.md
           model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
-          effort: medium
+          effort: high
           sandbox: danger-full-access
           codex-args: '["-c","service_tier=\"fast\""]'
           codex-home: /tmp/mantis-codex-home-${{ github.run_id }}
@@ -897,6 +897,16 @@ jobs:
           sudo install -m 0400 -o root -g root "$agent_manifest" "$trusted_agent_manifest"
           agent_manifest="$trusted_agent_manifest"
           sudo install -d -m 0755 -o root -g root "$trusted_output"
+          recipe_suggestion="$quarantine/recipe-suggestion.md"
+          if sudo test -e "$recipe_suggestion" || sudo test -L "$recipe_suggestion"; then
+            sudo test -f "$recipe_suggestion"
+            sudo test ! -L "$recipe_suggestion"
+            test "$(sudo stat -c %h "$recipe_suggestion")" = 1
+            recipe_bytes="$(sudo stat -c %s "$recipe_suggestion")"
+            ((recipe_bytes > 0 && recipe_bytes <= 65536))
+            sudo install -m 0644 -o root -g root "$recipe_suggestion" \
+              "$trusted_output/recipe-suggestion.md"
+          fi
           manifest="$trusted_output/mantis-evidence.json"
           judgment="$RUNNER_TEMP/mantis-agent-judgment.json"
           sudo jq -e '
@@ -944,13 +954,14 @@ jobs:
                .lane == $lane and
                (if .sutAttestation == null then
                   .status == "infra-error" and .artifacts == {} and .sendCount == 0 and
-                  .providerRequests == [] and .observation.events == [] and
+                  .botApiRequests == [] and .providerRequests == [] and .observation.events == [] and
                   .observation.truncated == false and
                   (.invocations | length) == 1 and .invocations[0].command == "start"
                 else
                   .sutAttestation.lane == $lane and .sutAttestation.sha == $sha
                 end) and
                (.invocations | type == "array") and (.observation.events | type == "array") and
+               (.botApiRequests | type == "array") and
                (.providerRequests | type == "array") and
                (if .status == "complete" or .status == "blocked" then (.cleanupErrors | length) == 0 else true end)' \
               "$verdict" >/dev/null
@@ -1090,6 +1101,7 @@ jobs:
                 hasFocusMessage: (.focusMessageId != null),
                 invocationCount: (.invocations | length),
                 observedEventCount: (.observation.events | length),
+                botApiRequestCount: (.botApiRequests | length),
                 providerRequestCount: (.providerRequests | length),
                 artifactNames: (.artifacts | keys),
                 cleanupErrorCount: (.cleanupErrors | length)

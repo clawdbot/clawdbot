@@ -273,6 +273,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(gate).toContain('any(.invocations[]; .command == "finish")');
     expect(gate).toContain(".observation.events");
     expect(gate).toContain(".blocked.name == null or");
+    expect(gate).toContain(".botApiRequests");
     expect(gate).toContain(".providerRequests");
     expect(gate).toContain('copy_verified_artifacts "$lane" "$attempt_facts"');
     expect(gate).toContain('copy_verified_artifacts "$lane" "$verdict"');
@@ -295,6 +296,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       'sudo install -m 0400 -o root -g root "$agent_manifest" "$trusted_agent_manifest"',
     );
     expect(gate).toContain('agent_manifest="$trusted_agent_manifest"');
+    expect(gate).toContain('recipe_suggestion="$quarantine/recipe-suggestion.md"');
+    expect(gate).toContain("((recipe_bytes > 0 && recipe_bytes <= 65536))");
+    expect(gate).toContain('"$trusted_output/recipe-suggestion.md"');
     expect(
       gate.indexOf(
         'sudo install -m 0400 -o root -g root "$agent_manifest" "$trusted_agent_manifest"',
@@ -662,10 +666,15 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const prompt = readFileSync(PROMPT, "utf8");
     expect(prompt).toContain("$OPENCLAW_TELEGRAM_MANTIS_LANE_CMD");
     expect(prompt).toContain("Write a short Bash scenario");
-    expect(prompt).toContain("`observe --seconds N [--since cursor]`");
+    expect(prompt).toContain("`observe --seconds N [--since cursor] [--until-events N]");
+    expect(prompt).toContain("`mock --script <public-json> <sha256>`");
+    expect(prompt).toContain("`botapi-fail <method> [--times N] [--status CODE | --drop]`");
+    expect(prompt).toContain("`botapi-requests [--method M] [--limit N]`");
     expect(prompt).toContain("`requests`");
     expect(prompt).toContain("`finish [--focus-message-id ID]`");
-    expect(prompt).toContain("Identical relevant observations are unproven");
+    expect(prompt).toContain("Identical pixels alone do not force `block`");
+    expect(prompt).toContain("mantis-recipes/");
+    expect(prompt).toContain("recipe-suggestion.md");
     expect(prompt).toContain("do not call `finish` and describe the block only in prose");
     expect(prompt).toContain("`block --reason TEXT [--missing-primitive NAME]`");
     expect(prompt).toContain("`@{sut}`");
@@ -798,11 +807,11 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(readFileSync(WORKFLOW, "utf8")).not.toContain("CRABBOX_COORDINATOR");
   });
 
-  it("runs the Mantis Codex agent in fast medium-effort mode", () => {
+  it("runs the Mantis Codex agent in fast high-effort mode", () => {
     const agent = workflowStep("Run Codex Mantis Telegram agent");
 
     expect(agent.uses).toContain("openai/codex-action@");
-    expect(agent.with?.effort).toBe("medium");
+    expect(agent.with?.effort).toBe("high");
     expect(agent.with?.["codex-args"]).toBe('["-c","service_tier=\\"fast\\""]');
   });
 
@@ -1110,6 +1119,15 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       'network connect --alias telegram-api-proxy "$network_name" "$proxy_container_name"',
     );
     expect(wrapper).toContain('--env TELEGRAM_PROXY_UPSTREAM_TOKEN="$telegram_bot_token"');
+    expect(wrapper).toContain(
+      '--mount "type=bind,src=$proxy_control_dir,dst=/opt/mantis/proxy-control"',
+    );
+    expect(wrapper).toContain(
+      "--env TELEGRAM_PROXY_CONTROL=/opt/mantis/proxy-control/control.json",
+    );
+    expect(wrapper).toContain(
+      "--env TELEGRAM_PROXY_RECORD_FILE=/opt/mantis/proxy-control/requests.ndjson",
+    );
     expect(wrapper).toContain('export TELEGRAM_BOT_TOKEN="$telegram_alias_token"');
     expect(wrapper).not.toContain('export TELEGRAM_BOT_TOKEN="$telegram_bot_token"');
     expect(wrapper).toContain('remove_container_or_fail "${1}-telegram-proxy"');
@@ -1138,6 +1156,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     );
     expect(sutScript).toContain(
       'const mockResponseControlDir = path.join(config.tempRoot, "mock-control")',
+    );
+    expect(sutScript).toContain(
+      'const proxyControlDir = path.join(config.tempRoot, "proxy-control")',
     );
     expect(sutScript).toContain(
       'const requestLog = path.join(config.tempRoot, "mock-openai-requests.ndjson")',
