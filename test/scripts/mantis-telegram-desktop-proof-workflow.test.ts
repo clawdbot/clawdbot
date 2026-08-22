@@ -901,12 +901,13 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(restore.with?.key).toContain("steps.proof_worktrees.outputs.lockfile_sha256");
     expect(restore.with?.key).toContain("steps.proof_worktrees.outputs.node_version");
     expect(restore.with?.key).toContain("steps.proof_worktrees.outputs.pnpm_version");
-    expect(restore.with?.key).toContain("mantis-baseline-v3");
+    expect(restore.with?.key).toContain("mantis-runtime-v1");
     expect(restore.with?.key).toMatch(/pnpm_version.*baseline_revision/u);
     expect(restore.with?.["restore-keys"]).toBe(
-      "${{ runner.os }}-${{ runner.arch }}-mantis-baseline-v3-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}-\n",
+      "${{ runner.os }}-${{ runner.arch }}-mantis-runtime-v1-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}-\n",
     );
-    expect(restore.with?.path).toBe(".artifacts/mantis-baseline-build.tar");
+    expect(restore.with?.path).toBe(".artifacts/mantis-runtime-build.tar");
+    expect(setup.with?.["build-all-cache-scope"]).toBeUndefined();
     expect(builds.if).toBeUndefined();
     expect(builds.env?.HOST_PNPM_STORE).toBe(
       "${{ steps.setup-node-env.outputs.pnpm-store-cache-path }}",
@@ -916,10 +917,13 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(buildRun).toContain("baseline_archive_restored=true");
     expect(buildRun).toContain('"$toolchain_dir/pnpm" install --frozen-lockfile');
     expect(buildRun).toContain('if [[ "$BASELINE_BUILD_CACHE_HIT" != "true" ]]');
-    expect(buildRun).toContain('"$toolchain_dir/pnpm" build');
+    expect(buildRun).toMatch(
+      /OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 \\\n\s+PATH="\$toolchain_dir:\/usr\/bin:\/bin" \\\n\s+"\$toolchain_dir\/pnpm" build/u,
+    );
     expect(buildRun).toContain('mv -T "$baseline_archive_new" "$BASELINE_BUILD_ARCHIVE"');
+    expect(buildRun).toContain('mkdir -p "$baseline_root/.artifacts/build-all-cache"');
     expect(buildRun).toContain(".artifacts/build-all-cache");
-    expect(buildRun).toContain("for phase in tsdown-ai tsdown-packages tsdown-unified");
+    expect(buildRun).not.toContain("for phase in tsdown-ai tsdown-packages tsdown-unified");
     expect(buildRun).toContain("-type f -links +1");
     expect(save.if).toContain("steps.baseline_build_cache.outputs.cache-hit != 'true'");
     expect(save.uses).toContain("actions/cache/save@");
@@ -1253,6 +1257,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(wrapper).toContain("--memory 8g");
     expect(wrapper).toContain("--cpus 4");
     expect(wrapper).toContain("--memory 16g");
+    expect(wrapper).toContain("OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 corepack pnpm build");
+    expect(wrapper).not.toContain("\n  corepack pnpm build\n");
     expect(sutScript).not.toContain("CODEX_HOME");
     expect(sutScript).not.toContain("codexProxyPort");
     expect(wrapper).toContain('connects("runner-host", 9)');
