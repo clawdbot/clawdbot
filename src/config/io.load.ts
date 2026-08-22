@@ -76,7 +76,16 @@ export function loadConfigFromContext(
     const contextBudgetMigration = migrateLegacyContextBudgetConfig(
       readResolution.resolvedConfigRaw,
     );
-    const rosterMigration = migratePersistedImplicitMainRoster(contextBudgetMigration.config);
+    // Pin the legacy default agent's workspace into the loaded config, mirroring the
+    // write path (see io.write.ts). Read-time migration strips `default: true`, so
+    // resolveAgentWorkspaceDir otherwise depends on a process-local WeakMap retention
+    // that is lost across config re-materialization — leaving a `default: true` agent
+    // with no explicit workspace resolving to `<workspace>/<agentId>` instead of
+    // `<workspace>` after upgrade (blank persona + empty memory). Pinning into the
+    // config data keeps resolution correct regardless of object identity.
+    const rosterMigration = migratePersistedImplicitMainRoster(contextBudgetMigration.config, {
+      materializeWorkspace: true,
+    });
     const effectiveConfigRaw = rosterMigration.config;
     const validationConfigRaw = effectiveConfigRaw;
     const snapshotRaw = raw;
