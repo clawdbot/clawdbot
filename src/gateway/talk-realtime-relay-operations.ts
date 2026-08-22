@@ -599,7 +599,7 @@ export async function cancelTalkRealtimeRelayTurn(params: {
     }
   };
   setTimeout(closeAfterCancellation, TURN_BOUND_CANCELLATION_DRAIN_MS).unref?.();
-  const terminalDrain = Promise.allSettled(
+  void Promise.allSettled(
     [...rootCallIds].map(async (callId) => {
       await submitTalkRealtimeRelayToolResult({
         relaySessionId: session.id,
@@ -609,14 +609,10 @@ export async function cancelTalkRealtimeRelayTurn(params: {
       });
     }),
   );
-  if (session.outputOwnership.mode === "exact-response") {
-    try {
-      session.bridge.handleBargeIn({ audioPlaybackActive: true });
-    } catch {
-      session.failSession("Realtime provider cancellation failed. Reconnecting.");
-    }
-  } else {
-    void terminalDrain.then(closeAfterCancellation);
+  try {
+    session.bridge.handleBargeIn({ audioPlaybackActive: true });
+  } catch {
+    session.failSession("Realtime provider cancellation failed. Reconnecting.");
   }
   return cancellationDrained.promise.then(() => ({ status: "applied" as const, turnId }));
 }

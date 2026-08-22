@@ -146,7 +146,6 @@ export class TalkRealtimeRelayOutputOwnership {
   finish(responseId: string | undefined, cancellationEvent = false) {
     const cancelled = this.phase === "cancelling";
     if (
-      (cancelled && this.mode === "turn-bound") ||
       (cancellationEvent && !cancelled) ||
       (this.mode === "exact-response" &&
         (this.phase === "unowned" || this.responseId !== responseId))
