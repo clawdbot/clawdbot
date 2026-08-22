@@ -1,123 +1,136 @@
-import type { SpawnSyncReturns } from "node:child_process";
+import { spawnSync } from "node:child_process";
+import { constants as osConstants } from "node:os";
+import nodePath from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
-  collectVitestProcessDiagnostics,
+  terminateVitestProcessGroupForTimeout,
   writeVitestProcessDiagnostics,
-} from "../../scripts/lib/vitest-process-diagnostics.mjs";
+} from "../../scripts/vitest-process-group.mts";
 
-function result(stdout: string): SpawnSyncReturns<string> {
-  return {
-    error: undefined,
-    output: [null, stdout, ""],
-    pid: 1,
-    signal: null,
-    status: 0,
-    stderr: "",
-    stdout,
-  };
-}
+const posixIt = process.platform === "win32" ? it.skip : it;
 
 describe("vitest process diagnostics", () => {
-  it("collects bounded process, process-group, and fd evidence on macOS", () => {
-    const spawnSyncImpl = vi.fn((command: string, args: readonly string[]) => {
-      if (command === "ps" && args.at(-1) === "42") {
-        return result("42 7 42 01:02 S 87.5 204800 - node vitest.mjs\n");
-      }
-      if (command === "pgrep") {
-        return result("42\n43\n");
-      }
-      if (command === "ps") {
-        return result(
-          [
-            "42 7 42 01:02 S 87.5 204800 - node vitest.mjs",
-            "43 42 42 01:01 D 12.5 102400 wait worker.js",
-          ].join("\n"),
-        );
-      }
-      return result(
-        [
-          "COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME",
-          ...Array.from(
-            { length: 30 },
-            (_, index) => `node 42 user ${index}u REG 1,1 0 1 fd-${index}`,
-          ),
-        ].join("\n"),
-      );
-    });
+  it("signals the process group before a stuck diagnostic and bounds the wait", async () => {
+    vi.useFakeTimers();
+    try {
+      const kill = vi.fn(() => true);
+      const log = vi.fn();
+      let diagnosticSignal: AbortSignal | undefined;
+      const startDiagnostics = vi.fn((signal: AbortSignal) => {
+        diagnosticSignal = signal;
+        return new Promise<void>(() => {});
+      });
 
-    const lines = collectVitestProcessDiagnostics({
-      pid: 42,
-      platform: "darwin",
-      spawnSyncImpl,
-      fsImpl: { existsSync: () => false },
-    });
+      const result = terminateVitestProcessGroupForTimeout({
+        child: { pid: 42 },
+        diagnosticsDeadlineMs: 50,
+        kill,
+        log,
+        platform: "darwin",
+        startDiagnostics,
+      });
 
-    expect(lines).toContain(
-      "[vitest] process: PID PPID PGID ELAPSED STATE CPU% RSS_KB WCHAN COMMAND",
-    );
-    expect(lines).toContain("[vitest] process: 42 7 42 01:02 S 87.5 204800 - node vitest.mjs");
-    expect(lines).toContain("[vitest] process tree: PGID 42 (2 process(es))");
-    expect(lines.some((line) => line.includes("43 42 42 01:01 D"))).toBe(true);
-    expect(lines.some((line) => line.includes("unrelated"))).toBe(false);
-    expect(lines).toContain("[vitest] fd summary: ... 7 more line(s) omitted");
-    expect(spawnSyncImpl).toHaveBeenCalledWith(
-      "lsof",
-      ["-nP", "-a", "-p", "42", "-d", "0-64"],
-      expect.objectContaining({ maxBuffer: 131072, timeout: 1000 }),
-    );
+      expect(kill).toHaveBeenCalledWith(-42, "SIGTERM");
+      expect(startDiagnostics).not.toHaveBeenCalled();
+
+      await Promise.resolve();
+      expect(startDiagnostics).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(50);
+      await expect(result.diagnostics).resolves.toBeUndefined();
+      expect(diagnosticSignal?.aborted).toBe(true);
+      expect(log).toHaveBeenCalledWith("[vitest] process diagnostics deadline reached after 50ms.");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it("uses procfs for Linux fd evidence", () => {
-    const spawnSyncImpl = vi.fn((command: string, args: readonly string[]) => {
-      if (command === "ps" && args.at(-1) === "42") {
-        return result("42 7 42 01:02 D 0.0 100 futex node vitest.mjs\n");
-      }
-      if (command === "pgrep") {
-        return result("42\n");
-      }
-      if (command === "ps") {
-        return result("42 7 42 01:02 D 0.0 100 futex node vitest.mjs\n");
-      }
-      return result("total 0\n1 -> pipe:[123]\n");
-    });
-
-    const lines = collectVitestProcessDiagnostics({
-      pid: 42,
-      platform: "linux",
-      spawnSyncImpl,
-      fsImpl: { existsSync: () => true },
-    });
-
-    expect(lines).toContain("[vitest] fd summary: 1 -> pipe:[123]");
-    expect(spawnSyncImpl).toHaveBeenCalledWith(
-      "ls",
-      ["-l", "/proc/42/fd"],
-      expect.objectContaining({ timeout: 1000 }),
-    );
-  });
-
-  it("guards unsupported process-group and fd surfaces on Windows", () => {
-    const spawnSyncImpl = vi.fn(() => result("Image Name: node.exe\nPID: 42\n"));
-
-    const lines = collectVitestProcessDiagnostics({
-      pid: 42,
-      platform: "win32",
-      spawnSyncImpl,
-    });
-
-    expect(lines).toContain(
-      "[vitest] process: PID 42; PGID and wait channel are unavailable on win32",
-    );
-    expect(lines).toContain("[vitest] process tree unavailable on win32");
-    expect(lines).toContain("[vitest] fd summary unavailable on win32");
-  });
-
-  it("logs diagnostics in collection order without throwing", () => {
+  it("logs only sanitized process fields and aggregate fd types", async () => {
     const log = vi.fn();
-    writeVitestProcessDiagnostics({ pid: undefined, log });
+    const probe = vi.fn(async (command: string, args: string[]) => {
+      if (command === "pgrep") {
+        return "42\n43\n44\n";
+      }
+      if (command === "lsof") {
+        return [
+          "p42",
+          "f0",
+          "tCHR",
+          "n/Users/alice/private-token",
+          "f1",
+          "tREG",
+          "nhttps://internal.example/SECRET_TOKEN",
+        ].join("\n");
+      }
+      if (command === "ps" && args.at(-1) === "42") {
+        return "42 7 42 01:02 S 87.5 204800 wait /Users/alice/private/node --token SECRET_TOKEN";
+      }
+      return [
+        "42 7 42 01:02 S 87.5 204800 wait /Users/alice/private/node --token SECRET_TOKEN",
+        "43 42 42 01:01 D 12.5 102400 futex /opt/private/worker https://internal.example",
+        "44 42 42 01:00 S 1.0 2048 wait https://internal.example/SECRET_TOKEN",
+      ].join("\n");
+    });
 
-    expect(log).toHaveBeenCalledWith(
-      "[vitest] process diagnostics unavailable: child PID is missing",
+    await writeVitestProcessDiagnostics({
+      childPid: 42,
+      log,
+      platform: "darwin",
+      probe,
+      signal: new AbortController().signal,
+    });
+
+    const output = log.mock.calls.flat().join("\n");
+    expect(output).toContain("comm=node");
+    expect(output).toContain("comm=worker");
+    expect(output).toContain("comm=unknown");
+    expect(output).toContain("fd summary: total=2 types=CHR:1,REG:1");
+    expect(output).not.toMatch(
+      /SECRET_TOKEN|internal\.example|\/Users\/alice|private-token|alice/u,
     );
+  });
+
+  it("degrades without probes on Windows", async () => {
+    const log = vi.fn();
+    const probe = vi.fn();
+
+    await writeVitestProcessDiagnostics({
+      childPid: 42,
+      log,
+      platform: "win32",
+      probe,
+      signal: new AbortController().signal,
+    });
+
+    expect(probe).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(
+      "[vitest] process diagnostics: pid=42 platform=win32 details=unavailable",
+    );
+  });
+
+  posixIt("preserves SIGTERM exit 143 and the final failure trailer end to end", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        nodePath.resolve("scripts/run-vitest.mjs"),
+        "run",
+        "--config",
+        "test/vitest/vitest.tooling.config.ts",
+        "test/scripts/run-vitest-profile.test.ts",
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "0",
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "1",
+        },
+        timeout: 15_000,
+      },
+    );
+
+    expect(result.signal).toBe("SIGTERM");
+    expect(128 + osConstants.signals.SIGTERM).toBe(143);
+    expect(result.stderr.trim().split("\n").at(-1)).toBe("[test] FAILED (exit 143)");
   });
 });
