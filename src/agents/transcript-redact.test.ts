@@ -122,6 +122,17 @@ describe("redactTranscriptMessage", () => {
     expect(text).not.toContain(envToken);
   });
 
+  it("keeps broad assignment masking for non-tool transcript messages", () => {
+    const credential = "assistant-credential-value-127697";
+    const result = redactTranscriptMessage(textMessage(`password = ${credential}`), cfg("tools"));
+    const text = expectDefined(
+      (msgContent(result) as Array<{ text: string }>)[0],
+      "assistant text block",
+    ).text;
+
+    expect(text).not.toContain(credential);
+  });
+
   it("keeps pagination cursors readable while still masking credential tool args (#104992)", () => {
     const msg = castAgentMessage({
       role: "assistant",
