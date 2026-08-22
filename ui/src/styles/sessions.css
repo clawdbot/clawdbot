@@ -1,7 +1,7 @@
 /* ===========================================
    Sessions page
    Structure comes from the settings design language (settings.css). This file
-   keeps the sessions-specific escape hatches: overview grid, roster toolbar,
+   keeps the sessions-specific escape hatches: overview facts, roster toolbar,
    table cells, and the row drawer's flat interior.
    =========================================== */
 
@@ -12,93 +12,38 @@
   line-height: 1.45;
 }
 
-/* --- Overview grid (escape hatch inside one group) --- */
-.sessions-overview {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-}
-
-.sessions-overview__tile {
+/* --- Compact overview facts --- */
+.sessions-facts {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 11px;
-  min-width: 0;
-}
-
-.sessions-overview__icon {
-  display: inline-grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  flex: 0 0 auto;
+  gap: var(--space-2);
+  min-height: 28px;
+  padding: 0 var(--space-1);
   color: var(--muted);
-  background: var(--bg-hover);
-  border-radius: var(--radius-sm);
+  font-size: var(--control-ui-text-sm);
 }
 
-.sessions-overview__icon svg {
-  width: 15px;
-  height: 15px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 2px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.sessions-overview__meta {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-}
-
-.sessions-overview__value {
-  overflow: hidden;
+.sessions-fact strong {
   color: var(--text-strong);
   font-family: var(--mono);
-  font-size: 17px;
   font-weight: 700;
-  line-height: 1.15;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.sessions-overview__label {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-  letter-spacing: 0.05em;
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.sessions-overview__tile--live.sessions-overview__tile--active .sessions-overview__icon,
-.sessions-overview__tile--live.sessions-overview__tile--active .sessions-overview__value {
+.sessions-fact--active,
+.sessions-fact--active strong {
   color: var(--ok);
 }
 
-.sessions-overview__tile--live.sessions-overview__tile--active .sessions-overview__icon {
-  background: var(--ok-subtle);
-}
-
-.sessions-overview__tile--unread.sessions-overview__tile--active .sessions-overview__icon,
-.sessions-overview__tile--unread.sessions-overview__tile--active .sessions-overview__value {
-  color: var(--accent-2);
-}
-
-.sessions-overview__tile--unread.sessions-overview__tile--active .sessions-overview__icon {
-  background: var(--accent-2-subtle);
+.sessions-fact__separator {
+  color: var(--border-strong);
 }
 
 /* --- Transcript search: server-backed message content, separate from roster filters --- */
 .sessions-transcript-search {
   display: grid;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-3);
 }
 
 .sessions-transcript-search__form {
@@ -215,8 +160,8 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
@@ -265,16 +210,16 @@
   gap: var(--space-1);
   height: 30px;
   box-sizing: border-box;
-  padding: 0 4px 0 10px;
-  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  padding: 0 4px 0 8px;
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   transition: border-color var(--duration-fast) ease;
 }
 
 .session-filter-field:focus-within {
   border-color: var(--border-strong);
-  box-shadow: var(--focus-ring);
+  background: var(--bg-hover);
 }
 
 .session-filter-label,
@@ -318,9 +263,9 @@
   gap: var(--space-1);
   height: 30px;
   box-sizing: border-box;
-  padding: 0 11px;
-  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  padding: 0 8px;
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   user-select: none;
   transition:
@@ -335,7 +280,7 @@
 }
 
 .session-filter-check--active {
-  border-color: color-mix(in srgb, var(--accent) 44%, var(--border));
+  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
   background: var(--accent-subtle);
 }
 
@@ -399,8 +344,8 @@
   height: 30px;
   padding: 0 8px;
   color: var(--text);
-  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   font-size: var(--control-ui-text-sm);
 }

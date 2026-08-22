@@ -1709,7 +1709,7 @@ describe("sessions view", () => {
     expect(emptyState?.querySelector("button") !== null).toBe(testCase.filtered);
   });
 
-  it("summarizes loaded sessions in the overview tiles", async () => {
+  it("summarizes loaded sessions in the overview facts", async () => {
     const container = document.createElement("div");
     render(
       renderSessions(
@@ -1737,19 +1737,19 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const tiles = Array.from(container.querySelectorAll(".sessions-overview__tile"));
-    const readTile = (tile: Element) => [
-      tile.querySelector(".sessions-overview__label")?.textContent?.trim(),
-      tile.querySelector(".sessions-overview__value")?.textContent?.trim(),
-    ];
-    expect(tiles.map(readTile)).toEqual([
-      ["Sessions", "2"],
-      ["Live", "1"],
-      ["Unread", "1"],
-      ["Tokens", "1.5k"],
+    const facts = Array.from(container.querySelectorAll(".sessions-fact"));
+    const readFact = (fact: Element) => {
+      const value = fact.querySelector("strong")?.textContent?.trim() ?? "";
+      return [value, fact.textContent?.replace(value, "").trim()];
+    };
+    expect(facts.map(readFact)).toEqual([
+      ["2", "Sessions"],
+      ["1", "Live"],
+      ["1", "Unread"],
+      ["1.5k", "Tokens"],
     ]);
-    expect(tiles[1]?.classList.contains("sessions-overview__tile--active")).toBe(true);
-    expect(tiles[2]?.classList.contains("sessions-overview__tile--active")).toBe(true);
+    expect(facts[1]?.classList.contains("sessions-fact--active")).toBe(true);
+    expect(facts[2]?.classList.contains("sessions-fact--active")).toBe(true);
   });
 
   it("renders a context meter with usage tone on the tokens cell", async () => {
@@ -1826,10 +1826,8 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const tokensTile = container.querySelector(".sessions-overview__tile--tokens");
-    expect(tokensTile?.querySelector(".sessions-overview__value")?.textContent?.trim()).toBe(
-      "~1.2k",
-    );
+    const tokenFact = () => container.querySelector(".sessions-fact:last-child strong");
+    expect(tokenFact()?.textContent?.trim()).toBe("~1.2k");
 
     render(
       renderSessions(
@@ -1839,11 +1837,7 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    expect(
-      container
-        .querySelector(".sessions-overview__tile--tokens .sessions-overview__value")
-        ?.textContent?.trim(),
-    ).toBe("n/a");
+    expect(tokenFact()?.textContent?.trim()).toBe("n/a");
   });
 
   it("omits the context meter when a session reports no context window", async () => {
@@ -1908,7 +1902,7 @@ describe("sessions view", () => {
 
     expect(container.querySelectorAll(".session-skeleton-row").length).toBeGreaterThan(0);
     expect(container.querySelector(".data-table-empty-cell")).toBeNull();
-    expect(container.querySelector(".sessions-overview")).toBeNull();
+    expect(container.querySelector(".sessions-facts")).toBeNull();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

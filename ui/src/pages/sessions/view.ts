@@ -348,7 +348,7 @@ function renderTokensCell(row: GatewaySessionRow) {
   `;
 }
 
-function renderSessionsOverview(
+function renderSessionsFacts(
   rows: GatewaySessionRow[],
   liveCount: number,
   statusFilter: SessionArchivedFilter,
@@ -367,43 +367,27 @@ function renderSessionsOverview(
     rowsWithTokens.length === 0
       ? t("common.na")
       : `${tokensApproximate ? "~" : ""}${formatCompactTokenCount(totalTokens)}`;
-  const tiles: Array<
-    readonly [string, (typeof icons)[keyof typeof icons], string, string, boolean]
-  > = [
-    ["sessions", icons.messageSquare, t("sessionsView.title"), String(rows.length), false],
-    ["live", icons.zap, t("sessionsView.statusLive"), String(liveCount), liveCount > 0],
-    ["unread", icons.eye, t("sessionsView.unread"), String(unreadCount), unreadCount > 0],
-    ["tokens", icons.barChart, t("sessionsView.tokens"), tokensValue, false],
+  const facts: Array<readonly [string, string, boolean]> = [
+    [String(rows.length), t("sessionsView.title"), false],
+    [String(liveCount), t("sessionsView.statusLive"), liveCount > 0],
+    [String(unreadCount), t("sessionsView.unread"), unreadCount > 0],
+    [tokensValue, t("sessionsView.tokens"), false],
   ];
   if (statusFilter !== "active") {
-    tiles.push([
-      "archived",
-      icons.archive,
-      t("sessionsView.archived"),
-      String(archivedCount),
-      false,
-    ]);
+    facts.push([String(archivedCount), t("sessionsView.archived"), false]);
   }
   return html`
-    <div class="sessions-overview">
-      ${tiles.map(([id, icon, label, value, active]) => {
-        const tileClass = [
-          "sessions-overview__tile",
-          `sessions-overview__tile--${id}`,
-          active ? "sessions-overview__tile--active" : "",
-        ]
-          .filter(Boolean)
-          .join(" ");
-        return html`
-          <div class=${tileClass}>
-            <span class="sessions-overview__icon" aria-hidden="true">${icon}</span>
-            <span class="sessions-overview__meta">
-              <span class="sessions-overview__value">${value}</span>
-              <span class="sessions-overview__label">${label}</span>
-            </span>
-          </div>
-        `;
-      })}
+    <div class="sessions-facts" aria-label=${t("sessionsView.title")}>
+      ${facts.map(
+        ([value, label, active], index) => html`
+          ${index > 0
+            ? html`<span class="sessions-fact__separator" aria-hidden="true">·</span>`
+            : nothing}
+          <span class=${active ? "sessions-fact sessions-fact--active" : "sessions-fact"}>
+            <strong>${value}</strong> ${label}
+          </span>
+        `,
+      )}
     </div>
   `;
 }
@@ -1074,9 +1058,7 @@ export function renderSessions(props: SessionsProps) {
   `;
   const children = [
     props.error ? html`<div class="sessions-error" role="alert">${props.error}</div>` : nothing,
-    props.result
-      ? renderSettingsSection({}, renderSessionsOverview(rawRows, liveCount, props.statusFilter))
-      : nothing,
+    props.result ? renderSessionsFacts(rawRows, liveCount, props.statusFilter) : nothing,
     // When the gateway lacks sessions.search the section still renders: the
     // form disables itself and shows the unavailable notice (shipped behavior).
     renderSettingsSection(
