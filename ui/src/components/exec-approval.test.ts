@@ -152,15 +152,30 @@ describe("openclaw-exec-approval", () => {
     expect(container.querySelector(".exec-approval-warning")).toBeNull();
   });
 
-  it("renders the live expiry countdown as mm:ss", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(0);
-    await renderOpenedApproval(createExecRequest({ expiresAtMs: 90_500 }));
-    await getRenderedModalDialog(container);
+  it("keeps the visible and accessible expiry countdowns synchronized", async () => {
+    let nowMs = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    const { approval } = await renderOpenedApproval(createExecRequest({ expiresAtMs: 90_500 }));
+    const { dialog } = await getRenderedModalDialog(container);
 
     expect(container.querySelector(".exec-approval-countdown")?.textContent?.trim()).toBe(
       "expires in 01:31",
     );
-    now.mockRestore();
+    expect(dialog.getAttribute("aria-description")).toBe("expires in 01:31");
+
+    nowMs = 1_000;
+    await vi.waitFor(
+      () => {
+        expect(container.querySelector(".exec-approval-countdown")?.textContent?.trim()).toBe(
+          "expires in 01:30",
+        );
+      },
+      { timeout: 2_000 },
+    );
+    await getRenderedModalDialog(container);
+
+    await approval.updateComplete;
+    expect(dialog.getAttribute("aria-description")).toBe("expires in 01:30");
   });
 
   it("selects another queued request without changing queue order", async () => {
