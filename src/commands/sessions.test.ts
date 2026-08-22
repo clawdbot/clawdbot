@@ -1,5 +1,10 @@
 // Sessions command tests cover listing, details, filtering, and transcript display behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  assignSessionOwner,
+  recordSessionParticipant,
+} from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   cleanupStore,
@@ -277,6 +282,78 @@ describe("sessionsCommand", () => {
     expect(main?.totalTokensFresh).toBe(true);
     expect(group?.totalTokens).toBeNull();
     expect(group?.totalTokensFresh).toBe(false);
+  });
+
+  it("preserves collaboration metadata in JSON and human output", async () => {
+    const sessionKey = "agent:main:shared";
+    const store = await writeStore(
+      {
+        [sessionKey]: {
+          sessionId: "shared-session",
+          updatedAt: Date.now() - 60_000,
+          model: "test:opus",
+          visibility: "suggest",
+          createdActor: { type: "human", id: "profile-creator", label: "Creator" },
+        },
+      },
+      "sessions-collaboration",
+    );
+    const scope = { agentId: "main", sessionKey, storePath: store };
+    assignSessionOwner(scope, {
+      owner: { type: "human", id: "profile-owner", label: "Grace" },
+      assignedBy: { type: "human", id: "profile-admin", label: "Admin" },
+      assignedAt: Date.now() - 30_000,
+    });
+    for (const [id, label] of [
+      ["profile-ada", "Ada"],
+      ["profile-ben", "Ben"],
+      ["profile-cam", "Cam"],
+      ["profile-dee", "Dee"],
+      ["profile-eli", "Eli"],
+    ] as const) {
+      recordSessionParticipant(scope, {
+        actor: { type: "human", id, label },
+        source: "profile",
+      });
+    }
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+    const row = logs.find((line) => line.includes(sessionKey)) ?? "";
+    expect(row).toContain(
+      "visibility:suggest owner:profile-owner participants:profile-ada,profile-ben,profile-cam,profile-dee,+1",
+    );
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<
+        Pick<
+          SessionEntry,
+          "visibility" | "createdActor" | "owner" | "participants" | "participantCount"
+        > & {
+          key: string;
+          sharingRole?: unknown;
+        }
+      >;
+    }>(sessionsCommand, store);
+    const shared = payload.sessions?.find((entry) => entry.key === sessionKey);
+    expect(shared).toMatchObject({
+      visibility: "suggest",
+      createdActor: { type: "human", id: "profile-creator" },
+      owner: {
+        actor: { type: "human", id: "profile-owner" },
+        assignedBy: { type: "human", id: "profile-admin" },
+        assignedAt: Date.now() - 30_000,
+      },
+      participantCount: 5,
+      participants: [
+        { type: "human", id: "profile-ada", source: "profile" },
+        { type: "human", id: "profile-ben", source: "profile" },
+        { type: "human", id: "profile-cam", source: "profile" },
+        { type: "human", id: "profile-dee", source: "profile" },
+        { type: "human", id: "profile-eli", source: "profile" },
+      ],
+    });
+    expect(shared).not.toHaveProperty("sharingRole");
   });
 
   it("reports the SQLite database and omits the retired sessionFile field", async () => {
