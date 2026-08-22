@@ -805,7 +805,8 @@ describe("Mistral provider", () => {
   it("serializes structured non-image blocks in tool results as JSON text", async () => {
     // Prove the host redaction port is applied to structured tool-result text.
     configureAiTransportHost({
-      redactToolPayloadText: (text) => text.replaceAll('"value"', '"***"'),
+      redactModelVisibleSecrets: <T>(value: T): T =>
+        JSON.parse(JSON.stringify(value).replaceAll('"value"', '"***"')) as T,
     });
     const testContext = makeMistralToolResultContext("fetch", [
       {
