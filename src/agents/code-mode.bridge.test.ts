@@ -155,6 +155,50 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(testing.activeRuns.size).toBe(0);
   });
 
+  it("rejects an over-cap bridge frontier before dispatching its admitted prefix", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: { codeMode: { enabled: true, maxPendingToolCalls: 2 } },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const codeModeTools = createCodeModeTools(ctx);
+    const mutation = pluginTool("fake_mutation", "Record a side effect");
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, mutation],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-frontier-overflow",
+        {
+          code: `return await Promise.all(
+            Array.from({ length: 3 }, (_, index) => fake_mutation({ index })),
+          );`,
+        },
+      ),
+    );
+
+    expect(mutation.execute).not.toHaveBeenCalled();
+    expect(details).toMatchObject({
+      status: "failed",
+      code: "invalid_input",
+      bridgeDispatchStarted: false,
+    });
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
   it("yields nested exec before the Code Mode deadline when continuation args are omitted", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
