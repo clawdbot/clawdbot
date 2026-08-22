@@ -788,9 +788,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       ".github/codex/prompts/mantis-recipes/staged-media-provider-proof.md",
       "utf8",
     );
-    expect(stagedMediaRecipe).toContain("--until-provider-requests 3");
+    expect(stagedMediaRecipe).toContain("--until-provider-requests 4");
     expect(stagedMediaRecipe).toContain('select(.type == "function_call_output"');
-    expect(stagedMediaRecipe.indexOf("--until-provider-requests 3")).toBeLessThan(
+    expect(stagedMediaRecipe.indexOf("--until-provider-requests 4")).toBeLessThan(
       stagedMediaRecipe.lastIndexOf("finish --lane baseline"),
     );
     expect(prompt).toContain("mantis-recipes/");

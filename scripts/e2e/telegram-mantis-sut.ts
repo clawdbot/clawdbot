@@ -209,6 +209,9 @@ export function writeSutConfig(params: {
         models: {
           "openai/gpt-5.6-luna": { params: { openaiWsWarmup: false, transport: "sse" } },
         },
+        // Auto-resolution walks plugin manifest defaults (gpt-5.5), which this
+        // catalog does not define; pin the pdf tool to the only harness model.
+        pdfModel: { primary: "openai/gpt-5.6-luna" },
       },
       entries: {
         main: {

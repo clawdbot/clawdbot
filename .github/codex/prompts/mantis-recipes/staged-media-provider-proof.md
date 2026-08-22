@@ -103,7 +103,7 @@ sha256="$(sha256sum "$script" | cut -d ' ' -f 1)"
 $lane mock --lane baseline --script "$script" "$sha256"
 tool_sent="$($lane send --lane baseline --text '@{sut} inspect the staged PDF with the pdf tool')"
 tool_message_id="$(jq -er '.sent.messageId' <<<"$tool_sent")"
-$lane observe --lane baseline --seconds 120 --until-provider-requests 3
+$lane observe --lane baseline --seconds 120 --until-provider-requests 4
 requests="$($lane requests --lane baseline)"
 jq -e '[.requests[] | .body.input[]? | select(.type == "function_call_output"
   and .call_id == "call_mantis_pdf_exec")] | length > 0' <<<"$requests"
@@ -111,6 +111,10 @@ $lane finish --lane baseline --focus-message-id "$tool_message_id"
 ```
 
 `finish` tears the lane down, so wait for the cumulative provider-request count
-(staging turn, exec turn, follow-up) and assert the recorded
-`function_call_output` before finishing; its `output` carries the serialized
-exec result. Repeat the same script, turn, wait, and assertions for `candidate`.
+(staging turn, exec turn, the pdf tool's own model call, follow-up) and assert
+the recorded `function_call_output` before finishing; its `output` carries the
+serialized exec result. The pdf tool's model call consumes the script's second
+response; the follow-up then repeats the exhausted script's last entry, which
+is fine. The pdf tool's request is where the lanes diverge: compare its
+`contentFacts` for `input_file` versus extracted text. Repeat the same script,
+turn, wait, and assertions for `candidate`.
