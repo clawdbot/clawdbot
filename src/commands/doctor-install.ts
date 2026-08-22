@@ -77,7 +77,8 @@ function detectSelfLinkWarnings(root: string): string[] {
     // Only flag self-referential links inside the overrides: section, not any
     // indented openclaw: mapping elsewhere in the workspace file.
     const overridesMatch = workspaceYaml.match(/^overrides:\s*\n((?:^[ \t]+.*\n?)*)/m);
-    if (overridesMatch && /^[ \t]+openclaw:\s*['"]?link:/m.test(overridesMatch[1])) {
+    const overridesBody = overridesMatch?.[1];
+    if (overridesBody && /^[ \t]+openclaw:\s*['"]?link:/m.test(overridesBody)) {
       warnings.push(
         `- pnpm-workspace.yaml contains a self-referential "openclaw: link:" entry, which breaks frozen pnpm installs (ERR_PNPM_LOCKFILE_CONFIG_MISMATCH). ${SELF_LINK_RECOVERY}`,
       );
