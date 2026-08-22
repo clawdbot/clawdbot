@@ -28,6 +28,10 @@ import {
   resolveChatTranscriptInteractionRow,
 } from "./chat-transcript-interaction-anchor.ts";
 import { extractTranscriptRange, previewTranscriptRowKeys } from "./chat-transcript-range.ts";
+import {
+  initialChatTranscriptScrollMargin,
+  syncChatTranscriptScrollMargin,
+} from "./chat-transcript-scroll-margin.ts";
 
 export type TranscriptRow<T = unknown> =
   | { kind: "item"; key: string; item: T }
@@ -69,20 +73,6 @@ function initialTranscriptRect(host: ReactiveControllerHost) {
     width: width || (typeof window === "undefined" ? 0 : window.innerWidth),
     height: height || (typeof window === "undefined" ? 0 : window.innerHeight),
   };
-}
-
-function transcriptScrollMargin(element: Element | null): number {
-  if (!(element instanceof HTMLElement) || typeof getComputedStyle !== "function") {
-    return 0;
-  }
-  const margin = Number.parseFloat(getComputedStyle(element).paddingTop);
-  return Number.isFinite(margin) ? margin : 0;
-}
-
-function initialTranscriptScrollMargin(host: ReactiveControllerHost): number {
-  return host instanceof HTMLElement
-    ? transcriptScrollMargin(host.querySelector(".chat-thread"))
-    : 0;
 }
 
 class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscriptSession {
@@ -250,7 +240,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       getItemKey: () => "",
       initialRect: initialTranscriptRect(host),
       initialOffset: initialOffset ?? Number.MAX_SAFE_INTEGER,
-      scrollMargin: initialTranscriptScrollMargin(host),
+      scrollMargin: initialChatTranscriptScrollMargin(host),
       anchorTo: "end",
       followOnAppend: false,
       observeElementRect: (instance, callback) =>
@@ -275,7 +265,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
               CHAT_TRANSCRIPT_END_THRESHOLD_PX;
           this.observedWidth = rect.width;
           this.observedHeight = rect.height;
-          this.syncScrollMargin(instance.scrollElement);
+          syncChatTranscriptScrollMargin(instance.scrollElement, instance);
           callback(rect);
           if (wasAtEndBeforeResize) {
             instance.scrollToEnd({ behavior: "auto" });
@@ -617,18 +607,6 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
         align: "end",
       });
     }
-  }
-
-  private syncScrollMargin(scrollElement: HTMLDivElement | null): void {
-    const scrollMargin = transcriptScrollMargin(scrollElement);
-    const virtualizer = this.virtualizerController.getVirtualizer();
-    if (scrollMargin === virtualizer.options.scrollMargin) {
-      return;
-    }
-    virtualizer.setOptions({
-      ...virtualizer.options,
-      scrollMargin,
-    });
   }
 
   private reconcileImplicitEndAnchor(): void {
