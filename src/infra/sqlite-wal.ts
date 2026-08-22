@@ -5,6 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Result } from "@openclaw/normalization-core/result";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { hasErrnoCode } from "./errno.js";
 import { normalizeSqliteNonNegativeInteger } from "./sqlite-busy-timeout.js";
 import { isSqliteLockError } from "./sqlite-transaction.js";
 
@@ -41,7 +42,7 @@ type SqliteWalCheckpointMode = "PASSIVE" | "FULL" | "RESTART" | "TRUNCATE";
 type SqliteFilesystemJournalPolicy = "rollback" | "unsupported" | "wal";
 type MountEntry = { mountPoint: string; fsType: string; source?: string };
 
-export type SqliteWalSplitBrainEvent = {
+type SqliteWalSplitBrainEvent = {
   event: "sqlite_wal_sidecar_identity_mismatch";
   databasePath: string;
   descriptorDevice: string;
@@ -360,7 +361,7 @@ function statSqliteSidecarTarget(pathname: string): BigIntStats | undefined {
   try {
     return fs.statSync(pathname, { bigint: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return undefined;
     }
     throw error;
@@ -384,7 +385,7 @@ function detectSqliteWalSplitBrain(databasePath: string): SqliteWalSplitBrainEve
   try {
     descriptors = fs.readdirSync(PROC_SELF_FD_PATH);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return undefined;
     }
     throw error;
@@ -396,7 +397,7 @@ function detectSqliteWalSplitBrain(databasePath: string): SqliteWalSplitBrainEve
     try {
       linkedPath = fs.readlinkSync(descriptorPath);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      if (hasErrnoCode(error, "ENOENT")) {
         continue;
       }
       throw error;
@@ -411,8 +412,7 @@ function detectSqliteWalSplitBrain(databasePath: string): SqliteWalSplitBrainEve
     try {
       descriptor = fs.fstatSync(Number(descriptorName), { bigint: true });
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "EBADF" || code === "ENOENT") {
+      if (hasErrnoCode(error, "EBADF") || hasErrnoCode(error, "ENOENT")) {
         continue;
       }
       throw error;
@@ -422,7 +422,7 @@ function detectSqliteWalSplitBrain(databasePath: string): SqliteWalSplitBrainEve
         continue;
       }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      if (hasErrnoCode(error, "ENOENT")) {
         continue;
       }
       throw error;

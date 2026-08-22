@@ -588,11 +588,12 @@ function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteReadOnlyWo
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
-  const result = value as Record<string, unknown>;
-  const keys = Object.keys(result);
+  if (Object.keys(value).length !== 2 || !("ok" in value)) {
+    return false;
+  }
   return (
-    (keys.length === 2 && result.ok === true && typeof result.location === "string") ||
-    (keys.length === 2 && result.ok === false && typeof result.message === "string")
+    (value.ok === true && "location" in value && typeof value.location === "string") ||
+    (value.ok === false && "message" in value && typeof value.message === "string")
   );
 }
 
@@ -652,7 +653,12 @@ export async function prepareSqliteReadOnlyLocation(
   return await new Promise((resolve, reject) => {
     execFile(
       process.execPath,
-      [...resolveRuntimeWorkerArgv(workerUrl), SQLITE_READONLY_CHILD_ARG, path.resolve(pathname)],
+      [
+        ...resolveRuntimeWorkerArgv(workerUrl),
+        SQLITE_READONLY_CHILD_ARG,
+        "async",
+        path.resolve(pathname),
+      ],
       { encoding: "utf8" },
       (error, stdout, stderr) => {
         try {
@@ -672,7 +678,12 @@ export function prepareSqliteReadOnlyLocationSync(
   const workerUrl = resolveSqliteReadOnlyWorkerUrl();
   const result = spawnSync(
     process.execPath,
-    [...resolveRuntimeWorkerArgv(workerUrl), SQLITE_READONLY_CHILD_ARG, path.resolve(pathname)],
+    [
+      ...resolveRuntimeWorkerArgv(workerUrl),
+      SQLITE_READONLY_CHILD_ARG,
+      "sync",
+      path.resolve(pathname),
+    ],
     { encoding: "utf8" },
   );
   const failure = result.error
