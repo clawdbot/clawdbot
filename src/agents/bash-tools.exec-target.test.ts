@@ -156,22 +156,53 @@ describe("resolveExecTarget", () => {
     );
   });
 
-  it("allows gateway configured with auto requested (same effective host)", () => {
-    // auto resolves to gateway when no sandbox is available, and elevated routing
-    // maps auto→gateway regardless. The configured gateway target is always a valid
-    // resolution of auto.
-    expectExecTarget(
+  it("rejects gateway configured with auto requested when sandbox is available and not elevated", () => {
+    // With a sandbox available and no elevated routing, auto resolves to sandbox,
+    // not gateway. The operator's gateway pin must be preserved.
+    expect(() =>
       resolveExecTarget({
         configuredTarget: "gateway",
         requestedTarget: "auto",
         elevatedRequested: false,
         sandboxAvailable: true,
       }),
+    ).toThrow(
+      "exec host not allowed (requested auto; configured host is gateway; set tools.exec.host=auto to allow this override).",
+    );
+  });
+
+  it("allows gateway configured with auto requested when no sandbox is available", () => {
+    // Without a sandbox, auto resolves to gateway — the same host as configured.
+    expectExecTarget(
+      resolveExecTarget({
+        configuredTarget: "gateway",
+        requestedTarget: "auto",
+        elevatedRequested: false,
+        sandboxAvailable: false,
+      }),
       {
         configuredTarget: "gateway",
         requestedTarget: "auto",
         selectedTarget: "auto",
-        effectiveHost: "sandbox",
+        effectiveHost: "gateway",
+      },
+    );
+  });
+
+  it("allows gateway configured with auto requested when elevated with sandbox", () => {
+    // Elevated routing maps auto→gateway regardless of sandbox availability.
+    expectExecTarget(
+      resolveExecTarget({
+        configuredTarget: "gateway",
+        requestedTarget: "auto",
+        elevatedRequested: true,
+        sandboxAvailable: true,
+      }),
+      {
+        configuredTarget: "gateway",
+        requestedTarget: "auto",
+        selectedTarget: "gateway",
+        effectiveHost: "gateway",
       },
     );
   });
