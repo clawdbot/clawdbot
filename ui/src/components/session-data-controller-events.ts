@@ -37,7 +37,15 @@ export function publishSidebarSessionList(
   owner.sessionsResult = snapshot.result;
   owner.sessionsAgentId = snapshot.agentId;
   const sessions = snapshot.result?.sessions ?? [];
-  const visibleKeys = new Set(sessions.map((row) => row.key).filter(Boolean));
+  if (snapshot.result && snapshot.agentId) {
+    owner.sessionResultsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result;
+  }
+  const retainedResults = snapshot.result
+    ? [snapshot.result, ...Object.values(owner.sessionResultsByAgent)]
+    : [];
+  const visibleKeys = new Set(
+    retainedResults.flatMap((result) => result.sessions.map((row) => row.key).filter(Boolean)),
+  );
   for (const key of owner.sessionCreatedOrder.keys()) {
     if (!visibleKeys.has(key)) {
       owner.sessionCreatedOrder.delete(key);
@@ -47,9 +55,6 @@ export function publishSidebarSessionList(
     if (row.key && !owner.sessionCreatedOrder.has(row.key)) {
       owner.sessionCreatedOrder.set(row.key, owner.sessionCreatedOrder.size);
     }
-  }
-  if (snapshot.result && snapshot.agentId) {
-    owner.sessionResultsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result;
   }
 }
 
