@@ -440,11 +440,11 @@ suite.define(() => {
       code: "INVALID_REQUEST",
       message,
     });
-    const alert = currentPage.getByRole("alert").filter({ hasText: message });
+    const alert = currentPage.locator(".chat-error[role=alert]").filter({ hasText: message });
     await expectBrowser(alert).toBeVisible();
 
     await currentPage.getByRole("button", { name: "Session sharing" }).click();
-    await expectBrowser(dropdown.locator(".chat-pane__sharing-status--error")).toBeVisible();
+    await expectBrowser(dropdown.getByRole("alert").filter({ hasText: message })).toBeVisible();
   });
 
   it("lets a read-scoped owner inspect sharing but blocks mutations", async () => {
