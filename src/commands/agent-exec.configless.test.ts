@@ -24,4 +24,24 @@ describe("agent exec configless workspace ownership", () => {
       workspaceDir: resolve("/run/here"),
     });
   });
+
+  it("adds explicitly requested one-shot tools without replacing configured additions", () => {
+    const config = buildExecRunConfig({
+      base: { tools: { alsoAllow: ["read"] } },
+      cwd: "/run/here",
+      opts: { alsoAllowTool: [" browser ", "read"] },
+    });
+
+    expect(config.tools?.alsoAllow).toEqual(["read", "browser"]);
+  });
+
+  it("rejects empty one-shot tool names", () => {
+    expect(() =>
+      buildExecRunConfig({
+        base: {},
+        cwd: "/run/here",
+        opts: { alsoAllowTool: [" "] },
+      }),
+    ).toThrow("--also-allow-tool requires a non-empty tool name");
+  });
 });

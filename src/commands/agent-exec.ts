@@ -34,6 +34,7 @@ export type AgentExecCliOptions = {
   thinking?: string;
   fallback?: string[];
   codeMode?: "direct" | "auto" | "code";
+  alsoAllowTool?: string[];
   localModelLean?: boolean;
   authEnvOnly?: boolean;
   timeout?: string;
@@ -328,9 +329,17 @@ function stripInheritedAgentLocations(base: OpenClawConfig): OpenClawConfig {
 function buildExecRunOverlay(params: {
   base: OpenClawConfig;
   cwd: string;
-  opts: Pick<AgentExecCliOptions, "codeMode" | "localModelLean">;
+  opts: Pick<AgentExecCliOptions, "alsoAllowTool" | "codeMode" | "localModelLean">;
 }): OpenClawConfig {
   const codeMode = normalizeCodeMode(params.opts.codeMode);
+  const requestedTools = params.opts.alsoAllowTool?.map((value) => value.trim()) ?? [];
+  if (requestedTools.some((value) => !value)) {
+    throw new Error("--also-allow-tool requires a non-empty tool name.");
+  }
+  const alsoAllow =
+    requestedTools.length > 0
+      ? [...new Set([...(params.base.tools?.alsoAllow ?? []), ...requestedTools])]
+      : undefined;
   // A per-agent `workspace` outranks `agents.defaults`, so pinning only the
   // defaults would let an inherited entry silently run the turn against a
   // different repository. Override every configured entry as well.
@@ -349,7 +358,14 @@ function buildExecRunOverlay(params: {
     // This process exits after one turn, so live skill invalidation cannot be
     // observed and would leave Chokidar retaining the otherwise-finished CLI.
     skills: { load: { watch: false } },
-    ...(codeMode !== undefined ? { tools: { codeMode } } : {}),
+    ...(codeMode !== undefined || alsoAllow
+      ? {
+          tools: {
+            ...(codeMode !== undefined ? { codeMode } : {}),
+            ...(alsoAllow ? { alsoAllow } : {}),
+          },
+        }
+      : {}),
   } as OpenClawConfig;
 }
 
@@ -426,7 +442,7 @@ export async function resolveExecBaseConfig(
 export function buildExecRunConfig(params: {
   base: OpenClawConfig;
   cwd: string;
-  opts?: Pick<AgentExecCliOptions, "codeMode" | "localModelLean">;
+  opts?: Pick<AgentExecCliOptions, "alsoAllowTool" | "codeMode" | "localModelLean">;
 }): OpenClawConfig {
   const opts = params.opts ?? {};
   const base = stripInheritedAgentLocations(params.base);
