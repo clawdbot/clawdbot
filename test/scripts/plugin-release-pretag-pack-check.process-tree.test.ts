@@ -75,7 +75,7 @@ function createProofRepo(): {
       extensions: ["./index.ts"],
       compat: { pluginApi: ">=2026.8.22" },
       build: { openclawVersion: "2026.8.22" },
-      assetScripts: { build: "node ./asset-build.mjs" },
+      assetScripts: { build: "node ./proof-assets/asset-build.mjs" },
       install: { npmSpec: "@openclaw/proof-plugin" },
       release: { publishToClawHub: true },
       runtimeExtensions: ["./dist/index.js"],
@@ -83,8 +83,9 @@ function createProofRepo(): {
   });
   writeFileSync(join(packageDir, "README.md"), "# Proof plugin\n");
   writeFileSync(join(packageDir, "index.ts"), "export const proof = 1;\n");
+  mkdirSync(join(packageDir, "proof-assets"));
   writeFileSync(
-    join(packageDir, "asset-build.mjs"),
+    join(packageDir, "proof-assets", "asset-build.mjs"),
     `import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 
