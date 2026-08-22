@@ -53,6 +53,7 @@ import {
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   type AuthorizedGatewayHttpRequest,
+  authorizeOpenAiCompatibleHttpMessageTarget,
   authorizeOpenAiCompatibleHttpModelOverride,
   authorizeOpenAiCompatibleHttpSession,
   getBearerToken,
@@ -454,6 +455,11 @@ export async function handleOpenResponsesHttpRequest(
   const modelOverrideAuth = authorizeOpenAiCompatibleHttpModelOverride(req, handled.requestAuth);
   if (!modelOverrideAuth.allowed) {
     sendMissingScopeForbidden(res, modelOverrideAuth.missingScope);
+    return true;
+  }
+  const messageTargetAuth = authorizeOpenAiCompatibleHttpMessageTarget(req, handled.requestAuth);
+  if (!messageTargetAuth.allowed) {
+    sendMissingScopeForbidden(res, messageTargetAuth.missingScope);
     return true;
   }
   const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);

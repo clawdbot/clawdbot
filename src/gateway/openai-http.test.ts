@@ -451,6 +451,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             "x-openclaw-message-to": "channel:24514",
             "x-openclaw-account-id": "acct-7",
             "x-openclaw-thread-id": "thread-42",
+            "x-openclaw-scopes": "operator.admin, operator.write",
           },
         );
         expect(res.status).toBe(200);
@@ -470,6 +471,25 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(optsTargetHeaders?.deliver).toBe(false);
         expect(optsTargetHeaders?.bestEffortDeliver).toBe(false);
         await res.text();
+      }
+
+      {
+        // Delivery targets mint a later out-of-turn channel send, so they are
+        // owner-level: a write-scoped identity-bearing caller must be rejected.
+        agentCommandMock.mockClear();
+        const res = await postChatCompletions(
+          port,
+          {
+            model: "openclaw",
+            messages: [{ role: "user", content: "hi" }],
+          },
+          { "x-openclaw-message-to": "channel:24514" },
+        );
+        expect(res.status).toBe(403);
+        const json = (await res.json()) as { error?: { message?: string; type?: string } };
+        expect(json.error?.type).toBe("forbidden");
+        expect(json.error?.message).toBe("missing scope: operator.admin");
+        expect(agentCommandMock).toHaveBeenCalledTimes(0);
       }
 
       {
@@ -3850,6 +3870,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
               authorization: "Bearer secret",
               "x-openclaw-scopes": "operator.approvals",
               "x-openclaw-sender-is-owner": "false",
+              "x-openclaw-message-to": "channel:24514",
             },
           );
 
@@ -3857,6 +3878,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           await res.text();
           expect(agentCommandMock).toHaveBeenCalledTimes(1);
           expect(firstAgentCommandOptions()?.senderIsOwner).toBe(true);
+          // Shared-secret callers carry owner semantics, so the owner-level
+          // delivery-target header is accepted and forwarded.
+          expect((firstAgentCommandOptions() as { to?: string } | undefined)?.to).toBe(
+            "channel:24514",
+          );
         }
 
         agentCommandMock.mockClear();

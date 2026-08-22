@@ -647,3 +647,25 @@ export function authorizeOpenAiCompatibleHttpModelOverride(
   }
   return { allowed: false, missingScope: ADMIN_SCOPE };
 }
+
+export const OPENAI_COMPAT_MESSAGE_TARGET_HEADERS = [
+  "x-openclaw-message-to",
+  "x-openclaw-account-id",
+  "x-openclaw-thread-id",
+] as const;
+
+export function authorizeOpenAiCompatibleHttpMessageTarget(
+  req: IncomingMessage,
+  requestAuth: AuthorizedGatewayHttpRequest,
+): { allowed: true } | { allowed: false; missingScope: typeof ADMIN_SCOPE } {
+  // Delivery-target headers let async out-of-turn deliveries (subagent
+  // completion announces) reach an external channel recipient, so they carry
+  // owner authority — same boundary as the x-openclaw-model override.
+  const requestedTarget = OPENAI_COMPAT_MESSAGE_TARGET_HEADERS.some(
+    (header) => normalizeOptionalString(getHeader(req, header)) !== undefined,
+  );
+  if (!requestedTarget || resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth)) {
+    return { allowed: true };
+  }
+  return { allowed: false, missingScope: ADMIN_SCOPE };
+}

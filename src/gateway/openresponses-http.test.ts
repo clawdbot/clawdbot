@@ -798,6 +798,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
           "x-openclaw-message-to": "channel:24514",
           "x-openclaw-account-id": "acct-7",
           "x-openclaw-thread-id": "thread-42",
+          "x-openclaw-scopes": "operator.admin, operator.write",
         },
       );
       expect(resTargetHeaders.status).toBe(200);
@@ -815,6 +816,22 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(optsTargetHeaders.deliver).toBe(false);
       expect(optsTargetHeaders.bestEffortDeliver).toBe(false);
       await ensureResponseConsumed(resTargetHeaders);
+
+      // Delivery targets mint a later out-of-turn channel send, so they are
+      // owner-level: a write-scoped identity-bearing caller must be rejected.
+      agentCommandMock.mockClear();
+      const resTargetHeadersDenied = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        { "x-openclaw-message-to": "channel:24514" },
+      );
+      expect(resTargetHeadersDenied.status).toBe(403);
+      const deniedJson = (await resTargetHeadersDenied.json()) as {
+        error?: { message?: string; type?: string };
+      };
+      expect(deniedJson.error?.type).toBe("forbidden");
+      expect(deniedJson.error?.message).toBe("missing scope: operator.admin");
+      expect(agentCommandMock).toHaveBeenCalledTimes(0);
 
       mockAgentOnce([{ text: "hello" }]);
       const resNoTargetHeaders = await postResponses(port, { model: "openclaw", input: "hi" });

@@ -39,6 +39,7 @@ import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 export {
   authorizeControlUiReadRequestOrReply,
   authorizeControlUiSessionOwnerReadRequestOrReply,
+  authorizeOpenAiCompatibleHttpMessageTarget,
   authorizeOpenAiCompatibleHttpModelOverride,
   authorizeGatewayHttpRequestOrReply,
   authorizeScopedGatewayHttpRequestOrReply,
