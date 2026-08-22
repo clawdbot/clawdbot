@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -94,20 +95,54 @@ async function statFingerprint(filePath: string): Promise<string> {
           : "other";
     const own = statTuple(entry);
     if (!entry.isSymbolicLink()) {
-      return `${type}:${own}`;
+      const content = entry.isFile() ? await readFileFingerprint(filePath, entry, false) : "";
+      return `${type}:${own}:${content}`;
     }
     const [link, realPath, target] = await Promise.all([
       fs.readlink(filePath),
       fs.realpath(filePath),
       fs.stat(filePath, { bigint: true }),
     ]);
-    return `${type}:${own}:${link}:${realPath}:${statTuple(target)}`;
+    const content = target.isFile() ? await readFileFingerprint(filePath, target, true) : "";
+    return `${type}:${own}:${link}:${realPath}:${statTuple(target)}:${content}`;
   } catch (error) {
     if (isNodeError(error, "ENOENT") || isNodeError(error, "ENOTDIR")) {
       return "missing";
     }
     throw error;
   }
+}
+
+async function readFileFingerprint(
+  filePath: string,
+  expected: BigIntStats,
+  followsSymlink: boolean,
+): Promise<string> {
+  const noFollow = followsSymlink ? 0 : (fsConstants.O_NOFOLLOW ?? 0);
+  const handle = await fs.open(filePath, fsConstants.O_RDONLY | noFollow);
+  try {
+    const before = await handle.stat({ bigint: true });
+    if (!sameStat(before, expected)) {
+      throw new Error(`Codex desktop artifact changed while fingerprinting: ${filePath}`);
+    }
+    const hash = createHash("sha256");
+    // Metadata can collide on coarse filesystems. Content binds an event-driven generation
+    // to the exact executable/config bytes without adding request-hot-path polling.
+    for await (const chunk of handle.createReadStream({ autoClose: false })) {
+      hash.update(chunk);
+    }
+    const after = await handle.stat({ bigint: true });
+    if (!sameStat(before, after)) {
+      throw new Error(`Codex desktop artifact changed while fingerprinting: ${filePath}`);
+    }
+    return hash.digest("hex");
+  } finally {
+    await handle.close();
+  }
+}
+
+function sameStat(left: BigIntStats, right: BigIntStats): boolean {
+  return statTuple(left) === statTuple(right);
 }
 
 function statTuple(stat: BigIntStats): string {
