@@ -18,6 +18,7 @@ import { provisionGatewayTokenStoreRef } from "../../../gateway/auth-token-store
 import type { RuntimeEnv } from "../../../runtime.js";
 import { createGatewayEnvSecretRef } from "../../../secrets/ref-contract.js";
 import { normalizeGatewayTokenInput, randomToken } from "../../onboard-helpers.js";
+import { rejectOnboardingOption } from "../../onboard-options.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
 /** Resolves what `gateway.auth.token` should hold once setup owns the token value. */
@@ -59,8 +60,7 @@ export function applyNonInteractiveGatewayConfig(params: {
     gatewayPort !== undefined &&
     (!Number.isFinite(gatewayPort) || gatewayPort <= 0 || gatewayPort > 65_535)
   ) {
-    runtime.error(formatInvalidPortOption("--gateway-port"));
-    runtime.exit(1);
+    rejectOnboardingOption(opts, runtime, formatInvalidPortOption("--gateway-port"));
     return null;
   }
 
@@ -73,8 +73,7 @@ export function applyNonInteractiveGatewayConfig(params: {
     explicitAuthMode !== "token" &&
     explicitAuthMode !== "password"
   ) {
-    runtime.error('Invalid --gateway-auth. Use "token" or "password".');
-    runtime.exit(1);
+    rejectOnboardingOption(opts, runtime, 'Invalid --gateway-auth. Use "token" or "password".');
     return null;
   }
   const hasExplicitTokenAuthInput =
@@ -109,10 +108,11 @@ export function applyNonInteractiveGatewayConfig(params: {
     if (customBindHostIssue) {
       const setCommand = formatCliCommand("openclaw config set gateway.customBindHost <ipv4>");
       const interactiveCommand = formatCliCommand("openclaw onboard");
-      runtime.error(
+      rejectOnboardingOption(
+        opts,
+        runtime,
         `--gateway-bind custom requires gateway.customBindHost: ${customBindHostIssue}. Set it with ${setCommand} and rerun, or run ${interactiveCommand} interactively to be prompted for it.`,
       );
-      runtime.exit(1);
       return null;
     }
   }
@@ -147,27 +147,30 @@ export function applyNonInteractiveGatewayConfig(params: {
       // Env refs must be validated before writing config because the daemon
       // install plan will later depend on this exact env-var id.
       if (!isValidEnvSecretRefId(gatewayTokenRefEnv)) {
-        runtime.error(
+        rejectOnboardingOption(
+          opts,
+          runtime,
           "Invalid --gateway-token-ref-env. Use an environment variable name like OPENCLAW_GATEWAY_TOKEN.",
         );
-        runtime.exit(1);
         return null;
       }
       if (explicitGatewayToken) {
         // Avoid ambiguous persistence: a plaintext token and a ref target cannot
         // both represent the same gateway auth field.
-        runtime.error(
+        rejectOnboardingOption(
+          opts,
+          runtime,
           "Use either --gateway-token or --gateway-token-ref-env, not both. Prefer --gateway-token-ref-env to avoid writing plaintext tokens.",
         );
-        runtime.exit(1);
         return null;
       }
       const resolvedFromEnv = process.env[gatewayTokenRefEnv]?.trim();
       if (!resolvedFromEnv) {
-        runtime.error(
+        rejectOnboardingOption(
+          opts,
+          runtime,
           `Environment variable "${gatewayTokenRefEnv}" is missing or empty. Export it first, then rerun ${formatCliCommand("openclaw onboard --non-interactive")}.`,
         );
-        runtime.exit(1);
         return null;
       }
       nextConfig = {
@@ -232,10 +235,11 @@ export function applyNonInteractiveGatewayConfig(params: {
           normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD))
         : normalizeOptionalString(input);
     if (!password) {
-      runtime.error(
+      rejectOnboardingOption(
+        opts,
+        runtime,
         "Missing --gateway-password for password auth. Pass --gateway-password or use --gateway-auth token.",
       );
-      runtime.exit(1);
       return null;
     }
     nextConfig = {
