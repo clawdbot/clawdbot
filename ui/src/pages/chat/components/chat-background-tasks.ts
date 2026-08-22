@@ -540,6 +540,7 @@ export function createBackgroundTasksProps(
     narrowLayout?: boolean;
     openTaskId?: string;
     onOpenTaskDetail?: (task: TaskSummary) => void;
+    presented?: boolean;
   } = {},
 ): BackgroundTasksProps {
   const state = getBackgroundTasksState(host);
@@ -551,6 +552,7 @@ export function createBackgroundTasksProps(
   // Load eagerly even while collapsed: the toggle badge is how running work
   // gets detected at all, so it cannot wait for the rail to be opened first.
   if (
+    opts.presented !== false &&
     host.connected &&
     !state.loading &&
     !state.error &&

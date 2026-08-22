@@ -228,7 +228,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
 
   protected refreshSwarmRoster(): void {
     const state = this.state;
-    if (!state) {
+    if (!state || !this.presented) {
       return;
     }
     const parentKey = this.resolveBoardSessionKey();

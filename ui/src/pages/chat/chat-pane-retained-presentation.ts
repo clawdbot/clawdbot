@@ -46,10 +46,13 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       this.minutePoll.start();
       this.consumeSessionHandoff(this.sessionKey);
       this.syncActiveBindings();
+      this.refreshSwarmRoster();
       void this.refreshSessionPullRequests();
       return;
     }
     this.minutePoll.stop();
+    this.swarmHydrator?.dispose();
+    this.swarmHydrator = null;
     this.clearHistoryObserver();
     sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
     this.syncActiveBindings();
