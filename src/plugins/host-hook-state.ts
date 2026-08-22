@@ -383,6 +383,7 @@ export async function patchPluginSessionExtension(params: {
       entry.updatedAt = Date.now();
       return pluginState[namespace] as PluginJsonValue | undefined;
     },
+    params.assertCurrent ? { assertCommitAllowed: params.assertCurrent } : {},
   );
   if (!updated.found) {
     return { ok: false, error: `unknown session key: ${params.sessionKey}` };

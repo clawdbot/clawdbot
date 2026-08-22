@@ -29,6 +29,7 @@ import {
   type PluginSideEffectGuard,
 } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
+import { getActivePluginRegistry } from "./runtime.js";
 import type { OpenClawPluginApi, PluginLogger, PluginRegistrationMode } from "./types.js";
 
 function mutableConfigView(config: unknown): OpenClawConfig {
@@ -156,6 +157,7 @@ export function createPluginApiFactory(
       registry.plugins.some((plugin) => plugin === record && plugin.status === "loaded");
     const isLoadedRecordInLiveRegistry = () =>
       sideEffectGuard.active &&
+      getActivePluginRegistry() === registry &&
       isPluginRegistryActivated(registry) &&
       !isPluginRegistryRetired(registry) &&
       isLoadedRecordInRegistry();
