@@ -90,6 +90,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   let platformSendStarted = false;
   let platformSendRoute: PlatformSendRoute | undefined;
   const auditPlatformStartedPayloads = new Set<number>();
+  const platformDispatchedPayloads = new Set<number>();
   let deliveredResults: OutboundDeliveryResult[] = [];
   let commitHooksRun = false;
   const settleDeliveryCompletion = async (
@@ -242,7 +243,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       await params.onPlatformSendDispatch?.();
       params.abortSignal?.throwIfAborted();
     },
-    onPlatformSendDispatch: async () => {
+    onPlatformSendDispatch: async (sourceIndex) => {
       params.abortSignal?.throwIfAborted();
       // Once any payload returns an identity, unknown-after-send protects the whole batch.
       // A later payload dispatch must not regress that durable evidence to attempt-started.
@@ -278,6 +279,9 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       params.abortSignal?.throwIfAborted();
       await params.onPlatformSendDispatch?.();
       params.abortSignal?.throwIfAborted();
+      if (sourceIndex !== undefined) {
+        platformDispatchedPayloads.add(sourceIndex);
+      }
     },
     onError: (err: unknown, payload: NormalizedOutboundPayload) => {
       throwIfProducerLeaseLost();
@@ -286,9 +290,16 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       partialFailuresAreProvenNotSent &&= isProvenDeliveryNotSentError(err);
       params.onError?.(err, payload);
     },
-    ...(auditPayloadOutcomes || stablePayloadOutcomes
+    ...(params.onPayloadDeliveryOutcome || auditPayloadOutcomes || stablePayloadOutcomes
       ? {
           onPayloadDeliveryOutcome: (outcome: OutboundPayloadDeliveryOutcome) => {
+            if (
+              outcome.status === "failed" &&
+              platformDispatchedPayloads.has(outcome.index) &&
+              !isProvenDeliveryNotSentError(outcome.error)
+            ) {
+              outcome.sentBeforeError = true;
+            }
             auditPayloadOutcomes?.push(outcome);
             stablePayloadOutcomes?.push(outcome);
             params.onPayloadDeliveryOutcome?.(outcome);
@@ -378,6 +389,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       if (hadPartialFailure) {
         const partialSendEvidence =
           results.length > 0 ||
+          (platformDispatchedPayloads.size > 0 && !partialFailuresAreProvenNotSent) ||
           (lastPayloadError instanceof OutboundDeliveryError && lastPayloadError.sentBeforeError);
         const postSendState =
           queuedPostSendState ??
@@ -542,8 +554,10 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         }
       } else if (!platformResultsReturned) {
         const sendEvidence =
-          deliveredResults.length > 0 ||
-          (err instanceof OutboundDeliveryError && err.sentBeforeError);
+          !isProvenDeliveryNotSentError(err) &&
+          (deliveredResults.length > 0 ||
+            platformDispatchedPayloads.size > 0 ||
+            (err instanceof OutboundDeliveryError && err.sentBeforeError));
         if (sendEvidence) {
           try {
             queuedPostSendState ??= await persistOwnedPostSendState();
