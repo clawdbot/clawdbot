@@ -372,8 +372,47 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
     await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);
     expect(acquireLocalService).not.toHaveBeenCalled();
     expect(resolveLmstudioRuntimeApiKeyMock).not.toHaveBeenCalled();
+    expect(resolveLmstudioProviderHeadersMock).not.toHaveBeenCalled();
+    expect(createRemoteEmbeddingProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        client: expect.objectContaining({
+          headers: {
+            "Content-Type": "application/json",
+            "X-Remote-Tenant": "remote-b",
+          },
+        }),
+      }),
+    );
+  });
+
+  it("does not inherit primary remote headers when LM Studio activates as a fallback", async () => {
+    await createLmstudioEmbeddingProvider({
+      config: buildConfig({
+        provider: {
+          params: { preload: false },
+          headers: { "X-Provider-Tenant": "provider-a" },
+        },
+      }),
+      provider: "google",
+      model: EMBEDDING_MODEL,
+      fallback: "lmstudio",
+      remote: {
+        baseUrl: "http://memory.local:1234/v1",
+        apiKey: "primary-provider-key",
+        headers: { "X-Remote-Tenant": "remote-b" },
+      },
+    });
+
     expect(resolveLmstudioProviderHeadersMock).toHaveBeenCalledWith(
-      expect.objectContaining({ headers: { "X-Remote-Tenant": "remote-b" } }),
+      expect.objectContaining({ headers: { "X-Provider-Tenant": "provider-a" } }),
+    );
+    expect(createRemoteEmbeddingProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        client: expect.objectContaining({
+          baseUrl: "http://localhost:1234/v1",
+          headers: { "Content-Type": "application/json" },
+        }),
+      }),
     );
   });
 

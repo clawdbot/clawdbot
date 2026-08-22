@@ -24,6 +24,7 @@ import {
   resolveLmstudioConfiguredApiKeyForProvider,
   resolveLmstudioProviderHeaders,
   resolveLmstudioRuntimeApiKey,
+  sanitizeLmstudioStringHeaders,
 } from "./runtime.js";
 
 const log = createSubsystemLogger("memory/embeddings");
@@ -198,16 +199,20 @@ export async function createLmstudioEmbeddingProvider(
     !baseUrlSource ||
     embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl: providerOwnedBaseUrl });
   const model = normalizeLmstudioModel(options.model, resolvedProvider?.providerId);
-  const providerHeaders = await resolveLmstudioProviderHeaders({
-    config: options.config,
-    env: process.env,
-    headers: Object.assign(
-      {},
-      providerOwnsDestination ? providerConfig?.headers : undefined,
-      !isFallbackActivation ? options.remote?.headers : {},
-    ),
-  });
-  const apiKey = hasAuthorizationHeader(providerHeaders)
+  const providerHeaders = providerOwnsDestination
+    ? await resolveLmstudioProviderHeaders({
+        config: options.config,
+        env: process.env,
+        headers: providerConfig?.headers,
+      })
+    : undefined;
+  // Memory remote headers are resolved snapshot values, never fresh SecretRefs.
+  const headerOverrides = Object.assign(
+    {},
+    providerHeaders,
+    !isFallbackActivation ? sanitizeLmstudioStringHeaders(options.remote?.headers) : undefined,
+  );
+  const apiKey = hasAuthorizationHeader(headerOverrides)
     ? undefined
     : !isFallbackActivation
       ? remoteApiKey?.trim() ||
@@ -215,7 +220,6 @@ export async function createLmstudioEmbeddingProvider(
           ? await resolveLmstudioApiKey(options, resolvedProvider?.providerId)
           : undefined)
       : await resolveLmstudioApiKey(options, resolvedProvider?.providerId);
-  const headerOverrides = Object.assign({}, providerHeaders);
   const headers =
     buildLmstudioAuthHeaders({
       apiKey,
