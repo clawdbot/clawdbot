@@ -423,8 +423,14 @@ export function createSessionsSpawnTool(
       const execution =
         params.execution && typeof params.execution === "object" && !Array.isArray(params.execution)
           ? {
-              backend: readStringParam(params.execution as Record<string, unknown>, "backend"),
-              profile: readStringParam(params.execution as Record<string, unknown>, "profile"),
+              backend: readToolStringParam(
+                params.execution as Record<string, unknown>,
+                "backend",
+              ),
+              profile: readToolStringParam(
+                params.execution as Record<string, unknown>,
+                "profile",
+              ),
             }
           : undefined;
       if (params.visible === true && execution) {

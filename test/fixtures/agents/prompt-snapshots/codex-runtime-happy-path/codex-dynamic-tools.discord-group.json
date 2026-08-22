@@ -59,6 +59,22 @@
             "description": "Working directory for the child. With visible=true, paths outside configured agent workspaces require operator.admin; omit to use the target agent workspace.",
             "type": "string"
           },
+          "execution": {
+            "description": "Execution placement; only local process is supported in this release and execution is unavailable with visible=true.",
+            "properties": {
+              "backend": {
+                "description": "Execution placement backend id.",
+                "maxLength": 128,
+                "type": "string"
+              },
+              "profile": {
+                "description": "Optional execution profile id.",
+                "maxLength": 128,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
           "label": {
             "description": "Short task title shown in UI lists; name the work, not the agent.",
             "type": "string"
