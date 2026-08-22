@@ -491,7 +491,11 @@ function appendAuthorizationFailure(
     schemaVersion: 1,
   });
   const temporary = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, `${JSON.stringify(fact, null, 2)}\n`, { mode: 0o600 });
+  // 0644: cross-identity evidence — the Mantis workflow runs the recorder as the
+  // desktop user while the lane reads this fact as mantis-sut to enforce its
+  // retry budget; the 0770 attempt directory bounds visibility. 0600 would make
+  // the lane's read fail EACCES and silently disable the budget.
+  fs.writeFileSync(temporary, `${JSON.stringify(fact, null, 2)}\n`, { mode: 0o644 });
   fs.renameSync(temporary, file);
 }
 

@@ -709,6 +709,12 @@ describe("Telegram Desktop recorder remote contract", () => {
           ),
         ),
       ).toMatchObject({ failures: [{ classification: "qr-unreadable" }] });
+      // The lane reads this fact as a different OS user than the recorder; 0600
+      // would break the retry budget with EACCES.
+      expect(
+        fs.statSync(path.join(root, "out", "telegram-desktop-authorization-failure.json")).mode &
+          0o777,
+      ).toBe(0o644);
       expect(scpFromRemote).toHaveBeenCalledWith(
         expect.objectContaining({ remote: expect.stringContaining("telegram-login-qr.png") }),
       );
