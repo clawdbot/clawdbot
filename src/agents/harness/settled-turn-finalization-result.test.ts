@@ -181,6 +181,23 @@ describe("assertSettledTurnFinalizationResult", () => {
     ).toThrow("reported capability activity");
   });
 
+  it("does not retry an idle Codex app-server failure with unsafe replay state", () => {
+    expect(() =>
+      projectSettledTurnFinalizationAttemptResult(
+        successfulAttempt({
+          terminal: { kind: "timeout", phase: "prompt", source: "idle" },
+          currentAttemptCompletedAssistant: undefined,
+          codexAppServerFailure: {
+            kind: "turn_completion_idle_timeout",
+            transport: "stdio",
+            replaySafe: false,
+            replayBlockedReason: "potential_side_effect",
+          },
+        }),
+      ),
+    ).toThrow("did not complete successfully");
+  });
+
   it("rejects a full attempt that compacted before producing its answer", () => {
     expect(() =>
       projectSettledTurnFinalizationAttemptResult(successfulAttempt({ compactionCount: 1 })),

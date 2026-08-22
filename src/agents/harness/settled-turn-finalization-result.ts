@@ -124,6 +124,16 @@ export function projectSettledTurnFinalizationAttemptResult(
     throw new Error("Settled-turn finalization attempt reported capability activity");
   }
   if (
+    (result.compactionCount ?? 0) > 0 ||
+    result.promptTimeoutOutcome ||
+    result.preflightRecovery ||
+    result.beforeAgentFinalizeRevisionReason ||
+    result.codexAppServerFailure ||
+    result.cloudCodeAssistFormatError
+  ) {
+    throw new Error("Settled-turn finalization attempt did not complete successfully");
+  }
+  if (
     !result.currentAttemptCompletedAssistant &&
     ((terminal.kind === "timeout" && terminal.source === "idle") ||
       (terminal.kind === "failed" &&
@@ -132,15 +142,7 @@ export function projectSettledTurnFinalizationAttemptResult(
   ) {
     throw new RetryableSettledTurnFinalizationAttemptError(result);
   }
-  if (
-    terminal.kind !== "ok" ||
-    (result.compactionCount ?? 0) > 0 ||
-    result.promptTimeoutOutcome ||
-    result.preflightRecovery ||
-    result.beforeAgentFinalizeRevisionReason ||
-    result.codexAppServerFailure ||
-    result.cloudCodeAssistFormatError
-  ) {
+  if (terminal.kind !== "ok") {
     throw new Error("Settled-turn finalization attempt did not complete successfully");
   }
   const assistant = result.currentAttemptCompletedAssistant;
