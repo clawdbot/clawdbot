@@ -94,7 +94,8 @@ export function armClaudeTurnTimers(
   turn: ClaudeLiveTimeoutTurn,
   overallTimeoutMs: number,
 ): void {
-  armNoOutputTimer(host, turn, host.noOutputTimeoutMs);
+  // Register the authoritative overall deadline first so it wins when a valid
+  // minimum turn budget makes the no-output and overall deadlines coincide.
   turn.timeoutTimer = setTimeout(() => {
     const timeoutSeconds = Math.round(overallTimeoutMs / 1000);
     host.close(
@@ -113,4 +114,5 @@ export function armClaudeTurnTimers(
       ),
     );
   }, overallTimeoutMs);
+  armNoOutputTimer(host, turn, host.noOutputTimeoutMs);
 }
