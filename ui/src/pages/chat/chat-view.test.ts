@@ -843,6 +843,7 @@ function createBackgroundTasks(
     loading: false,
     error: null,
     tasks: [],
+    activeCount: 0,
     subagentActivity: {
       rows: [],
       overflowWorking: 0,

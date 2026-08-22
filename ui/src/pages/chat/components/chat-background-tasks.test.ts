@@ -72,6 +72,7 @@ function makeProps(overrides: Partial<BackgroundTasksProps> = {}): BackgroundTas
     loading: false,
     error: null,
     tasks: null,
+    activeCount: 0,
     subagentActivity: deriveSubagentActivity({
       tasks: [],
       sessionKey: "agent:main:current",
@@ -171,6 +172,7 @@ describe("background tasks rail state", () => {
     expect(props.finishedCollapsed).toBe(true);
     expect(request).toHaveBeenCalledTimes(2);
     expect(props.tasks?.map((task) => task.id)).toEqual(["task-1"]);
+    expect(props.activeCount).toBe(1);
   });
 
   it("keeps the later recent page's equally current running progress", async () => {

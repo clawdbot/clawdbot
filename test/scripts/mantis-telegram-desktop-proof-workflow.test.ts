@@ -781,6 +781,18 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("not who sent it");
     expect(prompt).not.toContain("trusted, tamper-protected");
     expect(prompt).not.toContain("Provider request logs are diagnostic and pacing signals");
+    expect(prompt).toContain("Script catalog-tool turns as an `exec` function");
+    // The exec/pdf round trip outlives `send`; the recipe must wait for the
+    // follow-up function_call_output request before `finish` tears the lane down.
+    const stagedMediaRecipe = readFileSync(
+      ".github/codex/prompts/mantis-recipes/staged-media-provider-proof.md",
+      "utf8",
+    );
+    expect(stagedMediaRecipe).toContain("--until-provider-requests 4");
+    expect(stagedMediaRecipe).toContain('select(.type == "function_call_output"');
+    expect(stagedMediaRecipe.indexOf("--until-provider-requests 4")).toBeLessThan(
+      stagedMediaRecipe.lastIndexOf("finish --lane baseline"),
+    );
     expect(prompt).toContain("mantis-recipes/");
     expect(prompt).toContain("recipe-suggestion.md");
     expect(prompt).toContain("do not call `finish` and describe the block only in prose");
