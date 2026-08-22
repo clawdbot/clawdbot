@@ -46,7 +46,7 @@ export function getSubagentSpawnDeps(): SubagentSpawnDeps {
   return subagentSpawnDeps;
 }
 
-export function setSubagentSpawnDepsForTest(overrides?: Partial<SubagentSpawnDeps>): void {
+function setSubagentSpawnDepsForTest(overrides?: Partial<SubagentSpawnDeps>): void {
   subagentSpawnDeps = overrides
     ? {
         ...defaultSubagentSpawnDeps,
@@ -73,6 +73,7 @@ const testing = {
   },
 };
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  // SAFETY: globalThis is extensible in the Vitest runtime; this symbol key is test-only.
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.subagentSpawnTestApi")] =
     testing;
 }
