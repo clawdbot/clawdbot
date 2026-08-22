@@ -206,6 +206,41 @@ function stageScannerRelevantPackedFiles(
   return stageDir;
 }
 
+function isReviewedGeneratedSourceFinding(params: {
+  findingFile: string;
+  line: number;
+  packageDir: string;
+  packageName: string;
+  ruleId: string;
+}): boolean {
+  const region = readFileSync(params.findingFile, "utf8")
+    .split("\n")
+    .slice(0, params.line)
+    .findLast((line) => line.startsWith("//#region "))
+    ?.slice("//#region ".length);
+  const packagePrefix = `${toRepoPath(params.packageDir)}/`;
+  if (!region?.startsWith(packagePrefix)) {
+    return false;
+  }
+  const sourcePath = region.slice(packagePrefix.length);
+  return isReviewedPublishableCriticalFinding(
+    `${params.packageName}:${params.ruleId}:${sourcePath}`,
+  );
+}
+
+function hasPackageSourceAttribution(packageDir: string, packedPath: string): boolean {
+  if (!packedPath.startsWith("dist/") || !packedPath.endsWith(".js")) {
+    return false;
+  }
+  try {
+    return readFileSync(resolve(packageDir, packedPath), "utf8").includes(
+      `//#region ${toRepoPath(packageDir)}/`,
+    );
+  } catch {
+    return false;
+  }
+}
+
 function listPublishablePluginPackageDirs(): string[] {
   const externalDirs = listExternalPluginPackageDirs();
   if (externalDirs) {
@@ -296,6 +331,11 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
   const unexpectedCriticalFindings: string[] = [];
   const packedFiles = await collectNpmPackedFiles(plugin.packageDir, plugin.packageName);
   for (const packedFile of packedFiles) {
+    // Source-attributed chunks are verified against the exact reviewed source
+    // region below; their content hashes and bundler-selected filenames may move.
+    if (hasPackageSourceAttribution(plugin.packageDir, packedFile)) {
+      continue;
+    }
     for (const key of expectedOptionalReviewedFindingsForPackedPath(
       plugin.packageName,
       packedFile,
@@ -304,27 +344,43 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
     }
   }
   const stageDir = stageScannerRelevantPackedFiles(plugin.packageDir, packedFiles);
-  let summary: Awaited<ReturnType<typeof scanDirectoryWithSummary>>;
   try {
-    summary = await scanDirectoryWithSummary(stageDir, {
+    const summary = await scanDirectoryWithSummary(stageDir, {
       excludeTestFiles: true,
       maxFiles: 10_000,
     });
+
+    for (const finding of summary.findings) {
+      if (finding.severity !== "critical") {
+        continue;
+      }
+      const packedPath = normalizePackedFindingPath(toRepoPath(relative(stageDir, finding.file)));
+      const key = `${plugin.packageName}:${finding.ruleId}:${packedPath}`;
+      if (
+        packedPath.startsWith("dist/") &&
+        isReviewedGeneratedSourceFinding({
+          findingFile: finding.file,
+          line: finding.line,
+          packageDir: plugin.packageDir,
+          packageName: plugin.packageName,
+          ruleId: finding.ruleId,
+        })
+      ) {
+        for (let index = expectedReviewedCriticalFindings.length - 1; index >= 0; index -= 1) {
+          if (expectedReviewedCriticalFindings[index] === key) {
+            expectedReviewedCriticalFindings.splice(index, 1);
+          }
+        }
+        continue;
+      }
+      if (isReviewedPublishableCriticalFinding(key)) {
+        reviewedCriticalFindings.push(key);
+        continue;
+      }
+      unexpectedCriticalFindings.push([key, `${finding.line}`, finding.evidence].join(":"));
+    }
   } finally {
     rmSync(stageDir, { recursive: true, force: true });
-  }
-
-  for (const finding of summary.findings) {
-    if (finding.severity !== "critical") {
-      continue;
-    }
-    const packedPath = normalizePackedFindingPath(toRepoPath(relative(stageDir, finding.file)));
-    const key = `${plugin.packageName}:${finding.ruleId}:${packedPath}`;
-    if (isReviewedPublishableCriticalFinding(key)) {
-      reviewedCriticalFindings.push(key);
-      continue;
-    }
-    unexpectedCriticalFindings.push([key, `${finding.line}`, finding.evidence].join(":"));
   }
 
   return {

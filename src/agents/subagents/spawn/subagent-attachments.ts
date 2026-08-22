@@ -156,6 +156,7 @@ function renderStagedAttachmentPathBlock(relDir: string, names: readonly string[
 function prepareSubagentAttachments(params: {
   attachments: SubagentInlineAttachment[];
   limits: AttachmentLimits;
+  nameUsage?: "portable-file" | "transport-only";
   requireImageMime?: boolean;
 }): { attachments: PreparedSubagentAttachment[]; totalBytes: number } {
   return prepareInlineAttachmentSnapshots(params);
@@ -308,6 +309,7 @@ export function resolveAcpSessionsSpawnImageAttachments(params: {
     const prepared = prepareSubagentAttachments({
       attachments: request.attachments,
       limits: request.limits,
+      nameUsage: "transport-only",
       requireImageMime: true,
     });
     return {

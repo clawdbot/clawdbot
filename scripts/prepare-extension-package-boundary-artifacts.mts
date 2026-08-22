@@ -669,7 +669,9 @@ export function isArtifactSetFresh(params: ArtifactFreshParams) {
   // sub-millisecond write rounding or lagging metadata on CI filesystems, and
   // an output that lands at or below its input silently keeps every later
   // invocation on the expensive full-hash path this repair exists to avoid.
-  const now = new Date(Math.max(Date.now(), Math.ceil(newestInputMtimeMs)) + 1);
+  // Date-based utimes can be reported 0.001ms below the requested value. A
+  // second millisecond preserves the promised whole-millisecond clearance.
+  const now = new Date(Math.max(Date.now(), Math.ceil(newestInputMtimeMs)) + 2);
   for (const relativePath of params.outputPaths) {
     const outputPath = resolve(rootDir, relativePath);
     if (fs.existsSync(outputPath)) {

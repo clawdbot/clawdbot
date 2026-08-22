@@ -40,7 +40,7 @@ import {
 } from "./server-chat-state.js";
 import type { AgentEventHandlerOptions } from "./server-chat.js";
 import type { TaskEventPayload } from "./server-methods/task-summary.js";
-import { registerTaskTerminalSubscriptionTests } from "./server-runtime-subscriptions.task-terminals.test-support.js";
+import { registerTaskTerminalSubscriptionTests } from "./server-runtime-subscriptions.task-terminals.test-harness.js";
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,

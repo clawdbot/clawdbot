@@ -298,6 +298,7 @@ beforeEach(() => {
       result: await run(provider, model),
       provider,
       model,
+      attempts: [],
     }));
   resetSystemEventsForTest();
 });
@@ -324,7 +325,11 @@ describe("continuation cross-session targeting bracket gate", () => {
           text: "Reply\n[[CONTINUE_DELEGATE: inspect sibling | target=agent:main:other]]",
         },
       ],
-      meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+      meta: {
+        finalAssistantRawText:
+          "Reply\n[[CONTINUE_DELEGATE: inspect sibling | target=agent:main:other]]",
+        agentMeta: { usage: { input: 1, output: 1 } },
+      },
     });
 
     await runDelegateTurn(run);
@@ -357,7 +362,10 @@ describe("continuation cross-session targeting bracket gate", () => {
     });
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "Reply\n[[CONTINUE_DELEGATE: inspect host state | fanout=all]]" }],
-      meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+      meta: {
+        finalAssistantRawText: "Reply\n[[CONTINUE_DELEGATE: inspect host state | fanout=all]]",
+        agentMeta: { usage: { input: 1, output: 1 } },
+      },
     });
 
     await runDelegateTurn(run);
@@ -374,7 +382,10 @@ describe("continuation cross-session targeting bracket gate", () => {
     });
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "Reply\n[[CONTINUE_DELEGATE: continue default route]]" }],
-      meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+      meta: {
+        finalAssistantRawText: "Reply\n[[CONTINUE_DELEGATE: continue default route]]",
+        agentMeta: { usage: { input: 1, output: 1 } },
+      },
     });
 
     await runDelegateTurn(run);
@@ -402,7 +413,10 @@ describe("continuation cross-session targeting bracket gate", () => {
     });
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "Reply\n[[CONTINUE_DELEGATE: inspect host state | fanout=all]]" }],
-      meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+      meta: {
+        finalAssistantRawText: "Reply\n[[CONTINUE_DELEGATE: inspect host state | fanout=all]]",
+        agentMeta: { usage: { input: 1, output: 1 } },
+      },
     });
 
     await runDelegateTurn(run);

@@ -752,3 +752,144 @@ workorder/dispatch files. They are required local tooling, explicitly excluded
 from candidate history, and are not candidate failures. Full committed-tree
 format proof must ignore only those exact untracked paths while leaving every
 tracked file visible.
+
+## 2026-08-22T06:25:00Z - Gate 3 full-suite failure classification and repairs
+
+The full local static/build pass on `8e2a304f88f...` completed successfully:
+`pnpm tsgo`, `pnpm check:test-types`, `pnpm check`, `pnpm build`, and
+`pnpm check:docs` all exited 0. The initial `pnpm check` run first found and
+repaired one tracked import-order defect in `src/agents/internal-events.ts`;
+local untracked workorders and GitNexus material remain outside candidate
+history.
+
+The canonical `pnpm test` graph then ran 548 leaf shards with local parallelism 8. Its per-shard summaries totaled 128,651 passed, 409 skipped, and 62 failed
+assertions; 12 processes exited without a summary. The run ended after 2,036.30
+seconds with 19 failed shards. Repeated `Worker exited unexpectedly` records and
+one Microsoft Teams shard with no output for eight minutes establish broad host
+contention, but every assertion failure was still treated as actionable until
+serial owner proof classified it.
+
+### Root-cause repairs
+
+- The extracted Gateway terminal-subscription test body used a
+  `.test-support.ts` suffix not recognized by the task-boundary scanner, so raw
+  task-registry test calls appeared to be production imports. Renaming it to the
+  canonical `.test-harness.ts` suffix restores the intended test-only boundary;
+  no allowlist grew.
+- The cross-session continuation test's fallback mock omitted the current
+  `attempts` result field. The real fallback entry tried to map that missing
+  array, returned an error payload, and never reached bracket handling. The mock
+  now returns `attempts: []` and supplies the raw assistant final that owns
+  bracket recovery after visible-payload sanitization.
+- The merged shared inline-attachment validator applied portable filesystem
+  filename rules to ACP images even though ACP forwards only media type and
+  bytes. The shared owner now exposes a closed `portable-file |
+transport-only` usage mode. Native staging retains all portable and
+  prompt-safe checks; ACP retains structural name checks while allowing ignored
+  format/markup characters, matching frozen upstream.
+- Release-dispatch tests inspected a bare fixture repository by cwd. The
+  repository's `safe.bareRepository=explicit` policy rejects that form, so the
+  test now uses explicit `--git-dir=.` for the two bare-repository reads.
+- Filesystems on this host can report a Date-based `utimes` result 0.001 ms
+  below the requested timestamp. Boundary-artifact mtime repair now requests
+  two milliseconds of headroom, preserving its promised full millisecond above
+  the newest input.
+- Capability provider loading intentionally omits a config field when no config
+  exists. Its test now expects `undefined` rather than an invented empty object.
+- The publishable-plugin scanner saw a reviewed Codex process-containment
+  execution site in a newly named shared generated chunk. Generated chunks
+  already carry exact `//#region` source attribution and the packaged source is
+  scanned with exact reviewed-layout counts. The scanner now accepts a generated
+  duplicate only when its rule and attributed source path match an existing
+  reviewed source finding; unknown source regions remain critical. Volatile
+  chunk names no longer need new allowlist entries.
+- Four UI browser tests used `file://` fixtures under host `/tmp`, which the
+  available confined Chromium could not read. Stateless fixtures now use
+  `page.setContent`; the installed-window test uses a loopback HTTP fixture so
+  Chromium still supplies genuine `display-mode: standalone`.
+- The Anthropic catalog test now compares the observed transcript mtime after
+  `utimes`, not the requested Date value, preserving the exact cache
+  invalidation assertion across sub-millisecond filesystem rounding.
+
+The complete named-failure replay ran serially through 11 canonical Vitest
+projects and passed 589/589 assertions. Additional shared/native attachment
+owner proof passed 173/173 assertions. No timeout was raised, no assertion was
+weakened, and no product path was changed to compensate for Gate 2.5's duplicate
+isolated-project routing.
+
+### Final full-suite repair details
+
+The 548-shard parallel run's 62 assertion failures and 12 worker exits were
+replayed through their canonical owners with one Vitest worker. This separated
+load-induced process loss from nine deterministic owner defects:
+
+- `server-runtime-subscriptions.task-terminals.test-support.ts` was an extracted
+  test body with a suffix the task-boundary scanner intentionally treats as
+  production. It is now named `.test-harness.ts`, matching the canonical
+  test-only suffix; the scanner allowlist remains unchanged.
+- `subagent-announce.crosssession-gate.test.ts` mocked the old model-fallback
+  result shape without `attempts`. Current `runEmbeddedAgentEntry` maps that
+  array before returning the selected result, so the stale mock failed before
+  bracket continuation handling. The mock now returns `attempts: []` and the
+  four cases provide the raw assistant final used after visible-payload
+  sanitization.
+- Shared inline attachment preparation had made portable filesystem names
+  unconditional. ACP transports only image bytes and MIME type and never stages
+  or renders the caller's filename. A closed `portable-file | transport-only`
+  mode restores that owner split: native subagent staging keeps portable and
+  prompt-safe checks, while ACP keeps structural name validation without
+  rejecting ignored bidi or markup characters.
+- The release-dispatch fixture now marks its bare repository explicitly with
+  `--git-dir=.` when reading refs, satisfying `safe.bareRepository=explicit`.
+- Boundary artifact mtime repair now requests two milliseconds of headroom
+  because this filesystem reports Date-based `utimes` 0.001 ms below the
+  requested value; the owner contract still requires a full millisecond above
+  the newest input.
+- Capability manifest loading correctly preserves absent config as `undefined`;
+  the stale test expectation no longer invents `{}`.
+- The package security scan now uses generated chunk `//#region` attribution to
+  recognize only exact rule IDs from already-reviewed packaged source. Unknown
+  source regions remain critical; volatile bundler chunk names no longer need
+  allowlist expansion.
+- Four browser-style tests now inject stateless fixtures with
+  `page.setContent`, avoiding a confined Chromium's inaccessible host `/tmp`.
+  The installed-window case serves the same fixture over a loopback HTTP server
+  so it still proves Chromium's real standalone display mode.
+- The Anthropic catalog cache assertion compares the filesystem-observed mtime,
+  not the requested Date value that may round by 0.001 ms.
+
+Focused final receipts:
+
+- task boundary 5/5 and Gateway subscription owners 54/54;
+- release and boundary tooling 47/47;
+- continuation cross-session gate 4/4;
+- shared/native/ACP attachment owners 173/173;
+- capability and package security owners 165/165;
+- Control UI browser owners 27/27;
+- Microsoft Teams owners 40/40;
+- Anthropic catalog owner 57/57;
+- TUI PTY owner 63/63;
+- bundled provider auth parity 20/20.
+
+All named assertion failures from the parallel run are green. Its unsummarized
+worker exits remain host-pressure evidence; Gate 3g's mandated single-worker
+full graph is the authoritative whole-suite rerun.
+
+### Direct Codex contract evidence
+
+The package scan touches Codex runtime evidence, so the mandatory direct sibling
+inspection used `../codex` tag `rust-v0.148.0^{}` at
+`3ba0f711642a888aec92a611a3f3b2211157ff89`.
+
+- `codex-rs/core/src/spawn.rs:90-136` deliberately gives spawned shell work a
+  parent-death signal on Linux and `kill_on_drop(true)`.
+- `codex-rs/core/src/exec.rs:989-1042` terminates and, after a grace period,
+  kills the full process group on timeout, cancellation, and Ctrl-C.
+- `codex-rs/app-server/src/request_processors/process_exec_processor.rs:397-408`
+  exposes the app-server process kill control.
+
+OpenClaw's bounded `ps` inspection in
+`extensions/codex/src/app-server/transport-process-containment.ts` therefore
+implements a real lifecycle contract. The package scanner still requires its
+exact reviewed source finding; it suppresses a generated duplicate only when
+the chunk itself attributes the same rule to that source region.

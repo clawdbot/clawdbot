@@ -231,7 +231,7 @@ function requireManifestRegistryLoadParams(index = 0): Record<string, unknown> {
   return call[0];
 }
 
-function expectManifestRegistryLoad(index: number, config: OpenClawConfig | Record<string, never>) {
+function expectManifestRegistryLoad(index: number, config: OpenClawConfig | undefined) {
   const params = requireManifestRegistryLoadParams(index);
   expect(params.config).toEqual(config);
   expect(params.env).toBe(process.env);
@@ -1665,7 +1665,7 @@ describe("resolvePluginCapabilityProviders", () => {
     const providers = resolvePluginCapabilityProviders({ key: "mediaUnderstandingProviders" });
 
     expectResolvedCapabilityProviderIds(providers, ["google"]);
-    expectManifestRegistryLoad(0, {});
+    expectManifestRegistryLoad(0, undefined);
     expectActiveRegistryLookup(["google"]);
   });
 

@@ -98,7 +98,11 @@ function isWellFormedAttachmentName(value: string): boolean {
   return true;
 }
 
-function validateInlineAttachmentName(name: string, attachmentIndex: number): void {
+function validateInlineAttachmentName(
+  name: string,
+  attachmentIndex: number,
+  usage: "portable-file" | "transport-only",
+): void {
   const index = `attachmentIndex=${attachmentIndex}`;
   if (!name) {
     throw new Error(`attachments_invalid_name (${index} empty)`);
@@ -108,6 +112,12 @@ function validateInlineAttachmentName(name: string, attachmentIndex: number): vo
   }
   if (name.trim() !== name) {
     throw new Error(`attachments_invalid_name (${index} leading or trailing whitespace)`);
+  }
+  if (usage === "transport-only") {
+    if (name.includes("/") || name.includes("\\") || name === "." || name === "..") {
+      throw new Error(`attachments_invalid_name (${index})`);
+    }
+    return;
   }
   if (
     name.includes("\u0000") ||
@@ -153,6 +163,7 @@ function validateInlineAttachmentName(name: string, attachmentIndex: number): vo
 export function prepareInlineAttachmentSnapshots(params: {
   attachments: InlineAttachment[];
   limits: InlineAttachmentSnapshotLimits;
+  nameUsage?: "portable-file" | "transport-only";
   requireImageMime?: boolean;
 }): { attachments: PreparedInlineAttachmentSnapshot[]; totalBytes: number } {
   if (params.attachments.length > params.limits.maxFiles) {
@@ -220,7 +231,7 @@ export function prepareInlineAttachmentSnapshots(params: {
     }
     const encoding = item.encoding ?? "utf8";
     const mimeType = rawMimeType;
-    validateInlineAttachmentName(name, attachmentIndex);
+    validateInlineAttachmentName(name, attachmentIndex, params.nameUsage ?? "portable-file");
     const canonicalNameKey = name.toUpperCase().normalize("NFC");
     if (seen.has(canonicalNameKey)) {
       throw new Error(

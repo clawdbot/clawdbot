@@ -1,7 +1,4 @@
 // Control UI tests cover the continuous corner curvature contract.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
@@ -239,10 +236,10 @@ function fixtureDocument(css: string): string {
 
 type CornerProbe = Record<string, { radius: string; shape: string }>;
 
-async function probeCorners(browser: Browser, fixtureFile: string): Promise<CornerProbe> {
+async function probeCorners(browser: Browser, fixture: string): Promise<CornerProbe> {
   const page = await browser.newPage();
   try {
-    await page.goto(`file://${fixtureFile}`);
+    await page.setContent(fixture);
     return await page.evaluate(
       (probes: readonly { selector: string; corner: "bottomLeft" | "topLeft" }[]) => {
         return Object.fromEntries(
@@ -270,11 +267,11 @@ async function probeCorners(browser: Browser, fixtureFile: string): Promise<Corn
 
 async function probeRootRadiusTokens(
   browser: Browser,
-  fixtureFile: string,
+  fixture: string,
 ): Promise<Record<string, string>> {
   const page = await browser.newPage();
   try {
-    await page.goto(`file://${fixtureFile}`);
+    await page.setContent(fixture);
     return await page.evaluate((tokens: readonly string[]) => {
       const style = getComputedStyle(document.documentElement);
       return Object.fromEntries(
@@ -286,7 +283,6 @@ async function probeRootRadiusTokens(
   }
 }
 
-let fixtureDirectory: string;
 let superellipticalFixture: string;
 let circularFixture: string;
 let browser: Browser;
@@ -297,23 +293,13 @@ beforeAll(async () => {
   }
   const css = readUiCss();
   expect(css.split(SUPPORTS_CONDITION)).toHaveLength(2);
-  fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "corner-shape-"));
-  superellipticalFixture = path.join(fixtureDirectory, "superelliptical.html");
-  circularFixture = path.join(fixtureDirectory, "circular.html");
-  fs.writeFileSync(superellipticalFixture, fixtureDocument(css), "utf8");
-  fs.writeFileSync(
-    circularFixture,
-    fixtureDocument(css.replace(SUPPORTS_CONDITION, UNSUPPORTED_CONDITION)),
-    "utf8",
-  );
+  superellipticalFixture = fixtureDocument(css);
+  circularFixture = fixtureDocument(css.replace(SUPPORTS_CONDITION, UNSUPPORTED_CONDITION));
   browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
 });
 
 afterAll(async () => {
   await browser?.close().catch(() => {});
-  if (fixtureDirectory) {
-    fs.rmSync(fixtureDirectory, { force: true, recursive: true });
-  }
 });
 
 describeCornerShape("Control UI corner curvature", () => {
