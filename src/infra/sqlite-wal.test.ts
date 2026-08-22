@@ -622,9 +622,9 @@ describe("sqlite WAL maintenance", () => {
     },
   );
 
-  it.runIf(process.platform === "linux")(
-    "disables split-brain detection after an unexpected scan error",
-    () => {
+  it.runIf(process.platform === "linux").each(["EACCES", "EPERM"] as const)(
+    "disables split-brain detection after a %s scan error",
+    (code) => {
       vi.useFakeTimers();
       const tempDir = tempDirs.make("openclaw-sqlite-wal-tripwire-error-");
       const databasePath = path.join(tempDir, "state.sqlite");
@@ -639,7 +639,7 @@ describe("sqlite WAL maintenance", () => {
       const prepare = vi.spyOn(writer, "prepare");
       const readdir = vi.spyOn(fs, "readdirSync").mockImplementationOnce(() => {
         const error = new Error("restricted procfs");
-        (error as NodeJS.ErrnoException).code = "EPERM";
+        (error as NodeJS.ErrnoException).code = code;
         throw error;
       });
       try {

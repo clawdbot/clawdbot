@@ -22,7 +22,6 @@ const SQLITE_READONLY_RESULT_CODE = 8;
 const SQLITE_RESULT_CODE_MASK = 0xff;
 const SQLITE_JOURNAL_MAGIC = Buffer.from([0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]);
 export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
-const SQLITE_READONLY_CHILD_TIMEOUT_MS = 60_000;
 const SQLITE_READONLY_STDERR_TAIL_CHARS = 4_000;
 const pendingTempDirectoryCleanup = new Set<string>();
 let cleanupExitHandlerInstalled = false;
@@ -654,14 +653,10 @@ export async function prepareSqliteReadOnlyLocation(
     execFile(
       process.execPath,
       [...resolveRuntimeWorkerArgv(workerUrl), SQLITE_READONLY_CHILD_ARG, path.resolve(pathname)],
-      { encoding: "utf8", timeout: SQLITE_READONLY_CHILD_TIMEOUT_MS },
+      { encoding: "utf8" },
       (error, stdout, stderr) => {
         try {
-          const failure = error
-            ? error.killed
-              ? `timed out after ${SQLITE_READONLY_CHILD_TIMEOUT_MS}ms`
-              : `exited unsuccessfully: ${error.message}`
-            : undefined;
+          const failure = error ? `exited unsuccessfully: ${error.message}` : undefined;
           resolve(adoptSqliteReadOnlyWorkerResult({ failure, stderr, stdout }));
         } catch (workerError) {
           reject(workerError instanceof Error ? workerError : new Error(String(workerError)));
@@ -678,12 +673,10 @@ export function prepareSqliteReadOnlyLocationSync(
   const result = spawnSync(
     process.execPath,
     [...resolveRuntimeWorkerArgv(workerUrl), SQLITE_READONLY_CHILD_ARG, path.resolve(pathname)],
-    { encoding: "utf8", timeout: SQLITE_READONLY_CHILD_TIMEOUT_MS },
+    { encoding: "utf8" },
   );
   const failure = result.error
-    ? "code" in result.error && result.error.code === "ETIMEDOUT"
-      ? `timed out after ${SQLITE_READONLY_CHILD_TIMEOUT_MS}ms`
-      : `failed to start: ${result.error.message}`
+    ? `failed to start: ${result.error.message}`
     : result.status === 0
       ? undefined
       : `exited with ${result.signal ? `signal ${result.signal}` : `code ${result.status}`}`;

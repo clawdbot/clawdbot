@@ -384,8 +384,7 @@ function detectSqliteWalSplitBrain(databasePath: string): SqliteWalSplitBrainEve
   try {
     descriptors = fs.readdirSync(PROC_SELF_FD_PATH);
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "EACCES") {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;
     }
     throw error;
