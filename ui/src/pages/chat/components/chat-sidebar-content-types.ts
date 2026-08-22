@@ -22,8 +22,6 @@ type MarkdownSidebarContent = {
   kind: "markdown";
   content: string;
   rawText?: string | null;
-  fullMessageRequest?: SidebarFullMessageRequest;
-  unavailableReason?: DetailUnavailableReason | null;
 };
 
 type CanvasSidebarContent = {
@@ -35,8 +33,6 @@ type CanvasSidebarContent = {
   /** Per-preview sandbox ceiling; keeps widget iframes below the global embed mode. */
   sandbox?: "strict" | "scripts";
   rawText?: string | null;
-  fullMessageRequest?: SidebarFullMessageRequest;
-  unavailableReason?: DetailUnavailableReason | null;
 };
 
 type ImageSidebarContent = {
@@ -45,8 +41,6 @@ type ImageSidebarContent = {
   src: string;
   mimeType?: string | null;
   rawText?: string | null;
-  fullMessageRequest?: SidebarFullMessageRequest;
-  unavailableReason?: DetailUnavailableReason | null;
 };
 
 type SessionDiffSidebarContent = {
@@ -57,8 +51,6 @@ type SessionDiffSidebarContent = {
   openFile?: (path: string) => void;
   revealFile?: (path: string) => void;
   rawText?: string | null;
-  fullMessageRequest?: SidebarFullMessageRequest;
-  unavailableReason?: DetailUnavailableReason | null;
 };
 
 type FileSaveOutcome =
@@ -84,8 +76,6 @@ type FileSidebarContent = {
   language?: string;
   line?: number | null;
   rawText?: string | null;
-  fullMessageRequest?: SidebarFullMessageRequest;
-  unavailableReason?: DetailUnavailableReason | null;
   edit?: FileSidebarEdit;
 };
 

@@ -16,8 +16,7 @@ describe("chat message access", () => {
 
     expect(access.catalogKey).toBeNull();
     expect(access.chatProps.fullMessageAgentId).toBe("alpha");
-    expect(access.chatProps.loadFullAssistantMessage).toBe(access.fullMessageLoader);
-    await access.fullMessageLoader?.({
+    await access.chatProps.loadFullAssistantMessage?.({
       sessionKey: "agent:alpha:main",
       agentId: "alpha",
       messageId: "message-1",
@@ -46,7 +45,6 @@ describe("chat message access", () => {
       hostId: "host-1",
       threadId: "thread-1",
     });
-    expect(access.fullMessageLoader).toBeNull();
     expect(access.chatProps.loadFullAssistantMessage).toBeNull();
   });
 });

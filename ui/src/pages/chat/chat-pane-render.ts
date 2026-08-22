@@ -130,7 +130,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       ),
     );
     const currentAgentId = resolveChatAgentId(state);
-    const { catalogKey, fullMessageLoader, chatProps } = resolveChatMessageAccess(state);
+    const { catalogKey, chatProps } = resolveChatMessageAccess(state);
     const overlays = this.context?.overlays;
     const inlineApproval = findInlineApproval(
       overlays?.snapshot?.approvalQueue ?? [],
@@ -640,7 +640,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       sessionWorkspace,
       backgroundTasks,
       chatProps: props,
-      fullMessageLoader,
       observerDigest,
       observerRunId,
       catalog: Boolean(catalogKey),
