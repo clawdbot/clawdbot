@@ -28,7 +28,8 @@ vi.mock("./auth-bridge.js", () => ({
   resolveCodexAppServerHomeDir: (agentDir: string) => `${agentDir}/codex-home`,
 }));
 
-vi.mock("./managed-binary.js", () => ({
+vi.mock("./managed-binary.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./managed-binary.js")>()),
   resolveManagedCodexAppServerStartOptions: mocks.managedBinary.startOptions,
   resolveManagedCodexNativeCommand: mocks.managedBinary.nativeCommand,
 }));
