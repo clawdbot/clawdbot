@@ -31,6 +31,10 @@ import {
 import type { PluginRecord } from "./registry-types.js";
 import type { OpenClawPluginApi, PluginLogger, PluginRegistrationMode } from "./types.js";
 
+function mutableConfigView(config: unknown): OpenClawConfig {
+  return config as OpenClawConfig; // SAFETY: Runtime config snapshots are deeply readonly views of OpenClawConfig.
+}
+
 function normalizeLogger(logger: PluginLogger): PluginLogger {
   return {
     info: logger.info,
@@ -256,8 +260,7 @@ export function createPluginApiFactory(
               getSessionExtension: ({ sessionKey, namespace }) => {
                 assertLoadedRecordInLiveRegistry();
                 const pluginState = getPluginSessionExtensionStateSync({
-                  // SAFETY: DeepReadonly preserves the OpenClawConfig structure required by the read-only session resolver.
-                  cfg: resolveCurrentConfig() as OpenClawConfig,
+                  cfg: mutableConfigView(resolveCurrentConfig()),
                   pluginId: record.id,
                   sessionKey,
                 });
@@ -266,8 +269,7 @@ export function createPluginApiFactory(
               setSessionExtension: async ({ sessionKey, namespace, value }) => {
                 assertLoadedRecordInLiveRegistry();
                 const result = await patchPluginSessionExtension({
-                  // SAFETY: The session patcher reads config routing fields and does not mutate the runtime config object.
-                  cfg: resolveCurrentConfig() as OpenClawConfig,
+                  cfg: mutableConfigView(resolveCurrentConfig()),
                   pluginId: record.id,
                   sessionKey,
                   namespace,
@@ -286,8 +288,7 @@ export function createPluginApiFactory(
               clearSessionExtension: async ({ sessionKey, namespace }) => {
                 assertLoadedRecordInLiveRegistry();
                 const result = await patchPluginSessionExtension({
-                  // SAFETY: The session patcher reads config routing fields and does not mutate the runtime config object.
-                  cfg: resolveCurrentConfig() as OpenClawConfig,
+                  cfg: mutableConfigView(resolveCurrentConfig()),
                   pluginId: record.id,
                   sessionKey,
                   namespace,
