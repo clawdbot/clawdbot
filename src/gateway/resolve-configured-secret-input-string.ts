@@ -1,8 +1,8 @@
 // SecretRef-aware Gateway config string resolver.
 // Resolves configured secret inputs and fallback values without leaking values.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
 import {
@@ -44,7 +44,9 @@ export async function resolveConfiguredSecretInputString(params: {
   unresolvedReasonStyle?: SecretInputUnresolvedReasonStyle;
 }): Promise<{ value?: string; unresolvedRefReason?: string }> {
   const style = params.unresolvedReasonStyle ?? "generic";
-  const { ref } = resolveSecretInputRef({
+  const ref = resolveConfigSecretRef({
+    config: params.config,
+    path: params.path,
     value: params.value,
     defaults: params.config.secrets?.defaults,
   });
@@ -110,7 +112,9 @@ async function resolveConfiguredSecretRefOnlyInputString(params: {
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   unresolvedReasonStyle?: SecretInputUnresolvedReasonStyle;
 }): Promise<{ refConfigured: boolean; value?: string; unresolvedRefReason?: string }> {
-  const { ref } = resolveSecretInputRef({
+  const ref = resolveConfigSecretRef({
+    config: params.config,
+    path: params.path,
     value: params.value,
     defaults: params.config.secrets?.defaults,
   });

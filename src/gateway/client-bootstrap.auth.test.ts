@@ -68,6 +68,38 @@ describe("resolveGatewayClientBootstrap interactive auth policy", () => {
     expect(result.auth).toEqual({ token: "${LITERAL_TOKEN}", password: undefined });
   });
 
+  it("preserves a substituted template-looking literal through interactive client auth", async () => {
+    const root = tempDirs.make("openclaw-client-bootstrap-resolved-literal-");
+    const configPath = path.join(root, "openclaw.json");
+    const env: NodeJS.ProcessEnv = {
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+      SOURCE: "${OTHER}",
+      VITEST: "true",
+    };
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        gateway: { mode: "local", auth: { mode: "token", token: "${SOURCE}" } },
+      }),
+      "utf8",
+    );
+    const context = createConfigIoContext({
+      configPath,
+      env,
+      homedir: () => root,
+      observe: false,
+    });
+
+    const snapshot = await readConfigFileSnapshotFromContext(context);
+    const result = await resolveGatewayClientBootstrap({ config: snapshot.config, env: {} });
+
+    expect(result.auth).toEqual({ token: "${OTHER}", password: undefined });
+  });
+
   it("keeps configured local password ahead of OPENCLAW_GATEWAY_PASSWORD", async () => {
     await expectInteractiveAuth(
       {

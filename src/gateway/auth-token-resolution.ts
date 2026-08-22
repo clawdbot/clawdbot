@@ -1,7 +1,7 @@
 // Gateway auth token resolution applies explicit/config/SecretRef/env
 // precedence with caller-controlled env fallback behavior.
+import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { trimToUndefined } from "./credentials.js";
 import {
   resolveConfiguredSecretInputString,
@@ -36,10 +36,12 @@ export async function resolveGatewayAuthToken(params: {
   }
 
   const tokenInput = params.cfg.gateway?.auth?.token;
-  const tokenRef = resolveSecretInputRef({
+  const tokenRef = resolveConfigSecretRef({
+    config: params.cfg,
+    path: "gateway.auth.token",
     value: tokenInput,
     defaults: params.cfg.secrets?.defaults,
-  }).ref;
+  });
   const envFallback = params.envFallback ?? "always";
   const envToken = trimToUndefined(params.env.OPENCLAW_GATEWAY_TOKEN);
 

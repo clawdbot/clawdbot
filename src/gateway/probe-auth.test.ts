@@ -2,6 +2,8 @@
 // local/remote target selection, and redacted auth payload handling.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveConfigForRead } from "../config/io.read-helpers.js";
+import { setConfigResolutionFacts } from "../config/resolution-facts.js";
 import {
   resolveGatewayProbeAuthSafe,
   resolveGatewayProbeAuthSafeWithSecretInputs,
@@ -34,6 +36,13 @@ function configWithDefaultEnvProvider(gateway: NonNullable<OpenClawConfig["gatew
       },
     },
   } as OpenClawConfig;
+}
+
+function configFromAuthoredToken(token: string, env: NodeJS.ProcessEnv): OpenClawConfig {
+  const read = resolveConfigForRead({ gateway: { auth: { mode: "token", token } } }, env);
+  const config = read.resolvedConfigRaw as OpenClawConfig;
+  setConfigResolutionFacts(config, read.resolutionFacts);
+  return config;
 }
 
 function resolveSafeProbeAuth(cfg: OpenClawConfig, mode: "local" | "remote" = "local") {
@@ -176,6 +185,33 @@ describe("resolveGatewayProbeAuthSafeWithSecretInputs", () => {
       password: undefined,
     });
   });
+
+  it("preserves a substituted template-looking literal for probe auth", async () => {
+    const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: configFromAuthoredToken("${SOURCE}", { SOURCE: "${OTHER}" }),
+      mode: "local",
+      env: {},
+    });
+
+    expect(result).toEqual({
+      auth: { token: "${OTHER}", password: undefined },
+    });
+  });
+
+  it.each(["$MISSING", "${MISSING}"])(
+    "keeps unresolved authored shorthand unavailable: %s",
+    async (authored) => {
+      const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
+        cfg: configFromAuthoredToken(authored, {}),
+        mode: "local",
+        env: {},
+      });
+
+      expect(result.auth).toStrictEqual({});
+      expect(result.warning).toContain("gateway.auth.token");
+      expect(result.warning).toContain("unresolved");
+    },
+  );
 
   it("returns empty auth without warning for gateway.remote SecretRefs in local probes", async () => {
     const result = await resolveGatewayProbeAuthSafeWithSecretInputs({
