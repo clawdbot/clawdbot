@@ -137,7 +137,7 @@ describe("plugin session extension SessionEntry projection", () => {
           store["agent:main:main"] = {
             sessionId: "session-id",
             updatedAt: Date.now(),
-          } as unknown as SessionEntry;
+          } as SessionEntry;
         });
         await expect(
           ownerApi?.session.state.setSessionExtension({
@@ -146,28 +146,16 @@ describe("plugin session extension SessionEntry projection", () => {
             value: { checkpoint: "PR117" },
           }),
         ).resolves.toEqual({ checkpoint: "PR117" });
-        expect(
-          ownerApi?.session.state.getSessionExtension({
-            sessionKey: "agent:main:main",
-            namespace: "workflow",
-          }),
-        ).toEqual({ checkpoint: "PR117" });
-        expect(
-          otherApi?.session.state.getSessionExtension({
-            sessionKey: "agent:main:main",
-            namespace: "workflow",
-          }),
-        ).toBeUndefined();
+        const extension = { sessionKey: "agent:main:main", namespace: "workflow" };
+        expect(ownerApi?.session.state.getSessionExtension(extension)).toEqual({
+          checkpoint: "PR117",
+        });
+        expect(otherApi?.session.state.getSessionExtension(extension)).toBeUndefined();
         await ownerApi?.session.state.clearSessionExtension({
           sessionKey: "agent:main:main",
           namespace: "workflow",
         });
-        expect(
-          ownerApi?.session.state.getSessionExtension({
-            sessionKey: "agent:main:main",
-            namespace: "workflow",
-          }),
-        ).toBeUndefined();
+        expect(ownerApi?.session.state.getSessionExtension(extension)).toBeUndefined();
       },
     );
   });
