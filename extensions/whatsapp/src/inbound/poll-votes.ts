@@ -50,6 +50,7 @@ export function extractWhatsAppPollUpdateMessage(
   if (!message) {
     return undefined;
   }
+  // SAFETY: POLL_UPDATE_SECTIONS restricts findMessageSection to the poll-update protobuf variant.
   return findMessageSection(message, POLL_UPDATE_SECTIONS)?.value as
     | proto.Message.IPollUpdateMessage
     | undefined;
@@ -68,9 +69,9 @@ function hashPollOptionName(optionName: string): string {
  */
 function buildPollOptionHashMap(pollCreationMessage: proto.IMessage): Map<string, string> {
   const section = findMessageSection(pollCreationMessage, POLL_CREATION_SECTIONS);
-  const options = (
-    section?.value as { options?: Array<{ optionName?: string | null }> } | undefined
-  )?.options;
+  const options =
+    // SAFETY: POLL_CREATION_SECTIONS contains only poll creation protobuf variants, all with options.
+    (section?.value as { options?: Array<{ optionName?: string | null }> } | undefined)?.options;
   const map = new Map<string, string>();
   for (const option of options ?? []) {
     const name = option.optionName?.trim();

@@ -40,6 +40,7 @@ function serializeMessage(message: proto.IMessage): string {
 }
 
 function deserializeMessage(json: string): proto.IMessage {
+  // SAFETY: this is the BufferJSON round-trip payload emitted by serializeMessage for this proto type.
   return JSON.parse(json, BufferJSON.reviver) as proto.IMessage;
 }
 
