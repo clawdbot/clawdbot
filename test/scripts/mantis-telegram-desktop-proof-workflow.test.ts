@@ -5,6 +5,7 @@ import { parse } from "yaml";
 
 const PROOF_SCRIPT = "scripts/e2e/telegram-user-crabbox-proof.ts";
 const MANTIS_SUT_SCRIPT = "scripts/e2e/telegram-mantis-sut.ts";
+const MOCK_OPENAI_SERVER = "scripts/e2e/mock-openai-server.mjs";
 const MANTIS_LANE_SCRIPT = "scripts/e2e/telegram-mantis-lane.ts";
 const DESKTOP_CRABBOX_SCRIPT = "scripts/e2e/telegram-desktop-crabbox.ts";
 const SUT_CONTAINER_WRAPPER = "scripts/mantis/mantis-sut-container.sh";
@@ -759,6 +760,10 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("`requests`");
     expect(prompt).toContain("`finish [--focus-message-id ID]`");
     expect(prompt).toContain("Identical pixels alone do not force `block`");
+    expect(prompt).toContain(
+      "Provider request facts are trusted, tamper-protected comparison evidence",
+    );
+    expect(prompt).not.toContain("Provider request logs are diagnostic and pacing signals");
     expect(prompt).toContain("mantis-recipes/");
     expect(prompt).toContain("recipe-suggestion.md");
     expect(prompt).toContain("do not call `finish` and describe the block only in prose");
@@ -1141,6 +1146,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
   it("does not pass the full workflow environment into the local Telegram SUT", () => {
     const sutScript = readFileSync(MANTIS_SUT_SCRIPT, "utf8");
     const laneScript = readFileSync(MANTIS_LANE_SCRIPT, "utf8");
+    const mockServer = readFileSync(MOCK_OPENAI_SERVER, "utf8");
     const prompt = readFileSync(PROMPT, "utf8");
     const workflow = readFileSync(WORKFLOW, "utf8");
     const wrapper = readFileSync(SUT_CONTAINER_WRAPPER, "utf8");
@@ -1212,10 +1218,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflow).toContain(
       'sudo install -m 0444 "$toolchain_build/scripts/e2e/mock-openai-server.mjs"',
     );
-    expect(wrapper).toContain("node /opt/mantis/mock-openai-server.mjs");
-    expect(wrapper).toContain(
-      '--mount "type=bind,src=$mock_server_script,dst=/opt/mantis/mock-openai-server.mjs,readonly"',
-    );
+    expect(wrapper).not.toContain('node /opt/mantis/mock-openai-server.mjs >"$MOCK_LOG"');
     expect(wrapper).not.toContain("node scripts/e2e/mock-openai-server.mjs");
     expect(workflow).toContain('sudo usermod -aG mantis-proof "$recorder_user"');
     expect(workflow).toContain(
@@ -1268,6 +1271,25 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(wrapper).toContain(
       "--env TELEGRAM_PROXY_RECORD_FILE=/opt/mantis/proxy-control/requests.ndjson",
     );
+    const mockContainerSpec = wrapper.slice(
+      wrapper.indexOf('"$docker_bin" run --detach --name "$mock_container_name"'),
+      wrapper.indexOf('wait_for_mock_openai "$mock_container_name"'),
+    );
+    expect(mockContainerSpec).toContain('--network "$network_name"');
+    expect(mockContainerSpec).toContain("--network-alias mock-openai");
+    expect(mockContainerSpec).not.toContain("$egress_network_name");
+    expect(mockContainerSpec).toContain(
+      '--mount "type=bind,src=$mock_server_script,dst=/opt/mantis/mock-openai-server.mjs,readonly"',
+    );
+    expect(mockContainerSpec).toContain(
+      '--mount "type=bind,src=$response_control_dir,dst=/opt/mantis/mock-control"',
+    );
+    expect(wrapper).toContain("--env MOCK_BIND_HOST=0.0.0.0");
+    expect(mockContainerSpec).toContain('--user "$(id -u mantis-sut):$(id -g mantis-sut)"');
+    expect(mockServer).toContain('const bindHost = process.env.MOCK_BIND_HOST ?? "127.0.0.1"');
+    expect(mockServer).toContain("server.listen(port, bindHost");
+    expect(wrapper).toContain('wait_for_mock_openai "$mock_container_name" "$mock_log"');
+    expect(wrapper).toContain("mock OpenAI container exited before readiness");
     // Candidate code shares the mantis-sut UID with the proxy record sink, so
     // the SUT container must shadow proxy-control; otherwise the lane under
     // test could rewrite its own trusted Bot API evidence before publication.
@@ -1277,8 +1299,16 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(wrapper.indexOf(proxyControlShadow)).toBeGreaterThan(
       wrapper.indexOf('--mount "type=bind,src=$safe_runtime,dst=$runtime_source"'),
     );
+    const mockControlShadow =
+      '--mount "type=tmpfs,dst=$runtime_source/mock-control,tmpfs-size=65536,tmpfs-mode=0000"';
+    expect(wrapper).toContain(mockControlShadow);
+    expect(wrapper.indexOf(mockControlShadow)).toBeGreaterThan(
+      wrapper.indexOf('--mount "type=bind,src=$safe_runtime,dst=$runtime_source"'),
+    );
     expect(wrapper).toContain('export TELEGRAM_BOT_TOKEN="$telegram_alias_token"');
     expect(wrapper).not.toContain('export TELEGRAM_BOT_TOKEN="$telegram_bot_token"');
+    expect(wrapper.match(/remove_container_or_fail "\$mock_container_name"/gu)).toHaveLength(2);
+    expect(wrapper).toContain('remove_container_or_fail "${1}-mock-openai"');
     expect(wrapper).toContain('remove_container_or_fail "${1}-telegram-proxy"');
     expect(workflow).toContain(
       "/usr/local/lib/mantis-toolchain/scripts/e2e/telegram-bot-api-proxy.mjs",
@@ -1322,17 +1352,21 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       'const proxyControlDir = path.join(config.tempRoot, "proxy-control")',
     );
     expect(sutScript).toContain(
-      'const requestLog = path.join(config.tempRoot, "mock-openai-requests.ndjson")',
+      'const requestLog = path.join(mockResponseControlDir, "mock-openai-requests.ndjson")',
     );
-    expect(wrapper).toContain(
-      'export MOCK_RESPONSE_CONTROL="$runtime_source/mock-control/response.json"',
+    expect(sutScript).toContain(
+      'const mockLog = path.join(mockResponseControlDir, "mock-openai.log")',
     );
     const forwardedEnv = wrapper.slice(
       wrapper.indexOf("forwarded_env=("),
       wrapper.indexOf("docker_env=()"),
     );
-    expect(forwardedEnv).toContain("MOCK_RESPONSE_CONTROL");
+    expect(forwardedEnv).not.toContain("MOCK_RESPONSE_CONTROL");
+    expect(forwardedEnv).not.toContain("MOCK_REQUEST_LOG");
+    expect(forwardedEnv).not.toContain("MOCK_LOG");
+    expect(forwardedEnv).not.toContain("MOCK_PORT");
     expect(wrapper).toContain("refusing to destroy a running SUT container");
+    expect(wrapper).toContain("refusing to destroy a running mock OpenAI container");
     expect(wrapper).toContain('destroy_bounded_filesystem "$runtime_root"');
     expect(wrapper).toContain('create_runtime_claim "$container_name" "$runtime_source"');
     expect(wrapper).toContain('cancel_runtime_claim "$1" "$runtime_source"');

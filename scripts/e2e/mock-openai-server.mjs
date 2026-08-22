@@ -18,6 +18,7 @@ const port =
   process.env.MOCK_PORT != null
     ? readTcpPortEnv("MOCK_PORT")
     : readTcpPortEnv("OPENCLAW_MOCK_OPENAI_PORT");
+const bindHost = process.env.MOCK_BIND_HOST ?? "127.0.0.1";
 const successMarker = process.env.SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const requestLog = process.env.MOCK_REQUEST_LOG;
 const initialResponseChunkDelayMs = process.env.MOCK_RESPONSE_CHUNK_DELAY_MS
@@ -953,6 +954,6 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(port, "127.0.0.1", () => {
+server.listen(port, bindHost, () => {
   console.log(`mock-openai listening on ${port}`);
 });

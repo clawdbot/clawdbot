@@ -493,6 +493,7 @@ describe("telegram user Crabbox proof log polling", () => {
       gatewayPort: 19042,
       groupId: "group",
       mcpAppFixture: true,
+      mockHost: "127.0.0.1",
       mockPort: 19043,
       outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
       repoRoot: "/repo",
@@ -520,6 +521,7 @@ describe("telegram user Crabbox proof log polling", () => {
     const configRoot = writeSutConfig({
       gatewayPort: 19042,
       groupId: "group",
+      mockHost: "127.0.0.1",
       mockPort: 19043,
       outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
       testerId: "tester",
@@ -532,6 +534,7 @@ describe("telegram user Crabbox proof log polling", () => {
       executionIdentity: true,
       messages: "direct",
     });
+    expect(config.models.providers.openai.baseUrl).toBe("http://127.0.0.1:19043/v1");
   });
 
   it("injects the requested Telegram link-preview setting before startup", () => {
@@ -539,6 +542,7 @@ describe("telegram user Crabbox proof log polling", () => {
       configPatch: { channels: { telegram: { linkPreview: false } } },
       gatewayPort: 19042,
       groupId: "group",
+      mockHost: "127.0.0.1",
       mockPort: 19043,
       outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
       testerId: "tester",
@@ -546,6 +550,7 @@ describe("telegram user Crabbox proof log polling", () => {
     const defaultConfigRoot = writeSutConfig({
       gatewayPort: 19044,
       groupId: "group",
+      mockHost: "127.0.0.1",
       mockPort: 19045,
       outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
       testerId: "tester",
@@ -570,6 +575,7 @@ describe("telegram user Crabbox proof log polling", () => {
       },
       gatewayPort: 19042,
       groupId: "group",
+      mockHost: "127.0.0.1",
       mockPort: 19043,
       outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
       testerId: "tester",
@@ -577,6 +583,7 @@ describe("telegram user Crabbox proof log polling", () => {
     const defaultConfigRoot = writeSutConfig({
       gatewayPort: 19044,
       groupId: "group",
+      mockHost: "127.0.0.1",
       mockPort: 19045,
       outputDir: makeTempDir(tempDirs, "openclaw-telegram-proof-"),
       testerId: "tester",
