@@ -501,9 +501,10 @@ export function resolveAllowedGeneratedMixBranch(
 
 /**
  * Fork sync PRs must retain upstream-owned generated locale artifacts. Permit
- * that mix only when the same-repository PR head is a two-parent merge whose
- * first parent is the exact base and whose second parent matches the committed
- * Arxi upstream pin.
+ * that mix only when the same-repository PR first-parent range contains exactly
+ * one merge whose first parent is the exact base and whose second parent
+ * matches the Arxi upstream pin committed at the current head. Ordinary repair
+ * commits may follow that merge, but another merge invalidates the exception.
  * @param {Readonly<Record<string, string | undefined>>} [env]
  * @param {string} [cwd]
  * @returns {boolean}
@@ -531,7 +532,22 @@ export function isPinnedArxiUpstreamMerge(env = process.env, cwd = process.cwd()
     if (!commitPattern.test(pin)) {
       return false;
     }
-    const parents = execFileSync("git", ["show", "-s", "--format=%P", head], {
+    const mergeCommits = execFileSync(
+      "git",
+      ["rev-list", "--first-parent", "--merges", `${base}..${head}`],
+      {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    )
+      .trim()
+      .split(/\s+/u)
+      .filter(Boolean);
+    if (mergeCommits.length !== 1) {
+      return false;
+    }
+    const parents = execFileSync("git", ["show", "-s", "--format=%P", mergeCommits[0]], {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],

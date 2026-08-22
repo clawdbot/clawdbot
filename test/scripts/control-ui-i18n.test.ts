@@ -194,6 +194,19 @@ describe("control-ui-i18n generated ownership", () => {
 
       expect(isPinnedArxiUpstreamMerge(env, cwd)).toBe(true);
       expect(resolveAllowedGeneratedMixBranch(env, "codex/upstream-sync", cwd)).toBe("main");
+      writeFileSync(path.join(cwd, "repair.txt"), "repair\n", "utf8");
+      git(["add", "--", "repair.txt"]);
+      const repairTree = git(["write-tree"]);
+      const repairedHead = git(["commit-tree", repairTree, "-p", head], "repair\n");
+      const repairedEnv = { ...env, ARXI_UPSTREAM_SYNC_HEAD_SHA: repairedHead };
+      expect(isPinnedArxiUpstreamMerge(repairedEnv, cwd)).toBe(true);
+      const extraMerge = git(
+        ["commit-tree", repairTree, "-p", repairedHead, "-p", pin],
+        "extra merge\n",
+      );
+      expect(
+        isPinnedArxiUpstreamMerge({ ...repairedEnv, ARXI_UPSTREAM_SYNC_HEAD_SHA: extraMerge }, cwd),
+      ).toBe(false);
       expect(isPinnedArxiUpstreamMerge({ ...env, ARXI_UPSTREAM_SYNC_BASE_SHA: pin }, cwd)).toBe(
         false,
       );
