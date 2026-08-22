@@ -483,11 +483,13 @@ export async function runManagerTurn(params: {
             meta &&
             meta.mode === "oneshot"
           ) {
+            let oneshotCloseSucceeded = false;
             try {
               await runtime.close({
                 handle,
                 reason: "oneshot-complete",
               });
+              oneshotCloseSucceeded = true;
             } catch (error) {
               logVerbose(
                 `acp-manager: ACP oneshot close failed for ${sessionKey}: ${String(error)}`,
@@ -495,20 +497,23 @@ export async function runManagerTurn(params: {
             } finally {
               params.runtimeHandles.clear(params);
             }
-            // The backend session is terminated either way; clear the persisted resume
-            // identity so a later cache-miss ensure for this sessionKey (e.g. after restart)
-            // cannot resume an already-completed oneshot session (#124852 follow-up).
-            try {
-              await discardPersistedManagerRuntimeState({
-                cfg: input.cfg,
-                sessionKey,
-                agentId,
-                writeSessionMeta: params.writeSessionMeta,
-              });
-            } catch (error) {
-              logVerbose(
-                `acp-manager: failed to clear persisted ACP identity after oneshot close for ${sessionKey}: ${String(error)}`,
-              );
+            // Only clear the persisted resume identity once close is confirmed to have
+            // succeeded. If close failed, the backend session may still be live, so retain
+            // the identity so a later cache-miss ensure can reconnect to it instead of
+            // orphaning it and opening a second backend session (#124852 follow-up).
+            if (oneshotCloseSucceeded) {
+              try {
+                await discardPersistedManagerRuntimeState({
+                  cfg: input.cfg,
+                  sessionKey,
+                  agentId,
+                  writeSessionMeta: params.writeSessionMeta,
+                });
+              } catch (error) {
+                logVerbose(
+                  `acp-manager: failed to clear persisted ACP identity after oneshot close for ${sessionKey}: ${String(error)}`,
+                );
+              }
             }
           }
         }

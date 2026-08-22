@@ -274,6 +274,81 @@ describe("AcpSessionManager runtime config", () => {
     expect(currentMeta?.identity?.agentSessionId).toBeUndefined();
   });
 
+  it("retains persisted oneshot identity when the terminal close call fails", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.ensureSession.mockResolvedValue({
+      sessionKey: "agent:codex:acp:session-1",
+      backend: "acpx",
+      runtimeSessionName: "runtime-1",
+      backendSessionId: "acpx-oneshot",
+    });
+    runtimeState.getStatus.mockResolvedValue({
+      summary: "status=done",
+      backendSessionId: "acpx-oneshot",
+      agentSessionId: "agent-oneshot",
+      details: { status: "done" },
+    });
+    runtimeState.close.mockRejectedValue(new Error("close failed: lease still held"));
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+
+    let currentMeta: SessionAcpMeta | undefined;
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey =
+        (paramsUnknown as { sessionKey?: string }).sessionKey ?? "agent:codex:acp:session-1";
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: currentMeta,
+      };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const next = params.mutate(currentMeta, { acp: currentMeta });
+      if (next) {
+        currentMeta = next;
+      }
+      return {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        acp: currentMeta,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.initializeSession({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      agent: "codex",
+      mode: "oneshot",
+    });
+
+    await manager.runTurn({
+      provenance: "system",
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-1",
+    });
+
+    // The close attempt failed, so the backend session may still be live: the persisted
+    // resume identity must be retained (not cleared) so a later cache-miss ensure can
+    // reconnect to it instead of orphaning it and opening a second backend session.
+    expectRecordFields(currentMeta?.identity, {
+      state: "resolved",
+      acpxSessionId: "acpx-oneshot",
+      agentSessionId: "agent-oneshot",
+    });
+  });
+
   it("reconciles prompt-learned agent session IDs even when runtime status omits them", async () => {
     const runtimeState = createRuntime();
     runtimeState.ensureSession.mockResolvedValue({
