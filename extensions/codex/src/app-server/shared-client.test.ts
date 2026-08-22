@@ -869,6 +869,34 @@ describe("shared Codex app-server client", () => {
     });
   });
 
+  it.each(["config", "env"] as const)(
+    "rejects a stale %s-selected standard desktop client",
+    async (commandSource) => {
+      const generationX = { epoch: 1, fingerprint: "desktop-x" };
+      mocks.desktopGeneration = generationX;
+      const harness = createClientHarness();
+      vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(harness.client);
+      const startOptions: CodexAppServerStartOptions = {
+        transport: "stdio",
+        homeScope: "agent",
+        command: "/Applications/ChatGPT.app/Contents/Resources/codex",
+        commandSource,
+        args: ["app-server"],
+        headers: {},
+      };
+
+      const clientPromise = createIsolatedCodexAppServerClient({ startOptions });
+      await sendInitializeResult(harness, "openclaw/0.148.0 (macOS; test)");
+      const client = await clientPromise;
+
+      mocks.desktopGeneration = { epoch: 2, fingerprint: "desktop-y" };
+      expect(() =>
+        assertCodexAppServerClientStartSelectionCurrent({ client, startOptions }),
+      ).toThrow("managed executable selection changed during startup");
+      client.close();
+    },
+  );
+
   it.each(["abort", "timeout"] as const)(
     "holds the native config fence through process exit after a post-write %s",
     async (mode) => {

@@ -238,12 +238,12 @@ export function assertCodexAppServerClientStartSelectionCurrent(params: {
   if (!metadata) {
     return;
   }
+  if (metadata.desktopGeneration && !isCodexDesktopGenerationCurrent(metadata.desktopGeneration)) {
+    throw new CodexAppServerStartSelectionChangedError();
+  }
   const requestedStartOptions = params.startOptions ?? metadata.requestedStartOptions;
   if (requestedStartOptions.commandSource !== "managed") {
     return;
-  }
-  if (metadata.desktopGeneration && !isCodexDesktopGenerationCurrent(metadata.desktopGeneration)) {
-    throw new CodexAppServerStartSelectionChangedError();
   }
   const current = resolveCodexAppServerStartOptionsForAgent({
     startOptions: requestedStartOptions,
