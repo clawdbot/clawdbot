@@ -208,6 +208,55 @@ describe("runSystemAgentTui", () => {
     }
   }, 240_000);
 
+  it("retains and returns only the requested latest history", async () => {
+    const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
+
+    await runSystemAgentTui(
+      {
+        ...verified,
+        runTui: async (opts) => {
+          const backend = opts.backend as unknown as {
+            sendChat: (opts: { sessionKey: string; message: string }) => Promise<{ runId: string }>;
+            loadHistory: (opts: { sessionKey: string; limit?: number }) => Promise<{
+              messages: Array<{ content: Array<{ text: string }> }>;
+            }>;
+            engine: {
+              handle: () => Promise<never>;
+              dispose: () => Promise<void>;
+            };
+          };
+          backend.engine.handle = () => new Promise(() => {});
+          backend.engine.dispose = async () => undefined;
+
+          for (let index = 1; index <= 201; index += 1) {
+            await backend.sendChat({
+              sessionKey: "agent:openclaw:main",
+              message: `message-${index}`,
+            });
+          }
+
+          const retained = await backend.loadHistory({
+            sessionKey: "agent:openclaw:main",
+            limit: 500,
+          });
+          expect(retained.messages).toHaveLength(200);
+          expect(retained.messages[0]?.content[0]?.text).toBe("message-2");
+
+          const tail = await backend.loadHistory({
+            sessionKey: "agent:openclaw:main",
+            limit: 2,
+          });
+          expect(tail.messages.map((entry) => entry.content[0]?.text)).toEqual([
+            "message-200",
+            "message-201",
+          ]);
+          return { exitReason: "exit" };
+        },
+      },
+      createRuntime(),
+    );
+  });
+
   it("opens the verified setup shell without preparing an unpublished model catalog", async () => {
     const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
     const catalogPreparation = vi.mocked(preparedModelCatalog.loadPreparedModelCatalog);
@@ -265,7 +314,7 @@ describe("runSystemAgentTui", () => {
         ...verified,
         runTui: async (opts) => {
           const backend = opts.backend as unknown as {
-            loadHistory: () => Promise<{ thinkingLevel: string }>;
+            loadHistory: (opts: { sessionKey: string }) => Promise<{ thinkingLevel: string }>;
             listSessions: () => Promise<{
               sessions: Array<{
                 model?: string;
@@ -275,7 +324,9 @@ describe("runSystemAgentTui", () => {
             }>;
           };
 
-          await expect(backend.loadHistory()).resolves.toMatchObject({ thinkingLevel: "high" });
+          await expect(
+            backend.loadHistory({ sessionKey: "agent:openclaw:main" }),
+          ).resolves.toMatchObject({ thinkingLevel: "high" });
           await expect(backend.listSessions()).resolves.toMatchObject({
             sessions: [
               {
