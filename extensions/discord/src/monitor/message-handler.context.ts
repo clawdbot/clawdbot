@@ -10,6 +10,7 @@ import {
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { formatAudioTranscriptForAgent } from "openclaw/plugin-sdk/media-understanding-runtime";
 import {
   buildHistoryContextFromEntries,
   buildInboundHistoryFromEntries,
@@ -57,10 +58,6 @@ function normalizeDiscordDmOwnerEntry(entry: string): string | undefined {
 
 function isContextAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
-}
-
-function formatDiscordAudioTranscriptForAgent(transcript: string): string {
-  return `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(transcript)}`;
 }
 
 export async function buildDiscordMessageProcessContext(params: {
@@ -189,7 +186,7 @@ export async function buildDiscordMessageProcessContext(params: {
   // text; machine transcriptions are always labeled untrusted for the model.
   const agentFacingBody =
     preflightAudioTranscript !== undefined
-      ? formatDiscordAudioTranscriptForAgent(preflightAudioTranscript)
+      ? formatAudioTranscriptForAgent(preflightAudioTranscript)
       : (baseText ?? text);
   let combinedBody = formatInboundEnvelope({
     channel: "Discord",

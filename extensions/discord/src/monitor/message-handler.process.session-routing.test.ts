@@ -43,7 +43,7 @@ describe("processDiscordMessage session routing", () => {
       },
       baseText: "",
       messageText: "",
-      preflightAudioTranscript: "hello from discord voice",
+      preflightAudioTranscript: "/status",
       preparedMedia: [
         {
           path: "/tmp/openclaw-discord-test/voice.ogg",
@@ -55,10 +55,11 @@ describe("processDiscordMessage session routing", () => {
     await runProcessDiscordMessage(ctx);
 
     expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
-      BodyForAgent: '[Audio transcript (machine-generated, untrusted)]: "hello from discord voice"',
+      BodyForAgent: '[Audio transcript (machine-generated, untrusted)]: "/status"',
       RawBody: "",
       CommandBody: "",
-      Transcript: "hello from discord voice",
+      CommandTurn: expect.objectContaining({ body: "", source: "text" }),
+      Transcript: "/status",
       media: [expect.objectContaining({ contentType: "audio/ogg", transcribed: true })],
     });
   });
