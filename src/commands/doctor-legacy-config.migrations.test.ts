@@ -1525,6 +1525,28 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
+  it("preserves runtime policy for allowlist-only legacy refs", () => {
+    const res = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-7" },
+            modelPolicy: { allow: ["claude-cli/claude-sonnet-4-6"] },
+          },
+        },
+      }),
+    );
+
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "anthropic/claude-sonnet-4-6": {
+        agentRuntime: { id: "claude-cli" },
+      },
+    });
+    expect(res.config.agents?.defaults?.modelPolicy).toEqual({
+      allow: ["anthropic/claude-sonnet-4-6"],
+    });
+  });
+
   it("preserves selected legacy keys outside the migrated allowlist runtime", () => {
     const res = normalizeCompatibilityConfigValues(
       legacyConfig({

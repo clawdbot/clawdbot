@@ -469,12 +469,17 @@ function normalizeLegacyRuntimeAllowlistModels(
 function normalizeLegacyRuntimeModelPolicy(
   rawPolicy: unknown,
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
-): { value?: unknown; runtimes: ReadonlySet<string> } {
+): {
+  value?: unknown;
+  runtimes: ReadonlySet<string>;
+  selectedRefs: readonly SelectedRuntimeRef[];
+} {
   if (!isRecord(rawPolicy) || !Array.isArray(rawPolicy.allow)) {
-    return { value: rawPolicy, runtimes: new Set() };
+    return { value: rawPolicy, runtimes: new Set(), selectedRefs: [] };
   }
 
   const runtimes = new Set<string>();
+  const selectedRefs: SelectedRuntimeRef[] = [];
   const allow = rawPolicy.allow.map((entry) => {
     if (typeof entry !== "string") {
       return entry;
@@ -489,10 +494,19 @@ function normalizeLegacyRuntimeModelPolicy(
       return entry;
     }
     runtimes.add(migrated.runtime);
+    selectedRefs.push({
+      ref: migrated.ref,
+      runtime: migrated.runtime,
+      requiresRuntimePolicy: migratedRuntimeRequiresPolicy(migrated.legacyProvider),
+    });
     return migrated.ref;
   });
 
-  return { value: runtimes.size > 0 ? { ...rawPolicy, allow } : rawPolicy, runtimes };
+  return {
+    value: runtimes.size > 0 ? { ...rawPolicy, allow } : rawPolicy,
+    runtimes,
+    selectedRefs,
+  };
 }
 
 function ensureSelectedModelRuntimePolicies(
@@ -580,6 +594,13 @@ function normalizeLegacyRuntimeAgentContainer(
     next.models = models.value;
     changed = true;
     changes.push(`Moved ${path}.models legacy runtime keys to canonical provider keys.`);
+  }
+
+  const policyRuntimes = ensureSelectedModelRuntimePolicies(next.models, modelPolicy.selectedRefs);
+  if (policyRuntimes.changed) {
+    next.models = policyRuntimes.value;
+    changed = true;
+    changes.push(`Preserved runtime policy for ${path}.modelPolicy.allow entries.`);
   }
 
   if (model.selectedRuntime) {
