@@ -12,15 +12,13 @@ import {
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import {
+  CHAT_SNAPSHOT_METADATA_STORE_NAME,
+  CHAT_SNAPSHOT_STORE_NAME,
   openSessionSnapshotDatabase,
   resetSessionSnapshotDatabase,
 } from "./session-snapshot-database.ts";
 import { subscribeSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
-import {
-  CHAT_SNAPSHOT_STORE_NAME,
-  CHAT_SNAPSHOT_METADATA_STORE_NAME,
-  deleteStoredChatSnapshot,
-} from "./session-snapshot-invalidation.ts";
+import { deleteStoredChatSnapshot } from "./session-snapshot-invalidation.ts";
 const CHAT_SNAPSHOT_WRITE_DELAY_MS = 500;
 
 const paginationSchema = z.discriminatedUnion("hasMore", [
