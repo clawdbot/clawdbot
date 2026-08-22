@@ -1,3 +1,4 @@
+import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
 // Whatsapp plugin module implements process message behavior.
 import {
   logAckFailure,
@@ -109,10 +110,9 @@ function shouldEmitWhatsAppMessageReceivedHooks(params: {
   const channelConfig = params.cfg.channels?.whatsapp as
     | WhatsAppMessageReceivedHookConfig
     | undefined;
-  const accountConfig =
-    params.accountId && channelConfig?.accounts
-      ? channelConfig.accounts[params.accountId]
-      : undefined;
+  const accountConfig = params.accountId
+    ? resolveAccountEntry(channelConfig?.accounts, params.accountId)
+    : undefined;
 
   return (
     readWhatsAppMessageReceivedHookOptIn(accountConfig) ??

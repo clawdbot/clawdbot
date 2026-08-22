@@ -459,13 +459,15 @@ describe("web monitor inbox poll vote hook", () => {
     await waitForMessageCalls(runPollVoteReceivedMock, 1);
   });
 
-  it("does not fire when an account-level override disables it despite channel-level being on", async () => {
+  it("honors a differently cased account-level opt-out despite channel-level being on", async () => {
     mockLoadConfig.mockReturnValue({
       channels: {
         whatsapp: {
           allowFrom: ["*"],
           pluginHooks: { pollVoteReceived: true },
-          accounts: { [DEFAULT_ACCOUNT_ID]: { pluginHooks: { pollVoteReceived: false } } },
+          accounts: {
+            [DEFAULT_ACCOUNT_ID.toUpperCase()]: { pluginHooks: { pollVoteReceived: false } },
+          },
         },
       },
     });

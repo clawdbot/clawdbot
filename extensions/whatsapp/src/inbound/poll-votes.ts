@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import type { proto } from "baileys";
 import { decryptPollVote, getKeyAuthor, jidNormalizedUser } from "baileys";
+import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { fireAndForgetBoundedHook } from "openclaw/plugin-sdk/hook-runtime";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
@@ -277,7 +278,9 @@ const recentOwnPollCreationKeys: Map<string, { expiresAt: number; value: true }>
 /** Resolves the configured poll-state retention window, account overriding channel, defaulting to 10 minutes, clamped to a documented maximum. */
 function resolveWhatsAppPollVoteRetentionMs(cfg: OpenClawConfig, accountId?: string): number {
   const channelConfig = cfg.channels?.whatsapp;
-  const accountConfig = accountId ? channelConfig?.accounts?.[accountId] : undefined;
+  const accountConfig = accountId
+    ? resolveAccountEntry(channelConfig?.accounts, accountId)
+    : undefined;
   const configured =
     accountConfig?.pollVoteRetentionMs ??
     channelConfig?.pollVoteRetentionMs ??
@@ -386,7 +389,9 @@ export function shouldEmitWhatsAppPollVoteHooks(params: {
   accountId?: string;
 }): boolean {
   const channelConfig = params.cfg.channels?.whatsapp;
-  const accountConfig = params.accountId ? channelConfig?.accounts?.[params.accountId] : undefined;
+  const accountConfig = params.accountId
+    ? resolveAccountEntry(channelConfig?.accounts, params.accountId)
+    : undefined;
   return (
     accountConfig?.pluginHooks?.pollVoteReceived ??
     channelConfig?.pluginHooks?.pollVoteReceived ??
