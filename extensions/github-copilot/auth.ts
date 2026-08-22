@@ -43,7 +43,10 @@ export async function resolveFirstGithubToken(params: {
       Boolean(coerceSecretRef(providerConfig?.apiKey, params.config?.secrets?.defaults))) ||
     (providerConfig?.auth === "api-key" &&
       Boolean(normalizeOptionalSecretInput(providerConfig.apiKey)));
-  if (!requestedProfileId && (params.authProfileMode || !hasProfile)) {
+  if (
+    !requestedProfileId &&
+    (params.authProfileMode || preferConfiguredToken || githubToken || !hasProfile)
+  ) {
     // Prepared direct-auth attempts must not borrow a stored profile: model
     // limits and the later runtime exchange must use the same source token.
     if (githubToken && !preferConfiguredToken) {

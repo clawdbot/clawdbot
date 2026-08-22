@@ -65,7 +65,7 @@ describe("resolveFirstGithubToken", () => {
     resolveRequiredConfiguredSecretRefInputStringMock.mockReset();
   });
 
-  it("prefers the stored device-login profile over ambient environment tokens", async () => {
+  it("preserves ambient-token precedence when no configured SecretRef owns auth", async () => {
     ensureAuthProfileStoreMock.mockReturnValue({
       profiles: {
         "github-copilot:github": { type: "token", token: "profile-token" },
@@ -77,10 +77,10 @@ describe("resolveFirstGithubToken", () => {
     });
 
     expect(result).toEqual({
-      githubToken: "profile-token",
-      hasProfile: true,
+      githubToken: "env-token",
+      hasProfile: false,
     });
-    expect(resolveRequiredConfiguredSecretRefInputStringMock).toHaveBeenCalledOnce();
+    expect(resolveRequiredConfiguredSecretRefInputStringMock).not.toHaveBeenCalled();
   });
 
   it("returns direct profile tokens when no SecretRef is configured", async () => {
@@ -165,6 +165,31 @@ describe("resolveFirstGithubToken", () => {
     },
   );
 
+  it("resolves a configured direct SecretRef before a stored profile", async () => {
+    const config = {
+      models: {
+        providers: {
+          "github-copilot": {
+            apiKey: {
+              source: "env",
+              provider: "default",
+              id: "MISSING_COPILOT_DIRECT_TOKEN",
+            },
+          },
+        },
+      },
+    } as never;
+    resolveConfiguredSecretInputWithFallbackMock.mockResolvedValue({
+      secretRefConfigured: true,
+      unresolvedRefReason: "models.providers.github-copilot.apiKey SecretRef is unresolved.",
+    });
+
+    await expect(resolveFirstGithubToken({ config, env: {} })).rejects.toThrow(
+      "models.providers.github-copilot.apiKey",
+    );
+    expect(resolveRequiredConfiguredSecretRefInputStringMock).not.toHaveBeenCalled();
+  });
+
   it("lets explicit api-key config outrank environment direct auth", async () => {
     const config = {
       models: {
@@ -228,7 +253,7 @@ describe("resolveFirstGithubToken", () => {
         config,
         env: { GH_TOKEN: "ambient-token" } as NodeJS.ProcessEnv,
       }),
-    ).resolves.toEqual({ githubToken: "profile-token", hasProfile: true });
+    ).resolves.toEqual({ githubToken: "ambient-token", hasProfile: false });
     expect(resolveConfiguredSecretInputWithFallbackMock).not.toHaveBeenCalled();
 
     ensureAuthProfileStoreMock.mockReturnValue({ profiles: {} });
