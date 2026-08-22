@@ -41,8 +41,7 @@ export const toolIcons = {
       d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"
     />
     <polyline points="14 2 14 8 20 8" />
-    <path d="m10 13-2 2 2 2" />
-    <path d="m14 17 2-2-2-2" />`),
+    <path d="M10 13l-2 2 2 2M14 17l2-2-2-2" />`),
   edit: strokeIcon(
     svg`<path
       d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"
@@ -57,7 +56,8 @@ export const toolIcons = {
     d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"
   />`),
   globe: strokeIcon(svg` <circle cx="12" cy="12" r="10" />
-    <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20M2 12h20" />`),
+    <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+    <path d="M2 12h20" />`),
   image: strokeIcon(svg` <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
     <circle cx="9" cy="9" r="2" />
     <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />`),
@@ -69,12 +69,11 @@ export const toolIcons = {
       d="M14.5 4 16 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3l1.5-3z"
     />
     <circle cx="12" cy="13" r="3" />`),
-  cameraOff: strokeIcon(svg` <path d="M14.564 14.558a3 3 0 1 1-4.122-4.121" />
-    <path d="m2 2 20 20" />
-    <path d="M20 20H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 .819-.175" />
-    <path
-      d="M9.695 4.024A2 2 0 0 1 10.004 4h3.993a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v7.344"
-    />`),
+  cameraOff: strokeIcon(
+    svg`<path
+      d="M14.564 14.558a3 3 0 1 1-4.122-4.121M2 2l20 20M20 20H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 .819-.175M9.695 4.024A2 2 0 0 1 10.004 4h3.993a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v7.344"
+    />`,
+  ),
   smartphone: strokeIcon(svg` <rect width="14" height="20" x="5" y="2" rx="2" ry="2" />
     <path d="M12 18h.01" />`),
   circleQuestionMark: strokeIcon(svg` <circle cx="12" cy="12" r="10" />
@@ -112,9 +111,9 @@ export const toolIcons = {
   download: strokeIcon(svg` <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
     <polyline points="7 10 12 15 17 10" />
     <line x1="12" x2="12" y1="15" y2="3" />`),
-  mic: strokeIcon(svg` <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-    <line x1="12" x2="12" y1="19" y2="22" />`),
+  mic: strokeIcon(
+    svg`<path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3ZM19 10v2a7 7 0 0 1-14 0v-2M12 19v3" />`,
+  ),
   volume2: strokeIcon(svg` <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
     <path d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14" />`),
   bookmark: strokeIcon(svg`<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z" />`),
@@ -201,10 +200,11 @@ export const toolIcons = {
   circleUser: strokeIcon(svg` <path d="M18 20a6 6 0 0 0-12 0" />
     <circle cx="12" cy="10" r="4" />
     <circle cx="12" cy="12" r="10" />`),
-  bell: strokeIcon(svg` <path d="M10.268 21a2 2 0 0 0 3.464 0" />
-    <path
-      d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"
-    />`),
+  bell: strokeIcon(
+    svg`<path
+      d="M10.268 21a2 2 0 0 0 3.464 0M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"
+    />`,
+  ),
   palette: strokeIcon(svg` <path
       d="M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z"
     />
@@ -212,11 +212,11 @@ export const toolIcons = {
     <circle cx="17.5" cy="10.5" r=".5" fill="currentColor" />
     <circle cx="6.5" cy="12.5" r=".5" fill="currentColor" />
     <circle cx="8.5" cy="7.5" r=".5" fill="currentColor" />`),
-  flaskConical: strokeIcon(svg` <path
-      d="M14 2v6a2 2 0 0 0 .245.96l5.51 10.08A2 2 0 0 1 18 22H6a2 2 0 0 1-1.755-2.96l5.51-10.08A2 2 0 0 0 10 8V2"
-    />
-    <path d="M6.453 15h11.094" />
-    <path d="M8.5 2h7" />`),
+  flaskConical: strokeIcon(
+    svg`<path
+      d="M14 2v6a2 2 0 0 0 .245.96l5.51 10.08A2 2 0 0 1 18 22H6a2 2 0 0 1-1.755-2.96l5.51-10.08A2 2 0 0 0 10 8V2M6.453 15h11.094M8.5 2h7"
+    />`,
+  ),
   badgeCheck: strokeIcon(svg` <path
       d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z"
     />
@@ -227,23 +227,20 @@ export const toolIcons = {
   rotateCcw: strokeIcon(
     svg`<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8M3 3v5h5" />`,
   ),
-  trash: strokeIcon(svg` <path d="M3 6h18" />
-    <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-    <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-    <line x1="10" x2="10" y1="11" y2="17" />
-    <line x1="14" x2="14" y1="11" y2="17" />`),
+  trash: strokeIcon(
+    svg`<path
+      d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6M14 11v6"
+    />`,
+  ),
   eye: strokeIcon(svg` <path
       d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"
     />
     <circle cx="12" cy="12" r="3" />`),
-  eyeOff: strokeIcon(svg` <path
-      d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"
-    />
-    <path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" />
-    <path
-      d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"
-    />
-    <path d="m2 2 20 20" />`),
+  eyeOff: strokeIcon(
+    svg`<path
+      d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49M14.084 14.158a3 3 0 0 1-4.242-4.242M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143M2 2l20 20"
+    />`,
+  ),
   moreHorizontal: strokeIcon(svg` <circle cx="12" cy="12" r="1.5" />
     <circle cx="6" cy="12" r="1.5" />
     <circle cx="18" cy="12" r="1.5" />`),
