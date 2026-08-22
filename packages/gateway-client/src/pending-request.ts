@@ -46,8 +46,7 @@ type GatewayPendingRequestsOptions = {
 /** Owns request deadlines, correlation, settlement, and generation-scoped IDs. */
 export class GatewayPendingRequests {
   private readonly pending = new Map<string, GatewayPendingRequest>();
-  private readonly retiredIds = new Set<string>();
-  private collisionSuffix = 0;
+  private requestSequence = 0;
 
   constructor(private readonly opts: GatewayPendingRequestsOptions) {}
 
@@ -101,7 +100,6 @@ export class GatewayPendingRequests {
           return false;
         }
         this.pending.delete(id);
-        this.retiredIds.add(id);
         cleanup();
         this.finishTiming(id, pending, false, errorCode);
         return true;
@@ -188,21 +186,13 @@ export class GatewayPendingRequests {
     this.pending.clear();
     // IDs are tombstoned only for one socket generation. Retired socket frames
     // are fenced by GatewayProtocolClient before a replacement generation runs.
-    this.retiredIds.clear();
-    this.collisionSuffix = 0;
+    this.requestSequence = 0;
   }
 
   private allocateRequestId(): string {
+    this.requestSequence += 1;
     const id = this.opts.createRequestId();
-    if (!this.pending.has(id) && !this.retiredIds.has(id)) {
-      return id;
-    }
-    let uniqueId: string;
-    do {
-      this.collisionSuffix += 1;
-      uniqueId = `${id}:${this.collisionSuffix}`;
-    } while (this.pending.has(uniqueId) || this.retiredIds.has(uniqueId));
-    return uniqueId;
+    return this.requestSequence === 1 ? id : `${id}:${this.requestSequence - 1}`;
   }
 
   private finishTiming(

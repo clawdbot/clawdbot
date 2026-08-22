@@ -36,7 +36,14 @@ export function publishSidebarSessionList(
 ): void {
   owner.sessionsResult = snapshot.result;
   owner.sessionsAgentId = snapshot.agentId;
-  for (const row of snapshot.result?.sessions ?? []) {
+  const sessions = snapshot.result?.sessions ?? [];
+  const visibleKeys = new Set(sessions.map((row) => row.key).filter(Boolean));
+  for (const key of owner.sessionCreatedOrder.keys()) {
+    if (!visibleKeys.has(key)) {
+      owner.sessionCreatedOrder.delete(key);
+    }
+  }
+  for (const row of sessions) {
     if (row.key && !owner.sessionCreatedOrder.has(row.key)) {
       owner.sessionCreatedOrder.set(row.key, owner.sessionCreatedOrder.size);
     }
