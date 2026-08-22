@@ -60,8 +60,8 @@ export function normalizeModelCatalogContextWindowSelection(value: {
     value.contextWindowDefault,
     contextWindows,
   );
-  return {
-    ...(contextWindows ? { contextWindows } : {}),
-    ...(contextWindowDefault ? { contextWindowDefault } : {}),
-  };
+  // Options and default are one atomic tuple: options without a valid default
+  // would advertise a capability the picker cannot render a selection for, so
+  // a missing or invalid default drops the option list with it.
+  return contextWindows && contextWindowDefault ? { contextWindows, contextWindowDefault } : {};
 }
