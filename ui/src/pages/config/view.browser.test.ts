@@ -789,10 +789,15 @@ describe("config view", () => {
       HTMLButtonElement,
     );
     const controlledPanelId = collapsedHeader.getAttribute("aria-controls");
+    const collapsedPanel = queryRequired(
+      collapsed.container,
+      `#${controlledPanelId}`,
+      HTMLDivElement,
+    );
 
     expect(collapsedHeader.getAttribute("aria-expanded")).toBe("false");
     expect(controlledPanelId).not.toBeNull();
-    expect(collapsed.container.querySelector(`#${controlledPanelId}`)).toBeNull();
+    expect(collapsedPanel.hidden).toBe(true);
 
     const expanded = renderConfigView({ ...overrides, activeSection: "env" });
     const expandedHeader = queryRequired(
@@ -802,7 +807,9 @@ describe("config view", () => {
     );
     expect(expandedHeader.getAttribute("aria-expanded")).toBe("true");
     expect(expandedHeader.getAttribute("aria-controls")).toBe(controlledPanelId);
-    expect(expanded.container.querySelector(`#${controlledPanelId}`)).not.toBeNull();
+    expect(queryRequired(expanded.container, `#${controlledPanelId}`, HTMLDivElement).hidden).toBe(
+      false,
+    );
   });
 
   it("renders the virtual Notifications tab on Notifications settings", () => {

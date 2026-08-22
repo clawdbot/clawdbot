@@ -239,26 +239,24 @@ export function renderConfig(props: ConfigProps) {
                   <polyline points="6 9 12 15 18 9"></polyline>
                 </svg>
               </button>
-              ${expanded
-                ? html`<div id=${panelId} class="config-accordion-group__items">
-                    ${category.sections.map(
-                      (section) => html`<button
-                        class="config-accordion-group__item ${props.activeSection === section.key
-                          ? "config-accordion-group__item--active"
-                          : ""}"
-                        @click=${(event: Event) => {
-                          props.onSectionChange(section.key);
-                          resetContentScroll(event.currentTarget);
-                        }}
-                      >
-                        <span class="config-accordion-group__item-icon">
-                          ${getSectionIcon(section.key)}
-                        </span>
-                        ${section.label}
-                      </button>`,
-                    )}
-                  </div>`
-                : nothing}
+              <div id=${panelId} class="config-accordion-group__items" ?hidden=${!expanded}>
+                ${category.sections.map(
+                  (section) => html`<button
+                    class="config-accordion-group__item ${props.activeSection === section.key
+                      ? "config-accordion-group__item--active"
+                      : ""}"
+                    @click=${(event: Event) => {
+                      props.onSectionChange(section.key);
+                      resetContentScroll(event.currentTarget);
+                    }}
+                  >
+                    <span class="config-accordion-group__item-icon">
+                      ${getSectionIcon(section.key)}
+                    </span>
+                    ${section.label}
+                  </button>`,
+                )}
+              </div>
             </div>
           `;
         })}
