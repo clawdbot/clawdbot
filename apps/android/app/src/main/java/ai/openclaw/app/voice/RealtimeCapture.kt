@@ -318,3 +318,41 @@ internal class RealtimeCaptureResampler(
     }
   }
 }
+
+/**
+ * One bounded, content-free health line per realtime capture session.
+ *
+ * It exists to make "the recorder opened and returned silence" distinguishable from "the recorder
+ * is working" without logging audio: a recorder that reports an active unmuted route and hands
+ * back nothing but zeroes looks identical to a working one from every other signal. Emitted once
+ * on the first non-zero sample, or once at session end if none ever arrived, so it cannot become
+ * a per-frame log. No sample values, no transcript, no content -- only a peak magnitude.
+ *
+ * This is observability, not policy: nothing here rejects a capture session. Quiet rooms and
+ * aggressive platform noise suppression both produce legitimate near-silence.
+ */
+internal class RealtimeCaptureHealthReport(
+  private val header: String,
+) {
+  private var frames = 0L
+  private var reported = false
+
+  /**
+   * Takes the RMS the level meter already computed for this frame, so nothing rescans the buffer
+   * and no second PCM decoder exists to drift from the first.
+   */
+  fun observe(rms: Double) {
+    if (reported) return
+    frames += 1
+    if (rms <= 0.0) return
+    reported = true
+    Log.i(tag, "capture health: $header frames=$frames nonZero=true rms=${"%.5f".format(rms)}")
+  }
+
+  /** Called once when the session ends, so a session that never produced audio is visible too. */
+  fun reportSessionEnd() {
+    if (reported) return
+    reported = true
+    Log.w(tag, "capture health: $header frames=$frames nonZero=false")
+  }
+}

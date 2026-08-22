@@ -9,6 +9,8 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.AudioRouting
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AudioEffect
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -21,10 +23,26 @@ internal data class AudioInputDeviceOption(
   val type: Int,
 )
 
+/**
+ * The capture semantics one [AndroidAudioInputSession] is opened with.
+ *
+ * Two lanes, deliberately not merged. Manual Mic/STT and push-to-talk want the recognition
+ * preset; realtime Talk wants the communication preset, which is the capture path Android's own
+ * echo canceller attaches to.
+ */
+internal enum class AndroidAudioInputProfile(
+  internal val audioSource: Int,
+) {
+  VoiceRecognition(MediaRecorder.AudioSource.VOICE_RECOGNITION),
+  VoiceCommunication(MediaRecorder.AudioSource.VOICE_COMMUNICATION),
+}
+
 /** Owns one recorder and its Bluetooth route for the full capture lifecycle. */
 internal class AndroidAudioInputSession private constructor(
   private val audioManager: AudioManager,
   private val audioRecord: AudioRecord,
+  private val acousticEchoCanceler: AcousticEchoCanceler?,
+  private val profile: AndroidAudioInputProfile,
   private val preferredInputKey: String?,
   private val onAppliedPreferredDeviceChanged: (String?) -> Unit,
   private val setPreferredDevice: (AudioDeviceInfo?) -> Boolean,
@@ -40,6 +58,7 @@ internal class AndroidAudioInputSession private constructor(
       preferredDeviceKey: String? = null,
       onAppliedPreferredDeviceChanged: (String?) -> Unit = {},
       setPreferredDevice: ((AudioDeviceInfo?) -> Boolean)? = null,
+      profile: AndroidAudioInputProfile = AndroidAudioInputProfile.VoiceRecognition,
     ): AndroidAudioInputSession {
       val minBuffer =
         AudioRecord.getMinBufferSize(
@@ -53,7 +72,7 @@ internal class AndroidAudioInputSession private constructor(
       val audioRecord =
         AudioRecord
           .Builder()
-          .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+          .setAudioSource(profile.audioSource)
           .setAudioFormat(
             AudioFormat
               .Builder()
@@ -63,10 +82,16 @@ internal class AndroidAudioInputSession private constructor(
               .build(),
           ).setBufferSizeInBytes(maxOf(minBuffer, frameBytes * 4))
           .build()
+      // The effect is optional: the caller's forwarding policy already falls back to half duplex
+      // without it, so an echo canceller that cannot be set up must never cost the session its
+      // microphone.
+      val acousticEchoCanceler = openAcousticEchoCanceler(profile, audioRecord.audioSessionId)
       val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
       return AndroidAudioInputSession(
         audioManager = audioManager,
         audioRecord = audioRecord,
+        acousticEchoCanceler = acousticEchoCanceler,
+        profile = profile,
         preferredInputKey = preferredDeviceKey,
         onAppliedPreferredDeviceChanged = onAppliedPreferredDeviceChanged,
         setPreferredDevice = setPreferredDevice ?: audioRecord::setPreferredDevice,
@@ -78,6 +103,35 @@ internal class AndroidAudioInputSession private constructor(
           throw err
         }
       }
+    }
+
+    /**
+     * Attaches the platform echo canceller to the recorder's own effect session.
+     *
+     * Communication profile only, and only ever a request: whether the platform actually enabled
+     * it is read back by the caller from the effect itself. `create` succeeding says nothing --
+     * AOSP documents that an AEC may already be inserted, or not, depending on the audio source,
+     * and tells applications to read the enabled state back per session.
+     */
+    private fun openAcousticEchoCanceler(
+      profile: AndroidAudioInputProfile,
+      audioSessionId: Int,
+    ): AcousticEchoCanceler? {
+      if (profile != AndroidAudioInputProfile.VoiceCommunication) return null
+      if (!runCatching { AcousticEchoCanceler.isAvailable() }.getOrDefault(false)) return null
+      val canceler = runCatching { AcousticEchoCanceler.create(audioSessionId) }.getOrNull() ?: return null
+      val enableResult = runCatching { if (canceler.enabled) AudioEffect.SUCCESS else canceler.setEnabled(true) }
+      val result = enableResult.getOrNull()
+      if (result == null) {
+        // Release the half-configured effect rather than leaking it; the caller keeps half duplex.
+        Log.w(tag, "AcousticEchoCanceler enable threw: ${enableResult.exceptionOrNull()?.message ?: "unknown"}")
+        runCatching { canceler.release() }
+        return null
+      }
+      if (result != AudioEffect.SUCCESS) {
+        Log.w(tag, "AcousticEchoCanceler enable returned $result")
+      }
+      return canceler
     }
 
     fun listAvailableDevices(context: Context): List<AudioInputDeviceOption> {
@@ -116,7 +170,7 @@ internal class AndroidAudioInputSession private constructor(
   }
 
   private val lock = Any()
-  private val communicationRouteOwner = bluetoothCommunicationRoute.newOwner()
+  private val communicationRouteOwner = communicationRoute.newOwner()
   private val callbackHandler = Handler(Looper.getMainLooper())
   private var closed = false
   private var callbackRegistered = false
@@ -125,6 +179,7 @@ internal class AndroidAudioInputSession private constructor(
   private var requestedCommunicationDevice: AudioDeviceInfo? = null
   private var selectedInput: AudioDeviceInfo? = null
   private var appliedPreferredInputKey: String? = null
+  private var appliedCommunicationType: Int? = null
 
   private val deviceCallback =
     object : AudioDeviceCallback() {
@@ -145,6 +200,29 @@ internal class AndroidAudioInputSession private constructor(
 
   internal val appliedPreferredDeviceKey: String?
     get() = synchronized(lock) { appliedPreferredInputKey }
+
+  /**
+   * Whether the platform reports echo cancellation as actually enabled for this capture session.
+   *
+   * Read back from the effect, never inferred from the audio source, from `isAvailable`, from the
+   * route, or from `create` succeeding. Read live rather than snapshotted: a route can change
+   * under a running recorder, and a session that could only ever answer with what was true when
+   * it opened could never fall back to half duplex once it had said yes. Guarded by the same lock
+   * [close] takes, so it cannot read a released effect.
+   */
+  internal val communicationEchoCancellationEnabled: Boolean
+    get() =
+      synchronized(lock) {
+        if (closed) false else runCatching { acousticEchoCanceler?.enabled == true }.getOrDefault(false)
+      }
+
+  /**
+   * The communication output this session actually holds, or null when it holds none -- either
+   * because it is a recognition-profile session or because the platform rejected the request.
+   * Never inferred from what was asked for.
+   */
+  internal val appliedCommunicationDeviceType: Int?
+    get() = synchronized(lock) { appliedCommunicationType }
 
   /**
    * The rate the recorder negotiated, read back from it rather than assumed from the request.
@@ -176,7 +254,7 @@ internal class AndroidAudioInputSession private constructor(
   private fun openRoute() {
     audioManager.registerAudioDeviceCallback(deviceCallback, callbackHandler)
     synchronized(lock) { callbackRegistered = true }
-    bluetoothCommunicationRoute.begin(communicationRouteOwner)
+    communicationRoute.begin(communicationRouteOwner)
     refreshRouteSafely()
   }
 
@@ -209,14 +287,23 @@ internal class AndroidAudioInputSession private constructor(
     inputs: List<AudioDeviceInfo>,
     preferredInput: AudioDeviceInfo?,
   ): Boolean {
-    val communicationDevice =
+    val available = audioManager.availableCommunicationDevices
+    val bluetoothDevice =
       if (preferredInput == null) {
-        selectBluetoothDevice(audioManager.availableCommunicationDevices, requestedCommunicationDevice)
+        selectBluetoothDevice(available, requestedCommunicationDevice)
       } else {
-        selectCommunicationDevice(audioManager.availableCommunicationDevices, preferredInput)
+        selectCommunicationDevice(available, preferredInput)
       }
-    val communicationSelected = bluetoothCommunicationRoute.update(audioManager, communicationRouteOwner, communicationDevice)
-    requestedCommunicationDevice = communicationDevice.takeIf { communicationSelected }
+    // Communication capture owns the output route too. Without an explicit selection Android's
+    // phone strategy sends communication audio to the earpiece, which turns hands-free Talk into
+    // hold-it-to-your-ear Talk. Only the built-in pair is ever overridden: any external
+    // communication output was chosen deliberately and already outranks the earpiece.
+    val communicationDevice = bluetoothDevice ?: handsFreeBuiltInSpeaker(available)
+    val appliedCommunicationDevice = communicationRoute.update(audioManager, communicationRouteOwner, communicationDevice)
+    appliedCommunicationType = appliedCommunicationDevice?.type
+    // Input following stays Bluetooth-only: the built-in speaker is an output and must never be
+    // handed to the input selector as if it were a headset.
+    requestedCommunicationDevice = bluetoothDevice.takeIf { appliedCommunicationDevice != null }
     val input = preferredInput ?: selectBluetoothInput(inputs, requestedInput, requestedCommunicationDevice)
     if (sameDevice(requestedInput, input) && sameDevice(selectedInput, input)) return true
     requestedInput = input
@@ -230,6 +317,42 @@ internal class AndroidAudioInputSession private constructor(
       false
     }
   }
+
+  /**
+   * The built-in speaker, but only when choosing it is the difference between the loudspeaker and
+   * the earpiece. Any external communication output present means the platform already has a
+   * better answer than the earpiece, and taking it would be stealing an intentional route.
+   */
+  private fun handsFreeBuiltInSpeaker(available: List<AudioDeviceInfo>): AudioDeviceInfo? {
+    if (profile != AndroidAudioInputProfile.VoiceCommunication) return null
+    if (available.any { isDeliberateExternalOutput(it.type) }) return null
+    return available.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+  }
+
+  /**
+   * Outputs a person plugged in, paired, or docked into, and therefore chose over the handset.
+   *
+   * Deliberately an allowlist. `availableCommunicationDevices` can also carry entries that are
+   * simply always there -- telephony on a handset, a bus on Automotive -- and treating "anything
+   * that is not the built-in pair" as a deliberate choice would silently leave hands-free Talk on
+   * the earpiece for a whole class of devices, with nothing to distinguish it from working.
+   */
+  private fun isDeliberateExternalOutput(type: Int): Boolean =
+    when (type) {
+      AudioDeviceInfo.TYPE_WIRED_HEADSET,
+      AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+      AudioDeviceInfo.TYPE_USB_HEADSET,
+      AudioDeviceInfo.TYPE_USB_DEVICE,
+      AudioDeviceInfo.TYPE_USB_ACCESSORY,
+      AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+      AudioDeviceInfo.TYPE_BLE_HEADSET,
+      AudioDeviceInfo.TYPE_BLE_SPEAKER,
+      AudioDeviceInfo.TYPE_HEARING_AID,
+      AudioDeviceInfo.TYPE_DOCK,
+      AudioDeviceInfo.TYPE_HDMI,
+      -> true
+      else -> false
+    }
 
   private fun setAppliedPreferredInputKey(value: String?) {
     if (appliedPreferredInputKey == value) return
@@ -283,15 +406,19 @@ internal class AndroidAudioInputSession private constructor(
       if (audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
         runCatching { audioRecord.stop() }
       }
+      // Before the recorder: the effect is attached to that recorder's audio session id.
+      runCatching { acousticEchoCanceler?.release() }
       runCatching { audioRecord.release() }
-      bluetoothCommunicationRoute.close(audioManager, communicationRouteOwner)
+      communicationRoute.close(audioManager, communicationRouteOwner)
       requestedCommunicationDevice = null
+      appliedCommunicationType = null
     }
   }
 }
 
 /** Serializes Android's process-wide communication route across overlapping capture cleanup. */
-private class BluetoothCommunicationRoute {
+private class CommunicationDeviceRoute {
+  private val tag = "AudioInput"
   private var nextOwner = 0L
   private var latestOwner = 0L
   private var activeOwner: Long? = null
@@ -304,26 +431,34 @@ private class BluetoothCommunicationRoute {
     if (owner > latestOwner) latestOwner = owner
   }
 
+  /** Returns the device the platform actually selected, or null when it selected none. */
   @Synchronized
   fun update(
     audioManager: AudioManager,
     owner: Long,
     device: AudioDeviceInfo?,
-  ): Boolean {
-    if (owner < latestOwner) return false
+  ): AudioDeviceInfo? {
+    if (owner < latestOwner) return null
     latestOwner = owner
     if (device == null) {
       if (activeOwner != null) audioManager.clearCommunicationDevice()
       activeOwner = null
-      return false
+      return null
     }
     if (!audioManager.setCommunicationDevice(device)) {
       if (activeOwner != null) audioManager.clearCommunicationDevice()
       activeOwner = null
-      return false
+      return null
     }
     activeOwner = owner
-    return true
+    // A request is not an outcome. Report what the platform says it selected, so nothing upstream
+    // claims a route Android did not actually give it.
+    val applied = audioManager.communicationDevice
+    if (applied == null || applied.id != device.id) {
+      Log.w(tag, "communication device requested id=${device.id} but platform selected id=${applied?.id}")
+      return null
+    }
+    return applied
   }
 
   @Synchronized
@@ -337,7 +472,7 @@ private class BluetoothCommunicationRoute {
   }
 }
 
-private val bluetoothCommunicationRoute = BluetoothCommunicationRoute()
+private val communicationRoute = CommunicationDeviceRoute()
 
 /** Converts AudioRecord's negative return codes into capture-session failures. */
 internal fun checkAudioRecordReadResult(result: Int): Int {

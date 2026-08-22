@@ -94,6 +94,21 @@ internal interface RealtimeAudioSink : AutoCloseable {
   override fun close()
 }
 
+/**
+ * Attributes for realtime assistant playback.
+ *
+ * Communication usage rather than media: this is the far end of a two-way conversation, and it is
+ * the usage the platform's own voice pipeline -- including the echo canceller attached to the
+ * matching communication capture path -- is built around. Media usage would place the same audio
+ * on a stream that pipeline does not treat as the call's downlink.
+ */
+internal fun realtimeCommunicationPlaybackAttributes(): AudioAttributes =
+  AudioAttributes
+    .Builder()
+    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+    .build()
+
 /** Opens the realtime output device. Production always uses [AudioTrackBacked]. */
 internal fun interface RealtimeAudioSinkFactory {
   fun open(
@@ -120,13 +135,8 @@ internal fun interface RealtimeAudioSinkFactory {
         val track =
           AudioTrack
             .Builder()
-            .setAudioAttributes(
-              AudioAttributes
-                .Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                .build(),
-            ).setAudioFormat(
+            .setAudioAttributes(realtimeCommunicationPlaybackAttributes())
+            .setAudioFormat(
               AudioFormat
                 .Builder()
                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT)

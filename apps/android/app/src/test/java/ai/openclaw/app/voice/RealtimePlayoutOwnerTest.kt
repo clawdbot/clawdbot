@@ -497,7 +497,7 @@ class RealtimePlayoutOwnerTest {
   }
 }
 
-private const val FAKE_BUFFER_DURATION_MS = 240L
+internal const val FAKE_BUFFER_DURATION_MS = 240L
 
 // Mirrors of the production bounds. Pinned rather than derived: these numbers are the contract
 // the two overflow tests exist to protect, so a change to either must fail here first.
@@ -506,7 +506,7 @@ private const val REALTIME_PLAYBACK_QUEUED_AUDIO_CEILING_BYTES = 12L * 1024L * 1
 
 private fun pcm(byteCount: Int): ByteArray = ByteArray(byteCount) { index -> (index % 251).toByte() }
 
-private class FakeRealtimeAudioSink(
+internal class FakeRealtimeAudioSink(
   private val onWrite: (offered: Int, callIndex: Int) -> Int,
 ) : RealtimeAudioSink {
   override val bufferDurationMs: Long = FAKE_BUFFER_DURATION_MS
@@ -542,7 +542,7 @@ private class FakeRealtimeAudioSink(
   }
 }
 
-private class FakeRealtimeAudioSinkFactory(
+internal class FakeRealtimeAudioSinkFactory(
   private val onWrite: (offered: Int, callIndex: Int) -> Int = { offered, _ -> offered },
 ) : RealtimeAudioSinkFactory {
   val opened = mutableListOf<FakeRealtimeAudioSink>()

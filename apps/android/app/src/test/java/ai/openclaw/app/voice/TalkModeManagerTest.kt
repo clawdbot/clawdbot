@@ -15,6 +15,7 @@ import android.Manifest
 import android.content.ComponentName
 import android.content.IntentFilter
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Bundle
 import android.os.Looper
@@ -84,6 +85,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.CoroutineContext
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -1542,6 +1544,178 @@ class TalkModeManagerTest {
     }
   }
 
+  // ---- Phase 1C: full-duplex forwarding policy ---------------------------------------------
+
+  @Test
+  fun captureForwardingDuringPlaybackFollowsActualEchoCancellation() {
+    val manager = createManager()
+
+    // Nothing is playing: the microphone is forwarded either way.
+    assertTrue(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+    setRealtimeAecEnabled(manager, true)
+    assertTrue(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+
+    setPrivateField(manager, "realtimePlaybackEndsAtMs", SystemClock.elapsedRealtime() + 1_000)
+
+    // Playing, and the platform is cancelling its own echo: what the microphone hears is the
+    // user, so forwarding it is the whole point -- this is the capability Phase 1C adds.
+    assertTrue(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+
+    // Playing with no echo cancellation: the same frames would be the assistant's own voice.
+    setRealtimeAecEnabled(manager, false)
+    assertFalse(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+
+    // An empty converted frame is never forwarded, whatever the route can do.
+    setRealtimeAecEnabled(manager, true)
+    assertFalse(shouldAppendRealtimeCapturedFrame(manager, 0))
+  }
+
+  @Test
+  fun aStaleCaptureGenerationCannotAnswerForItsSuccessor() {
+    val manager = createManager()
+
+    // Generation 5 runs with echo cancellation, then a restart fences it off. The fence is the
+    // boundary publication itself, so nothing a dying job does afterwards can win.
+    publishRealtimeAecCapability(manager, 5, true)
+    assertTrue(realtimeAecEnabled(manager))
+    publishRealtimeAecCapability(manager, 6, false)
+    assertFalse(realtimeAecEnabled(manager))
+
+    // Generation 5's cleanup unwinds late. It must not answer for 6 in either direction --
+    // clearing would drop a working session to half duplex, and setting would open the uplink
+    // into a speaker that has no canceller.
+    publishRealtimeAecCapability(manager, 5, true)
+    assertFalse(realtimeAecEnabled(manager))
+
+    publishRealtimeAecCapability(manager, 6, true)
+    assertTrue(realtimeAecEnabled(manager))
+    publishRealtimeAecCapability(manager, 5, false)
+    assertTrue(realtimeAecEnabled(manager))
+  }
+
+  @Test
+  fun installingCaptureClearsTheEchoCancellationCapabilityAtTheGenerationBoundary() =
+    runTest {
+      val manager =
+        createManager(scope = this, realtimeCaptureDispatcher = StandardTestDispatcher(testScheduler))
+      setMutableStateFlow(manager, "_isEnabled", true)
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(manager, "realtimeWireAudioContract", RealtimeWireAudioContract.Pcm16(24_000))
+      setRealtimeAecEnabled(manager, true)
+
+      val start = manager.javaClass.getDeclaredMethod("startRealtimeCaptureLocked", String::class.java)
+      start.isAccessible = true
+      synchronized(readPrivateField(manager, "realtimeCapturePauseLock")!!) { start.invoke(manager, "relay-1") }
+
+      // The capture coroutine has not run yet, so nothing has reported a capability. Until one
+      // does, the safe answer to "may the uplink stay open" is no.
+      assertFalse(realtimeAecEnabled(manager))
+      manager.stopAllCapture()
+    }
+
+  // ---- Phase 1C: communication mode is session-scoped ---------------------------------------
+
+  @Test
+  fun startingARelaySessionAcquiresCommunicationAudioBeforePublishingTheSession() {
+    val manager = createManager()
+    val audioManager = RuntimeEnvironment.getApplication().getSystemService(AudioManager::class.java)
+    audioManager.mode = AudioManager.MODE_NORMAL
+
+    val acquire = manager.javaClass.getDeclaredMethod("acquireRealtimeCommunicationAudio")
+    acquire.isAccessible = true
+    val token = acquire.invoke(manager) as Long
+
+    assertTrue(token != 0L)
+    assertEquals(AudioManager.MODE_IN_COMMUNICATION, audioManager.mode)
+  }
+
+  @Test
+  fun relayTeardownRestoresTheModeTheSessionEntered() {
+    val manager = createManager()
+    val audioManager = RuntimeEnvironment.getApplication().getSystemService(AudioManager::class.java)
+    audioManager.mode = AudioManager.MODE_NORMAL
+    enterCommunicationModeForTest(manager, audioManager)
+    assertEquals(AudioManager.MODE_IN_COMMUNICATION, audioManager.mode)
+
+    stopRealtimeRelayForTest(manager)
+
+    assertEquals(AudioManager.MODE_NORMAL, audioManager.mode)
+  }
+
+  @Test
+  fun aResponseBoundaryDoesNotReleaseOrReacquireCommunicationMode() {
+    val manager = createManager()
+    val audioManager = RuntimeEnvironment.getApplication().getSystemService(AudioManager::class.java)
+    audioManager.mode = AudioManager.MODE_NORMAL
+    val token = enterCommunicationModeForTest(manager, audioManager)
+
+    // A whole turn: audio, its barrier, and the clear a barge-in produces.
+    manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"audio","audioBase64":"AAA="}""")
+    manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"mark","markName":"audio-1"}""")
+    manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"clear"}""")
+
+    // The events really were processed, so this is not a negative that passes on a dropped event:
+    // clear invalidates the playback generation on the requesting thread.
+    assertTrue((readPrivateField(manager, "realtimePlaybackEpoch") as AtomicLong).get() > 0L)
+
+    // Mode is a property of the session, not of a response: toggling it per turn would rebuild
+    // the platform's voice pipeline mid-conversation.
+    assertEquals(AudioManager.MODE_IN_COMMUNICATION, audioManager.mode)
+    assertEquals(token, readPrivateField(manager, "realtimeCommunicationAudioToken"))
+  }
+
+  // ---- Phase 1C: suppression timing when echo cancellation is unavailable --------------------
+
+  @Test
+  fun withoutEchoCancellationTheGateIsClosedBeforeTheFirstSampleIsWritten() =
+    runTest {
+      val gateAtFirstWrite = AtomicReference<Boolean?>(null)
+      val manager = playoutManagerObservingFirstWrite(gateAtFirstWrite, acceptWrites = true)
+      setRealtimeAecEnabled(manager, false)
+
+      manager.realtimeEvent(audioEventPayload(480))
+      runCurrent()
+
+      // Publishing after the frame finished writing would let the assistant's own first words
+      // reach the provider on a device with no echo cancellation.
+      assertEquals(false, gateAtFirstWrite.get())
+      manager.stopAllCapture()
+    }
+
+  @Test
+  fun withEchoCancellationTheGateStaysOpenThroughTheFirstWrite() =
+    runTest {
+      val gateAtFirstWrite = AtomicReference<Boolean?>(null)
+      val manager = playoutManagerObservingFirstWrite(gateAtFirstWrite, acceptWrites = true)
+      setRealtimeAecEnabled(manager, true)
+
+      manager.realtimeEvent(audioEventPayload(480))
+      runCurrent()
+
+      assertEquals(true, gateAtFirstWrite.get())
+      manager.stopAllCapture()
+    }
+
+  @Test
+  fun aFirstWriteThatFailsCannotLeaveTheMicrophoneSuppressedForever() =
+    runTest {
+      val gateAtFirstWrite = AtomicReference<Boolean?>(null)
+      val manager = playoutManagerObservingFirstWrite(gateAtFirstWrite, acceptWrites = false)
+      setRealtimeAecEnabled(manager, false)
+
+      manager.realtimeEvent(audioEventPayload(480))
+      runCurrent()
+      assertEquals(false, gateAtFirstWrite.get())
+      assertFalse(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+
+      // Nothing was ever presented, so the idle check the publication started is what reopens it.
+      advanceTimeBy(200)
+      runCurrent()
+
+      assertTrue(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+      manager.stopAllCapture()
+    }
+
   @Test
   fun resumingRealtimeCaptureRestoresListeningState() =
     runTest {
@@ -1749,6 +1923,7 @@ class TalkModeManagerTest {
     realtimeCaptureDispatcher: CoroutineDispatcher = Dispatchers.IO,
     realtimePlaybackDispatcher: CoroutineDispatcher = Dispatchers.IO,
     realtimeMarkAcknowledger: (suspend (String, String) -> Unit)? = null,
+    realtimeAudioSinkFactory: RealtimeAudioSinkFactory = RealtimeAudioSinkFactory.AudioTrackBacked,
   ): TalkModeManager {
     val app = RuntimeEnvironment.getApplication()
     val session =
@@ -1773,6 +1948,7 @@ class TalkModeManagerTest {
       realtimeCaptureDispatcher = realtimeCaptureDispatcher,
       realtimePlaybackDispatcher = realtimePlaybackDispatcher,
       realtimeMarkAcknowledger = realtimeMarkAcknowledger,
+      realtimeAudioSinkFactory = realtimeAudioSinkFactory,
     )
   }
 
@@ -1812,6 +1988,88 @@ class TalkModeManagerTest {
 
   @Suppress("UNCHECKED_CAST")
   private fun playbackGeneration(manager: TalkModeManager) = readPrivateField(manager, "playbackGeneration") as AtomicLong
+
+  private fun realtimeAecEnabled(manager: TalkModeManager): Boolean {
+    val capability = readPrivateField(manager, "realtimeAecCapability") as AtomicReference<*>
+    val value = capability.get()!!
+    val field = value.javaClass.getDeclaredField("enabled")
+    field.isAccessible = true
+    return field.getBoolean(value)
+  }
+
+  private fun setRealtimeAecEnabled(
+    manager: TalkModeManager,
+    enabled: Boolean,
+  ) {
+    val generation = (readPrivateField(manager, "audioInputGeneration") as AtomicLong).get()
+    publishRealtimeAecCapability(manager, generation, enabled)
+  }
+
+  private fun publishRealtimeAecCapability(
+    manager: TalkModeManager,
+    inputGeneration: Long,
+    enabled: Boolean,
+  ) {
+    val method =
+      manager.javaClass.getDeclaredMethod(
+        "publishRealtimeAecCapability",
+        Long::class.javaPrimitiveType,
+        Boolean::class.javaPrimitiveType,
+      )
+    method.isAccessible = true
+    method.invoke(manager, inputGeneration, enabled)
+  }
+
+  private fun enterCommunicationModeForTest(
+    manager: TalkModeManager,
+    audioManager: AudioManager,
+  ): Long {
+    val owner = readPrivateField(manager, "realtimeCommunicationAudio") as RealtimeCommunicationAudioOwner
+    val token = owner.enter(audioManager)
+    setPrivateField(manager, "realtimeCommunicationAudioToken", token)
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+    return token
+  }
+
+  private fun stopRealtimeRelayForTest(manager: TalkModeManager) {
+    val method =
+      manager.javaClass.getDeclaredMethod(
+        "stopRealtimeRelay",
+        Boolean::class.javaPrimitiveType,
+        Boolean::class.javaPrimitiveType,
+        Boolean::class.javaPrimitiveType,
+        Boolean::class.javaPrimitiveType,
+      )
+    method.isAccessible = true
+    method.invoke(manager, false, true, true, false)
+  }
+
+  private fun audioEventPayload(byteCount: Int): String {
+    val audioBase64 = android.util.Base64.encodeToString(ByteArray(byteCount) { 0x20 }, android.util.Base64.NO_WRAP)
+    return """{"relaySessionId":"relay-1","type":"audio","audioBase64":"$audioBase64"}"""
+  }
+
+  /** A manager whose output device reports the capture gate the moment it is first written to. */
+  private fun TestScope.playoutManagerObservingFirstWrite(
+    gateAtFirstWrite: AtomicReference<Boolean?>,
+    acceptWrites: Boolean,
+  ): TalkModeManager {
+    lateinit var manager: TalkModeManager
+    val sinks =
+      FakeRealtimeAudioSinkFactory { offered, call ->
+        if (call == 0) gateAtFirstWrite.set(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+        if (acceptWrites) offered else -1
+      }
+    manager =
+      createManager(
+        scope = this,
+        realtimePlaybackDispatcher = StandardTestDispatcher(testScheduler),
+        realtimeAudioSinkFactory = sinks,
+      )
+    setMutableStateFlow(manager, "_isEnabled", true)
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+    return manager
+  }
 
   private fun setPrivateField(
     target: Any,
