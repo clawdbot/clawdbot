@@ -770,6 +770,41 @@ describe("config view", () => {
     expect(onSectionChange).toHaveBeenCalledWith(null);
   });
 
+  it("exposes accordion category disclosure state and its controlled panel", () => {
+    const overrides: Partial<ConfigProps> = {
+      settingsLayout: "accordion",
+      includeVirtualSections: false,
+      includeSections: ["env"],
+      schema: {
+        type: "object",
+        properties: {
+          env: { type: "object", properties: {} },
+        },
+      },
+    };
+    const collapsed = renderConfigView(overrides);
+    const collapsedHeader = queryRequired(
+      collapsed.container,
+      ".config-accordion-group__header",
+      HTMLButtonElement,
+    );
+    const controlledPanelId = collapsedHeader.getAttribute("aria-controls");
+
+    expect(collapsedHeader.getAttribute("aria-expanded")).toBe("false");
+    expect(controlledPanelId).not.toBeNull();
+    expect(collapsed.container.querySelector(`#${controlledPanelId}`)).toBeNull();
+
+    const expanded = renderConfigView({ ...overrides, activeSection: "env" });
+    const expandedHeader = queryRequired(
+      expanded.container,
+      ".config-accordion-group__header",
+      HTMLButtonElement,
+    );
+    expect(expandedHeader.getAttribute("aria-expanded")).toBe("true");
+    expect(expandedHeader.getAttribute("aria-controls")).toBe(controlledPanelId);
+    expect(expanded.container.querySelector(`#${controlledPanelId}`)).not.toBeNull();
+  });
+
   it("renders the virtual Notifications tab on Notifications settings", () => {
     const onSectionChange = vi.fn();
     const { container } = renderConfigView({
