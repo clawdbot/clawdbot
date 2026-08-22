@@ -194,12 +194,13 @@ that need it.
 
 Three mechanisms run on eligible turns with no model involvement:
 
-- **Bootstrap injection.** `MEMORY.md` and `USER.md` load at session start
-  when the selected memory runtime classifies their provenance as eligible.
-  Files with ineligible or unavailable provenance are omitted from automatic
-  context but remain available through explicit memory tools. Eligible files
-  refresh per turn within budgets so long-lived sessions pick up consolidation
-  results without restarting.
+- **Bootstrap injection.** When a memory runtime is selected, `MEMORY.md` and
+  `USER.md` load at session start only when that runtime classifies their
+  provenance as eligible. Ineligible, missing, or unsupported classifications
+  are omitted from automatic context but remain available through explicit
+  memory tools. With no selected memory runtime, bootstrap behavior is unchanged.
+  Eligible files refresh per turn within budgets so long-lived sessions pick up
+  consolidation results without restarting.
 - **Ranked search.** `memory_search` scores hybrid relevance multiplied by
   an exponential recency decay (30-day half-life) and an importance
   multiplier. Importance (1 to 10) is assigned once at write time by
