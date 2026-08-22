@@ -543,7 +543,7 @@ describe("AppSidebar agent chip", () => {
     );
     sidebar.connected = true;
     sidebar.pinnedAgentIds = ["agent-7", "agent-12"];
-    // Two agents pinned while a third is active: the menu must keep all three.
+    // Pins sort first, but the scrollable grid keeps every configured agent reachable.
     context.agentSelection.state.selectedId = "agent-1";
     await sidebar.updateComplete;
 
@@ -551,14 +551,27 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
     const input = sidebar.querySelector<HTMLInputElement>(".sidebar-agent-menu__filter input");
     expect(input).not.toBeNull();
-    // Pinned agents plus the active one; pinned sort first.
+    // Pinned agents sort first without hiding the remaining roster.
     const labels = () =>
       [
         ...sidebar.querySelectorAll(
           ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch .agent-select__option-label",
         ),
       ].map((el) => el.textContent?.trim());
-    expect(labels()).toEqual(["agent-7", "agent-12", "agent-1"]);
+    expect(labels()).toEqual([
+      "agent-7",
+      "agent-12",
+      "agent-1",
+      "agent-2",
+      "agent-3",
+      "agent-4",
+      "agent-5",
+      "agent-6",
+      "agent-8",
+      "agent-9",
+      "agent-10",
+      "agent-11",
+    ]);
 
     if (!input) {
       throw new Error("Expected agent menu filter input");

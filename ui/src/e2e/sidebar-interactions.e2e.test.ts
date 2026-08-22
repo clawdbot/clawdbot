@@ -278,6 +278,23 @@ suite.define(() => {
       await expect
         .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
         .toBe(true);
+      await page.keyboard.press("End");
+      await expect
+        .poll(() =>
+          menu
+            .getByRole("menuitem", { name: "Agent settings" })
+            .evaluate((element) => element === document.activeElement),
+        )
+        .toBe(true);
+      await page.keyboard.press("Home");
+      await expect
+        .poll(() => mainSwitch.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.press("r");
+      await expect
+        .poll(() => researchSwitch.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await page.keyboard.press("Home");
       await page.keyboard.press("ArrowDown");
       await expect
         .poll(() => researchSwitch.evaluate((element) => element === document.activeElement))

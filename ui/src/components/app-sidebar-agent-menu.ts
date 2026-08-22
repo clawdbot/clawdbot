@@ -51,6 +51,10 @@ const QUICK_SWITCH_VISIBLE_AGENT_LIMIT = 6;
 const AGENT_VALUE_PREFIX = "agent:";
 const COMMAND_VALUE_PREFIX = "command:";
 const LINK_VALUE_PREFIX = "link:";
+const sidebarMenuTypeahead = new WeakMap<
+  HTMLElement,
+  { query: string; timeout: ReturnType<typeof setTimeout> }
+>();
 
 function sidebarMenuItems(dropdown: Element | null) {
   return [
@@ -58,6 +62,15 @@ function sidebarMenuItems(dropdown: Element | null) {
       ":scope > wa-dropdown-item:not([disabled]), :scope > .sidebar-agent-menu__agent-grid > wa-dropdown-item:not([disabled])",
     ) ?? []),
   ];
+}
+
+function focusSidebarMenuItem(
+  items: Array<HTMLElement & { active: boolean }>,
+  target: HTMLElement,
+) {
+  items.forEach((item) => (item.active = item === target));
+  target.focus({ preventScroll: true });
+  target.scrollIntoView?.({ block: "nearest" });
 }
 
 // Nested overlays bubble lifecycle events through the dropdown. Only the
@@ -70,7 +83,10 @@ function closeMenuAfterOwnDropdownHide(event: Event, onClose: (restoreFocus?: bo
 }
 
 function moveSidebarMenuFocus(event: KeyboardEvent): boolean {
-  if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+    return false;
+  }
+  if (event.target instanceof HTMLInputElement && (event.key === "Home" || event.key === "End")) {
     return false;
   }
   const dropdown = (event.currentTarget as HTMLElement).closest("wa-dropdown");
@@ -87,9 +103,13 @@ function moveSidebarMenuFocus(event: KeyboardEvent): boolean {
   }
   const direction = event.key === "ArrowDown" ? 1 : -1;
   const target =
-    index < 0
-      ? items.at(direction === 1 ? 0 : -1)
-      : controls[(index + direction + controls.length) % controls.length];
+    event.key === "Home"
+      ? items[0]
+      : event.key === "End"
+        ? items.at(-1)
+        : index < 0
+          ? items.at(direction === 1 ? 0 : -1)
+          : controls[(index + direction + controls.length) % controls.length];
   if (!target || (footer && !footer.contains(current) && !footer.contains(target))) {
     return false;
   }
@@ -97,8 +117,37 @@ function moveSidebarMenuFocus(event: KeyboardEvent): boolean {
   event.stopPropagation();
   // Native footer actions are outside Web Awesome's roving item list; reset
   // its active row on both crossings so reverse navigation cannot skip one.
-  items.forEach((item) => (item.active = item === target));
-  target.focus({ preventScroll: true });
+  focusSidebarMenuItem(items, target);
+  return true;
+}
+
+function typeaheadSidebarMenuFocus(event: KeyboardEvent): boolean {
+  if (event.key.length !== 1 || event.metaKey || event.ctrlKey || event.altKey) {
+    return false;
+  }
+  const dropdown = event.currentTarget;
+  if (!(dropdown instanceof HTMLElement)) {
+    return false;
+  }
+  const previous = sidebarMenuTypeahead.get(dropdown);
+  if (event.key === " " && !previous?.query) {
+    return false;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  if (previous) {
+    clearTimeout(previous.timeout);
+  }
+  const query = `${previous?.query ?? ""}${event.key}`.trim().toLowerCase();
+  const timeout = setTimeout(() => sidebarMenuTypeahead.delete(dropdown), 1_000);
+  sidebarMenuTypeahead.set(dropdown, { query, timeout });
+  const items = sidebarMenuItems(dropdown);
+  const target = items.find((item) =>
+    (item.textContent ?? "").trim().toLowerCase().startsWith(query),
+  );
+  if (target) {
+    focusSidebarMenuItem(items, target);
+  }
   return true;
 }
 
@@ -110,8 +159,7 @@ function focusActiveAgentMenuItem(dropdown: HTMLElement) {
   if (!target) {
     return;
   }
-  items.forEach((item) => (item.active = item === target));
-  target.focus({ preventScroll: true });
+  focusSidebarMenuItem(items, target);
 }
 
 type AgentMenuAgent = {
@@ -174,7 +222,7 @@ function sidebarAgentMenuRows(params: {
   pinnedAgentIds: readonly string[];
   identities: ReadonlyMap<string, AgentIdentityResult>;
 }) {
-  const { agents, activeId } = params;
+  const { agents } = params;
   const availableIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
   const pinnedIds = new Set(
     params.pinnedAgentIds
@@ -199,15 +247,6 @@ function sidebarAgentMenuRows(params: {
       );
     });
     return { rows, showFilter: true };
-  }
-  if (pinnedIds.size > 0) {
-    return {
-      rows: sorted.filter((entry) => {
-        const agentId = normalizeAgentId(entry.id);
-        return pinnedIds.has(agentId) || agentId === activeId;
-      }),
-      showFilter: true,
-    };
   }
   return { rows: sorted, showFilter: true };
 }
@@ -341,20 +380,26 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
           }
         }}
         @wa-after-show=${(event: Event) => {
+          if (!(event.currentTarget instanceof HTMLElement)) {
+            return;
+          }
           params.onAfterShow();
           if (params.openMode === "hover") {
             return;
           }
           if (showFilter) {
-            (event.currentTarget as HTMLElement)
+            event.currentTarget
               .querySelector<HTMLInputElement>(".sidebar-agent-menu__filter input")
               ?.focus();
           } else {
-            focusActiveAgentMenuItem(event.currentTarget as HTMLElement);
+            focusActiveAgentMenuItem(event.currentTarget);
           }
         }}
         @keydown=${(event: KeyboardEvent) => {
           if (moveSidebarMenuFocus(event)) {
+            return;
+          }
+          if (typeaheadSidebarMenuFocus(event)) {
             return;
           }
           const item =
