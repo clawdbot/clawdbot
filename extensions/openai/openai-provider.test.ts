@@ -1766,6 +1766,74 @@ describe("buildOpenAIProvider", () => {
     ).toEqual({ effort: "high", transport: "sse" });
   });
 
+  it("delegates an unlisted first-party model to its explicitly selected Codex runtime", () => {
+    const provider = buildOpenAIProvider();
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-future",
+      modelRegistry: { find: () => null },
+      agentRuntimeId: "codex",
+    } as never);
+
+    expect(model).toMatchObject({
+      provider: "openai",
+      id: "gpt-future",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+    });
+    expect(
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openai",
+          modelId: "gpt-future",
+          agentRuntime: "codex",
+          api: model?.api,
+          compat: model?.compat,
+        } as never)
+        ?.levels.map((level) => level.id),
+    ).toContain("max");
+    expect(
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openai",
+          modelId: "gpt-future",
+          agentRuntime: "codex",
+        } as never)
+        ?.levels.map((level) => level.id),
+    ).toEqual(expect.arrayContaining(["xhigh", "max"]));
+  });
+
+  it("does not invent an unlisted model for authored Platform credentials", () => {
+    const provider = buildOpenAIProvider();
+
+    expect(
+      provider.resolveDynamicModel?.({
+        provider: "openai",
+        modelId: "gpt-future",
+        modelRegistry: { find: () => null },
+        agentRuntimeId: "codex",
+        authProfileId: "openai:platform",
+        authProfileMode: "api_key",
+        providerConfig: {
+          auth: "api-key",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+        },
+      } as never),
+    ).toBeUndefined();
+    expect(
+      provider
+        .resolveThinkingProfile?.({
+          provider: "openai",
+          modelId: "gpt-future",
+          agentRuntime: "codex",
+          api: "openai-responses",
+        } as never)
+        ?.levels.map((level) => level.id),
+    ).not.toContain("max");
+  });
+
   it("restores gpt-5.3-codex-spark only through ChatGPT/Codex OAuth routing", () => {
     const provider = buildOpenAIProvider();
 

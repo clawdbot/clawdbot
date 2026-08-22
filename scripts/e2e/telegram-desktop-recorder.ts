@@ -26,6 +26,7 @@ import {
 import {
   parseRecorderArgs,
   readRecorderSession,
+  type ActionsOptions,
   type ArtifactsOptions,
   type RecoverOptions,
   recorderUsageText,
@@ -53,8 +54,7 @@ export {
 const REMOTE_ROOT = "/tmp/openclaw-telegram-desktop-recorder";
 const TELEGRAM_BINARY = "/opt/Telegram/Telegram";
 const TELEGRAM_WORKDIR = `${REMOTE_ROOT}/desktop`;
-const DEFAULT_PREVIEW_FPS = 24;
-const DEFAULT_PREVIEW_WIDTH = 1920;
+const DEFAULT_PREVIEW_FPS = 4;
 const PROOF_VIEWPORT_HEIGHT = 600;
 
 function proofViewport(window: RecorderSession["window"]): {
@@ -175,14 +175,13 @@ export DISPLAY=:99
 win="$(wmctrl -lx | awk 'tolower($0) ~ /telegramdesktop/ {print $1; exit}')"
 test -n "$win"
 eval "$(xdotool getwindowgeometry --shell "$win")"
-printf '%s %s %s %s\n' "$X" "$Y" "$WIDTH" "$HEIGHT"`;
+printf '%s %s %s %s %s\n' "$win" "$X" "$Y" "$WIDTH" "$HEIGHT"`;
 }
 
-function renderHideTelegramWindow(): string {
+function renderHideTelegramWindow(windowId: string): string {
   return `set -euo pipefail
 export DISPLAY=:99
-win="$(wmctrl -lx | awk 'tolower($0) ~ /telegramdesktop/ {print $1; exit}')"
-test -n "$win"
+win=${shellQuote(windowId)}
 xdotool windowminimize "$win"
 sleep 0.2`;
 }
@@ -237,19 +236,26 @@ exit 1`;
 
 export function parseWindowGeometry(raw: string): {
   height: number;
+  id: string;
   width: number;
   x: number;
   y: number;
 } {
-  const parts = raw.trim().split(/\s+/u).map(Number);
-  if (parts.length !== 4 || parts.some((value) => !Number.isFinite(value) || value < 0)) {
+  const [id, ...rawGeometry] = raw.trim().split(/\s+/u);
+  const parts = rawGeometry.map(Number);
+  if (
+    !id ||
+    !/^0x[0-9a-f]+$/iu.test(id) ||
+    parts.length !== 4 ||
+    parts.some((value) => !Number.isFinite(value) || value < 0)
+  ) {
     throw new Error(`Telegram Desktop window geometry was not readable: ${raw.trim()}`);
   }
   const [x, y, width, height] = parts as [number, number, number, number];
   if (width < 200 || height < 200) {
     throw new Error(`Telegram Desktop window is too small to crop: ${width}x${height}`);
   }
-  return { height, width, x, y };
+  return { height, id, width, x, y };
 }
 
 function driverCommand(userDriver: string[], args: string[]) {
@@ -612,7 +618,7 @@ async function startRecorderAttempt(
     // The lane clears prior history before recorder start. Keep the empty chat hidden until
     // the first session-owned send is ready, so setup frames reveal neither account UI nor chat.
     await operations.sshRun({
-      command: renderHideTelegramWindow(),
+      command: renderHideTelegramWindow(windowGeometry.id),
       cwd,
       inspect,
       run: operations.runCommand,
@@ -816,6 +822,93 @@ export async function viewRecorder(
   });
 }
 
+const desktopActionsSchema = z
+  .array(
+    z.discriminatedUnion("command", [
+      z.object({
+        button: z.number().int().min(1).max(5).default(1),
+        command: z.literal("click"),
+        x: z.number().int().nonnegative(),
+        y: z.number().int().nonnegative(),
+      }),
+      z.object({
+        command: z.literal("key"),
+        keys: z
+          .array(z.string().regex(/^[A-Za-z0-9_+:-]+$/u))
+          .min(1)
+          .max(20),
+      }),
+      z.object({ command: z.literal("sleep"), milliseconds: z.number().int().min(1).max(30_000) }),
+      z.object({
+        command: z.literal("type"),
+        delayMs: z.number().int().min(0).max(1_000).default(5),
+        text: z.string().min(1).max(10_000),
+      }),
+    ]),
+  )
+  .min(1)
+  .max(100);
+
+export async function runRecorderActions(
+  cwd: string,
+  opts: ActionsOptions,
+  operations: RecorderOperations = defaultOperations,
+): Promise<{ results: Array<{ command: string; stderr: string; stdout: string }> }> {
+  const sessionPath = resolveRecorderPath(cwd, opts.sessionPath, "--session");
+  const actionsPath = resolveRecorderPath(cwd, opts.actionsFile, "--actions-file");
+  const actionsStat = fs.lstatSync(actionsPath);
+  if (!actionsStat.isFile() || actionsStat.isSymbolicLink() || actionsStat.size > 64 * 1024) {
+    throw new Error("--actions-file must be a regular file no larger than 64 KiB.");
+  }
+  const actions = desktopActionsSchema.parse(JSON.parse(fs.readFileSync(actionsPath, "utf8")));
+  const session = readRecorderSession(sessionPath);
+  for (const action of actions) {
+    if (
+      action.command === "click" &&
+      (action.x >= session.window.width || action.y >= session.window.height)
+    ) {
+      throw new Error("click coordinates must stay inside the Telegram window.");
+    }
+  }
+  const crabboxBin = process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN?.trim() || "crabbox";
+  const inspect = await sessionInspect({ crabboxBin, cwd, operations, session });
+  const results: Array<{ command: string; stderr: string; stdout: string }> = [];
+  for (const action of actions) {
+    if (action.command === "sleep") {
+      await sleep(action.milliseconds);
+      results.push({ command: "sleep", stderr: "", stdout: "" });
+      continue;
+    }
+    const telegramWindow = `win=${shellQuote(session.window.id)}
+if ! wmctrl -lx | awk -v win="$win" 'tolower($1) == tolower(win) && tolower($0) ~ /telegramdesktop/ {found=1} END {exit !found}'; then
+  echo "Recorded Telegram window $win no longer exists." >&2
+  exit 1
+fi
+eval "$(xdotool getwindowgeometry --shell "$win")"
+if [ "$X" -ne ${session.window.x} ] || [ "$Y" -ne ${session.window.y} ] || [ "$WIDTH" -ne ${session.window.width} ] || [ "$HEIGHT" -ne ${session.window.height} ]; then
+  echo "Recorded Telegram window $win moved or resized." >&2
+  exit 1
+fi
+`;
+    const actionCommand =
+      action.command === "click"
+        ? `xdotool windowactivate --sync "$win" mousemove --window "$win" ${action.x} ${action.y} click ${action.button}`
+        : action.command === "key"
+          ? `xdotool key --window "$win" ${action.keys.map(shellQuote).join(" ")}`
+          : `xdotool type --window "$win" --delay ${action.delayMs} -- ${shellQuote(action.text)}`;
+    const result = await operations.sshRun({
+      command: `export DISPLAY=:99\n${telegramWindow}${actionCommand}`,
+      cwd,
+      inspect,
+      run: operations.runCommand,
+      stdio: "pipe",
+      timeoutMs: opts.timeoutSeconds * 1000,
+    });
+    results.push({ command: action.command, ...result });
+  }
+  return { results };
+}
+
 async function captureScreenshot(params: {
   crop: ReturnType<typeof proofViewport>;
   cwd: string;
@@ -942,47 +1035,47 @@ export async function stopRecorder(
   }
   const motionVideoPath = path.join(outputDir, "telegram-desktop-recorder-session-motion.mp4");
   const motionGifPath = path.join(outputDir, "telegram-desktop-recorder-session-motion.gif");
-  // Previews read the recovered recording; with no lease there is no video to
-  // trim, and running ffmpeg on the missing file would fail an otherwise
-  // complete cleanup.
+  // A missing lease produces no local video, so there is no preview to build.
   if (artifacts.video) {
-    await attempt("motion preview", async () => {
-      await operations.createMotionPreview({
-        crabboxBin,
-        cwd,
-        fps: DEFAULT_PREVIEW_FPS,
-        gifPath: motionGifPath,
-        run: operations.runCommand,
-        trimmedVideoPath: motionVideoPath,
-        videoPath,
-        width: DEFAULT_PREVIEW_WIDTH,
+    if (opts.crop === "telegram-window") {
+      const croppedVideoPath = path.join(
+        outputDir,
+        "telegram-desktop-recorder-session-motion-telegram-window.mp4",
+      );
+      const croppedGifPath = path.join(
+        outputDir,
+        "telegram-desktop-recorder-session-motion-telegram-window.gif",
+      );
+      await attempt("cropped motion preview", async () => {
+        await operations.createCroppedMotionPreview({
+          crabboxBin,
+          crop: proofViewport(session.window),
+          croppedGifPath,
+          croppedVideoPath,
+          cwd,
+          fps: DEFAULT_PREVIEW_FPS,
+          run: operations.runCommand,
+          videoPath,
+        });
+        artifacts.previewGifCropped = croppedGifPath;
+        artifacts.trimmedVideoCropped = croppedVideoPath;
       });
-      artifacts.previewGif = motionGifPath;
-      artifacts.trimmedVideo = motionVideoPath;
-    });
-  }
-  if (opts.crop === "telegram-window" && artifacts.trimmedVideo) {
-    const croppedVideoPath = path.join(
-      outputDir,
-      "telegram-desktop-recorder-session-motion-telegram-window.mp4",
-    );
-    const croppedGifPath = path.join(
-      outputDir,
-      "telegram-desktop-recorder-session-motion-telegram-window.gif",
-    );
-    await attempt("cropped motion preview", async () => {
-      await operations.createCroppedMotionPreview({
-        crop: proofViewport(session.window),
-        croppedGifPath,
-        croppedVideoPath,
-        cwd,
-        fps: DEFAULT_PREVIEW_FPS,
-        run: operations.runCommand,
-        videoPath: motionVideoPath,
+    } else {
+      await attempt("motion preview", async () => {
+        await operations.createMotionPreview({
+          crabboxBin,
+          cwd,
+          fps: DEFAULT_PREVIEW_FPS,
+          gifPath: motionGifPath,
+          run: operations.runCommand,
+          trimmedVideoPath: motionVideoPath,
+          videoPath,
+          width: 1920,
+        });
+        artifacts.previewGif = motionGifPath;
+        artifacts.trimmedVideo = motionVideoPath;
       });
-      artifacts.previewGifCropped = croppedGifPath;
-      artifacts.trimmedVideoCropped = croppedVideoPath;
-    });
+    }
   }
   // --keep-box keeps the whole debugging surface: the Desktop authorization stays
   // valid for WebVNC until the operator finishes; a later `stop` without it revokes.
@@ -1066,6 +1159,10 @@ async function main(): Promise<void> {
   if (opts.command === "view") {
     await viewRecorder(cwd, opts);
     console.log(`Telegram Desktop opened message ${opts.messageId}.`);
+    return;
+  }
+  if (opts.command === "actions") {
+    console.log(JSON.stringify(await runRecorderActions(cwd, opts), null, 2));
     return;
   }
   if (opts.command === "screenshot") {

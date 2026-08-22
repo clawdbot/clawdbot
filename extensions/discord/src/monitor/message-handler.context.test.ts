@@ -31,6 +31,7 @@ describe("discord buildDiscordMessageProcessContext sender bot status", () => {
     }
 
     expect(result.ctxPayload.NativeChannelId).toBe(ctx.messageChannelId);
+    expect(result.ctxPayload.ConversationRoutePeerId).toBe(ctx.messageChannelId);
   });
 
   it("projects a cached conversation avatar into channel-owned context", async () => {
@@ -53,6 +54,22 @@ describe("discord buildDiscordMessageProcessContext sender bot status", () => {
     const result = await buildDiscordMessageProcessContext({ ctx, text: "hi", mediaList: [] });
 
     expect(result?.ctxPayload.GroupSpace).toBe("guild-id");
+  });
+
+  it("records the source channel as the parent of an auto-threaded turn", async () => {
+    const ctx = await createBaseDiscordMessageContext({
+      channelConfig: { allowed: true, autoThread: true },
+      client: {
+        rest: {
+          get: async () => ({ thread: { id: "auto-thread-1" } }),
+        },
+      },
+    });
+
+    const result = await buildDiscordMessageProcessContext({ ctx, text: "hi", mediaList: [] });
+
+    expect(result?.ctxPayload.MessageThreadId).toBe("auto-thread-1");
+    expect(result?.ctxPayload.ThreadParentId).toBe("c1");
   });
 
   it("forwards bot author status to ctxPayload.SenderIsBot", async () => {

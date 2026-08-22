@@ -155,6 +155,12 @@ tool({
 });
 ```
 
+Factories can use `toolContext.delivery?.send({ text, mediaUrl })` for outbound
+messages in the active conversation. The host chooses the destination,
+account, thread, and local-media policy; plugins cannot retarget this helper,
+and retained copies stop working after the turn closes. The helper is unavailable
+for channels whose delivery is owned by a Gateway transport.
+
 Factories still declare a fixed tool name up front. Use `definePluginEntry`
 directly when the plugin computes tool names dynamically or combines tools
 with hooks, services, providers, or commands.

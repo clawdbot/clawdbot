@@ -7,6 +7,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { sleep } from "../utils.js";
+import { GATEWAY_SERVICE_KIND } from "./constants.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import {
   execLaunchctl,
@@ -36,6 +37,10 @@ export async function resolveLaunchAgentGatewayContext(env: GatewayServiceEnv): 
   port: number | null;
   probeHosts: readonly string[];
 }> {
+  const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim();
+  if (serviceKind && serviceKind !== GATEWAY_SERVICE_KIND) {
+    return { port: null, probeHosts: [] };
+  }
   const command = await readLaunchAgentProgramArguments(env).catch(() => null);
   const fromArgs = parseTcpPortFromArgs(command?.programArguments);
   if (fromArgs !== null) {

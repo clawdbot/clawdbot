@@ -12,8 +12,8 @@ import type {
 export type { WorkerTunnelStatus };
 
 export class WorkerTunnelOwnerDisconnectedError extends Error {
-  constructor() {
-    super("Worker tunnel owner is no longer connected");
+  constructor(message = "Worker tunnel owner is no longer connected") {
+    super(message);
     this.name = "WorkerTunnelOwnerDisconnectedError";
   }
 }

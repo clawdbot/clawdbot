@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import * as talk from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveVoiceModelRefs } from "../tts/voice-models.js";
 import {
@@ -267,6 +268,7 @@ function collectRequestedSpeechProviderIds(
       : undefined;
   addStringValue(requested, tts?.provider);
   addObjectKeys(requested, tts?.providers);
+  addStringValue(requested, cfg && talk.resolveConfiguredTalkSpeechProviderId(cfg));
   if (options.includeVoiceModel) {
     addModelConfigProviderIds(requested, cfg?.agents?.defaults?.voiceModel);
   }
@@ -311,10 +313,16 @@ function collectRequestedCapabilityProviderIds(params: {
         includeVoiceModel: params.includeVoiceModel ?? false,
       });
     case "realtimeTranscriptionProviders":
-    case "realtimeVoiceProviders":
       return params.includeVoiceModel
         ? collectRequestedVoiceModelProviderIds(params.cfg)
         : undefined;
+    case "realtimeVoiceProviders": {
+      const requested = params.includeVoiceModel
+        ? collectRequestedVoiceModelProviderIds(params.cfg)
+        : new Set<string>();
+      addStringValue(requested, talk.resolveConfiguredTalkRealtimeProviderId(params.cfg ?? {}));
+      return requested.size > 0 ? requested : undefined;
+    }
     case "mediaUnderstandingProviders":
       return collectRequestedMediaUnderstandingProviderIds(params.cfg);
     default:

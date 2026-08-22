@@ -171,6 +171,8 @@ jobs:
 
       - name: Setup Android toolchain
         uses: ./.github/actions/setup-android-toolchain
+        with:
+          cache-mode: read-write
 
       - name: Create apps-signing read token
         if: ${{ steps.release_source.outputs.fallback_base_tag == '' }}

@@ -11,13 +11,20 @@ import { t } from "../../i18n/index.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { requestPlaceCatalog } from "../new-session/cloud-target.ts";
-import { projectDevicePlacements } from "../new-session/device-placement.ts";
+import {
+  projectDevicePlacements,
+  type DevicePlacementRequirement,
+} from "../new-session/device-placement.ts";
 
-async function loadPlacementMoveCatalog(client: GatewayBrowserClient, includeProfiles: boolean) {
+async function loadPlacementMoveCatalog(
+  client: GatewayBrowserClient,
+  includeProfiles: boolean,
+  requirement?: DevicePlacementRequirement,
+) {
   const catalog = await requestPlaceCatalog(client);
   return {
     profiles: includeProfiles ? catalog.profiles : [],
-    devices: projectDevicePlacements(catalog.environments),
+    devices: projectDevicePlacements(catalog.environments, requirement),
   };
 }
 
@@ -68,17 +75,27 @@ export async function moveChatPanePlacement(params: {
   } else {
     const { showSessionPlacementMoveDialog } =
       await import("../../components/session-placement-move-dialog.ts");
+    const runtime = params.row.agentRuntime;
     target = await showSessionPlacementMoveDialog({
       sessionLabel: params.row.label || params.row.key,
       activeRun: params.row.hasActiveRun === true,
       deviceDisabledReason:
-        params.row.agentRuntime?.devicePlacementSupported === false
-          ? t("newSession.deviceRuntimeUnsupported")
-          : undefined,
+        runtime && !runtime.devicePlacement ? t("newSession.deviceRuntimeUnsupported") : undefined,
+      profileDisabledReason: (profile) => {
+        if (runtime?.cloudPlacementSupported === false) {
+          return t("newSession.cloudRuntimeUnsupported", { runtime: runtime.id });
+        }
+        return runtime?.cloudPlacementExecutionMode &&
+          profile.executionMode &&
+          profile.executionMode !== runtime.cloudPlacementExecutionMode
+          ? t("newSession.cloudProfileRuntimeUnsupported", { runtime: runtime.id })
+          : undefined;
+      },
       loadCatalog: async () =>
         await loadPlacementMoveCatalog(
           client,
           hasOperatorAdminAccess(params.gatewaySnapshot.hello?.auth ?? null),
+          runtime?.devicePlacement,
         ),
     });
   }

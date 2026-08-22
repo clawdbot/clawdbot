@@ -144,6 +144,8 @@ const rootEntries = [
   "scripts/print-cli-backend-live-metadata.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
   "scripts/openclaw-cross-os-release-checks.ts!",
+  "scripts/release-plan-producer-core.mts!",
+  "scripts/release-plan-producer.mts!",
   // Spawned by the agent concurrency benchmark; no static import edge exists.
   "scripts/bench-agent-concurrency-worker.ts!",
   // Spawned by the durable task registry churn benchmark in a fresh GC-enabled process.
@@ -160,7 +162,7 @@ const rootEntries = [
   "src/agents/model-provider-auth.worker.ts!",
   "src/agents/prepared-model-catalog.worker.ts!",
   // Spawned through computed sibling URLs by the service-child host and relay.
-  "src/process/supervisor/{service-child-relay,service-child-group-anchor}.ts!",
+  "src/process/supervisor/{service-child-relay,service-child-group-anchor,service-child-windows-job-anchor}.ts!",
   // Loaded by URL from setup-inference-detection.ts; no static import edge exists.
   "src/system-agent/setup-inference-detection.worker.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.

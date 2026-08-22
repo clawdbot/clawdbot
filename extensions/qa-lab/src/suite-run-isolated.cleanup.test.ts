@@ -97,6 +97,43 @@ describe("isolated QA suite transport cleanup", () => {
     mocks.disposeRegisteredAgentHarnesses.mockResolvedValue(undefined);
   });
 
+  it("records a rejected dispatched worker and leaves the fail-fast tail unstarted", async () => {
+    const lab = createCleanupTestLab();
+    const context = createCleanupTestContext();
+    context.selectedScenarios.push(makeQaSuiteTestScenario("never-started"));
+    const runChild = vi
+      .fn<QaSuiteRunner>()
+      .mockRejectedValueOnce(new Error("isolated worker gateway failed"));
+
+    const result = await runQaFlowSuiteIsolated(
+      { failFast: true, lab, startLab: async () => lab },
+      context,
+      runChild,
+    );
+
+    expect(runChild).toHaveBeenCalledOnce();
+    expect(result.startedScenarioIds).toEqual(["leased-channel-scenario"]);
+    expect(result.scenarios).toEqual([
+      expect.objectContaining({
+        name: "leased-channel-scenario",
+        status: "fail",
+        details: "isolated worker gateway failed",
+      }),
+    ]);
+    expect(lab.setScenarioRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: "completed",
+        scenarios: [
+          expect.objectContaining({ id: "leased-channel-scenario", status: "fail" }),
+          expect.objectContaining({ id: "never-started", status: "pending" }),
+        ],
+      }),
+    );
+    expect(mocks.writeQaSuiteArtifacts).toHaveBeenLastCalledWith(
+      expect.objectContaining({ scenarios: result.scenarios }),
+    );
+  });
+
   it("leaves only running progress when parent cleanup fails after worker completion", async () => {
     const lab = createCleanupTestLab();
     const release = vi.fn(async () => {});

@@ -24,6 +24,7 @@ import {
   buildCompactionDividerItem,
   buildResetDividerItem,
   clearWorkingProgress,
+  projectContextCompactionActivity,
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
@@ -214,7 +215,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
   }
   for (let i = 0; i < history.length; i++) {
-    const msg = history[i];
+    const msg = projectContextCompactionActivity(history[i]);
     const itemKey = historyKeys[i] ?? messageKey(msg, i);
     const normalized = safeNormalizeMessage(msg);
     if (!normalized) {
@@ -713,7 +714,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       const liveProgress = resolveProgress();
       const liveStreamItem: ChatItem = {
         kind: "stream",
-        key: liveProgress.key,
+        key: latestBoundaryRunId
+          ? `${liveProgress.key}:after:${latestBoundaryRunId}`
+          : liveProgress.key,
         text: visibleText,
         startedAt: timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now()),
         isStreaming: true,

@@ -142,6 +142,7 @@ async function readSessionCompanionContext(params: {
     let rawBytes = 0;
     let scannedMessages = 0;
     let totalMessages = 0;
+    let stoppedAtOlderByteBoundary = false;
     let snapshot:
       | {
           activeLeafEntryId?: string | null;
@@ -163,8 +164,17 @@ async function readSessionCompanionContext(params: {
         ),
         offset,
       });
-      if (params.signal?.aborted || page.events.length !== page.scannedMessages) {
+      if (params.signal?.aborted) {
         return { kind: "unavailable" };
+      }
+      if (page.events.length !== page.scannedMessages) {
+        if (contextMessages.length === 0) {
+          return { kind: "unavailable" };
+        }
+        // A partial older page can contain holes around oversized rows. Keep
+        // only the complete newer pages, then verify their snapshot below.
+        stoppedAtOlderByteBoundary = true;
+        break;
       }
       const pageSnapshot = {
         activeLeafEntryId: page.activeLeafEntryId,
@@ -193,7 +203,11 @@ async function readSessionCompanionContext(params: {
         break;
       }
     }
-    if (contextMessages.length < CONTEXT_MAX_MESSAGES && offset < totalMessages) {
+    if (
+      contextMessages.length < CONTEXT_MAX_MESSAGES &&
+      offset < totalMessages &&
+      !stoppedAtOlderByteBoundary
+    ) {
       return { kind: "unavailable" };
     }
     const fence = readSessionTranscriptBoundedMessageTailPage(scope, {

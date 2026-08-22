@@ -144,7 +144,7 @@ export function createTelegramCallbackRouter({
         callbackMessage.chat.type === "group" || callbackMessage.chat.type === "supergroup";
       const nativeCallbackCommand = parseTelegramNativeCommandCallbackData(data);
       const hasReservedOpaquePrefix = hasTelegramOpaqueCallbackPrefix(data);
-      const opaqueCallbackData = parseTelegramOpaqueCallbackData(data);
+      const opaqueCallbackData = parseTelegramOpaqueCallbackData(callback.data?.trimStart());
       const genericCallbackText = data.startsWith("/") ? data : `callback_data: ${data}`;
       const callbackCommandText =
         nativeCallbackCommand ?? (opaqueCallbackData ? "" : genericCallbackText);

@@ -307,6 +307,7 @@ export async function runCodeModeScriptHeadless(params: {
           namespaceRuntime,
           parentToolCallId,
           codeModeRunId,
+          deadlineMs: deadline,
           ctx: params.ctx,
           signal: abortScope.signal,
         }),

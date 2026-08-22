@@ -24,35 +24,124 @@ const initialResponseChunkDelayMs = process.env.MOCK_RESPONSE_CHUNK_DELAY_MS
   ? readPositiveIntEnv("MOCK_RESPONSE_CHUNK_DELAY_MS", undefined)
   : 0;
 const responseControl = process.env.MOCK_RESPONSE_CONTROL;
+let scriptState;
 
-function readCurrentResponse() {
-  if (!responseControl) {
-    return { text: successMarker, chunkDelayMs: initialResponseChunkDelayMs, hold: false };
-  }
-  const value = JSON.parse(readFileSync(responseControl, "utf8"));
-  if (Array.isArray(value.events) && value.events.length > 0) {
-    return { events: value.events, hold: value.hold ?? false };
-  }
-  if (typeof value.text !== "string" || value.text.length === 0 || value.text.length > 100_000) {
-    throw new Error("mock response control text is invalid");
+function readResponseEntry(value, label) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} is invalid`);
   }
   const chunkDelayMs = value.chunkDelayMs ?? 0;
   if (!Number.isInteger(chunkDelayMs) || chunkDelayMs < 0 || chunkDelayMs > 15 * 60_000) {
-    throw new Error("mock response control chunkDelayMs is invalid");
+    throw new Error(`${label} chunkDelayMs is invalid`);
   }
+  if (value.fail !== undefined) {
+    if (!value.fail || typeof value.fail !== "object" || Array.isArray(value.fail)) {
+      throw new Error(`${label} fail is invalid`);
+    }
+    const status = value.fail.status ?? 500;
+    if (!Number.isInteger(status) || status < 400 || status > 599) {
+      throw new Error(`${label} fail status is invalid`);
+    }
+    if (value.fail.mode !== undefined && value.fail.mode !== "drop") {
+      throw new Error(`${label} fail mode is invalid`);
+    }
+    if (value.fail.mode === "drop" && value.fail.status !== undefined) {
+      throw new Error(`${label} fail cannot combine status and drop`);
+    }
+    return {
+      fail: value.fail.mode === "drop" ? { mode: "drop" } : { status },
+      chunkDelayMs,
+    };
+  }
+  if (Array.isArray(value.events) && value.events.length > 0) {
+    return { events: value.events, chunkDelayMs };
+  }
+  if (typeof value.text !== "string" || value.text.length === 0 || value.text.length > 100_000) {
+    throw new Error(`${label} text is invalid`);
+  }
+  return { text: value.text, chunkDelayMs };
+}
+
+function readResponseControl() {
+  if (!responseControl) {
+    return {
+      hold: false,
+      response: { text: successMarker, chunkDelayMs: initialResponseChunkDelayMs },
+    };
+  }
+  const value = JSON.parse(readFileSync(responseControl, "utf8"));
   if (value.hold !== undefined && typeof value.hold !== "boolean") {
     throw new Error("mock response control hold is invalid");
   }
-  return { text: value.text, chunkDelayMs, hold: value.hold ?? false };
+  if (value.responses !== undefined) {
+    if (!Array.isArray(value.responses) || value.responses.length === 0) {
+      throw new Error("mock response control responses are invalid");
+    }
+    const responses = value.responses.map((entry, index) =>
+      readResponseEntry(entry, `mock response control responses[${index}]`),
+    );
+    const defaultResponse =
+      value.default === undefined
+        ? undefined
+        : readResponseEntry(value.default, "mock response control default");
+    const version =
+      typeof value.scriptVersion === "string" && value.scriptVersion
+        ? value.scriptVersion
+        : createHash("sha256")
+            .update(JSON.stringify({ default: value.default, responses: value.responses }))
+            .digest("hex");
+    return { defaultResponse, hold: value.hold ?? false, responses, version };
+  }
+  return {
+    hold: value.hold ?? false,
+    response: readResponseEntry(value, "mock response control"),
+  };
 }
 
-async function currentResponse() {
-  let response = readCurrentResponse();
-  while (response.hold) {
-    await delay(25);
-    response = readCurrentResponse();
+function selectCurrentResponse() {
+  const control = readResponseControl();
+  if (!control.responses) {
+    return { response: control.response };
   }
-  return response;
+  if (scriptState?.version !== control.version) {
+    scriptState = { nextIndex: 0, version: control.version };
+  }
+  const requestIndex = scriptState.nextIndex;
+  scriptState.nextIndex += 1;
+  if (requestIndex < control.responses.length) {
+    return {
+      response: control.responses[requestIndex],
+      scriptEntry: { entryIndex: requestIndex, requestIndex, source: "responses" },
+    };
+  }
+  if (control.defaultResponse) {
+    return {
+      response: control.defaultResponse,
+      scriptEntry: { requestIndex, source: "default" },
+    };
+  }
+  return {
+    response: control.responses.at(-1),
+    scriptEntry: {
+      entryIndex: control.responses.length - 1,
+      requestIndex,
+      source: "last",
+    },
+  };
+}
+
+async function waitForResponseRelease() {
+  while (readResponseControl().hold) {
+    await delay(25);
+  }
+}
+
+function writeInjectedFailure(res, fail) {
+  if (fail.mode === "drop") {
+    res.destroy();
+    return;
+  }
+  writeJson(res, fail.status, { error: { message: "mantis injected fault" } });
 }
 
 function splitResponseText(text) {
@@ -570,6 +659,13 @@ const server = http.createServer((req, res) => {
       return;
     }
 
+    const scriptedRoute =
+      req.method === "POST" &&
+      (url.pathname === "/v1/responses" || url.pathname === "/v1/chat/completions");
+    // Reserve before body reads or hold waits so concurrent turns consume the script
+    // in arrival order. The explicit version survives hold-only control rewrites.
+    const selectedResponse = responseControl && scriptedRoute ? selectCurrentResponse() : undefined;
+
     let bodyText;
     try {
       bodyText = await readBody(req);
@@ -593,10 +689,18 @@ const server = http.createServer((req, res) => {
           method: req.method,
           path: url.pathname,
           body: boundedRequestLogBody(bodyText, bodyText),
+          ...(selectedResponse?.scriptEntry ? { scriptEntry: selectedResponse.scriptEntry } : {}),
         },
       })
     ) {
       return;
+    }
+    if (selectedResponse) {
+      await waitForResponseRelease();
+      if (selectedResponse.response.fail) {
+        writeInjectedFailure(res, selectedResponse.response.fail);
+        return;
+      }
     }
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {
@@ -622,7 +726,7 @@ const server = http.createServer((req, res) => {
           return;
         }
       }
-      const response = await currentResponse();
+      const response = selectedResponse?.response ?? selectCurrentResponse().response;
       if (response.events) {
         writeResponsesEvents(res, body.stream, response.events);
         return;
@@ -674,7 +778,7 @@ const server = http.createServer((req, res) => {
         writeChatCompletion(res, body.stream !== false, "OPENCLAW_E2E_DRAFTPROOF");
         return;
       }
-      const response = await currentResponse();
+      const response = selectedResponse?.response ?? selectCurrentResponse().response;
       const responseText = responseControl ? response.text : resolveResponseText(bodyText);
       writeChatCompletion(res, body.stream !== false, responseText);
       return;

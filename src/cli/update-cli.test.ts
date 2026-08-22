@@ -8,6 +8,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
@@ -545,17 +546,12 @@ describe("update-cli", () => {
     fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-update-tests-")),
   );
   let fixtureCount = 0;
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const tempDirsToCleanup = new Set<string>();
 
   const createCaseDir = (prefix: string) => {
     const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
     // Callers that only need a stable path skip creating it; real-I/O callers mkdir themselves.
-    return dir;
-  };
-
-  const createTrackedTempDir = async (prefix: string) => {
-    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), prefix)));
-    tempDirsToCleanup.add(dir);
     return dir;
   };
 
@@ -1314,8 +1310,8 @@ describe("update-cli", () => {
     options: Parameters<typeof updateCommand>[0];
     beforeUpdate?: () => void | Promise<void>;
   }) => {
-    const stateDir = await createTrackedTempDir("openclaw-update-sentinel-state-");
-    const metaDir = await createTrackedTempDir("openclaw-update-sentinel-meta-");
+    const stateDir = tempDirs.make("openclaw-update-sentinel-state-");
+    const metaDir = tempDirs.make("openclaw-update-sentinel-meta-");
     const metaPath = path.join(metaDir, "meta.json");
     await fs.writeFile(metaPath, JSON.stringify({ version: 1, meta: params.meta }));
     await params.beforeUpdate?.();
@@ -1758,7 +1754,7 @@ describe("update-cli", () => {
   it("keeps foreign-service updates in the caller profile", async () => {
     const personalState = path.join(fixtureRoot, "personal-profile");
     const { root, entrypoints } = setupUpdatedRootRefresh();
-    const foreignRoot = await createTrackedTempDir("openclaw-update-foreign-profile-");
+    const foreignRoot = tempDirs.make("openclaw-update-foreign-profile-");
     const foreignEntrypoint = path.join(foreignRoot, "dist", "index.js");
     await fs.mkdir(path.dirname(foreignEntrypoint), { recursive: true });
     await fs.writeFile(
@@ -4473,7 +4469,7 @@ describe("update-cli", () => {
   });
 
   it("stops package post-update work when staged npm install verification fails", async () => {
-    const tempDir = await createTrackedTempDir("openclaw-update-staged-fail-");
+    const tempDir = tempDirs.make("openclaw-update-staged-fail-");
     const prefix = path.join(tempDir, "prefix");
     const nodeModules = path.join(prefix, "lib", "node_modules");
     const { pkgRoot } = await setupInstalledPackageAtNodeModules(nodeModules, "2026.4.20");
@@ -4524,7 +4520,7 @@ describe("update-cli", () => {
   });
 
   it("runs old package doctors without fix mode when service ownership is unknown", async () => {
-    const tempDir = await createTrackedTempDir("openclaw-update-package-");
+    const tempDir = tempDirs.make("openclaw-update-package-");
     const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageRoot(tempDir);
     primeServiceCommand(["openclaw-wrapper", "gateway", "run"]);
     serviceLoaded.mockResolvedValue(true);
@@ -4568,7 +4564,7 @@ describe("update-cli", () => {
   });
 
   it("continues package post-core work for explicit post-update doctor advisories", async () => {
-    const tempDir = await createTrackedTempDir("openclaw-update-package-doctor-warning-");
+    const tempDir = tempDirs.make("openclaw-update-package-doctor-warning-");
     const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
     primeNpmChannelTag("latest", "2026.4.21");
     mockFileBackedPathExists();
@@ -4637,7 +4633,7 @@ describe("update-cli", () => {
   });
 
   it("fails package updates when the post-update doctor is killed after verification", async () => {
-    const tempDir = await createTrackedTempDir("openclaw-update-package-doctor-timeout-");
+    const tempDir = tempDirs.make("openclaw-update-package-doctor-timeout-");
     const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
     primeNpmChannelTag("latest", "2026.4.21");
     mockFileBackedPathExists();
@@ -4678,7 +4674,7 @@ describe("update-cli", () => {
   });
 
   it("runs package post-update doctor from the verified package root after a staged swap", async () => {
-    const tempDir = await createTrackedTempDir("openclaw-update-staged-doctor-");
+    const tempDir = tempDirs.make("openclaw-update-staged-doctor-");
     const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageAtNodeModules(
       path.join(tempDir, "lib", "node_modules"),
     );
@@ -4741,7 +4737,7 @@ describe("update-cli", () => {
     const processOffSpy = vi.spyOn(process, "off");
     suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
     resumeScheduledTaskAutoStartAfterUpdate.mockResolvedValue(true);
-    const tempDir = await createTrackedTempDir("openclaw-update-stop-service-");
+    const tempDir = tempDirs.make("openclaw-update-stop-service-");
     const { nodeModules } = await setupInstalledPackageRoot(tempDir);
     mockRunningManagedGateway();
     mockFileBackedPathExists();
@@ -4815,7 +4811,7 @@ describe("update-cli", () => {
     "quiesces a stopped loaded managed gateway on $platform before package replacement",
     async ({ platform, handoff }) => {
       const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-      const tempDir = await createTrackedTempDir(`openclaw-update-stopped-loaded-${platform}-`);
+      const tempDir = tempDirs.make(`openclaw-update-stopped-loaded-${platform}-`);
       const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
       primeServiceCommand(["node", entryPath, "gateway", "run"], {
         OPENCLAW_SERVICE_MARKER: "openclaw",
@@ -4880,7 +4876,7 @@ describe("update-cli", () => {
     { name: "an ordinary stopped Scheduled Task", platform: "win32" as const, loaded: true },
   ])("leaves $name stopped during package replacement", async ({ platform, loaded }) => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-    const tempDir = await createTrackedTempDir(`openclaw-update-stopped-${platform}-`);
+    const tempDir = tempDirs.make(`openclaw-update-stopped-${platform}-`);
     const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
     primeServiceCommand(["node", entryPath, "gateway", "run"]);
     serviceLoaded.mockResolvedValue(loaded);
@@ -4903,7 +4899,7 @@ describe("update-cli", () => {
 
   it("restarts a quiesced stopped LaunchAgent after package replacement fails", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    const tempDir = await createTrackedTempDir("openclaw-update-stopped-launchagent-failure-");
+    const tempDir = tempDirs.make("openclaw-update-stopped-launchagent-failure-");
     const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
     primeServiceCommand(["node", entryPath, "gateway", "run"]);
     serviceLoaded.mockResolvedValue(true);
@@ -4943,7 +4939,7 @@ describe("update-cli", () => {
 
   it("leaves a disabled stopped LaunchAgent disabled when package replacement fails", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    const tempDir = await createTrackedTempDir("openclaw-update-disabled-launchagent-failure-");
+    const tempDir = tempDirs.make("openclaw-update-disabled-launchagent-failure-");
     const { nodeModules, entryPath } = await setupInstalledPackageRoot(tempDir);
     primeServiceCommand(["node", entryPath, "gateway", "run"]);
     serviceLoaded.mockResolvedValue(true);
@@ -4974,7 +4970,7 @@ describe("update-cli", () => {
 
   it("does not inspect or mutate a Windows host service from an isolated install", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const tempDir = await createTrackedTempDir("openclaw-update-isolated-service-");
+    const tempDir = tempDirs.make("openclaw-update-isolated-service-");
     const { nodeModules } = await setupInstalledPackageRoot(tempDir);
     mockRunningManagedGateway();
     mockFileBackedPathExists();
@@ -5016,7 +5012,7 @@ describe("update-cli", () => {
     "does not reuse a conflicting $envKey selector from the managed service on $platform",
     async ({ platform, envKey, value }) => {
       const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-      const tempDir = await createTrackedTempDir(`openclaw-update-${platform}-selector-`);
+      const tempDir = tempDirs.make(`openclaw-update-${platform}-selector-`);
       const home = path.join(tempDir, "home");
       const stateDir = path.join(home, ".openclaw-work");
       const { nodeModules } = await setupInstalledPackageRoot(tempDir);
@@ -5303,7 +5299,7 @@ describe("update-cli", () => {
 
   it("stops a managed gateway rooted at the git checkout when switching package installs to dev", async () => {
     const packageRoot = createCaseDir("openclaw-update-package-root");
-    const gitRoot = await createTrackedTempDir("openclaw-update-git-service-root-");
+    const gitRoot = tempDirs.make("openclaw-update-git-service-root-");
     const serviceEntrypoint = path.join(gitRoot, "dist", "index.js");
     await fs.mkdir(path.join(gitRoot, ".git"), { recursive: true });
     await fs.mkdir(path.dirname(serviceEntrypoint), { recursive: true });
@@ -5336,9 +5332,9 @@ describe("update-cli", () => {
   });
 
   it("stops a managed gateway rooted at the package install when switching package installs to dev", async () => {
-    const packageRoot = await createTrackedTempDir("openclaw-update-package-service-root-");
+    const packageRoot = tempDirs.make("openclaw-update-package-service-root-");
     const packageEntrypoint = path.join(packageRoot, "dist", "index.js");
-    const gitRoot = await createTrackedTempDir("openclaw-update-git-service-root-");
+    const gitRoot = tempDirs.make("openclaw-update-git-service-root-");
     await fs.mkdir(path.join(gitRoot, ".git"), { recursive: true });
     await fs.mkdir(path.dirname(packageEntrypoint), { recursive: true });
     await fs.writeFile(
@@ -5377,7 +5373,7 @@ describe("update-cli", () => {
   it.runIf(process.platform !== "win32")(
     "continues package-to-Git updates from the published checkout after its alias is retargeted",
     async () => {
-      const root = await createTrackedTempDir("openclaw-update-git-alias-");
+      const root = tempDirs.make("openclaw-update-git-alias-");
       const nodeModules = path.join(root, "package", "node_modules");
       const packageRoot = path.join(nodeModules, "openclaw");
       const targetRoot = path.join(root, "checkout-target");
@@ -5427,7 +5423,7 @@ describe("update-cli", () => {
   );
 
   it("preserves the package and shim when package-to-Git staged activation fails", async () => {
-    const root = await createTrackedTempDir("openclaw-update-package-to-git-fail-");
+    const root = tempDirs.make("openclaw-update-package-to-git-fail-");
     const prefix = path.join(root, "prefix");
     const nodeModules = path.join(prefix, "lib", "node_modules");
     const packageRoot = path.join(nodeModules, "openclaw");
@@ -5481,7 +5477,7 @@ describe("update-cli", () => {
   });
 
   it("does not stop or restart a managed gateway owned by another git checkout", async () => {
-    const otherRoot = await createTrackedTempDir("openclaw-update-other-service-root-");
+    const otherRoot = tempDirs.make("openclaw-update-other-service-root-");
     const otherEntrypoint = path.join(otherRoot, "dist", "index.js");
     await fs.mkdir(path.dirname(otherEntrypoint), { recursive: true });
     await fs.writeFile(
@@ -5548,7 +5544,7 @@ describe("update-cli", () => {
   });
 
   it("keeps managed service stop output off stdout during json package updates", async () => {
-    const tempDir = await createTrackedTempDir("openclaw-update-json-stop-service-");
+    const tempDir = tempDirs.make("openclaw-update-json-stop-service-");
     const { nodeModules } = await setupInstalledPackageRoot(tempDir);
     const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     mockRunningManagedGateway();
@@ -5571,7 +5567,7 @@ describe("update-cli", () => {
   });
 
   it("disarms legacy launchd updater jobs before stopping the gateway", async () => {
-    const tempDir = await createTrackedTempDir("openclaw-update-launchd-loop-");
+    const tempDir = tempDirs.make("openclaw-update-launchd-loop-");
     const { nodeModules } = await setupInstalledPackageRoot(tempDir);
     mockRunningManagedGateway();
     launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob.mockResolvedValue(true);
@@ -5589,7 +5585,7 @@ describe("update-cli", () => {
   });
 
   it("refreshes package installs even when the current version already matches the target", async () => {
-    const tempDir = await createTrackedTempDir("openclaw-update-current-");
+    const tempDir = tempDirs.make("openclaw-update-current-");
     const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageRoot(
       tempDir,
       "2026.4.23",
@@ -5624,7 +5620,7 @@ describe("update-cli", () => {
   });
 
   it("retries package updates without optional deps when npm global update fails", async () => {
-    const tempDir = await createTrackedTempDir("openclaw-update-optional-");
+    const tempDir = tempDirs.make("openclaw-update-optional-");
     const nodeModules = path.join(tempDir, "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
     mockPackageInstallStatus(pkgRoot);
@@ -5873,7 +5869,7 @@ describe("update-cli", () => {
 
   it("warns when a package update targets a managed service root outside the shell root", async () => {
     const shellRoot = createCaseDir("openclaw-shell-root");
-    const serviceRoot = await createTrackedTempDir("openclaw-service-root-");
+    const serviceRoot = tempDirs.make("openclaw-service-root-");
     const serviceNode = path.join(path.dirname(serviceRoot), "bin", "node");
     await fs.mkdir(path.join(serviceRoot, "dist"), { recursive: true });
     await fs.writeFile(
@@ -5897,7 +5893,7 @@ describe("update-cli", () => {
 
   it("blocks a stale managed service Node before a no-restart package update", async () => {
     const shellRoot = createCaseDir("openclaw-shell-root");
-    const serviceRoot = await createTrackedTempDir("openclaw-service-root-");
+    const serviceRoot = tempDirs.make("openclaw-service-root-");
     const serviceNode = path.join(path.dirname(serviceRoot), "bin", "node");
     await fs.mkdir(path.join(serviceRoot, "dist"), { recursive: true });
     await fs.mkdir(path.dirname(serviceNode), { recursive: true });
@@ -5938,7 +5934,7 @@ describe("update-cli", () => {
 
   it("runs managed service package follow-up commands with the service Node", async () => {
     const shellRoot = createCaseDir("openclaw-shell-root");
-    const servicePrefix = await createTrackedTempDir("openclaw-service-prefix-");
+    const servicePrefix = tempDirs.make("openclaw-service-prefix-");
     const nodeModules = path.join(servicePrefix, "lib", "node_modules");
     const serviceRoot = path.join(nodeModules, "openclaw");
     const serviceNode = path.join(servicePrefix, "bin", "node");
@@ -6031,7 +6027,7 @@ describe("update-cli", () => {
   });
 
   it("refreshes the managed service to current Node when its baked Node cannot run the target", async () => {
-    const servicePrefix = await createTrackedTempDir("openclaw-service-prefix-");
+    const servicePrefix = tempDirs.make("openclaw-service-prefix-");
     const nodeModules = path.join(servicePrefix, "lib", "node_modules");
     const root = path.join(nodeModules, "openclaw");
     const serviceNode = path.join(servicePrefix, "bin", "node");
@@ -6112,7 +6108,7 @@ describe("update-cli", () => {
   });
 
   it("pins package install to the service root when nodes differ and no owning npm exists at the prefix", async () => {
-    const servicePrefix = await createTrackedTempDir("openclaw-no-npm-prefix-");
+    const servicePrefix = tempDirs.make("openclaw-no-npm-prefix-");
     const nodeModules = path.join(servicePrefix, "lib", "node_modules");
     const root = path.join(nodeModules, "openclaw");
     const serviceNode = path.join(servicePrefix, "bin", "node");
@@ -6136,11 +6132,7 @@ describe("update-cli", () => {
     primeNpmChannelTag("latest", "2026.5.20");
     mockFileBackedPathExists();
     // The PATH npm returns a DIFFERENT global root (simulates Node-B's npm).
-    const nodeBGlobalRoot = path.join(
-      await createTrackedTempDir("node-b-global-"),
-      "lib",
-      "node_modules",
-    );
+    const nodeBGlobalRoot = path.join(tempDirs.make("node-b-global-"), "lib", "node_modules");
     await fs.mkdir(nodeBGlobalRoot, { recursive: true });
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
       if (Array.isArray(argv) && argv[0] === serviceNode && argv[1] === "--version") {
@@ -8036,7 +8028,7 @@ describe("update-cli", () => {
   });
 
   it("updateWizardCommand offers dev checkout and forwards selections", async () => {
-    const root = await createTrackedTempDir("openclaw-update-wizard-");
+    const root = tempDirs.make("openclaw-update-wizard-");
     const tempDir = path.join(root, "openclaw");
     await withEnvAsync({ OPENCLAW_GIT_DIR: tempDir }, async () => {
       setTty(true);

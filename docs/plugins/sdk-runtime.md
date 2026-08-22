@@ -536,12 +536,18 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
     `openDuplex` accepts the same node, command, parameters, timeout,
     idempotency key, session key, caller signal, and requested scopes as
-    `nodes.invoke`, plus an optional `maxMessageBytes`. The limit defaults to
-    100 MiB and can be reduced, but never increased beyond 100 MiB. OpenClaw
-    splits each binary message into ordered 8 KiB payload fragments that fit the
-    existing 16 KiB transport-frame limit; callers always send and receive
-    complete `Uint8Array` messages. Concurrent sends preserve message
-    boundaries.
+    `nodes.invoke`, plus optional `maxMessageBytes` and
+    `maxOutstandingDeliveryBytes` limits. The per-message limit defaults to
+    100 MiB and can be reduced, but never increased beyond 100 MiB.
+    `maxOutstandingDeliveryBytes` bounds the combined size of complete messages
+    whose asynchronous listener callbacks have not settled; it defaults to
+    `maxMessageBytes`, cannot be smaller than that limit, and cannot exceed
+    100 MiB. A protocol that can follow a maximum-sized response with a bounded
+    asynchronous notification may request a larger outstanding-delivery budget
+    without raising its per-message ceiling. OpenClaw splits each binary message
+    into ordered 8 KiB payload fragments that fit the existing 16 KiB
+    transport-frame limit; callers always send and receive complete
+    `Uint8Array` messages. Concurrent sends preserve message boundaries.
 
     Register the channel's single message listener immediately after
     `openDuplex` resolves. Before a listener is registered, OpenClaw buffers at

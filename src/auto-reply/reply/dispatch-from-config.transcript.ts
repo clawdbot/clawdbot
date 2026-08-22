@@ -30,7 +30,7 @@ export async function mirrorDeliveredReplyToTranscript(params: {
   cfg: OpenClawConfig;
 }): Promise<void> {
   const mirror = params.metadata;
-  if (!mirror) {
+  if (!mirror || mirror.transcriptOwner) {
     return;
   }
   try {

@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AttemptFailureSource, EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { persistCodexContextCompactionActivity } from "./context-compaction-activity.js";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
 import { CodexProjectionDiagnostics } from "./event-projector-diagnostics.js";
 import { CodexEventProjection } from "./event-projector-events.js";
@@ -519,6 +520,16 @@ export class CodexAppServerEventProjector {
           trigger: this.params.trigger,
           channelId: this.params.messageChannel ?? this.params.messageProvider ?? undefined,
         },
+      });
+      await persistCodexContextCompactionActivity({
+        sessionTarget: this.params.sessionTarget,
+        config: this.params.config,
+        cwd: this.params.workspaceDir,
+        runId: this.params.runId,
+        threadId: this.threadId,
+        turnId: this.turnId,
+        itemId,
+        timestamp: this.nextTranscriptTimestamp(),
       });
       this.emitCompactionEnd(itemId, true);
     }

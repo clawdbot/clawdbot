@@ -111,6 +111,21 @@ function settingsRow(page: Page, title: string): Locator {
   });
 }
 
+function overlapArea(
+  first: { x: number; y: number; width: number; height: number },
+  second: { x: number; y: number; width: number; height: number },
+): number {
+  const width = Math.max(
+    0,
+    Math.min(first.x + first.width, second.x + second.width) - Math.max(first.x, second.x),
+  );
+  const height = Math.max(
+    0,
+    Math.min(first.y + first.height, second.y + second.height) - Math.max(first.y, second.y),
+  );
+  return width * height;
+}
+
 async function capture(page: Page, name: string): Promise<void> {
   if (!captureUiProofEnabled) {
     return;
@@ -440,10 +455,40 @@ suite.define(() => {
         await expect
           .poll(() => saveIndicator.textContent())
           .toContain("Autosave paused after reconnect");
+        const saveButton = saveIndicator.getByRole("button", { name: "Save", exact: true });
+        const buildLink = page.locator(".settings-sidebar__footer .sidebar-footer-build");
+        await saveButton.focus();
+        await expect
+          .poll(() => saveButton.evaluate((element) => element === document.activeElement))
+          .toBe(true);
+        const [saveBounds, buildBounds] = await Promise.all([
+          saveButton.boundingBox(),
+          buildLink.boundingBox(),
+        ]);
+        expect(saveBounds).not.toBeNull();
+        expect(buildBounds).not.toBeNull();
+        if (!saveBounds || !buildBounds) {
+          throw new Error("Expected visible settings footer controls");
+        }
+        expect(overlapArea(saveBounds, buildBounds)).toBe(0);
+        expect(await buildLink.textContent()).not.toBe("");
         await capture(page, "07-opaque-revision-reconnect.png");
 
+        await page.setViewportSize({ height: 900, width: 1280 });
+        const [narrowSaveBounds, narrowBuildBounds] = await Promise.all([
+          saveButton.boundingBox(),
+          buildLink.boundingBox(),
+        ]);
+        expect(narrowSaveBounds).not.toBeNull();
+        expect(narrowBuildBounds).not.toBeNull();
+        if (!narrowSaveBounds || !narrowBuildBounds) {
+          throw new Error("Expected visible settings footer controls at 1280px");
+        }
+        expect(overlapArea(narrowSaveBounds, narrowBuildBounds)).toBe(0);
+        await capture(page, "07-opaque-revision-reconnect-1280.png");
+
         await gateway.deferNext("config.set");
-        await saveIndicator.getByRole("button", { name: "Save", exact: true }).click();
+        await saveButton.click();
         const save = mutationParams(await gateway.waitForRequest("config.set"));
         expect(save.baseHash).toBe("hmac-sha256:v1:opaque-current");
         expect(JSON.parse(String(save.raw))).toMatchObject({

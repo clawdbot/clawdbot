@@ -1,6 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
+import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
+import { bindDeviceWorkerAvailability } from "../worker-environments/device-provider.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import type { GatewayRequestContext, RespondFn, SessionMutationAuthorization } from "./types.js";
 
@@ -119,6 +126,26 @@ export function makeSessionTarget(entry?: DispatchSessionEntry) {
 export function makeDispatchTestContext(
   overrides: Partial<GatewayRequestContext> = {},
 ): GatewayRequestContext {
+  const workerEnvironmentService = overrides.workerEnvironmentService ?? {
+    supportsExecutionMode: () => true,
+  };
+  if (!overrides.workerEnvironmentService) {
+    bindDeviceWorkerAvailability(workerEnvironmentService, async (deviceId) => {
+      const observed = overrides.nodeRegistry?.get?.(deviceId);
+      const node: NodeWorkerSupervisorNodeProof = {
+        nodeId: deviceId,
+        connId: observed?.connId ?? `conn-${deviceId}`,
+        pairingIdentity: observed?.pairingIdentity ?? `identity-${deviceId}`,
+        pairingGeneration: observed?.pairingGeneration ?? `generation-${deviceId}`,
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+        protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
+        commands: observed?.commands ?? ["system.run", "codex.exec-server.stdio.v1"],
+      };
+      return { available: true, node };
+    });
+  }
   return {
     getRuntimeConfig: () => ({
       cloudWorkers: {
@@ -128,10 +155,7 @@ export function makeDispatchTestContext(
       },
     }),
     ...overrides,
-    workerEnvironmentService: {
-      supportsExecutionMode: () => true,
-      ...overrides.workerEnvironmentService,
-    } as never,
+    workerEnvironmentService: workerEnvironmentService as never,
   } as unknown as GatewayRequestContext;
 }
 

@@ -242,6 +242,7 @@ type MessageToolOptions = {
   requesterSenderId?: string;
   senderIsOwner?: boolean;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
+  workspaceDir?: string;
 };
 
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
@@ -660,6 +661,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           },
           senderIsOwner: options?.senderIsOwner,
           conversationReadOrigin: options?.conversationReadOrigin,
+          workspaceDir: options?.workspaceDir,
           broadcastAccountPlan,
           gateway,
           toolContext,

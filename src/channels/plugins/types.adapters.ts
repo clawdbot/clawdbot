@@ -739,6 +739,8 @@ export type ChannelConfiguredBindingProvider = {
 export type ChannelConversationBindingSupport = {
   supportsCurrentConversationBinding?: boolean;
   isCurrentConversationBindingSupported?: (params: { accountId: string }) => boolean;
+  /** Declares that live bindings come from a channel-registered adapter, never generic storage. */
+  bindingStore?: "adapter";
   /**
    * Preferred placement when a command is started from a top-level conversation
    * without an existing native thread id.

@@ -20,7 +20,7 @@ const { launchMock } = vi.hoisted(() => ({
   launchMock: vi.fn(),
 }));
 
-let PlaywrightDiffScreenshotter: typeof import("./browser.js").PlaywrightDiffScreenshotter;
+let PlaywrightDiffScreenshotter: typeof import("./browser.runtime.js").PlaywrightDiffScreenshotter;
 
 vi.mock("playwright-core", () => ({
   chromium: {
@@ -58,7 +58,7 @@ describe("PlaywrightDiffScreenshotter", () => {
       throw new Error("process.platform descriptor is unavailable");
     }
     originalPlatform = platformDescriptor;
-    ({ PlaywrightDiffScreenshotter } = await import("./browser.js"));
+    ({ PlaywrightDiffScreenshotter } = await import("./browser.runtime.js"));
     ({ rootDir, cleanup: cleanupRootDir } = await createTempDiffRoot("openclaw-diffs-browser-"));
     outputPath = path.join(rootDir, "preview.png");
     launchMock.mockReset();

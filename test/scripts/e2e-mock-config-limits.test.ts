@@ -1,7 +1,7 @@
 // E2E Mock Config Limits tests cover e2e mock config limits script behavior.
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -288,6 +288,104 @@ describe("mock OpenAI response markers", () => {
           JSON.stringify({ chunkDelayMs: 0, hold: false, text: "visible after reveal" }),
         );
         expect((await request).output?.[0]?.content?.[0]?.text).toBe("visible after reveal");
+      });
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("consumes scripted responses in order and logs the selected entries", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-script-"));
+    const control = join(root, "response.json");
+    const requestLog = join(root, "requests.ndjson");
+    const script = {
+      scriptVersion: "script-1",
+      hold: true,
+      responses: [
+        { text: "first response" },
+        { fail: { status: 429 } },
+        { text: "third response" },
+      ],
+      default: { text: "default response" },
+    };
+    try {
+      await writeFile(control, JSON.stringify(script));
+      await writeFile(requestLog, "");
+      await withMockServer(
+        mockOpenAiPath,
+        { MOCK_REQUEST_LOG: requestLog, MOCK_RESPONSE_CONTROL: control },
+        async (baseUrl) => {
+          const request = () =>
+            fetch(`${baseUrl}/v1/responses`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ input: "scripted turn", stream: false }),
+            });
+          const firstPromise = request();
+          await delay(75);
+          await writeFile(control, JSON.stringify({ ...script, hold: false }));
+          const first = await firstPromise;
+          expect((await first.json()).output?.[0]?.content?.[0]?.text).toBe("first response");
+          const second = await request();
+          expect(second.status).toBe(429);
+          expect(await second.json()).toEqual({ error: { message: "mantis injected fault" } });
+          const third = await request();
+          expect((await third.json()).output?.[0]?.content?.[0]?.text).toBe("third response");
+          const fourth = await request();
+          expect((await fourth.json()).output?.[0]?.content?.[0]?.text).toBe("default response");
+          await writeFile(
+            control,
+            JSON.stringify({ ...script, hold: false, scriptVersion: "script-2" }),
+          );
+          const reset = await request();
+          expect((await reset.json()).output?.[0]?.content?.[0]?.text).toBe("first response");
+          await writeFile(
+            control,
+            JSON.stringify({ responses: [{ text: "last response" }], scriptVersion: "script-3" }),
+          );
+          expect((await (await request()).json()).output?.[0]?.content?.[0]?.text).toBe(
+            "last response",
+          );
+          expect((await (await request()).json()).output?.[0]?.content?.[0]?.text).toBe(
+            "last response",
+          );
+
+          const entries = (await readFile(requestLog, "utf8"))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+          expect(entries.map((entry) => entry.scriptEntry)).toEqual([
+            { entryIndex: 0, requestIndex: 0, source: "responses" },
+            { entryIndex: 1, requestIndex: 1, source: "responses" },
+            { entryIndex: 2, requestIndex: 2, source: "responses" },
+            { requestIndex: 3, source: "default" },
+            { entryIndex: 0, requestIndex: 0, source: "responses" },
+            { entryIndex: 0, requestIndex: 0, source: "responses" },
+            { entryIndex: 0, requestIndex: 1, source: "last" },
+          ]);
+        },
+      );
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("supports scripted connection drops", async () => {
+    const root = await mkdtemp(join(tmpdir(), "openclaw-mock-response-drop-"));
+    const control = join(root, "response.json");
+    try {
+      await writeFile(
+        control,
+        JSON.stringify({ responses: [{ fail: { mode: "drop" } }], scriptVersion: "drop-1" }),
+      );
+      await withMockServer(mockOpenAiPath, { MOCK_RESPONSE_CONTROL: control }, async (baseUrl) => {
+        await expect(
+          fetch(`${baseUrl}/v1/responses`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ input: "drop this turn", stream: false }),
+          }),
+        ).rejects.toThrow();
       });
     } finally {
       await rm(root, { force: true, recursive: true });

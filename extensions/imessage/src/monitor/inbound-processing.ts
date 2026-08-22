@@ -1039,6 +1039,14 @@ export async function buildIMessageInboundContext(params: {
     conversation: {
       kind: decision.isGroup ? "group" : "direct",
       id: chatId != null ? String(chatId) : decision.sender,
+      ...(decision.isGroup && chatId == null
+        ? {}
+        : {
+            routePeer: {
+              kind: decision.isGroup ? ("group" as const) : ("direct" as const),
+              id: decision.isGroup ? String(chatId) : decision.senderNormalized,
+            },
+          }),
       label: fromLabel,
     },
     route: {

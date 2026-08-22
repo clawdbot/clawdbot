@@ -19,7 +19,11 @@ type LifecycleData = {
   endedAt?: number;
   aborted?: boolean;
   error?: string;
+  stopReason?: string;
   terminalReply?: AgentRunTerminalReplySnapshot;
+  status?: string;
+  timeoutPhase?: string;
+  providerStarted?: boolean;
 };
 type LifecycleEvent = {
   stream?: string;
@@ -236,7 +240,11 @@ describe("subagent registry lifecycle error grace", () => {
       const run = mod
         .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
         .find((candidate) => candidate.runId === runId);
-      if (run?.cleanupHandled === false) {
+      if (
+        run?.cleanupHandled === false &&
+        run.delivery?.status === "pending" &&
+        run.delivery.payload
+      ) {
         return;
       }
       await vi.advanceTimersByTimeAsync(1);
@@ -282,12 +290,13 @@ describe("subagent registry lifecycle error grace", () => {
     throw new Error(`expected ${expectedCount} agent call(s), got ${getAgentCalls().length}`);
   };
 
-  const waitForFrozenResultText = async (runId: string, expectedText: string) => {
+  const waitForFrozenResult = async (runId: string, matches: (resultText: string) => boolean) => {
     for (let attempt = 0; attempt < 80; attempt += 1) {
       const run = mod
         .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
         .find((candidate) => candidate.runId === runId);
-      if (run?.completion?.resultText === expectedText) {
+      const resultText = run?.completion?.resultText;
+      if (run && typeof resultText === "string" && matches(resultText)) {
         return run;
       }
       await vi.advanceTimersByTimeAsync(1);
@@ -296,11 +305,15 @@ describe("subagent registry lifecycle error grace", () => {
     throw new Error(`run ${runId} frozen result did not refresh`);
   };
 
+  const waitForFrozenResultText = async (runId: string, expectedText: string) =>
+    waitForFrozenResult(runId, (resultText) => resultText === expectedText);
+
   function registerCompletionRun(
     runId: string,
     childSuffix: string,
     task: string,
     requesterTurnRunId?: string,
+    expectsCompletionMessage = true,
   ) {
     mod.registerSubagentRun({
       runId,
@@ -311,7 +324,7 @@ describe("subagent registry lifecycle error grace", () => {
       requesterDisplayKey: MAIN_REQUESTER_DISPLAY_KEY,
       task,
       cleanup: "keep",
-      expectsCompletionMessage: true,
+      expectsCompletionMessage,
     });
   }
 
@@ -451,10 +464,18 @@ describe("subagent registry lifecycle error grace", () => {
       }),
     );
 
-    emitLifecycleEvent("run-yield-alpha", { phase: "end", endedAt: Date.now() });
+    emitLifecycleEvent("run-yield-alpha", {
+      phase: "end",
+      endedAt: Date.now(),
+      terminalReply: { disposition: "visible", text: "alpha complete" },
+    });
     await waitForAgentCallCount(1);
 
-    emitLifecycleEvent("run-yield-beta", { phase: "end", endedAt: Date.now() + 1 });
+    emitLifecycleEvent("run-yield-beta", {
+      phase: "end",
+      endedAt: Date.now() + 1,
+      terminalReply: { disposition: "visible", text: "beta complete" },
+    });
     await waitForAgentCallCount(2);
     const betaBeforeYield = mod
       .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
@@ -583,7 +604,11 @@ describe("subagent registry lifecycle error grace", () => {
     expect(getRequesterWakeCalls()).toHaveLength(0);
     expect(liveChild.execution.status).toBe("running");
 
-    emitLifecycleEvent("run-frozen-live-child", { phase: "end", endedAt: Date.now() + 1 });
+    emitLifecycleEvent("run-frozen-live-child", {
+      phase: "end",
+      endedAt: Date.now() + 1,
+      terminalReply: { disposition: "visible", text: "live child complete" },
+    });
     await waitForAgentCallCount(1);
     await waitForDeliveredCleanup("run-frozen-live-child");
 
@@ -616,7 +641,11 @@ describe("subagent registry lifecycle error grace", () => {
     await vi.advanceTimersByTimeAsync(20_000);
     expect(getAgentCalls()).toHaveLength(0);
 
-    emitLifecycleEvent("run-transient-error", { phase: "end", endedAt: 1_250 });
+    emitLifecycleEvent("run-transient-error", {
+      phase: "end",
+      endedAt: 1_250,
+      terminalReply: { disposition: "visible", text: "Final answer transient" },
+    });
     await flushAsync();
 
     await waitForAgentCallCount(1);
@@ -650,7 +679,11 @@ describe("subagent registry lifecycle error grace", () => {
     agentCallPlan = ["throw", "ok"];
 
     const endedAt = Date.now();
-    emitLifecycleEvent("run-freeze", { phase: "end", endedAt });
+    emitLifecycleEvent("run-freeze", {
+      phase: "end",
+      endedAt,
+      terminalReply: { disposition: "visible", text: "Final answer X" },
+    });
     await flushAsync();
 
     await waitForAgentCallCount(1);
@@ -661,7 +694,11 @@ describe("subagent registry lifecycle error grace", () => {
     await waitForCleanupHandledFalse("run-freeze");
 
     setAssistantOutput("agent:main:subagent:freeze", "Late reply Y");
-    emitLifecycleEvent("run-freeze", { phase: "end", endedAt: endedAt + 100 });
+    emitLifecycleEvent("run-freeze", {
+      phase: "end",
+      endedAt: endedAt + 100,
+      terminalReply: { disposition: "visible", text: "Final answer X" },
+    });
     await flushAsync();
 
     await waitForAgentCallCount(2);
@@ -680,7 +717,14 @@ describe("subagent registry lifecycle error grace", () => {
     agentCallPlan = ["throw", "ok"];
 
     const endedAt = Date.now();
-    emitLifecycleEvent("run-refresh", { phase: "end", endedAt });
+    emitLifecycleEvent("run-refresh", {
+      phase: "end",
+      endedAt,
+      terminalReply: {
+        disposition: "visible",
+        text: "Both spawned. Waiting for completion events...",
+      },
+    });
     await flushAsync();
 
     await waitForAgentCallCount(1);
@@ -713,7 +757,14 @@ describe("subagent registry lifecycle error grace", () => {
     );
     expect((runAfterRefresh?.completion?.capturedAt ?? 0) >= firstCapturedAt).toBe(true);
 
-    emitLifecycleEvent("run-refresh", { phase: "end", endedAt: endedAt + 300 });
+    emitLifecycleEvent("run-refresh", {
+      phase: "end",
+      endedAt: endedAt + 300,
+      terminalReply: {
+        disposition: "visible",
+        text: "All 3 subagents complete. Here's the final summary.",
+      },
+    });
     await flushAsync();
 
     await waitForAgentCallCount(2);
@@ -729,7 +780,14 @@ describe("subagent registry lifecycle error grace", () => {
     agentCallPlan = ["throw", "ok"];
 
     const endedAt = Date.now();
-    emitLifecycleEvent("run-refresh-silent", { phase: "end", endedAt });
+    emitLifecycleEvent("run-refresh-silent", {
+      phase: "end",
+      endedAt,
+      terminalReply: {
+        disposition: "visible",
+        text: "All work complete, final summary",
+      },
+    });
     await flushAsync();
     await waitForCleanupHandledFalse("run-refresh-silent");
     await waitForFrozenResultText("run-refresh-silent", "All work complete, final summary");
@@ -747,7 +805,14 @@ describe("subagent registry lifecycle error grace", () => {
       .find((candidate) => candidate.runId === "run-refresh-silent");
     expect(runAfterSilent?.completion?.resultText).toBe("All work complete, final summary");
 
-    emitLifecycleEvent("run-refresh-silent", { phase: "end", endedAt: endedAt + 300 });
+    emitLifecycleEvent("run-refresh-silent", {
+      phase: "end",
+      endedAt: endedAt + 300,
+      terminalReply: {
+        disposition: "visible",
+        text: "All work complete, final summary",
+      },
+    });
     await flushAsync();
 
     await waitForAgentCallCount(2);
@@ -758,54 +823,86 @@ describe("subagent registry lifecycle error grace", () => {
   });
 
   it("regression, captures frozen completion output with 100KB cap and retains it for keep-mode cleanup", async () => {
-    registerCompletionRun("run-capped", "capped", "capped result test");
+    registerCompletionRun("run-capped", "capped", "capped result test", undefined, false);
     setAssistantOutput("agent:main:subagent:capped", "x".repeat(120 * 1024));
 
     emitLifecycleEvent("run-capped", { phase: "end", endedAt: Date.now() });
     await flushAsync();
 
-    await waitForAgentCallCount(1);
-    const cappedResults = getAgentResultsForChildSession("agent:main:subagent:capped");
-    expect(cappedResults).toHaveLength(1);
-    expect(cappedResults[0]).toContain("[truncated: frozen completion output exceeded 100KB");
-    expect(Buffer.byteLength(cappedResults[0] ?? "", "utf8")).toBeLessThanOrEqual(100 * 1024);
-
-    const run = mod
-      .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
-      .find((candidate) => candidate.runId === "run-capped");
-    if (!run) {
-      throw new Error("expected capped run to exist");
-    }
+    const run = await waitForFrozenResult("run-capped", (resultText) =>
+      resultText.includes("[truncated: frozen completion output exceeded 100KB"),
+    );
+    expect(getAgentCalls()).toHaveLength(0);
     expect(run.runId).toBe("run-capped");
     expect(typeof run.completion?.resultText).toBe("string");
     expect(run.completion?.resultText).toContain(
       "[truncated: frozen completion output exceeded 100KB",
     );
+    expect(Buffer.byteLength(run.completion?.resultText ?? "", "utf8")).toBeLessThanOrEqual(
+      100 * 1024,
+    );
     expect(run.completion?.capturedAt).toBeTypeOf("number");
   });
 
-  it("completes with timeout status when aborted end event fires after grace window", async () => {
-    registerCompletionRun("run-timeout", "timeout", "timeout test");
-    setAssistantOutput("agent:main:subagent:timeout", "Partial output before timeout");
+  it("records a bare aborted end event as cancellation after retry grace", async () => {
+    registerCompletionRun("run-aborted", "aborted", "aborted test");
+    setAssistantOutput("agent:main:subagent:aborted", "Partial output before cancellation");
 
-    // Emit an end event with aborted=true which triggers the timeout grace path
-    emitLifecycleEvent("run-timeout", {
+    emitLifecycleEvent("run-aborted", {
       phase: "end",
       aborted: true,
       endedAt: 3_000,
-    } as LifecycleData & { aborted: boolean });
+    });
     await flushAsync();
+
     expect(getAgentCalls()).toHaveLength(0);
+    expect(
+      mod
+        .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+        .find((candidate) => candidate.runId === "run-aborted")?.execution.status,
+    ).toBe("running");
 
-    // Advance past the lifecycle timeout retry grace window
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(15_000);
     await flushAsync();
-
-    await waitForAgentCallCount(1);
 
     const run = mod
       .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
-      .find((candidate) => candidate.runId === "run-timeout");
+      .find((candidate) => candidate.runId === "run-aborted");
+    expect(run).toMatchObject({
+      endedReason: "subagent-killed",
+      execution: { outcome: { status: "error", error: "subagent run terminated" } },
+    });
+    expect(getAgentCalls()).toHaveLength(0);
+  });
+
+  it("announces a provider hard timeout from its canonical lifecycle metadata", async () => {
+    registerCompletionRun("run-provider-timeout", "provider-timeout", "provider timeout test");
+    setAssistantOutput(
+      "agent:main:subagent:provider-timeout",
+      "Partial output before provider timeout",
+    );
+
+    emitLifecycleEvent("run-provider-timeout", {
+      phase: "end",
+      aborted: true,
+      stopReason: "restart",
+      status: "timeout",
+      timeoutPhase: "provider",
+      providerStarted: true,
+      endedAt: 3_000,
+      error: "provider timed out",
+    });
+    await flushAsync();
+    expect(getAgentCalls()).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await flushAsync();
+    await waitForAgentCallCount(1);
+
+    expect(readFirstAnnounceOutcome()?.status).toBe("timeout");
+    const run = mod
+      .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+      .find((candidate) => candidate.runId === "run-provider-timeout");
     expect(run?.execution.outcome?.status).toBe("timeout");
   });
 
@@ -813,17 +910,24 @@ describe("subagent registry lifecycle error grace", () => {
     registerCompletionRun("run-timeout-cancel", "timeout-cancel", "timeout cancel test");
     setAssistantOutput("agent:main:subagent:timeout-cancel", "Final answer after recovery");
 
-    // Emit an aborted end event (starts timeout grace)
+    // Emit a structured timeout terminal (starts timeout grace).
     emitLifecycleEvent("run-timeout-cancel", {
       phase: "end",
       aborted: true,
+      status: "timeout",
+      timeoutPhase: "provider",
+      providerStarted: true,
       endedAt: 4_000,
-    } as LifecycleData & { aborted: boolean });
+    });
     await flushAsync();
     expect(getAgentCalls()).toHaveLength(0);
 
     // Before the grace window, the run successfully ends (non-aborted)
-    emitLifecycleEvent("run-timeout-cancel", { phase: "end", endedAt: 4_500 });
+    emitLifecycleEvent("run-timeout-cancel", {
+      phase: "end",
+      endedAt: 4_500,
+      terminalReply: { disposition: "visible", text: "Final answer after recovery" },
+    });
     await flushAsync();
 
     await waitForAgentCallCount(1);
@@ -857,8 +961,16 @@ describe("subagent registry lifecycle error grace", () => {
     agentCallPlan = ["throw", "throw", "ok", "ok"];
 
     const parallelEndedAt = Date.now();
-    emitLifecycleEvent("run-parallel-a", { phase: "end", endedAt: parallelEndedAt });
-    emitLifecycleEvent("run-parallel-b", { phase: "end", endedAt: parallelEndedAt + 1 });
+    emitLifecycleEvent("run-parallel-a", {
+      phase: "end",
+      endedAt: parallelEndedAt,
+      terminalReply: { disposition: "visible", text: "Final answer A" },
+    });
+    emitLifecycleEvent("run-parallel-b", {
+      phase: "end",
+      endedAt: parallelEndedAt + 1,
+      terminalReply: { disposition: "visible", text: "Final answer B" },
+    });
     await flushAsync();
 
     await waitForAgentCallCount(2);
@@ -868,8 +980,16 @@ describe("subagent registry lifecycle error grace", () => {
     setAssistantOutput("agent:main:subagent:parallel-a", "Late overwrite");
     setAssistantOutput("agent:main:subagent:parallel-b", "Late overwrite");
 
-    emitLifecycleEvent("run-parallel-a", { phase: "end", endedAt: parallelEndedAt + 100 });
-    emitLifecycleEvent("run-parallel-b", { phase: "end", endedAt: parallelEndedAt + 101 });
+    emitLifecycleEvent("run-parallel-a", {
+      phase: "end",
+      endedAt: parallelEndedAt + 100,
+      terminalReply: { disposition: "visible", text: "Final answer A" },
+    });
+    emitLifecycleEvent("run-parallel-b", {
+      phase: "end",
+      endedAt: parallelEndedAt + 101,
+      terminalReply: { disposition: "visible", text: "Final answer B" },
+    });
     await flushAsync();
 
     await waitForAgentCallCount(4);

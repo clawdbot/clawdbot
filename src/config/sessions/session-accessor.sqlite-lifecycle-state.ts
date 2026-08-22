@@ -405,6 +405,7 @@ export async function projectSessionEntryLifecycleMutation(
       expectedEntry,
       sessionKey,
       entry: cloned,
+      ...(upsert.routeContext !== undefined ? { routeContext: upsert.routeContext } : {}),
       ...(resetBoundaryPlan ? { resetBoundaryPlan } : {}),
     });
   }
@@ -627,7 +628,7 @@ export function planSessionLifecycleArtifactCleanup(
     ) {
       continue;
     }
-    const entry = parseSessionEntryRow(row);
+    const entry = projectedStore[row.session_key];
     const sessionIds = uniqueStrings([
       row.current_session_id,
       ...(entry ? collectSessionStateIdsForEntry(entry) : []),

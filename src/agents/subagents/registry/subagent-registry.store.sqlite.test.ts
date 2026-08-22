@@ -301,6 +301,9 @@ describe("subagent registry sqlite store", () => {
         },
       });
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      openOpenClawStateDatabase()
+        .db.prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
+        .run("2026.7.0");
       closeOpenClawStateDatabaseForTest();
 
       const restored = loadSubagentRegistryFromSqlite().get(run.runId);

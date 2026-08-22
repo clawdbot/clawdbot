@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
   assertTrustedWorkflowHarness,
@@ -10,10 +10,13 @@ import {
   FULL_RELEASE_WAIT_TIMEOUT_MINUTES,
   parseArgs,
   releaseProfileForTarget,
+  releaseDecisionStopsForeground,
   releaseEvidenceVerificationArgs,
   releaseEvidenceVerifierPath,
   resolveRemoteTargetRefSha,
   shouldDeleteTemporaryWorkflowRef,
+  tryReadReleaseDecision,
+  validateReleaseDecisionPayload,
   verifyTargetRef,
   verifyTrustedWorkflowRef,
 } from "../../scripts/full-release-validation-at-sha.mts";
@@ -160,7 +163,10 @@ if (args[0] === "workflow" && args[1] === "run") {
   }
   console.log("https://github.com/openclaw/openclaw/actions/runs/123");
 } else if (args[0] === "api" && args.at(-1).endsWith("/actions/runs/123")) {
-  console.log(JSON.stringify({ status: "completed", conclusion: "success", head_sha: process.env.MOCK_WORKFLOW_SHA }));
+  console.log(JSON.stringify({ status: "completed", conclusion: "success", head_sha: process.env.MOCK_WORKFLOW_SHA, run_attempt: 1 }));
+} else if (args[0] === "run" && args[1] === "download") {
+  console.error("no valid artifacts found");
+  process.exit(1);
 } else {
   console.error("unexpected gh call: " + args.join(" "));
   process.exit(2);
@@ -560,10 +566,82 @@ describe("full-release-validation-at-sha", () => {
     expect(source).toContain("const remainingMs = deadline - Date.now();");
     expect(source).toContain("Math.min(FULL_RELEASE_WAIT_POLL_INTERVAL_MS, remainingMs)");
     expect(source).toContain("Parent run progress after ${elapsedMinutes}m");
+    expect(source).toContain("formatReleaseStateOutcome(releaseDecision)");
     expect(source).toContain(
       "Timed out after ${FULL_RELEASE_WAIT_TIMEOUT_MINUTES} minutes waiting for Full Release Validation",
     );
     expect(source).not.toContain("attempt < 480");
+  });
+
+  it("binds early release decisions to the exact parent attempt and tooling SHA", () => {
+    const payload = {
+      kind: "openclaw.full-release-decision",
+      mode: "decision",
+      parentRunAttempt: 2,
+      sourceParentRunAttempt: 1,
+      parentRunId: "123",
+      activeRunIds: ["101"],
+      blockers: [{ child: "normalCi", job: "test", runId: "101" }],
+      cancellation: { cancelledRunIds: [], requested: false },
+      children: {},
+      errors: [],
+      executionPlanSha256: "c".repeat(64),
+      releaseProfile: "stable",
+      rerunGroup: "ci",
+      state: "blocked_diagnostics_running",
+      targetSha: "b".repeat(40),
+      version: 2,
+      workflowRef: "main",
+      workflowSha: "a".repeat(40),
+    };
+    expect(
+      validateReleaseDecisionPayload(payload, {
+        parentRunAttempt: 2,
+        parentRunId: "123",
+        workflowSha: "a".repeat(40),
+      }),
+    ).toMatchObject(payload);
+    expect(releaseDecisionStopsForeground("blocked_diagnostics_running")).toBe(true);
+    expect(releaseDecisionStopsForeground("passed")).toBe(false);
+    expect(() =>
+      validateReleaseDecisionPayload(
+        { ...payload, parentRunAttempt: 3 },
+        {
+          parentRunAttempt: 2,
+          parentRunId: "123",
+          workflowSha: "a".repeat(40),
+        },
+      ),
+    ).toThrow("binding is invalid");
+  });
+
+  it("treats only transient Release Decision download failures as unavailable this poll", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(
+        tryReadReleaseDecision("123", 1, "a".repeat(40), () => ({
+          error: undefined,
+          signal: null,
+          status: 1,
+          stderr: "HTTP 503: Server Error",
+          stdout: "",
+        })),
+      ).toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("Release Decision artifact unavailable this poll"),
+      );
+      expect(() =>
+        tryReadReleaseDecision("123", 1, "a".repeat(40), () => ({
+          error: undefined,
+          signal: null,
+          status: 1,
+          stderr: "HTTP 403: Bad credentials",
+          stdout: "",
+        })),
+      ).toThrow("Release Decision artifact download failed");
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("bounds GitHub reads without applying a timeout to workflow dispatch", () => {

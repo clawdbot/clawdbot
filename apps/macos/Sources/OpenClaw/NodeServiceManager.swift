@@ -3,48 +3,22 @@ import OSLog
 
 enum NodeServiceManager {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "node.service")
+    private static let lifecycleQueue = LifecycleQueue()
     private static var launchdPlistURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents/\(nodeLaunchdLabel).plist")
     }
 
     static func start(profile: AppProfile = .current) async -> String? {
-        if self.skipUnderProfile(profile, action: "start") { return nil }
-        let result = await self.runServiceCommandResult(
-            ["start"],
-            timeout: 20,
-            quiet: false)
-        if let error = self.errorMessage(from: result, treatNotLoadedAsError: true) {
-            self.logger.error("node service start failed: \(error, privacy: .public)")
-            return error
-        }
-        return nil
+        await self.lifecycleQueue.run("start", profile: profile)
     }
 
     static func stop(profile: AppProfile = .current) async -> String? {
-        if self.skipUnderProfile(profile, action: "stop") { return nil }
-        let result = await self.runServiceCommandResult(
-            ["stop"],
-            timeout: 15,
-            quiet: false)
-        if let error = self.errorMessage(from: result, treatNotLoadedAsError: false) {
-            self.logger.error("node service stop failed: \(error, privacy: .public)")
-            return error
-        }
-        return nil
+        await self.lifecycleQueue.run("stop", profile: profile)
     }
 
     static func restart(profile: AppProfile = .current) async -> String? {
-        if self.skipUnderProfile(profile, action: "restart") { return nil }
-        let result = await self.runServiceCommandResult(
-            ["restart"],
-            timeout: 20,
-            quiet: false)
-        if let error = self.errorMessage(from: result, treatNotLoadedAsError: true) {
-            self.logger.error("node service restart failed: \(error, privacy: .public)")
-            return error
-        }
-        return nil
+        await self.lifecycleQueue.run("restart", profile: profile)
     }
 
     /// Empty means no node LaunchAgent. Nil means the on-disk ownership proof
@@ -82,6 +56,31 @@ enum NodeServiceManager {
 }
 
 extension NodeServiceManager {
+    private actor LifecycleQueue {
+        private var tail: Task<String?, Never>?
+
+        func run(_ action: String, profile: AppProfile) async -> String? {
+            if NodeServiceManager.skipUnderProfile(profile, action: action) { return nil }
+            let predecessor = self.tail
+            let task = Task<String?, Never> {
+                _ = await predecessor?.value
+                let result = await NodeServiceManager.runServiceCommandResult(
+                    [action],
+                    timeout: action == "stop" ? 15 : 20,
+                    quiet: false)
+                guard let error = NodeServiceManager.errorMessage(
+                    from: result,
+                    treatNotLoadedAsError: action != "stop")
+                else { return nil }
+                NodeServiceManager.logger.error(
+                    "node service \(action, privacy: .public) failed: \(error, privacy: .public)")
+                return error
+            }
+            self.tail = task
+            return await task.value
+        }
+    }
+
     private static func skipUnderProfile(_ profile: AppProfile, action: String) -> Bool {
         guard profile.isActive else { return false }
         self.logger.info("node service \(action, privacy: .public) skipped (unavailable under app profile)")

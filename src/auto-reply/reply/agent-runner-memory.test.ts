@@ -236,6 +236,8 @@ type EmbeddedAgentParams = {
   transcriptPrompt?: string;
   memoryFlushWritePath?: string;
   silentExpected?: boolean;
+  allowEmptyAssistantReplyAsSilent?: boolean;
+  terminalReplyExpectation?: "required" | "optional";
   extraSystemPrompt?: string;
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
@@ -474,6 +476,8 @@ describe("runMemoryFlushIfNeeded", () => {
     const followupRun = createTestFollowupRun({
       authProfileId: "anthropic:work",
       authProfileIdSource: "user",
+      allowEmptyAssistantReplyAsSilent: false,
+      terminalReplyExpectation: "required",
     });
     const { result, sessionKey, storePath } = await runProjectedCompaction(true, followupRun);
 
@@ -489,6 +493,8 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushCall.prompt).not.toBe(flushCall.transcriptPrompt);
     expect(flushCall.memoryFlushWritePath).toMatch(/^memory\/\d{4}-\d{2}-\d{2}\.md$/);
     expect(flushCall.silentExpected).toBe(true);
+    expect(flushCall.allowEmptyAssistantReplyAsSilent).toBe(true);
+    expect(flushCall.terminalReplyExpectation).toBe("optional");
     expect(registerAgentRunContextMock).toHaveBeenCalledWith(
       "00000000-0000-0000-0000-000000000001",
       expect.objectContaining({

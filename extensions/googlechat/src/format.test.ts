@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { formatGoogleChatTextChunks, GOOGLE_CHAT_FORMAT_PROFILE } from "./format.js";
 
 const formatGoogleChatText = (text: string) => formatGoogleChatTextChunks(text).join("");
@@ -102,6 +102,26 @@ describe("formatGoogleChatText", () => {
   it("uses semantic list depth instead of authored indentation width", () => {
     expect(formatGoogleChatText("- parent\n    - child")).toBe("* parent\n    * child");
     expect(formatGoogleChatText("   - top-level")).toBe("* top-level");
+  });
+
+  it("keeps dense bullet-list formatting work bounded", () => {
+    const input = Array.from({ length: 1_000 }, (_, index) => `- row ${index}`).join("\n");
+    const expected = input.replace(/^- /gmu, "* ");
+    const sliceSpy = vi.spyOn(String.prototype, "slice");
+    let fullMessagePrefixSlices = 0;
+    try {
+      expect(formatGoogleChatText(input)).toBe(expected);
+      fullMessagePrefixSlices = sliceSpy.mock.calls.reduce((count, [start, end], index) => {
+        const source = sliceSpy.mock.contexts[index];
+        return String(source).length === input.length && start === 0 && end !== undefined
+          ? count + 1
+          : count;
+      }, 0);
+    } finally {
+      sliceSpy.mockRestore();
+    }
+
+    expect(fullMessagePrefixSlices).toBeLessThan(50);
   });
 
   it("neutralizes nested markup inside native link labels", () => {

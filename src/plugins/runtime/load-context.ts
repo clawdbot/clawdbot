@@ -137,6 +137,7 @@ export type PluginRuntimeLoadContext = {
   manifestRegistry?: PluginManifestRegistry;
   metadataSnapshot?: PluginMetadataSnapshot;
   installRecords?: Record<string, PluginInstallRecord>;
+  preferBuiltPluginArtifacts?: boolean;
 };
 
 /** Runtime load option values that can be passed directly to plugin loading. */
@@ -150,6 +151,7 @@ type PluginRuntimeResolvedLoadValues = Pick<
   | "logger"
   | "manifestRegistry"
   | "installRecords"
+  | "preferBuiltPluginArtifacts"
 >;
 
 /** Options accepted while resolving plugin runtime load context. */
@@ -162,6 +164,7 @@ type PluginRuntimeLoadContextOptions = {
   logger?: PluginLogger;
   manifestRegistry?: PluginManifestRegistry;
   metadataSnapshot?: PluginMetadataSnapshot;
+  preferBuiltPluginArtifacts?: boolean;
 };
 
 /** Creates the default plugin runtime loader logger. */
@@ -262,6 +265,7 @@ export function resolvePluginRuntimeLoadContext(
     ...(finalManifestRegistry ? { manifestRegistry: finalManifestRegistry } : {}),
     ...(metadataSnapshot ? { metadataSnapshot } : {}),
     installRecords,
+    preferBuiltPluginArtifacts: options?.preferBuiltPluginArtifacts === true,
   };
 }
 
@@ -287,6 +291,7 @@ export function buildPluginRuntimeLoadOptionsFromValues(
     logger: values.logger,
     manifestRegistry: values.manifestRegistry,
     installRecords: values.installRecords,
+    preferBuiltPluginArtifacts: values.preferBuiltPluginArtifacts,
     ...overrides,
   };
 }

@@ -200,27 +200,17 @@ function registerSessionsLifecycleCommand(
     });
 }
 
-function parseTimeoutMs(timeout: unknown): number | null | undefined {
-  const parsed = parseStrictPositiveInteger(timeout);
-  if (timeout !== undefined && parsed === undefined) {
-    defaultRuntime.error("--timeout must be a positive integer (milliseconds)");
-    defaultRuntime.exit(1);
-    return null;
-  }
-  return parsed;
-}
-
 async function runWithVerboseAndTimeout(
   opts: { verbose?: boolean; debug?: boolean; timeout?: unknown },
   action: (params: { verbose: boolean; timeoutMs: number | undefined }) => Promise<void>,
 ): Promise<void> {
   const verbose = resolveVerbose(opts);
   setVerbose(verbose);
-  const timeoutMs = parseTimeoutMs(opts.timeout);
-  if (timeoutMs === null) {
-    return;
-  }
   await runCommandWithRuntime(defaultRuntime, async () => {
+    const timeoutMs = parseStrictPositiveInteger(opts.timeout);
+    if (opts.timeout !== undefined && timeoutMs === undefined) {
+      throw new Error("--timeout must be a positive integer (milliseconds)");
+    }
     await action({ verbose, timeoutMs });
   });
 }

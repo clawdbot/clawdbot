@@ -219,12 +219,25 @@ CREATE TABLE IF NOT EXISTS session_conversations (
   session_id TEXT NOT NULL,
   conversation_id TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'primary' CHECK (role IN ('primary', 'participant', 'related')),
+  route_context_json TEXT,
   first_seen_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL,
   PRIMARY KEY (session_id, conversation_id, role),
   FOREIGN KEY (session_id) REFERENCES "session_windows"(session_id) ON DELETE CASCADE,
   FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE
 ) STRICT;
+
+-- Older same-version writers preserve the envelope while updating the association.
+CREATE TRIGGER IF NOT EXISTS session_conversations_route_context_invalidate_after_update
+AFTER UPDATE OF role, last_seen_at ON session_conversations
+WHEN NEW.route_context_json IS OLD.route_context_json
+BEGIN
+  UPDATE session_conversations
+  SET route_context_json = NULL
+  WHERE session_id = NEW.session_id
+    AND conversation_id = NEW.conversation_id
+    AND role = NEW.role;
+END;
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_conversations_conversation
   ON session_conversations(conversation_id, last_seen_at DESC, session_id);

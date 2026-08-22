@@ -380,6 +380,7 @@ export async function runBridgeRequest(params: {
   parentToolCallId: string;
   codeModeRunId: string;
   maxOutputBytes: number;
+  remainingMs: number;
   ctx: ToolSearchToolContext;
   request: PendingBridgeRequest;
   signal?: AbortSignal;
@@ -439,7 +440,24 @@ export async function runBridgeRequest(params: {
         if (!binding) {
           throw new ToolInputError(`Unknown catalog function: ${callableName}.`);
         }
-        const called = await params.runtime.callExactId(binding.id, values[1] ?? {}, {
+        let input = values[1] ?? {};
+        if (
+          binding.source === "openclaw" &&
+          binding.name === "exec" &&
+          binding.input?.includes("yieldMs") === true &&
+          isRecord(input) &&
+          input.background !== true &&
+          input.yieldMs === undefined
+        ) {
+          // The shell's 10s default equals Code Mode's default budget. Yield
+          // within the remaining shared deadline so late sequential calls can
+          // still return their process handle and resume the guest inline.
+          input = {
+            ...input,
+            yieldMs: Math.max(1, Math.min(1_000, Math.floor(params.remainingMs / 4))),
+          };
+        }
+        const called = await params.runtime.callExactId(binding.id, input, {
           parentToolCallId: params.parentToolCallId,
           signal: params.signal,
           onUpdate: params.onUpdate,

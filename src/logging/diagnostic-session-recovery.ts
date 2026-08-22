@@ -87,8 +87,8 @@ export function recoveryOutcomeClearsQueuedSessionState(
   outcome: StuckSessionRecoveryOutcome,
 ): boolean {
   return (
-    outcome.status === "released" ||
-    (outcome.status === "aborted" && outcome.released > 0 && (outcome.queuedCount ?? 0) === 0)
+    (outcome.status === "released" || (outcome.status === "aborted" && outcome.released > 0)) &&
+    (outcome.queuedCount ?? 0) === 0
   );
 }
 

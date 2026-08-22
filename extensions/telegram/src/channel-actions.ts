@@ -72,7 +72,7 @@ function resolveTelegramMessageActionName(action: ChannelMessageActionName) {
   return TELEGRAM_MESSAGE_ACTION_MAP[action as keyof typeof TELEGRAM_MESSAGE_ACTION_MAP];
 }
 
-function prepareTelegramSendPayload({
+async function prepareTelegramSendPayload({
   ctx,
   payload,
 }: Parameters<NonNullable<ChannelMessageActionAdapter["prepareSendPayload"]>>[0]) {
@@ -217,6 +217,7 @@ function describeTelegramMessageTool({
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeTelegramMessageTool,
+  providerOwnedReadGates: ["react", "edit", "delete"],
   resolveExecutionMode: () => "gateway",
   messageActionTargetAliases: {
     react: { aliases: ["messageId"], deliveryTargetAliases: [] },

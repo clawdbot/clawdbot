@@ -36,6 +36,7 @@ import {
 } from "./inbound-context.js";
 import { buildDirectLabel, buildGuildLabel } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
+import { buildDiscordConversationRouteContext } from "./route-resolution.js";
 
 const loadConversationRuntime = createLazyRuntimeModule(
   () => import("./agent-components.runtime.js"),
@@ -202,6 +203,14 @@ export async function dispatchDiscordComponentEvent(params: {
     SessionKey: sessionKey,
     AccountId: accountId,
     ChatType: chatType,
+    ...buildDiscordConversationRouteContext({
+      isDirectMessage: interactionCtx.isDirectMessage,
+      isGroupDm: interactionCtx.isGroupDm,
+      directUserId: interactionCtx.userId,
+      conversationId: interactionCtx.channelId,
+      isThread: channelCtx.isThread,
+      parentConversationId: channelCtx.parentId,
+    }),
     ConversationLabel: fromLabel,
     SenderName: senderName,
     SenderId: interactionCtx.userId,

@@ -504,6 +504,7 @@ type TuiProcessExitTimeout = (callback: () => void, delayMs: number) => TuiProce
 type TuiShutdownTask = () => void | Promise<void>;
 
 export function beginTuiShutdown(params: {
+  stopCommandScopes?: TuiShutdownTask;
   stopClient: TuiShutdownTask;
   stopTui: TuiShutdownTask;
   disposeStatus: () => void;
@@ -525,10 +526,13 @@ export function beginTuiShutdown(params: {
   void Promise.resolve()
     .then(async () => {
       const errors: unknown[] = [];
-      try {
-        await params.stopClient();
-      } catch (error) {
-        errors.push(error);
+      const runtimeTasks = [params.stopCommandScopes, params.stopClient].map(async (task) =>
+        task?.(),
+      );
+      for (const result of await Promise.allSettled(runtimeTasks)) {
+        if (result.status === "rejected") {
+          errors.push(result.reason);
+        }
       }
       // Terminal ownership must be released even when transport teardown fails.
       try {
@@ -1496,6 +1500,12 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     clearLocalBtwRunIds: localBtwRunIds.clear,
   });
   reconcileReconnectRun = reconnectStreamingWatchdog;
+  const localShell = createLocalShellRunner({
+    chatLog,
+    tui,
+    openOverlay,
+    closeOverlay,
+  });
   invalidateSessionRunOwnership = () => {
     disposeEventHandlers();
     state.activeChatRunId = null;
@@ -1531,6 +1541,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     pluginApprovals?.dispose();
     taskSuggestions?.dispose();
     beginTuiShutdown({
+      stopCommandScopes: () => localShell.shutdown(),
       stopClient: () => client.stop(),
       stopTui: () => drainAndStopTuiSafely(tui),
       disposeStatus,
@@ -1592,12 +1603,6 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     requestExit,
   });
 
-  const { runLocalShellLine } = createLocalShellRunner({
-    chatLog,
-    tui,
-    openOverlay,
-    closeOverlay,
-  });
   updateAutocompleteProvider();
   const notifySubmitError = (action: TuiSubmitAction, error: unknown) => {
     const message = formatTuiErrorMessage(error);
@@ -1608,7 +1613,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     editor,
     handleCommand,
     sendMessage,
-    handleBangLine: runLocalShellLine,
+    handleBangLine: localShell.runLocalShellLine,
     onSubmitError: notifySubmitError,
     admitMessage: resolveMessageAdmission,
     onBlockedMessageSubmit: reportBlockedMessageSubmit,

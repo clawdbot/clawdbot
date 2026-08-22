@@ -10,7 +10,7 @@ continuous event recording, capture, and cleanup.
 - Do not read prepared worktrees. Pass their exact paths only to the lane helper.
 - Write only under `MANTIS_OUTPUT_DIR`.
 - Never invent a pass, hide an attempt, edit trusted facts/media, or use old chat history.
-- A visible defect is a failure. A missing harness capability is `block`, not a pass.
+- A visible defect is a failure. An unproven comparison is `block`, not a pass.
 
 ## Design the proof
 
@@ -25,6 +25,7 @@ commands, routing, stop behavior, TTS/audio, and timing as visible.
 
 Write a short Bash scenario under `MANTIS_OUTPUT_DIR`; use TypeScript only when
 timing or concurrency needs it. Compose the primitives below in any order needed.
+Start from `.github/codex/prompts/mantis-recipes/` when a listed pattern matches.
 Use `jq` or code for scenario-specific assertions, not generic wrappers or schema
 parsers. The helper's JSON is factual evidence, not a semantic verdict. Run
 TypeScript scenarios with `$MANTIS_NODE_BIN --import tsx <scenario.ts>`.
@@ -57,21 +58,37 @@ Use `$OPENCLAW_TELEGRAM_MANTIS_LANE_CMD` with `--lane baseline|candidate`:
 - `mock --response-events-file <public-json>` (replace a later Responses API turn
   with a JSON array of raw response events; use for reasoning, tool calls, or any
   stream shape that plain text cannot express)
+- `mock --script <public-json> <sha256>` (consume `responses` in request order,
+  then `default` or the last entry; entries choose `text`, `eventsFile`, or
+  `fail` with `status`/`mode:"drop"`, plus optional `chunkDelayMs`)
+- `botapi-fail <method> [--times N] [--status CODE | --drop]`; `botapi-clear`
+- `botapi-requests [--method M] [--limit N]` (bounded recorded outbound Bot API
+  calls, parsed payloads, statuses, and injected-fault facts)
 - `send --text <text>`; also `--text-file`, `--media` (document), `--reply-to`
 - `turn --text <text> --observe-seconds 15` (send + observe convenience)
-- `observe --seconds N [--since cursor]` (messages, edits, deletes, typing)
+- `observe --seconds N [--since cursor] [--until-events N] [--until-text substring]
+[--until-provider-requests N]` (returns early when all supplied conditions hold;
+  event/text conditions count only events after the cursor, provider count is
+  cumulative for the lane)
 - `requests` (redacted provider requests; zero is a valid recorded fact)
 - `press --message-id ID --button INDEX`
 - `delete --message-id ID` (only user messages sent in this session)
+- `desktop --actions-file <public-json> [--timeout-seconds N]` (run an
+  agent-authored click/key/type/sleep action sequence in the recorded desktop)
 - `view --message-id ID` (scroll Desktop to the exact Telegram server message)
 - `screenshot` (returns a public inspection PNG)
-- `finish --focus-message-id ID` (focus again, stop, capture, publish facts)
-- `block --missing-primitive NAME --reason TEXT` (clean stop-report)
+- `finish [--focus-message-id ID]` (focus the named message or the latest sent message, stop, capture, publish facts)
+- `block --reason TEXT [--missing-primitive NAME]` (clean stop-report)
 - `abort` (cleanup after scenario failure)
 
-`start` returns the exact command/budget list. No generic exec/eval or raw
-Telegram API exists. If a required action is absent, use `block`; do not route
-around the credential boundary.
+`start` returns the exact command/budget list. When the listed primitives cannot
+exercise the behavior, extend the harness: write a focused JSON action sequence
+under `MANTIS_OUTPUT_DIR` and run it with `desktop`. Actions use Telegram-window
+coordinates: `{"command":"click","x":N,"y":N,"button":1}`,
+`{"command":"key","keys":["ctrl+a"]}`, `{"command":"type","text":"..."}`,
+or `{"command":"sleep","milliseconds":N}`. Inspect a screenshot, adjust the
+sequence, and continue the proof. Use `block` only when the ephemeral desktop
+itself cannot exercise the behavior.
 Raw response events must form a complete provider response; deltas alone do not
 produce a final answer. Copy the terminal item and completed-response structure
 from `responseEvents` in `scripts/e2e/mock-openai-server.mjs`, and use
@@ -94,13 +111,29 @@ timing matters; use one `turn` for an ordinary exchange.
 
 Run comparable baseline and candidate programs. This proof has no skipped lane:
 each side ends as complete, failed, or blocked with its own trusted facts.
+Use the same scenario inputs in both lanes; only the SUT revision changes. A
+baseline lane that reproduces the defect is a successful capture. A PR-level
+pass claim requires an observed, material baseline/candidate difference caused
+by the changed behavior. That difference may be trusted Bot API payload/status
+facts even when pixels are identical; screenshots remain comparison context.
+Provider request logs are diagnostic and pacing signals, not standalone
+comparison evidence. Identical pixels alone do not force `block` when the
+trusted recorded facts differ materially. If neither pixels nor trusted facts prove a
+difference, use `block`. When the expected result is silence, focus the
+session-owned user message that triggered the silent outcome.
+Decide before finalizing each lane. If its setup did not exercise the intended
+behavior, call `block`; do not call `finish` and describe the block only in prose.
 
 ## Judge and publish
 
 Inspect `mantis-lane-facts.json`, every returned event/request, the inspection
 PNG, final PNG, and cropped GIF. Confirm the evaluated message is fully visible
 near the bottom and the recording covers the behavior—not only its final state.
-Iterate within the three-attempt budget; all attempts remain recorded.
+Iterate as needed; all attempts remain recorded.
+
+If you design a novel working scenario worth reusing, optionally write
+`MANTIS_OUTPUT_DIR/recipe-suggestion.md` with its trigger, exact commands, and
+proof facts. The builder publishes it as a non-inline attachment.
 
 Build `mantis-evidence.json` with
 `scripts/mantis/build-telegram-desktop-proof-evidence.mts` as before, using each

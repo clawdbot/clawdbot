@@ -50,10 +50,9 @@ export function resolvePluginSkillDirs(params: {
     });
     return [];
   }
-  const config = params.config ?? {};
   const metadataSnapshot = resolvePluginMetadataSnapshot({
     workspaceDir,
-    config,
+    config: params.config,
     env: process.env,
   });
   return resolvePluginSkillDirsFromMetadata({ ...params, metadataSnapshot });

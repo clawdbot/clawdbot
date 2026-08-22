@@ -350,6 +350,12 @@ export async function prepareNodeHostRuntime(params?: {
       const pluginCommandContext: OpenClawPluginNodeHostCommandContext = {
         sendNodeEvent: async (event, payload) =>
           await client.request("node.event", buildNodeEventParams(event, payload)),
+        ...(workerWorkspace
+          ? {
+              acquireManagedWorkspace: (request) =>
+                workerWorkspace.acquireManagedWorkspace(request),
+            }
+          : {}),
       };
       let currentPluginNodeHost = pluginNodeHost;
       let currentManifest = manifest;

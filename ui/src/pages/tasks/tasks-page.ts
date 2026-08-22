@@ -9,6 +9,7 @@ import { hasOperatorReadAccess, hasOperatorWriteAccess } from "../../app/operato
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
+import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import {
   findUiSessionRow,
@@ -99,14 +100,17 @@ class TasksPage extends OpenClawLightDomElement {
 
   @state() private tasks: TaskSummary[] = [];
   @state() private error: string | null = null;
+  @state() private copyResultError: string | null = null;
   @state() private cancellingTaskIds = new Set<string>();
 
   private taskRefreshEvents: TaskRefreshEventBuffer | null = null;
+  private copyResultAttempt = 0;
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     onIdentityChange: () => {
       this.tasks = [];
       this.error = null;
+      this.copyResultError = null;
     },
     invalidateRequests: () => this.cancelGatewayWork(),
     onSnapshot: () => {
@@ -238,6 +242,8 @@ class TasksPage extends OpenClawLightDomElement {
     );
 
   override disconnectedCallback() {
+    this.copyResultAttempt += 1;
+    this.copyResultError = null;
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
@@ -245,6 +251,8 @@ class TasksPage extends OpenClawLightDomElement {
   private cancelGatewayWork() {
     // Reconnects may reuse the client object; the epoch keeps pre-disconnect
     // cancellation responses from mutating the replacement task snapshot.
+    this.copyResultAttempt += 1;
+    this.copyResultError = null;
     this.taskRefreshEvents = null;
     void this.listTask.run([null, null, null]);
     this.cancellingTaskIds = new Set();
@@ -258,6 +266,7 @@ class TasksPage extends OpenClawLightDomElement {
     }
     const scopeId = this.context.agentSelection.state.scopeId;
     this.error = null;
+    this.copyResultError = null;
     return this.listTask.run([gateway, client, scopeId]);
   }
 
@@ -353,6 +362,7 @@ class TasksPage extends OpenClawLightDomElement {
   }
 
   private async copyTaskResult(taskId: string) {
+    const attempt = ++this.copyResultAttempt;
     const scope = this.gateway.capture();
     const gateway = this.gateway.gateway;
     if (!scope || !gateway || this.context.gateway !== gateway) {
@@ -360,18 +370,24 @@ class TasksPage extends OpenClawLightDomElement {
     }
     try {
       const detail = normalizeTasksGetResult(await scope.client.request("tasks.get", { taskId }));
-      if (!this.gateway.isCurrent(scope)) {
+      if (!this.gateway.isCurrent(scope) || attempt !== this.copyResultAttempt) {
         return;
       }
       const result = detail?.result ?? detail?.progressSummary;
       if (!result) {
-        this.error = t("tasksPage.recoveryFailed");
+        this.copyResultError = t("tasksPage.recoveryFailed");
         return;
       }
-      await navigator.clipboard.writeText(result);
+      const copied = await copyToClipboard(
+        result,
+        () => this.gateway.isCurrent(scope) && attempt === this.copyResultAttempt,
+      );
+      if (this.gateway.isCurrent(scope) && attempt === this.copyResultAttempt) {
+        this.copyResultError = copied ? null : t("common.copyFailed");
+      }
     } catch (error) {
-      if (this.gateway.isCurrent(scope)) {
-        this.error = formatUiError(error, t("tasksPage.recoveryFailed"));
+      if (this.gateway.isCurrent(scope) && attempt === this.copyResultAttempt) {
+        this.copyResultError = formatUiError(error, t("tasksPage.recoveryFailed"));
       }
     }
   }
@@ -413,6 +429,7 @@ class TasksPage extends OpenClawLightDomElement {
         canCancel: hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null),
         loading: this.listTask.status === TaskStatus.PENDING,
         error: this.error,
+        copyResultError: this.copyResultError,
         tasks: this.tasks,
         cancellingTaskIds: this.cancellingTaskIds,
         sessionRow: (sessionKey) => findUiSessionRow(this.context, sessionKey),

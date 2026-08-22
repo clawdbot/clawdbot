@@ -270,9 +270,13 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         }
         const existing = normalizeMatrixStoredCredentials(stored, source.accountId);
         if (existing && JSON.stringify(existing) !== JSON.stringify(credentials)) {
-          warnings.push(
-            `Kept existing Matrix credentials for account ${source.accountId}; left differing legacy source in place`,
-          );
+          changes.push(`Kept existing Matrix credentials for account ${source.accountId}`);
+          await archiveLegacyStateSource({
+            filePath: source.filePath,
+            label: "Matrix credentials",
+            changes,
+            warnings,
+          });
           continue;
         }
         if (!existing) {

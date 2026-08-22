@@ -137,15 +137,13 @@ function isWebSocketUpgradeRequest(req: IncomingMessage): boolean {
   );
 }
 
-type GatewayHttpRequestStage = {
-  run: () => Promise<boolean> | boolean;
-};
+type GatewayHttpRequestStage = () => Promise<boolean> | boolean;
 
 async function runGatewayHttpRequestStages(
   stages: readonly GatewayHttpRequestStage[],
 ): Promise<boolean> {
   for (const stage of stages) {
-    if (await stage.run()) {
+    if (await stage()) {
       return true;
     }
   }
@@ -335,34 +333,30 @@ export function createGatewayHttpServer(opts: {
         return true;
       };
       const requestStages: GatewayHttpRequestStage[] = [
-        {
-          run: () =>
-            handleGatewayProbeRequest(
-              req,
-              res,
-              scopedRequestPath,
-              resolvedAuthValue,
-              trustedProxies,
-              allowRealIpFallback,
-              rateLimiter,
-              getReadiness,
-              getStartup,
-            ),
-        },
+        () =>
+          handleGatewayProbeRequest(
+            req,
+            res,
+            scopedRequestPath,
+            resolvedAuthValue,
+            trustedProxies,
+            allowRealIpFallback,
+            rateLimiter,
+            getReadiness,
+            getStartup,
+          ),
       ];
       const addRequestStage = (
         enabled: boolean,
-        run: GatewayHttpRequestStage["run"],
+        stage: GatewayHttpRequestStage,
         admitted = false,
       ) => {
         if (enabled) {
-          requestStages.push({
-            run: admitted ? () => runWithGatewayHttpWorkAdmission(res, run) : run,
-          });
+          requestStages.push(admitted ? () => runWithGatewayHttpWorkAdmission(res, stage) : stage);
         }
       };
-      const addAdmittedStage = (enabled: boolean, run: GatewayHttpRequestStage["run"]) =>
-        addRequestStage(enabled, run, true);
+      const addAdmittedStage = (enabled: boolean, stage: GatewayHttpRequestStage) =>
+        addRequestStage(enabled, stage, true);
 
       const workerGatewayRoute = classifyWorkerGatewayPath(scopedRequestPath);
       addRequestStage(workerGatewayRoute !== "outside", () => {
@@ -519,8 +513,8 @@ export function createGatewayHttpServer(opts: {
         configSnapshot.mcp?.apps?.enabled === true &&
         (mcpAppRoute === "shell" || mcpAppRoute === "view")
       ) {
-        requestStages.push({
-          run: async () =>
+        requestStages.push(
+          async () =>
             await runWithGatewayHttpWorkAdmission(res, async () => {
               const standalone = await getMcpAppStandaloneModule();
               return await standalone.handleMcpAppStandaloneHttpRequest(req, res, {
@@ -528,7 +522,7 @@ export function createGatewayHttpServer(opts: {
                 sandboxOrigin: configSnapshot.mcp?.apps?.sandboxOrigin,
               });
             }),
-        });
+        );
       }
       // Core and recovery routes run first, then plugin routes, then read-only Control UI
       // surfaces. Non-GET requests the SPA does not claim reach the startup 503 before final 404.
@@ -538,46 +532,42 @@ export function createGatewayHttpServer(opts: {
         let pluginRequestOperatorScopes: string[] | undefined;
         // Auth and dispatch stay separate so authorized context reaches the handler.
         requestStages.push(
-          {
-            run: async () => {
-              if (
-                !(shouldEnforcePluginGatewayAuth ?? shouldEnforceDefaultPluginGatewayAuth)(
-                  pluginPathContext,
-                ) ||
-                (await getCachedPluginGatewayAuthBypassPaths(configSnapshot)).has(scopedRequestPath)
-              ) {
-                return false;
-              }
-              // Bypass paths come only from activated channel plugins; every other protected
-              // route must authorize before runtime scopes are derived.
-              const { authorizePluginGatewayHttpRequestOrReply } = await getHttpAuthUtilsModule();
-              const { resolvePluginRouteRuntimeOperatorScopes } =
-                await getPluginRouteRuntimeScopesModule();
-              const authResult = await authorizePluginGatewayHttpRequestOrReply({
-                req,
-                res,
-                ...routeAuth,
-                requestPath: scopedRequestPath,
-                resolveOperatorScopes: resolvePluginRouteRuntimeOperatorScopes,
-              });
-              if (!authResult) {
-                return true;
-              }
-              pluginGatewayAuthSatisfied = true;
-              pluginGatewayRequestAuth = authResult.requestAuth;
-              pluginRequestOperatorScopes = authResult.operatorScopes;
+          async () => {
+            if (
+              !(shouldEnforcePluginGatewayAuth ?? shouldEnforceDefaultPluginGatewayAuth)(
+                pluginPathContext,
+              ) ||
+              (await getCachedPluginGatewayAuthBypassPaths(configSnapshot)).has(scopedRequestPath)
+            ) {
               return false;
-            },
+            }
+            // Bypass paths come only from activated channel plugins; every other protected
+            // route must authorize before runtime scopes are derived.
+            const { authorizePluginGatewayHttpRequestOrReply } = await getHttpAuthUtilsModule();
+            const { resolvePluginRouteRuntimeOperatorScopes } =
+              await getPluginRouteRuntimeScopesModule();
+            const authResult = await authorizePluginGatewayHttpRequestOrReply({
+              req,
+              res,
+              ...routeAuth,
+              requestPath: scopedRequestPath,
+              resolveOperatorScopes: resolvePluginRouteRuntimeOperatorScopes,
+            });
+            if (!authResult) {
+              return true;
+            }
+            pluginGatewayAuthSatisfied = true;
+            pluginGatewayRequestAuth = authResult.requestAuth;
+            pluginRequestOperatorScopes = authResult.operatorScopes;
+            return false;
           },
-          {
-            run: () =>
-              handlePluginRequest(req, res, pluginPathContext, {
-                gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
-                gatewayRequestAuth: pluginGatewayRequestAuth,
-                gatewayRequestOperatorScopes: pluginRequestOperatorScopes,
-                gatewayRequestClientIp: requestClientIp,
-              }),
-          },
+          () =>
+            handlePluginRequest(req, res, pluginPathContext, {
+              gatewayAuthSatisfied: pluginGatewayAuthSatisfied,
+              gatewayRequestAuth: pluginGatewayRequestAuth,
+              gatewayRequestOperatorScopes: pluginRequestOperatorScopes,
+              gatewayRequestClientIp: requestClientIp,
+            }),
         );
       }
 

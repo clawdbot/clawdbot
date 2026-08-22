@@ -516,6 +516,11 @@ jobs:
             fi
           fi
           PACK_OUTPUT="$RUNNER_TEMP/npm-pack-output.txt"
+          if [[ "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            # Validation-only SHA runs package unreleased main; real release tags
+            # still require their exact versioned changelog section.
+            export OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG=1
+          fi
           pnpm pack --json 2>&1 | tee "$PACK_OUTPUT"
           PACK_NAME="$(node - "$PACK_OUTPUT" <<'NODE'
           const fs = require("node:fs");

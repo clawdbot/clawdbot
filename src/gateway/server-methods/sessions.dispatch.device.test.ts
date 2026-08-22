@@ -1,14 +1,21 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { registerAgentHarness } from "../../agents/harness/registry.js";
 import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -31,6 +38,21 @@ import {
 } from "./sessions-dispatch.test-support.js";
 
 const dispatchTestMocks = getDispatchTestMocks();
+
+function useDeviceSession(agentRuntimeOverride?: string): void {
+  dispatchTestMocks.resolveTarget.mockReturnValue(
+    makeSessionTarget({
+      sessionId: dispatchTestSessionId,
+      ...(agentRuntimeOverride ? { agentRuntimeOverride } : {}),
+      worktree: { id: "worktree-1", branch: "openclaw/device-test", repoRoot: "/repo" },
+    }),
+  );
+  dispatchTestMocks.findLiveByOwner.mockReturnValue({
+    id: "worktree-1",
+    ownerKind: "session",
+    ownerId: dispatchTestSessionKey,
+  });
+}
 
 function pairedNode(deviceId: string): PairedDevice {
   return {
@@ -72,17 +94,7 @@ describe("sessions.dispatch device targets", () => {
   });
 
   it("synthesizes the core device-provider target for a connected session-capable node", async () => {
-    dispatchTestMocks.resolveTarget.mockReturnValue(
-      makeSessionTarget({
-        sessionId: dispatchTestSessionId,
-        worktree: { id: "worktree-1", branch: "openclaw/device-test", repoRoot: "/repo" },
-      }),
-    );
-    dispatchTestMocks.findLiveByOwner.mockReturnValue({
-      id: "worktree-1",
-      ownerKind: "session",
-      ownerId: dispatchTestSessionKey,
-    });
+    useDeviceSession();
     const dispatch = vi.fn().mockResolvedValue({
       sessionId: dispatchTestSessionId,
       agentId: "main",
@@ -136,17 +148,7 @@ describe("sessions.dispatch device targets", () => {
   });
 
   it("returns a device dispatch failure to the operator", async () => {
-    dispatchTestMocks.resolveTarget.mockReturnValue(
-      makeSessionTarget({
-        sessionId: dispatchTestSessionId,
-        worktree: { id: "worktree-1", branch: "openclaw/device-test", repoRoot: "/repo" },
-      }),
-    );
-    dispatchTestMocks.findLiveByOwner.mockReturnValue({
-      id: "worktree-1",
-      ownerKind: "session",
-      ownerId: dispatchTestSessionKey,
-    });
+    useDeviceSession();
     const dispatch = vi
       .fn()
       .mockRejectedValue(
@@ -171,6 +173,144 @@ describe("sessions.dispatch device targets", () => {
     );
   });
 
+  describe("runtime-owned paired-node command authority", () => {
+    let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
+
+    beforeEach(() => {
+      previousPluginRegistry = getActivePluginRegistry();
+      setActivePluginRegistry(
+        createEmptyPluginRegistry(),
+        "sessions-dispatch-device-test",
+        "default",
+      );
+      registerAgentHarness({
+        id: "codex",
+        label: "Codex",
+        autoSelection: { providerIds: ["codex", "openai"] },
+        cloudPlacement: {
+          mode: "remote-exec",
+          devicePlacement: {
+            requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+            consumesWorkerSlot: false,
+          },
+        },
+        supports: () => ({ supported: true, priority: 10 }),
+        async runAttempt() {
+          throw new Error("not used");
+        },
+      });
+    });
+
+    afterEach(() => {
+      if (previousPluginRegistry) {
+        setActivePluginRegistry(
+          previousPluginRegistry,
+          "sessions-dispatch-device-test-restore",
+          "default",
+        );
+      } else {
+        resetPluginRuntimeStateForTest();
+      }
+    });
+
+    it.each([
+      {
+        name: "missing",
+        declaredCommands: ["system.run"],
+        commandPolicy: { allow: ["codex.exec-server.stdio.v1"] },
+      },
+      {
+        name: "declared but denied",
+        declaredCommands: ["system.run", "codex.exec-server.stdio.v1"],
+        commandPolicy: { deny: ["codex.exec-server.stdio.v1"] },
+      },
+    ])("rejects a $name required paired-node command before dispatch", async (scenario) => {
+      useDeviceSession("codex");
+      const dispatch = vi.fn();
+      const respond = await invokeSessionDispatch(
+        makeDispatchTestContext({
+          getRuntimeConfig: () => ({
+            gateway: { nodes: { commands: scenario.commandPolicy } },
+          }),
+          nodeRegistry: {
+            get: () => ({
+              nodeId: "device-1",
+              platform: "darwin",
+              commands: scenario.declaredCommands,
+              client: {},
+            }),
+          } as never,
+          workerPlacementDispatchService: { dispatch },
+          workerSessionPlacementService: { getMany: () => new Map() },
+        }),
+        { deviceId: "device-1" },
+      );
+
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: ErrorCodes.INVALID_REQUEST,
+          message: expect.stringMatching(/command.*(enabled|approved|declared)/i),
+        }),
+      );
+    });
+
+    it.each([
+      { name: "dispatches an opted-in runtime", runtimeId: "codex", supported: true },
+      { name: "rejects a runtime without opt-in", runtimeId: "cloud-only", supported: false },
+    ])("$name to a paired device", async ({ runtimeId, supported }) => {
+      if (!supported) {
+        registerAgentHarness({
+          id: runtimeId,
+          label: "Cloud only",
+          cloudPlacement: { mode: "remote-exec" },
+          supports: () => ({ supported: true }),
+          runAttempt: async () => {
+            throw new Error("not used");
+          },
+        });
+      }
+      useDeviceSession(runtimeId);
+      const dispatch = vi.fn().mockRejectedValue(new Error("paired-device dispatch reached"));
+      const respond = await invokeSessionDispatch(
+        makeDispatchTestContext({
+          getRuntimeConfig: () => ({
+            gateway: { nodes: { commands: { allow: ["codex.exec-server.stdio.v1"] } } },
+          }),
+          workerPlacementDispatchService: { dispatch },
+          workerSessionPlacementService: { getMany: () => new Map() },
+        }),
+        { deviceId: "device-1" },
+      );
+
+      if (supported) {
+        expect(dispatch).toHaveBeenCalledWith(
+          expect.objectContaining({
+            executionMode: "remote-exec",
+            profileId: "device:device-1",
+            deviceId: "device-1",
+          }),
+          expect.any(Function),
+          undefined,
+        );
+      } else {
+        expect(dispatch).not.toHaveBeenCalled();
+      }
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: supported ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+          message: supported
+            ? "paired-device dispatch reached"
+            : "runtime cloud-only does not support paired-device placement; select a compatible runtime or cloud worker provider",
+        }),
+      );
+    });
+  });
+
   it.each([
     {
       name: "full",
@@ -185,7 +325,7 @@ describe("sessions.dispatch device targets", () => {
       rejectedMessage: "at capacity",
     },
   ])(
-    "carries a $name node rejection through the placement row and operator response",
+    "rejects a $name node before mutating placement or provisioning",
     async ({ nodes, expectedMessage, rejectedMessage }) => {
       const root = await fs.mkdtemp(
         path.join(await fs.realpath(os.tmpdir()), "openclaw-session-dispatch-device-"),
@@ -205,37 +345,25 @@ describe("sessions.dispatch device targets", () => {
         });
         bindDeviceWorkerAvailability(harness.environments, runtime.resolveAvailability);
 
-        dispatchTestMocks.resolveTarget.mockReturnValue(
-          makeSessionTarget({
-            sessionId: dispatchTestSessionId,
-            worktree: { id: "worktree-1", branch: "openclaw/device-test", repoRoot: "/repo" },
-          }),
-        );
-        dispatchTestMocks.findLiveByOwner.mockReturnValue({
-          id: "worktree-1",
-          ownerKind: "session",
-          ownerId: dispatchTestSessionKey,
-        });
+        useDeviceSession();
         const respond = await invokeSessionDispatch(
           makeDispatchTestContext({
             workerPlacementDispatchService: harness.service,
             workerSessionPlacementService: placements,
+            workerEnvironmentService: harness.environments as never,
           }),
           { deviceId: "device-1" },
         );
 
         const placement = placements.get(dispatchTestSessionId);
-        expect(placement).toMatchObject({
-          state: "failed",
-          recoveryError: expect.stringContaining(expectedMessage),
-          terminalReason: expect.stringContaining(expectedMessage),
-        });
-        expect(placement?.recoveryError).not.toContain(rejectedMessage);
+        expect(placement).toBeUndefined();
+        expect(harness.environments.createFromProfileSnapshot).not.toHaveBeenCalled();
+        expect(harness.environments.startTunnel).not.toHaveBeenCalled();
         expect(respond).toHaveBeenCalledWith(
           false,
           undefined,
           expect.objectContaining({
-            code: ErrorCodes.UNAVAILABLE,
+            code: ErrorCodes.INVALID_REQUEST,
             message: expect.stringContaining(expectedMessage),
           }),
         );

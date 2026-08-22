@@ -1,8 +1,7 @@
+import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelGatewayContext } from "../runtime-api.js";
 import type { BuzzBus } from "./buzz-bus.js";
-import type { ResolvedBuzzAccount } from "./types.js";
 
 const gatewayMocks = vi.hoisted(() => ({
   close: vi.fn(async () => {}),
@@ -61,13 +60,34 @@ function createBuzzConfig(name?: string): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function createUnavailableBuzzConfig(credential: "privateKey" | "authTag"): OpenClawConfig {
+  vi.stubEnv("BUZZ_PRIVATE_KEY", PRIVATE_KEY);
+  vi.stubEnv("BUZZ_AUTH_TAG", "ambient-auth-tag");
+  return {
+    channels: {
+      buzz: {
+        relayUrl: "wss://buzz.example.com",
+        privateKey: PRIVATE_KEY,
+        groups: { [CHANNEL_ID]: {} },
+        [credential]: {
+          source: "env",
+          provider: "default",
+          id: credential === "privateKey" ? "MISSING_BUZZ_PRIVATE_KEY" : "MISSING_BUZZ_AUTH_TAG",
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
 function startTestGateway(
   options: {
     profileName?: string;
-    setStatus?: ReturnType<typeof vi.fn>;
-    logInfo?: ReturnType<typeof vi.fn>;
-    logError?: ReturnType<typeof vi.fn>;
-    invalidateDirectoryCache?: ReturnType<typeof vi.fn>;
+    setStatus?: Parameters<typeof startBuzzGatewayAccount>[0]["setStatus"];
+    logInfo?: NonNullable<Parameters<typeof startBuzzGatewayAccount>[0]["log"]>["info"];
+    logError?: NonNullable<Parameters<typeof startBuzzGatewayAccount>[0]["log"]>["error"];
+    invalidateDirectoryCache?: Parameters<
+      typeof startBuzzGatewayAccount
+    >[0]["invalidateDirectoryCache"];
     omitLog?: boolean;
   } = {},
 ) {
@@ -76,18 +96,13 @@ function startTestGateway(
   const account = resolveBuzzAccount({ cfg });
   const setStatus = options.setStatus ?? vi.fn();
   const lifecycle = startBuzzGatewayAccount({
-    cfg,
-    accountId: account.accountId,
-    account,
-    runtime: {},
-    abortSignal: abortController.signal,
-    ...(options.omitLog
-      ? {}
-      : { log: { info: options.logInfo ?? vi.fn(), error: options.logError ?? vi.fn() } }),
-    getStatus: vi.fn(),
+    ...createStartAccountContext({ account, abortSignal: abortController.signal, cfg }),
+    log: options.omitLog
+      ? undefined
+      : { info: options.logInfo ?? vi.fn(), warn: vi.fn(), error: options.logError ?? vi.fn() },
     setStatus,
     invalidateDirectoryCache: options.invalidateDirectoryCache,
-  } as unknown as ChannelGatewayContext<ResolvedBuzzAccount>);
+  });
   return { abortController, cfg, account, setStatus, lifecycle };
 }
 
@@ -154,6 +169,7 @@ describe("Buzz gateway lifecycle", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
   });
 
   it("invalidates cached room targets after initial discovery and newer room metadata", async () => {
@@ -238,6 +254,31 @@ describe("Buzz gateway lifecycle", () => {
       to: CHANNEL_ID,
       messageId: "standalone-event-id",
     });
+  });
+
+  it("blocks direct sends before opening a relay when an auth-tag SecretRef is unavailable", async () => {
+    const cfg = createUnavailableBuzzConfig("authTag");
+
+    await expect(
+      buzzOutboundAdapter.sendText({
+        cfg,
+        to: `buzz:${CHANNEL_ID}`,
+        text: "must not send",
+        accountId: "default",
+      }),
+    ).rejects.toThrow(/configured.*unavailable|unresolved/i);
+    expect(gatewayMocks.sendBuzzTextOneShot).not.toHaveBeenCalled();
+    expect(gatewayMocks.busSendText).not.toHaveBeenCalled();
+  });
+
+  it("blocks gateway startup before opening a relay when a private-key SecretRef is unavailable", async () => {
+    const cfg = createUnavailableBuzzConfig("privateKey");
+    const account = resolveBuzzAccount({ cfg });
+
+    await expect(
+      startBuzzGatewayAccount(createStartAccountContext({ account, cfg })),
+    ).rejects.toThrow(/configured.*unavailable|unresolved/i);
+    expect(gatewayMocks.startBuzzBus).not.toHaveBeenCalled();
   });
 
   it("drops heartbeat typing when no gateway bus is running", async () => {

@@ -16,6 +16,10 @@ const PAIRING_CONFIG_KEYS = ["relayUrl", "token", "pairingStatus"];
 const RETIRED_CUSTODY_BLOCKED_KEY = "retiredCopilotCustodyBlockedV1";
 const backgroundCleanups = new Set<() => Promise<void>>();
 
+function waitForBackgroundState<T>(assertion: () => T | Promise<T>): Promise<T> {
+  return vi.waitFor(assertion, { interval: 1 });
+}
+
 export async function cleanupBackgroundHarnesses(): Promise<void> {
   await Promise.all([...backgroundCleanups].map(async (cleanup) => await cleanup()));
 }
@@ -388,7 +392,7 @@ export async function loadBackground({
   const backgroundModulePath = "./background.js";
   await import(backgroundModulePath);
   if (!deferRetiredStatePreparation) {
-    await vi.waitFor(() => {
+    await waitForBackgroundState(() => {
       const pairingReads = storageGet.mock.calls.filter(([keys]) =>
         PAIRING_CONFIG_KEYS.every((key) => keys.includes(key)),
       );
@@ -396,7 +400,7 @@ export async function loadBackground({
     });
   }
   if (!deferTabAccessInitialization && !deferRetiredStatePreparation) {
-    await vi.waitFor(() => {
+    await waitForBackgroundState(() => {
       const pairingWasCleared = storageRemove.mock.calls.some(([keys]) =>
         keys.includes("relayUrl"),
       );
@@ -482,7 +486,7 @@ export async function loadBackground({
       if (socket.readyState !== FakeWebSocket.OPEN) {
         socket.open();
       }
-      await vi.waitFor(() => expect(socket.send).toHaveBeenCalled());
+      await waitForBackgroundState(() => expect(socket.send).toHaveBeenCalled());
       const helloRaw = socket.send.mock.calls.find(
         ([raw]) => JSON.parse(raw).type === "auth.hello",
       )?.[0];
@@ -511,7 +515,7 @@ export async function loadBackground({
         ...fields,
         serverProof: await computeRelayAuthProof(String(storageValues.token), "server", fields),
       });
-      await vi.waitFor(() => {
+      await waitForBackgroundState(() => {
         expect(
           socket.send.mock.calls.some(([raw]) => JSON.parse(raw).type === "auth.response"),
         ).toBe(true);
@@ -534,7 +538,7 @@ export async function loadBackground({
           response.clientProof,
         ),
       });
-      await vi.waitFor(() => {
+      await waitForBackgroundState(() => {
         expect(socket.send.mock.calls.some(([raw]) => JSON.parse(raw).type === "hello")).toBe(true);
       });
     },

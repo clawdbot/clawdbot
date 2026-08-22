@@ -250,15 +250,8 @@ describe("diagnostics-otel gateway runtime", () => {
         },
         45_000,
         () => ({
-          requests: activeReceiver.capturedRequests,
-          spans: activeReceiver.capturedSpans.map((span) => ({
-            attributes: span.attributes,
-            name: span.name,
-            parentSpanId: span.parentSpanId,
-            spanId: span.spanId,
-            statusCode: span.statusCode,
-            traceId: span.traceId,
-          })),
+          requests: activeReceiver.capturedRequests.slice(-8),
+          traces: activeReceiver.recentTraceSummary(),
         }),
       );
 

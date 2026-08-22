@@ -11,6 +11,7 @@ readonly iptables_bin="/usr/sbin/iptables"
 readonly timeout_bin="/usr/bin/timeout"
 readonly network_lock_file="/run/lock/openclaw-mantis-sut-network.lock"
 readonly network_state_root="/run/openclaw-mantis-sut-networks"
+readonly mock_server_script="/usr/local/lib/mantis-toolchain/scripts/e2e/mock-openai-server.mjs"
 readonly telegram_proxy_script="/usr/local/lib/mantis-toolchain/scripts/e2e/telegram-bot-api-proxy.mjs"
 
 die() {
@@ -579,6 +580,8 @@ readonly network_probe_script='
 readonly build_command='
   set -eu
   store=.mantis-pnpm-store
+  test -d "$store"
+  test -n "$(find "$store" -type f -print -quit)"
   cleanup() {
     rm -rf "$store"
   }
@@ -629,7 +632,7 @@ readonly sut_command='
     exit "$exit_code"
   }
   trap cleanup EXIT INT TERM
-  node scripts/e2e/mock-openai-server.mjs >"$MOCK_LOG" 2>&1 &
+  node /opt/mantis/mock-openai-server.mjs >"$MOCK_LOG" 2>&1 &
   mock_pid=$!
   attempt=0
   until grep -q "mock-openai listening" "$MOCK_LOG" 2>/dev/null; do
@@ -648,10 +651,14 @@ shift || true
 case "$command" in
   build)
     [[ "${SUDO_USER:-}" == "runner" ]] || die "build is restricted to the workflow runner"
-    [[ $# -eq 1 ]] || die "build expects the candidate worktree"
+    [[ $# -eq 2 ]] || die "build expects the candidate worktree and host pnpm store"
     worktree_root="$(realpath -e "$(<"$worktree_root_file")")"
     candidate_root="$(realpath -e "$1")"
+    host_pnpm_store="$(realpath -e "$2")"
     [[ "$candidate_root" == "$worktree_root/candidate" ]] || die "unexpected candidate worktree"
+    [[ -d "$host_pnpm_store" ]] || die "host pnpm store is not a directory"
+    [[ "$host_pnpm_store" != "$candidate_root" && "$host_pnpm_store" != "$candidate_root/"* ]] \
+      || die "host pnpm store must be outside the candidate worktree"
     [[ "$(stat -c %u "$candidate_root")" == "$(id -u mantis-builder)" ]] || die "candidate owner mismatch"
     [[ -f "$candidate_root/.git" && ! -L "$candidate_root/.git" ]] \
       || die "candidate Git link is not a regular file"
@@ -684,10 +691,21 @@ case "$command" in
     # `set -e` preserves a failed probe/container status through this EXIT trap.
     # The explicit cleanup below is reached only after the protected command succeeds.
     trap cleanup_build EXIT INT TERM
-    create_bounded_filesystem "${container_name}-fs" 10G >/dev/null
+    # 16G bounds worktree + full pnpm-store copy + build output together; the image
+    # is sparse so unused capacity costs nothing, and the post-build 8 GiB check
+    # below still bounds what leaves the container.
+    create_bounded_filesystem "${container_name}-fs" 16G >/dev/null
     isolated_root="$build_mount/repo"
     mkdir "$isolated_root"
     /bin/cp -a "$candidate_root/." "$isolated_root/"
+    store_copy_start=$SECONDS
+    mkdir "$isolated_root/.mantis-pnpm-store"
+    # Host disk -> loop image crosses filesystems, so reflink falls back to a full
+    # byte copy on CI; keep --reflink=auto for same-filesystem hosts. Never bind or
+    # hard-link the host store: candidate lifecycle scripts may rewrite their store.
+    /bin/cp -a --reflink=auto "$host_pnpm_store/." "$isolated_root/.mantis-pnpm-store/"
+    test -n "$(find "$isolated_root/.mantis-pnpm-store" -type f -print -quit)"
+    echo "Copied disposable pnpm store in $((SECONDS - store_copy_start))s."
     chown -R mantis-builder:mantis-builder "$isolated_root"
     create_public_only_network "$network_name"
     run_network_probe "$network_name"
@@ -783,6 +801,24 @@ case "$command" in
       || die "mock response control mode mismatch"
     [[ "$(stat -c %h "$response_control")" == "1" ]] \
       || die "mock response control must not be hard-linked"
+    proxy_control_dir="$safe_runtime/proxy-control"
+    [[ -d "$proxy_control_dir" && ! -L "$proxy_control_dir" ]] \
+      || die "invalid Telegram proxy control directory"
+    [[ "$(stat -c %u "$proxy_control_dir")" == "$(id -u mantis-sut)" ]] \
+      || die "Telegram proxy control directory owner mismatch"
+    [[ "$(stat -c %a "$proxy_control_dir")" == "700" ]] \
+      || die "Telegram proxy control directory mode mismatch"
+    proxy_control="$proxy_control_dir/control.json"
+    proxy_record="$proxy_control_dir/requests.ndjson"
+    for file in "$proxy_control" "$proxy_record"; do
+      [[ -f "$file" && ! -L "$file" ]] || die "invalid Telegram proxy control file"
+      [[ "$(stat -c %u "$file")" == "$(id -u mantis-sut)" ]] \
+        || die "Telegram proxy control file owner mismatch"
+      [[ "$(stat -c %a "$file")" == "600" ]] \
+        || die "Telegram proxy control file mode mismatch"
+      [[ "$(stat -c %h "$file")" == "1" ]] \
+        || die "Telegram proxy control file must not be hard-linked"
+    done
     for name in gateway.log mock-openai.log mock-openai-requests.ndjson sut-attestation.json; do
       [[ ! -e "$safe_runtime/$name" && ! -L "$safe_runtime/$name" ]] \
         || die "runtime output was pre-created"
@@ -853,6 +889,12 @@ case "$command" in
       || die "Telegram Bot API proxy owner mismatch"
     [[ -z "$(find "$telegram_proxy_script" -perm /222 -print -quit)" ]] \
       || die "Telegram Bot API proxy is writable"
+    [[ -f "$mock_server_script" && ! -L "$mock_server_script" ]] \
+      || die "missing trusted mock OpenAI server"
+    [[ "$(stat -c %u "$mock_server_script")" == "0" ]] \
+      || die "mock OpenAI server owner mismatch"
+    [[ -z "$(find "$mock_server_script" -perm /222 -print -quit)" ]] \
+      || die "mock OpenAI server is writable"
     # shellcheck disable=SC2329
     cleanup_run() {
       local result=0
@@ -870,16 +912,25 @@ case "$command" in
     "$docker_bin" run --detach --name "$proxy_container_name" --network "$egress_network_name" \
       "${container_security_args[@]}" "${proxy_resource_args[@]}" \
       --mount "type=bind,src=$telegram_proxy_script,dst=/opt/mantis/telegram-bot-api-proxy.mjs,readonly" \
+      --mount "type=bind,src=$proxy_control_dir,dst=/opt/mantis/proxy-control" \
       --user "$(id -u mantis-sut):$(id -g mantis-sut)" \
       --env TELEGRAM_PROXY_ALIAS_TOKEN="$telegram_alias_token" \
+      --env TELEGRAM_PROXY_CONTROL=/opt/mantis/proxy-control/control.json \
+      --env TELEGRAM_PROXY_RECORD_FILE=/opt/mantis/proxy-control/requests.ndjson \
       --env TELEGRAM_PROXY_UPSTREAM_TOKEN="$telegram_bot_token" \
       "$image" node /opt/mantis/telegram-bot-api-proxy.mjs >/dev/null
     "$docker_bin" network connect --alias telegram-api-proxy "$network_name" "$proxy_container_name"
     require_runtime_claim_active "$container_name"
+    # proxy-control holds the proxy's fault rules and recorded Bot API facts.
+    # The SUT runs untrusted candidate code as the same mantis-sut UID, so an
+    # inaccessible tmpfs must shadow the directory inside the runtime mount;
+    # without it the lane under test could rewrite its own trusted evidence.
     "$docker_bin" run --rm --init --name "$container_name" --network "$network_name" \
       "${container_security_args[@]}" "${runtime_resource_args[@]}" \
       --mount "type=bind,src=$repo_root,dst=$repo_root,readonly" \
+      --mount "type=bind,src=$mock_server_script,dst=/opt/mantis/mock-openai-server.mjs,readonly" \
       --mount "type=bind,src=$safe_runtime,dst=$runtime_source" \
+      --mount "type=tmpfs,dst=$runtime_source/proxy-control,tmpfs-size=65536,tmpfs-mode=0000" \
       --workdir "$repo_root" \
       --user "$(id -u mantis-sut):$(id -g mantis-sut)" \
       "${docker_env[@]}" \

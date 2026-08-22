@@ -82,6 +82,9 @@ jobs:
     timeout-minutes: 20
     outputs:
       checkout_revision: ${{ steps.checkout_ref.outputs.sha }}
+      candidate_trust: ${{ steps.candidate_trust.outputs.trust }}
+      cache_mode: ${{ steps.candidate_trust.outputs.cache_mode }}
+      cache_write_allowed: ${{ steps.candidate_trust.outputs.cache_write_allowed }}
       diff_base_revision: ${{ steps.diff_base.outputs.sha }}
       diff_head_revision: ${{ steps.diff_base.outputs.head_sha }}
       docs_only: ${{ steps.manifest.outputs.docs_only }}
@@ -137,6 +140,14 @@ jobs:
       run_protocol_event_coverage: ${{ steps.manifest.outputs.run_protocol_event_coverage }}
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
+      - name: Checkout trusted CI harness
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-harness
+          sparse-checkout: .github/actions
+          persist-credentials: false
+
       - name: Validate release-gate dispatch
         if: github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
@@ -372,6 +383,7 @@ jobs:
         id: target_context_target
         if: inputs.target_context_ref != ''
         env:
+          GH_TOKEN: ${{ github.token }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_REF: ${{ inputs.target_ref }}
         run: |
@@ -384,11 +396,77 @@ jobs:
             echo "target_context_ref requires target_ref to be a full commit SHA." >&2
             exit 1
           fi
+          branch_sha="$(git ls-remote --heads origin "refs/heads/${TARGET_CONTEXT_REF}" | awk 'NR == 1 { print $1 }')"
+          if [[ ! "$branch_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "target_context_ref branch ${TARGET_CONTEXT_REF} does not exist." >&2
+            exit 1
+          fi
+          comparison_status="$(
+            gh api "repos/${GITHUB_REPOSITORY}/compare/${TARGET_REF}...${branch_sha}" --jq .status
+          )"
+          if [[ "$comparison_status" != "ahead" && "$comparison_status" != "identical" ]]; then
+            echo "target_ref must be the declared release branch head or one of its ancestors." >&2
+            exit 1
+          fi
           echo "eligible=true" >> "$GITHUB_OUTPUT"
+
+      - name: Classify candidate cache trust
+        id: candidate_trust
+        env:
+          CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
+          RELEASE_CANDIDATE_TARGET: ${{ steps.release_candidate_target.outputs.eligible || 'false' }}
+          RELEASE_GATE: ${{ inputs.release_gate && 'true' || 'false' }}
+          TARGET_CONTEXT_TARGET: ${{ steps.target_context_target.outputs.eligible || 'false' }}
+          TARGET_REF: ${{ inputs.target_ref }}
+          WORKFLOW_REVISION: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+
+          trust=untrusted
+          cache_mode=off
+          cache_write_allowed=false
+
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/main" ]]; then
+            trust=main
+            cache_mode=restore
+            cache_write_allowed=true
+          elif [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            trust=pull-request
+            cache_mode=restore
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            default_sha="$(git ls-remote origin "refs/heads/${DEFAULT_BRANCH}" | awk 'NR == 1 { print $1 }')"
+            if [[ "$RELEASE_GATE" == "true" ]]; then
+              trust=pull-request
+              cache_mode=restore
+            elif [[
+              "$HISTORICAL_TARGET" == "true" ||
+              "$RELEASE_CANDIDATE_TARGET" == "true" ||
+              "$TARGET_CONTEXT_TARGET" == "true"
+            ]]; then
+              trust=release
+              cache_mode=restore
+              cache_write_allowed=true
+            elif [[ -n "$default_sha" && "$CHECKOUT_REVISION" == "$default_sha" ]]; then
+              trust=main
+              cache_mode=restore
+              cache_write_allowed=true
+            elif [[ -z "$TARGET_REF" && "$CHECKOUT_REVISION" == "$WORKFLOW_REVISION" ]]; then
+              trust=workflow
+              cache_mode=restore
+            fi
+          fi
+
+          {
+            echo "trust=$trust"
+            echo "cache_mode=$cache_mode"
+            echo "cache_write_allowed=$cache_write_allowed"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Ensure preflight base commit
         if: github.event_name != 'workflow_dispatch'
-        uses: ./.github/actions/ensure-base-commit
+        uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: ${{ steps.diff_base.outputs.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
@@ -396,7 +474,7 @@ jobs:
       - name: Detect docs-only changes
         id: docs_scope
         if: github.event_name != 'workflow_dispatch'
-        uses: ./.github/actions/detect-docs-changes
+        uses: ./.ci-harness/.github/actions/detect-docs-changes
         with:
           base-sha: ${{ steps.diff_base.outputs.sha }}
 
@@ -433,9 +511,9 @@ jobs:
       # install and run through tsx.
       - name: Setup manifest pnpm
         if: github.event_name == 'workflow_dispatch'
-        uses: ./.github/actions/setup-pnpm-store-cache
+        uses: ./.ci-harness/.github/actions/setup-pnpm-store-cache
         with:
-          cache-mode: restore
+          cache-mode: ${{ steps.candidate_trust.outputs.cache_mode }}
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install manifest dependencies
@@ -943,9 +1021,9 @@ jobs:
       # Blacksmith jobs fan out. Cache publication belongs to the trusted warmer.
       - name: Restore exact dependency cache
         if: vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.repository == 'openclaw/openclaw' && steps.manifest.outputs.run_node == 'true' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository))
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ steps.candidate_trust.outputs.cache_mode }}
           dependency-cache: "true"
           install-bun: "false"
 
@@ -1015,6 +1093,14 @@ jobs:
           fi
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
+      - name: Checkout trusted CI harness
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-harness
+          sparse-checkout: .github/actions
+          persist-credentials: false
+
       - name: Resolve security diff base
         id: diff_base
         env:
@@ -1044,7 +1130,7 @@ jobs:
 
       - name: Ensure security base commit
         if: github.event_name != 'workflow_dispatch'
-        uses: ./.github/actions/ensure-base-commit
+        uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: ${{ steps.diff_base.outputs.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
@@ -1147,7 +1233,7 @@ jobs:
           REQUESTED_NODE_VERSION: "24.x"
         run: |
           set -euo pipefail
-          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
           openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
       - name: Audit production dependencies
@@ -1170,6 +1256,7 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
 
@@ -1200,6 +1287,15 @@ jobs:
 
             git -C "$workdir" checkout --force --detach "$CHECKOUT_SHA" || return 1
             test -f "$workdir/.github/actions/setup-node-env/action.yml" || return 1
+            harness_dir="$workdir/.ci-harness"
+            git init "$harness_dir" >/dev/null
+            git -C "$harness_dir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+            git -C "$harness_dir" -c protocol.version=2 fetch \
+              --no-tags --no-recurse-submodules --depth=1 origin \
+              "+${WORKFLOW_SHA}:refs/remotes/origin/ci-harness" || return 1
+            git -C "$harness_dir" sparse-checkout set .github/actions || return 1
+            git -C "$harness_dir" checkout --force --detach "$WORKFLOW_SHA" || return 1
+            test -f "$harness_dir/.github/actions/setup-node-env/action.yml" || return 1
             echo "checkout attempt ${attempt}/5 succeeded"
           }
 
@@ -1215,9 +1311,9 @@ jobs:
           exit 1
 
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
 
   # Build dist once for Node-relevant changes and share it with downstream jobs.
@@ -1237,15 +1333,15 @@ jobs:
       - *linux_node_checkout_step
       - name: Ensure secrets base commit (PR fast path)
         if: github.event_name == 'pull_request'
-        uses: ./.github/actions/ensure-base-commit
+        uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: ${{ needs.preflight.outputs.diff_base_revision }}
           fetch-ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           node-compile-cache: "true"
           node-compile-cache-scope: "build"
@@ -1254,6 +1350,7 @@ jobs:
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
 
       - name: Restore build-all step cache
+        if: needs.preflight.outputs.cache_mode != 'off'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .artifacts/build-all-cache
@@ -1263,6 +1360,7 @@ jobs:
 
       - name: Restore dist build cache
         id: dist_build_cache
+        if: needs.preflight.outputs.cache_mode != 'off'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
@@ -1516,9 +1614,9 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           restore-test-caches: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'true' || 'false' }}
@@ -1546,16 +1644,12 @@ jobs:
     runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-        with:
-          ref: ${{ needs.preflight.outputs.checkout_revision }}
-          persist-credentials: false
+      - *linux_node_checkout_step
 
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
@@ -1596,9 +1690,9 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: "24.x"
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
@@ -1608,7 +1702,7 @@ jobs:
 
       - &cache_playwright_chromium
         name: Cache Playwright Chromium
-        if: needs.preflight.outputs.compatibility_target != 'true'
+        if: needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.compatibility_target != 'true'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.cache/ms-playwright
@@ -1671,9 +1765,9 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: "24.x"
           install-bun: "false"
           # The github/hybrid planner profile uses the Actions pnpm-store cache
@@ -1726,9 +1820,9 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: "24.x"
           install-bun: "false"
           # The github/hybrid planner profile uses the Actions pnpm-store cache
@@ -1787,9 +1881,9 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: "24.x"
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
@@ -1876,9 +1970,9 @@ jobs:
           echo "RATCHET_RELEASE_MERGE_TREE=true" >> "$GITHUB_ENV"
 
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: ${{ matrix.task == 'bun-launcher' && 'true' || 'false' }}
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
@@ -1971,9 +2065,9 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           # The github/hybrid planner profile uses the Actions pnpm-store cache
           # on either runner backend; all-Blacksmith mode restores preflight's tree.
@@ -2155,9 +2249,9 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
@@ -2198,9 +2292,9 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
@@ -2238,9 +2332,9 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: "22.22.3"
           install-bun: "false"
           build-all-cache-scope: full
@@ -2275,9 +2369,9 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: "${{ matrix.node_version || '24.x' }}"
           install-bun: "false"
           # Blacksmith shards restore the exact dependency archive;
@@ -2290,11 +2384,40 @@ jobs:
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true
         # The current workflow validates frozen targets whose go.mod may predate this patch pin.
-        # Keep the runner toolchain owned by the workflow while using the target only for cache keys.
+        # Keep the runner toolchain owned by the workflow; cache publication is gated separately.
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: "1.25.12"
-          cache-dependency-path: scripts/docs-i18n/go.sum
+          cache: false
+
+      - name: Resolve docs i18n Go cache
+        id: docs-i18n-go-cache-key
+        if: matrix.requires_go == true && needs.preflight.outputs.cache_mode != 'off'
+        env:
+          DEPENDENCY_HASH: ${{ hashFiles('scripts/docs-i18n/go.sum') }}
+        run: |
+          set -euo pipefail
+          arch="$(node -p process.arch)"
+          image_prefix=""
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            image_prefix="${ImageOS-undefined}-"
+          fi
+          version="$(go env GOVERSION)"
+          {
+            echo "key=setup-go-${RUNNER_OS}-${arch}-${image_prefix}go-${version#go}-${DEPENDENCY_HASH}"
+            echo "paths<<EOF"
+            go env GOMODCACHE
+            go env GOCACHE
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Restore docs i18n Go cache
+        id: docs-i18n-go-cache
+        if: matrix.requires_go == true && needs.preflight.outputs.cache_mode != 'off'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ steps.docs-i18n-go-cache-key.outputs.paths }}
+          key: ${{ steps.docs-i18n-go-cache-key.outputs.key }}
 
       - name: Verify docs i18n Go toolchain
         if: matrix.requires_go == true
@@ -2367,6 +2490,13 @@ jobs:
           fi
           node --import tsx "$runner"
 
+      - name: Save docs i18n Go cache
+        if: always() && matrix.requires_go == true && needs.preflight.outputs.cache_write_allowed == 'true' && steps.docs-i18n-go-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ steps.docs-i18n-go-cache-key.outputs.paths }}
+          key: ${{ steps.docs-i18n-go-cache.outputs.cache-primary-key }}
+
   # Types, lint, and format check shards.
   check-shard:
     permissions:
@@ -2411,9 +2541,9 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           # The github/hybrid planner profile uses the Actions pnpm-store cache
           # on either runner backend; all-Blacksmith mode restores preflight's tree.
@@ -2429,7 +2559,7 @@ jobs:
           echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
 
       - name: Cache extension package boundary artifacts for hosted lint
-        if: matrix.task == 'lint' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository))
+        if: needs.preflight.outputs.cache_mode != 'off' && matrix.task == 'lint' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository))
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
@@ -2728,9 +2858,9 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
 
@@ -2765,9 +2895,9 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && vars.OPENCLAW_CI_RUNNER_BACKEND != 'hybrid' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
 
@@ -2843,20 +2973,20 @@ jobs:
       - *linux_node_checkout_step
       - name: Ensure Plugin SDK API diff base commit
         if: matrix.group == 'plugin-sdk-api-diff'
-        uses: ./.github/actions/ensure-base-commit
+        uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: ${{ needs.preflight.outputs.diff_base_revision }}
           fetch-ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
       - name: Ensure Plugin SDK API diff head commit
         if: matrix.group == 'plugin-sdk-api-diff'
-        uses: ./.github/actions/ensure-base-commit
+        uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: ${{ needs.preflight.outputs.diff_head_revision }}
           fetch-ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate && format('refs/pull/{0}/merge', inputs.pull_request_number) || github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           # The github/hybrid planner profile uses the Actions pnpm-store cache
           # on either runner backend; all-Blacksmith mode restores preflight's tree.
@@ -2927,7 +3057,7 @@ jobs:
 
       - name: Cache extension package boundary artifacts
         id: extension-package-boundary-cache
-        if: matrix.group == 'extension-package-boundary'
+        if: needs.preflight.outputs.cache_mode != 'off' && matrix.group == 'extension-package-boundary'
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
@@ -3130,9 +3260,9 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           # Same-repo Blacksmith runs restore the dependency cache published by
           # preflight; hosted paths use the pnpm store cache instead.
@@ -3271,6 +3401,7 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           git init "$GITHUB_WORKSPACE"
@@ -3314,6 +3445,15 @@ jobs:
           }
           fetch_checkout_ref
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
+          harness_dir="$GITHUB_WORKSPACE/.ci-harness"
+          git init "$harness_dir"
+          git -C "$harness_dir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+          git -C "$harness_dir" -c protocol.version=2 fetch \
+            --no-tags --no-recurse-submodules --depth=1 origin \
+            "+${WORKFLOW_SHA}:refs/remotes/origin/ci-harness"
+          git -C "$harness_dir" sparse-checkout set .github/actions
+          git -C "$harness_dir" checkout --force --detach "$WORKFLOW_SHA"
+          test -f "$harness_dir/.github/actions/setup-node-env/action.yml"
 
       - name: Try to exclude workspace from Windows Defender (best-effort)
         shell: pwsh
@@ -3339,13 +3479,13 @@ jobs:
           REQUESTED_NODE_VERSION: "22.x"
         run: |
           set -euo pipefail
-          source .github/actions/setup-pnpm-store-cache/ensure-node.sh
+          source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
           openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
       - name: Setup pnpm
-        uses: ./.github/actions/setup-pnpm-store-cache
+        uses: ./.ci-harness/.github/actions/setup-pnpm-store-cache
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: 22.x
 
       - name: Runtime versions
@@ -3410,9 +3550,9 @@ jobs:
       - *platform_checkout_step
 
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
 
       - name: TS tests (macOS)
@@ -3511,17 +3651,20 @@ jobs:
           toolchain_key="$(printf '%s\n%s\n' "$xcode_version" "$swift_version" | shasum -a 256 | awk '{print $1}')"
           echo "key=$toolchain_key" >> "$GITHUB_OUTPUT"
 
-      - name: Cache SwiftPM
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      - name: Restore SwiftPM cache
+        id: swiftpm-cache
+        if: needs.preflight.outputs.cache_mode != 'off'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/Library/Caches/org.swift.swiftpm
           key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-swiftpm-
 
-      - name: Cache Swift build directory
+      - name: Restore Swift build directory cache
         id: swift-build-cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        if: needs.preflight.outputs.cache_mode != 'off'
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: apps/macos/.build
           key: ${{ runner.os }}-swift-build-v3-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'apps/swabble/Package.swift', 'apps/swabble/Sources/**') }}
@@ -3655,6 +3798,20 @@ jobs:
           done
           exit 1
 
+      - name: Save SwiftPM cache
+        if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swiftpm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: ${{ steps.swiftpm-cache.outputs.cache-primary-key }}
+
+      - name: Save Swift build directory cache
+        if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swift-build-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: apps/macos/.build
+          key: ${{ steps.swift-build-cache.outputs.cache-primary-key }}
+
   ios-build:
     permissions:
       contents: read
@@ -3686,9 +3843,9 @@ jobs:
           swift --version
 
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
 
       - name: Install iOS Swift tooling
@@ -3898,20 +4055,22 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.workflow_sha }}
-          path: .ci-workflow
-          sparse-checkout: .github/actions/setup-android-toolchain
+          path: .ci-harness
+          sparse-checkout: .github/actions
           persist-credentials: false
 
       - name: Setup Android toolchain
         # Frozen targets keep their Gradle task contract, but CI toolchain pins remain
         # workflow-owned as before. Load them from the workflow revision so old targets work.
-        uses: ./.ci-workflow/.github/actions/setup-android-toolchain
+        uses: ./.ci-harness/.github/actions/setup-android-toolchain
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_write_allowed == 'true' && 'read-write' || needs.preflight.outputs.cache_mode }}
 
       - name: Setup Node environment for native resources
         if: needs.preflight.outputs.use_compatible_android_ci != 'true'
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
 
       # Same-repo runs carry the Gradle user home (dependency, wrapper, and
@@ -4059,9 +4218,9 @@ jobs:
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
+        uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          cache-mode: restore
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           node-version: "24.x"
           install-bun: "false"
           dependency-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}

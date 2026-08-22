@@ -900,6 +900,7 @@ describe("resolveIMessageInboundDecision command auth", () => {
     });
 
     expect(ctxPayload.CommandAuthorized).toBe(true);
+    expect(ctxPayload.ConversationRoutePeerId).toBe("+15555550123");
     expect(ctxPayload.CommandSource).toBe("text");
     expect(ctxPayload.CommandTurn).toMatchObject({
       kind: "text-slash",

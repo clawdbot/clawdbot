@@ -33,6 +33,7 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   applySessionEntryLifecycleMutation,
+  assignSessionOwner,
   commitReplySessionInitialization,
   countSessionEntryRowsReadOnly,
   createSessionEntryWithTranscript,
@@ -593,6 +594,36 @@ describe("session accessor seam", () => {
       [header, older, newer],
     );
 
+    const databasePath = expectDefined(
+      resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+      "transcript find database path",
+    );
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    const originalPrepare = database.db.prepare.bind(database.db);
+    let transcriptRowsRead = 0;
+    // Count SQLite rows rather than matcher calls: eager materialization happens before matching.
+    const prepareSpy = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+      const statement = originalPrepare(sql);
+      return new Proxy(statement, {
+        get(target, property) {
+          if (property === "iterate") {
+            return (...params: Parameters<typeof target.iterate>) => {
+              const iterator = target.iterate(...params);
+              return (function* () {
+                for (const row of iterator) {
+                  if ("event_json" in row) {
+                    transcriptRowsRead += 1;
+                  }
+                  yield row;
+                }
+              })() as ReturnType<typeof target.iterate>;
+            };
+          }
+          const value = Reflect.get(target, property, target) as unknown;
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    });
     const seen: unknown[] = [];
     const found = await findTranscriptEvent(
       { sessionId: "session-find", sessionKey: "agent:main:main", storePath },
@@ -600,10 +631,11 @@ describe("session accessor seam", () => {
         seen.push(event);
         return (event as { type?: string }).type === "message";
       },
-    );
+    ).finally(() => prepareSpy.mockRestore());
     // Newest-first with early exit: the older message is never visited.
     expect(found).toEqual({ event: newer });
     expect(seen).toEqual([newer]);
+    expect(transcriptRowsRead).toBe(1);
 
     await replaceTranscriptEvents(
       { agentId: "main", sessionId: "session-falsy", sessionKey: "agent:main:falsy", storePath },
@@ -804,6 +836,24 @@ describe("session accessor seam", () => {
     });
 
     expect(routed).toBeNull();
+    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+  });
+
+  it("runs the last-route ownership guard at the SQLite commit edge", async () => {
+    const sessionKey = "agent:main:webchat:dm:revoked-route";
+
+    await expect(
+      updateSessionLastRoute({
+        storePath,
+        sessionKey,
+        channel: "webchat",
+        to: "webchat:revoked-route",
+        assertCommitAllowed: () => {
+          throw new Error("route owner changed");
+        },
+      }),
+    ).rejects.toThrow("route owner changed");
+
     expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
   });
 
@@ -2088,6 +2138,11 @@ describe("session accessor seam", () => {
       ],
       skipMaintenance: true,
     });
+    const doneOwner = { id: "done-owner", type: "human" as const };
+    assignSessionOwner(
+      { sessionKey: "agent:main:done", storePath },
+      { assignedBy: doneOwner, owner: doneOwner },
+    );
 
     const result = await applySessionEntryReplacements({
       storePath,
@@ -2138,9 +2193,12 @@ describe("session accessor seam", () => {
       "agent:main:other",
       "agent:main:shared-running",
     ]);
-    expect(
-      listSessionEntriesByStatus({ storePath }, ["done"]).map((entry) => entry.sessionKey),
-    ).toEqual(["agent:main:done", "agent:main:shared-done"]);
+    const doneSessions = listSessionEntriesByStatus({ storePath }, ["done"]);
+    expect(doneSessions.map((entry) => entry.sessionKey)).toEqual([
+      "agent:main:done",
+      "agent:main:shared-done",
+    ]);
+    expect(doneSessions[0]?.entry.owner?.actor).toEqual(doneOwner);
 
     const other = loadSessionEntry({ sessionKey: "agent:main:other", storePath });
     expect(other).toBeDefined();
@@ -2561,6 +2619,8 @@ describe("session accessor seam", () => {
       sessionId: "lifecycle-prepare",
       updatedAt: 10,
     });
+    const owner = { id: "lifecycle-owner", type: "human" as const };
+    assignSessionOwner(scope, { assignedBy: owner, owner });
     const builderStarted = createDeferred();
     const builderGate = createDeferred();
     const pendingMutation = applySessionEntryLifecycleMutation({
@@ -2665,6 +2725,8 @@ describe("session accessor seam", () => {
       sessionId: scope.sessionId,
       updatedAt: 10,
     });
+    const owner = { id: "lifecycle-owner", type: "human" as const };
+    assignSessionOwner(scope, { assignedBy: owner, owner });
     await replaceTranscriptEvents(scope, [
       {
         id: "event-1",
@@ -4265,11 +4327,12 @@ describe("session accessor seam", () => {
     expect(target.sessionKey).toBe(canonicalScope.sessionKey);
   });
 
-  it("drops imported legacy session transcript paths from canonical rows", async () => {
+  it("drops imported legacy transcript paths and untrusted owners from canonical rows", async () => {
     const sessionKey = "agent:main:main";
     await importSqliteSessionRows({
       agentId: "main",
       entry: {
+        owner: { actor: { type: "human", id: "spoofed" } },
         sessionFile: path.join(tempDir, "legacy-transcript.jsonl"),
         sessionId: "session-1",
         updatedAt: 10,
@@ -4278,13 +4341,13 @@ describe("session accessor seam", () => {
       storePath,
     });
 
-    expect(
-      loadExactSessionEntry({
-        agentId: "main",
-        sessionKey,
-        storePath,
-      })?.entry,
-    ).not.toHaveProperty("sessionFile");
+    const entry = loadExactSessionEntry({
+      agentId: "main",
+      sessionKey,
+      storePath,
+    })?.entry;
+    expect(entry).not.toHaveProperty("sessionFile");
+    expect(entry).not.toHaveProperty("owner");
   });
 
   it("reads imported transcripts before opening the SQLite transaction", async () => {

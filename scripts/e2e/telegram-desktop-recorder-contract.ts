@@ -27,6 +27,7 @@ const recorderSessionBaseSchema = z.object({
   /** Telegram Desktop window as placed on the recorded desktop; the crop uses it. */
   window: z.object({
     height: z.number().int().positive(),
+    id: z.string().regex(/^0x[0-9a-f]+$/iu),
     width: z.number().int().positive(),
     x: z.number().int().nonnegative(),
     y: z.number().int().nonnegative(),
@@ -70,6 +71,13 @@ export type ViewOptions = {
   sessionPath: string;
 };
 
+export type ActionsOptions = {
+  actionsFile: string;
+  command: "actions";
+  sessionPath: string;
+  timeoutSeconds: number;
+};
+
 export type ScreenshotOptions = {
   command: "screenshot";
   output?: string;
@@ -100,6 +108,7 @@ export type ArtifactsOptions = {
 
 type RecorderOptions =
   | ArtifactsOptions
+  | ActionsOptions
   | RecoverOptions
   | ScreenshotOptions
   | StartOptions
@@ -113,6 +122,7 @@ export function recorderUsageText(): string {
     "  pnpm qa:telegram-desktop-recorder artifacts --session <recorder.json>",
     '  pnpm qa:telegram-desktop-recorder start --output-dir <dir> --chat <-100groupId> --user-driver "<space-separated cmd prefix>" [options]',
     "  pnpm qa:telegram-desktop-recorder view --session <recorder.json> --message-id <id>",
+    "  pnpm qa:telegram-desktop-recorder actions --session <recorder.json> --actions-file <json> [--timeout-seconds <seconds>]",
     "  pnpm qa:telegram-desktop-recorder screenshot --session <recorder.json> [--output <png>]",
     "  pnpm qa:telegram-desktop-recorder recover --session <recorder.json>",
     "  pnpm qa:telegram-desktop-recorder stop --session <recorder.json> [--crop telegram-window] [--keep-box]",
@@ -163,7 +173,7 @@ export function parseRecorderArgs(argv: string[]): RecorderOptions {
     throw new Error(recorderUsageText());
   }
   const parsedCommand = z
-    .enum(["artifacts", "recover", "screenshot", "start", "status", "stop", "view"])
+    .enum(["actions", "artifacts", "recover", "screenshot", "start", "status", "stop", "view"])
     .safeParse(rawCommand);
   if (!parsedCommand.success) {
     throw new Error(`Unknown command: ${rawCommand}\n\n${recorderUsageText()}`);
@@ -205,11 +215,13 @@ export function parseRecorderArgs(argv: string[]): RecorderOptions {
         ])
       : command === "view"
         ? new Set(["--message-id", "--session"])
-        : command === "screenshot"
-          ? new Set(["--output", "--session"])
-          : command === "stop"
-            ? new Set(["--crop", "--session"])
-            : new Set(["--session"]);
+        : command === "actions"
+          ? new Set(["--actions-file", "--session", "--timeout-seconds"])
+          : command === "screenshot"
+            ? new Set(["--output", "--session"])
+            : command === "stop"
+              ? new Set(["--crop", "--session"])
+              : new Set(["--session"]);
   for (const flag of values.keys()) {
     if (!allowed.has(flag)) {
       throw new Error(`${flag} is not available for ${command}.`);
@@ -265,6 +277,14 @@ export function parseRecorderArgs(argv: string[]): RecorderOptions {
     const messageId = requiredString(values, "--message-id");
     positiveInteger(messageId, "--message-id");
     return { command, messageId, sessionPath };
+  }
+  if (command === "actions") {
+    return {
+      actionsFile: requiredString(values, "--actions-file"),
+      command,
+      sessionPath,
+      timeoutSeconds: positiveInteger(values.get("--timeout-seconds") ?? "60", "--timeout-seconds"),
+    };
   }
   if (command === "screenshot") {
     return { command, output: values.get("--output"), sessionPath };

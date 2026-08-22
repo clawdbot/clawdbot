@@ -86,12 +86,18 @@ export function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup>
       currentGroup?.role === "assistant" &&
       isKeyedAssistantStreamFallbackMessage(currentGroup.messages[0]?.message) !==
         isKeyedAssistantStreamFallbackMessage(item.message);
+    const splitsRuntimeActivity =
+      role === "assistant" &&
+      currentGroup?.role === "assistant" &&
+      isContextCompactionActivity(currentGroup.messages[0]?.message) !==
+        isContextCompactionActivity(item.message);
 
     if (
       !currentGroup ||
       startsProjectedTurn ||
       currentGroup.role !== role ||
       splitsAssistantCommentary ||
+      splitsRuntimeActivity ||
       (shouldSplitBySender &&
         (currentGroup.senderLabel !== senderLabel ||
           senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender)))
@@ -542,8 +548,13 @@ export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolea
   return (
     group.role.toLowerCase() === "assistant" &&
     !assistantGroupIsForwardedBoundary(group) &&
+    !group.messages.every(({ message }) => isContextCompactionActivity(message)) &&
     groupHasVisibleReplyContent(group)
   );
+}
+
+function isContextCompactionActivity(message: unknown): boolean {
+  return asRecord(asRecord(message)?.["__openclaw"])?.runtimeActivityKind === "context_compaction";
 }
 
 // History carries no final-vs-commentary marker (commentary exists only as
