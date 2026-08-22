@@ -1903,7 +1903,17 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.completeTurn();
     await run;
 
-    const messages = (await readSessionTranscriptEvents(params.sessionTarget!))
+    const sessionTarget = params.sessionTarget;
+    if (!sessionTarget?.sessionId || !sessionTarget.sessionKey) {
+      throw new Error("expected a complete session transcript target");
+    }
+    const messages = (
+      await readSessionTranscriptEvents({
+        ...sessionTarget,
+        sessionId: sessionTarget.sessionId,
+        sessionKey: sessionTarget.sessionKey,
+      })
+    )
       .map((event) => (event as { message?: { role?: string } }).message)
       .filter((message) => message !== undefined);
     expect(messages.slice(0, 2).map((message) => message.role)).toEqual(["user", "assistant"]);

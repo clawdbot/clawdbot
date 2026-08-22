@@ -706,10 +706,13 @@ describe("projectBoundedCodexThreadHistory", () => {
     );
     expect(projection.responseItems).toHaveLength(3);
     const visibleSessionHistory = projectBoundedCodexVisibleSessionHistory(
-      projection.transcriptMessages.map((message) => ({
+      projection.transcriptMessages.map((message, index) => ({
+        entryId: `entry-${index}`,
+        parentId: index === 0 ? null : `entry-${index - 1}`,
+        seq: index,
         role: message.role,
         message,
-      })) as Parameters<typeof projectBoundedCodexVisibleSessionHistory>[0],
+      })),
     );
     expect(JSON.stringify(visibleSessionHistory)).not.toContain("Which environment should I use?");
     expect(visibleSessionHistory).toHaveLength(3);
