@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
 import { buildExecRunConfig, resolveExecBaseConfig } from "./agent-exec.js";
 
@@ -44,6 +45,45 @@ describe("agent exec configless workspace ownership", () => {
 
     expect(config.tools?.allow).toEqual(["read", "browser"]);
     expect(config.tools?.alsoAllow).toBeUndefined();
+  });
+
+  it("preserves global empty-allow additive semantics", () => {
+    const config = buildExecRunConfig({
+      base: { tools: { allow: [], alsoAllow: ["read"] } },
+      cwd: "/run/here",
+      opts: { alsoAllowTool: ["browser"] },
+    });
+
+    expect(config.tools?.allow).toEqual([]);
+    expect(config.tools?.alsoAllow).toEqual(["read", "browser"]);
+  });
+
+  it.each([
+    {
+      name: "strict allowlist",
+      tools: { allow: ["read"] },
+      expectedKey: "allow" as const,
+    },
+    {
+      name: "additive allowlist",
+      tools: { alsoAllow: ["read"] },
+      expectedKey: "alsoAllow" as const,
+    },
+  ])("extends the selected agent's $name", ({ tools, expectedKey }) => {
+    const config = buildExecRunConfig({
+      base: { agents: { entries: { ops: { tools } } } },
+      cwd: "/run/here",
+      agentId: "ops",
+      opts: { alsoAllowTool: ["browser"] },
+    });
+
+    expect(config.agents?.entries?.ops?.tools?.[expectedKey]).toEqual(["read", "browser"]);
+    const effective = resolveEffectiveToolPolicy({ config, agentId: "ops" });
+    if (expectedKey === "allow") {
+      expect(effective.agentPolicy?.allow).toContain("browser");
+    } else {
+      expect(effective.profileAlsoAllow).toContain("browser");
+    }
   });
 
   it("rejects empty one-shot tool names", () => {

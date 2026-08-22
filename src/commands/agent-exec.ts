@@ -329,6 +329,7 @@ function stripInheritedAgentLocations(base: OpenClawConfig): OpenClawConfig {
 function buildExecRunOverlay(params: {
   base: OpenClawConfig;
   cwd: string;
+  agentId?: string;
   opts: Pick<AgentExecCliOptions, "alsoAllowTool" | "codeMode" | "localModelLean">;
 }): OpenClawConfig {
   const codeMode = normalizeCodeMode(params.opts.codeMode);
@@ -336,14 +337,29 @@ function buildExecRunOverlay(params: {
   if (requestedTools.some((value) => !value)) {
     throw new Error("--also-allow-tool requires a non-empty tool name.");
   }
+  const globalAllow = params.base.tools?.allow ?? [];
   const requestedToolPolicy =
     requestedTools.length === 0
       ? undefined
-      : params.base.tools?.allow !== undefined
-        ? { allow: [...new Set([...params.base.tools.allow, ...requestedTools])] }
+      : globalAllow.length > 0
+        ? { allow: [...new Set([...globalAllow, ...requestedTools])] }
         : {
             alsoAllow: [...new Set([...(params.base.tools?.alsoAllow ?? []), ...requestedTools])],
           };
+  const selectedAgentTools = params.agentId
+    ? params.base.agents?.entries?.[params.agentId]?.tools
+    : undefined;
+  const selectedAgentAllow = selectedAgentTools?.allow ?? [];
+  const selectedAgentRequestedToolPolicy =
+    requestedTools.length === 0 || !selectedAgentTools
+      ? undefined
+      : selectedAgentAllow.length > 0
+        ? { allow: [...new Set([...selectedAgentAllow, ...requestedTools])] }
+        : selectedAgentTools.alsoAllow !== undefined
+          ? {
+              alsoAllow: [...new Set([...selectedAgentTools.alsoAllow, ...requestedTools])],
+            }
+          : undefined;
   // A per-agent `workspace` outranks `agents.defaults`, so pinning only the
   // defaults would let an inherited entry silently run the turn against a
   // different repository. Override every configured entry as well.
@@ -356,7 +372,19 @@ function buildExecRunOverlay(params: {
         ...(params.opts.localModelLean ? { experimental: { localModelLean: true } } : {}),
       },
       ...(entries.length > 0
-        ? { entries: Object.fromEntries(entries.map((id) => [id, { workspace: params.cwd }])) }
+        ? {
+            entries: Object.fromEntries(
+              entries.map((id) => [
+                id,
+                {
+                  workspace: params.cwd,
+                  ...(id === params.agentId && selectedAgentRequestedToolPolicy
+                    ? { tools: selectedAgentRequestedToolPolicy }
+                    : {}),
+                },
+              ]),
+            ),
+          }
         : {}),
     },
     // This process exits after one turn, so live skill invalidation cannot be
@@ -446,6 +474,7 @@ export async function resolveExecBaseConfig(
 export function buildExecRunConfig(params: {
   base: OpenClawConfig;
   cwd: string;
+  agentId?: string;
   opts?: Pick<AgentExecCliOptions, "alsoAllowTool" | "codeMode" | "localModelLean">;
 }): OpenClawConfig {
   const opts = params.opts ?? {};
@@ -453,7 +482,7 @@ export function buildExecRunConfig(params: {
   const withDefaults = mergeDeep(buildExecConfigDefaults(), base) as OpenClawConfig;
   return mergeDeep(
     withDefaults,
-    buildExecRunOverlay({ base, cwd: params.cwd, opts }),
+    buildExecRunOverlay({ base, cwd: params.cwd, agentId: params.agentId, opts }),
   ) as OpenClawConfig;
 }
 
@@ -644,7 +673,13 @@ export async function agentExecCommand(
         before: envBeforeConfigLoad,
         after: envAfterConfigLoad,
       });
-    const runConfig = buildExecRunConfig({ base: baseConfig, cwd, opts });
+    const { resolveAgentDir, resolveAmbientOwnerAgentId } =
+      await import("../agents/agent-scope-config.js");
+    const execAgentId = resolveAmbientOwnerAgentId(baseConfig, undefined, {
+      surface: "agent exec",
+      hint: "Set agents.defaults.systemAgent.agentId.",
+    });
+    const runConfig = buildExecRunConfig({ base: baseConfig, cwd, agentId: execAgentId, opts });
     // Installed plugins belong to the operator config resolved above, not to
     // the disposable state root used for this run. Capture all roots before
     // OPENCLAW_STATE_DIR moves so discovery and the installed-index DB agree.
@@ -655,8 +690,6 @@ export async function agentExecCommand(
     const pluginInstallRoots = pluginInstallContext?.resolvePluginInstallRoots();
     const timeout = normalizeTimeoutSeconds(opts.timeout);
     const fallbacks = normalizeFallbacks(opts.model, opts.fallback);
-    const { resolveAgentDir, resolveAmbientOwnerAgentId } =
-      await import("../agents/agent-scope-config.js");
     // Resolve from the inherited config, not `{}`: the default agent may declare
     // its own `agentDir`, and that is where its stored auth profiles live. This
     // reads `baseConfig` rather than `runConfig` because the run config
@@ -664,10 +697,6 @@ export async function agentExecCommand(
     // credential ownership must still follow the operator's configuration.
     // Computed before the environment repoints the state dir so the unconfigured
     // case still resolves against the real one.
-    const execAgentId = resolveAmbientOwnerAgentId(baseConfig, undefined, {
-      surface: "agent exec",
-      hint: "Set agents.defaults.systemAgent.agentId.",
-    });
     // Auth, session keys, and SQLite ownership must share one resolved owner.
     // Splitting these paths can select an agent's store but emit a `main` key.
     const storedAuthAgentDir = resolveAgentDir(baseConfig, execAgentId);
