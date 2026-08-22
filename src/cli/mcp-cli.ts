@@ -43,7 +43,9 @@ import { serveOpenClawChannelMcp } from "../mcp/channel-server.js";
 import { defaultRuntime } from "../runtime.js";
 import { shouldAuditPlaintextMcpValue } from "../secrets/mcp-target-sensitivity.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { resolveCommandConfigWithSecrets } from "./command-config-resolution.js";
 import { formatCliCommand } from "./command-format.js";
+import { getMcpCommandSecretTargetIds } from "./command-secret-targets.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
@@ -377,14 +379,11 @@ async function probeMcpServerIssues(params: {
   name: string;
   server: Record<string, unknown>;
 }): Promise<McpDoctorIssue[]> {
-  const runtime = createSessionMcpRuntime({
+  const runtime = await createMcpProbeRuntime({
+    commandName: "mcp doctor --probe",
     sessionId: "openclaw-cli-mcp-doctor",
-    workspaceDir: process.cwd(),
-    cfg: buildMcpProbeConfig({
-      config: params.config,
-      servers: { [params.name]: params.server },
-    }),
-    manifestRegistry: { plugins: [] },
+    config: params.config,
+    servers: { [params.name]: params.server },
   });
   try {
     const result = formatMcpProbeResult(await runtime.getCatalog());
@@ -551,6 +550,26 @@ function buildMcpProbeConfig(params: {
   };
 }
 
+async function createMcpProbeRuntime(params: {
+  commandName: string;
+  sessionId: string;
+  config: OpenClawConfig;
+  servers: Record<string, Record<string, unknown>>;
+}) {
+  const { resolvedConfig } = await resolveCommandConfigWithSecrets({
+    config: buildMcpProbeConfig({ config: params.config, servers: params.servers }),
+    commandName: params.commandName,
+    targetIds: getMcpCommandSecretTargetIds(),
+    runtime: defaultRuntime,
+  });
+  return createSessionMcpRuntime({
+    sessionId: params.sessionId,
+    workspaceDir: process.cwd(),
+    cfg: resolvedConfig,
+    manifestRegistry: { plugins: [] },
+  });
+}
+
 const DEFAULT_MCP_PROBE_INITIALIZE_TIMEOUT_MS = 5_000;
 
 function applyMcpProbeInitializeTimeout(server: Record<string, unknown>): Record<string, unknown> {
@@ -592,6 +611,7 @@ function failOnMcpProbeIssues(params: Parameters<typeof resolveMcpProbeIssue>[0]
 }
 
 async function probeMcpServersOrFail(params: {
+  commandName: string;
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
   path: string;
@@ -602,11 +622,11 @@ async function probeMcpServersOrFail(params: {
       applyMcpProbeInitializeTimeout(server),
     ]),
   );
-  const runtime = createSessionMcpRuntime({
+  const runtime = await createMcpProbeRuntime({
+    commandName: params.commandName,
     sessionId: "openclaw-cli-mcp-probe",
-    workspaceDir: process.cwd(),
-    cfg: buildMcpProbeConfig({ config: params.config, servers: probeServers }),
-    manifestRegistry: { plugins: [] },
+    config: params.config,
+    servers: probeServers,
   });
   try {
     const result = formatMcpProbeResult(await runtime.getCatalog());
@@ -821,11 +841,11 @@ export function registerMcpCli(program: Command) {
         );
         return;
       }
-      const runtime = createSessionMcpRuntime({
+      const runtime = await createMcpProbeRuntime({
+        commandName: "mcp probe",
         sessionId: "openclaw-cli-mcp-probe",
-        workspaceDir: process.cwd(),
-        cfg: buildMcpProbeConfig({ config: loaded.config, servers }),
-        manifestRegistry: { plugins: [] },
+        config: loaded.config,
+        servers,
       });
       try {
         const result = formatMcpProbeResult(await runtime.getCatalog());
@@ -1083,6 +1103,7 @@ export function registerMcpCli(program: Command) {
           opts.probe !== false && server.enabled !== false && server.auth !== "oauth";
         if (shouldProbe) {
           await probeMcpServersOrFail({
+            commandName: "mcp add",
             config: loaded.config,
             path: loaded.path,
             servers: { [name]: server },
@@ -1304,6 +1325,7 @@ export function registerMcpCli(program: Command) {
         setOptionalField(next, "clientKey", normalizeStringifiedOptionalString(opts.clientKey));
         if (opts.probe && next.enabled !== false && next.auth !== "oauth") {
           await probeMcpServersOrFail({
+            commandName: "mcp configure --probe",
             config: loaded.config,
             path: loaded.path,
             servers: { [name]: next },

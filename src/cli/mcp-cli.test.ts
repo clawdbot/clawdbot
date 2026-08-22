@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   cleanupMcpCliTestState,
   createWorkspace,
@@ -779,6 +780,71 @@ describe("mcp cli", () => {
         diagnostics: [],
       });
       expect(lastErrorLine()).toBe("");
+    });
+  });
+
+  it("resolves MCP SecretRefs before probe transports are constructed", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
+      const workspaceDir = await createWorkspace();
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const resolvedEnvValues: unknown[] = [];
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({
+          secrets: { providers: { default: { source: "env" } } },
+          mcp: {
+            servers: {
+              proof: {
+                command: process.execPath,
+                env: {
+                  API_TOKEN: {
+                    source: "env",
+                    provider: "default",
+                    id: "OPENCLAW_MCP_PROBE_TEST_TOKEN",
+                  },
+                },
+              },
+            },
+          },
+        })}\n`,
+        "utf8",
+      );
+      setCreateSessionMcpRuntimeOverride((params) => {
+        resolvedEnvValues.push(params.cfg?.mcp?.servers?.proof?.env?.API_TOKEN);
+        return {
+          sessionId: params.sessionId,
+          workspaceDir: params.workspaceDir,
+          configFingerprint: "cli-probe-secret-ref",
+          createdAt: 0,
+          lastUsedAt: 0,
+          getCatalog: async () => ({
+            version: 1,
+            generatedAt: Date.now(),
+            servers: {
+              proof: {
+                serverName: "proof",
+                launchSummary: process.execPath,
+                toolCount: 0,
+              },
+            },
+            tools: [],
+            diagnostics: [],
+          }),
+          peekCatalog: () => null,
+          markUsed: () => {},
+          callTool: async () => ({ content: [] }),
+          dispose: async () => {},
+        };
+      });
+
+      await withEnvAsync({ OPENCLAW_MCP_PROBE_TEST_TOKEN: "resolved-probe-token" }, async () => {
+        await runMcpCommand(["mcp", "probe", "proof", "--json"]);
+        await runMcpCommand(["mcp", "doctor", "proof", "--probe", "--json"]);
+      });
+
+      expect(resolvedEnvValues).toEqual(["resolved-probe-token", "resolved-probe-token"]);
     });
   });
 
