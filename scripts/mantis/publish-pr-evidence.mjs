@@ -9,7 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 
-/** @typedef {Record<string, unknown> & { expected?: string, fixed?: boolean, ref?: string, sha?: string, status?: string }} EvidenceLane */
+/** @typedef {Record<string, unknown> & { detail?: string, expected?: string, fixed?: boolean, ref?: string, sha?: string, status?: string }} EvidenceLane */
 /**
  * @typedef {{
  *   alt?: string,
@@ -366,7 +366,9 @@ function laneLine(label, lane) {
   } else if (lane.ref) {
     pieces.push(` at \`${lane.ref}\``);
   }
-  if (lane.expected) {
+  if (lane.detail) {
+    pieces.push(` — ${lane.detail}`);
+  } else if (lane.expected) {
     pieces.push(`, expected ${lane.expected}`);
   }
   return pieces.join("");

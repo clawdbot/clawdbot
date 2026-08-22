@@ -369,7 +369,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(gate).toContain("build-telegram-desktop-proof-evidence.mts");
     expect(gate).toContain('--baseline-status "$baseline_status"');
     expect(gate).toContain('--candidate-status "$candidate_status"');
-    expect(gate).toContain(".summary = $judgment[0].summary");
+    expect(gate).toContain(
+      '.summary = (if .comparison.outcome == "pass" then $judgment[0].summary else .summary end)',
+    );
     expect(gate).toContain('sudo mv "$trusted_manifest" "$manifest"');
     expect(gate.indexOf('"$trusted_output/$lane/summary.json"')).toBeLessThan(
       gate.indexOf("build-telegram-desktop-proof-evidence.mts"),
