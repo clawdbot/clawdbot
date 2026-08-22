@@ -50,7 +50,7 @@ function pruneSidebarAgentSessionCaches(
     owner.sessionsAgentId = null;
   }
   const retainedResults = Object.values(owner.sessionResultsByAgent);
-  if (owner.sessionsResult && !owner.sessionsAgentId) {
+  if (owner.sessionsResult) {
     retainedResults.push(owner.sessionsResult);
   }
   pruneSidebarSessionOrder(owner, retainedResults);

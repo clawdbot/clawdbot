@@ -206,6 +206,20 @@ describe("filtered sidebar session event refresh", () => {
     controller.hostDisconnected();
   });
 
+  it("retains the current canonical result outside the per-agent cache", () => {
+    const { controller, publishAgentRoster, resultForKeys } =
+      createFilteredSessionController("all");
+    controller.hostConnected();
+    controller.sessionsResult = resultForKeys(["agent:main:current"]);
+    controller.sessionsAgentId = "main";
+    controller.sessionCreatedOrder = new Map([["agent:main:current", 0]]);
+
+    publishAgentRoster(["main"]);
+
+    expect([...controller.sessionCreatedOrder.keys()]).toEqual(["agent:main:current"]);
+    controller.hostDisconnected();
+  });
+
   it.each(["archived", "all"] as const)(
     "refreshes the %s list once for duplicate remote session events",
     async (statusFilter) => {
