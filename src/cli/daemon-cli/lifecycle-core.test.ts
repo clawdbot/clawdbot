@@ -588,6 +588,30 @@ describe("runServiceRestart token drift", () => {
     expect(onNotLoaded).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { loaded: true, stopWhenNotLoaded: false },
+    { loaded: false, stopWhenNotLoaded: true },
+  ])(
+    "runs the service mutation guard before managed stop (loaded=$loaded)",
+    async ({ loaded, stopWhenNotLoaded }) => {
+      service.isLoaded.mockResolvedValue(loaded);
+      const beforeServiceMutation = vi.fn();
+
+      await runServiceStop({
+        serviceNoun: "Gateway",
+        service,
+        opts: { json: true, disable: stopWhenNotLoaded },
+        stopWhenNotLoaded,
+        beforeServiceMutation,
+      });
+
+      expect(beforeServiceMutation).toHaveBeenCalledTimes(1);
+      expect(beforeServiceMutation.mock.invocationCallOrder[0]).toBeLessThan(
+        service.stop.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+    },
+  );
+
   it("emits started when a not-loaded start path repairs the service", async () => {
     service.isLoaded.mockResolvedValue(false);
 

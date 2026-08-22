@@ -359,6 +359,7 @@ export async function runServiceStop(params: {
   serviceNoun: string;
   service: GatewayService;
   opts?: DaemonLifecycleOptions;
+  beforeServiceMutation?: () => void;
   onNotLoaded?: (ctx: ServiceRecoveryContext) => Promise<ServiceRecoveryResult<"stopped"> | null>;
   stopWhenNotLoaded?: boolean;
 }) {
@@ -386,6 +387,7 @@ export async function runServiceStop(params: {
   }
   if (!loaded) {
     if (params.stopWhenNotLoaded) {
+      params.beforeServiceMutation?.();
       try {
         await params.service.stop({
           env: process.env,
@@ -434,6 +436,7 @@ export async function runServiceStop(params: {
     }
     return;
   }
+  params.beforeServiceMutation?.();
   try {
     await params.service.stop({
       env: process.env,

@@ -741,6 +741,27 @@ describe("runDaemonRestart health checks", () => {
     expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGTERM");
   });
 
+  it("stops a verified unmanaged gateway for a non-default install identity", async () => {
+    isDefaultInstallIdentity.mockReturnValue(false);
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+
+    await runUnmanagedStop();
+
+    expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGTERM");
+    expect(service.stop).not.toHaveBeenCalled();
+  });
+
+  it("retains the service guard when a non-default identity has no unmanaged gateway", async () => {
+    isDefaultInstallIdentity.mockReturnValue(false);
+    readActiveGatewayLockIdentity.mockResolvedValue(undefined);
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
+
+    await expect(runUnmanagedStop()).rejects.toThrow(/non-default state dir/);
+
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+    expect(service.stop).not.toHaveBeenCalled();
+  });
+
   it("routes macOS disable stops through the service manager when not loaded", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
 
@@ -763,6 +784,17 @@ describe("runDaemonRestart health checks", () => {
     expect(service.stop).toHaveBeenCalledWith(
       expect.objectContaining({ env: process.env, stdout: process.stdout }),
     );
+    expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
+  });
+
+  it("guards a disabled running systemd service before stopping it", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    isDefaultInstallIdentity.mockReturnValue(false);
+    service.readRuntime.mockResolvedValue({ status: "running" });
+
+    await expect(runUnmanagedStop()).rejects.toThrow(/non-default state dir/);
+
+    expect(service.stop).not.toHaveBeenCalled();
     expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
   });
 
@@ -1083,6 +1115,22 @@ describe("runDaemonRestart health checks", () => {
       expect.objectContaining({ result: "stopped" }),
     );
     expect(stopSystemdService).toHaveBeenCalled();
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+  });
+
+  it("rejects a system-scope stop for a non-default install identity before mutation", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    isDefaultInstallIdentity.mockReturnValue(false);
+    findInstalledSystemdGatewayScope.mockResolvedValue({
+      scope: "system",
+      unitName: "openclaw-gateway.service",
+      unitPath: "/etc/systemd/system/openclaw-gateway.service",
+    });
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+
+    await expect(runUnmanagedStop()).rejects.toThrow(/non-default state dir/);
+
+    expect(stopSystemdService).not.toHaveBeenCalled();
     expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
   });
 
