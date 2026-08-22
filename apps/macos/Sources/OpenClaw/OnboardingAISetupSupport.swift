@@ -1,6 +1,7 @@
 import Foundation
 import OpenClawChatUI
 import OpenClawKit
+import OpenClawProtocol
 
 extension OnboardingAISetupModel {
     struct PersistedActivationState: Equatable {

@@ -1072,7 +1072,8 @@ extension OnboardingAISetupModel {
         originalServerLease: GatewayConnection.ServerLease,
         gatewayRestartRequired: Bool) async -> Failure?
     {
-        let restartRequired = gatewayRestartRequired || await !(self.gateway.isCurrentServerLease(originalServerLease))
+        let originalLeaseWasReplaced = await !(self.gateway.isCurrentServerLease(originalServerLease))
+        let restartRequired = gatewayRestartRequired || originalLeaseWasReplaced
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return nil }
         guard restartRequired else {
             self.finishConnected(kind: kind, activationOwner: activationOwner)
