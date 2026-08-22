@@ -120,11 +120,13 @@ export function isPollEventType(eventType: string): boolean {
   return (POLL_EVENT_TYPES as readonly string[]).includes(eventType);
 }
 
-function getTextContent(text?: TextContent): string {
-  if (!text) {
+function getTextContent(text?: unknown): string {
+  if (!text || typeof text !== "object") {
     return "";
   }
-  return text["m.text"] ?? text["org.matrix.msc1767.text"] ?? text.body ?? "";
+  const content = text as Record<string, unknown>;
+  const value = content["m.text"] ?? content["org.matrix.msc1767.text"] ?? content.body;
+  return normalizeOptionalString(value) ?? "";
 }
 
 export function parsePollStart(content: PollStartContent): ParsedPollStart | null {
@@ -136,7 +138,7 @@ export function parsePollStart(content: PollStartContent): ParsedPollStart | nul
     return null;
   }
 
-  const question = getTextContent(poll.question).trim();
+  const question = getTextContent(poll.question);
   if (!question) {
     return null;
   }
@@ -151,7 +153,7 @@ export function parsePollStart(content: PollStartContent): ParsedPollStart | nul
       const candidate = answer as Partial<PollAnswer> | null | undefined;
       return {
         id: typeof candidate?.id === "string" ? candidate.id : "",
-        text: getTextContent(candidate ?? undefined).trim(),
+        text: getTextContent(candidate),
       };
     })
     .filter((answer) => answer.id.trim().length > 0 && answer.text.length > 0);

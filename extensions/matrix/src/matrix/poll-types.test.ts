@@ -76,6 +76,14 @@ describe("parsePollStartContent", () => {
         "answer id non-string",
         { question: { "m.text": "Q?" }, answers: [{ id: 42, "m.text": "a" }] },
       ],
+      [
+        "question text non-string",
+        { question: { "m.text": 42 }, answers: [{ id: "a1", "m.text": "a" }] },
+      ],
+      [
+        "answer text non-string",
+        { question: { "m.text": "Q?" }, answers: [{ id: "a1", "m.text": 42 }] },
+      ],
     ];
     for (const [label, poll] of malformed) {
       expect(() => parsePollStart({ "m.poll.start": poll } as never), label).not.toThrow();
