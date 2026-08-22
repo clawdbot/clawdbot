@@ -11,7 +11,10 @@ import {
   createSessionEntryWithTranscript,
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.js";
-import { clearMemoryPluginState } from "../../../plugins/memory-state.test-fixtures.js";
+import {
+  clearMemoryPluginState,
+  registerMemoryPromptPreparation,
+} from "../../../plugins/memory-state.test-fixtures.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
@@ -250,6 +253,29 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const availableTools = assembleParams.availableTools;
     expect(availableTools).toBeInstanceOf(Set);
     expect((availableTools as Set<string>).has("memory_search")).toBe(false);
+  });
+
+  it("prepares memory context for the explicit prompt owner", async () => {
+    const prepare = vi.fn(async () => []);
+    registerMemoryPromptPreparation("memory-wiki", prepare);
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:openclaw:main",
+      tempPaths,
+      attemptOverrides: {
+        agentId: "openclaw",
+        memoryPromptAgentId: "hq",
+        sessionTarget: undefined,
+      },
+    });
+
+    expect(prepare).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "hq",
+        agentSessionKey: "agent:openclaw:main",
+      }),
+    );
   });
 
   it("defaults local-model lean embedded runs to Tool Search controls", async () => {
