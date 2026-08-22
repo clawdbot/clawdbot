@@ -75,17 +75,7 @@ describe("shared toast", () => {
     const host = await mountHost();
     const anchor = document.createElement("div");
     document.body.append(anchor);
-    vi.spyOn(anchor, "getBoundingClientRect").mockReturnValue({
-      bottom: 100,
-      height: 100,
-      left: 0,
-      right: 100,
-      toJSON: () => ({}),
-      top: 0,
-      width: 100,
-      x: 0,
-      y: 0,
-    });
+    vi.spyOn(anchor, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
 
     showToast({ anchor, message: "Temporary", durationMs: 50 });
     await host.updateComplete;
@@ -94,7 +84,7 @@ describe("shared toast", () => {
 
     expect(host.querySelector('.app-toast[data-active="false"]')).not.toBeNull();
 
-    await vi.advanceTimersByTimeAsync(450);
+    await vi.runAllTimersAsync();
     await host.updateComplete;
 
     expect(host.querySelector(".app-toast")).toBeNull();
@@ -114,7 +104,6 @@ describe("shared toast", () => {
   });
 
   it("reports why a toast is replaced, dismissed, acted on, or disconnected", async () => {
-    vi.useFakeTimers();
     const host = await mountHost();
     const reasons: string[] = [];
 

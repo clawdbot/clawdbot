@@ -825,7 +825,6 @@ openclaw-session-owner-chip {
   display: block;
   white-space: nowrap;
   font-size: var(--control-ui-text-sm);
-  text-wrap: nowrap;
 }
 
 .app-toast--anchored .app-toast__dismiss {
