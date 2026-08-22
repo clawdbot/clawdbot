@@ -4120,7 +4120,12 @@ button.chat-pr__diff {
     max-height: calc(7em + var(--chat-box-inset) + var(--chat-box-inset));
     padding-top: 10px;
     padding-bottom: 10px;
+    padding-left: var(--chat-box-inset);
     font-size: var(--control-ui-input-text-size);
+  }
+
+  .agent-chat__composer-footer {
+    padding-inline: calc(var(--chat-box-inset) * 2);
   }
 
   .agent-chat__composer-actions {

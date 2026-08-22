@@ -2123,9 +2123,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(geometry.textarea?.paddingTop).toBe(textareaBlockInset);
       expect(geometry.textarea?.paddingRight).toBe(composerInset);
       expect(geometry.textarea?.paddingBottom).toBe(textareaBlockInset);
-      expect(geometry.textarea?.paddingLeft).toBe(composerInset - 4);
-      expect(geometry.footer?.paddingLeft).toBe(composerInset);
-      expect(geometry.footer?.paddingRight).toBe(composerInset);
+      expect(geometry.textarea?.paddingLeft).toBe(width <= 768 ? composerInset : composerInset - 4);
+      expect(geometry.footer?.paddingLeft).toBe(width <= 768 ? composerInset * 2 : composerInset);
+      expect(geometry.footer?.paddingRight).toBe(width <= 768 ? composerInset * 2 : composerInset);
       // #105866 splits the block inset evenly around the footer so the
       // settings chip centers between the divider and the card edge.
       expect(geometry.footer?.paddingTop).toBe(composerInset / 2);
