@@ -51,9 +51,9 @@ async function waitFor(condition: () => boolean, timeoutMs = 5_000): Promise<voi
 
 function createProofRepo(): {
   repoDir: string;
-  npmPidFile: string;
+  packPidFile: string;
   descendantPidFile: string;
-  shimDir: string;
+  clawHubCli: string;
 } {
   const repoDir = tempDirs.make("openclaw-plugin-pretag-proof-");
   mkdirSync(join(repoDir, "extensions"), { recursive: true });
@@ -93,53 +93,50 @@ function createProofRepo(): {
   mkdirSync(join(packageDir, "dist"));
   writeFileSync(join(packageDir, "dist", "index.js"), "export const proof = 1;\n");
 
-  const npmPidFile = join(repoDir, "proof-npm.pid");
+  const packPidFile = join(repoDir, "proof-pack.pid");
   const descendantPidFile = join(repoDir, "proof-descendant.pid");
   const shimDir = join(repoDir, "bin");
   mkdirSync(shimDir);
   writeFileSync(
-    join(shimDir, "npm"),
+    join(shimDir, "clawhub"),
     `#!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 
-const args = process.argv.slice(2);
-if (args[0] === "view") {
-  process.exit(0);
+const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+  stdio: "ignore",
+});
+const packPidFile = process.env.PROOF_PACK_PID_FILE;
+const descendantPidFile = process.env.PROOF_DESCENDANT_PID_FILE;
+if (!packPidFile || !descendantPidFile) {
+  throw new Error("proof PID paths are required");
 }
-if (args[0] === "pack" || args[0] === "exec") {
-  const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-    stdio: "ignore",
-  });
-  const npmPidFile = process.env.PROOF_NPM_PID_FILE;
-  const descendantPidFile = process.env.PROOF_DESCENDANT_PID_FILE;
-  if (!npmPidFile || !descendantPidFile) {
-    throw new Error("proof PID paths are required");
-  }
-  writeFileSync(npmPidFile, String(process.pid));
-  writeFileSync(descendantPidFile, String(descendant.pid));
-  setInterval(() => {}, 1000);
-}
-process.exitCode = 2;
+writeFileSync(packPidFile, String(process.pid));
+writeFileSync(descendantPidFile, String(descendant.pid));
+setInterval(() => {}, 1000);
 `,
     "utf8",
   );
-  chmodSync(join(shimDir, "npm"), 0o755);
-  return { repoDir, npmPidFile, descendantPidFile, shimDir };
+  const clawHubCli = join(shimDir, "clawhub");
+  chmodSync(clawHubCli, 0o755);
+  return { repoDir, packPidFile, descendantPidFile, clawHubCli };
 }
 
 describe("scripts/plugin-release-pretag-pack-check.ts real behavior", () => {
   posixIt(
     "times out a real pretag pack and leaves no descendant alive",
     async () => {
-      const { repoDir, npmPidFile, descendantPidFile, shimDir } = createProofRepo();
+      const { repoDir, packPidFile, descendantPidFile, clawHubCli } = createProofRepo();
       const originalPath = process.env.PATH;
-      const originalNpmPidFile = process.env.PROOF_NPM_PID_FILE;
+      const originalClawHubCli = process.env.OPENCLAW_CLAWHUB_CLI;
+      const originalPackPidFile = process.env.PROOF_PACK_PID_FILE;
       const originalDescendantPidFile = process.env.PROOF_DESCENDANT_PID_FILE;
       const originalSourceCommit = process.env.SOURCE_COMMIT;
       const originalSourceRef = process.env.SOURCE_REF;
-      process.env.PATH = `${shimDir}:${originalPath ?? ""}`;
-      process.env.PROOF_NPM_PID_FILE = npmPidFile;
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+      process.env.OPENCLAW_CLAWHUB_CLI = clawHubCli;
+      process.env.PROOF_PACK_PID_FILE = packPidFile;
       process.env.PROOF_DESCENDANT_PID_FILE = descendantPidFile;
       process.env.SOURCE_COMMIT = "0000000000000000000000000000000000000000";
       process.env.SOURCE_REF = "refs/heads/proof";
@@ -154,8 +151,8 @@ describe("scripts/plugin-release-pretag-pack-check.ts real behavior", () => {
         }
 
         expect(thrown).toMatchObject({ code: "ETIMEDOUT" });
-        await waitFor(() => existsSync(npmPidFile) && existsSync(descendantPidFile));
-        const directPid = Number(readFileSync(npmPidFile, "utf8"));
+        await waitFor(() => existsSync(packPidFile) && existsSync(descendantPidFile));
+        const directPid = Number(readFileSync(packPidFile, "utf8"));
         const descendantPid = Number(readFileSync(descendantPidFile, "utf8"));
         await waitFor(() => !isProcessAlive(directPid) && !isProcessAlive(descendantPid));
         const proof = {
@@ -176,8 +173,10 @@ describe("scripts/plugin-release-pretag-pack-check.ts real behavior", () => {
       } finally {
         if (originalPath === undefined) delete process.env.PATH;
         else process.env.PATH = originalPath;
-        if (originalNpmPidFile === undefined) delete process.env.PROOF_NPM_PID_FILE;
-        else process.env.PROOF_NPM_PID_FILE = originalNpmPidFile;
+        if (originalClawHubCli === undefined) delete process.env.OPENCLAW_CLAWHUB_CLI;
+        else process.env.OPENCLAW_CLAWHUB_CLI = originalClawHubCli;
+        if (originalPackPidFile === undefined) delete process.env.PROOF_PACK_PID_FILE;
+        else process.env.PROOF_PACK_PID_FILE = originalPackPidFile;
         if (originalDescendantPidFile === undefined) delete process.env.PROOF_DESCENDANT_PID_FILE;
         else process.env.PROOF_DESCENDANT_PID_FILE = originalDescendantPidFile;
         if (originalSourceCommit === undefined) delete process.env.SOURCE_COMMIT;
@@ -185,7 +184,7 @@ describe("scripts/plugin-release-pretag-pack-check.ts real behavior", () => {
         if (originalSourceRef === undefined) delete process.env.SOURCE_REF;
         else process.env.SOURCE_REF = originalSourceRef;
         if (!proofSucceeded) {
-          for (const pidFile of [npmPidFile, descendantPidFile]) {
+          for (const pidFile of [packPidFile, descendantPidFile]) {
             if (existsSync(pidFile)) {
               killProcessIfAlive(Number(readFileSync(pidFile, "utf8")));
             }
