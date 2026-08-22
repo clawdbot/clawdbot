@@ -2,12 +2,12 @@ import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { icons } from "../components/icons.ts";
+import "../components/modal-dialog.ts";
+import "../components/web-awesome-popover.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import {
-  dismissScopeUpgradeBanner,
-  hasDismissedScopeUpgradeBanner,
   readScopeUpgradeAvailability,
   SCOPE_UPGRADE_DETAILS_EVENT,
   type ScopeUpgradeState,
@@ -135,26 +135,35 @@ export class ScopeUpgradeController {
   }
 }
 
-type ScopeUpgradeBannerProps = {
+type ScopeUpgradeSurfaceProps = {
   snapshot: ApplicationGatewaySnapshot;
-  compact: boolean;
+  mobile: boolean;
+  anchorId: string;
+  popoverPlacement: "bottom-start" | "bottom-end";
 };
 
-class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
-  @property({ attribute: false }) props?: ScopeUpgradeBannerProps;
+class ScopeUpgradeSurface extends OpenClawLightDomContentsElement {
+  @property({ attribute: false }) props?: ScopeUpgradeSurfaceProps;
   private controller?: ScopeUpgradeController;
-  private expanded = !hasDismissedScopeUpgradeBanner();
-  private compactExpanded = false;
+  private detailsOpen = false;
 
   private readonly showDetails = () => {
-    this.expanded = true;
-    this.compactExpanded = true;
+    this.removeAttribute("data-open-requested");
+    this.detailsOpen = true;
+    this.requestUpdate();
+  };
+
+  private readonly hideDetails = () => {
+    this.detailsOpen = false;
     this.requestUpdate();
   };
 
   override connectedCallback(): void {
     super.connectedCallback();
     window.addEventListener(SCOPE_UPGRADE_DETAILS_EVENT, this.showDetails);
+    if (this.hasAttribute("data-open-requested")) {
+      this.showDetails();
+    }
   }
 
   protected override updated(): void {
@@ -182,37 +191,11 @@ class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
     const state =
       this.controller?.state ??
       (props ? readScopeUpgradeAvailability(props.snapshot) : { phase: "hidden" as const });
-    if (
-      !props ||
-      state.phase === "hidden" ||
-      (state.phase === "guidance" && hasDismissedScopeUpgradeBanner())
-    ) {
+    if (!props || state.phase === "hidden") {
       return nothing;
-    }
-    if (!this.expanded && state.phase === "guidance") {
-      return nothing;
-    }
-    const compactAvailable = props.compact && !this.compactExpanded;
-    if (compactAvailable && state.phase === "available") {
-      return nothing;
-    }
-    if (!this.expanded && state.phase === "available") {
-      return html`<div class="scope-upgrade-chip-row">
-        <button
-          class="scope-upgrade-chip"
-          type="button"
-          aria-expanded="false"
-          aria-label=${t("connection.scopeUpgrade.showDetails")}
-          @click=${this.showDetails}
-        >
-          <span class="scope-upgrade-chip__dot" aria-hidden="true"></span>
-          <span class="scope-upgrade-chip__text">${t("connection.scopeUpgrade.status")}</span>
-        </button>
-      </div>`;
     }
     const retryable =
       state.phase === "pending" || state.phase === "rejected" || state.phase === "error";
-    const dismissible = state.phase === "available" || state.phase === "guidance";
     const text =
       state.phase === "guidance"
         ? t("connection.scopeUpgrade.guidance")
@@ -229,24 +212,33 @@ class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
                       : "connection.scopeUpgrade.rejected",
                   )
                 : t("connection.scopeUpgrade.error", { error: state.message });
-    return html`<div
+    const details = html`<div
       class="callout ${state.phase === "error" || state.phase === "rejected"
         ? "danger"
-        : "warn"} callout--action ${dismissible ? "callout--dismissible" : ""}"
+        : "warn"} callout--action callout--dismissible scope-upgrade-details"
       role="status"
+      aria-live="polite"
     >
       <span class="callout__content">${text}</span>
       ${state.phase === "available"
-        ? html`<button class="btn btn--sm" type="button" @click=${() => this.controller?.request()}>
+        ? html`<button
+            class="btn btn--sm btn--primary"
+            type="button"
+            @click=${() => this.controller?.request()}
+          >
             ${t("connection.scopeUpgrade.request")}
           </button>`
         : state.phase === "requesting"
-          ? html`<button class="btn btn--sm" type="button" disabled>
+          ? html`<button class="btn btn--sm btn--primary" type="button" disabled>
               ${t("connection.scopeUpgrade.requestingAction")}
             </button>`
           : retryable
             ? html`
-                <button class="btn btn--sm" type="button" @click=${() => this.controller?.retry()}>
+                <button
+                  class="btn btn--sm btn--primary"
+                  type="button"
+                  @click=${() => this.controller?.retry()}
+                >
                   ${t("connection.scopeUpgrade.retry")}
                 </button>
                 <button class="btn btn--sm" type="button" @click=${() => this.controller?.cancel()}>
@@ -254,27 +246,41 @@ class ScopeUpgradeBanner extends OpenClawLightDomContentsElement {
                 </button>
               `
             : nothing}
-      ${dismissible
-        ? html`<openclaw-tooltip .content=${t("connection.scopeUpgrade.dismiss")}>
-            <button
-              class="callout__dismiss"
-              type="button"
-              aria-label=${t("connection.scopeUpgrade.dismiss")}
-              @click=${() => {
-                dismissScopeUpgradeBanner();
-                this.expanded = false;
-                this.compactExpanded = false;
-                this.requestUpdate();
-              }}
-            >
-              ${icons.x}
-            </button>
-          </openclaw-tooltip>`
-        : nothing}
+      <button
+        class="callout__dismiss"
+        type="button"
+        aria-label=${t("connection.scopeUpgrade.closeDetails")}
+        @click=${this.hideDetails}
+      >
+        ${icons.x}
+      </button>
     </div>`;
+    if (props.mobile) {
+      return this.detailsOpen
+        ? html`<openclaw-modal-dialog
+            class="scope-upgrade-details-dialog"
+            label=${t("connection.scopeUpgrade.status")}
+            description=${text}
+            @modal-cancel=${this.hideDetails}
+          >
+            ${details}
+          </openclaw-modal-dialog>`
+        : nothing;
+    }
+    return html`<wa-popover
+      class="scope-upgrade-details-popover"
+      for=${props.anchorId}
+      placement=${props.popoverPlacement}
+      without-arrow
+      .open=${this.detailsOpen}
+      @wa-show=${this.showDetails}
+      @wa-hide=${this.hideDetails}
+    >
+      ${details}
+    </wa-popover>`;
   }
 }
 
 if (!customElements.get("openclaw-device-scope-upgrade-banner")) {
-  customElements.define("openclaw-device-scope-upgrade-banner", ScopeUpgradeBanner);
+  customElements.define("openclaw-device-scope-upgrade-banner", ScopeUpgradeSurface);
 }

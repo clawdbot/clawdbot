@@ -12,6 +12,7 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) canGoBack = false;
   @property({ attribute: false }) canGoForward = false;
   @property({ attribute: false }) newSessionDisabledReason?: string;
+  @property({ attribute: false }) trailingActions: TemplateResult | typeof nothing = nothing;
   @property({ attribute: false }) onToggleSidebar?: () => void;
   @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onOpenNewSession?: () => void;
@@ -52,6 +53,7 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
                 onClick: this.onOpenPalette,
                 className: "macos-titlebar-controls__search",
               })}
+              ${this.trailingActions}
               ${this.navCollapsed
                 ? this.renderButton({
                     // While the sidebar rail is collapsed, this mirrors the native

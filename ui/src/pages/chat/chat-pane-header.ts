@@ -5,9 +5,8 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import {
-  hasDismissedScopeUpgradeBanner,
-  readScopeUpgradeAvailability,
-  SCOPE_UPGRADE_DETAILS_EVENT,
+  openScopeUpgradeDetails,
+  scopeUpgradeStatusVisible,
 } from "../../app/device-scope-upgrade.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
@@ -84,17 +83,13 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       return [];
     }
     const actions: HeaderMenuStatusAction[] = [];
-    const scopeState = readScopeUpgradeAvailability(this.context.gateway.snapshot);
-    const scopeStatusVisible =
-      scopeState.phase !== "hidden" &&
-      !(scopeState.phase === "guidance" && hasDismissedScopeUpgradeBanner());
-    if (scopeStatusVisible) {
+    if (scopeUpgradeStatusVisible(this.context.gateway.snapshot)) {
       actions.push({
         id: "access",
         label: t("connection.scopeUpgrade.status"),
         icon: icons.shieldQuestion,
         tone: "warn",
-        onActivate: () => window.dispatchEvent(new Event(SCOPE_UPGRADE_DETAILS_EVENT)),
+        onActivate: openScopeUpgradeDetails,
       });
     }
 

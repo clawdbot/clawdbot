@@ -2,24 +2,14 @@ import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import { hasOperatorAdminAccess } from "./operator-access.ts";
 
-const SCOPE_UPGRADE_BANNER_DISMISSED_KEY = "openclaw.control.scopeUpgradeBannerDismissed.v1";
-
 export const SCOPE_UPGRADE_DETAILS_EVENT = "openclaw:scope-upgrade-details";
+const SCOPE_UPGRADE_SURFACE_SELECTOR = "openclaw-device-scope-upgrade-banner";
 
-export function hasDismissedScopeUpgradeBanner(): boolean {
-  try {
-    return globalThis.localStorage?.getItem(SCOPE_UPGRADE_BANNER_DISMISSED_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-export function dismissScopeUpgradeBanner(): void {
-  try {
-    globalThis.localStorage?.setItem(SCOPE_UPGRADE_BANNER_DISMISSED_KEY, "1");
-  } catch {
-    // The current page can still collapse the banner when storage is unavailable.
-  }
+export function openScopeUpgradeDetails(): void {
+  globalThis.document
+    ?.querySelector(SCOPE_UPGRADE_SURFACE_SELECTOR)
+    ?.setAttribute("data-open-requested", "");
+  globalThis.dispatchEvent(new Event(SCOPE_UPGRADE_DETAILS_EVENT));
 }
 
 export type ScopeUpgradeState =
@@ -47,4 +37,8 @@ export function readScopeUpgradeAvailability(
     snapshot.client?.scopeUpgradeReady === true
     ? { phase: "available" }
     : { phase: "guidance" };
+}
+
+export function scopeUpgradeStatusVisible(snapshot: ApplicationGatewaySnapshot): boolean {
+  return readScopeUpgradeAvailability(snapshot).phase !== "hidden";
 }

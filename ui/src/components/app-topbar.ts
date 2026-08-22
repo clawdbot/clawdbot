@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { property } from "lit/decorators.js";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
@@ -12,6 +12,7 @@ import "./tooltip.ts";
 class AppTopbar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) navDrawerOpen = false;
   @property({ attribute: false }) resourceBasePath = "";
+  @property({ attribute: false }) trailingActions: TemplateResult | typeof nothing = nothing;
   @property({ attribute: false }) onToggleDrawer!: (trigger: HTMLElement) => void;
   @property({ attribute: false }) onOpenPalette!: () => void;
 
@@ -46,6 +47,7 @@ class AppTopbar extends OpenClawLightDomContentsElement {
             </div>
           </div>
           <div class="topnav-shell__actions">
+            ${this.trailingActions}
             <openclaw-tooltip .content=${t("chat.commandPaletteTitle")}>
               <button
                 class="topbar-search"
