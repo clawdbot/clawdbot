@@ -103,9 +103,11 @@ CLI backends have two independent limits:
 Managed Claude live sessions distinguish idle-model silence from reported
 outstanding work. While a tool call is reported in flight, the no-output
 allowance defaults to 30 minutes, is never shorter than the idle watchdog, and
-is capped below the overall turn limit. CLI-internal background tasks use a
-separate 15-minute floor. These allowances do not extend the overall turn
-budget: reaching that limit still stops the Claude subprocess and its work.
+is normally capped below the overall turn limit. At the one-second minimum
+budget, the deadlines may coincide and the overall turn timer wins.
+CLI-internal background tasks use a separate 15-minute floor. These allowances
+do not extend the overall turn budget: reaching that limit still stops the
+Claude subprocess and its work.
 
 Remove a short overall-timeout override to return to the 48-hour default, or set an explicit budget such as 12 hours:
 

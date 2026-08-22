@@ -101,8 +101,9 @@ export function resolveCliNoOutputTimeoutMs(params: {
 
 /**
  * Resolves the no-output watchdog timeout that applies while the CLI has a
- * tool call in flight. Never below the idle watchdog timeout; always below
- * the overall run timeout.
+ * tool call in flight. Never below the idle watchdog timeout; normally below
+ * the overall run timeout. At the one-second minimum budget the deadlines may
+ * coincide, and the overall timer remains authoritative.
  */
 export function resolveCliToolActiveNoOutputTimeoutMs(params: {
   timeoutMs: number;
