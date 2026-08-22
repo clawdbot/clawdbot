@@ -10,6 +10,7 @@ import {
   createWorkspace,
   lastErrorLine,
   lastLogLine,
+  logWarn,
   mockError,
   mockLog,
   readMcpOAuthCredentialsStatus,
@@ -845,6 +846,9 @@ describe("mcp cli", () => {
       });
 
       expect(resolvedEnvValues).toEqual(["resolved-probe-token", "resolved-probe-token"]);
+      expect(logWarn.mock.calls.map(([line]) => String(line)).join("\n")).not.toContain(
+        'env "API_TOKEN" is blocked for stdio startup safety and was ignored',
+      );
     });
   });
 

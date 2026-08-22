@@ -273,7 +273,7 @@ async function collectMcpDoctorIssues(params: {
 }): Promise<McpDoctorIssue[]> {
   const issues: McpDoctorIssue[] = [];
   const { name, server } = params;
-  const resolved = resolveMcpTransportConfig(name, server);
+  const resolved = resolveMcpTransportConfig(name, server, { logWarnings: false });
   const disabled = server.enabled === false;
   if (server.enabled === false) {
     issues.push(issue("warning", "server is disabled"));

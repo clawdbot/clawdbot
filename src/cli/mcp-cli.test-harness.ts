@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => {
     callGateway: vi.fn(async () => {
       throw new Error("test gateway unavailable");
     }),
+    logWarn: vi.fn(),
     createSessionMcpRuntimeOverride: undefined as CreateSessionMcpRuntime | undefined,
   };
 });
@@ -43,6 +44,7 @@ export const clearMcpOAuthCredentials = mocks.clearMcpOAuthCredentials;
 export const completeMcpOAuthAuthorization = mocks.completeMcpOAuthAuthorization;
 export const readMcpOAuthCredentialsStatus = mocks.readMcpOAuthCredentialsStatus;
 export const countMcpOAuthPrincipals = mocks.countMcpOAuthPrincipals;
+export const logWarn = mocks.logWarn;
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.runtime,
@@ -54,6 +56,11 @@ vi.mock("../mcp/channel-server.js", () => ({
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
+}));
+
+vi.mock("../logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logger.js")>()),
+  logWarn: mocks.logWarn,
 }));
 
 vi.mock("../agents/mcp-oauth.js", () => ({
