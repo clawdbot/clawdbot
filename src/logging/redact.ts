@@ -950,23 +950,34 @@ export function redactToolPayloadText(text: string): string {
   return redactToolPayloadTextWithConfig(text, readLoggingConfig());
 }
 
-export function redactToolPayloadTextWithConfig(
+function redactToolPayloadTextWithPolicy(
   text: string,
-  loggingConfig?: LoggingConfig,
+  loggingConfig: LoggingConfig | undefined,
+  options: RedactOptions,
 ): string {
   if (!text) {
     return text;
   }
-  const exactRedacted = redactRegisteredSecretValues(text, maskToken);
-  if (isFullContextToolPayloadRedaction(loggingConfig)) {
-    const resolved = resolveRedactOptions(resolveToolPayloadRedaction(loggingConfig));
-    return redactText(exactRedacted, resolved.patterns, {
-      fullContext: true,
-      redactFormBodies: resolved.redactFormBodies,
-      redactStructuredAuthHeaders: resolved.redactStructuredAuthHeaders,
-    });
+  if (!isFullContextToolPayloadRedaction(loggingConfig)) {
+    return redactSensitiveText(text, options);
   }
-  return redactSensitiveText(text, resolveToolPayloadRedaction(loggingConfig));
+  const resolved = resolveRedactOptions(options);
+  return redactText(redactRegisteredSecretValues(text, maskToken), resolved.patterns, {
+    fullContext: true,
+    redactFormBodies: resolved.redactFormBodies,
+    redactStructuredAuthHeaders: resolved.redactStructuredAuthHeaders,
+  });
+}
+
+export function redactToolPayloadTextWithConfig(
+  text: string,
+  loggingConfig?: LoggingConfig,
+): string {
+  return redactToolPayloadTextWithPolicy(
+    text,
+    loggingConfig,
+    resolveToolPayloadRedaction(loggingConfig),
+  );
 }
 
 // Model-visible tool output commonly contains source code, so its assignment matching is
@@ -979,19 +990,11 @@ export function redactModelVisibleToolPayloadTextWithConfig(
   text: string,
   loggingConfig?: LoggingConfig,
 ): string {
-  if (!text) {
-    return text;
-  }
-  const exactRedacted = redactRegisteredSecretValues(text, maskToken);
-  if (isFullContextToolPayloadRedaction(loggingConfig)) {
-    const resolved = resolveRedactOptions(resolveModelVisibleToolPayloadRedaction(loggingConfig));
-    return redactText(exactRedacted, resolved.patterns, {
-      fullContext: true,
-      redactFormBodies: resolved.redactFormBodies,
-      redactStructuredAuthHeaders: resolved.redactStructuredAuthHeaders,
-    });
-  }
-  return redactSensitiveText(text, resolveModelVisibleToolPayloadRedaction(loggingConfig));
+  return redactToolPayloadTextWithPolicy(
+    text,
+    loggingConfig,
+    resolveModelVisibleToolPayloadRedaction(loggingConfig),
+  );
 }
 
 export function isSensitiveFieldKey(key: string): boolean {
