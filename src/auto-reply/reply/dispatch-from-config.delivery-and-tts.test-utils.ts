@@ -1952,6 +1952,36 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
+  it("delivers independent durable updates immediately without mixing them into the final Telegram voice reply", async () => {
+    setNoAbort();
+    installCaptionedVoiceTestPlugin("telegram");
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.(
+        { text: "Which environment should I use?" },
+        { deliveryIntentId: "block-reply:v1:codex-app-server:thread-1:turn-1:question" },
+      );
+      expect(dispatcher.sendBlockReply).toHaveBeenCalledWith({
+        text: "Which environment should I use?",
+      });
+      await opts?.onBlockReply?.({ text: "The selected environment is ready." });
+      return { text: "Deployment complete." };
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(firstFinalReplyPayload(dispatcher)).toMatchObject({
+      text: "The selected environment is ready.\nDeployment complete.",
+      mediaUrl: "https://example.com/tts-synth.opus",
+      audioAsVoice: true,
+    });
+  });
+
   it("delivers deferred Telegram text when synthesis produces no audio", async () => {
     setNoAbort();
     installCaptionedVoiceTestPlugin("telegram");

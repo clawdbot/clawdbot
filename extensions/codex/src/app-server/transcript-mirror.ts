@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  deliverAgentHarnessUserInputPrompt,
   embeddedAgentLog,
   formatErrorMessage,
   projectAgentHarnessTranscriptMessageForDisplay,
@@ -578,7 +579,7 @@ async function deliverAsyncMessageBestEffort(params: {
       return "retry";
     }
     try {
-      await params.params.onBlockReply({ text: params.text }, { deliveryIntentId });
+      await deliverAsyncBlockReply(params.params.onBlockReply, params.text, deliveryIntentId);
       return "settled";
     } catch (error) {
       embeddedAgentLog.warn("failed to deliver codex async agent message", {
@@ -623,7 +624,7 @@ async function deliverAsyncMessageBestEffort(params: {
   );
   if (params.params.onBlockReply && persistedText !== undefined) {
     try {
-      await params.params.onBlockReply({ text: persistedText }, { deliveryIntentId });
+      await deliverAsyncBlockReply(params.params.onBlockReply, persistedText, deliveryIntentId);
     } catch (error) {
       embeddedAgentLog.warn("failed to deliver persisted codex async agent message", {
         error: formatErrorMessage(error),
@@ -643,6 +644,20 @@ export const codexTranscriptMirrorRuntime = {
   mirror,
   mirrorBestEffort,
 };
+
+async function deliverAsyncBlockReply(
+  onBlockReply: NonNullable<EmbeddedRunAttemptParams["onBlockReply"]>,
+  text: string,
+  deliveryIntentId: string,
+): Promise<void> {
+  // Harness-owned prompts already carry the host's canonical source-delivery
+  // authorization; an empty question list keeps the upstream message exact.
+  await deliverAgentHarnessUserInputPrompt(
+    { onBlockReply: (payload) => onBlockReply(payload, { deliveryIntentId }) },
+    [],
+    { intro: text },
+  );
+}
 
 function resolveCodexMirrorTranscriptTarget(params: {
   agentId?: string;

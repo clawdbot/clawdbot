@@ -16,6 +16,44 @@ import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector async delivery", () => {
+  it.each([
+    { name: "disabled tools", disableTools: true },
+    { name: "an empty tool allowlist", toolsAllow: [] },
+    { name: "the ring-zero system tool", toolsAllow: ["openclaw"] },
+    { name: "an allowlist without message delivery", toolsAllow: ["read"] },
+  ])("does not expose native async messages through $name", async (restriction) => {
+    const params = await createParams();
+    const onAsyncDelivery = vi.fn().mockResolvedValue("settled");
+    const projector = await createProjector({ ...params, ...restriction }, { onAsyncDelivery });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "agentMessage",
+          id: "unauthorized-async-update",
+          phase: "final_answer",
+          delivery: "async",
+          text: "This restricted update must not reach a user.",
+        },
+      }),
+    );
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "agentMessage",
+          id: "authorized-final",
+          phase: "final_answer",
+          text: "Ordinary final reply.",
+        },
+      ]),
+    );
+
+    expect(onAsyncDelivery).not.toHaveBeenCalled();
+    expect(
+      JSON.stringify(projector.buildResult(buildEmptyToolTelemetry()).messagesSnapshot),
+    ).not.toContain("restricted update");
+  });
+
   it("persists async delivery once without selecting it as the final answer", async () => {
     const onAgentEvent = vi.fn();
     const onBlockReply = vi.fn();
@@ -195,7 +233,7 @@ describe("CodexAppServerEventProjector async delivery", () => {
     ]);
   });
 
-  it("retries unsettled sessionless async delivery from the terminal snapshot", async () => {
+  it("retries unsettled sessionless async delivery when the real terminal summary contains only the final answer", async () => {
     const params = await createParams();
     const onBlockReply = vi
       .fn()
@@ -222,7 +260,6 @@ describe("CodexAppServerEventProjector async delivery", () => {
       text: "Retry this background update.",
     };
     const completed = turnCompleted([
-      asyncItem,
       {
         type: "agentMessage",
         id: "terminal-retry",

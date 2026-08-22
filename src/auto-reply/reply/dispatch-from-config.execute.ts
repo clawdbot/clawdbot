@@ -427,6 +427,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     }
                     // Buffered commentary preceded this block; deliver it first.
                     await flushPendingCommentaryProgress();
+                    const independentDurableBlock = context?.deliveryIntentId !== undefined;
+                    if (independentDurableBlock && state.suppressAcpChildUserDelivery) {
+                      return;
+                    }
                     if (
                       state.suppressDelivery &&
                       !shouldDeliverDespiteSourceReplySuppression(inputPayload, state)
@@ -458,12 +462,12 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     // and must not be synthesised into the spoken reply. Display
                     // lanes stay out too: they are presentation, never final text.
                     const isStatusNotice = isReplyPayloadStatusNotice(payload);
-                    if (
-                      payload.text &&
+                    const contributesToFinalReply =
                       !isStatusNotice &&
+                      !independentDurableBlock &&
                       payload.isReasoning !== true &&
-                      payload.isCommentary !== true
-                    ) {
+                      payload.isCommentary !== true;
+                    if (payload.text && contributesToFinalReply) {
                       const joinsBufferedTtsDirective =
                         cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
                       if (state.progressState.accumulatedBlockText.length > 0) {
@@ -480,11 +484,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       state.progressState.blockCount++;
                     }
                     let visiblePayload =
-                      payload.text &&
-                      cleanBlockTtsDirectiveText &&
-                      !isStatusNotice &&
-                      payload.isReasoning !== true &&
-                      payload.isCommentary !== true
+                      payload.text && cleanBlockTtsDirectiveText && contributesToFinalReply
                         ? (() => {
                             const text = cleanBlockTtsDirectiveText.push(payload.text);
                             return copyReplyPayloadMetadata(payload, {
@@ -493,11 +493,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                             });
                           })()
                         : payload;
-                    const deferThisBlock =
-                      deferFinalTtsText &&
-                      !isStatusNotice &&
-                      payload.isReasoning !== true &&
-                      payload.isCommentary !== true;
+                    const deferThisBlock = deferFinalTtsText && contributesToFinalReply;
                     if (deferThisBlock) {
                       const hasNonTextContent = Boolean(
                         visiblePayload.mediaUrl ||
@@ -547,7 +543,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     if (isDispatchOperationAborted()) {
                       return;
                     }
-                    if (context?.deliveryIntentId || shouldRouteToOriginating) {
+                    if (
+                      shouldRouteToOriginating ||
+                      (independentDurableBlock && state.canRouteDurableBlockReply)
+                    ) {
                       const result = await sendPayloadAsync(
                         normalizedPayload,
                         context?.abortSignal,

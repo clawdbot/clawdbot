@@ -2,6 +2,7 @@
  * Tests agent harness runtime helpers and task dispatch behavior.
  */
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
   attachModelProviderRequestTransport,
   buildAgentHarnessUserInputAnswers,
@@ -222,6 +223,20 @@ describe("agent harness runtime SDK facade", () => {
 });
 
 describe("agent harness user input helpers", () => {
+  it("authorizes host-owned text-only harness updates without altering their visible payload", async () => {
+    const onBlockReply = vi.fn();
+
+    await deliverAgentHarnessUserInputPrompt({ onBlockReply }, [], {
+      intro: "Which environment should I use?",
+    });
+
+    const payload = onBlockReply.mock.calls[0]?.[0];
+    expect(payload).toEqual({ text: "Which environment should I use?", presentation: undefined });
+    expect(getReplyPayloadMetadata(payload)).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
   it("formats prompts and delivers through blocking replies first", async () => {
     const onBlockReply = vi.fn();
 

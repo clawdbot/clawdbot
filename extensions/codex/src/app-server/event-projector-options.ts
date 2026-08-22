@@ -9,6 +9,7 @@ export type CodexAsyncDeliverySettlement = "settled" | "retry";
 export type CodexAppServerEventProjectorOptions = {
   initialContextTokens?: number;
   nativePostToolUseRelayEnabled?: boolean;
+  asyncUserMessageAllowed?: boolean;
   onAsyncDelivery?: (delivery: {
     itemId: string;
     message: AssistantMessage;

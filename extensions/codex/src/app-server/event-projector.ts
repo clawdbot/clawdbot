@@ -66,6 +66,10 @@ export class CodexAppServerEventProjector {
   private readonly activeItemIds = new Set<string>();
   private readonly completedItemIds = new Set<string>();
   private readonly settledAsyncDeliveryItemIds = new Set<string>();
+  private readonly pendingAsyncDeliveries = new Map<
+    string,
+    Parameters<NonNullable<CodexAppServerEventProjectorOptions["onAsyncDelivery"]>>[0]
+  >();
   private readonly activeCompactionItemIds = new Set<string>();
   private readonly terminalPresentationClearedItemIds = new Set<string>();
   private readonly nativeToolOutcomeOrdinals = new Map<string, number>();
@@ -452,6 +456,18 @@ export class CodexAppServerEventProjector {
       this.activeItemIds.delete(itemId);
       this.completedItemIds.add(itemId);
     }
+    if (
+      item?.type === "agentMessage" &&
+      item.delivery === "async" &&
+      !this.canDeliverAsyncUserMessage()
+    ) {
+      embeddedAgentLog.warn("blocked unauthorized codex async user message", {
+        itemId,
+        threadId: this.threadId,
+        turnId: this.turnId,
+      });
+      return;
+    }
     const asyncMessage = this.assistantProjection.recordItemCompleted(
       item,
       itemId,
@@ -530,6 +546,9 @@ export class CodexAppServerEventProjector {
       this.promptErrorSource = "prompt";
     }
     const turnItems = turn.items ?? [];
+    // Upstream terminal summaries contain only the last assistant item. Keep
+    // earlier unsettled deliveries at their producer instead of inferring them.
+    const unsettledAsyncDeliveries = [...this.pendingAsyncDeliveries.values()];
     // The final snapshot is authoritative when item notifications were omitted.
     // Only its last relevant tool may change the terminal presentation.
     for (let index = turnItems.length - 1; index >= 0; index -= 1) {
@@ -546,6 +565,13 @@ export class CodexAppServerEventProjector {
       }
     }
     for (const item of turnItems) {
+      if (
+        item.type === "agentMessage" &&
+        item.delivery === "async" &&
+        !this.canDeliverAsyncUserMessage()
+      ) {
+        continue;
+      }
       this.diagnostics.warnUnknownItemStatus(item);
       const asyncMessage = this.assistantProjection.recordSnapshotItem(item);
       if (asyncMessage) {
@@ -561,6 +587,9 @@ export class CodexAppServerEventProjector {
       this.toolTranscriptProjection.emitAfterToolCallObservation(item);
       this.toolProgressProjection.emitToolResultSummary(item);
       this.toolProgressProjection.emitToolResultOutput(item);
+    }
+    for (const delivery of unsettledAsyncDeliveries) {
+      await this.deliverAsyncMessage(delivery);
     }
     this.assistantProjection.finalizeAnswerCandidate(turn);
     this.activeCompactionItemIds.clear();
@@ -580,7 +609,23 @@ export class CodexAppServerEventProjector {
     const settlement = await this.options.onAsyncDelivery?.(delivery);
     if (settlement === "settled") {
       this.settledAsyncDeliveryItemIds.add(delivery.itemId);
+      this.pendingAsyncDeliveries.delete(delivery.itemId);
+    } else if (settlement === "retry") {
+      this.pendingAsyncDeliveries.set(delivery.itemId, delivery);
     }
+  }
+
+  private canDeliverAsyncUserMessage(): boolean {
+    if (this.params.disableTools === true) {
+      return false;
+    }
+    if (this.options.asyncUserMessageAllowed !== undefined) {
+      return this.options.asyncUserMessageAllowed;
+    }
+    return (
+      this.params.toolsAllow === undefined ||
+      this.params.toolsAllow.some((name) => name === "*" || name === "message")
+    );
   }
 
   private async emitSnapshotOnlyNativeToolProgress(item: CodexThreadItem): Promise<void> {
