@@ -165,6 +165,7 @@ export async function runMemoryStatus(
     allAgents: true,
     diagnosticsToStderr: Boolean(opts.json),
     purpose: opts.index ? "cli" : "status",
+    inspectSources: true,
     ...hostOptions,
     run: async ({ manager, agentId }) => {
       const deep = Boolean(opts.deep || opts.index);
@@ -231,7 +232,7 @@ export async function runMemoryStatus(
         }
       }
       const status = manager.status();
-      const scan = await scanMemoryManagerSources(status, agentId);
+      const scan = await scanMemoryManagerSources(status);
       const workspaceDir = status.workspaceDir;
       let audit: ShortTermAuditSummary | undefined;
       let repair: RepairShortTermPromotionArtifactsResult | undefined;

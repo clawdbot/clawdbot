@@ -675,9 +675,9 @@ describe("parseAt", () => {
 });
 
 describe("getCronChannelOptions", () => {
-  it("falls back to a generic channel placeholder when no plugins are loaded", () => {
+  it("falls back to a channel plugin id placeholder when no plugins are loaded", () => {
     hoisted.listChannelPluginsMock.mockReturnValue([]);
-    expect(getCronChannelOptions()).toBe("last|<channel-id>");
+    expect(getCronChannelOptions()).toBe("last|<channel-plugin-id>");
   });
 
   it("lists discovered channel plugin ids when plugins are available", () => {

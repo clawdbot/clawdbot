@@ -127,7 +127,7 @@ on:
         type: string
 
 concurrency:
-  group: openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ inputs.rerun_group }}
+  group: openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}
   cancel-in-progress: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
 
 env:
@@ -149,6 +149,10 @@ jobs:
       release_profile: ${{ steps.inputs.outputs.release_profile }}
       run_release_soak: ${{ steps.inputs.outputs.run_release_soak }}
       qa_live_scheduled: ${{ steps.inputs.outputs.qa_live_scheduled }}
+      release_check_groups_json: ${{ steps.inputs.outputs.release_check_groups_json }}
+      package_required: ${{ steps.inputs.outputs.package_required }}
+      docker_required: ${{ steps.inputs.outputs.docker_required }}
+      install_smoke_scheduled: ${{ steps.inputs.outputs.install_smoke_scheduled }}
       fail_fast: ${{ steps.inputs.outputs.fail_fast }}
       run_maturity_scorecard: ${{ steps.inputs.outputs.run_maturity_scorecard }}
       allow_unreleased_changelog: ${{ steps.inputs.outputs.allow_unreleased_changelog }}
@@ -168,7 +172,9 @@ jobs:
       package_acceptance_package_spec: ${{ steps.inputs.outputs.package_acceptance_package_spec }}
       codex_plugin_spec: ${{ steps.inputs.outputs.codex_plugin_spec }}
       cross_os_scheduled: ${{ steps.inputs.outputs.cross_os_scheduled }}
-      docker_release_scheduled: ${{ steps.inputs.outputs.docker_release_scheduled }}
+      live_e2e_scheduled: ${{ steps.inputs.outputs.live_e2e_scheduled }}
+      package_acceptance_scheduled: ${{ steps.inputs.outputs.package_acceptance_scheduled }}
+      qa_parity_scheduled: ${{ steps.inputs.outputs.qa_parity_scheduled }}
     steps:
       - name: Require trusted workflow ref for release checks
         env:
@@ -423,6 +429,7 @@ jobs:
           RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT: ${{ inputs.package_acceptance_package_spec }}
           RELEASE_CODEX_PLUGIN_SPEC_INPUT: ${{ inputs.codex_plugin_spec }}
           CANDIDATE_ARTIFACT_JSON_INPUT: ${{ inputs.candidate_artifact_json }}
+          RELEASE_FILTER_VALIDATOR: workflow/scripts/github/validate-release-suite-filters.sh
         run: |
           set -euo pipefail
           if [[ -n "${CANDIDATE_ARTIFACT_JSON_INPUT// }" ]] &&
@@ -511,12 +518,19 @@ jobs:
           if [[ -z "${codex_plugin_spec// }" && "$RELEASE_PACKAGE_SPEC_INPUT" =~ ^openclaw@(.+)$ ]]; then
             codex_plugin_spec="npm:@openclaw/codex@${BASH_REMATCH[1]}"
           fi
+          source "$RELEASE_FILTER_VALIDATOR"
+          validate_release_suite_filters \
+            "$RELEASE_RERUN_GROUP_INPUT" \
+            "$RELEASE_LIVE_SUITE_FILTER_INPUT" \
+            "$RELEASE_CROSS_OS_SUITE_FILTER_INPUT" \
+            release-checks
+          live_suite_filter="$RELEASE_FILTER_LIVE_SUITE_FILTER"
+          cross_os_suite_filter="$RELEASE_FILTER_CROSS_OS_SUITE_FILTER"
 
-          qa_filter_seen=false
-          filter="$(printf '%s' "$RELEASE_LIVE_SUITE_FILTER_INPUT" | tr '[:upper:]' '[:lower:]')"
-          repo_live_suite_filter="$filter"
-          if [[ -n "${filter// }" ]]; then
-            repo_filter_tokens=()
+          qa_filter_seen="$RELEASE_FILTER_QA_FILTER_SEEN"
+          filter="$live_suite_filter"
+          repo_live_suite_filter="$RELEASE_FILTER_REPO_LIVE_SUITE_FILTER"
+          if [[ -n "$filter" ]]; then
             matrix_selected=false
             buzz_selected=false
             telegram_selected=false
@@ -525,12 +539,8 @@ jobs:
             slack_selected=false
             disabled_required_lanes=()
 
-            IFS=', ' read -r -a filter_tokens <<< "$filter"
+            IFS=',' read -r -a filter_tokens <<< "$filter"
             for token in "${filter_tokens[@]}"; do
-              token="${token//$'\t'/}"
-              token="${token//$'\r'/}"
-              token="${token//$'\n'/}"
-              [[ -z "$token" ]] && continue
               case "$token" in
                 qa-live|qa-live-all|qa-all)
                   qa_filter_seen=true
@@ -577,19 +587,12 @@ jobs:
                   [[ "$qa_live_whatsapp_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-whatsapp")
                   ;;
                 qa-live-slack|qa-slack|slack)
-                  qa_filter_seen=true
                   slack_selected="$qa_live_slack_ci_enabled"
                   [[ "$qa_live_slack_ci_enabled" == "true" ]] || disabled_required_lanes+=("qa-live-slack")
                   ;;
-                *)
-                  repo_filter_tokens+=("$token")
-                  ;;
+                *) ;;
               esac
             done
-
-            if [[ "$qa_filter_seen" == "true" ]]; then
-              repo_live_suite_filter="$(IFS=,; printf '%s' "${repo_filter_tokens[*]-}")"
-            fi
 
             if [[ "${#disabled_required_lanes[@]}" -gt 0 ]]; then
               echo "live_suite_filter explicitly requested disabled QA live lane(s): ${disabled_required_lanes[*]}" >&2
@@ -607,21 +610,55 @@ jobs:
             fi
           fi
 
-          qa_live_scheduled=false
-          if [[ "$RELEASE_RERUN_GROUP_INPUT" == "qa" || "$RELEASE_RERUN_GROUP_INPUT" == "qa-live" ]] ||
-            [[ "$RELEASE_RERUN_GROUP_INPUT" == "all" && ( "$run_release_soak" == "true" || "$qa_filter_seen" == "true" ) ]]; then
-            qa_live_scheduled=true
-          fi
+          release_check_groups=()
+          case "$RELEASE_RERUN_GROUP_INPUT" in
+            all)
+              release_check_groups=(install-smoke cross-os package qa-parity)
+              if [[ "$run_release_soak" == "true" ]]; then
+                release_check_groups+=(live-e2e)
+              fi
+              if [[ "$run_release_soak" == "true" || "$qa_filter_seen" == "true" ]]; then
+                release_check_groups+=(qa-live)
+              fi
+              ;;
+            qa)
+              release_check_groups=(qa-parity qa-live)
+              ;;
+            install-smoke|cross-os|live-e2e|package|qa-parity|qa-live)
+              release_check_groups=("$RELEASE_RERUN_GROUP_INPUT")
+              ;;
+            *)
+              echo "rerun_group must be one of: all, install-smoke, cross-os, live-e2e, package, qa, qa-parity, qa-live" >&2
+              exit 1
+              ;;
+          esac
+          release_check_groups_json="$(printf '%s\n' "${release_check_groups[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))')"
+          group_selected() {
+            jq -e --arg group "$1" 'index($group) != null' <<< "$release_check_groups_json" >/dev/null
+          }
 
+          install_smoke_scheduled=false
           cross_os_scheduled=false
-          if [[ "$RELEASE_RERUN_GROUP_INPUT" == "all" || "$RELEASE_RERUN_GROUP_INPUT" == "cross-os" ]]; then
-            cross_os_scheduled=true
+          live_e2e_scheduled=false
+          package_acceptance_scheduled=false
+          qa_parity_scheduled=false
+          qa_live_scheduled=false
+          group_selected install-smoke && install_smoke_scheduled=true
+          group_selected cross-os && cross_os_scheduled=true
+          group_selected live-e2e && live_e2e_scheduled=true
+          group_selected package && package_acceptance_scheduled=true
+          group_selected qa-parity && qa_parity_scheduled=true
+          group_selected qa-live && qa_live_scheduled=true
+
+          docker_required=false
+          if [[ "$live_e2e_scheduled" == "true" && -z "$repo_live_suite_filter" ]]; then
+            docker_required=true
           fi
-          docker_release_scheduled=false
-          if { [[ "$RELEASE_RERUN_GROUP_INPUT" == "live-e2e" ]] ||
-              { [[ "$RELEASE_RERUN_GROUP_INPUT" == "all" ]] && [[ "$run_release_soak" == "true" ]]; }; } &&
-            [[ -z "${repo_live_suite_filter// }" ]]; then
-            docker_release_scheduled=true
+          package_required=false
+          if [[ "$cross_os_scheduled" == "true" ||
+                "$package_acceptance_scheduled" == "true" ||
+                "$docker_required" == "true" ]]; then
+            package_required=true
           fi
 
           {
@@ -631,14 +668,18 @@ jobs:
             printf 'release_profile=%s\n' "$release_profile"
             printf 'run_release_soak=%s\n' "$run_release_soak"
             printf 'qa_live_scheduled=%s\n' "$qa_live_scheduled"
+            printf 'release_check_groups_json=%s\n' "$release_check_groups_json"
+            printf 'package_required=%s\n' "$package_required"
+            printf 'docker_required=%s\n' "$docker_required"
+            printf 'install_smoke_scheduled=%s\n' "$install_smoke_scheduled"
             printf 'fail_fast=%s\n' "$fail_fast"
             printf 'run_maturity_scorecard=%s\n' "$run_maturity_scorecard"
             printf 'allow_unreleased_changelog=%s\n' "$allow_unreleased_changelog"
             printf 'skip_package_telegram_e2e=%s\n' "$skip_package_telegram_e2e"
             printf 'rerun_group=%s\n' "$RELEASE_RERUN_GROUP_INPUT"
-            printf 'live_suite_filter=%s\n' "$RELEASE_LIVE_SUITE_FILTER_INPUT"
+            printf 'live_suite_filter=%s\n' "$live_suite_filter"
             printf 'repo_live_suite_filter=%s\n' "$repo_live_suite_filter"
-            printf 'cross_os_suite_filter=%s\n' "$RELEASE_CROSS_OS_SUITE_FILTER_INPUT"
+            printf 'cross_os_suite_filter=%s\n' "$cross_os_suite_filter"
             printf 'qa_live_matrix_enabled=%s\n' "$qa_live_matrix_enabled"
             printf 'qa_live_buzz_enabled=%s\n' "$qa_live_buzz_enabled"
             printf 'qa_live_telegram_enabled=%s\n' "$qa_live_telegram_enabled"
@@ -649,7 +690,9 @@ jobs:
             printf 'package_acceptance_package_spec=%s\n' "$RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT"
             printf 'codex_plugin_spec=%s\n' "$codex_plugin_spec"
             printf 'cross_os_scheduled=%s\n' "$cross_os_scheduled"
-            printf 'docker_release_scheduled=%s\n' "$docker_release_scheduled"
+            printf 'live_e2e_scheduled=%s\n' "$live_e2e_scheduled"
+            printf 'package_acceptance_scheduled=%s\n' "$package_acceptance_scheduled"
+            printf 'qa_parity_scheduled=%s\n' "$qa_parity_scheduled"
           } >> "$GITHUB_OUTPUT"
 
       - name: Summarize validated ref
@@ -662,6 +705,9 @@ jobs:
           RELEASE_PROFILE: ${{ steps.inputs.outputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ steps.inputs.outputs.run_release_soak }}
           QA_LIVE_SCHEDULED: ${{ steps.inputs.outputs.qa_live_scheduled }}
+          RELEASE_CHECK_GROUPS_JSON: ${{ steps.inputs.outputs.release_check_groups_json }}
+          PACKAGE_REQUIRED: ${{ steps.inputs.outputs.package_required }}
+          DOCKER_REQUIRED: ${{ steps.inputs.outputs.docker_required }}
           FAIL_FAST: ${{ steps.inputs.outputs.fail_fast }}
           RUN_MATURITY_SCORECARD: ${{ steps.inputs.outputs.run_maturity_scorecard }}
           SKIP_PACKAGE_TELEGRAM_E2E: ${{ steps.inputs.outputs.skip_package_telegram_e2e }}
@@ -683,6 +729,9 @@ jobs:
             echo "- Cross-OS mode: \`${RELEASE_MODE}\`"
             echo "- Release profile: \`${RELEASE_PROFILE}\`"
             echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
+            echo "- Concrete release-check groups: \`${RELEASE_CHECK_GROUPS_JSON}\`"
+            echo "- Shared package artifact required: \`${PACKAGE_REQUIRED}\`"
+            echo "- Docker release-path prep required: \`${DOCKER_REQUIRED}\`"
             echo "- QA-live scheduled: \`${QA_LIVE_SCHEDULED}\`"
             echo "- Matrix QA fail fast: \`${FAIL_FAST}\`"
             echo "- Maturity scorecard docs: \`${RUN_MATURITY_SCORECARD}\`"
@@ -721,7 +770,7 @@ jobs:
   prepare_release_package:
     name: Prepare release package artifact
     needs: [resolve_target]
-    if: needs.resolve_target.outputs.cross_os_scheduled == 'true' || needs.resolve_target.outputs.docker_release_scheduled == 'true' || needs.resolve_target.outputs.rerun_group == 'package'
+    if: needs.resolve_target.outputs.package_required == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -763,6 +812,7 @@ jobs:
         if: inputs.candidate_artifact_json == ''
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
           install-deps: "true"
@@ -773,7 +823,7 @@ jobs:
         shell: bash
         env:
           CROSS_OS_SCHEDULED: ${{ needs.resolve_target.outputs.cross_os_scheduled }}
-          DOCKER_RELEASE_SCHEDULED: ${{ needs.resolve_target.outputs.docker_release_scheduled }}
+          DOCKER_REQUIRED: ${{ needs.resolve_target.outputs.docker_required }}
           PACKAGE_REF: ${{ needs.resolve_target.outputs.revision }}
           PROVIDER: ${{ needs.resolve_target.outputs.provider }}
           RELEASE_PACKAGE_SPEC: ${{ needs.resolve_target.outputs.release_package_spec }}
@@ -796,7 +846,7 @@ jobs:
             )"
           fi
           docker_packages='[]'
-          if [[ "$DOCKER_RELEASE_SCHEDULED" == "true" && -z "${RELEASE_PACKAGE_SPEC// }" ]]; then
+          if [[ "$DOCKER_REQUIRED" == "true" && -z "${RELEASE_PACKAGE_SPEC// }" ]]; then
             export OPENCLAW_DOCKER_ALL_PROFILE=release-path
             export OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL=1
             export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="${{ needs.resolve_target.outputs.release_profile != 'beta' }}"
@@ -1033,7 +1083,7 @@ jobs:
 
   install_smoke_release_checks:
     needs: [resolve_target]
-    if: contains(fromJSON('["all","install-smoke"]'), needs.resolve_target.outputs.rerun_group)
+    if: needs.resolve_target.outputs.install_smoke_scheduled == 'true'
     permissions:
       actions: read
       contents: read
@@ -1080,7 +1130,7 @@ jobs:
   live_repo_e2e_release_checks:
     name: Run repo/live E2E validation
     needs: [resolve_target]
-    if: needs.resolve_target.outputs.rerun_group == 'live-e2e' || (needs.resolve_target.outputs.rerun_group == 'all' && needs.resolve_target.outputs.run_release_soak == 'true')
+    if: needs.resolve_target.outputs.live_e2e_scheduled == 'true'
     permissions:
       actions: read
       contents: read
@@ -1155,7 +1205,7 @@ jobs:
   docker_e2e_release_checks:
     name: Run Docker release-path validation
     needs: [resolve_target, prepare_release_package]
-    if: needs.resolve_target.outputs.docker_release_scheduled == 'true'
+    if: needs.resolve_target.outputs.docker_required == 'true'
     permissions:
       actions: read
       contents: read
@@ -1202,7 +1252,7 @@ jobs:
   package_acceptance_release_checks:
     name: Run package acceptance
     needs: [resolve_target, prepare_release_package]
-    if: contains(fromJSON('["all","package"]'), needs.resolve_target.outputs.rerun_group)
+    if: needs.resolve_target.outputs.package_acceptance_scheduled == 'true'
     permissions:
       actions: read
       contents: read
@@ -1302,7 +1352,7 @@ jobs:
   qa_lab_parity_lane_release_checks:
     name: Run QA Lab parity lane (${{ matrix.lane }})
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
+    if: needs.resolve_target.outputs.qa_parity_scheduled == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -1364,6 +1414,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -1470,7 +1521,7 @@ jobs:
   qa_lab_parity_report_release_checks:
     name: Run QA Lab parity report
     needs: [resolve_target, qa_lab_parity_lane_release_checks]
-    if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
+    if: needs.resolve_target.outputs.qa_parity_scheduled == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -1501,6 +1552,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -1596,7 +1648,7 @@ jobs:
   qa_lab_runtime_pair_lane_release_checks:
     name: Run QA Lab runtime-pair lane (${{ matrix.lane }})
     needs: [resolve_target]
-    if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
+    if: needs.resolve_target.outputs.qa_parity_scheduled == 'true'
     continue-on-error: true
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 45
@@ -1628,6 +1680,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -1808,7 +1861,7 @@ jobs:
   qa_lab_runtime_parity_release_checks:
     name: Verify QA Lab runtime-pair lanes
     needs: [resolve_target, qa_lab_runtime_pair_lane_release_checks]
-    if: always() && contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
+    if: always() && needs.resolve_target.outputs.qa_parity_scheduled == 'true'
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -1925,7 +1978,7 @@ jobs:
   runtime_tool_coverage_release_checks:
     name: Enforce QA Lab runtime tool coverage
     needs: [resolve_target, qa_lab_runtime_parity_release_checks]
-    if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
+    if: needs.resolve_target.outputs.qa_parity_scheduled == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -1955,6 +2008,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -2081,6 +2135,8 @@ jobs:
       - name: Dispatch and await trusted Telegram QA
         env:
           GH_TOKEN: ${{ github.token }}
+          PARENT_WORKFLOW_REF: ${{ github.ref_name }}
+          PARENT_WORKFLOW_SHA: ${{ github.sha }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
         shell: bash
@@ -2094,7 +2150,7 @@ jobs:
             RUN_NAME="$run_name" gh api -X GET \
               "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
               -F event=workflow_dispatch \
-              -F branch=main \
+              -F branch="$PARENT_WORKFLOW_REF" \
               -F per_page=100 \
               --jq '[.workflow_runs[] | select(.display_title == env.RUN_NAME) | {id, head_sha}]'
           }
@@ -2127,51 +2183,40 @@ jobs:
           trap 'exit 130' INT
           trap 'exit 143' TERM
 
-          for dispatch_attempt in 1 2 3 4 5; do
-            expected_trusted_workflow_sha="$(
-              gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha
-            )"
-            dispatch_id="release-checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${dispatch_attempt}-$(openssl rand -hex 16)"
-            run_name="OpenClaw Release Telegram QA ${dispatch_id}"
-            run_id=""
-            child_head_sha=""
+          dispatch_id="release-checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(openssl rand -hex 16)"
+          run_name="OpenClaw Release Telegram QA ${dispatch_id}"
+          child_head_sha=""
 
-            gh workflow run "$workflow" \
-              --repo "$GITHUB_REPOSITORY" \
-              --ref main \
-              -f dispatch_id="$dispatch_id" \
-              -f expected_trusted_workflow_sha="$expected_trusted_workflow_sha" \
-              -f target_context_ref="$TARGET_CONTEXT_REF" \
-              -f target_ref="$TARGET_SHA" \
-              -f target_sha="$TARGET_SHA"
+          gh workflow run "$workflow" \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "$PARENT_WORKFLOW_REF" \
+            -f dispatch_id="$dispatch_id" \
+            -f expected_trusted_workflow_sha="$PARENT_WORKFLOW_SHA" \
+            -f target_context_ref="$TARGET_CONTEXT_REF" \
+            -f target_ref="$TARGET_SHA" \
+            -f target_sha="$TARGET_SHA"
 
-            for _ in $(seq 1 60); do
-              matches_json="$(find_child_runs)"
-              match_count="$(jq 'length' <<<"$matches_json")"
-              if ((match_count > 1)); then
-                echo "Multiple Telegram QA runs matched ${run_name}; refusing to guess." >&2
-                exit 1
-              fi
-              if ((match_count == 1)); then
-                run_id="$(jq -r '.[0].id' <<<"$matches_json")"
-                child_head_sha="$(jq -r '.[0].head_sha' <<<"$matches_json")"
-                break
-              fi
-              sleep 5
-            done
-            if [[ -z "$run_id" ]]; then
-              echo "Could not find exact dispatched Telegram QA run ${run_name}." >&2
+          for _ in $(seq 1 60); do
+            matches_json="$(find_child_runs)"
+            match_count="$(jq 'length' <<<"$matches_json")"
+            if ((match_count > 1)); then
+              echo "Multiple Telegram QA runs matched ${run_name}; refusing to guess." >&2
               exit 1
             fi
-            if [[ "$child_head_sha" == "$expected_trusted_workflow_sha" ]]; then
+            if ((match_count == 1)); then
+              run_id="$(jq -r '.[0].id' <<<"$matches_json")"
+              child_head_sha="$(jq -r '.[0].head_sha' <<<"$matches_json")"
               break
             fi
-            echo "Trusted main moved from ${expected_trusted_workflow_sha} to ${child_head_sha} during dispatch attempt ${dispatch_attempt}; retrying." >&2
-            cancel_child
-            run_id=""
+            sleep 5
           done
           if [[ -z "$run_id" ]]; then
-            echo "Trusted main kept moving during Telegram QA dispatch; refusing an unpinned child." >&2
+            echo "Could not find exact dispatched Telegram QA run ${run_name}." >&2
+            exit 1
+          fi
+          if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then
+            echo "Telegram QA used tooling SHA ${child_head_sha}, expected ${PARENT_WORKFLOW_SHA}." >&2
+            cancel_child
             exit 1
           fi
 
@@ -2218,6 +2263,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -2336,6 +2382,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -2432,6 +2479,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 

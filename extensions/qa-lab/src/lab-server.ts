@@ -310,11 +310,7 @@ export async function startQaLabServer(
   const scenarioCatalog = readQaBootstrapScenarioCatalog();
   const scorecardReport = readQaScorecardTaxonomyReport(scenarioCatalog.scenarios);
   const runnerChannels = [
-    ...new Set(
-      scenarioCatalog.scenarios
-        .map((scenario) => scenario.execution.channel)
-        .filter((channel): channel is string => Boolean(channel)),
-    ),
+    ...new Set(scenarioCatalog.scenarios.flatMap((scenario) => scenario.execution.channels ?? [])),
   ].toSorted();
   const bootstrapDefaults = createBootstrapDefaults(params?.autoKickoffTarget);
   let runnerModelOptions: QaRunnerModelOption[] = [];

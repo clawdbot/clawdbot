@@ -208,7 +208,9 @@ describe("worker turn launcher failure recovery", () => {
     const dispatch = createWorkerPlacementDispatchService({
       placements,
       environments,
+      runnerAvailability: { read: () => undefined, version: () => 0 },
       runLocalBarrier: async ({ startDispatch }) => startDispatch(),
+      runRecoveryBarrier: async ({ run }) => await run(root),
       runActivationBarrier: async ({ activate }) => activate(),
       runMoveBarrier: async ({ begin }) => begin(),
       resolveMoveDestination: async () => undefined,

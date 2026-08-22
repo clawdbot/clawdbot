@@ -444,7 +444,7 @@ class PluginsPage extends OpenClawLightDomElement {
     this.iconRequests.set(pluginId, request);
     void fetchPluginIconBlobUrl({
       pluginId,
-      basePath: this.context.basePath,
+      resourceBasePath: this.context.resourceBasePath,
       gatewayUrl: this.context.gateway.connection.gatewayUrl,
       auth: {
         hello: this.context.gateway.snapshot.hello,
@@ -717,6 +717,7 @@ class PluginsPage extends OpenClawLightDomElement {
       refreshError: string | null,
       client: GatewayBrowserClient,
       isCurrent: () => boolean,
+      isLatest: () => boolean,
     ) => Promise<void>,
     onError: (error: unknown) => void = (error) => {
       this.setMessage(rowKey, {
@@ -730,10 +731,12 @@ class PluginsPage extends OpenClawLightDomElement {
     if (!scope || !this.canMutate() || this.busy[rowKey]) {
       return;
     }
+    this.pageNotice = null;
     const mutationToken = ++this.mutationToken;
     this.mutationTokens.set(rowKey, mutationToken);
     const isCurrent = () =>
       this.gateway.isCurrent(scope) && this.mutationTokens.get(rowKey) === mutationToken;
+    const isLatest = () => isCurrent() && this.mutationToken === mutationToken;
     this.setBusy(rowKey, true);
     if (!options.preserveMessageWhilePending) {
       this.setMessage(rowKey, null);
@@ -747,7 +750,7 @@ class PluginsPage extends OpenClawLightDomElement {
       if (!isCurrent()) {
         return;
       }
-      await onSuccess(mutation.value, mutation.refreshError, scope.client, isCurrent);
+      await onSuccess(mutation.value, mutation.refreshError, scope.client, isCurrent, isLatest);
     } catch (error) {
       if (isCurrent()) {
         onError(error);
@@ -840,19 +843,21 @@ class PluginsPage extends OpenClawLightDomElement {
     await this.runPluginMutation(
       rowKey,
       (client) => uninstallPlugin(client, pluginId),
-      async (result, refreshError, client) => {
+      async (result, refreshError, client, _isCurrent, isLatest) => {
         this.setPendingRemoval(rowKey, false);
         // Removal hides its row, so keep the restart reminder on the page.
-        this.pageNotice = {
-          kind: "success",
-          text: [
-            t("pluginsPage.removedRestart", { name: result.pluginId }),
-            ...(result.warnings ?? []).map((warning) => formatUiExternalText(warning)),
-            refreshError ? t("pluginsPage.configRefreshFailed", { error: refreshError }) : null,
-          ]
-            .filter(Boolean)
-            .join("\n"),
-        };
+        if (isLatest()) {
+          this.pageNotice = {
+            kind: "success",
+            text: [
+              t("pluginsPage.removedRestart", { name: result.pluginId }),
+              ...(result.warnings ?? []).map((warning) => formatUiExternalText(warning)),
+              refreshError ? t("pluginsPage.configRefreshFailed", { error: refreshError }) : null,
+            ]
+              .filter(Boolean)
+              .join("\n"),
+          };
+        }
         await this.refreshCatalogAfterMutation(client);
       },
     );

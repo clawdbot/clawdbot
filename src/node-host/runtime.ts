@@ -15,6 +15,7 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
   NODE_TERMINAL_UPLOAD_COMMAND,
 } from "../infra/node-commands.js";
+import { createNodeDuplexEndpoint } from "../infra/node-duplex-framing.js";
 import type { NodeWorkerCapacitySnapshot } from "../infra/node-runner-inventory.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { ensureTerminalUploadCleanup } from "../infra/terminal-file-upload.js";
@@ -90,6 +91,7 @@ type NodeInvokeInputTarget = {
 
 type ActiveNodeInvoke = {
   controller: AbortController;
+  framedFailure?: Error;
   input?: NodeInvokeInputTarget;
 };
 
@@ -348,6 +350,12 @@ export async function prepareNodeHostRuntime(params?: {
       const pluginCommandContext: OpenClawPluginNodeHostCommandContext = {
         sendNodeEvent: async (event, payload) =>
           await client.request("node.event", buildNodeEventParams(event, payload)),
+        ...(workerWorkspace
+          ? {
+              acquireManagedWorkspace: (request) =>
+                workerWorkspace.acquireManagedWorkspace(request),
+            }
+          : {}),
       };
       let currentPluginNodeHost = pluginNodeHost;
       let currentManifest = manifest;
@@ -438,8 +446,22 @@ export async function prepareNodeHostRuntime(params?: {
           if (duplexCommand) {
             progress?.startHeartbeats();
           }
-          const pluginCommandIo: OpenClawPluginNodeHostCommandIo | undefined =
+          const framedIo =
             input && progress
+              ? createNodeDuplexEndpoint({
+                  sendFrame: async (payloadJSON) => await progress.write(payloadJSON),
+                  onError: (error) => {
+                    active.framedFailure = error;
+                    controller.abort(error);
+                  },
+                })
+              : undefined;
+          if (framedIo) {
+            controller.signal.addEventListener("abort", () => framedIo.close(), { once: true });
+          }
+          let framedInputRegistered = false;
+          const pluginCommandIo: OpenClawPluginNodeHostCommandIo | undefined =
+            input && progress && framedIo
               ? {
                   signal: controller.signal,
                   emitChunk: async (chunk) => await progress.write(chunk),
@@ -448,13 +470,37 @@ export async function prepareNodeHostRuntime(params?: {
                       registerNodeInvokeInputHandler(input, callback);
                     }
                   },
+                  frames: {
+                    send: async (message) => await framedIo.send(message),
+                    onMessage: (callback) => {
+                      const unsubscribe = framedIo.onMessage(callback);
+                      if (!framedInputRegistered) {
+                        framedInputRegistered = true;
+                        registerNodeInvokeInputHandler(input, (payloadJSON) => {
+                          try {
+                            framedIo.receive(payloadJSON);
+                          } catch (error) {
+                            controller.abort(error);
+                          }
+                        });
+                        void framedIo.sendReady().catch(controller.abort.bind(controller));
+                      }
+                      return unsubscribe;
+                    },
+                  },
                 }
               : undefined;
           try {
             await handleInvoke(frame, client, skillBins, manager, {
               ...(claudePath ? { claudePath } : {}),
               signal: controller.signal,
-              ...(pluginCommandIo ? { pluginCommandIo } : {}),
+              pluginCommandIo,
+              flushPluginCommandIo: framedIo?.drain,
+              canReportAbortedFailure: (error) =>
+                controller.signal.aborted &&
+                error === active.framedFailure &&
+                error === controller.signal.reason &&
+                activeInvokes.get(frame.id) === active,
               ...(gatewayConnection?.url ? { gatewayUrl: gatewayConnection.url } : {}),
               ...(gatewayConnection?.tlsFingerprint
                 ? { gatewayTlsFingerprint: gatewayConnection.tlsFingerprint }
@@ -472,6 +518,7 @@ export async function prepareNodeHostRuntime(params?: {
               ...(workerWorkspace ? { workerWorkspace } : {}),
             });
           } finally {
+            framedIo?.close();
             progress?.stop();
             await progress?.flush();
             if (activeInvokes.get(frame.id) === active) {

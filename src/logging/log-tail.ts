@@ -1,6 +1,7 @@
 // Log tail helpers read recent log lines with optional parsing and redaction.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isMissingPathError } from "../infra/errno.js";
 import { readFileWindowFully } from "../infra/file-read.js";
 import { clamp } from "../utils.js";
 import { isRollingLogFilePath, isSameRollingLogFileFamily } from "./log-file-path.js";
@@ -14,6 +15,13 @@ const DEFAULT_LIMIT = 500;
 const DEFAULT_MAX_BYTES = 250_000;
 const MAX_LIMIT = 5000;
 const MAX_BYTES = 1_000_000;
+
+function missingPathToNull(error: unknown): null {
+  if (!isMissingPathError(error)) {
+    throw error;
+  }
+  return null;
+}
 
 /** Payload returned to log-tail callers with cursor and truncation metadata. */
 export type LogTailPayload = {
@@ -32,7 +40,7 @@ type ParsedLogTailPayload = Omit<LogTailPayload, "lines"> & {
 
 /** Resolves a rolling daily log path to the newest existing rolling log when needed. */
 async function resolveLogFile(file: string, options?: { rolling?: boolean }): Promise<string> {
-  const stat = await fs.stat(file).catch(() => null);
+  const stat = await fs.stat(file).catch(missingPathToNull);
   if (stat) {
     return file;
   }
@@ -41,7 +49,7 @@ async function resolveLogFile(file: string, options?: { rolling?: boolean }): Pr
   }
 
   const dir = path.dirname(file);
-  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => null);
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(missingPathToNull);
   if (!entries) {
     return file;
   }
@@ -51,7 +59,7 @@ async function resolveLogFile(file: string, options?: { rolling?: boolean }): Pr
       .filter((entry) => entry.isFile() && isSameRollingLogFileFamily(file, entry.name))
       .map(async (entry) => {
         const fullPath = path.join(dir, entry.name);
-        const fileStat = await fs.stat(fullPath).catch(() => null);
+        const fileStat = await fs.stat(fullPath).catch(missingPathToNull);
         return fileStat ? { path: fullPath, mtimeMs: fileStat.mtimeMs } : null;
       }),
   );
@@ -68,7 +76,7 @@ async function readLogSlice(params: {
   maxBytes: number;
   filter?: (line: string) => boolean;
 }): Promise<Omit<LogTailPayload, "file">> {
-  const stat = await fs.stat(params.file).catch(() => null);
+  const stat = await fs.stat(params.file).catch(missingPathToNull);
   if (!stat) {
     return {
       cursor: 0,

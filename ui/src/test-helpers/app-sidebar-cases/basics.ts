@@ -20,7 +20,6 @@ import {
   mountSidebar,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
-import { installDialogPolyfill, nextFrame, waitForRenderedModalDialog } from "../modal-dialog.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar update card wiring", () => {
@@ -32,7 +31,7 @@ describe("AppSidebar update card wiring", () => {
     expect(sidebar.querySelector('.nav-item[href="/settings/secrets"]')).toBeNull();
   });
 
-  it("renders the update card in the footer after the attention slot and forwards its action", async () => {
+  it("keeps the update card after attention for loud states", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
     const onUpdate = vi.fn();
@@ -52,15 +51,7 @@ describe("AppSidebar update card wiring", () => {
     expect(footer?.firstElementChild?.localName).toBe("openclaw-sidebar-attention");
     const card = footer?.querySelector("openclaw-sidebar-update-card");
     expect(card).not.toBeNull();
-    const restoreDialogPolyfill = installDialogPolyfill();
-    card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
-    const { modal } = await waitForRenderedModalDialog(document.body);
-    [...modal.querySelectorAll("button")]
-      .find((button) => button.textContent?.trim() === "Update and restart")
-      ?.click();
-    await nextFrame();
-    restoreDialogPolyfill();
-    expect(onUpdate).toHaveBeenCalledOnce();
+    expect(card?.querySelector(".sidebar-update-card")).toBeNull();
 
     sidebar.refreshRequired = true;
     await sidebar.updateComplete;
@@ -71,7 +62,7 @@ describe("AppSidebar update card wiring", () => {
     expect(refreshCard?.textContent).toContain("Server updated");
     refreshCard?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
     expect(onRefresh).toHaveBeenCalledOnce();
-    expect(onUpdate).toHaveBeenCalledOnce();
+    expect(onUpdate).not.toHaveBeenCalled();
   });
 });
 
@@ -340,7 +331,15 @@ describe("AppSidebar agent chip", () => {
         path: "",
         count: 1,
         defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 5, hasActiveRun: true }],
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 5,
+            hasActiveRun: true,
+            unread: true,
+          },
+        ],
       },
       agentId: "main",
     });
@@ -354,9 +353,24 @@ describe("AppSidebar agent chip", () => {
     expect(spinner).not.toBeNull();
     expect(sidebar.querySelector(".nav-item--home .nav-item__icon")).not.toBeNull();
     expect(sidebar.querySelector(".nav-item--home .session-glyph__ring")).toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).toBeNull();
     expect(spinner?.getAttribute("role")).toBe("img");
     expect(spinner?.getAttribute("aria-label")).toBe("Active run");
     expect(spinner?.getAttribute("title")).toBe("Active run");
+
+    harness.publishList({
+      result: {
+        ts: 3,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 6, unread: true }],
+      },
+      agentId: "main",
+    });
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".nav-item--home .session-run-spinner")).toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).not.toBeNull();
   });
 
   it("uses the shared tooltip for the Home dashboard glyph", async () => {

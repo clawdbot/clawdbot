@@ -23,7 +23,6 @@ import {
   requireString,
 } from "./json-rpc.js";
 import { resolveExecServerPath } from "./path-uri.js";
-import { requireBackend, requireFsBridge } from "./runtime.js";
 import type { DirectoryEntry, OpenClawExecServer, ResolvedFsSandboxPolicy } from "./types.js";
 
 const CODEX_SANDBOX_EXEC_SERVER_MAX_READ_FILE_BYTES = 512 * 1024 * 1024;
@@ -67,7 +66,7 @@ export async function openFile(
 
   const filePath = resolveExecServerPath(requireString(record.path, "path"), "read path");
   assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "read" }]);
-  const fsBridge = requireFsBridge(execServer);
+  const fsBridge = execServer.fsBridge;
   // Claim the handle before even stat so slow or cancelled stats cannot bypass
   // the connection's handle cap or lose their cancellation and ownership.
   const handle: CodexSandboxFileReadHandle = {
@@ -228,7 +227,7 @@ export async function readFile(
   const record = requireObject(params, "fs/readFile params");
   const filePath = resolveExecServerPath(requireString(record.path, "path"), "read path");
   assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "read" }]);
-  const fsBridge = requireFsBridge(execServer);
+  const fsBridge = execServer.fsBridge;
   const stat = await fsBridge.stat({ filePath });
   if (!stat) {
     throw new JsonRpcProtocolError(JSON_RPC_NOT_FOUND, "file not found");
@@ -249,7 +248,7 @@ export async function writeFile(
   const record = requireObject(params, "fs/writeFile params");
   const filePath = resolveExecServerPath(requireString(record.path, "path"), "write path");
   assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "write" }]);
-  const fsBridge = requireFsBridge(execServer);
+  const fsBridge = execServer.fsBridge;
   const parent = await fsBridge.stat({ filePath: pathPosix.dirname(filePath) });
   if (parent?.type !== "directory") {
     throw new JsonRpcProtocolError(JSON_RPC_NOT_FOUND, "parent directory not found");
@@ -272,7 +271,7 @@ export async function createDirectory(
     "create-directory path",
   );
   assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "write" }]);
-  const fsBridge = requireFsBridge(execServer);
+  const fsBridge = execServer.fsBridge;
   if (record.recursive === false) {
     const parentPath = pathPosix.dirname(filePath);
     const parent = await fsBridge.stat({ filePath: parentPath });
@@ -293,8 +292,7 @@ export async function getMetadata(
   const record = requireObject(params, "fs/getMetadata params");
   const filePath = resolveExecServerPath(requireString(record.path, "path"), "metadata path");
   assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "read" }]);
-  const fsBridge = requireFsBridge(execServer);
-  const stat = await fsBridge.stat({
+  const stat = await execServer.fsBridge.stat({
     filePath,
   });
   if (!stat) {
@@ -322,15 +320,13 @@ async function listDirectoryEntries(
   fsSandboxPolicy: ResolvedFsSandboxPolicy | undefined,
 ): Promise<DirectoryEntry[]> {
   assertResolvedFsSandboxAccess(fsSandboxPolicy, [{ path: filePath, access: "read" }]);
-  const fsBridge = requireFsBridge(execServer);
-  const backend = requireBackend(execServer);
-  const resolved = fsBridge.resolvePath({
+  const resolved = execServer.fsBridge.resolvePath({
     filePath,
   });
   if (!resolved) {
     throw new Error(`Cannot resolve sandbox path: ${filePath}`);
   }
-  const result = await backend.runShellCommand({
+  const result = await execServer.backend.runShellCommand({
     script:
       'find "$1" -mindepth 1 -maxdepth 1 -exec sh -c \'for path do name=${path##*/}; if [ -L "$path" ]; then kind=o; elif [ -d "$path" ]; then kind=d; elif [ -f "$path" ]; then kind=f; else kind=o; fi; printf "%s\\t%s\\n" "$kind" "$name"; done\' sh {} +',
     args: [resolved.containerPath],
@@ -363,8 +359,7 @@ export async function removePath(
   if (record.recursive !== false) {
     assertNoReadOnlyDescendant(fsSandboxPolicy, filePath, "remove");
   }
-  const fsBridge = requireFsBridge(execServer);
-  await fsBridge.remove({
+  await execServer.fsBridge.remove({
     filePath,
     recursive: record.recursive !== false,
     force: record.force !== false,
@@ -407,10 +402,7 @@ async function copySandboxPath(
     fsSandboxPolicy: ResolvedFsSandboxPolicy | undefined;
   },
 ): Promise<void> {
-  const fsBridge = execServer.sandbox.fsBridge;
-  if (!fsBridge) {
-    throw new Error("Sandbox filesystem bridge is unavailable.");
-  }
+  const fsBridge = execServer.fsBridge;
   assertResolvedFsSandboxAccess(params.fsSandboxPolicy, [
     { path: params.sourcePath, access: "read" },
     { path: params.destinationPath, access: "write" },

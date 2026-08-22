@@ -46,7 +46,14 @@ function linkRequiredShellTools(bin: string) {
   }
 }
 
+function linkNodeExecutable(nodeDir: string) {
+  const bin = join(nodeDir, "bin");
+  mkdirSync(bin, { recursive: true });
+  symlinkSync(process.execPath, join(bin, "node"));
+}
+
 function writeInstalledOpenClawEntry(nodeDir: string) {
+  linkNodeExecutable(nodeDir);
   const entry = join(nodeDir, "lib", "node_modules", "openclaw", "dist", "entry.js");
   mkdirSync(join(entry, ".."), { recursive: true });
   writeFileSync(entry, "");
@@ -1616,6 +1623,7 @@ describe("install-cli.sh", () => {
       const result = runInstallCliShell(
         [
           `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `node_bin() { printf '%s\n' ${JSON.stringify(process.execPath)}; }`,
           `result="$(npm_lifecycle_allow_arg ${JSON.stringify(npm)} openclaw@latest)"`,
           `printf '%s' "$result"`,
         ].join("\n"),
@@ -1628,25 +1636,29 @@ describe("install-cli.sh", () => {
     }
   });
 
-  it("rejects an invalid npm version before mutation", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-lifecycle-invalid-"));
-    const npm = join(tmp, "npm");
-    const args = join(tmp, "args");
-    writeNpmLifecycleFixture(npm);
-    try {
-      const result = runInstallCliShell(
-        [
-          `source ${JSON.stringify(SCRIPT_PATH)}`,
-          `npm_lifecycle_allow_arg ${JSON.stringify(npm)} openclaw@latest`,
-        ].join("\n"),
-        { NPM_FAKE_ARGS: args, NPM_FAKE_VERSION: "invalid" },
-      );
-      expect(result.status).not.toBe(0);
-      expect(existsSync(args)).toBe(false);
-    } finally {
-      rmSync(tmp, { recursive: true, force: true });
-    }
-  });
+  it.each(["invalid", "npm 12.0.0 warning"])(
+    "rejects npm version %s before mutation",
+    (version) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-lifecycle-invalid-"));
+      const npm = join(tmp, "npm");
+      const args = join(tmp, "args");
+      writeNpmLifecycleFixture(npm);
+      try {
+        const result = runInstallCliShell(
+          [
+            `source ${JSON.stringify(SCRIPT_PATH)}`,
+            `node_bin() { printf '%s\n' ${JSON.stringify(process.execPath)}; }`,
+            `npm_lifecycle_allow_arg ${JSON.stringify(npm)} openclaw@latest`,
+          ].join("\n"),
+          { NPM_FAKE_ARGS: args, NPM_FAKE_VERSION: version },
+        );
+        expect(result.status).not.toBe(0);
+        expect(existsSync(args)).toBe(false);
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each([
     ["openclaw@npm:@scope/candidate@1.0.0", "--allow-scripts=@scope/candidate"],
@@ -1663,6 +1675,7 @@ describe("install-cli.sh", () => {
       const result = runInstallCliShell(
         [
           `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `node_bin() { printf '%s\n' ${JSON.stringify(process.execPath)}; }`,
           `npm_lifecycle_allow_arg ${JSON.stringify(npm)} ${JSON.stringify(spec)}`,
         ].join("\n"),
         { NPM_FAKE_VERSION: "12.0.0" },
@@ -1913,6 +1926,7 @@ describe("install-cli.sh", () => {
       const nodeDir = join(tmp, "node");
       const prefix = join(tmp, "prefix");
       writeNpmInstallRetryFixture(fakeNpm);
+      linkNodeExecutable(nodeDir);
 
       try {
         const result = runInstallCliShell(
@@ -1963,6 +1977,7 @@ describe("install-cli.sh", () => {
     const nodeDir = join(tmp, "node");
     const prefix = join(tmp, "prefix");
     writeNpmInstallRetryFixture(fakeNpm);
+    linkNodeExecutable(nodeDir);
 
     try {
       const result = runInstallCliShell(

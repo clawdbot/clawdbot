@@ -1030,7 +1030,7 @@ export class VoiceCallWebhookServer {
   private async handleInboundResponse(callId: string, userMessage: string): Promise<void> {
     this.logger.info(`Auto-responding to inbound call ${callId} chars=${userMessage.length}`);
 
-    // Get call context for conversation history
+    // Get the persisted call context for routing and response delivery.
     const call = this.manager.getCall(callId);
     if (!call) {
       this.logger.warn(`Call ${callId} not found for auto-response`);

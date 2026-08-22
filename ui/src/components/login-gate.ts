@@ -40,7 +40,7 @@ type LoginFailureFeedback = {
 };
 
 type LoginGateProps = {
-  basePath: string;
+  resourceBasePath: string;
   connected: boolean;
   lastError: string | null;
   lastErrorCode?: string | null;
@@ -325,8 +325,8 @@ function renderLoginFailure(feedback: LoginFailureFeedback) {
 }
 
 function renderLoginGate(props: LoginGateProps) {
-  const basePath = normalizeBasePath(props.basePath);
-  const faviconSrc = controlUiPublicAssetPath("favicon.svg", basePath);
+  const resourceBasePath = normalizeBasePath(props.resourceBasePath);
+  const faviconSrc = controlUiPublicAssetPath("favicon.svg", resourceBasePath);
   const failure = resolveLoginFailureFeedback({
     connected: props.connected,
     lastError: props.lastError,

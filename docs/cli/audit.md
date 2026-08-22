@@ -152,14 +152,15 @@ valid host-bound evidence; it never means allowed. `unsupported` is reserved
 for a named path with no authoritative Phase 0 integration. A plugin-provided
 sender or structurally copied resolver result cannot upgrade either state.
 
-A terminal approval receipt shows `allowed` or `denied`, its stable reason
-code, enforcement state, authoritative source boundary, policy and grant
-references, context fields used, and remediation. Expired and cancelled
+A terminal approval display shows `allowed` or `denied`, its stable reason
+code, enforcement state, verified producer class, policy and grant counts,
+context fields used, and remediation. Expired and cancelled
 approvals are denied non-actions with distinct reason codes. `no-route` is an
 enforced denial only when the approval owner recorded that terminal state. A
-corrupt approval is `unknown`. The text view labels `operator_approvals` as an
-authoritative owner-native SQLite record retained for 30 days; JSON preserves
-the same source owner and record reference without lossy reformatting.
+corrupt approval is `unknown`. The text view labels a verified
+operator-approval producer as an authoritative owner-native SQLite record
+retained for 30 days. Neither text nor JSON exposes the raw source owner, record
+reference, policy reference, or grant reference.
 `enforced` requires the approval's immutable owner-local binding to match the
 selected context, execution, and run exactly. A missing, malformed, or
 mismatched binding reports `operator_approval_execution_link_missing`,
@@ -192,8 +193,9 @@ their exact tuple was recorded and the gate changed the outcome.
 Portable actions and early suppressions that have no durable delivery record
 use the generic decision-fact owner instead of duplicating delivery state.
 
-JSON output is the Gateway result without lossy reformatting. An exact result contains one
-bounded V1 context (maximum 16 KiB), up to 100 decision receipts, coverage and
+JSON output is the Gateway's safe-only result without lossy reformatting. An
+exact result contains one bounded V1 context (maximum 16 KiB), up to 100
+`decisionDisplays`, coverage and
 missing-evidence codes, and an optional `nextDecisionCursor`. An ambiguous run
 result instead contains at most 50 execution candidates and an optional
 `nextExecutionCursor`. Sensitive domain,
@@ -303,18 +305,25 @@ openclaw gateway call audit.run.inspect \
   --params '{"executionId":"5da4c4c3-e1c9-4c95-a17d-6e5c10fd45cf","decisionLimit":50}'
 ```
 
-Its result is `{ "schemaVersion": 1, "run": ..., "identity": ..., "decisions":
-..., "coverage": ..., "nextDecisionCursor"?: ..., "nextExecutionCursor"?: ... }`.
+Its result is `{ "schemaVersion": 1, "run": ..., "identity": ...,
+"decisionDisplays": ..., "coverage": ..., "nextDecisionCursor"?: ...,
+"nextExecutionCursor"?: ... }`. The required `decisionDisplays` array is the
+only receipt presentation field. Raw owner receipts and a `decisions` key never
+cross the Gateway boundary.
 The closed request accepts exactly one of `executionId` or `runId`.
 `decisionLimit` is 1–100 and `decisionCursor` is optional. Run discovery also
 accepts `executionLimit` from 1–50 and an optional `executionCursor`. A run
 with multiple retained executions returns the typed `ambiguous` identity state
-and no identity context or decisions until the caller selects an execution id.
+and no identity context; its required `decisionDisplays` array is empty until
+the caller selects an execution id.
 For one selected context, receipt paging starts with admission, then reads
 owner-native terminal approvals, merges outbound progress and terminal records,
 and finally reads generic facts for boundaries without a native durable record.
 The merge is deterministic across restart and rejects a cursor whose exact
-owner row has expired.
+owner row has expired. Approval and message selectors use the opaque
+`approval-decision:` and `message-decision:` namespaces minted from the same
+owner-query snapshot; raw receipt, resolution, and event identifiers never
+become selectors.
 Approval and delivery inspection never write generic duplicates. Generic fact
 writes and projections also require the full context, execution, and run tuple
 to match the immutable execution context.

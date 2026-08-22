@@ -12,6 +12,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { adoptRuntimeWidgetPresenterRegistrations } from "../plugins/widget-presenters.js";
 import { resolveUserPath } from "../utils.js";
 import {
   resolveAgentRuntimePluginLoadPlan,
@@ -27,7 +28,8 @@ type AgentRuntimePluginRegistryParams = {
   /** Explicit base scope for hosts without a Gateway startup registry. */
   basePluginIds?: readonly string[];
   selections?: readonly AgentHarnessPluginSelection[];
-  /** Lifecycle-selected metadata. Omission selects one standalone cold generation. */
+  /** Lifecycle-owned selection; standalone/direct generations stay source-default. */
+  preferBuiltPluginArtifacts?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
 };
 
@@ -62,6 +64,7 @@ function resolveAgentRuntimePluginRegistryLoad(params: AgentRuntimePluginRegistr
     ...(metadataSnapshot.discovery ? { discovery: metadataSnapshot.discovery } : {}),
     installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
     manifestRegistry: metadataSnapshot.manifestRegistry,
+    ...(params.preferBuiltPluginArtifacts ? { preferBuiltPluginArtifacts: true } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),
   };
   const requestPluginRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
@@ -104,12 +107,16 @@ export function loadAgentRuntimePluginRegistryHandle(
 ): PluginRegistry {
   const load = resolveAgentRuntimePluginRegistryLoad(params);
   // Discovery-only load: full mode can replace process-global sandbox backends.
-  // Copy runtime context engines from the composition-root registry instead.
+  // Adopt full-only runtime capabilities from the matching composition-root owners.
   const pluginRegistry = loadPluginRegistryHandle({ ...load.loadOptions, activate: false });
   const activeRegistry = getActivePluginRegistry();
-  return activeRegistry
-    ? adoptRuntimeContextEngineRegistrations(pluginRegistry, activeRegistry)
-    : pluginRegistry;
+  if (!activeRegistry) {
+    return pluginRegistry;
+  }
+  return adoptRuntimeWidgetPresenterRegistrations(
+    adoptRuntimeContextEngineRegistrations(pluginRegistry, activeRegistry),
+    activeRegistry,
+  );
 }
 
 /** Binds a scoped plugin generation when a direct host has no Gateway owner. */

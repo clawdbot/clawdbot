@@ -38,7 +38,6 @@ import {
   fetchGoogleMeetSpace,
 } from "./src/meet.js";
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
-import { testing as googleMeetPluginTesting } from "./src/plugin-registration.js";
 import {
   meetAudioBridge,
   meetBrowserState,
@@ -62,6 +61,7 @@ import {
   normalizeDialInNumber,
   prefixDtmfWait,
 } from "./src/transports/twilio.js";
+import { testing as googleMeetPluginTesting } from "./test-api.js";
 
 type GoogleMeetManifestConfigSchema = JsonSchemaObject & {
   properties?: Record<string, JsonSchemaObject & { properties?: Record<string, unknown> }>;

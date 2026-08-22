@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AgentSelectionRequiredError,
+  resolveConfiguredAgentId,
   type AgentSelectionContext,
 } from "../agents/agent-scope-config.js";
 import { registerSkillsCli } from "./skills-cli.js";
@@ -105,6 +106,9 @@ const mocks = vi.hoisted(() => {
     resolveAgentIdByWorkspacePathMock: vi.fn(
       (_configForTest: unknown, _workspacePath: string): string | undefined => undefined,
     ),
+    resolveConfiguredAgentIdMock: vi.fn(
+      (_configForTest: unknown, agentId: string): string => agentId,
+    ),
     resolveAgentWorkspaceDirMock: vi.fn(
       (_configForTest: unknown, _agentId: string) => "/tmp/workspace",
     ),
@@ -134,6 +138,7 @@ const {
   loadConfigMock,
   resolveDefaultAgentIdMock,
   resolveAgentIdByWorkspacePathMock,
+  resolveConfiguredAgentIdMock,
   resolveAgentWorkspaceDirMock,
   searchSkillsFromClawHubMock,
   installSkillFromClawHubMock,
@@ -272,6 +277,8 @@ vi.mock("../config/config.js", () => ({
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentIdByWorkspacePath: (config: unknown, workspacePath: string) =>
     mocks.resolveAgentIdByWorkspacePathMock(config, workspacePath),
+  resolveConfiguredAgentId: (config: unknown, agentId: string) =>
+    mocks.resolveConfiguredAgentIdMock(config, agentId),
   resolveDefaultAgentId: (config: unknown, context?: AgentSelectionContext) =>
     mocks.resolveDefaultAgentIdMock(config, context),
   resolveAgentWorkspaceDir: (config: unknown, agentId: string) =>
@@ -347,6 +354,7 @@ describe("skills cli commands", () => {
     loadConfigMock.mockReset();
     resolveDefaultAgentIdMock.mockReset();
     resolveAgentIdByWorkspacePathMock.mockReset();
+    resolveConfiguredAgentIdMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
     searchSkillsFromClawHubMock.mockReset();
     installSkillFromClawHubMock.mockReset();
@@ -366,6 +374,7 @@ describe("skills cli commands", () => {
     loadConfigMock.mockReturnValue({});
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentIdByWorkspacePathMock.mockReturnValue(undefined);
+    resolveConfiguredAgentIdMock.mockImplementation((_config, agentId: string) => agentId);
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
     searchSkillsFromClawHubMock.mockResolvedValue([]);
     installSkillFromClawHubMock.mockResolvedValue({
@@ -966,6 +975,7 @@ describe("skills cli commands", () => {
   });
 
   it.each([
+    { flag: "--force", option: "force" },
     { flag: "--force-install", option: "forceInstall" },
     { flag: "--acknowledge-clawhub-risk", option: "acknowledgeClawHubRisk" },
   ])("passes $flag through for ClawHub skill updates", async ({ flag, option }) => {
@@ -979,6 +989,24 @@ describe("skills cli commands", () => {
         ...(option === "forceInstall" ? { slug: undefined } : {}),
         [option]: true,
       }),
+    );
+  });
+
+  it("prints --force retry guidance for blocked ClawHub skill updates", async () => {
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: false,
+        code: "force_required",
+        error:
+          'Skill "calendar" has local file changes. Updating replaces the installed skill directory.',
+      },
+    ]);
+
+    await expect(runCommand(["skills", "update", "calendar"])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain(
+      'Skill "calendar" has local file changes. Updating replaces the installed skill directory. Re-run with --force to update it anyway.',
     );
   });
 
@@ -1499,6 +1527,7 @@ describe("skills cli commands", () => {
       await runCommand(argv);
     });
 
+    expect(resolveConfiguredAgentIdMock).not.toHaveBeenCalled();
     expectStatusWorkspaceCall("/tmp/workspace-writer");
   });
 
@@ -1570,7 +1599,57 @@ describe("skills cli commands", () => {
     });
 
     expect(resolveAgentIdByWorkspacePathMock).not.toHaveBeenCalled();
+    expect(resolveConfiguredAgentIdMock).toHaveBeenCalledWith({}, "writer");
     expectStatusWorkspaceCall("/tmp/workspace-writer");
+  });
+
+  it.each([
+    ["list", ["skills", "list", "--agent", "nope-agent"]],
+    ["check", ["skills", "check", "--agent", "nope-agent"]],
+    ["default parent option", ["skills", "--agent", "nope-agent"]],
+    ["install", ["skills", "install", "calendar", "--agent", "nope-agent"]],
+    ["verify", ["skills", "verify", "calendar", "--card", "--agent", "nope-agent"]],
+    ["workshop list", ["skills", "workshop", "list", "--agent", "nope-agent"]],
+    ["workshop inspect", ["skills", "workshop", "inspect", "proposal-id", "--agent", "nope-agent"]],
+    [
+      "workshop proposal",
+      [
+        "skills",
+        "workshop",
+        "propose-create",
+        "--name",
+        "calendar-helper",
+        "--description",
+        "Calendar helper",
+        "--proposal",
+        "/missing/proposal.md",
+        "--agent",
+        "nope-agent",
+      ],
+    ],
+  ])("rejects an unknown agent before skills %s work", async (_label, argv) => {
+    resolveConfiguredAgentIdMock.mockImplementation((_config, agentId: string) =>
+      resolveConfiguredAgentId({ agents: { list: [{ id: "main" }, { id: "writer" }] } }, agentId),
+    );
+
+    await expect(runCommand(argv)).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toStrictEqual([
+      'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
+    ]);
+    expect(resolveAgentWorkspaceDirMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["empty", ["skills", "check", "--agent", ""]],
+    ["whitespace-only", ["skills", "check", "--agent", "   "]],
+    ["empty with --global", ["skills", "install", "calendar", "--global", "--agent", ""]],
+  ])("rejects a blank explicit skills agent (%s)", async (_label, argv) => {
+    await expect(runCommand(argv)).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toStrictEqual(["--agent must not be blank"]);
+    expect(resolveConfiguredAgentIdMock).not.toHaveBeenCalled();
+    expect(resolveAgentWorkspaceDirMock).not.toHaveBeenCalled();
   });
 
   it("falls back to the default agent outside configured workspaces", async () => {
@@ -1587,6 +1666,7 @@ describe("skills cli commands", () => {
       {},
       expect.objectContaining({ hint: "Pass --agent <id>." }),
     );
+    expect(resolveConfiguredAgentIdMock).not.toHaveBeenCalled();
     expectStatusWorkspaceCall("/tmp/workspace-main");
   });
 

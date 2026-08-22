@@ -166,6 +166,10 @@ function buildClaudeLiveFingerprint(params: {
   argv: string[];
   env: Record<string, string>;
 }): string {
+  const managedMcpGrant = params.context.preparedBackend.mcpClientGrantCapture;
+  const normalizeMcpGrantToken =
+    managedMcpGrant !== undefined &&
+    params.env.OPENCLAW_MCP_TOKEN === managedMcpGrant.transportToken;
   const stableSystemPrompt =
     (params.context.preparedBackend.backend.systemPromptWhen === "always"
       ? splitSystemPromptCacheBoundary(params.context.systemPrompt)?.stablePrefix
@@ -237,14 +241,42 @@ function buildClaudeLiveFingerprint(params: {
     authEpochHash: params.context.authEpoch ? sha256Hex(params.context.authEpoch) : undefined,
     extraSystemPromptHash: params.context.extraSystemPromptHash,
     promptToolNamesHash: params.context.promptToolNamesHash,
-    mcpConfigHash: params.context.preparedBackend.mcpConfigHash,
+    // A warm child carries the canonical MCP topology across turns. Per-turn
+    // authority rotates through the capture grant without restarting it.
+    mcpResumeHash:
+      params.context.preparedBackend.mcpResumeHash ?? params.context.preparedBackend.mcpConfigHash,
     credentialFingerprint: params.context.preparedBackend.secretInput?.fingerprint,
     skillsFingerprint,
     argv: stableArgv,
+    // This is the canonical compatibility check for all spawn-time inputs.
+    // Claude reads MAX_THINKING_TOKENS only when the child starts, so a changed
+    // thinking environment invalidates a warm process without a second reuse gate.
     env: Object.keys(params.env)
       .toSorted()
-      .map((key) => [key, params.env[key] ? sha256Hex(params.env[key]) : ""]),
+      .map((key) => [
+        key,
+        key === "OPENCLAW_MCP_TOKEN" && normalizeMcpGrantToken
+          ? "<managed-mcp-grant>"
+          : params.env[key]
+            ? sha256Hex(params.env[key])
+            : "",
+      ]),
   });
+}
+
+function adoptClaudeLiveProcessMcpGrant(params: {
+  session: ClaudeLiveProcess;
+  context: PreparedCliRunContext;
+}): boolean {
+  const turnGrant = params.context.preparedBackend.mcpClientGrantCapture;
+  if (!turnGrant && !params.session.mcpGrantToken) {
+    return true;
+  }
+  if (!turnGrant || !params.session.mcpGrantToken) {
+    return false;
+  }
+  turnGrant.adoptProcessToken(params.session.mcpGrantToken);
+  return true;
 }
 
 function createAbortError(reason?: unknown): Error {
@@ -426,6 +458,33 @@ async function runSerializedClaudeTurn(
       code: "cli_live_session_missing",
     });
   }
+  if (session) {
+    const reusableSession = session;
+    try {
+      if (!adoptClaudeLiveProcessMcpGrant({ session: reusableSession, context: params.context })) {
+        reusableSession.close("restart");
+        session = undefined;
+      }
+    } catch (error) {
+      reusableSession.close("restart", error);
+      session = undefined;
+      if (params.requiredSessionGeneration) {
+        await cleanup();
+        throw createRequiredLiveSessionError({
+          context: params.context,
+          code: "cli_live_session_changed",
+          cause: error,
+        });
+      }
+    }
+  }
+  if (!session && params.requiredSessionGeneration) {
+    await cleanup();
+    throw createRequiredLiveSessionError({
+      context: params.context,
+      code: "cli_live_session_changed",
+    });
+  }
   const cleanupTurnArtifacts = Boolean(session);
   let notifiedMcpCaptureKey: string | undefined;
   const notifyMcpCaptureReady = (captureKey: string | undefined) => {
@@ -452,6 +511,9 @@ async function runSerializedClaudeTurn(
       });
     }
     const generation = crypto.randomUUID();
+    // Capture keys are child env/MCP-header state and cannot rotate without a
+    // new process. Bind one key to this process; grant activate/deactivate is
+    // the per-turn admission fence. Drain timeout still kills the child.
     const mcpCaptureKey = params.context.mcpDeliveryCapture ? crypto.randomUUID() : undefined;
     if (mcpCaptureKey) {
       try {
@@ -562,16 +624,8 @@ async function runSerializedClaudeTurn(
     return { output: await outputPromise };
   } finally {
     params.context.params.abortSignal?.removeEventListener("abort", abort);
-    try {
-      if (replyBackendHandle) {
-        params.context.params.replyOperation?.detachBackend(replyBackendHandle);
-      }
-    } finally {
-      if (session.mcpCaptureKey) {
-        session.close("restart");
-        await session.waitForExit();
-        await session.cleanupResources();
-      }
+    if (replyBackendHandle) {
+      params.context.params.replyOperation?.detachBackend(replyBackendHandle);
     }
   }
 }

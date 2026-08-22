@@ -12,11 +12,13 @@ import {
   getSessionDisplaySubagentRunByChildSessionKey,
 } from "../agents/subagents/registry/subagent-registry-read.js";
 import { shouldKeepSubagentRunChildLink } from "../agents/subagents/registry/subagent-run-liveness.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
 import {
   isIncognitoSessionKey,
+  LEGACY_IMPLICIT_AGENT_ID,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
@@ -54,7 +56,11 @@ import {
   resolveSessionListSearchModelFields,
   shouldResolveDerivedSessionModelSearchFields,
 } from "./session-utils-search.js";
-import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
+import type {
+  GatewaySessionRow,
+  SessionListModelCatalog,
+  SessionsListResult,
+} from "./session-utils.types.js";
 
 /**
  * Number of session rows to build per batch before yielding to the event loop.
@@ -73,7 +79,7 @@ type ListSessionsFromStoreParams = {
   entryFilter?: (key: string, entry: SessionEntry) => boolean;
   storePath: string;
   store: Record<string, SessionEntry>;
-  modelCatalog?: ModelCatalogEntry[];
+  modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   lightweightListRows?: boolean;
   opts: SessionsListParams;
   involvingActorId?: string;
@@ -466,10 +472,24 @@ function buildSessionsListResult(params: {
   cfg: OpenClawConfig;
   agentId?: string;
   list: ReturnType<typeof prepareSessionList>;
-  modelCatalog?: ModelCatalogEntry[];
+  modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   sessions: GatewaySessionRow[];
 }): SessionsListResult {
   const { list, sessions } = params;
+  // The defaults projection uses the same agent identity as getSessionDefaults:
+  // the requested agent when scoped, otherwise the legacy compatibility agent.
+  // Legacy plain-array catalogs (direct listSessionsFromStore callers) pass through
+  // unchanged; per-agent maps resolve by the same identity.
+  const defaultsCatalog =
+    params.modelCatalog instanceof Map
+      ? params.modelCatalog.get(
+          params.agentId
+            ? normalizeAgentId(params.agentId)
+            : normalizeAgentId(
+                tryResolveLegacyCompatibilityAgentId(params.cfg) ?? LEGACY_IMPLICIT_AGENT_ID,
+              ),
+        )
+      : params.modelCatalog;
   return {
     ts: list.now,
     path: list.storePath,
@@ -480,7 +500,7 @@ function buildSessionsListResult(params: {
     nextOffset: list.nextOffset,
     hasMore: list.hasMore,
     owners: list.ownerFacet,
-    defaults: getSessionDefaults(params.cfg, params.modelCatalog, {
+    defaults: getSessionDefaults(params.cfg, defaultsCatalog, {
       ...(params.agentId ? { agentId: params.agentId } : {}),
       allowPluginNormalization: false,
     }),

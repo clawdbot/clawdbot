@@ -380,7 +380,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   };
 
   override connectedCallback() {
-    this.boardProviderLifecycleConnected = this.presented;
+    this.boardProviderLifecycleConnected = true;
     this.resumeStagedAttachments();
     super.connectedCallback();
     if (!this.presented) {

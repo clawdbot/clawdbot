@@ -35,6 +35,7 @@ export type ApplicationThemeServerSelection = {
 
 export type ApplicationTheme = {
   readonly mode: ThemeMode;
+  readonly resolvedMode: "dark" | "light";
   readonly serverSelection: ApplicationThemeServerSelection | null;
   recordServerSelection: (theme: ThemeName | null, scope: string) => void;
   setMode: (mode: ThemeMode, element?: HTMLElement | null) => void;
@@ -84,6 +85,7 @@ export type ApplicationChatAttachmentHandoff = {
 
 export type ApplicationContext<TRouteId extends string = string> = {
   readonly basePath: string;
+  readonly resourceBasePath: string;
   readonly gateway: ApplicationGateway;
   readonly agents: AgentCapability;
   readonly agentIdentity: AgentIdentityCapability;

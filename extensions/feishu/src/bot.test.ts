@@ -598,6 +598,9 @@ describe("handleFeishuMessage ACP routing", () => {
 
     expect(mockResolveConfiguredBindingRoute).toHaveBeenCalledTimes(1);
     expect(mockEnsureConfiguredBindingRouteReady).toHaveBeenCalledTimes(1);
+    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ConversationRoutePeerId: "ou_sender_1" }),
+    );
   });
 
   it("surfaces configured ACP initialization failures to the Feishu conversation", async () => {
@@ -687,6 +690,12 @@ describe("handleFeishuMessage ACP routing", () => {
     expect(conversationRef.channel).toBe("feishu");
     expect(conversationRef.conversationId).toBe("oc_group_chat:topic:om_topic_root");
     expect(mockTouchBinding).toHaveBeenCalledWith("default:oc_group_chat:topic:om_topic_root");
+    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ConversationRoutePeerId: "oc_group_chat:topic:om_topic_root",
+        ThreadParentId: "oc_group_chat",
+      }),
+    );
   });
 
   it("records Feishu DM last-route updates on the resolved session", async () => {

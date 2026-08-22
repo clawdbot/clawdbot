@@ -405,11 +405,7 @@ export async function claimTailscaleRoute(
     if (!isPermissionDeniedError(error)) {
       throw error;
     }
-    try {
-      return await startTailscaleRouteOwner(["sudo", "-n", tailscaleBin, ...args]);
-    } catch {
-      throw error;
-    }
+    return await startTailscaleRouteOwner(["sudo", "-n", tailscaleBin, ...args]);
   }
 }
 

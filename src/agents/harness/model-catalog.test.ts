@@ -18,7 +18,19 @@ const cfg = {
 } as OpenClawConfig;
 
 const snapshot: ModelCatalogSnapshot = {
-  entries: [],
+  entries: [
+    {
+      provider: "openai",
+      id: "gpt-5.6-sol",
+      name: "GPT-5.6 Sol (API)",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      },
+    },
+  ],
   routeVariants: [
     {
       provider: "openai",
@@ -40,7 +52,7 @@ const snapshot: ModelCatalogSnapshot = {
       params: { providerFact: "kept", codexAppServerRuntimeModel: "stale-runtime" },
       compat: {
         supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
         supportsTools: false,
       },
     },
@@ -103,7 +115,7 @@ describe("agent harness model catalog", () => {
         params: { codexAppServerRuntimeModel: "gpt-5.6-sol-runtime" },
         compat: {
           supportsReasoningEffort: true,
-          supportedReasoningEfforts: ["high"],
+          supportedReasoningEfforts: ["high", "ultra"],
           supportsTools: true,
         },
       },

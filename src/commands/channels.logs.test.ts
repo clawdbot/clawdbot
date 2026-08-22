@@ -53,6 +53,7 @@ function readJsonPayload() {
   return JSON.parse(String(runtime.log.mock.calls[0]?.[0])) as {
     file: string;
     channel: string;
+    truncated: boolean;
     lines: Array<{ message: string; raw: string }>;
   };
 }
@@ -214,6 +215,21 @@ describe("channelsLogsCommand", () => {
       "first match",
       "second match",
     ]);
+  });
+
+  it("reports when the byte window omits all matching channel records", async () => {
+    const omitted = logLine({ module: "gateway/channels/slack/send", message: "omitted" });
+    const filler = logLine({ module: "gateway/health", message: "x".repeat(1000) });
+    await fs.writeFile(logPath, `${omitted}\n${filler.repeat(1100)}`);
+
+    await channelsLogsCommand({ channel: "slack", json: true }, runtime);
+    expect(readJsonPayload()).toMatchObject({ truncated: true, lines: [] });
+
+    runtime.log.mockClear();
+    await channelsLogsCommand({ channel: "slack" }, runtime);
+    expect(runtime.log.mock.calls.flat().join("\n")).toContain(
+      "Log tail truncated; earlier entries were omitted.",
+    );
   });
 
   it("treats an omitted channel filter as all", async () => {

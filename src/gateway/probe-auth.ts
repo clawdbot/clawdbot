@@ -3,28 +3,42 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayProbeSurfaceAuth } from "./auth-surface-resolution.js";
+import { createGatewayCredentialPlan } from "./credential-planner.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 import {
   type ExplicitGatewayAuth,
+  type GatewayCredentialPrecedence,
   isGatewaySecretRefUnavailableError,
   resolveGatewayProbeCredentialsFromConfig,
 } from "./credentials.js";
 export { resolveGatewayProbeTarget } from "./probe-target.js";
 export type { GatewayProbeTargetResolution } from "./probe-target.js";
 
-// Probe auth adapts normal gateway credential precedence for reachability
-// checks. Local probes must not accidentally consume remote gateway credentials
-// from config when they are only checking the embedded/local gateway.
-function buildGatewayProbeCredentialPolicy(params: {
+type GatewayProbeCredentialParams = {
   cfg: OpenClawConfig;
   mode: "local" | "remote";
   env?: NodeJS.ProcessEnv;
   explicitAuth?: ExplicitGatewayAuth;
   urlOverride?: string;
   urlOverrideSource?: "cli" | "env";
-}) {
+  localPrecedence?: GatewayCredentialPrecedence;
+};
+
+// Probe auth adapts normal gateway credential precedence for reachability
+// checks. Local probes must not accidentally consume remote gateway credentials
+// from config when they are only checking the embedded/local gateway.
+function buildGatewayProbeCredentialPolicy(params: GatewayProbeCredentialParams) {
   const cfg = resolveGatewayProbeCredentialConfig(params);
+  const plan =
+    params.mode === "local" && params.localPrecedence === "env-first"
+      ? createGatewayCredentialPlan({ config: cfg, env: params.env })
+      : undefined;
+  const activeLocalRef =
+    (plan?.localTokenCanWin && plan.localToken.hasSecretRef) ||
+    ((plan?.localPasswordCanWin || plan?.authMode === undefined) &&
+      plan?.localPassword.hasSecretRef);
   return {
+    activeLocalRef,
     config: cfg,
     cfg,
     env: params.env,
@@ -33,6 +47,9 @@ function buildGatewayProbeCredentialPolicy(params: {
     urlOverrideSource: params.urlOverrideSource,
     modeOverride: params.mode,
     mode: params.mode,
+    // Env-first is historical for plaintext, but an active SecretRef is an
+    // explicit trust choice and must never be bypassed by ambient credentials.
+    localPrecedence: activeLocalRef ? ("config-first" as const) : params.localPrecedence,
     remoteTokenFallback: "remote-only" as const,
   };
 }
@@ -99,35 +116,29 @@ export function resolveGatewayProbeAuth(params: {
   return resolveGatewayProbeCredentialsFromConfig(policy);
 }
 
-async function resolveGatewayProbeAuthResolutionWithSecretInputs(params: {
-  cfg: OpenClawConfig;
-  mode: "local" | "remote";
-  env?: NodeJS.ProcessEnv;
-  explicitAuth?: ExplicitGatewayAuth;
-  urlOverride?: string;
-  urlOverrideSource?: "cli" | "env";
-}): Promise<{
+async function resolveGatewayProbeAuthResolutionWithSecretInputs(
+  params: GatewayProbeCredentialParams,
+): Promise<{
   auth: { token?: string; password?: string };
   warning?: string;
 }> {
   const policy = buildGatewayProbeCredentialPolicy(params);
   const explicitAuth = resolveExplicitProbeAuth(params.explicitAuth);
   if (
-    params.mode === "remote" &&
+    (params.mode === "remote" || policy.activeLocalRef) &&
     !hasExplicitProbeAuth(explicitAuth) &&
     !normalizeOptionalString(params.urlOverride)
   ) {
-    // Remote startup, status, and wizard probes must share one precedence owner.
-    // Otherwise one entry point can forward an ambient secret that its siblings omit.
+    // Remote and SecretRef-owned local probes must share their target's
+    // credential owner so ambient auth cannot mask the configured secret.
     const resolved = await resolveGatewayProbeSurfaceAuth({
       config: policy.config,
       env: policy.env,
-      surface: "remote",
+      surface: params.mode,
     });
     const warning = resolved.diagnostics?.join("\n");
     if (warning) {
-      // A configured remote ref is an explicit trust choice. Keep a resolved
-      // sibling config credential, but never replace it with ambient fallback.
+      // Keep a resolved sibling config credential, never ambient fallback.
       return {
         auth:
           resolved.source === "config"
@@ -147,32 +158,23 @@ async function resolveGatewayProbeAuthResolutionWithSecretInputs(params: {
     urlOverride: policy.urlOverride,
     urlOverrideSource: policy.urlOverrideSource,
     modeOverride: policy.modeOverride,
+    localPrecedence: policy.localPrecedence,
     remoteTokenFallback: policy.remoteTokenFallback,
   });
   return { auth };
 }
 
 /** Resolves probe auth with async SecretRef support. */
-export async function resolveGatewayProbeAuthWithSecretInputs(params: {
-  cfg: OpenClawConfig;
-  mode: "local" | "remote";
-  env?: NodeJS.ProcessEnv;
-  explicitAuth?: ExplicitGatewayAuth;
-  urlOverride?: string;
-  urlOverrideSource?: "cli" | "env";
-}): Promise<{ token?: string; password?: string }> {
+export async function resolveGatewayProbeAuthWithSecretInputs(
+  params: GatewayProbeCredentialParams,
+): Promise<{ token?: string; password?: string }> {
   return (await resolveGatewayProbeAuthResolutionWithSecretInputs(params)).auth;
 }
 
 /** Resolves probe auth without throwing for unavailable SecretRefs, returning a warning. */
-export async function resolveGatewayProbeAuthSafeWithSecretInputs(params: {
-  cfg: OpenClawConfig;
-  mode: "local" | "remote";
-  env?: NodeJS.ProcessEnv;
-  explicitAuth?: ExplicitGatewayAuth;
-  urlOverride?: string;
-  urlOverrideSource?: "cli" | "env";
-}): Promise<{
+export async function resolveGatewayProbeAuthSafeWithSecretInputs(
+  params: GatewayProbeCredentialParams,
+): Promise<{
   auth: { token?: string; password?: string };
   warning?: string;
 }> {

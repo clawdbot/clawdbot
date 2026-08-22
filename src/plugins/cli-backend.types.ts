@@ -113,6 +113,8 @@ export type CliBackendPrepareExecutionContext = {
   modelId: string;
   /** Effective OpenClaw context budget selected for this run. */
   contextTokenBudget?: number;
+  /** Effective OpenClaw thinking level selected for this run. */
+  thinkingLevel?: CliBackendThinkingLevel;
   authProfileId?: string;
   executionMode?: CliBackendExecutionMode;
   /** Exact runtime tool surface the backend must enforce for this run. */

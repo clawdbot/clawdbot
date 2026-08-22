@@ -5,6 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   asNullableRecord,
   normalizeOptionalString,
@@ -34,7 +35,10 @@ const REMOTE_DEBUGGING_PAGES = [
   "brave://inspect/#remote-debugging",
   "edge://inspect/#remote-debugging",
 ].join(", ");
-const BROWSER_PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const BROWSER_MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const BROWSER_PLUGIN_ROOT = fs.existsSync(path.join(BROWSER_MODULE_DIR, "package.json"))
+  ? BROWSER_MODULE_DIR
+  : path.dirname(BROWSER_MODULE_DIR);
 const BUNDLED_CHROME_EXTENSION_DIR = path.join(BROWSER_PLUGIN_ROOT, "chrome-extension");
 
 type ExistingSessionProfile = {
@@ -126,16 +130,6 @@ function resolveManagedBrowserUserDataDir(configDir: string, profileName: string
   return path.join(resolveManagedBrowserProfileDir(configDir, profileName), "user-data");
 }
 
-function normalizeComparablePath(targetPath: string): string {
-  return path.resolve(targetPath);
-}
-
-function isSameOrChildPath(candidatePath: string, parentPath: string): boolean {
-  const candidate = normalizeComparablePath(candidatePath);
-  const parent = normalizeComparablePath(parentPath);
-  return candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
-}
-
 function isLegacyClawdProfileConfigured(cfg: OpenClawConfig, legacyProfileDir: string): boolean {
   const browser = asNullableRecord(cfg.browser);
   if (!browser) {
@@ -156,7 +150,7 @@ function isLegacyClawdProfileConfigured(cfg: OpenClawConfig, legacyProfileDir: s
   for (const rawProfile of Object.values(configuredProfiles)) {
     const profile = asNullableRecord(rawProfile);
     const userDataDir = normalizeOptionalString(profile?.userDataDir);
-    if (userDataDir && isSameOrChildPath(resolveUserPath(userDataDir), legacyProfileDir)) {
+    if (userDataDir && isPathInside(legacyProfileDir, resolveUserPath(userDataDir))) {
       return true;
     }
   }

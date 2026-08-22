@@ -25,6 +25,9 @@ const {
   decodeOpusStreamChunksMock,
   updateVoiceStateMock,
   enqueueSystemEventMock,
+  assertSecretOwnerAvailableMock,
+  isSecretOwnerAvailableMock,
+  canonicalizeRealtimeVoiceProviderIdMock,
 } = vi.hoisted(() => {
   type EventHandler = (...args: unknown[]) => unknown;
   type MockConnection = {
@@ -161,7 +164,11 @@ const {
     logVerboseMock: vi.fn(),
     loggerWarnMock: vi.fn(),
     resolveConfiguredRealtimeVoiceProviderMock: vi.fn<
-      () => {
+      (params?: {
+        configuredProviderId?: string;
+        isProviderAvailable?: (provider: { id: string }) => boolean;
+        assertProviderAvailable?: (provider: { id: string }) => void;
+      }) => {
         provider: {
           id: string;
           capabilities?: { supportsActivationNameGating?: boolean };
@@ -192,6 +199,11 @@ const {
     decodeOpusStreamChunksMock: vi.fn(),
     updateVoiceStateMock: vi.fn(),
     enqueueSystemEventMock: vi.fn(),
+    assertSecretOwnerAvailableMock: vi.fn(),
+    isSecretOwnerAvailableMock: vi.fn((_ownerKind: string, _ownerId: string) => true),
+    canonicalizeRealtimeVoiceProviderIdMock: vi.fn((providerId: string | undefined) =>
+      providerId?.trim().toLowerCase(),
+    ),
   };
 });
 
@@ -220,7 +232,21 @@ export const voiceTestMocks = {
   decodeOpusStreamChunksMock,
   updateVoiceStateMock,
   enqueueSystemEventMock,
+  assertSecretOwnerAvailableMock,
+  isSecretOwnerAvailableMock,
+  canonicalizeRealtimeVoiceProviderIdMock,
 };
+
+vi.mock("openclaw/plugin-sdk/channel-secret-owner-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/channel-secret-owner-runtime")
+  >("openclaw/plugin-sdk/channel-secret-owner-runtime");
+  return {
+    ...actual,
+    assertSecretOwnerAvailable: assertSecretOwnerAvailableMock,
+    isSecretOwnerAvailable: isSecretOwnerAvailableMock,
+  };
+});
 
 vi.mock("./sdk-runtime.js", () => ({
   loadDiscordVoiceSdk: () => ({
@@ -302,6 +328,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {
   );
   return {
     ...actual,
+    canonicalizeRealtimeVoiceProviderId: canonicalizeRealtimeVoiceProviderIdMock,
     createRealtimeVoiceBridgeSession: createRealtimeVoiceBridgeSessionMock,
     createRealtimeVoiceSessionHarness: (
       params: Parameters<typeof actual.createRealtimeVoiceSessionHarness>[0],

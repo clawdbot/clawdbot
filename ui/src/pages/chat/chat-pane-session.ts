@@ -61,6 +61,10 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       }
       this.sessionPullRequests = [];
       this.sessionPullRequestsBranch = undefined;
+      this.githubPublicationResult = null;
+      this.githubPublicationError = null;
+      this.githubPublicationIdempotencyKey = null;
+      this.githubPublicationBusy = false;
       this.sessionPullRequestsRateLimited = false;
       this.requestUpdate();
       return;
@@ -112,6 +116,25 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         pullRequestEpoch,
       );
     }
+    const published =
+      this.githubPublicationResult?.status === "published"
+        ? this.githubPublicationResult
+        : undefined;
+    const publishedPullRequest = published
+      ? result.pullRequests.find((pullRequest) => pullRequest.url === published.url)
+      : undefined;
+    if (
+      result.branch &&
+      published &&
+      (result.branch.branch !== published.branch ||
+        (publishedPullRequest &&
+          publishedPullRequest.state !== "open" &&
+          publishedPullRequest.state !== "draft"))
+    ) {
+      this.githubPublicationResult = null;
+      this.githubPublicationError = null;
+      this.githubPublicationIdempotencyKey = null;
+    }
     this.sessionPullRequestsBranch = result.branch;
     this.sessionPullRequestsRateLimited = result.rateLimited;
     this.dismissedSessionPullRequestIds = listDismissedChatPullRequests(sessionKey);
@@ -119,11 +142,16 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   }
 
   protected resetSessionPullRequests(): void {
+    this.githubPublicationRequestVersion += 1;
     sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
     this.sessionPullRequests = [];
     this.sessionPullRequestsBranch = undefined;
     this.sessionPullRequestsRateLimited = false;
     this.sessionPullRequestsExpanded = false;
+    this.githubPublicationResult = null;
+    this.githubPublicationError = null;
+    this.githubPublicationIdempotencyKey = null;
+    this.githubPublicationBusy = false;
     this.dismissedSessionPullRequestIds = new Set();
   }
 

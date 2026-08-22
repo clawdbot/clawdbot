@@ -134,6 +134,10 @@ async function mirrorBestEffort(params: {
       // identity (not via the scope). Dropping `turnId` from the scope here is
       // what lets a re-emitted prior-turn entry collide with its existing key.
       idempotencyScope: `codex-app-server:${params.threadId}`,
+      terminalAssistantOwner: {
+        mirrorIdentity: `${params.turnId}:assistant`,
+        runId: params.params.runId,
+      },
       config: params.params.config,
     });
     for (const receipt of mirrorResult.userMessageReceipts) {
@@ -323,6 +327,7 @@ async function mirror(params: {
   storePath?: string;
   messages: AgentMessage[];
   idempotencyScope?: string;
+  terminalAssistantOwner?: { mirrorIdentity: string; runId: string };
   config?: SessionTranscriptWriteLockParams["config"];
   skipBeforeMessageWriteHooks?: boolean;
 }): Promise<CodexAppServerTranscriptMirrorResult> {
@@ -498,6 +503,14 @@ async function mirror(params: {
 
   for (const update of appendedUpdates) {
     try {
+      // Commentary and tool rows share the Codex turn but cannot claim terminal run ownership.
+      const terminalOwner = params.terminalAssistantOwner;
+      const terminalRunId =
+        update.message.role === "assistant" &&
+        terminalOwner &&
+        readMirrorIdentity(update.message) === terminalOwner.mirrorIdentity
+          ? terminalOwner.runId
+          : undefined;
       await publishSessionTranscriptUpdateByIdentity({
         ...transcriptTarget,
         update: {
@@ -505,6 +518,7 @@ async function mirror(params: {
           message: update.message,
           messageId: update.messageId,
           ...(update.messageSeq !== undefined ? { messageSeq: update.messageSeq } : {}),
+          ...(terminalRunId ? { runId: terminalRunId } : {}),
           sessionKey: transcriptTarget.sessionKey,
         },
       });

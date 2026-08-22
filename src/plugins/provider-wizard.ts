@@ -42,6 +42,7 @@ type ProviderWizardProvidersResolver = (params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  providerRefs?: readonly string[];
 }) => ProviderPlugin[];
 
 let providerWizardProvidersResolverForTest: ProviderWizardProvidersResolver | undefined;
@@ -134,6 +135,7 @@ function resolveProviderWizardProviders(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  providerRefs?: readonly string[];
 }): ProviderPlugin[] {
   if (providerWizardProvidersResolverForTest) {
     return providerWizardProvidersResolverForTest(params);
@@ -143,6 +145,7 @@ function resolveProviderWizardProviders(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
     mode: "setup",
+    ...(params.providerRefs?.length ? { providerRefs: params.providerRefs } : {}),
   });
 }
 
@@ -334,6 +337,7 @@ export async function runProviderModelSelectedHookCore(params: {
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
+      providerRefs: [selectedProviderId],
     }).find((entry) => normalizeProviderId(entry.id) === selectedProviderId);
   if (!provider?.onModelSelected) {
     return;

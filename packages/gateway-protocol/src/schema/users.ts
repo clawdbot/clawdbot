@@ -7,6 +7,7 @@ import { NonEmptyString } from "./primitives.js";
 export const USER_PREFS_ENTRY_LIMIT = 32;
 export const USER_PREFS_PROFILE_KEY_LIMIT = 128;
 export const USER_PREFS_VALUE_BYTES = 4 * 1024;
+export const GIT_COAUTHOR_PREFERENCE_KEY = "git.coauthor.enabled";
 
 const UserProfileIdSchema = Type.String({ minLength: 1, maxLength: 128 });
 const UserProfileDisplayNameSchema = Type.String({ maxLength: 256 });
@@ -66,13 +67,6 @@ export const UsersSetAvatarResultSchema = closedObject({
   avatarRevision: NonEmptyString,
 });
 
-export const UsersSetGitHubIdentityParamsSchema = closedObject({
-  username: Type.String({ minLength: 1, maxLength: 39 }),
-});
-export const UsersSetGitHubIdentityResultSchema = closedObject({ profile: UserProfileSchema });
-export const UsersClearGitHubIdentityParamsSchema = closedObject({});
-export const UsersClearGitHubIdentityResultSchema = closedObject({ profile: UserProfileSchema });
-
 export const UsersPrefsGetParamsSchema = closedObject({
   keys: Type.Optional(
     Type.Array(UserPreferenceKeySchema, {
@@ -103,10 +97,6 @@ export type UsersSetDisplayNameParams = Static<typeof UsersSetDisplayNameParamsS
 export type UsersSetDisplayNameResult = Static<typeof UsersSetDisplayNameResultSchema>;
 export type UsersSetAvatarParams = Static<typeof UsersSetAvatarParamsSchema>;
 export type UsersSetAvatarResult = Static<typeof UsersSetAvatarResultSchema>;
-export type UsersSetGitHubIdentityParams = Static<typeof UsersSetGitHubIdentityParamsSchema>;
-export type UsersSetGitHubIdentityResult = Static<typeof UsersSetGitHubIdentityResultSchema>;
-export type UsersClearGitHubIdentityParams = Static<typeof UsersClearGitHubIdentityParamsSchema>;
-export type UsersClearGitHubIdentityResult = Static<typeof UsersClearGitHubIdentityResultSchema>;
 export type UsersPrefsGetParams = Static<typeof UsersPrefsGetParamsSchema>;
 export type UsersPrefsGetResult = Static<typeof UsersPrefsGetResultSchema>;
 export type UsersPrefsSetParams = Static<typeof UsersPrefsSetParamsSchema>;

@@ -144,11 +144,9 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             agentID: target.agentID)
     }
 
-    func gatewayAdvertisesProgressCardStore() async -> Bool? {
+    func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
         guard let lease = await self.connection.captureServerLease() else { return nil }
-        return await self.connection.supportsServerMethod(
-            "progressCard.get",
-            ifCurrentServerLease: lease)
+        return await self.connection.supportsServerMethod(method, ifCurrentServerLease: lease)
     }
 
     func fetchProgressCard(sessionKey: String) async throws -> ProgressCard? {
@@ -219,9 +217,9 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             replacing: failedURL.map { OpenClawChatWidgetResource(url: $0) })?.url
     }
 
-    func listModels() async throws -> [OpenClawChatModelChoice] {
+    func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice] {
         do {
-            let data = try await connection.request(OpenClawChatGatewayRequests.modelsList())
+            let data = try await connection.request(OpenClawChatGatewayRequests.modelsList(agentID: agentID))
             return try OpenClawChatGatewayPayloadCodec.decodeModelChoices(data)
         } catch {
             webChatSwiftLogger.warning(

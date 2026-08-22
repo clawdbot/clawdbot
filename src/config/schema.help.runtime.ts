@@ -89,6 +89,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Managed local GitHub CLI profile and optional Git author for agent tools. Omit this object to preserve the Gateway runtime user's native account and author; repository remote credentials are never overridden.",
   "tools.github.profileId":
     "Opaque generated profile version used to switch managed credentials atomically.",
+  "tools.github.kind":
+    "Marks a managed OAuth profile whose rotating refresh credential is owned by the Gateway. Omitted profiles use a personal access token.",
   "tools.github.gitAuthor.name": "Optional process-local Git author and committer name.",
   "tools.github.gitAuthor.email": "Optional process-local Git author and committer email.",
   "agents.entries.*.tools.github":
@@ -144,7 +146,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.codeMode.snapshotTtlSeconds":
     "How long suspended code-mode snapshots can be resumed with `wait` before they expire.",
   "tools.codeMode.searchDefaultLimit":
-    "Default number of hidden catalog search results returned by `tools.search` inside code mode.",
+    "Default number of hidden catalog search results returned by `catalog.search` inside code mode.",
   "tools.codeMode.maxSearchLimit":
     "Maximum number of hidden catalog search results a code-mode program can request.",
   "tools.swarm":

@@ -310,6 +310,7 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
               rows="1"
               ?disabled=${options.submitting || options.messageLocked}
               placeholder=${t("newSession.messagePlaceholder")}
+              aria-label=${t("newSession.messagePlaceholder")}
               .value=${options.message}
               aria-autocomplete="list"
               aria-controls=${ifDefined(skillMenuVisible ? skillMenuListboxId : undefined)}

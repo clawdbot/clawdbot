@@ -23,18 +23,18 @@ const IMPLICIT_CODEX_RUNTIME = {
 const IMPLICIT_OPENCLAW_RUNTIME = {
   id: "openclaw",
   cloudPlacementSupported: true,
+  cloudPlacementExecutionMode: "worker-turn",
+  devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
   devicePlacementSupported: true,
   source: "implicit",
 } as const;
 const MODEL_CODEX_RUNTIME = { ...IMPLICIT_CODEX_RUNTIME, source: "model" } as const;
-const MODEL_OPENCLAW_RUNTIME = { ...IMPLICIT_OPENCLAW_RUNTIME, source: "model" } as const;
 
-function preparedOwnerFacts(config: OpenClawConfig) {
-  return {
+const preparedOwnerFacts = (config: OpenClawConfig) =>
+  ({
     authStore: { version: 1, profiles: {} },
     metadataSnapshot: loadManifestMetadataSnapshot({ config, env: process.env }),
-  } as const;
-}
+  }) as const;
 
 function emptyPreparedOwner(config: OpenClawConfig) {
   return {
@@ -472,7 +472,7 @@ describe("models.list OpenAI routes", () => {
         expect.objectContaining({
           id: "gpt-worker",
           provider: "openai",
-          agentRuntime: MODEL_OPENCLAW_RUNTIME,
+          agentRuntime: { ...IMPLICIT_OPENCLAW_RUNTIME, source: "model" },
         }),
       ],
     });
@@ -679,6 +679,7 @@ describe("models.list OpenAI routes", () => {
           provider: "openai",
           agentRuntime: IMPLICIT_OPENCLAW_RUNTIME,
           available: false,
+          tags: ["default"],
         },
       ],
     });
@@ -697,6 +698,7 @@ describe("models.list OpenAI routes", () => {
           provider: "openai",
           agentRuntime: IMPLICIT_OPENCLAW_RUNTIME,
           available: false,
+          tags: ["default"],
         },
       ],
     });
@@ -864,6 +866,7 @@ describe("models.list OpenAI routes", () => {
             provider: "openai",
             agentRuntime: IMPLICIT_OPENCLAW_RUNTIME,
             available: false,
+            tags: ["default"],
           },
         ],
       });
@@ -966,6 +969,7 @@ describe("models.list OpenAI routes", () => {
             provider: "openai",
             agentRuntime: IMPLICIT_OPENCLAW_RUNTIME,
             available: false,
+            tags: ["fallback#1"],
           });
         },
       );
@@ -1012,6 +1016,7 @@ describe("models.list OpenAI routes", () => {
             alias: "fast",
             agentRuntime: IMPLICIT_OPENCLAW_RUNTIME,
             available: false,
+            tags: ["fallback#1", "configured"],
           },
         ],
       });

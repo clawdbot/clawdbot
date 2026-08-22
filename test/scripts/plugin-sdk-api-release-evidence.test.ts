@@ -33,6 +33,32 @@ function evidence(exports: unknown[] = []) {
 }
 
 describe("Plugin SDK API release evidence", () => {
+  it("preserves the frozen v1 payload digest and receipt bytes", () => {
+    const legacyDiff = diff([{ change: "added", exportName: "send" }]);
+    const receipt = createPluginSdkApiReleaseEvidence({
+      baseRef: "v2026.8.1",
+      baseSha,
+      diff: legacyDiff,
+      headSha,
+      workflowSha,
+    });
+
+    expect(legacyDiff.digest).toBe(
+      "f4b495f34f8c1b72721841242b24d6f8351524c00e34db016af0fd3944f44992",
+    );
+    expect(JSON.stringify(receipt)).toBe(
+      `{"schema":"openclaw.plugin-sdk-api-release-evidence/v1","status":"checked","baseRef":"v2026.8.1","baseSha":"${baseSha}","headSha":"${headSha}","hasChanges":true,"digest":"f4b495f34f8c1b72721841242b24d6f8351524c00e34db016af0fd3944f44992","diff":{"entrypointsAdded":[],"entrypointsRemoved":[],"exports":[{"change":"added","exportName":"send"}],"digest":"f4b495f34f8c1b72721841242b24d6f8351524c00e34db016af0fd3944f44992"},"workflowSha":"${workflowSha}"}`,
+    );
+    expect(
+      validatePluginSdkApiReleaseEvidence({
+        acknowledgement: legacyDiff.digest.slice(0, 8),
+        evidence: receipt,
+        expectedHeadSha: headSha,
+        expectedWorkflowSha: workflowSha,
+      }),
+    ).toMatchObject({ acknowledgement: "f4b495f3", hasChanges: true });
+  });
+
   it("enforces acknowledgement through the release CLI", () => {
     const receipt = evidence([{ change: "added", exportName: "send" }]);
     const manifestPath = join(tempDirs.make("plugin-sdk-evidence-"), "manifest.json");

@@ -12,6 +12,7 @@ import {
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
+  redactExecApprovals,
   resolveAllowAlwaysPatternCoverage,
   resolveExecApprovalsFromFile,
   updateExecApprovals,
@@ -82,6 +83,8 @@ const OUTPUT_EVENT_TAIL = 20_000;
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 type NodeHostPrivateInvokeRuntime = NodeHostInvokeRuntime & {
+  canReportAbortedFailure?: (error: unknown) => boolean;
+  flushPluginCommandIo?: () => Promise<void>;
   workerBundleInstaller?: NodeWorkerBundleInstallerControl;
   workerSupervisor?: NodeWorkerSupervisorControl;
   workerWorkspace?: NodeWorkerWorkspaceRuntime;
@@ -270,14 +273,6 @@ function truncateOutput(raw: string, maxChars: number): { text: string; truncate
     return { text: raw, truncated: false };
   }
   return { text: `... (truncated) ${sliceUtf16Safe(raw, raw.length - maxChars)}`, truncated: true };
-}
-
-function redactExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
-  const socketPath = file.socket?.path?.trim();
-  return {
-    ...file,
-    socket: socketPath ? { path: socketPath } : undefined,
-  };
 }
 
 function requireExecApprovalsBaseHash(
@@ -581,7 +576,7 @@ export async function handleInvoke(
 ) {
   const invocationClient = createNodeHostInvocationClient(client, runtime.signal);
   try {
-    await dispatchInvoke(frame, invocationClient, skillBins, mcpManager, runtime);
+    await dispatchInvoke(frame, invocationClient, client, skillBins, mcpManager, runtime);
   } catch (err) {
     // Gateway events launch this handler without awaiting it. Consume unexpected
     // failures here so one bad request cannot terminate the node-host process.
@@ -603,6 +598,7 @@ export async function handleInvoke(
 async function dispatchInvoke(
   frame: NodeInvokeRequestPayload,
   client: NodeHostClient,
+  abortedFailureClient: NodeHostClient,
   skillBins: SkillBinsProvider,
   mcpManager?: NodeHostMcpManager,
   runtime: NodeHostPrivateInvokeRuntime = {},
@@ -652,6 +648,7 @@ async function dispatchInvoke(
         paramsJSON: frame.paramsJSON,
         gatewayUrl: runtime.gatewayUrl,
         gatewayTlsFingerprint: runtime.gatewayTlsFingerprint,
+        gatewayCloudflareAccess: runtime.gatewayCloudflareAccess,
         config: runtime.desktopHostConfig,
         signal: runtime.signal,
         emitStatus: runtime.emitProgress,
@@ -688,10 +685,7 @@ async function dispatchInvoke(
     try {
       const snapshot = await ensureExecApprovalsSnapshot();
       const payload = {
-        path: snapshot.path,
-        exists: snapshot.exists,
-        hash: snapshot.hash,
-        file: redactExecApprovals(snapshot.file),
+        ...redactExecApprovals(snapshot),
         ...(includeResolvedDefaults
           ? { resolvedDefaults: resolveExecApprovalsFromFile({ file: snapshot.file }).defaults }
           : {}),
@@ -754,12 +748,7 @@ async function dispatchInvoke(
       return;
     }
 
-    const payload: ExecApprovalsSnapshot = {
-      path: nextSnapshot.path,
-      exists: nextSnapshot.exists,
-      hash: nextSnapshot.hash,
-      file: redactExecApprovals(nextSnapshot.file),
-    };
+    const payload: ExecApprovalsSnapshot = redactExecApprovals(nextSnapshot);
     await sendJsonPayloadResult(client, frame, payload);
     return;
   }
@@ -816,21 +805,48 @@ async function dispatchInvoke(
   }
   try {
     const { pluginCommandIo: io, pluginCommandContext: context } = runtime;
+    const acquireManagedWorkspace = context?.acquireManagedWorkspace;
+    let pluginInvocationActive = true;
     const invokeContext =
-      context && (frame.sessionKey || runtime.signal)
+      context && (frame.sessionKey || runtime.signal || acquireManagedWorkspace)
         ? {
             ...context,
             ...(frame.sessionKey ? { sessionKey: frame.sessionKey } : {}),
             ...(runtime.signal ? { signal: runtime.signal } : {}),
+            ...(acquireManagedWorkspace
+              ? {
+                  acquireManagedWorkspace: (
+                    request: Parameters<typeof acquireManagedWorkspace>[0],
+                  ) => {
+                    if (
+                      !pluginInvocationActive ||
+                      runtime.signal?.aborted ||
+                      !frame.sessionKey ||
+                      request.sessionKey !== frame.sessionKey
+                    ) {
+                      throw new Error("node placement workspace invocation authority is closed");
+                    }
+                    return acquireManagedWorkspace(request);
+                  },
+                }
+              : {}),
           }
         : context;
-    const pluginResult = await invokePlugin(command, frame.paramsJSON, io, invokeContext);
+    let pluginResult: string | null;
+    try {
+      pluginResult = await invokePlugin(command, frame.paramsJSON, io, invokeContext);
+    } finally {
+      pluginInvocationActive = false;
+    }
     if (pluginResult !== null) {
+      await runtime.flushPluginCommandIo?.();
       await sendRawPayloadResult(client, frame, pluginResult);
       return;
     }
   } catch (err) {
-    await sendInvalidRequestResult(client, frame, err);
+    // Only the exact current owner's exact framed failure may bypass its aborted-client fence.
+    const failureClient = runtime.canReportAbortedFailure?.(err) ? abortedFailureClient : client;
+    await sendInvalidRequestResult(failureClient, frame, err);
     return;
   }
 

@@ -380,6 +380,7 @@ function resolveConfiguredRuntimePluginSelections(
   const configured = resolveDefaultModelForAgent({ cfg: config, agentId });
   return resolveModelCandidateChain({
     cfg: config,
+    agentId,
     manifestPlugins: [],
     provider: configured.provider || DEFAULT_PROVIDER,
     model: configured.model || DEFAULT_MODEL,
@@ -413,6 +414,9 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
     owner.generation += 1;
     owner.needsRefresh = true;
     owner.refreshError = undefined;
+    owner.pendingPluginGeneration = params.reusePluginGenerations
+      ? owner.pluginGeneration
+      : undefined;
     const generation = owner.generation;
     const key = ownerKey(input);
     let registered = params.owners.get(key) === owner;
@@ -430,6 +434,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
         owner.generation === generation &&
         params.owners.get(key) === owner,
       key,
+      generation,
       markRegistered: () => {
         registered = true;
       },
@@ -524,6 +529,9 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
         }
       }
       for (const candidate of candidates) {
+        if (candidate.owner.generation === candidate.generation) {
+          candidate.owner.pendingPluginGeneration = undefined;
+        }
         if (!candidate.isCurrent()) {
           continue;
         }
@@ -541,6 +549,9 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
     } catch (error) {
       const refreshError = toStringifiedError(error);
       for (const candidate of candidates) {
+        if (candidate.owner.generation === candidate.generation) {
+          candidate.owner.pendingPluginGeneration = undefined;
+        }
         if (!candidate.isCurrent()) {
           continue;
         }
@@ -589,6 +600,7 @@ export async function publishModelRuntimeSnapshot(
   owner.needsRefresh = true;
   owner.refreshError = undefined;
   owner.pluginGeneration = undefined;
+  owner.pendingPluginGeneration = reusablePluginGeneration;
   const generation = owner.generation;
   const build = startSerializedSnapshotBuild(
     input,
@@ -617,11 +629,15 @@ export async function publishModelRuntimeSnapshot(
       }
       owner.snapshot = result.snapshot;
       owner.pluginGeneration = result.pluginGeneration;
+      owner.pendingPluginGeneration = undefined;
       owner.pending = undefined;
       owner.needsRefresh = false;
       return result.snapshot;
     } catch (error) {
       const refreshError = toStringifiedError(error);
+      if (owner.generation === generation) {
+        owner.pendingPluginGeneration = undefined;
+      }
       if (owner.generation === generation && owners.get(key) === owner) {
         owner.pending = undefined;
         owner.needsRefresh = true;

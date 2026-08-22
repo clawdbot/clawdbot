@@ -9,6 +9,7 @@ import {
 import { CONTROL_UI_LOCALE_ENTRIES } from "../../scripts/lib/control-ui-i18n-config.ts";
 import { flattenTranslations } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
 import { registerActivityEnglish } from "../src/i18n/locales/en-activity.ts";
+import { registerSessionPlacementEnglish } from "../src/i18n/locales/en-session-placement.ts";
 import { en } from "../src/i18n/locales/en.ts";
 
 const localeModulePrefix = "virtual:openclaw-control-ui-locale/";
@@ -19,7 +20,11 @@ const i18nAssetsDir = path.resolve(
   "../src/i18n/.i18n",
 );
 const locales = new Set(CONTROL_UI_LOCALE_ENTRIES.map(({ locale }) => locale));
-const sourceCatalog = mergeControlUiTranslationMaps(en, registerActivityEnglish.catalog);
+const sourceCatalog = mergeControlUiTranslationMaps(
+  en,
+  registerActivityEnglish.catalog,
+  registerSessionPlacementEnglish.catalog,
+);
 
 export function controlUiLocaleModulesPlugin(): Plugin {
   return {

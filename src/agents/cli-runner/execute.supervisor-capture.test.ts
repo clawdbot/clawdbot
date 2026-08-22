@@ -2634,6 +2634,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
     const activateCapture = vi.fn<(captureKey: string) => void>();
     const deactivateCapture = vi.fn<(captureKey: string) => void>();
     context.preparedBackend.mcpClientGrantCapture = {
+      transportToken: "capture-test-token",
+      adoptProcessToken: vi.fn(),
+      revokeProcessToken: vi.fn(),
       activate: activateCapture,
       deactivate: deactivateCapture,
     };
@@ -2655,6 +2658,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
     const activateCapture = vi.fn<(captureKey: string) => void>();
     const deactivateCapture = vi.fn<(captureKey: string) => void>();
     context.preparedBackend.mcpClientGrantCapture = {
+      transportToken: "capture-test-token",
+      adoptProcessToken: vi.fn(),
+      revokeProcessToken: vi.fn(),
       activate: activateCapture,
       deactivate: deactivateCapture,
     };

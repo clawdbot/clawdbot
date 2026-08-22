@@ -27,10 +27,10 @@ describe("pending session placement recovery state", () => {
       expected: "gateway-changed",
     },
     {
-      name: "an interrupted cloud draft",
+      name: "an interrupted placement draft",
       gatewayIdentityChanged: false,
       placementDraftOwned: true,
-      expected: "cloud-interrupted",
+      expected: "placement-interrupted",
     },
   ])("classifies $name accurately", ({ expected, gatewayIdentityChanged, placementDraftOwned }) => {
     expect(resolveSubmissionOutcomeReason({ gatewayIdentityChanged, placementDraftOwned })).toBe(
@@ -187,7 +187,7 @@ describe("pending session placement recovery state", () => {
     expect(pending.sessionKey).toBe(provisionalSessionKey);
   });
 
-  it("keeps incognito cloud drafts in memory without writing recovery storage", () => {
+  it("keeps incognito placement drafts in memory without writing recovery storage", () => {
     const pending = new PendingSessionPlacementRecoveryState();
     const createParams = pending.stageCreate({
       agentId: "cloud",

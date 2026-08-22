@@ -94,6 +94,8 @@ export const zh_CN = {
       tokenPlaceholder: "多机器或非 loopback 访问需要使用",
       tokenPrompt: "Gateway 令牌",
       tokenPromptGenerate: "Gateway 令牌（留空则生成）",
+      tokenStoreProvisioned:
+        "已生成 Gateway 令牌并以 {name} 存入 OpenClaw 密钥存储。配置中只保留引用；可用 `openclaw secrets store list` 查看。",
       websocketUrl: "Gateway WebSocket URL",
     },
     gatewayTailscale: {
@@ -125,6 +127,7 @@ export const zh_CN = {
       complete: "迁移完成。下一步运行 `openclaw doctor`。",
       continuing: "迁移完成。继续设置。",
       importFrom: "从 {source} 导入",
+      importFromAnotherAgent: "从其他 agent 导入",
       includeCredentials: "同时导入支持的认证凭据？",
       previewTitle: "迁移预览",
       setupModelSeparately: "单独设置模型",
@@ -1120,6 +1123,8 @@ export const zh_CN = {
       optionalApps: "可选应用",
       outroDashboardLink: "Onboarding 完成。使用上面的 dashboard 链接控制 OpenClaw。",
       outroDashboardOpened: "Onboarding 完成。Dashboard 已打开；保留该标签页以控制 OpenClaw。",
+      outroHealthCheckFailed:
+        "Onboarding 完成，但网关健康检查失败。请先解决上面的问题，然后用 {command} 验证。",
       outroSeeded: "Onboarding 完成。Web UI 已在后台初始化，可随时用上面的 dashboard 链接打开。",
       quickstartNodeRuntime: "QuickStart 使用 Node 运行 Gateway 服务（稳定且受支持）。",
       reinstall: "重新安装",

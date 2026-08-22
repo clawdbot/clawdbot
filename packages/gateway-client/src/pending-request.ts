@@ -212,17 +212,25 @@ export class GatewayPendingRequests {
     errorCode?: string,
   ): void {
     const endedAtMs = this.opts.nowMs();
-    this.invoke("request timing", () =>
-      this.opts.onTiming?.({
-        id,
-        method: pending.method,
-        ok,
-        durationMs: Math.max(0, endedAtMs - pending.startedAtMs),
-        startedAtMs: pending.startedAtMs,
-        endedAtMs,
-        errorCode,
-      }),
-    );
+    try {
+      const onTiming = this.opts.onTiming;
+      if (onTiming === undefined || onTiming === null) {
+        return;
+      }
+      Reflect.apply(onTiming, this.opts, [
+        {
+          id,
+          method: pending.method,
+          ok,
+          durationMs: Math.max(0, endedAtMs - pending.startedAtMs),
+          startedAtMs: pending.startedAtMs,
+          endedAtMs,
+          errorCode,
+        },
+      ]);
+    } catch (error) {
+      this.opts.onCallbackError?.("request timing", error);
+    }
   }
 
   private invoke(label: string, callback: () => void): void {

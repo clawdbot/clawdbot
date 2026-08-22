@@ -46,7 +46,7 @@ const workerOwnedFields = {
 };
 
 describe("session dispatch protocol schemas", () => {
-  it("accepts exactly one profile or device dispatch target", () => {
+  it("accepts an explicit target or configured-default lookup", () => {
     expect(
       validateSessionsDispatchParams({
         key: "agent:main:dispatch",
@@ -61,7 +61,10 @@ describe("session dispatch protocol schemas", () => {
         deviceId: "device-1",
       }),
     ).toBe(true);
-    expect(validateSessionsDispatchParams({ key: "agent:main:dispatch" })).toBe(false);
+    expect(validateSessionsDispatchParams({ key: "agent:main:dispatch" })).toBe(true);
+    expect(
+      validateSessionsDispatchParams({ key: "agent:main:dispatch", machineClass: "beast" }),
+    ).toBe(false);
     expect(
       validateSessionsDispatchParams({
         key: "agent:main:dispatch",
@@ -298,6 +301,41 @@ describe("session dispatch protocol schemas", () => {
     }
   });
 
+  it("keeps active device runner availability closed", () => {
+    for (const status of ["available", "offline"] as const) {
+      expect(
+        Value.Check(SessionPlacementSchema, {
+          state: "active",
+          ...basePlacement,
+          ...workerOwnedFields,
+          runner: { kind: "device", status },
+        }),
+      ).toBe(true);
+    }
+    for (const runner of [
+      { kind: "cloud", status: "offline" },
+      { kind: "device", status: "unknown" },
+      { kind: "device", status: "offline", extra: true },
+    ]) {
+      expect(
+        Value.Check(SessionPlacementSchema, {
+          state: "active",
+          ...basePlacement,
+          ...workerOwnedFields,
+          runner,
+        }),
+      ).toBe(false);
+    }
+    expect(
+      Value.Check(SessionPlacementSchema, {
+        state: "draining",
+        ...basePlacement,
+        ...workerOwnedFields,
+        runner: { kind: "device", status: "offline" },
+      }),
+    ).toBe(false);
+  });
+
   it("preserves optional provenance only in terminal states", () => {
     expect(Value.Check(SessionPlacementSchema, { state: "reclaimed", ...basePlacement })).toBe(
       true,
@@ -375,6 +413,30 @@ describe("session dispatch protocol schemas", () => {
         target,
       }),
     ).toBe(true);
+  });
+
+  it("accepts explicit abandonment only for a Gateway target", () => {
+    const request = {
+      key: "agent:main:dispatch",
+      expected: { generation: 4, environmentId: "environment-1", ownerEpoch: 7 },
+      abandonSource: true,
+    };
+    expect(validateSessionsMoveParams({ ...request, target: { kind: "gateway" } })).toBe(true);
+    expect(
+      validateSessionsMoveParams({
+        ...request,
+        target: { kind: "device", deviceId: "device-1" },
+      }),
+    ).toBe(false);
+    expect(
+      validateSessionsMoveParams({
+        ...request,
+        target: { kind: "profile", profileId: "development" },
+      }),
+    ).toBe(false);
+    expect(
+      validateSessionsMoveParams({ ...request, abandonSource: false, target: { kind: "gateway" } }),
+    ).toBe(false);
   });
 
   it("bounds move source and target identifiers", () => {

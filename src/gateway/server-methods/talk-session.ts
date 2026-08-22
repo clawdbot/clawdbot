@@ -14,6 +14,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope.js";
 import { buildAgentMainSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
+import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
@@ -260,6 +261,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           requestedOwner?.agentId ??
           bareTalkAgentId ??
           resolveTalkSessionAgentId(runtimeConfig, requestedSessionKey);
+        assertSecretOwnerAvailable("capability", "talk:realtime");
         const resolution = resolveConfiguredRealtimeVoiceProvider({
           configuredProviderId: realtimeConfig.provider,
           providerConfigs: realtimeConfig.providers,

@@ -146,13 +146,15 @@ current in-memory run state:
 3. If `inFlightRun` is present, adopt its `runId`, buffered `text`, and optional
    `plan`. Adopt the run even when `text` is empty.
 4. Treat `sessionInfo.hasActiveRun` as aggregate direct-session activity.
-   `activeRunIds`, when present, contains known exact active run identities and
-   can be empty while aggregate activity is still true. Omission means the field
-   was not projected and provides no identity information. In incremental merge
-   events, replace the cached list when the field is present; an empty array is
-   the tombstone that clears prior exact identities. Correlate only a run ID the
-   client owns locally or received from a request, history response, or event,
-   and never select the first list entry as an owner.
+   `activeRunIds`, when present, is the complete exact active set; an empty array
+   therefore proves the session is idle. When `hasActiveRun` is true and
+   `activeRunIds` is omitted, another runtime owner is active but its exact run
+   identities are unavailable. In incremental merge events, omission means no
+   change, `null` is the event-only tombstone that clears cached exact IDs to
+   unavailable, and an array replaces the cache (including `[]` for proven
+   idle). Correlate only a run ID the client owns locally or received from a
+   request, history response, or event, and never select the first list entry as
+   an owner.
 5. Show an observer headline or run-inspector link only when the observer digest's
    exact `runId` is present in `activeRunIds`. Aggregate activity alone does not
    make a retained digest current.
@@ -160,6 +162,23 @@ current in-memory run state:
    Maintain the highest accepted sequence independently for each run, ignore an
    already-seen or lower sequence, and treat a forward gap as a reason to reload
    authoritative history.
+
+### Active-run cache matrix
+
+Classify the source before applying `activeRunIds`; the same omission has
+different meaning in a full snapshot and an incremental delta.
+
+| Client cache             | Read path                                                  | Class    | Required behavior                                                                                  |
+| ------------------------ | ---------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
+| Web session roster       | `sessions.list`, reconnect hydration                       | Snapshot | Replace the row; omission clears cached exact IDs to unavailable.                                  |
+| Web selected session     | `chat.history.sessionInfo`                                 | Snapshot | Replace the row projection; omission clears cached exact IDs.                                      |
+| Web session events       | `sessions.changed`, `session.message`, lifecycle snapshots | Delta    | Omission is inert; `null` clears; an array replaces.                                               |
+| Android session roster   | `sessions.list`, reconnect hydration                       | Snapshot | Replace the list rows; omission clears cached exact IDs.                                           |
+| Android selected session | `chat.history.sessionInfo`, reconnect recovery             | Snapshot | Replace `activeRunIds` even while other partial history fields merge.                              |
+| Android session events   | `sessions.changed`, `session.message`, lifecycle snapshots | Delta    | Field presence controls replacement; `null` clears and omission is inert.                          |
+| Apple session roster     | `sessions.list`, reconnect hydration                       | Snapshot | Replace live rows; the offline cache strips transient active-run facts.                            |
+| Apple selected session   | `chat.history.sessionInfo`, reconnect recovery             | Snapshot | Replace both the current row and its run-ID projection; omission clears both.                      |
+| Apple session events     | `sessions.changed`, `session.message`, lifecycle snapshots | Delta    | Preserve field presence through decoding; omission is inert, `null` clears, and an array replaces. |
 
 The outer event frame also has an optional `seq`, which orders events on the
 current WebSocket connection. It resets with a new connection. The `seq` inside

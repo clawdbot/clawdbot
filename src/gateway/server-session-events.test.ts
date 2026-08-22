@@ -421,16 +421,38 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     );
   });
 
-  it("keeps transcript snapshots active while plugin finalization delays the terminal event", async () => {
+  it("carries terminal assistant run ownership while plugin finalization keeps the run active", async () => {
     // before_agent_finalize hooks run after the assistant transcript write but
     // before terminal delivery. The active-run registry remains authoritative
     // during that interval even when the persisted session row says done.
-    await expect(emitAssistantTranscriptUpdate(true)).resolves.toMatchObject({
+    const { broadcastToConnIds, handler } = createHandler(true);
+
+    await handler({
+      sessionFile: "/tmp/sess-main.jsonl",
       sessionKey: "agent:main:main",
-      status: "running",
-      hasActiveRun: true,
-      session: { key: "agent:main:main", status: "running", hasActiveRun: true },
+      runId: "run-before-finalize",
+      message: { role: "assistant", content: [{ type: "text", text: "Final answer" }] },
+      messageId: "message-1",
+      messageSeq: 1,
     });
+
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "session.message",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        runId: "run-before-finalize",
+        messageId: "message-1",
+        messageSeq: 1,
+        status: "running",
+        hasActiveRun: true,
+        session: expect.objectContaining({
+          key: "agent:main:main",
+          status: "running",
+          hasActiveRun: true,
+        }),
+      }),
+      expect.any(Set),
+    );
   });
 
   it("projects queued status into transcript snapshots before execution starts", async () => {
@@ -483,7 +505,13 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     await expect(emitAssistantTranscriptUpdate(false)).resolves.toMatchObject({
       sessionKey: "agent:main:main",
       hasActiveRun: true,
-      session: { key: "agent:main:main", sessionId: "sess-main", hasActiveRun: true },
+      activeRunIds: null,
+      session: {
+        key: "agent:main:main",
+        sessionId: "sess-main",
+        hasActiveRun: true,
+        activeRunIds: null,
+      },
     });
     expect(resolveEmbeddedAgentRunProgressStateMock).toHaveBeenCalledWith("sess-main");
   });

@@ -395,6 +395,7 @@ export async function handleTelegramAction(
     gatewayClientScopes?: readonly string[];
     conversationReadOrigin?: ConversationReadInvocationOrigin;
     requesterAccountId?: string | null;
+    reply?: ChannelMessageActionContext["reply"];
     toolContext?: TelegramMessageMutationContext["toolContext"];
   },
 ): Promise<AgentToolResult<unknown>> {
@@ -637,7 +638,9 @@ export async function handleTelegramAction(
       to,
       accountId: accountId ?? undefined,
       payloads: [payload],
-      replyToId: replyToMessageId == null ? undefined : String(replyToMessageId),
+      ...(options?.reply
+        ? { reply: options.reply }
+        : { replyToId: replyToMessageId == null ? undefined : String(replyToMessageId) }),
       threadId: messageThreadId,
       forceDocument: sendOptions.forceDocument,
       silent: sendOptions.silent,

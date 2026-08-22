@@ -1,5 +1,6 @@
 // Command queue tests cover bounded command execution and queue ordering.
 import { AsyncLocalStorage } from "node:async_hooks";
+import { spawnSync } from "node:child_process";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -224,6 +225,114 @@ describe("command queue", () => {
     await blocker;
     await Promise.all([first, second]);
     expect(calls).toEqual(["first", "second"]);
+  });
+
+  it("preserves priority and FIFO order across partial drains and resumed growth", async () => {
+    const lane = "priority-fifo-resume";
+    const calls: string[] = [];
+    const enqueue = (label: string, priority?: "foreground" | "background") =>
+      enqueueCommandInLane(
+        lane,
+        async () => {
+          calls.push(label);
+        },
+        { priority },
+      );
+
+    setCommandLaneConcurrency(lane, 0);
+    const normal = Array.from({ length: 20 }, (_, index) => enqueue(`normal-${index}`));
+
+    setCommandLaneConcurrency(lane, 5);
+    setCommandLaneConcurrency(lane, 0);
+    await Promise.all(normal.slice(0, 5));
+
+    const resumedNormal = Array.from({ length: 20 }, (_, index) => enqueue(`normal-${index + 20}`));
+    const background = Array.from({ length: 18 }, (_, index) =>
+      enqueue(`background-${index}`, "background"),
+    );
+    const foreground = Array.from({ length: 18 }, (_, index) =>
+      enqueue(`foreground-${index}`, "foreground"),
+    );
+    setCommandLaneConcurrency(lane, 1);
+    await Promise.all([...normal, ...resumedNormal, ...background, ...foreground]);
+
+    expect(calls).toEqual([
+      ...Array.from({ length: 5 }, (_, index) => `normal-${index}`),
+      ...Array.from({ length: 18 }, (_, index) => `foreground-${index}`),
+      ...Array.from({ length: 35 }, (_, index) => `normal-${index + 5}`),
+      ...Array.from({ length: 18 }, (_, index) => `background-${index}`),
+    ]);
+  });
+
+  it("avoids quadratic array work as a paused queue doubles", () => {
+    const script = String.raw`
+      const { enqueueCommandInLane, setCommandLaneConcurrency } = await import(
+        "./src/process/command-queue.ts"
+      );
+      const originalFindIndex = Array.prototype.findIndex;
+      const originalShift = Array.prototype.shift;
+      let enqueueComparisons = 0;
+      let shiftedSlots = 0;
+
+      Array.prototype.findIndex = function (predicate, thisArg) {
+        return originalFindIndex.call(this, (value, index, array) => {
+          enqueueComparisons += 1;
+          return predicate.call(thisArg, value, index, array);
+        });
+      };
+      Array.prototype.shift = function () {
+        shiftedSlots += this.length;
+        return originalShift.call(this);
+      };
+
+      const measureQueueWork = async (count) => {
+        const lane = "linear-queue-" + count;
+        setCommandLaneConcurrency(lane, 0);
+        const comparisonStart = enqueueComparisons;
+        const tasks = Array.from({ length: count }, (_, index) =>
+          enqueueCommandInLane(lane, async () => index),
+        );
+        const enqueueWork = enqueueComparisons - comparisonStart;
+        const shiftedSlotStart = shiftedSlots;
+        setCommandLaneConcurrency(lane, count);
+        const dequeueWork = shiftedSlots - shiftedSlotStart;
+        await Promise.all(tasks);
+        return { enqueueWork, dequeueWork };
+      };
+
+      const smaller = await measureQueueWork(256);
+      const larger = await measureQueueWork(512);
+      process.stdout.write(JSON.stringify({ smaller, larger }));
+    `;
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "--eval", script],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_OPTIONS: undefined,
+          VITEST: undefined,
+          VITEST_POOL_ID: undefined,
+          VITEST_WORKER_ID: undefined,
+        },
+        timeout: 60_000,
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    const measurements = JSON.parse(result.stdout) as {
+      smaller: { enqueueWork: number; dequeueWork: number };
+      larger: { enqueueWork: number; dequeueWork: number };
+    };
+    expect(measurements.larger.enqueueWork).toBeLessThanOrEqual(
+      measurements.smaller.enqueueWork * 3 + 512,
+    );
+    expect(measurements.larger.dequeueWork).toBeLessThanOrEqual(
+      measurements.smaller.dequeueWork * 3 + 512,
+    );
   });
 
   it("reports queueAhead after priority insertion", async () => {
@@ -727,18 +836,25 @@ describe("command queue", () => {
     await expect(second).resolves.toBe("second");
   });
 
-  it("clearCommandLane rejects pending promises", async () => {
+  it("clearCommandLane rejects pending promises at every priority", async () => {
     // First task blocks the lane.
     const { task: first, release } = enqueueBlockedMainTask(async () => "first");
 
-    // Second task is queued behind the first.
-    const second = enqueueCommandInLane(CommandLane.Main, async () => "second");
+    const background = enqueueCommandInLane(CommandLane.Main, async () => "background", {
+      priority: "background",
+    });
+    const normal = enqueueCommandInLane(CommandLane.Main, async () => "normal");
+    const foreground = enqueueCommandInLane(CommandLane.Main, async () => "foreground", {
+      priority: "foreground",
+    });
+    const rejectionChecks = [background, normal, foreground].map((task) =>
+      expect(task).rejects.toBeInstanceOf(CommandLaneClearedError),
+    );
 
     const removed = clearCommandLane();
-    expect(removed).toBe(1); // only the queued (not active) entry
+    expect(removed).toBe(3); // only the queued (not active) entries
 
-    // The queued promise should reject.
-    await expect(second).rejects.toBeInstanceOf(CommandLaneClearedError);
+    await Promise.all(rejectionChecks);
 
     // Let the active task finish normally.
     release();

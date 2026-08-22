@@ -1,5 +1,6 @@
 /** Session identity and context preparation for isolated cron runs. */
 import { isDeepStrictEqual } from "node:util";
+import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../agents/runtime-plugins.js";
@@ -22,7 +23,7 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
 import type { SkillSnapshot } from "../../skills/types.js";
-import { resolveCronJobEffectiveAgentId, tryResolveCronDefaultAgentId } from "../agent-id.js";
+import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import type { CronDeliveryPlan } from "../delivery-plan.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
@@ -96,6 +97,7 @@ export type PreparedCronRunContext = {
   agentCfg: AgentDefaultsConfig;
   agentDir: string;
   agentSessionKey: string;
+  sourceSessionKey?: string;
   runSessionId: string;
   currentRunSessionId: () => string;
   runSessionKey: string;
@@ -148,7 +150,7 @@ export async function prepareCronRunContext(params: {
     normalizedRequested ?? parseAgentSessionKey(input.job.sessionKey ?? input.sessionKey)?.agentId;
   const initialAgentId = resolveCronJobEffectiveAgentId(
     { agentId: requiredAgentId },
-    tryResolveCronDefaultAgentId(requestedRuntimeCfg),
+    tryResolveAmbientOwnerAgentId(requestedRuntimeCfg),
   );
   const modelOwner = await resolveCronModelSelectionOwner({
     cfg: requestedRuntimeCfg,
@@ -681,6 +683,7 @@ export async function prepareCronRunContext(params: {
         agentCfg,
         agentDir,
         agentSessionKey,
+        sourceSessionKey,
         runSessionId,
         currentRunSessionId,
         runSessionKey,

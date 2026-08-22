@@ -1,3 +1,4 @@
+import { supportsWorkerExecutionContextLaunch } from "./admission.js";
 import {
   isCurrentActiveWorkerEnvironment,
   isUnavailableEnvironment,
@@ -134,6 +135,36 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
         continue;
       }
       if (placement.state === "local" || placement.state === "reclaimed") {
+        continue;
+      }
+      if (placement.state === "provisioning") {
+        const environment = placement.environmentId
+          ? environments.get(placement.environmentId)
+          : undefined;
+        const exactEnvironment =
+          environment?.environmentId === placement.environmentId ? environment : undefined;
+        if (
+          exactEnvironment &&
+          exactEnvironment.destroyRequestedAtMs === null &&
+          (exactEnvironment.state === "requested" ||
+            exactEnvironment.state === "provisioning" ||
+            exactEnvironment.state === "bootstrapping" ||
+            ((exactEnvironment.state === "ready" || exactEnvironment.state === "idle") &&
+              supportsWorkerExecutionContextLaunch(exactEnvironment.bootstrapReceipt)))
+        ) {
+          // Transient provider or node-enrollment failure retains its exact durable operation.
+          continue;
+        }
+        await failure.teardownEnvironment({
+          placement,
+          environmentId: exactEnvironment?.environmentId ?? null,
+          ownerEpoch: exactEnvironment?.ownerEpoch ?? null,
+          primaryError: new Error(
+            exactEnvironment
+              ? `Provisioning worker environment cannot be recovered from ${exactEnvironment.state}`
+              : "Provisioning worker environment record is missing",
+          ),
+        });
         continue;
       }
       if (placement.state === "active") {

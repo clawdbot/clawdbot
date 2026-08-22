@@ -19,15 +19,17 @@ export function createConfiguredSkillWorkshopTool(params: {
   const messageId = normalizeOptionalString(
     params.messageId === undefined ? undefined : String(params.messageId),
   );
+  const revision = params.run?.proposalRevision;
+  const agentId = revision?.agentId ?? params.agentId;
   return createSkillWorkshopTool({
-    workspaceDir: getCanonicalSkillWorkspace() ?? params.workspaceDir,
+    workspaceDir: revision?.workspaceDir ?? getCanonicalSkillWorkspace() ?? params.workspaceDir,
     config: params.config,
     env: params.run?.env,
-    agentId: params.agentId,
+    agentId,
     origin:
       params.run?.origin ??
       ({
-        agentId: params.agentId,
+        agentId,
         ...(sessionKey ? { sessionKey } : {}),
         ...(runId ? { runId } : {}),
         ...(messageId ? { messageId } : {}),
@@ -41,5 +43,6 @@ export function createConfiguredSkillWorkshopTool(params: {
     proposalReviewCompletion: params.run?.proposalReviewCompletion,
     collectionReconcile: params.run?.collectionReconcile,
     modelContextWindowTokens: params.modelContextWindowTokens,
+    proposalRevision: params.run?.proposalRevision,
   });
 }

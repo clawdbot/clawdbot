@@ -82,6 +82,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       catalog,
       agentWorkspace,
       workspaceGit,
+      sidebarLayout,
     );
     const chat = renderChat({
       ...chatProps,
@@ -102,6 +103,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const desktopRefreshOnPresentation = !this.pendingPanelToggleRequests.has("desktop");
     const panelDefinitions = sidebarPanelDefinitions({
       state,
+      themeMode: this.context.theme.resolvedMode,
       agentId: currentAgentId,
       browserPresented,
       desktopPresented,
@@ -155,7 +157,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         forgetDiscussionUrl: () => this.sessionDiscussionOpenUrls.delete(state.sessionKey.trim()),
         resizePanel: (columnId, size) =>
           this.commitSidebarPanelResize(sidebarLayout, columnId, size),
-        setPanelOpen: (open) => this.setChatSidePanelOpen(open),
+        setPanelOpen: (open) => this.setChatSidePanelOpen(open, sidebarLayout),
       }),
       layout: sidebarLayout,
       panelDefinitions,

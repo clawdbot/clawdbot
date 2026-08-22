@@ -102,11 +102,14 @@ import {
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import {
   coerceTransportToolCallArguments,
+  copyProviderAcceptanceObserver,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
   failTransportStream,
+  finalizeTerminalToolCallArguments,
   finalizeTransportStream,
   mergeTransportHeaders,
+  notifyProviderHttpResponse,
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
   transportAbortError,
@@ -143,7 +146,10 @@ type AnthropicMessagesClient = {
     stream(
       params: Record<string, unknown>,
       options?: { signal?: AbortSignal },
-    ): AsyncIterable<Record<string, unknown>>;
+    ): Promise<{
+      response: Response;
+      stream: AsyncIterable<Record<string, unknown>> | Iterable<Record<string, unknown>>;
+    }>;
   };
 };
 
@@ -741,7 +747,7 @@ function createAnthropicMessagesClient(params: {
   const url = resolveAnthropicMessagesUrl(params.baseURL);
   return {
     messages: {
-      async *stream(body: Record<string, unknown>, options?: { signal?: AbortSignal }) {
+      async stream(body: Record<string, unknown>, options?: { signal?: AbortSignal }) {
         const headers = mergeTransportHeaders(
           {
             "content-type": "application/json",
@@ -757,14 +763,10 @@ function createAnthropicMessagesClient(params: {
           body: JSON.stringify(body),
           signal: options?.signal,
         });
-        if (!response.ok) {
-          const detail = await readAnthropicMessagesErrorBodySnippet(response);
-          throw new Error(formatAnthropicMessagesHttpError(response, detail));
-        }
-        if (!response.body) {
-          return;
-        }
-        yield* parseAnthropicSseBody(response.body, options?.signal);
+        return {
+          response,
+          stream: response.body ? parseAnthropicSseBody(response.body, options?.signal) : [],
+        };
       },
     },
   };
@@ -1084,7 +1086,7 @@ function resolveAnthropicTransportOptions(
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
   const reasoning =
     options?.reasoning === "off" && mandatoryAdaptiveThinking ? "low" : options?.reasoning;
-  const resolved: AnthropicTransportOptions = {
+  const resolved: AnthropicTransportOptions = copyProviderAcceptanceObserver(options, {
     temperature: options?.temperature,
     stop: options?.stop,
     maxTokens: baseMaxTokens,
@@ -1094,6 +1096,7 @@ function resolveAnthropicTransportOptions(
     sessionId: options?.sessionId,
     headers: options?.headers,
     onPayload: options?.onPayload,
+    onResponse: options?.onResponse,
     maxRetryDelayMs: options?.maxRetryDelayMs,
     metadata: options?.metadata,
     interleavedThinking: options?.interleavedThinking,
@@ -1102,7 +1105,7 @@ function resolveAnthropicTransportOptions(
     reasoning,
     ...(options?.anthropicServerCompaction === true ? { anthropicServerCompaction: true } : {}),
     ...(options?.authProfileId ? { authProfileId: options.authProfileId } : {}),
-  };
+  });
   if (reasoning === "off") {
     resolved.thinkingEnabled = false;
     return resolved;
@@ -1191,12 +1194,21 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           params = nextParams as Record<string, unknown>;
         }
         applyClaudeRequestContract(params, model);
-        const anthropicStream = client.messages.stream(
+        const { response, stream: anthropicStream } = await client.messages.stream(
           { ...params, stream: true },
           transportOptions.signal ? { signal: transportOptions.signal } : undefined,
         );
+        await notifyProviderHttpResponse({ options: transportOptions, response, model });
+        if (!response.ok) {
+          const detail = await readAnthropicMessagesErrorBodySnippet(response);
+          throw new Error(formatAnthropicMessagesHttpError(response, detail));
+        }
         const blocks = output.content;
         const blockIndexes = new Map<number, number>();
+        const sealedToolCalls: Array<{
+          block: Extract<TransportContentBlock, { type: "toolCall" }>;
+          contentIndex: number;
+        }> = [];
         const compactionCapture = createCompactionCapture(output, model, transportOptions);
         // Signature deltas are opaque and only complete at content_block_stop.
         // Keep partial bytes out of output so interrupted streams cannot poison replay.
@@ -1369,6 +1381,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               // events reference them, so rebuild the deferred timeline from
               // the surviving text prefix the fallback model continued from.
               refusalBuffer?.discard();
+              sealedToolCalls.length = 0;
               pendingTextEnds.length = 0;
               blockIndexes.clear();
               pendingThinkingSignatures.clear();
@@ -1679,13 +1692,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               continue;
             }
             if (block.type === "toolCall") {
-              delete block.partialJson;
-              eventSink.push({
-                type: "toolcall_end",
-                contentIndex: index,
-                toolCall: block,
-                partial: output,
-              });
+              sealedToolCalls.push({ block, contentIndex: index });
               finishReasoningContentSidecars(event.index);
             }
             continue;
@@ -1727,6 +1734,23 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         if (output.stopReason === "aborted" || output.stopReason === "error") {
           throw new Error(output.errorMessage ?? "An unknown error occurred");
         }
+        if ([...blockIndexes.values()].some((index) => blocks[index]?.type === "toolCall")) {
+          throw new Error("Provider completed stream with an incomplete tool call");
+        }
+        finalizeTerminalToolCallArguments(
+          sealedToolCalls.map(({ block }) => block),
+          (block) =>
+            block.partialJson && block.partialJson.length > 0 ? block.partialJson : block.arguments,
+        );
+        for (const sealed of sealedToolCalls) {
+          delete sealed.block.partialJson;
+          eventSink.push({
+            type: "toolcall_end",
+            contentIndex: sealed.contentIndex,
+            toolCall: sealed.block,
+            partial: output,
+          });
+        }
         refusalBuffer?.flush();
         // Backstop: streaming tags commentary at the tool-boundary above, but
         // replay/non-streaming assembly may reach here with tool calls untagged.
@@ -1745,6 +1769,8 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         if (refusalBuffer) {
           refusalBuffer.discard();
           output.content = [];
+        } else {
+          output.content = output.content.filter((block) => block.type !== "toolCall");
         }
         if (usedCompactionReplay && isAnthropicReplayRejection(error)) {
           suppressAnthropicCompaction(output, model, options);

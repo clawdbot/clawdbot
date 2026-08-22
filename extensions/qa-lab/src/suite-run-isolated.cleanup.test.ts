@@ -97,7 +97,44 @@ describe("isolated QA suite transport cleanup", () => {
     mocks.disposeRegisteredAgentHarnesses.mockResolvedValue(undefined);
   });
 
-  it("retains passing artifacts and finishes owned cleanup before reporting teardown failure", async () => {
+  it("records a rejected dispatched worker and leaves the fail-fast tail unstarted", async () => {
+    const lab = createCleanupTestLab();
+    const context = createCleanupTestContext();
+    context.selectedScenarios.push(makeQaSuiteTestScenario("never-started"));
+    const runChild = vi
+      .fn<QaSuiteRunner>()
+      .mockRejectedValueOnce(new Error("isolated worker gateway failed"));
+
+    const result = await runQaFlowSuiteIsolated(
+      { failFast: true, lab, startLab: async () => lab },
+      context,
+      runChild,
+    );
+
+    expect(runChild).toHaveBeenCalledOnce();
+    expect(result.startedScenarioIds).toEqual(["leased-channel-scenario"]);
+    expect(result.scenarios).toEqual([
+      expect.objectContaining({
+        name: "leased-channel-scenario",
+        status: "fail",
+        details: "isolated worker gateway failed",
+      }),
+    ]);
+    expect(lab.setScenarioRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: "completed",
+        scenarios: [
+          expect.objectContaining({ id: "leased-channel-scenario", status: "fail" }),
+          expect.objectContaining({ id: "never-started", status: "pending" }),
+        ],
+      }),
+    );
+    expect(mocks.writeQaSuiteArtifacts).toHaveBeenLastCalledWith(
+      expect.objectContaining({ scenarios: result.scenarios }),
+    );
+  });
+
+  it("leaves only running progress when parent cleanup fails after worker completion", async () => {
     const lab = createCleanupTestLab();
     const release = vi.fn(async () => {});
     const factory: QaTransportAdapterFactory = {
@@ -158,14 +195,22 @@ describe("isolated QA suite transport cleanup", () => {
     expect(lab.setLatestReport).toHaveBeenCalledWith(
       expect.objectContaining({ outputPath: "/qa-output/qa-suite-report.md" }),
     );
+    expect(mocks.writeQaSuiteArtifacts).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ status: "running" }),
+    );
+    expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledTimes(1);
+    expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "running", writeEvidenceFile: false }),
+    );
+    expect(lab.setScenarioRun).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: "completed" }),
+    );
     expect((thrown as Error).message.split("\n")[0]).toBe(
       "QA scenarios passed, but cleanup failed",
     );
     expect((thrown as Error).message).toContain(
       "failed cleanup phases: agent harnesses: agent harness disposal failed",
-    );
-    expect((thrown as Error).message).toContain(
-      "retained artifacts: output=/qa-output report=/qa-output/qa-suite-report.md summary=/qa-output/qa-suite-summary.json",
     );
     expect((thrown as Error).cause).toBe(cleanupError);
     expect(stderrWrite.mock.calls.flat().join("")).not.toContain("run complete");

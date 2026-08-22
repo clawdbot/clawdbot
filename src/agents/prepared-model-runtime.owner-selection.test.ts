@@ -13,6 +13,7 @@ import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   acquireAgentRunPreparedModelRuntime,
+  acquireReadOnlyPreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
   loadPublishedGatewayReplyDispatchRuntime,
   loadPreparedModelRuntimeSnapshot,
@@ -154,6 +155,25 @@ describe("prepared model runtime owner selection", () => {
     ).rejects.toThrow("prepared model runtime owner was not published");
   });
 
+  it("keeps a caller-pinned agent dir for isolated read-only leases on an active gateway", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = {};
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+
+    // Run-provenance leases rebind a pinned agentDir to the committed configured
+    // owner; isolated read-only leases keep the pinned dir so synthetic probe
+    // credentials stay resolvable from that generation's auth store.
+    const lease = await acquireReadOnlyPreparedModelRuntime({
+      agentId: "default",
+      config,
+      agentDir: "/tmp/isolated-probe-agent",
+      inheritedAuthDir: "/tmp/unused-agent",
+      workspaceDir: "/tmp/isolated-probe-workspace",
+    });
+    expect(lease.snapshot.agentDir).toBe("/tmp/isolated-probe-agent");
+    lease.release();
+  });
+
   it("publishes provider selections kept on the core runtime by request parameters", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = {
@@ -224,6 +244,61 @@ describe("prepared model runtime owner selection", () => {
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledOnce();
     expect(mocks.discoverModels).toHaveBeenCalledOnce();
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+  });
+
+  it("sequences pending owners by their explicit plugin generation", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = {};
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    const generationA = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))
+      ?.pluginGeneration;
+    expect(generationA).toBeDefined();
+    const generationB = {
+      ...generationA!,
+      pluginMetadataSnapshot: { ...generationA!.pluginMetadataSnapshot },
+    };
+    let finishGenerationA!: () => void;
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(
+      async () =>
+        await new Promise<{ agentDir: string; wrote: false }>((resolve) => {
+          finishGenerationA = () =>
+            resolve({ agentDir: "/tmp/dynamic-generation-agent", wrote: false });
+        }),
+    );
+    const input = {
+      config,
+      agentId: "default",
+      agentDir: "/tmp/dynamic-generation-agent",
+      workspaceDir: "/tmp/dynamic-generation-workspace",
+    };
+
+    const pendingA = acquireAgentRunPreparedModelRuntime(input, {
+      pluginGeneration: generationA!,
+    });
+    await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
+    const matchingPendingA = acquireAgentRunPreparedModelRuntime(input, {
+      pluginGeneration: generationA!,
+    });
+    const pendingB = acquireAgentRunPreparedModelRuntime(input, {
+      pluginGeneration: generationB,
+    });
+    await Promise.resolve();
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
+    finishGenerationA();
+    const [leaseA, matchingLeaseA, leaseB] = await Promise.all([
+      pendingA,
+      matchingPendingA,
+      pendingB,
+    ]);
+
+    expect(matchingLeaseA.snapshot).toBe(leaseA.snapshot);
+    expect(leaseB.snapshot).not.toBe(leaseA.snapshot);
+    expect(leaseA.snapshot.metadataSnapshot).toBe(generationA!.pluginMetadataSnapshot);
+    expect(leaseB.snapshot.metadataSnapshot).toBe(generationB.pluginMetadataSnapshot);
+    leaseA.release();
+    matchingLeaseA.release();
+    await expect(prepareModelRuntimeSnapshot(input)).resolves.toBe(leaseB.snapshot);
+    leaseB.release();
   });
 
   it("bounds retained gateway run owners while reusing recent selections", async () => {

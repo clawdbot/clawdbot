@@ -8,7 +8,7 @@ import { getActiveBuzzBus } from "./gateway.js";
 import { connectAuthenticatedBuzzRelaySession, parseBuzzAuthTag } from "./relay-auth.js";
 import { queryBuzzRoomMemberships } from "./room-membership-query.js";
 import { parseBuzzTarget } from "./target.js";
-import { decodeBuzzPrivateKey, resolveBuzzAccount } from "./types.js";
+import { assertBuzzAccountAvailable, decodeBuzzPrivateKey, resolveBuzzAccount } from "./types.js";
 
 const DIRECTORY_LIVE_TIMEOUT_MS = 10_000;
 
@@ -24,6 +24,7 @@ function createConfiguredDirectoryState(params: DirectoryConfigParams): {
   state: BuzzDirectoryState;
 } | null {
   const account = resolveBuzzAccount({ cfg: params.cfg, accountId: params.accountId });
+  assertBuzzAccountAvailable(account);
   if (!account.publicKey) {
     return null;
   }
