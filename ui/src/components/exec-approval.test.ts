@@ -157,19 +157,20 @@ describe("openclaw-exec-approval", () => {
     vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const { approval } = await renderOpenedApproval(createExecRequest({ expiresAtMs: 90_500 }));
     const { dialog } = await getRenderedModalDialog(container);
+    const countdown = container.querySelector<LitElement>(".exec-approval-countdown");
+    if (!countdown) {
+      throw new Error("Expected approval countdown");
+    }
+    await countdown.updateComplete;
 
-    expect(container.querySelector(".exec-approval-countdown")?.textContent?.trim()).toBe(
-      "expires in 01:31",
-    );
+    expect(countdown.textContent?.trim()).toBe("expires in 01:31");
     expect(dialog.getAttribute("aria-description")).toBe("expires in 01:31");
 
     const renderSpy = vi.spyOn(approval as LitElement & { render(): unknown }, "render");
     nowMs = 1_000;
     await vi.waitFor(
       () => {
-        expect(container.querySelector(".exec-approval-countdown")?.textContent?.trim()).toBe(
-          "expires in 01:30",
-        );
+        expect(countdown.textContent?.trim()).toBe("expires in 01:30");
       },
       { timeout: 2_000 },
     );
