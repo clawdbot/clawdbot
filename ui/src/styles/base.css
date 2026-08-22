@@ -398,7 +398,8 @@
     corner-shape: superellipse(1.5);
   }
 
-  .code-block-wrapper.code-block-wrapper {
+  .code-block-wrapper.code-block-wrapper,
+  .chat-assistant-attachment-card.chat-assistant-attachment-card {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }

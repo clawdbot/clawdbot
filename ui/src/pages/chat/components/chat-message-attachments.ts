@@ -3,7 +3,7 @@ import { t } from "../../../i18n/index.ts";
 import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
-import { attachmentCardGroup, renderAttachmentCardHeader } from "./chat-attachment-card.ts";
+import { renderAttachmentCardHeader } from "./chat-attachment-card.ts";
 import {
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES,
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS,
@@ -38,6 +38,7 @@ import {
   type ChatMediaResource,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
+import type { SidebarContent } from "./chat-sidebar.ts";
 
 function retainManagedAttachmentUntilExpiry(
   resource: ChatMediaResource<ManagedAttachmentAvailability>,
@@ -316,22 +317,19 @@ function resolveManagedAttachmentAvailability(
   return current ?? { status: "checking" };
 }
 
-function renderAttachmentGroupHeading(group: "archive" | "audio" | "video") {
-  const label =
-    group === "audio"
-      ? t("chat.attachments.audio")
-      : group === "video"
-        ? t("chat.attachments.video")
-        : t("chat.attachments.archive");
-  return html`<div class="chat-assistant-attachments__heading">${label}</div>`;
-}
-
 function renderAttachmentTablePreview(previewText: string | null | undefined) {
+  if (previewText === undefined) {
+    return html`<div class="chat-assistant-attachment-card__preview-unavailable">
+      ${t("chat.mediaPlayer.preparing")}
+    </div>`;
+  }
   const rows = previewText ? parseDelimitedPreview(previewText) : [];
-  const columnCount = Math.max(3, ...rows.map((row) => row.length));
-  const displayRows = rows.length
-    ? rows
-    : Array.from({ length: 4 }, () => Array.from({ length: columnCount }, () => ""));
+  if (rows.length === 0) {
+    return html`<div class="chat-assistant-attachment-card__preview-unavailable">
+      ${t("chat.attachments.previewUnavailable")}
+    </div>`;
+  }
+  const columnCount = Math.max(...rows.map((row) => row.length));
   return html`
     <div class="chat-assistant-attachment-card__table-wrap">
       <table class="chat-assistant-attachment-card__table">
@@ -343,7 +341,7 @@ function renderAttachmentTablePreview(previewText: string | null | undefined) {
           </tr>
         </thead>
         <tbody>
-          ${displayRows.slice(rows.length ? 1 : 0).map(
+          ${rows.slice(1).map(
             (row) => html`<tr>
               ${Array.from({ length: columnCount }, (_, index) => html`<td>${row[index] ?? ""}</td>`)}
             </tr>`,
@@ -394,6 +392,7 @@ export function renderAssistantAttachments(
   attachments: AttachmentItem[],
   options: ImageRenderOptions,
   onAssistantAttachmentLoaded?: () => void,
+  onOpenSidebar?: (content: SidebarContent) => void,
 ) {
   if (attachments.length === 0) {
     return nothing;
@@ -407,36 +406,6 @@ export function renderAssistantAttachments(
     onOpenImage,
     resolveArtifactDownload,
   } = options;
-  const groupOrder = ["image", "document", "audio", "video", "archive"] as const;
-  const groupedAttachments = new Map<(typeof groupOrder)[number], AttachmentItem[]>();
-  for (const item of attachments) {
-    const group = attachmentCardGroup(
-      item.attachment.kind,
-      item.attachment.label,
-      item.attachment.mimeType,
-    );
-    const groupItems = groupedAttachments.get(group);
-    if (groupItems) {
-      groupItems.push(item);
-    } else {
-      groupedAttachments.set(group, [item]);
-    }
-  }
-  const showGroupHeadings = groupedAttachments.size > 1;
-  const entries: Array<{ attachment?: AttachmentItem; heading?: "archive" | "audio" | "video" }> = [];
-  for (const group of groupOrder) {
-    const groupItems = groupedAttachments.get(group);
-    if (!groupItems) {
-      continue;
-    }
-    if (showGroupHeadings && group !== "image" && group !== "document") {
-      entries.push({ heading: group });
-    }
-    for (const item of groupItems) {
-      entries.push({ attachment: item });
-    }
-  }
-
   const renderAttachment = ({ attachment }: AttachmentItem) => {
     const assistantAvailability = resolveAssistantAttachmentAvailability(
       attachment.url,
@@ -497,6 +466,15 @@ export function renderAssistantAttachments(
               onRequestUpdate,
             )
         : undefined;
+    const openAttachmentSidebar = attachmentUrl
+      ? () =>
+          onOpenSidebar?.({
+            kind: "attachment",
+            title: attachment.label,
+            src: attachmentUrl,
+            mimeType: attachment.mimeType,
+          })
+      : undefined;
     if (attachment.kind === "image") {
       if (!attachmentUrl) {
         return renderAssistantAttachmentStatusCard({
@@ -553,6 +531,7 @@ export function renderAssistantAttachments(
           .sizeBytes=${sizeBytes}
           .serverDurationMs=${serverDurationMs}
           .voiceNote=${attachment.isVoiceNote === true}
+          .onExpand=${openAttachmentSidebar}
           .onMediaLoaded=${onAssistantAttachmentLoaded}
         ></openclaw-chat-audio-player>
       `;
@@ -585,6 +564,7 @@ export function renderAssistantAttachments(
           .mediaHeight=${assistantAvailability.status === "available"
             ? (assistantAvailability.height ?? attachment.height)
             : attachment.height}
+          .onExpand=${openAttachmentSidebar}
           .onMediaLoaded=${onAssistantAttachmentLoaded}
         ></openclaw-chat-video-player>
       `;
@@ -621,8 +601,9 @@ export function renderAssistantAttachments(
           mimeType: attachment.mimeType,
           sizeBytes,
           downloadHref,
-          showDownloadLabel: previewKind === null,
-          showExpandAction: previewKind !== null,
+          showDownloadLabel: true,
+          showExpandAction: true,
+          onExpand: openAttachmentSidebar,
           compact: previewKind === null,
         })}
         ${previewKind
@@ -634,11 +615,7 @@ export function renderAssistantAttachments(
 
   return html`
     <div class="chat-assistant-attachments">
-      ${entries.map((entry) =>
-        entry.heading
-          ? renderAttachmentGroupHeading(entry.heading)
-          : renderAttachment(entry.attachment!),
-      )}
+      ${attachments.map(renderAttachment)}
     </div>
   `;
 }

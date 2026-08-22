@@ -27,6 +27,7 @@ export type AttachmentCardHeaderOptions = {
   downloadHref?: string;
   showDownloadLabel?: boolean;
   showExpandAction?: boolean;
+  onExpand?: () => void;
   compact?: boolean;
   voiceNote?: boolean;
 };
@@ -111,20 +112,6 @@ function attachmentFormatLabel(
   return "FILE";
 }
 
-export function attachmentCardGroup(
-  kind: AttachmentCardKind,
-  label: string,
-  mimeType: string | undefined,
-): "archive" | "audio" | "document" | "image" | "video" {
-  if (kind === "image") {
-    return "image";
-  }
-  if (kind === "audio" || kind === "video") {
-    return kind;
-  }
-  return attachmentVisualType(label, mimeType) === "archive" ? "archive" : "document";
-}
-
 function attachmentTypeLabel(
   kind: AttachmentCardKind,
   label: string,
@@ -159,9 +146,10 @@ function attachmentIcon(
     case "code":
       return icons.fileCode;
     case "pdf":
-    case "spreadsheet":
     case "text":
       return icons.fileText;
+    case "spreadsheet":
+      return icons.layoutGrid;
     default:
       return icons.file;
   }
@@ -245,8 +233,6 @@ export function renderAttachmentCardHeader(
                 : ""}"
               href=${options.downloadHref}
               download=${options.label}
-              target="_blank"
-              rel="noreferrer"
               aria-label=${downloadTitle}
               title=${downloadTitle}
               >${icons.download}${options.showDownloadLabel
@@ -254,15 +240,14 @@ export function renderAttachmentCardHeader(
                 : null}</a
             >`
           : null}
-        ${options.showExpandAction && options.downloadHref
-          ? html`<a
+        ${options.showExpandAction && options.onExpand
+          ? html`<button
+              type="button"
               class="chat-assistant-attachment-card__download chat-assistant-attachment-card__expand"
-              href=${options.downloadHref}
-              target="_blank"
-              rel="noreferrer"
               aria-label=${t("chat.attachments.expand", { filename: options.label })}
               title=${t("chat.attachments.expand", { filename: options.label })}
-              >${icons.maximize}</a
+              @click=${options.onExpand}
+              >${icons.maximize}</button
             >`
           : null}
       </span>

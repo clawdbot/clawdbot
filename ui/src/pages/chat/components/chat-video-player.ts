@@ -20,6 +20,7 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
   @property({ type: Number }) sizeBytes: number | undefined;
   @property({ type: Number }) mediaWidth: number | undefined;
   @property({ type: Number }) mediaHeight: number | undefined;
+  @property({ attribute: false }) onExpand: (() => void) | undefined;
   @property({ attribute: false }) onMediaLoaded: (() => void) | undefined;
 
   @state() private metadataLoaded = false;
@@ -107,7 +108,9 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
           mimeType: this.mimeType,
           sizeBytes: this.sizeBytes,
           downloadHref,
+          showDownloadLabel: true,
           showExpandAction: true,
+          onExpand: this.onExpand,
         })}
         ${preparing
           ? html`<div class="chat-assistant-attachment-card__reason chat-media-preparing">

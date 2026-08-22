@@ -92,6 +92,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   @property({ type: Number }) sizeBytes: number | undefined;
   @property({ type: Number }) serverDurationMs: number | undefined;
   @property({ type: Boolean }) voiceNote = false;
+  @property({ attribute: false }) onExpand: (() => void) | undefined;
   @property({ attribute: false }) onMediaLoaded: (() => void) | undefined;
 
   @state() private currentTime = 0;
@@ -465,7 +466,9 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
           mimeType: this.mimeType,
           sizeBytes: this.sizeBytes,
           downloadHref,
+          showDownloadLabel: true,
           showExpandAction: true,
+          onExpand: this.onExpand,
           voiceNote: this.voiceNote,
         })}
         ${failed
@@ -494,8 +497,11 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
                 <div class="chat-audio-player__timeline">
                   ${this.renderSeek(progress)}
                   <div class="chat-audio-player__time" aria-live="off">
-                    <span>${formatChatMediaTime(this.currentTime)}</span>
-                    <span>${formatChatMediaTime(this.duration)}</span>
+                    <span
+                      >${formatChatMediaTime(this.currentTime)} / ${formatChatMediaTime(
+                        this.duration,
+                      )}</span
+                    >
                   </div>
                 </div>
                 <label class="chat-audio-player__volume">

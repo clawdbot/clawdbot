@@ -42,6 +42,13 @@ type ImageSidebarContent = {
   rawText?: string | null;
 };
 
+type AttachmentSidebarContent = {
+  kind: "attachment";
+  title: string;
+  src: string;
+  mimeType?: string | null;
+};
+
 type SessionDiffSidebarContent = {
   kind: "session-diff";
   /** Fetches a fresh sessions.diff snapshot; the panel refetches on refresh. */
@@ -81,6 +88,7 @@ export type SidebarContent =
   | MarkdownSidebarContent
   | CanvasSidebarContent
   | ImageSidebarContent
+  | AttachmentSidebarContent
   | FileSidebarContent
   | SessionDiffSidebarContent
   | { kind: "task"; taskId: string };

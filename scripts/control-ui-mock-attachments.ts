@@ -221,13 +221,28 @@ function managedImageUrl(fileName: string): string {
 }
 
 export function buildChatAttachmentHistory(baseTime: number): unknown[] {
+  const documentAttachment = (fileName: string, mimeType: string) => ({
+    type: "attachment",
+    attachment: {
+      kind: "document",
+      label: fileName,
+      mimeType,
+      url: fixtureUrl(fileName),
+      sizeBytes: chatAttachmentAssets[fileName].body.byteLength,
+    },
+  });
+  const sectionTitle = (text: string, timestamp: number) => ({
+    role: "assistant",
+    content: [{ type: "text", text }],
+    timestamp,
+  });
   return [
     {
       role: "assistant",
       content: [
         {
           type: "text",
-          text: "Attachment fixture: image actions, media players, and type-aware file cards.",
+          text: "Images",
         },
         { type: "image", url: managedImageUrl("sample-image.svg"), alt: "Attachment preview" },
         {
@@ -235,19 +250,48 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
           url: managedImageUrl("sample-image-secondary.svg"),
           alt: "Secondary attachment preview",
         },
-        {
-          type: "attachment",
-          attachment: {
-            kind: "video",
-            label: "sample-video.mp4",
-            mimeType: "video/mp4",
-            url: fixtureUrl("sample-video.mp4"),
-            sizeBytes: chatAttachmentAssets["sample-video.mp4"].body.byteLength,
-            durationMs: 1_500,
-            width: 640,
-            height: 360,
-          },
-        },
+      ],
+      timestamp: baseTime,
+    },
+    sectionTitle("Documents", baseTime + 1),
+    {
+      role: "assistant",
+      content: [
+        documentAttachment("notes.md", "text/markdown"),
+        documentAttachment("notes.txt", "text/plain"),
+        documentAttachment("styles.css", "text/css"),
+        documentAttachment("settings.json", "application/json"),
+        documentAttachment("script.js", "text/javascript"),
+        documentAttachment("brief.pdf", "application/pdf"),
+        documentAttachment(
+          "brief.docx",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+      ],
+      timestamp: baseTime + 2,
+    },
+    sectionTitle("HTML", baseTime + 3),
+    {
+      role: "assistant",
+      content: [documentAttachment("preview.html", "text/html")],
+      timestamp: baseTime + 4,
+    },
+    sectionTitle("CSV / XLSX", baseTime + 5),
+    {
+      role: "assistant",
+      content: [
+        documentAttachment("rows.csv", "text/csv"),
+        documentAttachment(
+          "report.xlsx",
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
+      ],
+      timestamp: baseTime + 6,
+    },
+    sectionTitle("Audio", baseTime + 7),
+    {
+      role: "assistant",
+      content: [
         {
           type: "attachment",
           attachment: {
@@ -270,32 +314,39 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
             durationMs: 2_000,
           },
         },
-        ...[
-          ["brief.pdf", "application/pdf"],
-          ["brief.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
-          ["preview.html", "text/html"],
-          ["notes.md", "text/markdown"],
-          ["notes.txt", "text/plain"],
-          ["styles.css", "text/css"],
-          ["settings.json", "application/json"],
-          ["config.xml", "application/xml"],
-          ["deploy.yaml", "application/yaml"],
-          ["rows.csv", "text/csv"],
-          ["report.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
-          ["worker.py", "text/x-python"],
-          ["readme.rtf", "application/rtf"],
-          ["bundle.zip", "application/zip"],
-          ["script.js", "text/javascript"],
-        ].map(([fileName, mimeType]) => ({
+      ],
+      timestamp: baseTime + 8,
+    },
+    sectionTitle("Video", baseTime + 9),
+    {
+      role: "assistant",
+      content: [
+        {
           type: "attachment",
           attachment: {
-            kind: "document",
-            label: fileName,
-            mimeType,
-            url: fixtureUrl(fileName),
-            sizeBytes: chatAttachmentAssets[fileName].body.byteLength,
+            kind: "video",
+            label: "sample-video.mp4",
+            mimeType: "video/mp4",
+            url: fixtureUrl("sample-video.mp4"),
+            sizeBytes: chatAttachmentAssets["sample-video.mp4"].body.byteLength,
+            durationMs: 1_500,
+            width: 640,
+            height: 360,
           },
-        })),
+        },
+      ],
+      timestamp: baseTime + 10,
+    },
+    sectionTitle("Archive", baseTime + 11),
+    {
+      role: "assistant",
+      content: [documentAttachment("bundle.zip", "application/zip")],
+      timestamp: baseTime + 12,
+    },
+    sectionTitle("Unavailable example", baseTime + 13),
+    {
+      role: "assistant",
+      content: [
         {
           type: "attachment",
           attachment: {
@@ -306,7 +357,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
           },
         },
       ],
-      timestamp: baseTime,
+      timestamp: baseTime + 14,
     },
   ];
 }

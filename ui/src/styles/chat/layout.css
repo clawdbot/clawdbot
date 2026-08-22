@@ -1436,16 +1436,13 @@ openclaw-chat-page {
   margin: 12px 0 8px;
 }
 
-.chat-assistant-attachments img.chat-message-image {
-  display: block;
+.chat-group.assistant .chat-bubble:has(.chat-assistant-attachments),
+.chat-group.assistant .chat-text:has(.chat-assistant-attachments) {
+  width: 100%;
 }
 
-.chat-assistant-attachments__heading {
-  margin: 2px 2px -4px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+.chat-assistant-attachments img.chat-message-image {
+  display: block;
 }
 
 openclaw-chat-audio-player,
@@ -1458,10 +1455,10 @@ openclaw-chat-video-player {
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
-  border: 0;
-  border-radius: var(--radius-lg);
-  corner-shape: superellipse(1.5);
-  background: var(--bg-muted);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
+  border-radius: var(--radius-md);
+  background: transparent;
 }
 
 .chat-assistant-attachment-card--audio,
@@ -1471,7 +1468,7 @@ openclaw-chat-video-player {
   flex-direction: column;
   align-items: stretch;
   gap: 0;
-  padding: 0 14px 14px;
+  padding: 0;
 }
 
 .chat-assistant-attachment-card--compact,
@@ -1495,9 +1492,8 @@ openclaw-chat-video-player {
 .chat-assistant-attachment-card--audio .chat-assistant-attachment-card__header,
 .chat-assistant-attachment-card--video .chat-assistant-attachment-card__header,
 .chat-assistant-attachment-card--preview .chat-assistant-attachment-card__header {
-  padding: 12px 0 10px;
-  margin-bottom: 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  padding: 10px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
 }
 
 .chat-assistant-attachment-card__identity {
@@ -1550,24 +1546,28 @@ openclaw-chat-video-player {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   flex: none;
   gap: 5px;
   padding: 0;
-  border-radius: 999px;
-  color: var(--muted);
-  border: 1px solid transparent;
+  border: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  text-decoration: none;
+  cursor: var(--cursor-action);
   transition:
     color 120ms ease,
-    background 120ms ease,
     border-color 120ms ease;
 }
 
 .chat-assistant-attachment-card__download:hover {
   color: var(--text);
-  border-color: var(--border);
-  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  border-color: color-mix(in srgb, var(--text) 38%, transparent);
+  background: transparent;
+  text-decoration: none;
 }
 
 .chat-assistant-attachment-card__download:focus-visible {
@@ -1583,24 +1583,17 @@ openclaw-chat-video-player {
 .chat-assistant-attachment-card__download--labeled {
   width: auto;
   padding: 0 10px;
-  border-color: color-mix(in srgb, var(--border) 82%, transparent);
-  border-radius: var(--radius-sm);
-  corner-shape: superellipse(1.5);
   color: var(--text);
   font-size: 12px;
   font-weight: 600;
 }
 
-.chat-assistant-attachment-card__download--labeled:hover {
-  background: color-mix(in srgb, var(--bg) 70%, transparent);
-}
-
 .chat-audio-player {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
-  padding: 4px 0 0;
+  padding: 12px;
 }
 
 .chat-audio-player:focus-visible {
@@ -1612,23 +1605,23 @@ openclaw-chat-video-player {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
-  height: 44px;
+  width: 32px;
+  height: 32px;
   flex: none;
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
   border-radius: 999px;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, var(--card));
+  color: var(--text);
+  background: transparent;
   cursor: var(--cursor-action);
   transition:
-    transform 120ms ease,
-    background 120ms ease;
+    color 120ms ease,
+    border-color 120ms ease;
 }
 
 .chat-audio-player__toggle:hover {
-  transform: scale(1.04);
-  background: color-mix(in srgb, var(--accent) 18%, var(--card));
+  border-color: color-mix(in srgb, var(--text) 38%, transparent);
+  background: transparent;
 }
 
 .chat-audio-player__toggle:focus-visible {
@@ -1690,18 +1683,18 @@ openclaw-chat-video-player {
 
 .chat-audio-player__waveform {
   position: relative;
-  height: 30px;
+  height: 22px;
 }
 
 .chat-audio-player__waveform svg {
   display: block;
   width: 100%;
-  height: 30px;
+  height: 22px;
   overflow: visible;
 }
 
 .chat-audio-player__waveform rect {
-  fill: color-mix(in srgb, var(--muted) 55%, transparent);
+  fill: color-mix(in srgb, var(--muted) 62%, transparent);
 }
 
 .chat-audio-player__waveform rect.is-played {
@@ -1711,7 +1704,7 @@ openclaw-chat-video-player {
 .chat-audio-player__seek--waveform {
   position: absolute;
   inset: 0;
-  height: 30px;
+  height: 22px;
   opacity: 0;
 }
 
@@ -1723,9 +1716,8 @@ openclaw-chat-video-player {
 
 .chat-audio-player__time {
   display: flex;
-  justify-content: space-between;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
@@ -1750,10 +1742,29 @@ openclaw-chat-video-player {
 }
 
 .chat-audio-player__volume input {
-  width: 58px;
-  height: 4px;
+  width: 44px;
+  height: 3px;
   margin: 0;
-  accent-color: var(--accent);
+  appearance: none;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 42%, transparent);
+}
+
+.chat-audio-player__volume input::-webkit-slider-thumb {
+  width: 8px;
+  height: 8px;
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  background: var(--muted);
+}
+
+.chat-audio-player__volume input::-moz-range-thumb {
+  width: 8px;
+  height: 8px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--muted);
 }
 
 .chat-audio-player__media {
@@ -1765,11 +1776,10 @@ openclaw-chat-video-player {
   display: grid;
   place-items: center;
   width: 100%;
-  min-height: 180px;
+  min-height: 0;
   overflow: hidden;
-  border-radius: var(--radius-md);
-  corner-shape: superellipse(1.5);
-  background: color-mix(in srgb, var(--bg) 74%, var(--text));
+  border-radius: 0;
+  background: var(--bg);
 }
 
 .chat-assistant-video-frame[hidden] {
@@ -1780,14 +1790,14 @@ openclaw-chat-video-player {
   position: relative;
   z-index: 1;
   display: block;
-  width: min(100%, 640px);
-  max-width: 640px;
+  width: 100%;
+  max-width: 100%;
   max-height: none;
-  margin: 0 auto;
+  margin: 0;
   aspect-ratio: 16 / 9;
   object-fit: contain;
   opacity: 1;
-  background: color-mix(in srgb, var(--bg) 92%, var(--text));
+  background: var(--bg);
 }
 
 .chat-assistant-video-frame__placeholder {
@@ -1798,9 +1808,7 @@ openclaw-chat-video-player {
   color: color-mix(in srgb, var(--muted) 55%, transparent);
   z-index: 2;
   pointer-events: none;
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--card) 78%, transparent), transparent),
-    color-mix(in srgb, var(--bg) 84%, var(--card));
+  background: var(--bg);
 }
 
 .chat-assistant-video-frame__placeholder svg {
@@ -1903,9 +1911,9 @@ openclaw-chat-video-player {
   align-items: center;
   justify-content: center;
   gap: 2px;
+  border: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
   border-radius: var(--radius-md);
-  corner-shape: superellipse(1.5);
-  background: color-mix(in srgb, var(--muted) 12%, var(--bg));
+  background: transparent;
 }
 
 .chat-assistant-attachment-card__icon-glyph {
@@ -1925,19 +1933,19 @@ openclaw-chat-video-player {
 }
 
 .chat-assistant-attachment-card__icon--pdf {
-  color: #ef4444;
+  color: var(--danger);
 }
 
 .chat-assistant-attachment-card__icon--code {
-  color: #60a5fa;
+  color: var(--info);
 }
 
 .chat-assistant-attachment-card__icon--archive {
-  color: #f59e0b;
+  color: var(--accent-2);
 }
 
 .chat-assistant-attachment-card__icon--spreadsheet {
-  color: #22c55e;
+  color: var(--ok);
 }
 
 .chat-assistant-attachment-card__icon--text {
@@ -1945,11 +1953,11 @@ openclaw-chat-video-player {
 }
 
 .chat-assistant-attachment-card__icon--audio {
-  color: #c084fc;
+  color: var(--muted);
 }
 
 .chat-assistant-attachment-card__icon--video {
-  color: #f87171;
+  color: var(--muted);
 }
 
 .chat-assistant-attachment-badge {
@@ -1970,9 +1978,8 @@ openclaw-chat-video-player {
   position: relative;
   min-height: 224px;
   overflow: hidden;
-  border-radius: var(--radius-md);
-  corner-shape: superellipse(1.5);
-  background: #fff;
+  border-radius: 0;
+  background: var(--media-foreground);
 }
 
 .chat-assistant-attachment-card__html-preview iframe {
@@ -1980,7 +1987,7 @@ openclaw-chat-video-player {
   width: 100%;
   height: 224px;
   border: 0;
-  background: #fff;
+  background: var(--media-foreground);
 }
 
 .chat-assistant-attachment-card__preview-fade {
@@ -1990,15 +1997,13 @@ openclaw-chat-video-player {
   left: 0;
   height: 52px;
   pointer-events: none;
-  background: linear-gradient(to bottom, transparent, #fff);
+  background: linear-gradient(to bottom, transparent, var(--media-foreground));
 }
 
 .chat-assistant-attachment-card__table-wrap {
   width: 100%;
-  min-height: 170px;
   overflow-x: auto;
-  border-radius: var(--radius-md);
-  corner-shape: superellipse(1.5);
+  border-radius: 0;
 }
 
 .chat-assistant-attachment-card__table {
@@ -2013,8 +2018,8 @@ openclaw-chat-video-player {
 .chat-assistant-attachment-card__table th,
 .chat-assistant-attachment-card__table td {
   padding: 9px 12px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
-  border-right: 1px solid color-mix(in srgb, var(--border) 54%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
+  border-right: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
   white-space: nowrap;
 }
 
@@ -2029,13 +2034,25 @@ openclaw-chat-video-player {
   font-weight: 600;
 }
 
+.chat-assistant-attachment-card__table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.chat-assistant-attachment-card__preview-unavailable {
+  display: grid;
+  min-height: 84px;
+  place-items: center;
+  padding: 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .chat-assistant-attachment-card__page-preview {
   width: 100%;
   min-height: 260px;
   overflow: hidden;
-  border-radius: var(--radius-md);
-  corner-shape: superellipse(1.5);
-  background: #fff;
+  border-radius: 0;
+  background: var(--media-foreground);
 }
 
 .chat-assistant-attachment-card__page-preview iframe {
@@ -2043,7 +2060,7 @@ openclaw-chat-video-player {
   width: 100%;
   height: 280px;
   border: 0;
-  background: #fff;
+  background: var(--media-foreground);
 }
 
 .chat-assistant-attachment-card__page-sheet {
