@@ -127,9 +127,12 @@ baseline lane that reproduces the defect is a successful capture. A PR-level
 pass claim requires an observed, material baseline/candidate difference caused
 by the changed behavior. That difference may be trusted Bot API payload/status
 facts even when pixels are identical; screenshots remain comparison context.
-Provider request facts are trusted, tamper-protected comparison evidence recorded
-outside the candidate runtime. Identical pixels alone do not force `block` when
-the trusted recorded facts differ materially. If neither pixels nor trusted facts
+Provider request facts are tamper-evident comparison evidence: the provider
+sidecar records them outside the candidate runtime, so candidate code cannot
+alter or remove a recorded request after the fact. Requests still originate
+inside the SUT, so the facts prove what the candidate runtime sent — the
+behavior under proof — not who sent it. Identical pixels alone do not force `block`
+when the recorded facts differ materially. If neither pixels nor recorded facts
 prove a difference, use `block`. When the expected result is silence, focus the
 session-owned user message that triggered the silent outcome.
 Decide before finalizing each lane. If its setup did not exercise the intended

@@ -760,9 +760,12 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("`requests`");
     expect(prompt).toContain("`finish [--focus-message-id ID]`");
     expect(prompt).toContain("Identical pixels alone do not force `block`");
-    expect(prompt).toContain(
-      "Provider request facts are trusted, tamper-protected comparison evidence",
-    );
+    // Precise trust claim: the sidecar makes facts tamper-evident (candidate
+    // cannot rewrite records), but requests originate inside the untrusted SUT,
+    // so the prompt must not present them as provenance-authenticated.
+    expect(prompt).toContain("Provider request facts are tamper-evident comparison evidence");
+    expect(prompt).toContain("not who sent it");
+    expect(prompt).not.toContain("trusted, tamper-protected");
     expect(prompt).not.toContain("Provider request logs are diagnostic and pacing signals");
     expect(prompt).toContain("mantis-recipes/");
     expect(prompt).toContain("recipe-suggestion.md");
