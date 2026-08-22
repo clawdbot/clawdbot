@@ -18,6 +18,7 @@ const NETWORK_TOOL_ERROR_MAX_CHARS = 4_000;
 const protectedNetworkToolErrors = new WeakSet<object>();
 const protectedNetworkToolTimeoutErrors = new WeakSet<object>();
 const trustedToolInputErrors = new WeakSet<object>();
+const trustedToolNoStartErrors = new WeakSet<object>();
 
 function readToolErrorField(error: object, key: string): unknown {
   try {
@@ -151,6 +152,18 @@ export function isTrustedToolExecutionPreflightError(error: unknown): boolean {
 /** Records canonical host-created input failures without loading heavyweight tool implementations. */
 export function registerTrustedToolInputError(error: object): void {
   trustedToolInputErrors.add(error);
+}
+
+/** Authenticate a wrapper-owned failure that settled before tool implementation start. */
+export function registerTrustedToolNoStartError(error: unknown): void {
+  if (typeof error === "object" && error !== null) {
+    trustedToolNoStartErrors.add(error);
+  }
+}
+
+/** Consume one private no-start fact at the next authoritative lifecycle boundary. */
+export function consumeTrustedToolNoStartError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && trustedToolNoStartErrors.delete(error);
 }
 
 /** Format a redacted tool error without allowing hostile getters to escape observability. */

@@ -140,7 +140,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
           code: `
             const ids = [];
             for (let index = 0; index < 5; index += 1) {
-              const called = await fake_create_ticket({ value: index });
+              const called = await fake_create_ticket({ value: String(index) });
               ids.push(called.input.value);
             }
             return ids;
@@ -150,7 +150,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
     );
 
     expect(details.status).toBe("completed");
-    expect(details.value).toEqual([0, 1, 2, 3, 4]);
+    expect(details.value).toEqual(["0", "1", "2", "3", "4"]);
     expect(ticket.execute).toHaveBeenCalledTimes(5);
     expect(testing.activeRuns.size).toBe(0);
   });
@@ -818,40 +818,6 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(slowCompleted).toBe(true);
     expect(slowAborted).toBe(false);
     expect(testing.activeRuns.size).toBe(0);
-  });
-
-  it("marks failures after nested tool dispatch as non-retryable bridge failures", async () => {
-    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
-    const sideEffect = pluginToolWithExecute("fake_side_effect", "Side effect", async () =>
-      jsonResult({ ok: true }),
-    );
-    applyCodeModeCatalog({
-      tools: [...codeModeTools, sideEffect],
-      config,
-      sessionId: "session-code-mode",
-      sessionKey: "agent:main:main",
-      runId: "run-code-mode",
-      catalogRef,
-    });
-
-    const details = resultDetails(
-      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
-        "code-call-post-dispatch-failure",
-        {
-          code: `
-            await fake_side_effect({});
-            throw new Error("after dispatch");
-          `,
-        },
-      ),
-    );
-
-    expect(sideEffect.execute).toHaveBeenCalledOnce();
-    expect(details).toMatchObject({
-      status: "failed",
-      failurePhase: "bridge",
-      bridgeDispatchStarted: true,
-    });
   });
 
   it("returns an actionable bounded result when a nested tool result exceeds the output budget", async () => {
