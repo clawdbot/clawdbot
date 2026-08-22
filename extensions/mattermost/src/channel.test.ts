@@ -1231,6 +1231,25 @@ describe("mattermostPlugin", () => {
       expect(result?.details).toStrictEqual({});
     });
 
+    it("normalizes a raw emoji glyph through the react action boundary", async () => {
+      const result = await runReactAction({ messageId: "POST1", emoji: "👍" }, "add");
+
+      expect(result?.content).toEqual([{ type: "text", text: "Reacted with :thumbsup: on POST1" }]);
+      expect(result?.details).toStrictEqual({});
+    });
+
+    it("normalizes a raw emoji glyph when removing a reaction", async () => {
+      const result = await runReactAction(
+        { messageId: "POST1", emoji: "👍", remove: true },
+        "remove",
+      );
+
+      expect(result?.content).toEqual([
+        { type: "text", text: "Removed reaction :thumbsup: from POST1" },
+      ]);
+      expect(result?.details).toStrictEqual({});
+    });
+
     it("maps replyTo to replyToId for send actions", async () => {
       const cfg = createMattermostTestConfig();
 
