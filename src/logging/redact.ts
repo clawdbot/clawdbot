@@ -42,7 +42,6 @@ const shellReferencePreservingPatterns = new WeakSet<RegExp>();
 // against the full string; chunking can invent a `^` boundary or split the secret itself.
 const chunkUnsafePatterns = new WeakSet<RegExp>();
 const formAwareEqualsAssignmentPatterns = new WeakSet<RegExp>();
-const toolPayloadRedactPatternSet = new Set<RedactPattern>(TOOL_PAYLOAD_REDACT_PATTERNS);
 let defaultResolvedPatterns: RegExp[] | undefined;
 let toolPayloadResolvedPatterns: RegExp[] | undefined;
 
@@ -136,6 +135,7 @@ const DEFAULT_REDACT_PREFILTER_RE = new RegExp(
 type RedactOptions = {
   mode?: RedactSensitiveMode;
   patterns?: readonly RedactPattern[];
+  sensitiveFieldPatterns?: readonly RedactPattern[];
 };
 
 type ResolvedRedactOptions = {
@@ -931,12 +931,15 @@ function resolveModelVisibleToolPayloadRedaction(
   loggingConfig: LoggingConfig | undefined = readLoggingConfig(),
 ): RedactOptions {
   const userPatterns = loggingConfig?.redactPatterns;
+  const hasUserPatterns = userPatterns && userPatterns.length > 0;
   return {
     mode: "tools",
-    patterns:
-      userPatterns && userPatterns.length > 0
-        ? [...userPatterns, ...TOOL_PAYLOAD_REDACT_PATTERNS]
-        : TOOL_PAYLOAD_REDACT_PATTERNS,
+    patterns: hasUserPatterns
+      ? [...userPatterns, ...TOOL_PAYLOAD_REDACT_PATTERNS]
+      : TOOL_PAYLOAD_REDACT_PATTERNS,
+    sensitiveFieldPatterns: hasUserPatterns
+      ? [...userPatterns, ...DEFAULT_REDACT_PATTERNS]
+      : DEFAULT_REDACT_PATTERNS,
   };
 }
 
@@ -1003,19 +1006,9 @@ function redactSensitiveFieldValueWithOptions(
 ): string {
   const exactRedacted = redactRegisteredSecretValues(value, maskToken);
   const sensitiveKey = isSensitiveFieldKey(key);
-  const hasToolPayloadPatterns = TOOL_PAYLOAD_REDACT_PATTERNS.every((pattern) =>
-    options.patterns?.includes(pattern),
-  );
   const fieldOptions =
-    sensitiveKey && hasToolPayloadPatterns
-      ? {
-          ...options,
-          patterns: [
-            ...(options.patterns?.filter((pattern) => !toolPayloadRedactPatternSet.has(pattern)) ??
-              []),
-            ...DEFAULT_REDACT_PATTERNS,
-          ],
-        }
+    sensitiveKey && options.sensitiveFieldPatterns
+      ? { ...options, patterns: options.sensitiveFieldPatterns }
       : options;
   const resolved = resolveRedactOptions(fieldOptions);
   if (resolved.mode === "off") {
@@ -1178,8 +1171,7 @@ function redactStructuredSecretValue(
   return value;
 }
 
-export function redactSecrets<T>(value: T): T {
-  const options = resolveToolPayloadRedaction();
+function redactSecretsWithOptions<T>(value: T, options: RedactOptions): T {
   if (typeof value === "string") {
     return redactSensitiveText(value, options) as T;
   }
@@ -1190,6 +1182,14 @@ export function redactSecrets<T>(value: T): T {
     return value;
   }
   return redactStructuredSecretValue("", value, new WeakSet<object>(), options) as T;
+}
+
+export function redactSecrets<T>(value: T): T {
+  return redactSecretsWithOptions(value, resolveToolPayloadRedaction());
+}
+
+export function redactModelVisibleSecrets<T>(value: T): T {
+  return redactSecretsWithOptions(value, resolveModelVisibleToolPayloadRedaction());
 }
 
 export function getDefaultRedactPatterns(): string[] {

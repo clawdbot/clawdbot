@@ -398,6 +398,24 @@ describe("sanitizeToolResult", () => {
     expect(sanitizeToolResult(source)).toBe(source);
   });
 
+  it("preserves source assignments in structured results while redacting credential fields", () => {
+    const source = "if let token = timeObserverToken {";
+    const credential = "sk-1234567890abcdefXYZ";
+    const sanitized = sanitizeToolResult({
+      content: [{ type: "text", text: source }],
+      detail: source,
+      token: credential,
+    }) as {
+      content: Array<{ text: string }>;
+      detail: string;
+      token: string;
+    };
+
+    expect(sanitized.content[0]?.text).toBe(source);
+    expect(sanitized.detail).toBe(source);
+    expect(sanitized.token).not.toContain(credential);
+  });
+
   it("preserves top-level arrays while redacting nested strings", () => {
     const sanitized = sanitizeToolResult([
       { output: "Authorization: Bearer abcdef0123456789QWERTY=" },
