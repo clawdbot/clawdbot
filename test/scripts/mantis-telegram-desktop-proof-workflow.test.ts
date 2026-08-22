@@ -694,7 +694,6 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const setup = workflowStep("Setup Node environment");
     const restore = workflowStep("Restore exact baseline build");
     const baseline = workflowStep("Prepare baseline proof build");
-    const save = workflowStep("Save exact baseline build");
     const candidate = workflowStep("Prepare candidate proof build");
     const createRun = create.run ?? "";
     const baselineRun = baseline.run ?? "";
@@ -703,8 +702,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
 
     expect(stepIndex(create.name ?? "")).toBeLessThan(stepIndex(restore.name ?? ""));
     expect(stepIndex(restore.name ?? "")).toBeLessThan(stepIndex(baseline.name ?? ""));
-    expect(stepIndex(baseline.name ?? "")).toBeLessThan(stepIndex(save.name ?? ""));
-    expect(stepIndex(save.name ?? "")).toBeLessThan(stepIndex(candidate.name ?? ""));
+    expect(stepIndex(baseline.name ?? "")).toBeLessThan(stepIndex(candidate.name ?? ""));
     expect(stepIndex(candidate.name ?? "")).toBeLessThan(
       stepIndex("Install TDLib and restore Telegram QA user"),
     );
@@ -715,9 +713,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(createRun).toContain('git worktree add --detach "$baseline_root" "$BASELINE_SHA"');
     expect(createRun).toContain('git worktree add --detach "$candidate_root" "$CANDIDATE_SHA"');
     expect(restore.uses).toContain("actions/cache/restore@");
-    expect(setup.with?.["cache-mode"]).toBe("read-write");
-    expect(save.if).toContain("github.ref == 'refs/heads/main'");
-    expect(save.if).toContain("steps.setup-node-env.outputs.cache-mode == 'read-write'");
+    expect(setup.with?.["cache-mode"]).toBe("restore");
+    expect(steps.some((step) => step.name === "Save exact baseline build")).toBe(false);
     expect(restore.with?.key).toContain("needs.resolve_request.outputs.baseline_revision");
     expect(restore.with?.key).toContain("steps.proof_worktrees.outputs.lockfile_sha256");
     expect(restore.with?.key).toContain("steps.proof_worktrees.outputs.node_version");
@@ -733,9 +730,6 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(baselineRun).toContain(".artifacts/build-all-cache");
     expect(baselineRun).toContain("for phase in tsdown-ai tsdown-packages tsdown-unified");
     expect(baselineRun).toContain("-type f -links +1");
-    expect(save.if).toContain("steps.baseline_build_cache.outputs.cache-hit != 'true'");
-    expect(save.uses).toContain("actions/cache/save@");
-    expect(save.with?.path).toBe(restore.with?.path);
     expect(candidate.if).toBeUndefined();
     expect(candidateRun).toContain('sudo chown -R mantis-builder:mantis-builder "$candidate_root"');
     expect(candidateRun).toContain(

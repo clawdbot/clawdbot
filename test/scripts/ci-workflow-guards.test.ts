@@ -3645,17 +3645,12 @@ NODE
         caller.mode === "read-write" ||
         (typeof caller.mode === "string" && caller.mode.includes("'read-write'")),
     );
-    expect(writeAuthorizedCallers).toHaveLength(4);
+    expect(writeAuthorizedCallers).toHaveLength(3);
     expect(writeAuthorizedCallers).toEqual(
       expect.arrayContaining([
         {
           file: ".github/workflows/ci-build-artifacts-testbox.yml",
           mode: expect.stringContaining("'read-write'"),
-          step: expect.objectContaining({ name: "Setup Node environment" }),
-        },
-        {
-          file: ".github/workflows/mantis-telegram-desktop-proof.yml",
-          mode: "read-write",
           step: expect.objectContaining({ name: "Setup Node environment" }),
         },
         {
