@@ -1,5 +1,4 @@
 // Control UI modal presents approvals after an explicit operator action.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
@@ -9,6 +8,7 @@ import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import {
   approvalRemainingLabel,
   approvalTitle,
+  compactApprovalCommand,
   renderExecApprovalCard,
   resolveApprovalDecisions,
 } from "./exec-approval-card.ts";
@@ -23,11 +23,6 @@ type ExecApprovalProps = {
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
 };
 
-function compactCommand(command: string): string {
-  const singleLine = command.replace(/\s+/g, " ").trim();
-  return singleLine.length > 64 ? `${truncateUtf16Safe(singleLine, 61)}…` : singleLine;
-}
-
 function renderApprovalQueueList(params: {
   queue: readonly ExecApprovalRequest[];
   activeId: string;
@@ -41,7 +36,7 @@ function renderApprovalQueueList(params: {
     <div class="exec-approval-list" aria-label=${t("execApproval.otherPending")}>
       <div class="exec-approval-list__heading">${t("execApproval.otherPending")}</div>
       ${others.map((entry) => {
-        const command = compactCommand(entry.request.command);
+        const command = compactApprovalCommand(entry.request.command);
         const agent = entry.request.agentId?.trim() || "—";
         return html`
           <button

@@ -39,6 +39,9 @@ export type SidebarAttentionItem = {
   icon: IconName;
   label: string;
   action: SidebarAttentionAction;
+  /** Pending approvals stay attached to their canonical overlay queue so the
+   * Inbox panel can render the real decision/details surface inline. */
+  approvalQueue?: readonly ExecApprovalRequest[];
   // Sorted identities of the entities behind the chip. A dismissal stores
   // this signature so the chip stays hidden only while the same incident set
   // is affected; any change (new job/provider, new overdue run) resurfaces
@@ -135,32 +138,29 @@ export function buildSidebarAttentionItems(params: {
         count: String(count),
       }),
       action: { kind: "openApprovals" },
+      approvalQueue: params.approvalQueue,
       signature: signatureOf(params.approvalQueue.map((approval) => approval.id)),
     });
   }
 
   const failedCron = params.cronJobs.filter(isCronJobActiveFailure);
-  if (failedCron.length > 0) {
-    const facts = failedCron.map((job) => {
-      const errorText = [job.state?.lastError, job.state?.lastErrorReason]
-        .map((value) => value?.trim())
-        .find((value): value is string => Boolean(value));
-      return `${cronJobName(job)}: ${clampText(
-        errorText ?? t("attention.cronErrorUnknown"),
-        CRON_ERROR_MAX_LENGTH,
-      )}`;
-    });
-    const signature = signatureOf(failedCron.map((job) => job.id));
-    const label = t("attention.cronFailed", { count: String(failedCron.length) });
+  for (const job of failedCron) {
+    const jobName = cronJobName(job);
+    const errorText = [job.state?.lastError, job.state?.lastErrorReason]
+      .map((value) => value?.trim())
+      .find((value): value is string => Boolean(value));
+    const fact = `${jobName}: ${clampText(
+      errorText ?? t("attention.cronErrorUnknown"),
+      CRON_ERROR_MAX_LENGTH,
+    )}`;
+    const label = t("attention.cronFailed", { job: jobName });
     items.push(
       explainedItem(
-        { kind: "cronFailed", severity: "error", icon: "clock", label, signature },
+        { kind: "cronFailed", severity: "error", icon: "clock", label, signature: job.id },
         {
           title: label,
-          facts,
-          question: boundedQuestion(
-            t("attention.alerts.cronFailedQuestion", { facts: facts.join("\n") }),
-          ),
+          facts: [fact],
+          question: boundedQuestion(t("attention.alerts.cronFailedQuestion", { facts: fact })),
           action: { label: t("tabs.cron"), target: { kind: "navigate", routeId: "cron" } },
         },
       ),
@@ -173,25 +173,22 @@ export function buildSidebarAttentionItems(params: {
       job.state?.nextRunAtMs != null &&
       params.now - job.state.nextRunAtMs > CRON_OVERDUE_GRACE_MS,
   );
-  if (overdueCron.length > 0) {
-    const facts = overdueCron.map((job) =>
-      t("attention.alerts.cronOverdueFact", {
-        job: cronJobName(job),
-        duration: formatDurationHuman(params.now - (job.state?.nextRunAtMs ?? params.now)),
-      }),
-    );
+  for (const job of overdueCron) {
+    const jobName = cronJobName(job);
+    const fact = t("attention.alerts.cronOverdueFact", {
+      job: jobName,
+      duration: formatDurationHuman(params.now - (job.state?.nextRunAtMs ?? params.now)),
+    });
     // The planned run changes after recovery, so a later overdue episode resurfaces.
-    const signature = signatureOf(overdueCron.map((job) => `${job.id}@${job.state?.nextRunAtMs}`));
-    const label = t("attention.cronOverdue", { count: String(overdueCron.length) });
+    const signature = `${job.id}@${job.state?.nextRunAtMs}`;
+    const label = t("attention.cronOverdue", { job: jobName });
     items.push(
       explainedItem(
         { kind: "cronOverdue", severity: "warning", icon: "clock", label, signature },
         {
           title: label,
-          facts,
-          question: boundedQuestion(
-            t("attention.alerts.cronOverdueQuestion", { facts: facts.join("\n") }),
-          ),
+          facts: [fact],
+          question: boundedQuestion(t("attention.alerts.cronOverdueQuestion", { facts: fact })),
           action: { label: t("tabs.cron"), target: { kind: "navigate", routeId: "cron" } },
         },
       ),

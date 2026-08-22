@@ -140,11 +140,20 @@ describe("cron attention details", () => {
     };
     const unknown = cronJob("unknown-id");
 
-    const failed = cronItems([primary, reason, unknown]).find((item) => item.kind === "cronFailed");
-
-    expect(itemFacts(failed)).toBe(
-      "Nightly backup: disk full\nreason-id: timeout\nunknown-id: Unknown error",
+    const failed = cronItems([primary, reason, unknown]).filter(
+      (item) => item.kind === "cronFailed",
     );
+
+    expect(failed.map((item) => item.label)).toEqual([
+      "Nightly backup failed",
+      "reason-id failed",
+      "unknown-id failed",
+    ]);
+    expect(failed.map(itemFacts)).toEqual([
+      "Nightly backup: disk full",
+      "reason-id: timeout",
+      "unknown-id: Unknown error",
+    ]);
   });
 
   it("caps failure errors at 200 characters with an ellipsis", () => {
@@ -166,11 +175,15 @@ describe("cron attention details", () => {
     unnamed.name = "";
     unnamed.state = { lastRunStatus: "ok", nextRunAtMs: 2 };
 
-    const overdue = cronItems([named, unnamed], 300_003).find(
+    const overdue = cronItems([named, unnamed], 300_003).filter(
       (item) => item.kind === "cronOverdue",
     );
 
-    expect(itemFacts(overdue)).toBe("Nightly backup: 5m late\nunnamed-id: 5m late");
+    expect(overdue.map((item) => item.label)).toEqual([
+      "Nightly backup overdue",
+      "unnamed-id overdue",
+    ]);
+    expect(overdue.map(itemFacts)).toEqual(["Nightly backup: 5m late", "unnamed-id: 5m late"]);
   });
 
   it("does not flag an actively running job as overdue", () => {
@@ -210,20 +223,20 @@ describe("cron attention details", () => {
     }
   });
 
-  it("hard-caps the model question for a large incident set", () => {
+  it("keeps each failed job as its own bounded incident", () => {
     const jobs = Array.from({ length: 100 }, (_, index) => {
       const job = cronJob(`failed-${index}`);
       job.name = `Automation ${index} ${"n".repeat(40)}`;
       job.state = { lastRunStatus: "error", lastError: "e".repeat(200) };
       return job;
     });
-    const action = cronItems(jobs).find((item) => item.kind === "cronFailed")?.action;
-    if (action?.kind !== "askCustodian") {
-      throw new Error("expected failed cron custodian action");
-    }
-
-    expect(action.alert.question).toHaveLength(1_000);
-    expect(action.alert.question.endsWith("…")).toBe(true);
+    const failed = cronItems(jobs).filter((item) => item.kind === "cronFailed");
+    expect(failed).toHaveLength(100);
+    expect(
+      failed.every(
+        (item) => item.action.kind === "askCustodian" && item.action.alert.question.length <= 1_000,
+      ),
+    ).toBe(true);
   });
 });
 
@@ -251,7 +264,7 @@ describe("pending approval attention", () => {
 
     expect(first.signature).toBe("exec:a\nexec:b");
     expect(changed.signature).toBe("exec:a\nexec:b\nexec:c");
-    expect(pruneDismissals({ pendingApproval: first.signature }, [changed])).toEqual({});
+    expect(pruneDismissals({ pendingApproval: [first.signature] }, [changed])).toEqual({});
   });
 });
 
@@ -450,7 +463,7 @@ describe("sidebar attention refresh ownership", () => {
     vi.stubGlobal("localStorage", storage);
     localStorage.setItem(
       dismissalStoreKey(gateway.connection.gatewayUrl),
-      JSON.stringify({ cronFailed: "current" }),
+      JSON.stringify({ cronFailed: ["current"] }),
     );
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     let now = 120_000;
@@ -647,10 +660,10 @@ describe("sidebar attention refresh ownership", () => {
     const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
     provider.append(element);
     document.body.append(provider);
-    await waitForFast(() => expect(element.textContent).toContain("1 automation(s) failed"));
+    await waitForFast(() => expect(element.textContent).toContain("failed failed"));
 
     eventListener?.({ type: "event", event: "cron", payload: {} });
-    await waitForFast(() => expect(element.textContent).not.toContain("automation(s) failed"));
+    await waitForFast(() => expect(element.textContent).not.toContain("failed failed"));
   });
 
   it("renders icon-only accessible alerts and reports summary changes", async () => {
@@ -737,21 +750,23 @@ describe("pruneDismissals", () => {
   const chip = (kind: SidebarAttentionKind, signature: string) => ({ kind, signature });
 
   it("keeps a dismissal while the same entity set is still affected", () => {
-    const dismissals = { cronFailed: "alpha\nbeta" };
-    expect(pruneDismissals(dismissals, [chip("cronFailed", "alpha\nbeta")])).toBe(dismissals);
+    const dismissals = { cronFailed: ["alpha", "beta"] };
+    expect(
+      pruneDismissals(dismissals, [chip("cronFailed", "alpha"), chip("cronFailed", "beta")]),
+    ).toBe(dismissals);
   });
 
   it("drops a dismissal when the affected set changes so the chip resurfaces", () => {
     expect(
-      pruneDismissals({ cronFailed: "alpha", modelAuthExpired: "openai" }, [
-        chip("cronFailed", "alpha\nbeta"),
+      pruneDismissals({ cronFailed: ["alpha"], modelAuthExpired: ["openai"] }, [
+        chip("cronFailed", "beta"),
         chip("modelAuthExpired", "openai"),
       ]),
-    ).toEqual({ modelAuthExpired: "openai" });
+    ).toEqual({ modelAuthExpired: ["openai"] });
   });
 
   it("drops a dismissal once the underlying state clears", () => {
-    expect(pruneDismissals({ cronFailed: "alpha" }, [])).toEqual({});
+    expect(pruneDismissals({ cronFailed: ["alpha"] }, [])).toEqual({});
   });
 });
 
@@ -778,11 +793,11 @@ describe("addDismissal", () => {
     vi.stubGlobal("localStorage", createStorageMock());
     const key = dismissalStoreKey("ws://gateway.test");
     // Another tab dismissed a cron chip after this tab last loaded.
-    localStorage.setItem(key, JSON.stringify({ cronFailed: "alpha" }));
+    localStorage.setItem(key, JSON.stringify({ cronFailed: ["alpha"] }));
 
-    const next = addDismissal("ws://gateway.test", "modelAuthExpired", "openai");
+    const next = addDismissal("ws://gateway.test", "cronFailed", "beta");
 
-    const expected = { cronFailed: "alpha", modelAuthExpired: "openai" };
+    const expected = { cronFailed: ["alpha", "beta"] };
     expect(next).toEqual(expected);
     expect(JSON.parse(localStorage.getItem(key) ?? "null")).toEqual(expected);
   });

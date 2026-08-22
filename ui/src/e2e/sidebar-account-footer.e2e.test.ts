@@ -34,10 +34,10 @@ async function assertSingleAccountTarget(page: Page, sidebar: Locator) {
   const parts = [
     identity.locator("openclaw-viewer-avatar"),
     identity.locator(".sidebar-identity-card__name"),
-    identity.locator(".sidebar-identity-card__more"),
   ];
   expect(await identity.locator("button").count()).toBe(0);
-  expect(await identity.locator(".sidebar-identity-card__more svg").count()).toBe(1);
+  expect(await identity.locator(".sidebar-identity-card__more").count()).toBe(0);
+  expect(await sidebar.getByRole("button", { name: "Devices" }).count()).toBe(1);
   expect(await sidebar.locator(".sidebar-footer-bar > openclaw-tooltip").count()).toBe(0);
   for (const part of parts) {
     await part.click();

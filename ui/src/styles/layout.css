@@ -1117,15 +1117,30 @@ openclaw-settings-save-indicator:empty {
   stroke-linejoin: round;
 }
 
-.sidebar-brand__new-thread {
+.sidebar-brand__new-thread,
+.sidebar-footer-bar__custodian {
   width: 32px;
   height: 32px;
   color: var(--text);
 }
 
-.sidebar-brand__new-thread svg {
+.sidebar-brand__new-thread svg,
+.sidebar-footer-bar__custodian svg {
   width: 18px;
   height: 18px;
+}
+
+.sidebar-footer-bar__custodian-glyph {
+  position: relative;
+  display: inline-flex;
+}
+
+.sidebar-footer-bar__custodian-badge--warning {
+  color: var(--warn);
+}
+
+.sidebar-footer-bar__custodian-badge--error {
+  color: var(--danger);
 }
 
 .sidebar-shell__body {
@@ -3480,8 +3495,8 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   display: flex;
   align-items: center;
   gap: 4px;
-  min-height: 60px;
-  padding: 4px 12px 2px;
+  min-height: 44px;
+  padding: 3px 8px;
 }
 
 openclaw-sidebar-attention {
@@ -3491,9 +3506,9 @@ openclaw-sidebar-attention {
 .sidebar-issues-button {
   position: relative;
   display: inline-grid;
-  width: 40px;
-  height: 40px;
-  flex: 0 0 40px;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
   place-items: center;
   padding: 0;
   border: 0;
@@ -3526,17 +3541,17 @@ openclaw-sidebar-attention {
 
 .sidebar-issues-button__count {
   position: absolute;
-  inset: 1px 0 auto auto;
+  inset: -1px -1px auto auto;
   display: inline-flex;
-  min-width: 18px;
-  height: 18px;
+  min-width: 14px;
+  height: 14px;
   align-items: center;
   justify-content: center;
-  padding: 0 5px;
+  padding: 0 3px;
   border-radius: var(--radius-full);
-  background: var(--danger);
-  color: var(--danger-foreground, white);
-  font-size: calc(10px * var(--control-ui-text-scale));
+  background: var(--accent);
+  color: var(--accent-foreground);
+  font-size: calc(9px * var(--control-ui-text-scale));
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1;
@@ -3545,22 +3560,40 @@ openclaw-sidebar-attention {
 .sidebar-issues-panel {
   position: fixed;
   z-index: 121;
-  width: min(304px, calc(100vw - 16px));
-  max-height: min(560px, 60vh);
+  width: min(360px, calc(100vw - 16px));
+  block-size: min(
+    500px,
+    calc(
+      100dvh -
+        max(var(--sidebar-issues-panel-bottom, 8px), calc(8px + env(safe-area-inset-bottom, 0px))) -
+        8px - env(safe-area-inset-top, 0px)
+    )
+  );
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--menu-radius);
+  overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   background: var(--bg-elevated);
   color: var(--text);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-sm);
   animation: menu-in 140ms var(--ease-out);
 }
 
 .sidebar-issues-panel__header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 12px 12px 8px;
 }
 
 .sidebar-issues-panel__heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   margin: 0;
   color: var(--text-strong);
   font-size: var(--control-ui-text-sm);
@@ -3568,78 +3601,188 @@ openclaw-sidebar-attention {
   line-height: 1.2;
 }
 
-.sidebar-issues-panel__list {
-  max-height: min(508px, calc(60vh - 44px));
-  overflow-y: auto;
-  padding: 0 6px 6px;
+.sidebar-issues-panel__ask {
+  flex: 0 0 32px;
 }
 
-.sidebar-issues-panel__row {
+.sidebar-issues-panel__tabs {
   display: flex;
-  width: 100%;
-  min-height: 46px;
+  flex: none;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 0 6px 8px;
+  border-block-end: 1px solid var(--border);
+  scrollbar-width: thin;
+}
+
+.sidebar-issues-panel__tab {
+  display: inline-flex;
+  min-height: 32px;
+  flex: 1 0 auto;
   align-items: center;
-  gap: 9px;
-  padding: 6px;
+  justify-content: center;
+  gap: 5px;
+  padding: 4px 8px;
   border: 0;
   border-radius: var(--radius-md);
   background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: var(--cursor-action);
-}
-
-.sidebar-issues-panel__row:hover {
-  background: var(--bg-hover);
-}
-
-.sidebar-issues-panel__open {
-  display: flex;
-  min-width: 0;
-  flex: 1 1 auto;
-  align-items: center;
-  gap: 9px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: var(--cursor-action);
-}
-
-.sidebar-issues-panel__dismiss {
-  display: inline-flex;
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
+  font: inherit;
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
-.sidebar-issues-panel__dismiss:hover {
+.sidebar-issues-panel__tab:hover {
+  background: var(--bg-hover);
   color: var(--text);
 }
 
-.sidebar-issues-panel__dismiss svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+.sidebar-issues-panel__tab[aria-selected="true"] {
+  background: var(--secondary);
+  color: var(--text-strong);
 }
 
-.sidebar-issues-panel__open:focus-visible,
-.sidebar-issues-panel__dismiss:focus-visible {
+.sidebar-issues-panel__tab:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sidebar-issues-panel__tab-count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-issues-panel__list-wrap {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.sidebar-issues-panel__list {
+  min-height: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  padding: 6px;
+  overscroll-behavior: contain;
+  scroll-padding-block: 6px 18px;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  touch-action: pan-y;
+}
+
+.sidebar-issues-panel__list:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.sidebar-issues-panel__overflow-cue {
+  position: absolute;
+  z-index: 1;
+  inset-inline: 6px;
+  height: 18px;
+  pointer-events: none;
+}
+
+.sidebar-issues-panel__overflow-cue--top {
+  inset-block-start: 0;
+  background: linear-gradient(to bottom, var(--bg-elevated), transparent);
+}
+
+.sidebar-issues-panel__overflow-cue--bottom {
+  inset-block-end: 0;
+  background: linear-gradient(to bottom, transparent, var(--bg-elevated));
+}
+
+.sidebar-issues-panel__update {
+  display: block;
+}
+
+.sidebar-issues-panel__details {
+  margin: 0;
+  border-radius: var(--radius-md);
+}
+
+.sidebar-issues-panel__summary {
+  display: flex;
+  min-width: 0;
+  min-height: 40px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 6px 4px;
+  border-radius: var(--radius-md);
+  cursor: var(--cursor-action);
+  list-style: none;
+}
+
+.sidebar-issues-panel__summary::-webkit-details-marker {
+  display: none;
+}
+
+.sidebar-issues-panel__summary:hover,
+.sidebar-issues-panel__details[open] > .sidebar-issues-panel__summary {
+  background: var(--bg-hover);
+}
+
+.sidebar-issues-panel__summary:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sidebar-issues-panel__body {
+  margin-inline-start: 36px;
+  padding: 6px 6px 10px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.sidebar-issues-panel__facts {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-inline-start: 16px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.sidebar-issues-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.sidebar-issues-panel__action {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--muted);
+  cursor: var(--cursor-action);
+  font: inherit;
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+}
+
+.sidebar-issues-panel__action--primary {
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  background: color-mix(in srgb, var(--accent-subtle) 50%, var(--bg-elevated));
+  color: var(--text);
+}
+
+.sidebar-issues-panel__action:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sidebar-issues-panel__action:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -3652,16 +3795,6 @@ openclaw-sidebar-attention {
   place-items: center;
   border-radius: var(--radius-sm);
   color: var(--muted);
-}
-
-.sidebar-issues-panel__row--error .sidebar-issues-panel__icon {
-  background: color-mix(in srgb, var(--danger) 14%, transparent);
-  color: var(--danger);
-}
-
-.sidebar-issues-panel__row--warning .sidebar-issues-panel__icon {
-  background: color-mix(in srgb, var(--warn) 14%, transparent);
-  color: var(--warn);
 }
 
 .sidebar-issues-panel__icon svg,
@@ -3700,6 +3833,216 @@ openclaw-sidebar-attention {
   display: inline-flex;
   flex: none;
   color: var(--muted);
+  transition: transform var(--duration-fast) ease;
+}
+
+.sidebar-issues-panel__chevron--expanded {
+  transform: rotate(90deg);
+}
+
+.sidebar-issues-panel__details[open]
+  > .sidebar-issues-panel__summary
+  .sidebar-issues-panel__chevron {
+  transform: rotate(90deg);
+}
+
+.sidebar-update-issue__body {
+  margin-inline-start: 0;
+  padding: 2px 6px 8px;
+}
+
+.sidebar-update-issue__body .sidebar-update-card {
+  box-sizing: border-box;
+  margin: 0;
+}
+
+.sidebar-approval-row {
+  min-width: 0;
+  border-radius: var(--radius-md);
+}
+
+.sidebar-approval-row + :not(.sidebar-approval-row) {
+  margin-top: 6px;
+}
+
+.sidebar-approval-row__disclosure {
+  width: 100%;
+  min-width: 0;
+  min-height: 52px;
+  display: block;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 7px 6px 3px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  cursor: var(--cursor-action);
+  font: inherit;
+  text-align: start;
+}
+
+.sidebar-approval-row__disclosure:hover,
+.sidebar-approval-row__disclosure[aria-expanded="true"] {
+  background: var(--bg-hover);
+}
+
+.sidebar-approval-row__disclosure:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sidebar-approval-row .sidebar-issues-panel__content {
+  gap: 4px;
+}
+
+.sidebar-approval-row__topline {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.sidebar-approval-row__topline .sidebar-issues-panel__entity {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-approval-row__meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  padding-inline-start: 26px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  white-space: nowrap;
+}
+
+.sidebar-approval-row__creator,
+.sidebar-approval-row__agent {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-approval-row__creator {
+  flex: 0 2 auto;
+}
+
+.sidebar-approval-row__agent {
+  display: inline-flex;
+  flex: 0 4 auto;
+  align-items: center;
+  gap: 4px;
+}
+
+.sidebar-approval-row__agent > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-approval-row__agent-avatar,
+.sidebar-approval-row__agent-avatar .viewer-avatar {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.sidebar-approval-row__separator {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.sidebar-approval-row__timer {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sidebar-approval-row__timer--urgent {
+  color: var(--danger);
+}
+
+.sidebar-approval-row__command {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+  align-self: flex-start;
+  overflow: hidden;
+  margin-block-start: 6px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-approval-row__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 7px 6px 8px;
+}
+
+.sidebar-approval-row__action {
+  min-height: 28px;
+}
+
+.sidebar-approval-row__action--deny {
+  color: var(--danger);
+}
+
+.sidebar-approval-row__action--deny:hover:not(:disabled) {
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+
+.sidebar-approval-row__message {
+  margin: 0 6px 6px;
+  color: var(--warn);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.35;
+}
+
+.sidebar-approval-row__message--error {
+  color: var(--danger);
+}
+
+.sidebar-approval-row__details {
+  margin: 0 6px 8px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.sidebar-approval-row__details .exec-approval-command {
+  max-height: 180px;
+  margin-top: 6px;
+  padding: 8px 9px;
+  font-size: var(--control-ui-text-xs);
+}
+
+.sidebar-approval-row__details .exec-approval-meta {
+  margin-top: 8px;
+  font-size: var(--control-ui-text-xs);
+}
+
+.exec-approval-description {
+  overflow-wrap: anywhere;
+  color: var(--muted-strong);
+  line-height: 1.4;
 }
 
 .sidebar-identity-card {
@@ -3709,7 +4052,7 @@ openclaw-sidebar-attention {
   width: auto;
   flex: 1 1 auto;
   min-width: 0;
-  padding: 5px 6px;
+  padding: 3px 6px;
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
@@ -3740,10 +4083,8 @@ openclaw-sidebar-attention {
 
 .sidebar-identity-card__text {
   display: flex;
-  flex: 0 1 auto;
-  flex-direction: column;
+  flex: 1 1 auto;
   min-width: 0;
-  gap: 1px;
 }
 
 .sidebar-identity-card__name,
@@ -3814,16 +4155,15 @@ openclaw-sidebar-attention {
   border: 0;
 }
 
-.sidebar-identity-card__more {
-  display: inline-flex;
-  flex: none;
-  margin-inline-start: auto;
-  color: var(--muted);
+.sidebar-footer-bar__devices {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
 }
 
-.sidebar-identity-card__more svg {
-  width: 16px;
-  height: 16px;
+.sidebar-footer-bar__devices[aria-current="page"] {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
 }
 
 openclaw-tooltip.sidebar-hover-tooltip {

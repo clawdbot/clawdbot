@@ -50,7 +50,6 @@ type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   activePluginTabId: string;
   activeWorkboardBoardId: string;
   offline: boolean;
-  onOpenApprovals?: () => void;
   getRouteSessionKey(): string;
   renderPinnedSidebarSession(session: SidebarRecentSession): unknown;
   toggleSection(sectionId: string): void;
@@ -385,12 +384,12 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
         <span class="sidebar-identity-card__text">
           <span class="sidebar-identity-card__name" title=${selfLabel}>${selfLabel}</span>
           ${host.offline
-            ? html`<span class="sidebar-identity-card__subtitle" aria-hidden="true"
+            ? html`<span class="sidebar-identity-card__subtitle sr-only" aria-hidden="true"
                 >${t("connection.reconnecting")}</span
               >`
             : gateway
               ? html`<span
-                  class="sidebar-identity-card__subtitle sidebar-identity-card__subtitle--gateway"
+                  class="sidebar-identity-card__subtitle sidebar-identity-card__subtitle--gateway sr-only"
                   aria-hidden="true"
                 >
                   <span
@@ -405,16 +404,30 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
                     : nothing}
                 </span>`
               : buildSubtitle
-                ? html`<span class="sidebar-identity-card__subtitle" aria-hidden="true"
+                ? html`<span class="sidebar-identity-card__subtitle sr-only" aria-hidden="true"
                     >${buildSubtitle}</span
                   >`
                 : nothing}
         </span>
-        <span class="sidebar-identity-card__more" aria-hidden="true">${icons.ellipsis}</span>
       </button>
       <span class="sidebar-identity-card__status" role="status" aria-live="polite"
         >${host.offline ? t("connection.reconnecting") : ""}</span
       >
+      ${host.sidebarMenus.isRouteEnabled("devices")
+        ? html`<button
+            type="button"
+            class="sidebar-brand__icon sidebar-footer-bar__devices"
+            aria-label=${t("tabs.devices")}
+            aria-current=${host.activeRouteId === "devices" ? "page" : nothing}
+            title=${t("tabs.devices")}
+            @click=${() =>
+              host.onNavigate?.("devices", {
+                pathname: pathForRoute("devices", host.basePath),
+              })}
+          >
+            ${icons.monitorSmartphone}
+          </button>`
+        : nothing}
       ${renderAppSidebarAttention(host)}
     </div>
   `;
@@ -517,6 +530,7 @@ function renderAppSidebarAttention(host: AppSidebarRenderHost) {
   return html`<openclaw-sidebar-attention
     .activeRouteId=${host.activeRouteId}
     .onNavigate=${(routeId: NavigationRouteId) => host.onNavigate?.(routeId)}
-    .onOpenApprovals=${() => host.onOpenApprovals?.()}
+    .watchUpdateProgress=${host.watchUpdateProgress}
+    .onRefresh=${host.onRefresh}
   ></openclaw-sidebar-attention>`;
 }

@@ -94,7 +94,7 @@ describe("AppSidebar footer identity menu", () => {
     expect(menu?.querySelector("openclaw-theme-mode-toggle")).not.toBeNull();
     expect(menu?.textContent).not.toContain("Recent activity");
     expect(menu?.querySelectorAll(':scope > [role="separator"]')).toHaveLength(4);
-    expect(identity?.querySelector(".sidebar-identity-card__more svg")).not.toBeNull();
+    expect(identity?.querySelector(".sidebar-identity-card__more")).toBeNull();
     expect(identity?.querySelector(".sidebar-identity-card__chevron")).toBeNull();
 
     const helpRow = menu?.querySelector<HTMLElement>(".sidebar-identity-menu__help");

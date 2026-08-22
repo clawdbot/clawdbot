@@ -1,5 +1,4 @@
-// Active operational conditions live behind one footer bell so the sidebar
-// stays quiet while the same canonical items remain available on demand.
+// One footer bell owns the sidebar's canonical operational conditions.
 import { consume } from "@lit/context";
 import { initialState, Task } from "@lit/task";
 import { html, nothing, type PropertyValues } from "lit";
@@ -8,14 +7,21 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
+import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
+import { normalizeAgentLabel } from "../lib/agents/display.ts";
+import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { createInitialCronState, loadCronJobsPage } from "../lib/cron/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../lib/model-auth.ts";
+import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { renderSidebarApprovalRow } from "./exec-approval-card.ts";
 import { icons } from "./icons.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
+import type { SessionCreatedActor } from "./session-owner-chip.ts";
 import {
   addDismissal,
   dismissalStoreKey,
@@ -30,14 +36,20 @@ import {
 } from "./sidebar-attention-items.ts";
 import "./tooltip.ts";
 import "./menu-surface.ts";
+import { ISSUE_TABS, issueTabLabel, nextIssueTab, type IssueTab } from "./sidebar-issues-tabs.ts";
+import "./sidebar-update-card.ts";
 
-// Reloads are connection-scoped; a visibility change only refetches after the
-// snapshot is older than this, so tab switches stay free of request bursts.
+// A visibility change only refetches a connection-scoped stale snapshot.
 const VISIBILITY_REFRESH_MIN_AGE_MS = 60_000;
-// Always-visible windows (the macOS app) never fire visibilitychange, so a
-// slow lifecycle-owned interval keeps the chips from going permanently stale.
+// Always-visible native windows need a slow lifecycle-owned refresh too.
 const IDLE_REFRESH_INTERVAL_MS = 10 * 60_000;
-
+const ITEM_PRIORITY: Record<SidebarAttentionItem["kind"], number> = {
+  pendingApproval: 0,
+  modelAuthExpired: 1,
+  cronFailed: 2,
+  cronOverdue: 3,
+  updateAvailable: 4,
+};
 class SidebarAttention extends OpenClawLightDomContentsElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
@@ -47,10 +59,17 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   @state() private dismissed: SidebarAttentionDismissals = {};
   @state() private panelOpen = false;
   @state() private panelPosition = { left: 8, bottom: 8 };
+  @state() private selectedTab: IssueTab = "all";
+  @state() private expandedApprovalIds = new Set<string>();
+  @state() private overflowAbove = false;
+  @state() private overflowBelow = false;
 
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
   @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
-  @property({ attribute: false }) onOpenApprovals?: () => void;
+  @property({ attribute: false }) watchUpdateProgress:
+    | ((listener: (progress: UpdateProgress) => void) => () => void)
+    | undefined = undefined;
+  @property({ attribute: false }) onRefresh?: () => void;
 
   private loadedClient: GatewayBrowserClient | null = null;
   private loadedGateway: ApplicationContext["gateway"] | null = null;
@@ -146,6 +165,18 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     .watch(
       () => this.context?.overlays,
       (overlays, notify) => overlays.subscribe(() => notify()),
+    )
+    .watch(
+      () => this.context?.sessions,
+      (sessions, notify) => sessions.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.agents,
+      (agents, notify) => agents.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.agentIdentity,
+      (agentIdentity, notify) => agentIdentity.subscribe(notify),
     );
 
   // Cross-tab sync: another tab's dismiss/prune fires "storage" here, so this
@@ -198,8 +229,15 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     if (changed.has("activeRouteId") && changed.get("activeRouteId") !== undefined) {
       this.closePanel(false);
     }
-    if (this.panelOpen && this.currentItems().length === 0) {
+    if (this.panelOpen && this.currentItems().length === 0 && !this.hasUpdateSurface()) {
       this.closePanel(false);
+    }
+  }
+
+  protected override updated(changed: PropertyValues<this>) {
+    super.updated(changed);
+    if (this.panelOpen) {
+      this.syncOverflowCue();
     }
   }
 
@@ -242,14 +280,8 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     ]);
   }
 
-  // Re-arm stale snoozes only right after this tab's own data refresh: fresh
-  // data is the only safe basis for deciding a chip is gone. Pruning from
-  // render/update hooks would let a hidden tab with stale data clobber a
-  // dismissal another tab just wrote (its storage event triggers an update
-  // here). Against the persisted map, not the in-memory snapshot, for the
-  // same lost-update reason as addDismissal. A failed fetch (empty cron list,
-  // null auth status) prunes those kinds, which fails safe — re-nag, never
-  // stay hidden.
+  // Only fresh data can re-arm snoozes. Use the persisted map so a stale tab
+  // cannot clobber another tab's dismissal; failed fetches fail safe by re-nagging.
   private pruneAfterRefresh() {
     if (!this.dismissedScope) {
       return;
@@ -286,8 +318,21 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
 
   private currentItems(): SidebarAttentionItem[] {
     return this.context?.gateway.snapshot.phase === "connected"
-      ? this.buildItems().filter((item) => this.dismissed[item.kind] !== item.signature)
+      ? this.buildItems().filter(
+          (item) =>
+            item.kind === "pendingApproval" || !this.dismissed[item.kind]?.includes(item.signature),
+        )
       : [];
+  }
+
+  private hasUpdateSurface(): boolean {
+    const snapshot = this.context?.overlays.snapshot;
+    return Boolean(
+      snapshot?.controlUiRefreshRequired ||
+      snapshot?.updateRunning ||
+      snapshot?.updateStatusBanner ||
+      snapshot?.updateSchedule?.campaign,
+    );
   }
 
   private readonly closeOnOutsidePointer = (event: PointerEvent) => {
@@ -299,16 +344,19 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
 
   private openPanel(trigger: HTMLElement) {
     const rect = trigger.getBoundingClientRect();
-    const width = Math.min(304, globalThis.innerWidth - 16);
+    const width = Math.min(360, globalThis.innerWidth - 16);
     this.panelTrigger = trigger;
     this.panelPosition = {
       left: Math.max(8, Math.min(rect.right - width, globalThis.innerWidth - width - 8)),
       bottom: Math.max(8, globalThis.innerHeight - rect.top + 6),
     };
+    this.selectedTab = "all";
     this.panelOpen = true;
     document.addEventListener("pointerdown", this.closeOnOutsidePointer, true);
     void this.updateComplete.then(() => {
-      this.querySelector<HTMLElement>(".sidebar-issues-panel [data-autofocus]")?.focus();
+      this.querySelector<HTMLElement>(
+        ".sidebar-approval-row__disclosure, .sidebar-issues-panel summary",
+      )?.focus();
     });
   }
 
@@ -318,6 +366,8 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     }
     const trigger = this.panelTrigger;
     this.panelOpen = false;
+    this.overflowAbove = false;
+    this.overflowBelow = false;
     this.panelTrigger = null;
     document.removeEventListener("pointerdown", this.closeOnOutsidePointer, true);
     if (restoreFocus) {
@@ -325,10 +375,70 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     }
   }
 
+  private readonly syncOverflowCue = () => {
+    const list = this.querySelector<HTMLElement>(".sidebar-issues-panel__list");
+    const above = Boolean(list && list.scrollTop > 2);
+    const below = Boolean(list && list.scrollHeight - list.scrollTop - list.clientHeight > 2);
+    if (above !== this.overflowAbove) {
+      this.overflowAbove = above;
+    }
+    if (below !== this.overflowBelow) {
+      this.overflowBelow = below;
+    }
+  };
+
+  private selectTab(tab: IssueTab, focusTab = false) {
+    this.selectedTab = tab;
+    void this.updateComplete.then(() => {
+      if (!this.panelOpen || this.selectedTab !== tab) {
+        return;
+      }
+      const list = this.querySelector<HTMLElement>(".sidebar-issues-panel__list");
+      if (list) {
+        list.scrollTop = 0;
+      }
+      this.syncOverflowCue();
+      if (focusTab) {
+        this.querySelector<HTMLElement>(`#sidebar-issues-tab-${tab}`)?.focus();
+      }
+    });
+  }
+
+  private handleTabKeydown(event: KeyboardEvent, tab: IssueTab) {
+    const nextTab = nextIssueTab(tab, event.key);
+    if (!nextTab) {
+      return;
+    }
+    event.preventDefault();
+    this.selectTab(nextTab, true);
+  }
+
+  private renderTab(tab: IssueTab, count: number) {
+    const selected = this.selectedTab === tab;
+    const label = issueTabLabel(tab);
+    const countLabel = t(count === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
+      count: String(count),
+    });
+    return html`<button
+      type="button"
+      id=${`sidebar-issues-tab-${tab}`}
+      class="sidebar-issues-panel__tab"
+      role="tab"
+      aria-selected=${String(selected)}
+      aria-label=${`${label}, ${countLabel}`}
+      aria-controls="sidebar-issues-tabpanel"
+      tabindex=${selected ? 0 : -1}
+      @click=${() => this.selectTab(tab)}
+      @keydown=${(event: KeyboardEvent) => this.handleTabKeydown(event, tab)}
+    >
+      <span>${label}</span>
+      <span class="sidebar-issues-panel__tab-count" aria-hidden="true">${count}</span>
+    </button>`;
+  }
+
   private async open(item: SidebarAttentionItem) {
     this.closePanel(false);
     if (item.action.kind === "openApprovals") {
-      this.onOpenApprovals?.();
       return;
     }
     if (item.action.kind === "navigate") {
@@ -357,8 +467,17 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       return;
     }
     const rows = Array.from(
-      (event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>("button"),
-    );
+      (event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>(
+        "summary, button, a[href], [tabindex]:not([tabindex='-1'])",
+      ),
+    ).filter((element) => {
+      const closedDetails = element.closest("details:not([open])");
+      return (
+        !element.hasAttribute("disabled") &&
+        !element.closest("[hidden]") &&
+        (!closedDetails || element.matches("summary"))
+      );
+    });
     const first = rows[0];
     const last = rows.at(-1);
     if (event.shiftKey && document.activeElement === first) {
@@ -370,56 +489,236 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     }
   };
 
-  private renderItem(item: SidebarAttentionItem, autofocus: boolean) {
-    const detail = item.action.kind === "askCustodian" ? item.action.alert.facts[0] : undefined;
-    return html`
-      <div
-        class="sidebar-issues-panel__row sidebar-issues-panel__row--${item.severity}"
-        data-attention-kind=${item.kind}
+  private renderAskOpenClawButton(count: number, severity: "error" | "warning" | null) {
+    const snapshot = this.context?.gateway.snapshot;
+    if (!canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin")) {
+      return nothing;
+    }
+    const custodianLabel = count
+      ? t(count === 1 ? "attention.custodianAlertAria" : "attention.custodianAlertsAria", {
+          count: String(count),
+        })
+      : t("nav.askOpenClaw");
+    return html`<openclaw-tooltip .content=${custodianLabel}>
+      <button
+        type="button"
+        class="sidebar-brand__icon sidebar-footer-bar__custodian sidebar-issues-panel__ask"
+        aria-label=${custodianLabel}
+        @click=${() => window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))}
       >
-        <button
-          type="button"
-          class="sidebar-issues-panel__open sidebar-attention__open"
-          data-autofocus=${autofocus ? "true" : nothing}
-          aria-label=${detail ? `${item.label}: ${detail}` : item.label}
-          @click=${() => void this.open(item)}
-        >
-          <span class="sidebar-issues-panel__icon" aria-hidden="true">${icons[item.icon]}</span>
-          <span class="sidebar-issues-panel__content">
-            <span class="sidebar-issues-panel__entity">${item.label}</span>
-            ${detail
-              ? html`<span class="sidebar-issues-panel__state">${detail}</span>`
-              : nothing}
-          </span>
-          <span class="sidebar-issues-panel__chevron" aria-hidden="true"
-            >${icons.chevronRight}</span
+        <span class="sidebar-footer-bar__custodian-glyph">
+          ${icons.lobster}
+          ${count
+            ? html`<span
+                class="session-glyph__badge sidebar-footer-bar__custodian-badge sidebar-footer-bar__custodian-badge--${severity ??
+                "warning"}"
+                aria-hidden="true"
+              ></span>`
+            : nothing}
+        </span>
+      </button>
+    </openclaw-tooltip>`;
+  }
+
+  private renderUpdateSurface() {
+    if (!this.hasUpdateSurface()) {
+      return nothing;
+    }
+    const context = this.context;
+    if (!context) {
+      return nothing;
+    }
+    const snapshot = context.overlays.snapshot;
+    const gateway = context.gateway.snapshot;
+    return html`<openclaw-sidebar-update-card
+      class="sidebar-issues-panel__update"
+      data-attention-kind="updateAvailable"
+      .compact=${true}
+      .updateAvailable=${snapshot.updateAvailable}
+      .updateSchedule=${snapshot.updateSchedule}
+      .heldUpdateCampaignId=${snapshot.heldUpdateCampaignId}
+      .updateBusy=${snapshot.updateRunning}
+      .statusBanner=${snapshot.updateStatusBanner}
+      .watchUpdateProgress=${this.watchUpdateProgress}
+      .canUpdate=${canCallGatewayMethod(gateway, "update.run", "operator.admin")}
+      .canHoldUpdate=${canCallGatewayMethod(gateway, "update.hold", "operator.admin")}
+      .onUpdate=${() => void context.overlays.runUpdate()}
+      .refreshRequired=${snapshot.controlUiRefreshRequired}
+      .onRefresh=${this.onRefresh ?? (() => undefined)}
+      .onHoldUpdate=${() => context.overlays.holdUpdate()}
+      .onReviewUpdate=${() => this.onNavigate?.("updates")}
+    ></openclaw-sidebar-update-card>`;
+  }
+
+  private toggleApprovalDetails(approvalId: string) {
+    const next = new Set(this.expandedApprovalIds);
+    if (next.has(approvalId)) {
+      next.delete(approvalId);
+    } else {
+      next.add(approvalId);
+    }
+    this.expandedApprovalIds = next;
+  }
+
+  private async decideApproval(event: Event, approvalId: string, decision: ExecApprovalDecision) {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    const target = event.currentTarget as HTMLElement;
+    const focusOrder = Array.from(this.querySelectorAll<HTMLElement>("[data-issue-row-focus]"));
+    const row = target.closest<HTMLElement>("[data-approval-id]");
+    const rowFocus = row?.querySelector<HTMLElement>("[data-issue-row-focus]") ?? null;
+    const rowIndex = rowFocus ? focusOrder.indexOf(rowFocus) : 0;
+    await context.overlays.decideApproval(decision, approvalId);
+    await this.updateComplete;
+    if (!this.panelOpen || target.isConnected) {
+      return;
+    }
+    const remaining = Array.from(this.querySelectorAll<HTMLElement>("[data-issue-row-focus]"));
+    remaining[Math.min(Math.max(rowIndex, 0), remaining.length - 1)]?.focus();
+  }
+
+  private renderApprovalItem(approval: ExecApprovalRequest) {
+    const context = this.context;
+    const snapshot = context?.overlays.snapshot;
+    if (!context || !snapshot) {
+      return nothing;
+    }
+    const sessionKey = approval.request.sessionKey?.trim();
+    const session = sessionKey
+      ? context.sessions.state.result?.sessions.find((candidate) =>
+          areUiSessionKeysEquivalent(candidate.key, sessionKey),
+        )
+      : undefined;
+    const rawAgentId = approval.request.agentId?.trim();
+    const normalizedAgentId = rawAgentId ? normalizeAgentId(rawAgentId) : null;
+    const agent = normalizedAgentId
+      ? context.agents.state.agentsList?.agents.find(
+          (candidate) => normalizeAgentId(candidate.id) === normalizedAgentId,
+        )
+      : undefined;
+    const identity = normalizedAgentId ? context.agentIdentity.get(normalizedAgentId) : null;
+    const agentAvatarUrl = agent ? resolveAgentAvatarUrl(agent, identity) : null;
+    const agentActor: SessionCreatedActor | null = rawAgentId
+      ? {
+          type: "agent",
+          id: agent?.id ?? rawAgentId,
+          label: agent ? normalizeAgentLabel(agent, identity) : rawAgentId,
+          ...(agentAvatarUrl ? { avatarUrl: agentAvatarUrl } : {}),
+        }
+      : null;
+    return renderSidebarApprovalRow({
+      approval,
+      agentActor,
+      busy: snapshot.approvalBusy,
+      canGrant: snapshot.approvalCanGrant,
+      createdActor: session?.createdActor,
+      error: snapshot.approvalErrors.get(approval.id) ?? null,
+      expanded: this.expandedApprovalIds.has(approval.id),
+      nowMs: snapshot.approvalNowMs,
+      sessionTitle: session?.displayName?.trim() || session?.label?.trim(),
+      onDecision: (event, approvalId, decision) =>
+        void this.decideApproval(event, approvalId, decision),
+      onToggle: (approvalId) => this.toggleApprovalDetails(approvalId),
+    });
+  }
+
+  private renderItem(item: SidebarAttentionItem) {
+    if (item.approvalQueue?.length) {
+      return item.approvalQueue.map((approval) => this.renderApprovalItem(approval));
+    }
+    const facts = item.action.kind === "askCustodian" ? item.action.alert.facts : [];
+    const visibleFacts = facts.filter((fact) => fact !== item.label);
+    const actionLabel = item.action.kind === "askCustodian" ? t("nav.askOpenClaw") : item.label;
+    return html`<details
+      class="sidebar-issues-panel__details sidebar-issues-panel__details--${item.severity}"
+      data-attention-kind=${item.kind}
+    >
+      <summary class="sidebar-issues-panel__summary" data-issue-row-focus>
+        <span class="sidebar-issues-panel__icon" aria-hidden="true">${icons[item.icon]}</span>
+        <span class="sidebar-issues-panel__content">
+          <span class="sidebar-issues-panel__entity" title=${item.label}>${item.label}</span>
+        </span>
+        <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
+      </summary>
+      <div class="sidebar-issues-panel__body">
+        ${visibleFacts.length
+          ? html`<ul class="sidebar-issues-panel__facts">
+              ${visibleFacts.map((fact) => html`<li>${fact}</li>`)}
+            </ul>`
+          : nothing}
+        <div class="sidebar-issues-panel__actions">
+          <button
+            type="button"
+            class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
+            @click=${() => void this.open(item)}
           >
-        </button>
-        <button
-          type="button"
-          class="sidebar-issues-panel__dismiss sidebar-attention__dismiss"
-          aria-label=${t("common.dismiss")}
-          @click=${(event: MouseEvent) => {
-            event.stopPropagation();
-            this.dismiss(item);
-          }}
-        >
-          ${icons.x}
-        </button>
+            ${actionLabel}
+          </button>
+          <button
+            type="button"
+            class="sidebar-issues-panel__action"
+            @click=${() => this.dismiss(item)}
+          >
+            ${t("common.dismiss")}
+          </button>
+        </div>
       </div>
-    `;
+    </details>`;
   }
 
   override render() {
     if (this.context?.gateway.snapshot.phase !== "connected") {
       return nothing;
     }
-    const items = this.currentItems();
-    if (items.length === 0) {
+    const updateSurface = this.hasUpdateSurface();
+    const allItems = this.currentItems();
+    const approvalQueue = allItems.flatMap((item) => item.approvalQueue ?? []);
+    const items = allItems
+      .filter(
+        (item) =>
+          !item.approvalQueue?.length && (!updateSurface || item.kind !== "updateAvailable"),
+      )
+      .toSorted((left, right) => ITEM_PRIORITY[left.kind] - ITEM_PRIORITY[right.kind]);
+    const count = approvalQueue.length + items.length + (updateSurface ? 1 : 0);
+    if (count === 0) {
       return nothing;
     }
-    const count = items.length;
-    const label = `${count} ${count === 1 ? "issue" : "issues"}`;
+    const label = t(count === 1 ? "attention.issueCount" : "attention.issueCountPlural", {
+      count: String(count),
+    });
+    const updateError = this.context.overlays.snapshot.updateStatusBanner?.tone === "danger";
+    const automationItems = items.filter(
+      (item) => item.kind === "cronFailed" || item.kind === "cronOverdue",
+    );
+    const systemItems = items.filter(
+      (item) => item.kind === "modelAuthExpired" || item.kind === "updateAvailable",
+    );
+    const visibleItems =
+      this.selectedTab === "automations"
+        ? automationItems
+        : this.selectedTab === "system"
+          ? systemItems
+          : this.selectedTab === "approvals"
+            ? []
+            : items;
+    const showApprovals = this.selectedTab === "all" || this.selectedTab === "approvals";
+    const showUpdate = updateSurface && ["all", "system"].includes(this.selectedTab);
+    const errorItems = visibleItems.filter((item) => item.severity === "error");
+    const warningItems = visibleItems.filter((item) => item.severity === "warning");
+    const tabCounts: Record<IssueTab, number> = {
+      all: count,
+      approvals: approvalQueue.length,
+      automations: automationItems.length,
+      system: systemItems.length + (updateSurface ? 1 : 0),
+    };
+    const custodianItems = items.filter((item) => item.action.kind === "askCustodian");
+    const custodianSeverity = custodianItems.some((item) => item.severity === "error")
+      ? "error"
+      : custodianItems.length
+        ? "warning"
+        : null;
     return html`
       <span class="sr-only" role="status" aria-live="polite">${label}</span>
       <button
@@ -427,6 +726,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
         class="sidebar-issues-button"
         aria-expanded=${String(this.panelOpen)}
         aria-haspopup="dialog"
+        aria-controls="sidebar-issues-panel"
         aria-label=${label}
         @click=${(event: MouseEvent) =>
           this.panelOpen
@@ -441,17 +741,53 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       ${this.panelOpen
         ? html`<openclaw-menu-surface>
             <section
+              id="sidebar-issues-panel"
               class="sidebar-issues-panel"
               role="dialog"
-              aria-label="Issues"
-              style=${`left:${this.panelPosition.left}px;bottom:${this.panelPosition.bottom}px`}
+              aria-labelledby="sidebar-issues-panel-heading"
+              style=${`left:${this.panelPosition.left}px;bottom:${this.panelPosition.bottom}px;--sidebar-issues-panel-bottom:${this.panelPosition.bottom}px`}
               @keydown=${this.handlePanelKeydown}
             >
               <header class="sidebar-issues-panel__header">
-                <h2 class="sidebar-issues-panel__heading">Issues</h2>
+                <h2 id="sidebar-issues-panel-heading" class="sidebar-issues-panel__heading">
+                  ${t("attention.issues")}
+                </h2>
+                ${this.renderAskOpenClawButton(custodianItems.length, custodianSeverity)}
               </header>
-              <div class="sidebar-issues-panel__list">
-                ${items.map((item, index) => this.renderItem(item, index === 0))}
+              <div
+                class="sidebar-issues-panel__tabs"
+                role="tablist"
+                aria-label=${t("attention.tabs.label")}
+              >
+                ${ISSUE_TABS.map((tab) => this.renderTab(tab, tabCounts[tab]))}
+              </div>
+              <div class="sidebar-issues-panel__list-wrap">
+                <div
+                  id="sidebar-issues-tabpanel"
+                  class="sidebar-issues-panel__list"
+                  role="tabpanel"
+                  aria-labelledby=${`sidebar-issues-tab-${this.selectedTab}`}
+                  tabindex="0"
+                  @scroll=${this.syncOverflowCue}
+                >
+                  ${showApprovals
+                    ? approvalQueue.map((approval) => this.renderApprovalItem(approval))
+                    : nothing}
+                  ${showUpdate && updateError ? this.renderUpdateSurface() : nothing}
+                  ${errorItems.map((item) => this.renderItem(item))}
+                  ${showUpdate && !updateError ? this.renderUpdateSurface() : nothing}
+                  ${warningItems.map((item) => this.renderItem(item))}
+                </div>
+                <div
+                  class="sidebar-issues-panel__overflow-cue sidebar-issues-panel__overflow-cue--top"
+                  ?hidden=${!this.overflowAbove}
+                  aria-hidden="true"
+                ></div>
+                <div
+                  class="sidebar-issues-panel__overflow-cue sidebar-issues-panel__overflow-cue--bottom"
+                  ?hidden=${!this.overflowBelow}
+                  aria-hidden="true"
+                ></div>
               </div>
             </section>
           </openclaw-menu-surface>`

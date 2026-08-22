@@ -212,6 +212,7 @@ describe("AppSidebar viewer presence", () => {
     expect([...(footer?.children ?? [])].map((element) => element.localName)).toEqual([
       "button",
       "span",
+      "button",
       "openclaw-sidebar-attention",
     ]);
     gatewayHarness.gateway.updateSelfUser?.({

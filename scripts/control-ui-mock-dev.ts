@@ -17,6 +17,7 @@ import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-
 import { buildBaseHints } from "../src/config/schema.hints.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
+import type { UpdateScheduleState } from "../ui/src/api/types.ts";
 import {
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
@@ -1541,12 +1542,17 @@ async function createChatPickerScenario(
       childSessions: ["agent:main:subagent:tax-receipts"],
       pinned: true,
     }),
-    sessionRow("agent:main:production-export", "Production export", baseTime - 75_000, {
-      category: "Research",
-      createdActor: MOCK_ACTOR_MIRA,
-      execCwd: "/Users/peter/Projects/clawdbot",
-      owner: { actor: MOCK_ACTOR_MIRA },
-    }),
+    sessionRow(
+      "agent:main:production-export",
+      "Investigate transcript scroll-anchor regression when the final code block expands",
+      baseTime - 75_000,
+      {
+        category: "Research",
+        createdActor: MOCK_ACTOR_MIRA,
+        execCwd: "/Users/peter/Projects/clawdbot",
+        owner: { actor: MOCK_ACTOR_MIRA },
+      },
+    ),
     sessionRow("agent:main:model-budget", "Model budget review", baseTime - 80_000, {
       category: "Research",
       execCwd: "/Users/peter/Projects/openclaw",
@@ -1636,7 +1642,69 @@ async function createChatPickerScenario(
   const profileUsage = buildProfileUsageMocks(Date.now());
   const modelProviders = buildModelProviderMocks(Date.now());
   const skillWorkshop = buildSkillWorkshopMocks(Date.now());
-  const cronMocks = buildCronMocks(Date.now());
+  const richAttention = fixture === "approval";
+  const cronMocks = buildCronMocks(Date.now(), { richAttention });
+  const updateFixtureNow = Date.now();
+  const updateSchedule: UpdateScheduleState | null = richAttention
+    ? {
+        channel: "dev",
+        autoEnabled: true,
+        install: {
+          kind: "git",
+          git: { status: "behind", commitsBehind: 2 },
+        },
+        target: {
+          kind: "git",
+          upstreamRef: "origin/main",
+          upstreamSha: "a".repeat(40),
+          commitsBehind: 2,
+        },
+        campaign: {
+          id: "mock-update-campaign",
+          state: "waiting-for-idle",
+          announcedAtMs: updateFixtureNow - 2 * 60_000,
+          applyAtMs: updateFixtureNow + 15 * 60_000,
+          forceAtMs: updateFixtureNow + 60 * 60_000,
+          updatedAtMs: updateFixtureNow,
+        },
+      }
+    : null;
+  const heldUpdateSchedule: UpdateScheduleState | null = updateSchedule?.campaign
+    ? {
+        ...updateSchedule,
+        campaign: {
+          ...updateSchedule.campaign,
+          holdUntilMs: updateFixtureNow + 60 * 60_000,
+          updatedAtMs: updateFixtureNow,
+        },
+      }
+    : null;
+  const modelAuthStatus = richAttention
+    ? {
+        ...modelProviders.authStatus,
+        providers: modelProviders.authStatus.providers.map((provider) =>
+          provider.provider === "google"
+            ? {
+                ...provider,
+                displayName: "Google Gemini for the shared engineering workspace",
+                status: "expired" as const,
+                profiles: [
+                  {
+                    profileId: "google:workspace",
+                    type: "oauth" as const,
+                    status: "expired" as const,
+                    expiry: {
+                      at: updateFixtureNow - 12 * 60_000,
+                      remainingMs: -12 * 60_000,
+                      label: "12m ago",
+                    },
+                  },
+                ],
+              }
+            : provider,
+        ),
+      }
+    : modelProviders.authStatus;
   const channelWizard = buildChannelWizardMocks();
   const configMocks = buildConfigMocks({
     swarmEnabled: fixture === "swarm",
@@ -1724,6 +1792,21 @@ async function createChatPickerScenario(
     assistantName: "Molty",
     defaultAgentId: "main",
     serverBuildId: "mock",
+    updateSchedule,
+    updateAvailable:
+      fixture === "approval"
+        ? {
+            channel: "dev",
+            currentVersion: "2026.8.1",
+            latestVersion: "2026.8.1",
+            upstreamSha: "a".repeat(40),
+            commitsBehind: 2,
+            commits: [
+              { sha: "abcdef1234567", subject: "Unify sidebar notifications" },
+              { sha: "fedcba7654321", subject: "Keep the footer identity compact" },
+            ],
+          }
+        : null,
     // Advertised Gateway methods gate session actions (see
     // ui/src/lib/session-method-access.ts). Omitting the mutation methods left
     // every session context-menu row disabled, so the harness could not show
@@ -1756,6 +1839,7 @@ async function createChatPickerScenario(
       "sessions.create",
       "system.info",
       "terminal.open",
+      ...(richAttention ? ["update.hold", "update.run", "update.status"] : []),
       ...(fixture === "workboard"
         ? [
             "board.get",
@@ -2159,15 +2243,138 @@ async function createChatPickerScenario(
                 id: "mock-production-export-approval",
                 request: {
                   command: "openclaw export --target production",
+                  agentId: "main",
                   sessionKey: "agent:main:production-export",
+                  host: "peters-mac-studio.local",
+                  cwd: "/Users/peter/Projects/openclaw",
+                  security: "full",
+                  ask: "on-miss",
+                  allowedDecisions: ["allow-once", "allow-always", "deny"],
                 },
-                createdAtMs: baseTime - 75_000,
-                expiresAtMs: ATTENTION_FIXTURE_EXPIRES_AT,
+                createdAtMs: updateFixtureNow - 7 * 60_000,
+                expiresAtMs: updateFixtureNow + 83 * 60_000,
+              },
+              {
+                id: "mock-worktree-cleanup-approval",
+                request: {
+                  command: "git -C /mock/workspace clean -nd",
+                  agentId: "release",
+                  sessionKey: "agent:main:worktree-cleanup",
+                  host: "peters-mac-studio.local",
+                  cwd: "/mock/workspace",
+                  security: "sandboxed",
+                  ask: "always",
+                  allowedDecisions: ["allow-once", "deny"],
+                },
+                createdAtMs: updateFixtureNow - 6 * 60_000,
+                expiresAtMs: updateFixtureNow + 78 * 60_000,
+              },
+              {
+                id: "mock-long-command-approval",
+                request: {
+                  command:
+                    "node scripts/reconcile-release-artifacts.mjs --workspace /mock/workspace --channel dev --verify-generated-files --preserve-on-failure --report-format detailed",
+                  agentId: "build-custodian",
+                  sessionKey: "agent:main:release-readiness-and-artifact-reconciliation",
+                  host: "build-runner-07",
+                  cwd: "/mock/workspace",
+                  resolvedPath: "/usr/local/bin/node",
+                  security: "workspace-write",
+                  ask: "on-miss",
+                  allowedDecisions: ["allow-once", "deny"],
+                },
+                createdAtMs: updateFixtureNow - 5 * 60_000,
+                expiresAtMs: updateFixtureNow + 75 * 60_000,
+              },
+              {
+                id: "mock-database-backup-approval",
+                request: {
+                  command: "openclaw backup verify --latest --restore-manifest",
+                  agentId: "backup-auditor",
+                  sessionKey: "agent:main:backup-verification",
+                  host: "backup-worker-02",
+                  cwd: "/var/lib/openclaw/backups",
+                  security: "read-only",
+                  ask: "on-miss",
+                  allowedDecisions: ["allow-once", "allow-always", "deny"],
+                },
+                createdAtMs: updateFixtureNow - 4 * 60_000,
+                expiresAtMs: updateFixtureNow + 72 * 60_000,
+              },
+              {
+                id: "mock-release-notification-approval",
+                request: {
+                  command: "openclaw message send --channel slack --target '#release-operations'",
+                  agentId: "release-comms",
+                  sessionKey: "agent:main:release-notification",
+                  host: "peters-mac-studio.local",
+                  cwd: "/Users/peter/Projects/openclaw",
+                  security: "network",
+                  ask: "always",
+                  allowedDecisions: ["allow-once", "deny"],
+                },
+                createdAtMs: updateFixtureNow - 3 * 60_000,
+                expiresAtMs: updateFixtureNow + 69 * 60_000,
+              },
+              {
+                id: "mock-gateway-restart-approval",
+                request: {
+                  command: "openclaw gateway restart --reason 'apply repaired channel config'",
+                  agentId: "operations",
+                  sessionKey: "agent:main:gateway-recovery",
+                  host: "peters-mac-studio.local",
+                  cwd: "/Users/peter/Projects/openclaw",
+                  security: "full",
+                  ask: "always",
+                  allowedDecisions: ["allow-once", "deny"],
+                },
+                createdAtMs: updateFixtureNow - 2 * 60_000,
+                expiresAtMs: updateFixtureNow + 67 * 60_000,
               },
             ]
           : [],
-      "plugin.approval.list": [],
-      "openclaw.approval.list": [],
+      "plugin.approval.list":
+        fixture === "approval"
+          ? [
+              {
+                id: "mock-plugin-publish-approval",
+                request: {
+                  title: "Publish the release summary",
+                  description:
+                    "The Slack plugin will post the final deployment status to #release-operations.",
+                  severity: "warning",
+                  pluginId: "slack",
+                  agentId: "release-comms",
+                  sessionKey: "agent:main:release-notification",
+                  allowedDecisions: ["allow-once", "deny"],
+                },
+                createdAtMs: updateFixtureNow - 90_000,
+                expiresAtMs: updateFixtureNow + 66 * 60_000,
+              },
+            ]
+          : [],
+      "openclaw.approval.list":
+        fixture === "approval"
+          ? [
+              {
+                id: "mock-system-agent-approval",
+                request: {
+                  title: "Apply the proposed recovery plan",
+                  description:
+                    "The operations agent proposes restarting the failed release notification workflow after preserving its queued payload.",
+                  command: "openclaw cron run mock-cron-release-notify --preserve-payload",
+                  proposalHash: "mock-recovery-plan-v1",
+                  agentId: "operations",
+                  sessionKey: "agent:main:gateway-recovery",
+                },
+                createdAtMs: updateFixtureNow - 60_000,
+                expiresAtMs: updateFixtureNow + 65 * 60_000,
+              },
+            ]
+          : [],
+      "exec.approval.resolve": { ok: true },
+      "plugin.approval.resolve": { ok: true },
+      "approval.resolve": { ok: true },
       "sessions.patch": { ok: true },
       "sessions.diff": buildSessionDiffMock(),
       // The worktrees page assumes the gateway contract shape; without this
@@ -2247,7 +2454,35 @@ async function createChatPickerScenario(
       "skills.proposals.historyScan": skillWorkshop.historyScan,
       "usage.cost": profileUsage.cost,
       "sessions.usage": profileUsage.sessions,
-      "models.authStatus": modelProviders.authStatus,
+      "models.authStatus": modelAuthStatus,
+      "update.hold": heldUpdateSchedule
+        ? { ok: true, schedule: heldUpdateSchedule }
+        : { ok: false },
+      "update.run": updateSchedule
+        ? { ok: false, result: { status: "error", reason: "build-dirty" } }
+        : {},
+      "update.status": updateSchedule
+        ? {
+            sentinel: {
+              kind: "update",
+              status: "error",
+              ts: updateFixtureNow,
+              stats: {
+                reason: "build-dirty",
+                steps: [
+                  {
+                    name: "build",
+                    log: {
+                      exitCode: 1,
+                      stderrTail:
+                        "generated artifacts differ from the selected revision after the build completed; preserve the checkout and retry only after reconciling the generated files and verifying the target revision",
+                    },
+                  },
+                ],
+              },
+            },
+          }
+        : {},
       "usage.status": modelProviders.usageStatus,
       "device.pair.list": {
         paired: [
@@ -2909,7 +3144,7 @@ function createMockGatewayPlugin(scenario: ControlUiMockGatewayScenario): Plugin
     transformIndexHtml(html) {
       return html.replace(
         "</head>",
-        `    <script data-openclaw-control-ui-mock-gateway>\n${initScript}\n${statefulInitScript}\n    </script>\n  </head>`,
+        `    <script data-openclaw-control-ui-mock-gateway>\ntry { localStorage.setItem("openclaw.i18n.locale", "en"); } catch {}\n${initScript}\n${statefulInitScript}\n    </script>\n  </head>`,
       );
     },
   };

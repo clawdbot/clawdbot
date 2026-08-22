@@ -28,7 +28,7 @@ import { renderOfflineSidebarStatus } from "./session-row-badges.ts";
 import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.ts";
 import "./settings-save-indicator.ts";
 import "./sidebar-build-chip.ts";
-import "./sidebar-update-card.ts";
+import "./sidebar-attention.ts";
 
 type SettingsSidebarProps = {
   basePath: string;
@@ -330,23 +330,9 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
       </nav>
       <openclaw-sidebar-attention
         .onNavigate=${props.onNavigate}
-        .onOpenApprovals=${props.onOpenApprovals}
-      ></openclaw-sidebar-attention>
-      <openclaw-sidebar-update-card
-        .updateAvailable=${props.updateAvailable}
-        .updateSchedule=${props.updateSchedule ?? null}
-        .heldUpdateCampaignId=${props.heldUpdateCampaignId ?? null}
-        .updateBusy=${props.updateBusy}
-        .statusBanner=${props.updateStatusBanner ?? null}
         .watchUpdateProgress=${props.watchUpdateProgress}
-        .canUpdate=${props.canUpdate ?? false}
-        .canHoldUpdate=${props.canHoldUpdate ?? false}
-        .onUpdate=${props.onUpdate}
-        .refreshRequired=${props.refreshRequired}
         .onRefresh=${props.onRefresh}
-        .onHoldUpdate=${props.onHoldUpdate ?? (async () => false)}
-        .onReviewUpdate=${props.onReviewUpdate ?? (() => undefined)}
-      ></openclaw-sidebar-update-card>
+      ></openclaw-sidebar-attention>
       <footer class="settings-sidebar__footer">
         ${props.offline
           ? renderOfflineSidebarStatus({
