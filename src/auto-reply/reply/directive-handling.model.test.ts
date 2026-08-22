@@ -376,6 +376,13 @@ vi.mock("../../agents/prepared-model-catalog.js", () => {
       const entries = await loadModelCatalog();
       return { entries, routeVariants: entries };
     },
+    loadPreparedModelCatalogOwnerSnapshot: async () => {
+      const entries = await loadModelCatalog();
+      return {
+        modelCatalog: { entries, routeVariants: entries },
+        metadataSnapshot: { plugins: [] },
+      };
+    },
   };
 });
 
