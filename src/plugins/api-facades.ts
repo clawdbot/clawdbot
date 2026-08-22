@@ -10,11 +10,9 @@ export type OpenClawPluginApiWithoutFacades = Omit<OpenClawPluginApi, keyof Plug
 type PluginApiFacadeSource = Pick<
   OpenClawPluginApi,
   | "clearRunContext"
-  | "clearSessionExtension"
   | "emitAgentEvent"
   | "enqueueNextTurnInjection"
   | "getRunContext"
-  | "getSessionExtension"
   | "registerAgentEventSubscription"
   | "registerControlUiDescriptor"
   | "registerRuntimeLifecycle"
@@ -24,20 +22,22 @@ type PluginApiFacadeSource = Pick<
   | "scheduleSessionTurn"
   | "sendSessionAttachment"
   | "setRunContext"
-  | "setSessionExtension"
   | "unscheduleSessionTurnsByTag"
 >;
+
+type PluginSessionStateFacadeSource = OpenClawPluginApi["session"]["state"];
 
 /** Attaches nested facade namespaces to the flat plugin API implementation. */
 export function attachPluginApiFacades<T extends object>(
   api: T & PluginApiFacadeSource & Partial<PluginApiFacadeFields>,
+  sessionState: PluginSessionStateFacadeSource,
 ): T & PluginApiFacadeFields {
   api.session = {
     state: {
       registerSessionExtension: (...args) => api.registerSessionExtension(...args),
-      getSessionExtension: (...args) => api.getSessionExtension(...args),
-      setSessionExtension: (...args) => api.setSessionExtension(...args),
-      clearSessionExtension: (...args) => api.clearSessionExtension(...args),
+      getSessionExtension: (...args) => sessionState.getSessionExtension(...args),
+      setSessionExtension: (...args) => sessionState.setSessionExtension(...args),
+      clearSessionExtension: (...args) => sessionState.clearSessionExtension(...args),
     },
     workflow: {
       enqueueNextTurnInjection: (...args) => api.enqueueNextTurnInjection(...args),

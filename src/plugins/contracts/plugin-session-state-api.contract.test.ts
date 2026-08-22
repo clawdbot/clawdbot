@@ -61,9 +61,13 @@ describe("plugin session state API contract", () => {
               updatedAt: Date.now(),
             } as SessionEntry);
             const extension = { sessionKey: "agent:main:main", namespace: "workflow" };
+            expect("getSessionExtension" in (ownerApi as object)).toBe(false);
+            expect("setSessionExtension" in (ownerApi as object)).toBe(false);
+            expect("clearSessionExtension" in (ownerApi as object)).toBe(false);
             await expect(
               ownerApi?.session.state.setSessionExtension({
                 ...extension,
+                namespace: " workflow ",
                 value: { checkpoint: "PR117" },
               }),
             ).resolves.toEqual({ checkpoint: "PR117" });

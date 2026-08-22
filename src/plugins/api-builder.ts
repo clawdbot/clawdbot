@@ -64,9 +64,6 @@ type BuildPluginApiParams = {
       | "registerCodexAppServerExtensionFactory"
       | "registerAgentToolResultMiddleware"
       | "registerSessionExtension"
-      | "getSessionExtension"
-      | "setSessionExtension"
-      | "clearSessionExtension"
       | "enqueueNextTurnInjection"
       | "registerTrustedToolPolicy"
       | "registerToolMetadata"
@@ -89,7 +86,8 @@ type BuildPluginApiParams = {
       | "registerMemoryPromptPreparation"
       | "registerMemoryCorpusSupplement"
       | "on"
-    >
+    > &
+      OpenClawPluginApi["session"]["state"]
   >;
 };
 
@@ -151,10 +149,12 @@ const noopRegisterCodexAppServerExtensionFactory: OpenClawPluginApi["registerCod
 const noopRegisterAgentToolResultMiddleware: OpenClawPluginApi["registerAgentToolResultMiddleware"] =
   () => {};
 const noopRegisterSessionExtension: OpenClawPluginApi["registerSessionExtension"] = () => {};
-const noopGetSessionExtension: OpenClawPluginApi["getSessionExtension"] = () => undefined;
-const noopSetSessionExtension: OpenClawPluginApi["setSessionExtension"] = async ({ value }) =>
-  value;
-const noopClearSessionExtension: OpenClawPluginApi["clearSessionExtension"] = async () => {};
+const noopGetSessionExtension: OpenClawPluginApi["session"]["state"]["getSessionExtension"] = () =>
+  undefined;
+const noopSetSessionExtension: OpenClawPluginApi["session"]["state"]["setSessionExtension"] =
+  async ({ value }) => value;
+const noopClearSessionExtension: OpenClawPluginApi["session"]["state"]["clearSessionExtension"] =
+  async () => {};
 const noopEnqueueNextTurnInjection: OpenClawPluginApi["enqueueNextTurnInjection"] = async (
   injection,
 ) => ({ enqueued: false, id: "", sessionKey: injection.sessionKey });
@@ -274,9 +274,6 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerAgentToolResultMiddleware:
       handlers.registerAgentToolResultMiddleware ?? noopRegisterAgentToolResultMiddleware,
     registerSessionExtension: handlers.registerSessionExtension ?? noopRegisterSessionExtension,
-    getSessionExtension: handlers.getSessionExtension ?? noopGetSessionExtension,
-    setSessionExtension: handlers.setSessionExtension ?? noopSetSessionExtension,
-    clearSessionExtension: handlers.clearSessionExtension ?? noopClearSessionExtension,
     enqueueNextTurnInjection: handlers.enqueueNextTurnInjection ?? noopEnqueueNextTurnInjection,
     registerTrustedToolPolicy: handlers.registerTrustedToolPolicy ?? noopRegisterTrustedToolPolicy,
     registerToolMetadata: handlers.registerToolMetadata ?? noopRegisterToolMetadata,
@@ -310,5 +307,10 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     resolvePath: params.resolvePath,
     on: handlers.on ?? noopOn,
   };
-  return attachPluginApiFacades(api);
+  return attachPluginApiFacades(api, {
+    registerSessionExtension: api.registerSessionExtension,
+    getSessionExtension: handlers.getSessionExtension ?? noopGetSessionExtension,
+    setSessionExtension: handlers.setSessionExtension ?? noopSetSessionExtension,
+    clearSessionExtension: handlers.clearSessionExtension ?? noopClearSessionExtension,
+  });
 }

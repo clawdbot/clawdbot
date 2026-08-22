@@ -350,19 +350,6 @@ export type OpenClawPluginApi = {
    * @deprecated Use `api.session.state.registerSessionExtension(...)`.
    */
   registerSessionExtension: (extension: PluginSessionExtensionRegistration) => void;
-  /** @deprecated Use `api.session.state.getSessionExtension(...)`. */
-  getSessionExtension: (params: {
-    sessionKey: string;
-    namespace: string;
-  }) => PluginJsonValue | undefined;
-  /** @deprecated Use `api.session.state.setSessionExtension(...)`. */
-  setSessionExtension: (params: {
-    sessionKey: string;
-    namespace: string;
-    value: PluginJsonValue;
-  }) => Promise<PluginJsonValue>;
-  /** @deprecated Use `api.session.state.clearSessionExtension(...)`. */
-  clearSessionExtension: (params: { sessionKey: string; namespace: string }) => Promise<void>;
   /**
    * Queue one plugin-owned context injection for the next agent turn in a session.
    * @deprecated Use `api.session.workflow.enqueueNextTurnInjection(...)`.

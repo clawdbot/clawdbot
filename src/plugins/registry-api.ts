@@ -259,12 +259,13 @@ export function createPluginApiFactory(
               registerSessionExtension: (extension) => registerSessionExtension(record, extension),
               getSessionExtension: ({ sessionKey, namespace }) => {
                 assertLoadedRecordInLiveRegistry();
+                const normalizedNamespace = namespace.trim();
                 const pluginState = getPluginSessionExtensionStateSync({
                   cfg: mutableConfigView(resolveCurrentConfig()),
                   pluginId: record.id,
                   sessionKey,
                 });
-                return pluginState?.[namespace];
+                return pluginState?.[normalizedNamespace];
               },
               setSessionExtension: async ({ sessionKey, namespace, value }) => {
                 assertLoadedRecordInLiveRegistry();

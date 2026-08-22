@@ -65,6 +65,7 @@ function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
         };
       },
     }),
+    api.session.state,
   );
   return {
     api: guardedApi,
