@@ -6,8 +6,12 @@
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { Agent, AgentTool } from "openclaw/plugin-sdk/agent-core";
-import { runAgentLoop, type StreamFn } from "openclaw/plugin-sdk/agent-core";
+import {
+  type Agent,
+  type AgentTool,
+  runAgentLoop,
+  type StreamFn,
+} from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
