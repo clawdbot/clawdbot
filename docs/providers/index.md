@@ -56,6 +56,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [llama.cpp (managed or existing server)](/plugins/llama-cpp)
 - [LM Studio (local models)](/providers/lmstudio)
 - [LongCat](/providers/longcat)
+- [MindsHub (unified gateway)](/providers/mindshub)
 - [MiniMax](/providers/minimax)
 - [Mistral](/providers/mistral)
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)

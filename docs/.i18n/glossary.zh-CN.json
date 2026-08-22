@@ -1850,5 +1850,13 @@
   {
     "source": "Built-in memory",
     "target": "内置记忆"
+  },
+  {
+    "source": "MindsHub (unified gateway)",
+    "target": "MindsHub (unified gateway)"
+  },
+  {
+    "source": "MindsHub",
+    "target": "MindsHub"
   }
 ]

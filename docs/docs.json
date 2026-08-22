@@ -1557,6 +1557,7 @@
                   "providers/lmstudio",
                   "providers/longcat",
                   "providers/meta",
+                  "providers/mindshub",
                   "providers/minimax",
                   "providers/mistral",
                   "providers/moonshot",

@@ -511,6 +511,20 @@ Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
 }
 ```
 
+### MindsHub
+
+MindsHub is a unified inference gateway that reaches Claude, GPT, Kimi, DeepSeek, Gemini, and
+more through one API key, in either OpenAI-compatible or Anthropic-compatible form. It is not a
+bundled provider plugin, so configure it via `models.providers`:
+
+- Auth: `MINDSHUB_API_KEY`
+- Example model: `mindshub/sonnet`
+- Base URL (OpenAI-compatible): `https://api.mindshub.ai/v1`
+- Base URL (Anthropic-compatible): `https://api.mindshub.ai` (host only, `authHeader: true` required)
+
+See [/providers/mindshub](/providers/mindshub) for full config examples and the auth-header
+caveat on the Anthropic-compatible path.
+
 ### MiniMax
 
 MiniMax is configured via `models.providers` because it uses custom endpoints:
