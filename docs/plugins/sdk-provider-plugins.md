@@ -1110,6 +1110,13 @@ catalog, API-key auth, and dynamic model resolution.
         loading provider runtime code while preparing agent tools. The public
         artifact is resolved for enabled installed plugins as well as bundled
         plugins, so keep its imports limited to lightweight SDK contracts.
+        This model-visible extension is intentionally narrow: one provider may
+        declare at most 8 parameters, and the complete schema artifact must fit
+        within 2,048 UTF-8 bytes, 6 nested levels, 128 JSON nodes, and 256
+        characters per string. Only standard scalar, collection, composition,
+        and validation keywords are accepted. Invalid, oversized, or over-deep
+        artifacts are rejected as a whole, leaving the shared `web_search`
+        schema unchanged.
       </Tab>
     </Tabs>
 
