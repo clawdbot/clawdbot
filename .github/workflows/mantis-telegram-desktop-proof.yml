@@ -181,7 +181,7 @@ jobs:
             setOutput("request_source", requestSource);
       - name: Create Mantis status token
         id: mantis_status_token
-        if: ${{ steps.resolve.outputs.request_source == 'issue_comment' }}
+        if: ${{ steps.resolve.outputs.pr_number != '' }}
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
@@ -201,12 +201,9 @@ jobs:
         with:
           github-token: ${{ steps.mantis_status_token.outputs.token }}
           script: |
-            const markerRoot = "<!-- mantis-telegram-desktop-proof:";
-            const runId = Number(process.env.GITHUB_RUN_ID);
-            const runAttempt = Number(process.env.GITHUB_RUN_ATTEMPT);
-            const marker = `${markerRoot}${runId}-${runAttempt} -->`;
+            const marker = `<!-- mantis-telegram-desktop-proof:${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT} -->`;
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
-            const body = `${marker}\nMantis started this proof. [Follow the active job](${runUrl}).`;
+            const body = `${marker}\n👀 Mantis started this proof. [Follow the active job](${runUrl}).`;
             const { owner, repo } = context.repo;
             const issueNumber = Number(process.env.TARGET_PR);
             await github.rest.issues.createComment({
@@ -248,7 +245,7 @@ jobs:
         if: >-
           ${{
             always() &&
-            steps.resolve.outputs.request_source == 'issue_comment' &&
+            steps.resolve.outputs.pr_number != '' &&
             (
               steps.mantis_status_token.outcome != 'success' ||
               steps.mantis_status_comment.outcome != 'success'
@@ -260,7 +257,7 @@ jobs:
         with:
           github-token: ${{ github.token }}
           script: |
-            const marker = "<!-- mantis-telegram-desktop-proof -->";
+            const marker = `<!-- mantis-telegram-desktop-proof:${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT} -->`;
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
             const { owner, repo } = context.repo;
             await github.rest.issues.createComment({
@@ -534,32 +531,58 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .artifacts/mantis-baseline-build.tar
-          key: ${{ runner.os }}-${{ runner.arch }}-mantis-baseline-v3-${{ needs.resolve_request.outputs.baseline_revision }}-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}
+          key: ${{ runner.os }}-${{ runner.arch }}-mantis-baseline-v3-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}-${{ needs.resolve_request.outputs.baseline_revision }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-mantis-baseline-v3-${{ steps.proof_worktrees.outputs.lockfile_sha256 }}-${{ steps.proof_worktrees.outputs.node_version }}-${{ steps.proof_worktrees.outputs.pnpm_version }}-
 
-      - name: Prepare baseline proof build
+      - name: Prepare baseline and candidate proof builds
         env:
           BASELINE_BUILD_ARCHIVE: ${{ github.workspace }}/.artifacts/mantis-baseline-build.tar
           BASELINE_BUILD_CACHE_HIT: ${{ steps.baseline_build_cache.outputs.cache-hit }}
-          BASELINE_ROOT: ${{ steps.proof_worktrees.outputs.baseline_root }}
+          BASELINE_SHA: ${{ needs.resolve_request.outputs.baseline_revision }}
+          CANDIDATE_SHA: ${{ needs.resolve_request.outputs.candidate_revision }}
+          HOST_PNPM_STORE: ${{ steps.setup-node-env.outputs.pnpm-store-cache-path }}
         shell: bash
         run: |
           set -euo pipefail
+          worktree_root="/tmp/openclaw-mantis-proof-worktrees-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          baseline_root="$worktree_root/baseline"
+          candidate_root="$worktree_root/candidate"
           toolchain_dir=/usr/local/lib/mantis-toolchain
           corepack_home="${RUNNER_TEMP}/mantis-corepack"
+          baseline_archive_restored=false
+          if [[ -f "$BASELINE_BUILD_ARCHIVE" ]]; then
+            baseline_archive_restored=true
+          fi
 
-          mkdir -p "${RUNNER_TEMP}/mantis-baseline-home"
-          cd "$BASELINE_ROOT"
-          env -i \
-            CI=1 \
-            COREPACK_HOME="$corepack_home" \
-            HOME="${RUNNER_TEMP}/mantis-baseline-home" \
-            OPENCLAW_BUILD_PRIVATE_QA=1 \
-            OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 \
-            PATH="$toolchain_dir:/usr/bin:/bin" \
-            "$toolchain_dir/pnpm" install --frozen-lockfile
-          if [[ "$BASELINE_BUILD_CACHE_HIT" == "true" ]]; then
-            tar -xf "$BASELINE_BUILD_ARCHIVE"
+          candidate_git_link="$(cat "$candidate_root/.git")"
+          if [[ "$baseline_archive_restored" == "true" ]] &&
+            git -C "$baseline_root" diff --quiet "$BASELINE_SHA" "$CANDIDATE_SHA" -- \
+              scripts/build-all.mts \
+              scripts/lib \
+              scripts/pnpm-runner.mts \
+              packages/normalization-core \
+              package.json \
+              pnpm-lock.yaml \
+              pnpm-workspace.yaml \
+              tsconfig.json; then
+            # Observed 2026-08: cache-only seeding still rebuilt tsdown-unified for 3m04s;
+            # its cache contract also requires the live plugin-SDK outputs it will replace.
+            tar --no-same-owner -C "$candidate_root" -xf "$BASELINE_BUILD_ARCHIVE" \
+              .artifacts/build-all-cache dist/plugin-sdk
+            test -z "$(find "$candidate_root/.artifacts/build-all-cache" -type l -print -quit)"
+            test -z "$(find "$candidate_root/dist/plugin-sdk" -type l -print -quit)"
+            test -z "$(find "$candidate_root/dist/plugin-sdk" -type f -links +1 -print -quit)"
+            echo "Seeded candidate build-all cache from the trusted restored baseline."
+          elif [[ "$baseline_archive_restored" == "true" ]]; then
+            echo "Candidate changed the build-cache engine closure; building without the baseline seed."
           else
+            echo "No baseline archive restored; building candidate without the baseline seed."
+          fi
+
+          baseline_build() {
+            mkdir -p "${RUNNER_TEMP}/mantis-baseline-home"
+            cd "$baseline_root"
             env -i \
               CI=1 \
               COREPACK_HOME="$corepack_home" \
@@ -567,32 +590,78 @@ jobs:
               OPENCLAW_BUILD_PRIVATE_QA=1 \
               OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 \
               PATH="$toolchain_dir:/usr/bin:/bin" \
-              "$toolchain_dir/pnpm" build
-            mkdir -p "$(dirname "$BASELINE_BUILD_ARCHIVE")"
-            tar -cf "$BASELINE_BUILD_ARCHIVE" dist dist-runtime packages/*/dist .artifacts/build-all-cache
-            find extensions -type f -path '*/src/host/*' \
-              \( -name '.bundle.hash' -o -name '*.bundle.js' \) -print0 \
-              | tar --append --file="$BASELINE_BUILD_ARCHIVE" --null --files-from=-
+              "$toolchain_dir/pnpm" install --frozen-lockfile
+            if [[ "$baseline_archive_restored" == "true" ]]; then
+              tar -C "$baseline_root" -xf "$BASELINE_BUILD_ARCHIVE"
+            fi
+            if [[ "$BASELINE_BUILD_CACHE_HIT" != "true" ]]; then
+              env -i \
+                CI=1 \
+                COREPACK_HOME="$corepack_home" \
+                HOME="${RUNNER_TEMP}/mantis-baseline-home" \
+                OPENCLAW_BUILD_PRIVATE_QA=1 \
+                OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 \
+                PATH="$toolchain_dir:/usr/bin:/bin" \
+                "$toolchain_dir/pnpm" build
+              mkdir -p "$(dirname "$BASELINE_BUILD_ARCHIVE")"
+              baseline_archive_new="${BASELINE_BUILD_ARCHIVE}.new"
+              test ! -e "$baseline_archive_new"
+              tar -cf "$baseline_archive_new" \
+                dist dist-runtime packages/*/dist .artifacts/build-all-cache
+              find extensions -type f -path '*/src/host/*' \
+                \( -name '.bundle.hash' -o -name '*.bundle.js' \) -print0 \
+                | tar --append --file="$baseline_archive_new" --null --files-from=-
+              mv -T "$baseline_archive_new" "$BASELINE_BUILD_ARCHIVE"
+            fi
+            test -d dist-runtime
+            test -f dist/build-info.json
+            test -f dist/control-ui/index.html
+            test -f dist/index.js -o -f dist/index.mjs
+            build_cache_root="$baseline_root/.artifacts/build-all-cache"
+            for phase in tsdown-ai tsdown-packages tsdown-unified; do
+              stamp="$build_cache_root/$phase/stamp.json"
+              outputs="$build_cache_root/$phase/outputs"
+              test -s "$stamp"
+              jq -e '
+                (.version | type) == "number" and
+                (.signature | type) == "string" and (.signature | length) == 64 and
+                (.outputs | type) == "array" and (.outputs | length) > 0
+              ' "$stamp" >/dev/null
+              test -d "$outputs"
+              test -n "$(find "$outputs" -type f -print -quit)"
+            done
+            test -z "$(find "$build_cache_root" -type l -print -quit)"
+            test -z "$(find "$build_cache_root" -type f -links +1 -print -quit)"
+          }
+
+          candidate_build() {
+            sudo useradd --system --no-create-home --shell /usr/sbin/nologin mantis-builder
+            sudo chown -R mantis-builder:mantis-builder "$candidate_root"
+            sudo /usr/local/sbin/openclaw-mantis-sut-container \
+              build "$candidate_root" "$HOST_PNPM_STORE"
+            test "$(cat "$candidate_root/.git")" = "$candidate_git_link"
+            git -c safe.directory="$candidate_root" -C "$candidate_root" diff --exit-code
+            git -c safe.directory="$candidate_root" -C "$candidate_root" diff --cached --exit-code
+            test "$(git -C "$baseline_root" rev-parse HEAD)" = "$BASELINE_SHA"
+            test "$(git -c safe.directory="$candidate_root" -C "$candidate_root" rev-parse HEAD)" = "$CANDIDATE_SHA"
+          }
+
+          baseline_log="${RUNNER_TEMP}/mantis-baseline-build.log"
+          candidate_log="${RUNNER_TEMP}/mantis-candidate-build.log"
+          (set -o pipefail; baseline_build 2>&1 | sed -u 's/^/[baseline] /' | tee "$baseline_log") &
+          baseline_pid=$!
+          (set -o pipefail; candidate_build 2>&1 | sed -u 's/^/[candidate] /' | tee "$candidate_log") &
+          candidate_pid=$!
+          set +e
+          wait "$baseline_pid"
+          baseline_status=$?
+          wait "$candidate_pid"
+          candidate_status=$?
+          set -e
+          if ((baseline_status != 0 || candidate_status != 0)); then
+            echo "::error::Proof build failure: baseline=${baseline_status}, candidate=${candidate_status}."
+            exit 1
           fi
-          test -d dist-runtime
-          test -f dist/build-info.json
-          test -f dist/control-ui/index.html
-          test -f dist/index.js -o -f dist/index.mjs
-          build_cache_root="$BASELINE_ROOT/.artifacts/build-all-cache"
-          for phase in tsdown-ai tsdown-packages tsdown-unified; do
-            stamp="$build_cache_root/$phase/stamp.json"
-            outputs="$build_cache_root/$phase/outputs"
-            test -s "$stamp"
-            jq -e '
-              (.version | type) == "number" and
-              (.signature | type) == "string" and (.signature | length) == 64 and
-              (.outputs | type) == "array" and (.outputs | length) > 0
-            ' "$stamp" >/dev/null
-            test -d "$outputs"
-            test -n "$(find "$outputs" -type f -print -quit)"
-          done
-          test -z "$(find "$build_cache_root" -type l -print -quit)"
-          test -z "$(find "$build_cache_root" -type f -links +1 -print -quit)"
 
       - name: Save exact baseline build
         if: steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.baseline_build_cache.outputs.cache-hit != 'true'
@@ -601,47 +670,6 @@ jobs:
         with:
           path: .artifacts/mantis-baseline-build.tar
           key: ${{ steps.baseline_build_cache.outputs.cache-primary-key }}
-
-      - name: Prepare candidate proof build
-        env:
-          BASELINE_BUILD_ARCHIVE: ${{ github.workspace }}/.artifacts/mantis-baseline-build.tar
-          BASELINE_SHA: ${{ needs.resolve_request.outputs.baseline_revision }}
-          CANDIDATE_SHA: ${{ needs.resolve_request.outputs.candidate_revision }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          worktree_root="/tmp/openclaw-mantis-proof-worktrees-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          baseline_root="$worktree_root/baseline"
-          candidate_root="$worktree_root/candidate"
-          candidate_git_link="$(cat "$candidate_root/.git")"
-          if git -C "$baseline_root" diff --quiet "$BASELINE_SHA" "$CANDIDATE_SHA" -- \
-            scripts/build-all.mts \
-            scripts/lib \
-            scripts/pnpm-runner.mts \
-            packages/normalization-core \
-            package.json \
-            pnpm-lock.yaml \
-            pnpm-workspace.yaml \
-            tsconfig.json; then
-            # Observed 2026-08: cache-only seeding still rebuilt tsdown-unified for 3m04s;
-            # its cache contract also requires the live plugin-SDK outputs it will replace.
-            tar --no-same-owner -C "$candidate_root" -xf "$BASELINE_BUILD_ARCHIVE" \
-              .artifacts/build-all-cache dist/plugin-sdk
-            test -z "$(find "$candidate_root/.artifacts/build-all-cache" -type l -print -quit)"
-            test -z "$(find "$candidate_root/dist/plugin-sdk" -type l -print -quit)"
-            test -z "$(find "$candidate_root/dist/plugin-sdk" -type f -links +1 -print -quit)"
-            echo "Seeded candidate build-all cache from the trusted baseline."
-          else
-            echo "Candidate changed the build-cache engine closure; building without the baseline seed."
-          fi
-          sudo useradd --system --no-create-home --shell /usr/sbin/nologin mantis-builder
-          sudo chown -R mantis-builder:mantis-builder "$candidate_root"
-          sudo /usr/local/sbin/openclaw-mantis-sut-container build "$candidate_root"
-          test "$(cat "$candidate_root/.git")" = "$candidate_git_link"
-          git -c safe.directory="$candidate_root" -C "$candidate_root" diff --exit-code
-          git -c safe.directory="$candidate_root" -C "$candidate_root" diff --cached --exit-code
-          test "$(git -C "$baseline_root" rev-parse HEAD)" = "$BASELINE_SHA"
-          test "$(git -c safe.directory="$candidate_root" -C "$candidate_root" rev-parse HEAD)" = "$CANDIDATE_SHA"
 
       - name: Install TDLib and restore Telegram QA user
         id: telegram_credential
@@ -778,7 +806,7 @@ jobs:
           openai-api-key: ${{ secrets.OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           prompt-file: .github/codex/prompts/mantis-telegram-desktop-proof.md
           model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
-          effort: medium
+          effort: high
           sandbox: danger-full-access
           codex-args: '["-c","service_tier=\"fast\""]'
           codex-home: /tmp/mantis-codex-home-${{ github.run_id }}
@@ -897,6 +925,16 @@ jobs:
           sudo install -m 0400 -o root -g root "$agent_manifest" "$trusted_agent_manifest"
           agent_manifest="$trusted_agent_manifest"
           sudo install -d -m 0755 -o root -g root "$trusted_output"
+          recipe_suggestion="$quarantine/recipe-suggestion.md"
+          if sudo test -e "$recipe_suggestion" || sudo test -L "$recipe_suggestion"; then
+            sudo test -f "$recipe_suggestion"
+            sudo test ! -L "$recipe_suggestion"
+            test "$(sudo stat -c %h "$recipe_suggestion")" = 1
+            recipe_bytes="$(sudo stat -c %s "$recipe_suggestion")"
+            ((recipe_bytes > 0 && recipe_bytes <= 65536))
+            sudo install -m 0644 -o root -g root "$recipe_suggestion" \
+              "$trusted_output/recipe-suggestion.md"
+          fi
           manifest="$trusted_output/mantis-evidence.json"
           judgment="$RUNNER_TEMP/mantis-agent-judgment.json"
           sudo jq -e '
@@ -944,13 +982,14 @@ jobs:
                .lane == $lane and
                (if .sutAttestation == null then
                   .status == "infra-error" and .artifacts == {} and .sendCount == 0 and
-                  .providerRequests == [] and .observation.events == [] and
+                  .botApiRequests == [] and .providerRequests == [] and .observation.events == [] and
                   .observation.truncated == false and
                   (.invocations | length) == 1 and .invocations[0].command == "start"
                 else
                   .sutAttestation.lane == $lane and .sutAttestation.sha == $sha
                 end) and
                (.invocations | type == "array") and (.observation.events | type == "array") and
+               (.botApiRequests | type == "array") and
                (.providerRequests | type == "array") and
                (if .status == "complete" or .status == "blocked" then (.cleanupErrors | length) == 0 else true end)' \
               "$verdict" >/dev/null
@@ -1090,6 +1129,7 @@ jobs:
                 hasFocusMessage: (.focusMessageId != null),
                 invocationCount: (.invocations | length),
                 observedEventCount: (.observation.events | length),
+                botApiRequestCount: (.botApiRequests | length),
                 providerRequestCount: (.providerRequests | length),
                 artifactNames: (.artifacts | keys),
                 cleanupErrorCount: (.cleanupErrors | length)
@@ -1226,7 +1266,7 @@ jobs:
             --request-source "$REQUEST_SOURCE"
 
       - name: Report failed Mantis proof
-        if: ${{ always() && needs.resolve_request.outputs.request_source == 'issue_comment' && steps.publish_evidence.outcome != 'success' }}
+        if: ${{ always() && needs.resolve_request.outputs.pr_number != '' && steps.publish_evidence.outcome != 'success' }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           TARGET_PR: ${{ needs.resolve_request.outputs.pr_number }}
@@ -1355,7 +1395,8 @@ jobs:
             --manifest "$root/mantis-evidence.json" \
             --target-pr "$TARGET_PR" \
             --artifact-root "mantis/telegram-desktop/pr-${TARGET_PR}/published-${PUBLISH_RUN_ID}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            --marker "<!-- mantis-telegram-desktop-proof -->" \
+            --marker "<!-- mantis-telegram-desktop-proof:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT} -->" \
+            --create-missing false \
             --artifact-url "$PUBLISH_ARTIFACT_URL" \
             --run-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${PUBLISH_RUN_ID}" \
             --request-source "$REQUEST_SOURCE"

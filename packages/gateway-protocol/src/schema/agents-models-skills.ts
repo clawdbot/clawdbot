@@ -453,6 +453,7 @@ export const SkillsUpdateParamsSchema = Type.Union([
     source: Type.Literal("clawhub"),
     slug: Type.Optional(NonEmptyString),
     all: Type.Optional(Type.Boolean()),
+    force: Type.Optional(Type.Boolean()),
     acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
   }),
 ]);

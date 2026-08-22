@@ -1663,16 +1663,20 @@ describe("grouped chat rendering", () => {
     );
 
     expect(markdownRenderMock).not.toHaveBeenCalled();
-    expect(streamingMarkdownRenderMock).toHaveBeenCalledWith("**live**\nreply", {
-      assistantTranscriptRoleHeaders: true,
-      codeBlockChrome: "copy",
-      codeBlockInteraction: "interactive",
-      fileLinks: true,
-      interactiveImages: false,
-      linkFavicons: false,
-      sessionLinks: true,
-      tableInteractions: "enabled",
-    });
+    expect(streamingMarkdownRenderMock).toHaveBeenCalledWith(
+      "**live**\nreply",
+      {
+        assistantTranscriptRoleHeaders: true,
+        codeBlockChrome: "copy",
+        codeBlockInteraction: "interactive",
+        fileLinks: true,
+        interactiveImages: false,
+        linkFavicons: false,
+        sessionLinks: true,
+        tableInteractions: "enabled",
+      },
+      "stream:1",
+    );
     const text = container.querySelector(".streaming-markdown");
     expect(text?.textContent).toBe("**live**\nreply");
   });
