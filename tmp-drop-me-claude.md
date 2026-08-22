@@ -910,6 +910,29 @@ The focused owners now pass 27/27 assertions. The first Gate 3g log and exit
 receipt are
 `/home/figs/.copilot/session-state/fb697b5e-c2b3-42f8-89e8-904d36834ca0/files/gate-3g-prepush.{log,exit}`.
 
+## 2026-08-22T09:47:00Z - Gate 3g second-run correction and portal repair
+
+The second Gate 3g run at `1618911fbf5cc1cd8098770d2066f89d72769374`
+was stopped by this driver after its full-suite phase had progressed through
+the auto-reply shards. A contemporaneous status message incorrectly called the
+run contaminated by edits; no source edit occurred after that run started.
+This append-only correction supersedes that statement. The partial run is valid
+evidence for every completed preceding phase and failure, but it is not a
+complete Gate 3g receipt because the owned process was stopped before the
+remaining shards.
+
+The partial run passed `pnpm check`, strict build, protocol generation and Swift
+check, plugin assets, all 5,341 extension assertions with 57 skipped, and the
+previously failing unit tests. It then exposed one deterministic Gateway
+failure: the portal proxy promised a localhost dual-stack dial but depended on
+the host resolver returning both loopback families. This host resolves
+`localhost` only to IPv4 even though an IPv6-only `::1` listener works.
+
+The portal connection owner now supplies the fixed loopback pair `127.0.0.1`
+and `::1` to Node's `autoSelectFamily` dial for both HTTP and WebSocket
+connections. The destination remains strictly loopback; no network trust
+surface expands. Both routed portal owner copies pass 20/20 assertions.
+
 ### Direct Codex contract evidence
 
 The package scan touches Codex runtime evidence, so the mandatory direct sibling

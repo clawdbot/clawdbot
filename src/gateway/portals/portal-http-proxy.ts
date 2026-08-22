@@ -6,7 +6,7 @@ import type {
   ServerResponse,
 } from "node:http";
 import { request as requestHttp } from "node:http";
-import net, { type Socket } from "node:net";
+import net, { type LookupFunction, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
 
 const PORTAL_AUTH_NAME = "openclaw_portal";
@@ -24,6 +24,18 @@ const PORTAL_COOKIE_PREFIX = "oc_portal_";
 // forced after upstream headers are copied rather than merely defaulted.
 const PORTAL_REFERRER_POLICY = "no-referrer";
 const MAX_WEBSOCKET_RESPONSE_HEADER_BYTES = 64 * 1024;
+const lookupPortalLoopback: LookupFunction = (_hostname, options, callback) => {
+  const addresses = [
+    { address: "127.0.0.1", family: 4 },
+    { address: "::1", family: 6 },
+  ] as const;
+  if (options.all) {
+    callback(null, [...addresses]);
+    return;
+  }
+  const selected = options.family === 6 ? addresses[1] : addresses[0];
+  callback(null, selected.address, selected.family);
+};
 const HOP_BY_HOP_HEADERS = new Set([
   "connection",
   "keep-alive",
@@ -271,7 +283,12 @@ export function handlePortalProxyRequest(params: {
   const proxyReq = requestHttp({
     hostname: "localhost",
     createConnection: () =>
-      net.connect({ host: "localhost", autoSelectFamily: true, port: target.targetPort }),
+      net.connect({
+        host: "localhost",
+        lookup: lookupPortalLoopback,
+        autoSelectFamily: true,
+        port: target.targetPort,
+      }),
     port: target.targetPort,
     method: req.method,
     path: authorization.requestPath,
@@ -393,6 +410,7 @@ export function handlePortalProxyUpgrade(params: {
   // Same localhost/dual-stack contract as the HTTP path above.
   const targetSocket: Socket = net.connect({
     host: "localhost",
+    lookup: lookupPortalLoopback,
     autoSelectFamily: true,
     port: target.targetPort,
   });
