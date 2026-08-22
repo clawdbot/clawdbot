@@ -92,7 +92,10 @@ suite.define(() => {
         const reopened = await context.newPage();
         await reopened.addInitScript(() => {
           const blockedTransactions = new WeakSet<IDBTransaction>();
-          const originalOpenCursor = IDBObjectStore.prototype.openCursor;
+          const originalOpenCursor = Object.getOwnPropertyDescriptor(
+            IDBObjectStore.prototype,
+            "openCursor",
+          )?.value as IDBObjectStore["openCursor"];
           IDBObjectStore.prototype.openCursor = function (...args) {
             if (this.name === "composerDrafts") {
               blockedTransactions.add(this.transaction);
@@ -119,9 +122,9 @@ suite.define(() => {
           ({ draftScope, draftStore }) =>
             Promise.race([
               draftStore.readDurableComposerDraft(draftScope),
-              new Promise((resolve) =>
-                setTimeout(() => resolve({ status: "maintenance-blocked-read" }), 1_000),
-              ),
+              new Promise((resolve) => {
+                setTimeout(() => resolve({ status: "maintenance-blocked-read" }), 1_000);
+              }),
             ]),
           { draftScope: scope, draftStore: reopenedStoreHandle },
         );
