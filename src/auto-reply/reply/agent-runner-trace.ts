@@ -76,7 +76,7 @@ type TraceAttemptView = {
   status?: number;
 };
 
-export type TraceExecutionView = {
+type TraceExecutionView = {
   winnerProvider?: string;
   winnerModel?: string;
   attempts?: TraceAttemptView[];

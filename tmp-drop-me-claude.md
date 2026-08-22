@@ -651,3 +651,63 @@ The accepted Gate 2.5 semantic evidence is therefore 596/596 assertions across
 the four canonical owner files, plus the repaired 5/5 session-state notice
 owner assertions. Production LOC delta remains zero. The only candidate code
 change is the two-line mock-key correction; the journal is append-only.
+
+## 2026-08-22T04:36:00Z - Gate 2.7 classification and cure
+
+The first classifier attempt incorrectly supplied the latest pure-continuation
+tip `c3a0e5a...` as `PRCREATE`. That made every intentional line removed
+anywhere in the long-lived feature look post-fork and over-classified 419 MIXED
+rows; 262 were byte-identical to that supplied root. The runbook defines the
+fallback baseline as the shared merge base, so the authoritative pass uses
+`4589d8514ce189b4adb8f0cf20b2a23ae92902d5`. This correction changes only
+Layer C ranking; baseline-independent Layer B was identical.
+
+The corrected exact-object pass examined 914 reviewer-visible files from frozen
+upstream `3376c298...` to candidate `fe76bcf488...`:
+
+- 289 `SAFE-NEW`;
+- 596 `GENUINE`;
+- one `FROZEN-STALE`;
+- 28 `MIXED-CLOBBER`.
+
+### Actionable rows
+
+- `src/agents/sanitize-for-prompt.test.ts` was byte-identical to historical
+  upstream `0f5984f4e11` and omitted frozen upstream's
+  `hasPromptUnsafeControlCharacter` contract coverage. Its production helper was
+  already restored during semantic resolution, so the zero-feature-byte Layer B
+  cure restores the frozen-upstream import and eight-character table exactly.
+  This protects the native attachment filename boundary without adding a test
+  seam.
+- The changed static gate exposed one candidate-parent assertion-budget debt:
+  `agent-runner-result-complete.ts` carried four non-const assertions while
+  frozen upstream permitted three. `EmbeddedAgentRunResult.meta.executionTrace`
+  is structurally narrower than `TraceExecutionView`; removing that unnecessary
+  cast and import passes core typecheck. The required shrink-only baseline update
+  lowers the repository total from 13,505 to 13,504. This is a net-negative type
+  repair, not a baseline increase.
+
+### MIXED row closure
+
+Every corrected Layer C row was compared against the shared merge base, pure
+root, frozen upstream, automatic merge tree, exact candidate, introducing
+history, owner callers, and tests. Four disjoint read-only reviews were then
+checked directly at the consequential boundaries.
+
+| Rows                                                                                                                                                                   | Disposition                                                                                                                                                                                                                                                                                |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `subagent-attachments.ts`, `subagent-spawn.ts`, `subagent-spawn.attachments.test.ts`, `subagent-registry-restore.ts`, `attempt-execution.ts`, `tool-display-config.ts` | Intentional continuation overlays: shared inline validation remains canonical; native prompt-safe path rendering is additive; resolver-bound spawn/restore ownership is stronger; display entries moved to owner-scoped modules.                                                           |
+| Three Codex prompt snapshots                                                                                                                                           | Deterministic regenerated character/token counters over the combined tool surface; no prompt body or tool schema dropped.                                                                                                                                                                  |
+| Telegram QA, Codex auth, and Copilot bridge tests                                                                                                                      | Canonical test helper rename from removed `withTempDir` to `withTestDir`; no assertion dropped.                                                                                                                                                                                            |
+| Embedded message lifecycle, attempt stream preparation, execution phase, and client tools                                                                              | State moved to `lifecycle-state.ts`; tool trust fields were grouped into one closed `subscriptionToolTrust` object and extended with trusted local-media names. All callers retain the frozen-upstream fields.                                                                             |
+| `session-state-notices.test.ts`                                                                                                                                        | Frozen-upstream coalesced-wake behavior retained; descendant `fe76bcf488...` corrects only its merged raw export keys.                                                                                                                                                                     |
+| Session-delivery queue storage and restart sentinel                                                                                                                    | Canonical owner extraction: media/durable queue fields remain in the queue codec and restart delivery moved to `server-restart-sentinel-delivery.ts`; no delivery branch was removed.                                                                                                      |
+| Heartbeat scheduler-owner, Gateway runtime-subscription, conversation-registry, and trajectory tests                                                                   | Raw/Core helper renames or extracted test registration; assertions and behavior remain. The scheduler-owner test already imports and invokes `requestHeartbeatRaw` at the candidate.                                                                                                       |
+| Plugin SDK surface report                                                                                                                                              | Reconciled combined-surface budgets and rationale; executable surface check owns the numbers.                                                                                                                                                                                              |
+| Accounting test, trace owner, result completion, and assertion baseline                                                                                                | Both upstream context-token and continuation scheduler mocks are present; trace type/function export differences are active continuation diagnostics, and the result-complete missing-line signal is a structural rewrite. The only unsafe residue was the unnecessary cast removed above. |
+
+No MIXED row requires an upstream-content restoration. The two initial repair
+owners pass 17/17 prompt-sanitizer assertions and 14/14 accounting assertions.
+Production delta for the Gate 2.7 cure is net -1 line; no production path,
+timeout, assertion, or harness was changed to green duplicate isolated-project
+execution.

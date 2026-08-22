@@ -28,7 +28,6 @@ import {
   derivePromptSegments,
   type TraceCompletionView,
   type TraceContextManagementView,
-  type TraceExecutionView,
   type TracePromptSegmentView,
   type TraceToolSummaryView,
   mergeExecutionTrace,
@@ -201,7 +200,7 @@ export async function completeReplyAgentRun(input: {
     const traceAuthorized = followupRun.run.traceAuthorized === true;
     const executionTrace = mergeExecutionTrace({
       fallbackAttempts,
-      executionTrace: runResult.meta?.executionTrace as TraceExecutionView | undefined,
+      executionTrace: runResult.meta?.executionTrace,
       provider: providerUsed,
       model: modelUsed,
       runner: isCliProvider(providerUsed, cfg) ? "cli" : "embedded",
