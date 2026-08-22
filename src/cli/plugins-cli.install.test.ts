@@ -1597,6 +1597,50 @@ describe("plugins cli install", () => {
     },
   );
 
+  it("installs the beta artifact for an official ClawHub plugin on a beta gateway", async () => {
+    primeSuccessfulClawHubPluginInstall();
+    parseClawHubPluginSpecMock.mockReturnValue({ name: "@openclaw/brave-plugin" });
+    pluginCliConfigMock.mockReturnValue({
+      ...createEmptyPluginConfig(),
+      update: { channel: "beta" },
+    } as OpenClawConfig);
+
+    await runPluginsCommand(["plugins", "install", "clawhub:@openclaw/brave-plugin"]);
+
+    expect(clawHubInstallCall().spec).toBe("clawhub:@openclaw/brave-plugin@beta");
+  });
+
+  it("falls back to the operator selector when no beta ClawHub release exists", async () => {
+    primeSuccessfulClawHubPluginInstall();
+    parseClawHubPluginSpecMock.mockReturnValue({ name: "@openclaw/brave-plugin" });
+    pluginCliConfigMock.mockReturnValue({
+      ...createEmptyPluginConfig(),
+      update: { channel: "beta" },
+    } as OpenClawConfig);
+    installPluginFromClawHubMock.mockResolvedValueOnce({
+      ok: false,
+      error: "Version not found on ClawHub: @openclaw/brave-plugin@beta.",
+      code: "version_not_found",
+    });
+
+    await runPluginsCommand(["plugins", "install", "clawhub:@openclaw/brave-plugin"]);
+
+    expect(clawHubInstallCall(0).spec).toBe("clawhub:@openclaw/brave-plugin@beta");
+    expect(clawHubInstallCall(1).spec).toBe("clawhub:@openclaw/brave-plugin");
+  });
+
+  it("leaves a non-official ClawHub install on the operator selector", async () => {
+    primeSuccessfulClawHubPluginInstall();
+    pluginCliConfigMock.mockReturnValue({
+      ...createEmptyPluginConfig(),
+      update: { channel: "beta" },
+    } as OpenClawConfig);
+
+    await runPluginsCommand(["plugins", "install", "clawhub:demo"]);
+
+    expect(clawHubInstallCall().spec).toBe("clawhub:demo");
+  });
+
   it("does not show the non-ClawHub warning for explicit ClawHub installs", async () => {
     primeSuccessfulClawHubPluginInstall();
     await runPluginsCommand(["plugins", "install", "clawhub:demo"]);
@@ -1923,6 +1967,53 @@ describe("plugins cli install", () => {
     expect(record.installPath).toBe(cliInstallPath("brave"));
     expect(record.version).toBe("1.2.3");
     expect(configWriteMock).toHaveBeenCalledWith(enabledCfg);
+  });
+
+  it.each([
+    { label: "plugin id", arg: "brave" },
+    { label: "npm package name", arg: "@openclaw/brave-plugin" },
+  ])(
+    "installs the beta artifact for an official plugin on a beta gateway by $label",
+    async ({ arg }) => {
+      primeSuccessfulPluginPersistence("brave");
+      pluginCliConfigMock.mockReturnValue({
+        ...createEmptyPluginConfig(),
+        update: { channel: "beta" },
+      } as OpenClawConfig);
+      findBundledPluginSourceMock.mockReturnValue(undefined);
+      installPluginFromNpmSpecMock.mockResolvedValue(createNpmPluginInstallResult("brave"));
+
+      await runPluginsCommand(["plugins", "install", arg]);
+
+      expect(npmInstallCall().spec).toBe("@openclaw/brave-plugin@beta");
+      expect(npmInstallCall().trustedSourceLinkedOfficialInstall).toBe(true);
+      // The record keeps the operator's selector so a later channel change is
+      // not silently pinned to the beta dist-tag.
+      expect(persistedInstallRecord("brave").spec).toBe("@openclaw/brave-plugin");
+    },
+  );
+
+  it("falls back to the operator selector when no beta artifact is published", async () => {
+    primeSuccessfulPluginPersistence("brave");
+    pluginCliConfigMock.mockReturnValue({
+      ...createEmptyPluginConfig(),
+      update: { channel: "beta" },
+    } as OpenClawConfig);
+    findBundledPluginSourceMock.mockReturnValue(undefined);
+    installPluginFromNpmSpecMock
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "npm error code ETARGET No matching version found for @openclaw/brave-plugin@beta",
+        code: "npm_package_not_found",
+      })
+      .mockResolvedValue(createNpmPluginInstallResult("brave"));
+
+    await runPluginsCommand(["plugins", "install", "brave"]);
+
+    expect(npmInstallCall(0).spec).toBe("@openclaw/brave-plugin@beta");
+    expect(npmInstallCall(1).spec).toBe("@openclaw/brave-plugin");
+    expect(persistedInstallRecord("brave").spec).toBe("@openclaw/brave-plugin");
+    expect(runtimeLogsContain("No @openclaw/brave-plugin@beta release is published")).toBe(true);
   });
 
   it("passes third-party external catalog integrity with catalog install trust", async () => {

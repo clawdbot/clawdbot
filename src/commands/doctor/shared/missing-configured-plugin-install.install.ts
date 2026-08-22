@@ -17,11 +17,13 @@ import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "../../../plugins/install-channel-specs.js";
+import { installWithChannelFallback } from "../../../plugins/install-channel-specs.js";
 import {
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir,
   resolvePluginInstallDir,
 } from "../../../plugins/install-paths.js";
+import { isUnavailableNpmTarget } from "../../../plugins/install-types.js";
 import { installPluginFromNpmSpec } from "../../../plugins/install.js";
 import {
   buildNpmResolutionInstallFields,
@@ -265,21 +267,12 @@ export async function installCandidate(params: {
     };
   }
   const npmInstallMode = params.mode === "update" || existingNpmPackagePath ? "update" : "install";
-  let result = await installPluginFromNpmSpec({
-    spec: npmInstallSpec,
-    config: params.config,
-    extensionsDir,
-    npmDir,
-    expectedPluginId: candidate.pluginId,
-    expectedIntegrity: candidate.expectedIntegrity,
-    ...(candidate.trustedSourceLinkedOfficialInstall
-      ? { trustedSourceLinkedOfficialInstall: true }
-      : {}),
-    mode: npmInstallMode,
-  });
-  if (!result.ok && npmInstallMode === "install" && isPluginAlreadyExistsError(result.error)) {
-    result = await installPluginFromNpmSpec({
-      spec: npmInstallSpec,
+  // A channel fallback changes which artifact the operator gets, so it must stay
+  // visible on the success path instead of being dropped with the attempt log.
+  const channelNotices: string[] = [];
+  const runNpmInstall = async (spec: string, mode: "install" | "update") =>
+    await installPluginFromNpmSpec({
+      spec,
       config: params.config,
       extensionsDir,
       npmDir,
@@ -288,9 +281,24 @@ export async function installCandidate(params: {
       ...(candidate.trustedSourceLinkedOfficialInstall
         ? { trustedSourceLinkedOfficialInstall: true }
         : {}),
-      mode: "update",
+      mode,
     });
-  }
+  const installOnce = async (spec: string) => {
+    const attempt = await runNpmInstall(spec, npmInstallMode);
+    return !attempt.ok && npmInstallMode === "install" && isPluginAlreadyExistsError(attempt.error)
+      ? await runNpmInstall(spec, "update")
+      : attempt;
+  };
+  const result = await installWithChannelFallback({
+    installSpec: npmInstallSpec,
+    // An integrity pin identifies one exact artifact, so it outranks the channel.
+    ...(candidate.expectedIntegrity ? {} : { fallbackSpec: npmSpecs?.fallbackSpec }),
+    install: installOnce,
+    isRetryable: (attempt) => !attempt.ok && isUnavailableNpmTarget(attempt),
+    onFallback: (message) => {
+      channelNotices.push(message);
+    },
+  });
   if (!result.ok) {
     return {
       records: params.records,
@@ -298,6 +306,7 @@ export async function installCandidate(params: {
       notices: [],
       warnings: [
         ...warnings,
+        ...channelNotices,
         `Failed to install missing configured plugin "${candidate.pluginId}" from ${npmInstallSpec}: ${result.error}`,
       ],
       failedPluginId: candidate.pluginId,
@@ -328,7 +337,7 @@ export async function installCandidate(params: {
         repairReason: params.repairReason,
       }),
     ],
-    notices: [],
+    notices: channelNotices,
     warnings: [],
   };
 }

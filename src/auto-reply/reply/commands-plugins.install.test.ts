@@ -281,6 +281,48 @@ describe("handleCommands /plugins install", () => {
     });
   });
 
+  it("installs the beta artifact for an official plugin on a beta gateway", async () => {
+    const betaConfig: OpenClawConfig = {
+      commands: { text: true, plugins: true },
+      plugins: { enabled: true },
+      update: { channel: "beta" },
+    };
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "brave",
+      targetDir: "/tmp/brave",
+      version: "1.0.0",
+      extensions: ["index.js"],
+      npmResolution: {
+        name: "@openclaw/brave-plugin",
+        version: "1.0.0",
+        resolvedSpec: "@openclaw/brave-plugin@1.0.0",
+      },
+    });
+    persistPluginInstallMock.mockResolvedValue({});
+
+    await withTempHome("openclaw-command-plugins-home-", async (home) => {
+      await fs.writeFile(
+        path.join(home, ".openclaw", "openclaw.json"),
+        `${JSON.stringify(betaConfig, null, 2)}
+`,
+      );
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      const params = buildPluginsParams(
+        "/plugins install npm:@openclaw/brave-plugin",
+        workspaceDir,
+        { cfg: betaConfig },
+      );
+
+      await handlePluginsCommand(params, true);
+
+      expectObjectFields(mockFirstObjectArg(installPluginFromNpmSpecMock), {
+        spec: "@openclaw/brave-plugin@beta",
+        trustedSourceLinkedOfficialInstall: true,
+      });
+    });
+  });
+
   it("allows npm packages matched by a bundled plugin manifest", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: true,

@@ -19,7 +19,7 @@ import {
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
-import { CLAWHUB_INSTALL_ERROR_CODE } from "./clawhub-error-codes.js";
+import { isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
 import {
   getExternalizedBundledPluginClawHubSpec,
   getExternalizedBundledPluginNpmSpec,
@@ -30,7 +30,7 @@ import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "./install-channel-specs.js";
-import { PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
+import { isUnavailableNpmTarget } from "./install-types.js";
 import { checkMinHostVersion } from "./min-host-version.js";
 import * as officialInstallRecords from "./official-external-install-records.js";
 import {
@@ -417,21 +417,11 @@ export function isBundledVersionNewer(bundledVersion: string, installedVersion: 
 }
 
 function shouldFallbackClawHubToDefault(result: { ok: false; code?: string }): boolean {
-  return (
-    result.code === CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND ||
-    result.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND
-  );
+  return isUnavailableClawHubTarget(result);
 }
 
 export function shouldFallbackBetaClawHubUpdate(result: { ok: false; code?: string }): boolean {
   return shouldFallbackClawHubToDefault(result);
-}
-
-function isUnavailableNpmTarget(result: { ok: false; code?: string; error: string }): boolean {
-  return (
-    result.code === PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND ||
-    /\b(ETARGET|notarget)\b|No matching version found|dist-tag|tag .*not found/i.test(result.error)
-  );
 }
 
 export function describeBetaNpmFallback(params: {

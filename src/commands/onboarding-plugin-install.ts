@@ -28,6 +28,7 @@ import {
   type PluginEnableResult,
 } from "../plugins/enable.js";
 import {
+  installWithChannelFallback,
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "../plugins/install-channel-specs.js";
@@ -38,6 +39,7 @@ import {
   ALLOW_PLUGIN_INSTALL_OVERRIDES_ENV,
 } from "../plugins/install-overrides.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
+import { isUnavailableNpmTarget } from "../plugins/install-types.js";
 import {
   installPluginFromNpmSpec,
   installPluginFromNpmPackArchive,
@@ -1255,12 +1257,25 @@ export async function ensureOnboardingPluginInstalled(params: {
     }
 
     await params.beforePersistentEffect?.();
-    const installOutcome = await installPluginFromNpmSpecWithProgress({
-      cfg: next,
-      entry,
-      npmSpec: npmInstallSpec,
-      prompter,
-      runtime,
+    const installOutcome = await installWithChannelFallback({
+      installSpec: npmInstallSpec,
+      // An integrity pin identifies one exact artifact, so it outranks the channel.
+      ...(entry.install.expectedIntegrity ? {} : { fallbackSpec: npmSpecs?.fallbackSpec }),
+      install: async (spec) =>
+        await installPluginFromNpmSpecWithProgress({
+          cfg: next,
+          entry,
+          npmSpec: spec,
+          prompter,
+          runtime,
+        }),
+      isRetryable: (outcome) =>
+        outcome.status === "completed" &&
+        !outcome.result.ok &&
+        isUnavailableNpmTarget(outcome.result),
+      onFallback: async (message) => {
+        await prompter.note(message, t("wizard.plugins.installTitle"));
+      },
     });
 
     if (installOutcome.status === "timed_out") {
