@@ -76,7 +76,7 @@ describe("Codex app-server binding store", () => {
     });
   });
 
-  it("does not normalize untrusted persisted binding policy into live runtime policy", () => {
+  it("preserves the effective managed approval policy in persisted thread bindings", () => {
     expect(
       readCodexAppServerThreadBinding({
         threadId: "thread-untrusted-policy",
@@ -87,6 +87,7 @@ describe("Codex app-server binding store", () => {
     ).toEqual({
       threadId: "thread-untrusted-policy",
       cwd: "/repo",
+      approvalPolicy: "untrusted",
       sandbox: "workspace-write",
     });
   });

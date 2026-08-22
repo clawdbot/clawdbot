@@ -31,6 +31,10 @@ function resolveRuntimeForTest(params: RuntimeOptionsParams = {}) {
 }
 
 describe("withMcpElicitationsApprovalPolicy", () => {
+  it("preserves managed per-command approvals that already allow MCP elicitation", () => {
+    expect(withMcpElicitationsApprovalPolicy("untrusted")).toBe("untrusted");
+  });
+
   it("returns every field required by Codex granular approval policy", () => {
     expect(withMcpElicitationsApprovalPolicy("never")).toEqual({
       granular: {
@@ -1230,6 +1234,27 @@ describe("Codex app-server config", () => {
       sandbox: "workspace-write",
       approvalsReviewer: "auto_review",
     });
+  });
+
+  it.each([
+    { policies: ["untrusted"], description: "only the managed internal policy" },
+    { policies: ["untrusted", "never"], description: "managed and unrestricted policies" },
+  ])("preserves $description without weakening Codex approvals", ({ policies }) => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      modelProvider: "openai",
+      requirementsToml: `allowed_approval_policies = [${policies
+        .map((policy) => `"${policy}"`)
+        .join(", ")}]\n`,
+    });
+
+    expectRuntimePolicy(runtime, {
+      approvalPolicy: "untrusted",
+      sandbox: "workspace-write",
+      approvalsReviewer: "auto_review",
+    });
+    expect(runtime.approvalPolicySource).toBe("requirements");
+    expect(withMcpElicitationsApprovalPolicy(runtime.approvalPolicy)).toBe("untrusted");
   });
 
   it("normalizes the deprecated requirements on-failure alias to on-request", () => {
@@ -2453,21 +2478,9 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       error: "tools.exec.mode=auto requires Codex app-server prompting approvals",
     },
     {
-      execMode: "auto",
-      policies: ["untrusted"],
-      error:
-        'Codex requirements allowed_approval_policies only permits retired "untrusted"; replace it with "on-request".',
-    },
-    {
       execMode: "ask",
       policies: ["never"],
       error: "tools.exec.mode=ask requires Codex app-server prompting approvals",
-    },
-    {
-      execMode: "ask",
-      policies: ["untrusted"],
-      error:
-        'Codex requirements allowed_approval_policies only permits retired "untrusted"; replace it with "on-request".',
     },
   ] as const)(
     "fails closed when normalized OpenClaw $execMode mode can only use $policies approvals",
@@ -2483,6 +2496,24 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       ).toThrow(error);
     },
   );
+
+  it.each([
+    { execMode: "auto" as const, approvalsReviewer: "auto_review" },
+    { execMode: "ask" as const, approvalsReviewer: "user" },
+  ])("honors managed prompting approvals for OpenClaw $execMode mode", (expected) => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {},
+      execMode: expected.execMode,
+      modelProvider: "openai",
+      requirementsToml: 'allowed_approval_policies = ["untrusted", "never"]\n',
+    });
+
+    expectRuntimePolicy(runtime, {
+      approvalPolicy: "untrusted",
+      sandbox: "workspace-write",
+      approvalsReviewer: expected.approvalsReviewer,
+    });
+  });
 
   it("keeps normalized OpenClaw full exec mode on default Codex yolo", () => {
     const runtime = resolveRuntimeForTest({

@@ -29,14 +29,15 @@ export type OpenClawExecPolicy = OpenClawExecPolicyForCodexAppServer;
 export type ProviderAuthAliasConfig = NonNullable<ProviderAuthAliasLookupParams>["config"];
 export type CodexAppServerDefaultPolicy = {
   mode: CodexAppServerPolicyMode;
-  approvalPolicy?: CodexAppServerApprovalPolicy;
+  approvalPolicy?: CodexAppServerManagedApprovalPolicy;
   approvalsReviewer?: CodexAppServerApprovalsReviewer;
   sandbox?: CodexAppServerSandboxMode;
   dangerFullAccessAllowed?: boolean;
 };
 export type CodexAppServerApprovalPolicy = "never" | "on-request";
+export type CodexAppServerManagedApprovalPolicy = Extract<CodexApprovalPolicy, string>;
 export type CodexAppServerApprovalPolicySource = "config" | "env" | "requirements" | "implicit";
-export type CodexAppServerEffectiveApprovalPolicy = Exclude<CodexApprovalPolicy, "untrusted">;
+export type CodexAppServerEffectiveApprovalPolicy = CodexApprovalPolicy;
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 export type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 export type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";

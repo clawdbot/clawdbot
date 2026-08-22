@@ -227,7 +227,7 @@ const threadBindingSchema = z
     approvalPolicy: z
       .preprocess(
         (value) => (value === "on-failure" ? "on-request" : value),
-        z.enum(["never", "on-request"]).optional(),
+        z.enum(["never", "on-request", "untrusted"]).optional(),
       )
       .catch(undefined),
     sandbox: z
