@@ -744,29 +744,35 @@ openclaw-session-owner-chip {
   gap: var(--space-2);
   max-width: min(520px, calc(var(--app-toast-anchor-width) - 24px));
   padding: 8px 12px;
-  border-color: color-mix(in srgb, var(--info) 48%, var(--border));
+  border-color: color-mix(in srgb, var(--info) 12%, transparent);
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--info) 12%, var(--popover));
-  box-shadow:
-    0 12px 32px color-mix(in srgb, var(--info) 14%, transparent),
-    var(--shadow-lg);
-  transition-property: opacity, transform;
-  transition-duration: 220ms;
-  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  transition-property: translate, scale, opacity;
+}
+
+.app-toast--anchored[data-active="true"] {
+  translate: 0 0;
+  scale: 1;
+  opacity: 1;
+  transition-duration: 200ms;
+  transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 @starting-style {
-  .app-toast--anchored {
+  .app-toast--anchored[data-active="true"] {
+    translate: 0 -100%;
+    scale: 0.95;
     opacity: 0;
-    transform: translate(-50%, -10px);
   }
 }
 
-.app-toast--anchored.app-toast--exiting {
+.app-toast--anchored[data-active="false"] {
+  translate: 0 -100%;
+  scale: 0.95;
   opacity: 0;
-  transform: translate(-50%, -10px);
-  transition-duration: 150ms;
-  transition-timing-function: ease-out;
+  pointer-events: none;
+  transition-duration: 400ms;
+  transition-timing-function: cubic-bezier(0.7, 0, 0.84, 0);
 }
 
 .app-toast__icon {
@@ -863,7 +869,8 @@ openclaw-session-owner-chip {
 
 @media (prefers-reduced-motion: reduce) {
   .app-toast--anchored,
-  .app-toast--anchored.app-toast--exiting {
+  .app-toast--anchored[data-active="true"],
+  .app-toast--anchored[data-active="false"] {
     transition: none;
   }
 }

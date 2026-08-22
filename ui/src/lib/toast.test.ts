@@ -79,9 +79,9 @@ describe("shared toast", () => {
     await vi.advanceTimersByTimeAsync(50);
     await host.updateComplete;
 
-    expect(host.querySelector(".app-toast--exiting")).not.toBeNull();
+    expect(host.querySelector('.app-toast[data-active="false"]')).not.toBeNull();
 
-    await vi.advanceTimersByTimeAsync(150);
+    await vi.advanceTimersByTimeAsync(450);
     await host.updateComplete;
 
     expect(host.querySelector(".app-toast")).toBeNull();
@@ -101,6 +101,7 @@ describe("shared toast", () => {
   });
 
   it("reports why a toast is replaced, dismissed, acted on, or disconnected", async () => {
+    vi.useFakeTimers();
     const host = await mountHost();
     const reasons: string[] = [];
 
@@ -118,6 +119,9 @@ describe("shared toast", () => {
     showToast({ message: "Third", onDismiss: (reason) => reasons.push(reason) });
     await host.updateComplete;
     host.querySelector<HTMLButtonElement>(".app-toast__dismiss")?.click();
+    await host.updateComplete;
+    expect(host.querySelector('.app-toast[data-active="false"]')).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(450);
     await host.updateComplete;
 
     showToast({ message: "Fourth", onDismiss: (reason) => reasons.push(reason) });
