@@ -250,6 +250,7 @@ export function createPluginApiFactory(
               registerSessionExtension: (extension) => registerSessionExtension(record, extension),
               getSessionExtension: ({ sessionKey, namespace }) => {
                 const pluginState = getPluginSessionExtensionStateSync({
+                  // SAFETY: DeepReadonly preserves the OpenClawConfig structure required by the read-only session resolver.
                   cfg: resolveCurrentConfig() as OpenClawConfig,
                   pluginId: record.id,
                   sessionKey,
@@ -258,6 +259,7 @@ export function createPluginApiFactory(
               },
               setSessionExtension: async ({ sessionKey, namespace, value }) => {
                 const result = await patchPluginSessionExtension({
+                  // SAFETY: The session patcher reads config routing fields and does not mutate the runtime config object.
                   cfg: resolveCurrentConfig() as OpenClawConfig,
                   pluginId: record.id,
                   sessionKey,
@@ -271,13 +273,16 @@ export function createPluginApiFactory(
               },
               clearSessionExtension: async ({ sessionKey, namespace }) => {
                 const result = await patchPluginSessionExtension({
+                  // SAFETY: The session patcher reads config routing fields and does not mutate the runtime config object.
                   cfg: resolveCurrentConfig() as OpenClawConfig,
                   pluginId: record.id,
                   sessionKey,
                   namespace,
                   unset: true,
                 });
-                if (!result.ok) throw new Error(result.error);
+                if (!result.ok) {
+                  throw new Error(result.error);
+                }
               },
               enqueueNextTurnInjection: (injection) => {
                 if (params.hookPolicy?.allowPromptInjection === false) {
