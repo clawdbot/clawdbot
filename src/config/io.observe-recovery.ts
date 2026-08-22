@@ -153,6 +153,14 @@ function extractRestoreErrorDetails(error: unknown): {
   return { code, message };
 }
 
+function formatClobberSnapshotSkipWarning(
+  context: string,
+  configPath: string,
+  suspicious: string[],
+): string {
+  return `Config ${context} skipped: could not write the .clobbered.* copy of the current config: ${configPath} (${suspicious.join(", ")})`;
+}
+
 function returnOriginalConfigRead(params: ConfigReadRecoveryParams): ConfigReadRecoveryResult {
   return { raw: params.raw, parsed: params.parsed };
 }
@@ -440,6 +448,10 @@ function* recoverSuspiciousConfigRead(
     sync: () => persistBoundedClobberedConfigSnapshotSync(snapshotParams),
     async: () => persistBoundedClobberedConfigSnapshot(snapshotParams),
   }) as string | null;
+  if (!clobberedPath) {
+    deps.logger.warn(formatClobberSnapshotSkipWarning("backup restore", configPath, suspicious));
+    return returnOriginalConfigRead(params);
+  }
   let restoredFromBackup = false;
   let restoreError: unknown;
   try {
@@ -616,6 +628,12 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
     snapshot,
     observedAt: now,
   });
+  if (!clobberedPath) {
+    deps.logger.warn(
+      formatClobberSnapshotSkipWarning("last-known-good recovery", snapshot.path, [params.reason]),
+    );
+    return false;
+  }
   if (recoveryCandidate.raw !== backupRaw) {
     warnIfJSON5CommentsWillBeStripped({
       raw: backupRaw,
