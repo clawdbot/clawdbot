@@ -50,8 +50,7 @@ import {
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
-import { isUnavailableNpmTarget } from "./install-types.js";
-import type { PluginInstallLogger } from "./install-types.js";
+import { isUnavailableNpmTarget, type PluginInstallLogger } from "./install-types.js";
 import {
   installPluginFromNpmPackArchive,
   installPluginFromNpmSpec,
@@ -71,8 +70,8 @@ import {
   resolveTrustedSourceLinkedOfficialClawHubSpec,
   resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "./official-external-install-records.js";
-import { getOfficialExternalPluginCatalogEntryForPackage } from "./official-external-plugin-catalog.js";
 import {
+  getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
   listOfficialExternalPluginCatalogEntries,
   loadConfiguredHostedOfficialExternalPluginCatalogEntries,

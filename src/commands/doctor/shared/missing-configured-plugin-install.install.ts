@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { isOpenClawOrgNpmSpec, parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../../../infra/update-channels.js";
+import { isUnavailableClawHubTarget } from "../../../plugins/clawhub-error-codes.js";
 import { buildClawHubPluginInstallRecordFields } from "../../../plugins/clawhub-install-records.js";
 import {
   CLAWHUB_INSTALL_ERROR_CODE,
@@ -14,10 +15,10 @@ import {
   type ClawHubRiskAcknowledgementRequest,
 } from "../../../plugins/clawhub.js";
 import {
+  installWithChannelFallback,
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "../../../plugins/install-channel-specs.js";
-import { installWithChannelFallback } from "../../../plugins/install-channel-specs.js";
 import {
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir,
@@ -137,6 +138,9 @@ export async function installCandidate(params: {
   const extensionsDir = resolveDefaultPluginExtensionsDir(params.env);
   const changes: string[] = [];
   const warnings: string[] = [];
+  // A channel fallback changes which artifact the operator gets, so it must stay
+  // visible on the success path instead of being dropped with the attempt log.
+  const channelNotices: string[] = [];
   const clawhubSpecs = candidate.clawhubSpec
     ? resolveClawHubInstallSpecsForUpdateChannel({
         spec: candidate.clawhubSpec,
@@ -192,21 +196,34 @@ export async function installCandidate(params: {
     !(params.preferNpm && npmInstallSpec) &&
     candidate.defaultChoice !== "npm";
   if (shouldTryClawHub) {
-    const clawhubInstallSpecLabel = sanitizeTerminalText(clawhubInstallSpec);
-    const clawhubResult = await installPluginFromClawHub({
-      spec: clawhubInstallSpec,
-      config: params.config,
-      extensionsDir,
-      env: params.env,
-      expectedPluginId: candidate.pluginId,
-      mode: params.mode === "update" || existingClawHubPackagePath ? "update" : "install",
-      logger: {
-        terminalLinks: false,
-        warn: (message) => warnings.push(stripAnsi(message)),
+    let usedClawHubSpec = clawhubInstallSpec;
+    const clawhubResult = await installWithChannelFallback({
+      installSpec: clawhubInstallSpec,
+      // An integrity pin identifies one exact artifact, so it outranks the channel.
+      ...(candidate.expectedIntegrity ? {} : { fallbackSpec: clawhubSpecs?.fallbackSpec }),
+      install: async (spec) => {
+        usedClawHubSpec = spec;
+        return await installPluginFromClawHub({
+          spec,
+          config: params.config,
+          extensionsDir,
+          env: params.env,
+          expectedPluginId: candidate.pluginId,
+          mode: params.mode === "update" || existingClawHubPackagePath ? "update" : "install",
+          logger: {
+            terminalLinks: false,
+            warn: (message) => warnings.push(stripAnsi(message)),
+          },
+          ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
+          ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
+        });
       },
-      ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-      ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
+      isRetryable: (attempt) => !attempt.ok && isUnavailableClawHubTarget(attempt),
+      onFallback: (message) => {
+        channelNotices.push(message);
+      },
     });
+    const clawhubInstallSpecLabel = sanitizeTerminalText(usedClawHubSpec);
     if (clawhubResult.ok) {
       const pluginId = clawhubResult.pluginId;
       return {
@@ -226,7 +243,7 @@ export async function installCandidate(params: {
             repairReason: params.repairReason,
           }),
         ],
-        notices: warnings,
+        notices: [...channelNotices, ...warnings],
         warnings: [],
       };
     }
@@ -267,9 +284,6 @@ export async function installCandidate(params: {
     };
   }
   const npmInstallMode = params.mode === "update" || existingNpmPackagePath ? "update" : "install";
-  // A channel fallback changes which artifact the operator gets, so it must stay
-  // visible on the success path instead of being dropped with the attempt log.
-  const channelNotices: string[] = [];
   const runNpmInstall = async (spec: string, mode: "install" | "update") =>
     await installPluginFromNpmSpec({
       spec,

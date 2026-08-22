@@ -528,6 +528,61 @@ describe("ensureOnboardingPluginInstalled", () => {
     ).toBe(true);
   });
 
+  it("retries the operator ClawHub selector when no beta release is published", async () => {
+    installPluginFromClawHub
+      .mockResolvedValueOnce({
+        ok: false,
+        code: "version_not_found",
+        error: "Version not found on ClawHub: demo-plugin@beta.",
+      })
+      .mockResolvedValue({
+        ok: true,
+        pluginId: "demo-plugin",
+        targetDir: "/tmp/demo-plugin",
+        version: "2026.5.2",
+        packageName: "demo-plugin",
+        clawhub: {
+          source: "clawhub",
+          clawhubUrl: "https://clawhub.ai",
+          clawhubPackage: "demo-plugin",
+          clawhubFamily: "code-plugin",
+          clawhubChannel: "official",
+          version: "2026.5.2",
+          integrity: "sha256-clawpack",
+          resolvedAt: "2026-05-02T00:00:00.000Z",
+          clawpackSha256: "a".repeat(64),
+          clawpackSpecVersion: 1,
+          clawpackManifestSha256: "b".repeat(64),
+          clawpackSize: 4096,
+        },
+      });
+    const note = vi.fn();
+
+    await ensureOnboardingPluginInstalled({
+      cfg: { update: { channel: "beta" } } as never,
+      entry: {
+        pluginId: "demo-plugin",
+        label: "Demo Provider",
+        install: { clawhubSpec: "clawhub:demo-plugin", defaultChoice: "clawhub" },
+      },
+      prompter: {
+        select: vi.fn(async () => "clawhub"),
+        note,
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      } as never,
+      runtime: {} as never,
+    });
+
+    const calls = installPluginFromClawHub.mock.calls as [{ spec?: string }][];
+    expect(calls[0]?.[0]?.spec).toBe("clawhub:demo-plugin@beta");
+    expect(calls[1]?.[0]?.spec).toBe("clawhub:demo-plugin");
+    expect(
+      note.mock.calls.some(([message]) =>
+        String(message).includes("No clawhub:demo-plugin@beta release is published"),
+      ),
+    ).toBe(true);
+  });
+
   it("installs and records ClawHub provider plugins with source facts", async () => {
     const cfg: OpenClawConfig = {
       security: {

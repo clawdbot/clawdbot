@@ -21,7 +21,10 @@ import {
   findBundledPluginSourceInMap,
   resolveBundledPluginSources,
 } from "../plugins/bundled-sources.js";
-import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
+import {
+  CLAWHUB_INSTALL_ERROR_CODE,
+  isUnavailableClawHubTarget,
+} from "../plugins/clawhub-error-codes.js";
 import { buildClawHubPluginInstallRecordFields } from "../plugins/clawhub-install-records.js";
 import {
   enableExplicitlySelectedPluginInConfig,
@@ -1198,12 +1201,25 @@ export async function ensureOnboardingPluginInstalled(params: {
     let shouldTryNpm = choice === "npm";
     if (choice === "clawhub" && clawhubInstallSpec) {
       await params.beforePersistentEffect?.();
-      const result = await installPluginFromClawHubSpecWithProgress({
-        cfg: next,
-        entry,
-        clawhubSpec: clawhubInstallSpec,
-        prompter,
-        runtime,
+      let usedClawHubSpec = clawhubInstallSpec;
+      const result = await installWithChannelFallback({
+        installSpec: clawhubInstallSpec,
+        // An integrity pin identifies one exact artifact, so it outranks the channel.
+        ...(entry.install.expectedIntegrity ? {} : { fallbackSpec: clawhubSpecs?.fallbackSpec }),
+        install: async (spec) => {
+          usedClawHubSpec = spec;
+          return await installPluginFromClawHubSpecWithProgress({
+            cfg: next,
+            entry,
+            clawhubSpec: spec,
+            prompter,
+            runtime,
+          });
+        },
+        isRetryable: (attempt) => !attempt.ok && isUnavailableClawHubTarget(attempt),
+        onFallback: async (message) => {
+          await prompter.note(message, t("wizard.plugins.installTitle"));
+        },
       });
       if (result.ok) {
         return await finishOnboardingPluginInstall({
@@ -1221,7 +1237,7 @@ export async function ensureOnboardingPluginInstalled(params: {
         });
       }
 
-      await notePluginInstallFailure(prompter, clawhubInstallSpec, result.error);
+      await notePluginInstallFailure(prompter, usedClawHubSpec, result.error);
       const errorDetail = formatInstallErrorDetail(result.error);
 
       if (!npmInstallSpec || !shouldFallbackClawHubToNpm({ result, npmSpec: npmInstallSpec })) {
