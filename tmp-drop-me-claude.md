@@ -711,3 +711,29 @@ owners pass 17/17 prompt-sanitizer assertions and 14/14 accounting assertions.
 Production delta for the Gate 2.7 cure is net -1 line; no production path,
 timeout, assertion, or harness was changed to green duplicate isolated-project
 execution.
+
+## 2026-08-22T04:59:00Z - Gate 2.7 exact-head PASS
+
+The final classifier ran against committed and pushed head
+`cad7ff3918aa94ca06e4a494342666758ee2140d`, frozen upstream
+`3376c29800166a3151cbca6b8ab204964e97ac39`, and merge-base Layer C baseline
+`4589d8514ce189b4adb8f0cf20b2a23ae92902d5`.
+
+- 913 reviewer-visible files examined;
+- 289 `SAFE-NEW`;
+- 597 `GENUINE`;
+- 27 `MIXED-CLOBBER`, all covered by the preceding disposition;
+- zero `FROZEN-STALE`;
+- exit 0.
+
+The prior `agent-runner-trace.ts` MIXED row disappeared because the view type is
+now owner-local exactly as frozen upstream intended; the actively consumed
+trace merge function remains exported. The assertion baseline now records
+4,279 files and 13,504 grandfathered assertions. Changed production, test,
+typecheck, lint, dead-export, database, import-cycle, dependency, patch, and
+boundary gates all pass.
+
+Durable artifacts:
+`/home/figs/.copilot/session-state/fb697b5e-c2b3-42f8-89e8-904d36834ca0/files/gate-2.7-final.{log,exit}`
+and
+`/home/figs/.copilot/session-state/fb697b5e-c2b3-42f8-89e8-904d36834ca0/files/gate-2.7-final/classification.tsv`.
