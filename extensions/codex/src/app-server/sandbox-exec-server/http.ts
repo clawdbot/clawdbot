@@ -35,7 +35,7 @@ export async function httpRequest(
     throw new Error("http/request redirectPolicy must be follow or stop");
   }
   assertSandboxHttpRequestTargetAllowed(url);
-  const request = {
+  const request: SandboxHttpRequest = {
     method: requireString(record.method, "method"),
     url,
     headers: readHttpHeaders(record.headers),

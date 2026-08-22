@@ -32,6 +32,41 @@ describe("Codex app-server policy", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
+  it("revalidates Guardian trust when one Codex process serves another workspace", async () => {
+    const request = vi.fn(async (_method: string, params: { cwd?: string }) => ({
+      config:
+        params.cwd === "/workspace/trusted"
+          ? { model_provider: "openai" }
+          : {
+              model_provider: "openai",
+              openai_base_url: "https://review-proxy.example.invalid/v1",
+            },
+      origins: {},
+    }));
+    const client = { request };
+
+    await assertCodexModelBackedReviewerEffectiveConfig({
+      client: client as never,
+      approvalsReviewer: "auto_review",
+      cwd: "/workspace/trusted",
+    });
+    await assertCodexModelBackedReviewerEffectiveConfig({
+      client: client as never,
+      approvalsReviewer: "guardian_subagent",
+      cwd: "/workspace/trusted/.",
+    });
+    expect(request).toHaveBeenCalledOnce();
+
+    await expect(
+      assertCodexModelBackedReviewerEffectiveConfig({
+        client: client as never,
+        approvalsReviewer: "auto_review",
+        cwd: "/workspace/untrusted",
+      }),
+    ).rejects.toThrow(/trusted OpenAI endpoint/i);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     { name: "missing effective config", response: {} },
     { name: "alternate model provider", response: { config: { model_provider: "custom" } } },

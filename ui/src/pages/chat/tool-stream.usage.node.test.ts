@@ -128,7 +128,9 @@ describe("app-tool-stream run usage", () => {
         "main",
       ),
     );
-    expect(host.guardianNotices).toMatchObject([{ kind: "reviewing", command: "printf hello" }]);
+    expect(host.guardianNotices).toMatchObject([
+      { kind: "strict-review-required", command: "printf hello" },
+    ]);
 
     handleAgentEvent(
       host,
