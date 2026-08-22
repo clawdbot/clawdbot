@@ -13,6 +13,24 @@ const CONTEXT_WINDOW_WARN_BELOW_TOKENS = 8_000;
 const CONTEXT_WINDOW_HARD_MIN_RATIO = 0.1;
 const CONTEXT_WINDOW_WARN_BELOW_RATIO = 0.2;
 
+/**
+ * Local MLX/llama.cpp-class servers often advertise the model's theoretical
+ * context (256k+) even though unified memory cannot hold that KV cache.
+ * Compaction keyed off the advertised window never fires, and the backend
+ * crawls through multi-minute prefills instead. Cap unless the operator
+ * opts out with `localUsableContextTokens: 0`.
+ */
+export const DEFAULT_LOCAL_USABLE_CONTEXT_TOKENS = 65_536;
+const LOCAL_INFERENCE_PROVIDERS = new Set([
+  "omlx",
+  "ollama",
+  "lmstudio",
+  "llamacpp",
+  "llama.cpp",
+  "mlx",
+  "vllm",
+]);
+
 type ContextWindowSource = "model" | "modelsConfig" | "agentContextTokens" | "default";
 
 export type ContextWindowInfo = {
@@ -50,6 +68,21 @@ function modelIdMatchesProviderScope(params: {
   return stripProvider(configuredId) === stripProvider(params.modelId);
 }
 
+function localUsableContextCap(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): number | null {
+  if (!LOCAL_INFERENCE_PROVIDERS.has(provider)) {
+    return null;
+  }
+  const raw = cfg?.agents?.defaults?.compaction?.localUsableContextTokens;
+  if (raw === 0) {
+    return null;
+  }
+  const override = normalizePositiveInt(raw);
+  return override ?? DEFAULT_LOCAL_USABLE_CONTEXT_TOKENS;
+}
+
 /** Resolve the effective context window and source for one provider/model. */
 export function resolveContextWindowInfo(params: {
   cfg: OpenClawConfig | undefined;
@@ -82,11 +115,16 @@ export function resolveContextWindowInfo(params: {
     normalizePositiveInt(params.modelContextWindow);
   const defaultTokens =
     normalizePositiveInt(params.defaultTokens) ?? CONTEXT_WINDOW_WARN_BELOW_TOKENS;
-  return fromModelsConfig
+  const resolved = fromModelsConfig
     ? { tokens: fromModelsConfig, source: "modelsConfig" as const }
     : fromModel
       ? { tokens: fromModel, source: "model" as const }
       : { tokens: defaultTokens, source: "default" as const };
+  const cap = localUsableContextCap(params.cfg, params.provider);
+  if (cap && resolved.tokens > cap) {
+    return { ...resolved, tokens: cap, referenceTokens: resolved.tokens };
+  }
+  return resolved;
 }
 
 type ContextWindowGuardResult = ContextWindowInfo & {

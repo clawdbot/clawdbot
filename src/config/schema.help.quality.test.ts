@@ -317,6 +317,10 @@ describe("config help copy quality", () => {
           [/mid-turn|tool loop|default:\s*false/i],
         ],
         [
+          "agents.defaults.compaction.localUsableContextTokens",
+          [/omlx|ollama|lmstudio|65536|advertised/i],
+        ],
+        [
           "agents.defaults.compaction.model",
           [/provider\/model|different model|primary agent model/i, /alias/i],
         ],

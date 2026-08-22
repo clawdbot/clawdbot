@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  DEFAULT_LOCAL_USABLE_CONTEXT_TOKENS,
   evaluateContextWindowGuard,
   formatContextWindowBlockMessage,
   formatContextWindowWarningMessage,
@@ -270,6 +271,89 @@ describe("context-window-guard", () => {
     });
     expect(mediumGuard.hardMinTokens).toBe(6_400);
     expect(mediumGuard.warnBelowTokens).toBe(12_800);
+  });
+
+  it("caps advertised omlx 256k windows so tool-loop compaction can fire", () => {
+    const cfg = {
+      models: {
+        providers: {
+          omlx: {
+            baseUrl: "http://127.0.0.1:8000/v1",
+            apiKey: "x",
+            models: [
+              {
+                id: "Qwen3.8-27B-4bit",
+                name: "Qwen3.8-27B-4bit",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 262_144,
+                contextTokens: 262_144,
+                maxTokens: 32_768,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "omlx",
+      modelId: "Qwen3.8-27B-4bit",
+      modelContextWindow: 262_144,
+      defaultTokens: 200_000,
+    });
+
+    expect(info.source).toBe("modelsConfig");
+    expect(info.tokens).toBe(DEFAULT_LOCAL_USABLE_CONTEXT_TOKENS);
+    expect(info.referenceTokens).toBe(262_144);
+  });
+
+  it("does not cap cloud providers with large advertised windows", () => {
+    const info = resolveContextWindowInfo({
+      cfg: undefined,
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      modelContextWindow: 1_048_576,
+      defaultTokens: 200_000,
+    });
+    expect(info.tokens).toBe(1_048_576);
+    expect(info.referenceTokens).toBeUndefined();
+  });
+
+  it("lets operators disable the local usable-context cap", () => {
+    const cfg = {
+      agents: { defaults: { compaction: { localUsableContextTokens: 0 } } },
+      models: {
+        providers: {
+          omlx: {
+            baseUrl: "http://127.0.0.1:8000/v1",
+            apiKey: "x",
+            models: [
+              {
+                id: "Qwen3.8-27B-4bit",
+                name: "Qwen3.8-27B-4bit",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 262_144,
+                maxTokens: 32_768,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "omlx",
+      modelId: "Qwen3.8-27B-4bit",
+      modelContextWindow: 262_144,
+      defaultTokens: 200_000,
+    });
+    expect(info.tokens).toBe(262_144);
   });
 
   it("adds a local-model hint to warning messages for localhost endpoints", () => {

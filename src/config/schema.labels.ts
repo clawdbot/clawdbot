@@ -629,6 +629,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.compaction.qualityGuard.maxRetries": "Compaction Quality Guard Max Retries",
   "agents.defaults.compaction.midTurnPrecheck": "Compaction Mid-turn Precheck",
   "agents.defaults.compaction.midTurnPrecheck.enabled": "Compaction Mid-turn Precheck Enabled",
+  "agents.defaults.compaction.localUsableContextTokens": "Local Usable Context Tokens",
   "agents.defaults.compaction.postIndexSync": "Compaction Post-Index Sync",
   "agents.defaults.compaction.postCompactionSections": "Post-Compaction Context Sections",
   "agents.defaults.compaction.timeoutSeconds": "Compaction Timeout (Seconds)",

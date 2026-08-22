@@ -387,6 +387,26 @@ describe("agent defaults schema", () => {
     ).toBe(false);
   });
 
+  it("accepts compaction.localUsableContextTokens including 0 to disable the cap", () => {
+    const capped = AgentDefaultsSchema.parse({
+      compaction: { localUsableContextTokens: 65536 },
+    })!;
+    expect(capped.compaction?.localUsableContextTokens).toBe(65536);
+
+    const disabled = AgentDefaultsSchema.parse({
+      compaction: { localUsableContextTokens: 0 },
+    })!;
+    expect(disabled.compaction?.localUsableContextTokens).toBe(0);
+  });
+
+  it("rejects a negative compaction.localUsableContextTokens", () => {
+    expect(
+      AgentDefaultsSchema.safeParse({
+        compaction: { localUsableContextTokens: -1 },
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts compaction.midTurnPrecheck.enabled", () => {
     const result = AgentDefaultsSchema.parse({
       compaction: {

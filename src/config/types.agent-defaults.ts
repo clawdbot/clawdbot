@@ -396,6 +396,13 @@ export type AgentCompactionConfig = {
   qualityGuard?: AgentCompactionQualityGuardConfig;
   /** Mid-turn precheck for tool-loop context pressure. Default: disabled. */
   midTurnPrecheck?: AgentCompactionMidTurnPrecheckConfig;
+  /**
+   * Usable context cap for local inference providers (omlx, ollama, lmstudio,
+   * llama.cpp, mlx, vllm). Theoretical model windows (256k+) exceed unified
+   * memory, so compaction never fires. Default: 65536. Set 0 to use the
+   * advertised window unchanged.
+   */
+  localUsableContextTokens?: number;
   /** Post-compaction session memory index sync mode. */
   postIndexSync?: AgentCompactionPostIndexSyncMode;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */

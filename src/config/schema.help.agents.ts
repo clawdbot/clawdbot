@@ -146,6 +146,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Optional embedded OpenClaw tool-loop precheck that detects context pressure after a tool result is appended and before the next model call. When enabled, OpenClaw reuses existing precheck recovery to truncate tool results or compact before retrying.",
   "agents.defaults.compaction.midTurnPrecheck.enabled":
     "Enable structured mid-turn context pressure checks for embedded OpenClaw tool loops. Default: false. Keep disabled unless long tool-heavy sessions hit context overflow before normal turn-end compaction can run.",
+  "agents.defaults.compaction.localUsableContextTokens":
+    "Usable context cap in tokens for local inference providers (omlx, ollama, lmstudio, llama.cpp, mlx, vllm). Those servers often advertise a 256k theoretical window that unified memory cannot hold, so compaction never fires during tool loops. Default: 65536. Set 0 to honor the advertised window unchanged.",
   "agents.defaults.compaction.postIndexSync":
     'Controls post-compaction session memory reindex mode: "off", "async", or "await" (default: "async"). Use "await" for strongest freshness, "async" for lower compaction latency, and "off" only when session-memory sync is handled elsewhere.',
   "agents.defaults.compaction.postCompactionSections":
