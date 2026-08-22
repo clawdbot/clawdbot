@@ -43,6 +43,28 @@
   overflow: hidden;
 }
 
+.control-ui-environment-stripe {
+  position: fixed;
+  z-index: 260;
+  inset: 0 0 auto;
+  height: 2px;
+  background: var(--control-ui-environment-color);
+  pointer-events: none;
+}
+
+.control-ui-environment-pill {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--control-ui-environment-color) 16%, transparent);
+  color: var(--control-ui-environment-ink);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+}
+
 .shell-skip-link {
   position: fixed;
   top: 8px;
@@ -98,6 +120,24 @@
   display: flex;
   align-items: center;
   gap: var(--shell-chrome-controls-gap);
+}
+
+.shell-chrome-controls__nav-toggle[data-env-avatar]::before {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent-subtle) 80%, transparent);
+  color: var(--text-strong);
+  box-shadow: 0 0 0 2px var(--control-ui-environment-color);
+  content: attr(data-env-avatar);
+  font-size: var(--control-ui-text-sm);
+}
+
+.shell-chrome-controls__nav-toggle[data-env-avatar] > svg {
+  display: none;
 }
 
 .shell-chrome-controls__button {
@@ -3402,6 +3442,10 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   object-fit: cover;
 }
 
+.sidebar-agent-card__avatar--environment {
+  box-shadow: 0 0 0 2px var(--control-ui-environment-color);
+}
+
 .sidebar-agent-card__text {
   display: flex;
   flex-direction: column;
@@ -3445,6 +3489,13 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sidebar-agent-card__subtitle-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 5px;
 }
 
 .sidebar-agent-card__menu-unread {
