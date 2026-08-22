@@ -538,6 +538,7 @@ describe("Graph shared-link helpers", () => {
     ["https://evil1drv.ms/x", false],
     ["https://fakeonedrive.live.com/x", false],
     ["https://evilsharepoint.com/x", false],
+    ["http://onedrive.com/x", false],
     ["not-a-url", false],
   ])("isGraphSharedLinkUrl(%s) === %s", (url, expected) => {
     expect(isGraphSharedLinkUrl(url)).toBe(expected);

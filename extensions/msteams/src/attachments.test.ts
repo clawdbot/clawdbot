@@ -754,6 +754,24 @@ describe("msteams attachments", () => {
         expect(calledUrls.some((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toBe(false);
         expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
       });
+
+      it("rejects non-HTTPS shared-link hosts before fetch or auth fallback", async () => {
+        const tokenProvider = createTokenProvider();
+        const fetchMock = vi.fn(async () => createTextResponse("unauthorized", 401));
+
+        await downloadAttachmentsWithFetch(
+          createPdfAttachments("http://onedrive.com/direct.pdf"),
+          fetchMock,
+          {
+            tokenProvider,
+            allowHosts: ["onedrive.com", GRAPH_HOST],
+            authAllowHosts: [GRAPH_HOST],
+          },
+          { expectFetchCalled: false },
+        );
+
+        expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
+      });
     });
 
     describe("error logging (issue #63396)", () => {
