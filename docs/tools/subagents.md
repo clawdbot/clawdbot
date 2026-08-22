@@ -161,7 +161,7 @@ session to confirm the effective tool list.
 - **Run timeout:** pass `runTimeoutSeconds` to set a timeout for a specific native, ACP, or visible sub-agent run. When omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` if configured; otherwise it falls back to `0` (no timeout). An explicit `0` disables the timeout for that run.
 - **Process lifetime:** a detached OpenClaw sub-agent has its own run lifecycle. A background task created inside an external CLI backend is different: it shares the parent CLI subprocess and stops if that parent reaches `agents.defaults.timeoutSeconds`.
 - **Task delivery:** native sub-agents receive the delegated task in their first visible `[Subagent Task]` message. The sub-agent system prompt carries runtime rules and routing context, not a hidden duplicate of the task.
-- **Execution:** `sessions_spawn.execution` can explicitly request an execution backend/profile. The current implementation validates and records local process placement for registry/list readback; unsupported backend types return an error instead of silently falling back.
+- **Execution:** `sessions_spawn.execution` can explicitly request an execution backend/profile. The current implementation validates and records local process placement for registry/list readback; unsupported backend types return an error instead of silently falling back. A profile is placement metadata in this release: it does not request or enforce CPU, memory, PID, admission, or host resource limits.
 
 Accepted native sub-agent spawns include the resolved child model metadata
 in the tool result: `resolvedModel` contains the applied model ref and
@@ -230,7 +230,7 @@ In `prefer` mode, hidden sub-agents are for internal legwork that the user does 
   Execution placement backend id. Defaults to the built-in local process backend.
 </ParamField>
 <ParamField path="execution.profile" type="string">
-  Optional profile id within the selected execution backend. Profiles are validated and recorded for status/readback.
+  Optional placement profile id within the selected execution backend. Profiles are validated and recorded for status/readback. They do not yet define or enforce CPU, memory, PID, admission, or host resource limits.
 </ParamField>
 <ParamField path="model" type="string">
   Override the sub-agent model. Invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result.
