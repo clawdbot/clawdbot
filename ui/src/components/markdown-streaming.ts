@@ -104,16 +104,22 @@ type StreamingMarkdownSplit = {
   boundary: number;
   /** Absolute offset where remend may start, or null while a fence remains open. */
   tailRepairStart: number | null;
+  /** Opening line of the live fence relative to the streaming tail. */
+  openFenceLine: number | null;
 };
 
 export function splitStableStreamingMarkdown(markdownLocal: string): StreamingMarkdownSplit {
   let boundary = 0;
   let index = 0;
+  let lineNumber = 0;
+  let boundaryLine = 0;
   let openFence: FenceMarker | null = null;
+  let openFenceLine: number | null = null;
   const detailsStack: DetailsFrame[] = [];
   const codeSpans = findMarkdownCodeSpans(markdownLocal);
   let lastFenceOffset = 0;
   let firstListOffset: number | null = null;
+  let firstListLine: number | null = null;
   let hasLinkReferenceDefinition = false;
 
   while (index < markdownLocal.length) {
@@ -124,24 +130,30 @@ export function splitStableStreamingMarkdown(markdownLocal: string): StreamingMa
     if (openFence) {
       if (isFenceClose(line, openFence)) {
         openFence = null;
+        openFenceLine = null;
         lastFenceOffset = lineEnd;
         if (detailsStack.length === 0) {
           boundary = lineEnd;
+          boundaryLine = lineNumber + 1;
         }
       }
       index = lineEnd;
+      lineNumber += 1;
       continue;
     }
 
     if (firstListOffset === null && LIST_ITEM_OPEN_RE.test(line)) {
       firstListOffset = index;
+      firstListLine = lineNumber;
     }
 
     const openingFence = getFenceMarker(line);
     if (openingFence) {
       openFence = openingFence;
+      openFenceLine = lineNumber;
       lastFenceOffset = lineEnd;
       index = lineEnd;
+      lineNumber += 1;
       continue;
     }
 
@@ -152,24 +164,31 @@ export function splitStableStreamingMarkdown(markdownLocal: string): StreamingMa
       }
       if (line.trim() === "") {
         boundary = lineEnd;
+        boundaryLine = lineNumber + 1;
       }
     }
     index = lineEnd;
+    lineNumber += 1;
   }
 
   // A bracket-leading line can start a multiline or escaped reference label.
   // Keep its complete document together rather than guessing label boundaries.
   if (hasLinkReferenceDefinition) {
     boundary = 0;
+    boundaryLine = 0;
   } else if (firstListOffset !== null) {
     // Blank lines cannot prove a list has ended: loose items, continuation
     // indentation, and nested blocks all share the original list container.
-    boundary = Math.min(boundary, firstListOffset);
+    if (firstListOffset < boundary) {
+      boundary = firstListOffset;
+      boundaryLine = firstListLine ?? 0;
+    }
   }
 
   return {
     boundary,
     tailRepairStart: openFence ? null : Math.max(boundary, lastFenceOffset),
+    openFenceLine: openFenceLine === null ? null : openFenceLine - boundaryLine,
   };
 }
 

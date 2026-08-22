@@ -664,8 +664,11 @@ export function createMarkdownParser(): MarkdownIt {
     // token.info contains the full fence info string (e.g., "json title=foo");
     // extract only the first whitespace-separated token as the language.
     const language = token.info.trim().split(/\s+/)[0] || "";
+    const openFenceLine = (env as Partial<MarkdownRenderEnv> | undefined)?.streamingOpenFenceLine;
     return renderMarkdownCodeBlock(token.content, language, env, {
       copyText: markdownCodeBlockCopyText(token.content),
+      highlight:
+        openFenceLine === null || openFenceLine === undefined || token.map?.[0] !== openFenceLine,
     });
   };
   // Override indented code blocks (code_block) with the same treatment as fence

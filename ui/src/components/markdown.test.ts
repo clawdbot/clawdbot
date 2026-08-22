@@ -958,13 +958,29 @@ describe("toStreamingMarkdownHtml", () => {
     expect(html).toBe("<p>prices are $$50 and</p>\n");
   });
 
-  it("streams an open code fence as a live-highlighted code block", () => {
+  it("streams an open code fence without syntax highlighting", () => {
     const html = toStreamingMarkdownHtml("Intro\n\n```ts\nconst x = 1 < 2");
     const fragment = htmlFragment(html);
+    const code = fragment.querySelector("code.language-ts");
 
     expect(fragment.querySelector("p")?.textContent).toBe("Intro");
-    expect(fragment.querySelector("code.language-ts")?.textContent).toContain("const x = 1 < 2");
+    expect(code?.textContent).toContain("const x = 1 < 2");
+    expect(code?.classList.contains("hljs")).toBe(false);
+    expect(code?.querySelector("span")).toBeNull();
     expect(html).not.toContain("markdown-plain-text-fallback");
+  });
+
+  it("highlights only completed fences inside an open details block", () => {
+    const html = toStreamingMarkdownHtml(
+      "<details>\n<summary>Logs</summary>\n\n```ts\nconst closed = 1;\n```\n\n```ts\nconst open = 2;",
+    );
+    const code = htmlFragment(html).querySelectorAll("details code.language-ts");
+
+    expect(code).toHaveLength(2);
+    expect(code[0]?.classList.contains("hljs")).toBe(true);
+    expect(code[0]?.querySelector("span")).not.toBeNull();
+    expect(code[1]?.classList.contains("hljs")).toBe(false);
+    expect(code[1]?.querySelector("span")).toBeNull();
   });
 
   it("streams an open list code fence through blank lines", () => {
@@ -974,6 +990,7 @@ describe("toStreamingMarkdownHtml", () => {
 
     expect(code?.textContent).toContain("const x = 1;");
     expect(code?.textContent).toContain("const y = 2;");
+    expect(code?.classList.contains("hljs")).toBe(false);
     expect(html).not.toContain("markdown-plain-text-fallback");
   });
 
@@ -995,14 +1012,17 @@ describe("toStreamingMarkdownHtml", () => {
 
     expect(code?.textContent).toContain("const x = 1;");
     expect(code?.textContent).toContain("const y = 2;");
+    expect(code?.classList.contains("hljs")).toBe(false);
     expect(html).not.toContain("markdown-plain-text-fallback");
   });
 
   it("renders a completed code fence once the closing fence arrives", () => {
-    const html = toStreamingMarkdownHtml("```ts\nconst x = 1;\n```");
+    const markdown = "```ts\nconst x = 1;\n```";
+    const html = toStreamingMarkdownHtml(markdown);
 
     expect(html).toContain('<code class="hljs language-ts"');
     expect(html).toContain("const x = 1;");
     expect(html).not.toContain("markdown-plain-text-fallback");
+    expect(html).toBe(toSanitizedMarkdownHtml(markdown));
   });
 });
