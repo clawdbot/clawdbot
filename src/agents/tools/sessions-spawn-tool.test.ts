@@ -873,6 +873,45 @@ describe("sessions_spawn tool", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "malformed agent ID",
+      agentId: "Agent not found: reviewer",
+      requireAgentId: false,
+      expected: "Invalid agentId",
+    },
+    {
+      name: "missing required agent ID",
+      agentId: undefined,
+      requireAgentId: true,
+      expected: "sessions_spawn requires agentId",
+    },
+  ])("keeps visible $name recovery independent of filtered tools", async (testCase) => {
+    const callGateway = vi.fn();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: {
+        agents: {
+          defaults: { subagents: { requireAgentId: testCase.requireAgentId } },
+          list: [{ id: "main" }],
+        },
+      },
+      callGateway,
+      countActiveRuns: () => 0,
+    });
+
+    const result = await tool.execute("visible-invalid-agent", {
+      task: "inspect issue",
+      visible: true,
+      ...(testCase.agentId ? { agentId: testCase.agentId } : {}),
+    });
+
+    const details = requireRecord(result.details, "visible spawn failure");
+    expect(details.error).toContain(testCase.expected);
+    expect(details.error).not.toContain("agents_list");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("rejects cwd escape for sandboxed visible sessions", async () => {
     await withTestDir({ prefix: "openclaw-visible-sandbox-cwd-" }, async (dir) => {
       const callGateway = vi.fn();
@@ -1683,6 +1722,18 @@ describe("sessions_spawn tool", () => {
       expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     },
   );
+
+  it("rejects channel-delivery parameters without recommending filtered tools", async () => {
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+
+    await expect(
+      tool.execute("call-channel-delivery", { task: "do thing", channel: "example" }),
+    ).rejects.toThrow(
+      'sessions_spawn does not support "channel"; remove channel-delivery parameters.',
+    );
+
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
 
   it("passes inherited workspaceDir from tool context, not from tool args", async () => {
     const tool = createSessionsSpawnTool({

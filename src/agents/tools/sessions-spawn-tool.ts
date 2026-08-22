@@ -370,7 +370,7 @@ export function createSessionsSpawnTool(
       );
       if (unsupportedParam) {
         throw new ToolInputError(
-          `sessions_spawn does not support "${unsupportedParam}". Use "message" or "sessions_send" for channel delivery.`,
+          `sessions_spawn does not support "${unsupportedParam}"; remove channel-delivery parameters.`,
         );
       }
       const unsupportedTimeoutParam = resolveSnakeCaseParamKey(params, "timeoutSeconds");
