@@ -4,6 +4,7 @@ import type { proto } from "baileys";
 import { decryptPollVote, getKeyAuthor, jidNormalizedUser } from "baileys";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { fireAndForgetBoundedHook } from "openclaw/plugin-sdk/hook-runtime";
+import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
@@ -285,6 +286,9 @@ function isOwnPollCreation(accountId: string, remoteJid: string, messageId: stri
 
 const POLL_VOTE_DEDUP_TTL_MS = 10 * 60 * 1000;
 const recentlyDispatchedPollVoteKeys: Map<string, { expiresAt: number; value: true }> = new Map();
+const POLL_VOTE_DECODE_FAILURE_LOG_TTL_MS = 10 * 60 * 1000;
+const recentPollVoteDecodeFailureKeys: Map<string, { expiresAt: number; value: true }> = new Map();
+const pollVoteLogger = getChildLogger({ module: "web-poll-votes" });
 
 /**
  * Mirrors the `pluginHooks.messageReceived` opt-in gate in
@@ -407,6 +411,20 @@ export function maybeEmitWhatsAppPollVoteReceivedHook(params: {
     selfLid: params.selfLid,
   });
   if (!decoded) {
+    const failureKey = `${params.accountId}:${remoteJid}:${creationKey.id}`;
+    if (!readWhatsAppBaileysCacheEntry(recentPollVoteDecodeFailureKeys, failureKey)) {
+      rememberWhatsAppBaileysCacheEntry(
+        recentPollVoteDecodeFailureKeys,
+        failureKey,
+        true,
+        POLL_VOTE_DECODE_FAILURE_LOG_TTL_MS,
+      );
+      // Ownership was established by an accepted local send. Keep third-party
+      // polls silent, but make this bounded, redacted non-outcome observable.
+      pollVoteLogger.warn(
+        "whatsapp poll_vote_received not dispatched: locally created poll could not be decoded",
+      );
+    }
     // Decode failed (e.g. the poll creation payload hasn't arrived/been
     // cached yet) — leave the vote-update id undeduped so a later
     // redelivery, once the payload is available, can still be decoded and

@@ -1,5 +1,5 @@
 import type { proto, WAMessageKey } from "baileys";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   decodeWhatsAppPollVote,
   maybeEmitWhatsAppPollVoteReceivedHook,
@@ -12,12 +12,17 @@ import {
   wrapAsPollCreationMessageV4ForTests,
 } from "./poll-votes.test-support.js";
 
-const { runPollVoteReceivedMock, hasHooksMock } = vi.hoisted(() => ({
+const { runPollVoteReceivedMock, hasHooksMock, pollVoteWarningMock } = vi.hoisted(() => ({
   runPollVoteReceivedMock: vi.fn(async () => undefined),
   // Defaults to "a poll_vote_received handler is registered"; individual
   // tests can override once via mockReturnValueOnce to exercise the
   // no-handler path.
   hasHooksMock: vi.fn((hookName: string) => hookName === "poll_vote_received"),
+  pollVoteWarningMock: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/logging-core", () => ({
+  getChildLogger: () => ({ warn: pollVoteWarningMock }),
 }));
 
 vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
@@ -366,5 +371,75 @@ describe("decodeWhatsAppPollVote", () => {
     });
 
     expect(decoded).toBeUndefined();
+  });
+});
+
+describe("maybeEmitWhatsAppPollVoteReceivedHook", () => {
+  beforeEach(() => {
+    hasHooksMock.mockClear();
+    pollVoteWarningMock.mockClear();
+    runPollVoteReceivedMock.mockClear();
+  });
+
+  it("records one redacted non-outcome when an owned poll's cached creation message expired", () => {
+    const pollMessageId = "POLL-CACHE-EXPIRED";
+    const { pollEncKey } = buildPollCreationMessageForTests({
+      section: "pollCreationMessage",
+      options: ["A", "B"],
+    });
+    const creationKey = creationKeyFor(pollMessageId);
+    const vote = encryptPollVoteForTests({
+      selectedOptionNames: ["A"],
+      pollEncKey,
+      pollCreatorJid: POLL_CREATOR_JID,
+      pollMsgId: pollMessageId,
+      voterJid: VOTER_JID,
+    });
+    const voteMessage = buildPollUpdateMessageForTests({ creationKey, vote });
+    const cfg = {
+      channels: { whatsapp: { pluginHooks: { pollVoteReceived: true } } },
+    } as never;
+    const params = {
+      cfg,
+      accountId: "default",
+      message: voteMessage,
+      key: voteKeyFor("VOTE-CACHE-EXPIRED"),
+      getCachedMessage: () => undefined,
+      selfJid: POLL_CREATOR_JID,
+    };
+
+    rememberWhatsAppOwnPollCreation("default", CHAT_JID, pollMessageId);
+    maybeEmitWhatsAppPollVoteReceivedHook(params);
+    maybeEmitWhatsAppPollVoteReceivedHook(params);
+
+    expect(pollVoteWarningMock).toHaveBeenCalledTimes(1);
+    expect(pollVoteWarningMock).toHaveBeenCalledWith(
+      "whatsapp poll_vote_received not dispatched: locally created poll could not be decoded",
+    );
+    expect(runPollVoteReceivedMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps undecodable third-party polls silent", () => {
+    const creationKey = {
+      remoteJid: CHAT_JID,
+      id: "POLL-THIRD-PARTY",
+      fromMe: false,
+      participant: POLL_CREATOR_JID,
+    };
+    const voteMessage = buildPollUpdateMessageForTests({
+      creationKey,
+      vote: { encPayload: new Uint8Array([1]), encIv: new Uint8Array([2]) },
+    });
+
+    maybeEmitWhatsAppPollVoteReceivedHook({
+      cfg: { channels: { whatsapp: { pluginHooks: { pollVoteReceived: true } } } } as never,
+      accountId: "default",
+      message: voteMessage,
+      key: voteKeyFor("VOTE-THIRD-PARTY"),
+      getCachedMessage: () => undefined,
+      selfJid: POLL_CREATOR_JID,
+    });
+
+    expect(pollVoteWarningMock).not.toHaveBeenCalled();
   });
 });
