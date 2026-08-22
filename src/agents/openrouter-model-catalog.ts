@@ -3,10 +3,6 @@
  *
  * Fetches the public /api/v1/models catalog and normalizes provider/model
  * metadata into the Personal AI OS smart-router candidate shape.
- *
- * The adapter is deliberately network-bound and side-effect free apart from
- * the supplied fetch implementation, so callers can cache/refresh it at the
- * application boundary.
  */
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 import type { ModelTask, SmartModelCandidate } from "./smart-model-router.js";
@@ -18,28 +14,14 @@ export type OpenRouterModel = {
   canonical_slug?: unknown;
   name?: unknown;
   description?: unknown;
-  architecture?: {
-    modality?: unknown;
-    input_modalities?: unknown;
-    output_modalities?: unknown;
-  };
-  pricing?: {
-    prompt?: unknown;
-    completion?: unknown;
-    request?: unknown;
-  };
-  top_provider?: {
-    context_length?: unknown;
-    max_completion_tokens?: unknown;
-  };
+  architecture?: { input_modalities?: unknown };
+  pricing?: { prompt?: unknown; completion?: unknown };
+  top_provider?: { context_length?: unknown };
   context_length?: unknown;
   supported_parameters?: unknown;
-  default_parameters?: unknown;
 };
 
-export type OpenRouterModelsResponse = {
-  data?: unknown;
-};
+export type OpenRouterModelsResponse = { data?: unknown };
 
 export type OpenRouterCatalogOptions = {
   fetch?: typeof globalThis.fetch;
@@ -66,8 +48,7 @@ function stringArray(value: unknown): string[] {
 }
 
 function isZeroPrice(value: unknown): boolean {
-  const parsed = numberValue(value);
-  return parsed === 0 || value === "0" || value === "0.0";
+  return numberValue(value) === 0 || value === "0" || value === "0.0";
 }
 
 function isFreeModel(model: OpenRouterModel): boolean {
@@ -82,37 +63,37 @@ function hasParameter(model: OpenRouterModel, parameter: string): boolean {
 
 function inferInput(model: OpenRouterModel): ModelInputType[] {
   const raw = stringArray(model.architecture?.input_modalities);
-  if (raw.length > 0) {
-    return raw.filter((item): item is ModelInputType =>
-      ["text", "image", "audio", "video", "document"].includes(item),
-    );
-  }
-  return ["text"];
+  if (!raw.length) return ["text"];
+  return raw.filter((item): item is ModelInputType =>
+    ["text", "image", "audio", "video", "document"].includes(item),
+  );
 }
 
 function inferCapabilities(model: OpenRouterModel): Partial<Record<ModelTask, number>> {
   const name = `${stringValue(model.id) ?? ""} ${stringValue(model.name) ?? ""} ${stringValue(model.description) ?? ""}`.toLowerCase();
   const tools = hasParameter(model, "tools") || hasParameter(model, "tool_choice");
   const structured = hasParameter(model, "response_format") || hasParameter(model, "structured_outputs");
-  const reasoning = hasParameter(model, "reasoning") || /reason|thinking|r\d|qwq|o[1-9]/.test(name);
+  const reasoning = hasParameter(model, "reasoning") || /reason|thinking|qwq|r\d|o[1-9]/.test(name);
   const coding = /code|coder|coding|dev|program|software|qwen3-coder/.test(name);
   const vision = inferInput(model).includes("image");
-  const longContext = (numberValue(model.top_provider?.context_length) ?? numberValue(model.context_length) ?? 0) >= 100_000;
+  const context = numberValue(model.top_provider?.context_length) ?? numberValue(model.context_length) ?? 0;
   const fast = /flash|nano|mini|small|lite|haiku/.test(name);
 
   return {
     chat: 0.75,
-    ...(coding ? { coding: 0.95, debugging: 0.9 } : { coding: 0.65, debugging: 0.65 }),
-    ...(reasoning ? { reasoning: 0.95, planning: 0.9 } : { reasoning: 0.7, planning: 0.7 }),
+    coding: coding ? 0.95 : 0.65,
+    debugging: coding ? 0.9 : 0.65,
+    reasoning: reasoning ? 0.95 : 0.7,
     research: reasoning ? 0.9 : 0.7,
     writing: 0.8,
     summarization: 0.8,
     ...(vision ? { vision: 0.95 } : {}),
     ...(tools ? { "tool-use": 0.95, browser: 0.9 } : {}),
     ...(structured ? { "structured-output": 0.95 } : {}),
-    ...(longContext ? { "long-context": 0.95 } : {}),
-    ...(fast ? { fast: 0.9 } : { fast: 0.65 }),
+    ...(context >= 100_000 ? { "long-context": 0.95 } : {}),
+    fast: fast ? 0.9 : 0.65,
     "data-analysis": reasoning ? 0.85 : 0.7,
+    planning: reasoning ? 0.9 : 0.7,
   };
 }
 
@@ -129,14 +110,12 @@ export function normalizeOpenRouterModel(model: OpenRouterModel): {
   const supportsTools = hasParameter(model, "tools") || hasParameter(model, "tool_choice");
   const supportsVision = input.includes("image");
   const reasoning = hasParameter(model, "reasoning") || /reason|thinking|qwq|r1|o[1-9]/i.test(id);
-  const capabilities = inferCapabilities(model);
   const name = stringValue(model.name) ?? id;
 
   const catalog: ModelCatalogEntry = {
     id,
     name,
     provider: "openrouter",
-    api: "openai-completions",
     contextWindow,
     contextTokens: contextWindow,
     reasoning,
@@ -155,7 +134,7 @@ export function normalizeOpenRouterModel(model: OpenRouterModel): {
     model: id,
     free,
     available: true,
-    capabilities,
+    capabilities: inferCapabilities(model),
     contextWindow,
     supportsTools,
     supportsVision,
