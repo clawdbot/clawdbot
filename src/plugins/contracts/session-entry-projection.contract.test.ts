@@ -15,9 +15,12 @@ import { clearPluginHostRuntimeState } from "../host-hook-runtime.js";
 import { patchPluginSessionExtension } from "../host-hook-state.js";
 import type { PluginJsonValue } from "../host-hooks.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
+import { createPluginRegistry } from "../registry.js";
 import { setActivePluginRegistry } from "../runtime.js";
+import type { PluginRuntime } from "../runtime/types.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
+import type { OpenClawPluginApi } from "../types.js";
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object") {
@@ -77,6 +80,78 @@ describe("plugin session extension SessionEntry projection", () => {
   afterEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     clearPluginHostRuntimeState();
+  });
+
+  it("lets a plugin read only its own durable session extension", async () => {
+    await withProjectionSessionStore(
+      "openclaw-host-hooks-plugin-read-",
+      async ({ storePath, tempConfig }) => {
+        const registry = createPluginRegistry({
+          logger: { info() {}, warn() {}, error() {}, debug() {} },
+          runtime: {
+            config: { current: () => tempConfig },
+          } as unknown as PluginRuntime,
+        });
+        let ownerApi: OpenClawPluginApi | undefined;
+        let otherApi: OpenClawPluginApi | undefined;
+        for (const [id, capture] of [
+          ["owner-plugin", (api: OpenClawPluginApi) => (ownerApi = api)],
+          ["other-plugin", (api: OpenClawPluginApi) => (otherApi = api)],
+        ] as const) {
+          registerTestPlugin({
+            registry,
+            config: tempConfig,
+            record: createPluginRecord({ id, name: id }),
+            register(api) {
+              capture(api);
+              api.session.state.registerSessionExtension({
+                namespace: "workflow",
+                description: `${id} workflow`,
+              });
+            },
+          });
+        }
+        setActivePluginRegistry(registry.registry);
+        await updateSessionStore(storePath, (store) => {
+          store["agent:main:main"] = {
+            sessionId: "session-id",
+            updatedAt: Date.now(),
+          } as unknown as SessionEntry;
+        });
+        await expect(
+          ownerApi?.session.state.setSessionExtension({
+            sessionKey: "agent:main:main",
+            namespace: "workflow",
+            value: { checkpoint: "PR117" },
+          }),
+        ).resolves.toEqual({ checkpoint: "PR117" });
+
+        expect(
+          ownerApi?.session.state.getSessionExtension({
+            sessionKey: "agent:main:main",
+            namespace: "workflow",
+          }),
+        ).toEqual({ checkpoint: "PR117" });
+        expect(
+          otherApi?.session.state.getSessionExtension({
+            sessionKey: "agent:main:main",
+            namespace: "workflow",
+          }),
+        ).toBeUndefined();
+        await expect(
+          ownerApi?.session.state.clearSessionExtension({
+            sessionKey: "agent:main:main",
+            namespace: "workflow",
+          }),
+        ).resolves.toBeUndefined();
+        expect(
+          ownerApi?.session.state.getSessionExtension({
+            sessionKey: "agent:main:main",
+            namespace: "workflow",
+          }),
+        ).toBeUndefined();
+      },
+    );
   });
 
   it("mirrors projected values to SessionEntry[slotKey] and clears them on unset", async () => {

@@ -272,6 +272,13 @@ export function createCapturedPluginRegistration(params?: {
         registerSessionExtension(extension: PluginSessionExtensionRegistration) {
           sessionExtensions.push(extension);
         },
+        getSessionExtension() {
+          return undefined;
+        },
+        async setSessionExtension({ value }) {
+          return value;
+        },
+        async clearSessionExtension() {},
         registerTrustedToolPolicy(policy: PluginTrustedToolPolicyRegistration) {
           trustedToolPolicies.push(policy);
         },

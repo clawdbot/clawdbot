@@ -60,6 +60,9 @@ export type BuildPluginApiParams = {
       | "registerCodexAppServerExtensionFactory"
       | "registerAgentToolResultMiddleware"
       | "registerSessionExtension"
+      | "getSessionExtension"
+      | "setSessionExtension"
+      | "clearSessionExtension"
       | "enqueueNextTurnInjection"
       | "registerTrustedToolPolicy"
       | "registerToolMetadata"
@@ -141,6 +144,10 @@ const noopRegisterCodexAppServerExtensionFactory: OpenClawPluginApi["registerCod
 const noopRegisterAgentToolResultMiddleware: OpenClawPluginApi["registerAgentToolResultMiddleware"] =
   () => {};
 const noopRegisterSessionExtension: OpenClawPluginApi["registerSessionExtension"] = () => {};
+const noopGetSessionExtension: OpenClawPluginApi["getSessionExtension"] = () => undefined;
+const noopSetSessionExtension: OpenClawPluginApi["setSessionExtension"] = async ({ value }) =>
+  value;
+const noopClearSessionExtension: OpenClawPluginApi["clearSessionExtension"] = async () => {};
 const noopEnqueueNextTurnInjection: OpenClawPluginApi["enqueueNextTurnInjection"] = async (
   injection,
 ) => ({ enqueued: false, id: "", sessionKey: injection.sessionKey });
@@ -256,6 +263,9 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerAgentToolResultMiddleware:
       handlers.registerAgentToolResultMiddleware ?? noopRegisterAgentToolResultMiddleware,
     registerSessionExtension: handlers.registerSessionExtension ?? noopRegisterSessionExtension,
+    getSessionExtension: handlers.getSessionExtension ?? noopGetSessionExtension,
+    setSessionExtension: handlers.setSessionExtension ?? noopSetSessionExtension,
+    clearSessionExtension: handlers.clearSessionExtension ?? noopClearSessionExtension,
     enqueueNextTurnInjection: handlers.enqueueNextTurnInjection ?? noopEnqueueNextTurnInjection,
     registerTrustedToolPolicy: handlers.registerTrustedToolPolicy ?? noopRegisterTrustedToolPolicy,
     registerToolMetadata: handlers.registerToolMetadata ?? noopRegisterToolMetadata,

@@ -477,6 +477,10 @@ Workflow plugins can persist small JSON-compatible session state with
 Gateway `sessions.pluginPatch` method. Session rows project registered
 extension state through `pluginExtensions`, letting Control UI and other
 clients render plugin-owned status without learning plugin internals.
+At runtime, the owning plugin can use
+`api.session.state.setSessionExtension(...)`, `getSessionExtension(...)`, and
+`clearSessionExtension(...)`. The host binds every operation to the current
+plugin id, so plugins cannot read or mutate another plugin's extension state.
 `api.registerSessionExtension(...)` still works but is deprecated in favor of
 the `api.session.state` namespace.
 

@@ -2145,9 +2145,12 @@ describe("loadOpenClawPlugins", () => {
     {
       label:
         "keeps sendSessionAttachment callable after register closes while blocking registration-only APIs",
-      run: () => {
+      run: async () => {
         const registerGatewayMethod = vi.fn();
         const registerSessionExtension = vi.fn();
+        const getSessionExtension = vi.fn(() => ({ checkpoint: "PR117" }));
+        const setSessionExtension = vi.fn(async ({ value }) => value);
+        const clearSessionExtension = vi.fn(async () => {});
         const sendSessionAttachment = vi.fn(async () => ({
           ok: true as const,
           channel: "proofchat",
@@ -2174,6 +2177,9 @@ describe("loadOpenClawPlugins", () => {
           resolvePath: (input) => input,
           handlers: {
             emitAgentEvent,
+            getSessionExtension,
+            setSessionExtension,
+            clearSessionExtension,
             registerGatewayMethod,
             registerSessionExtension,
             sendSessionAttachment,
@@ -2199,6 +2205,19 @@ describe("loadOpenClawPlugins", () => {
           text: "attachment ready",
         };
         const lateResult = capturedApi?.sendSessionAttachment(attachmentParams);
+        const lateSessionState = capturedApi?.session?.state.getSessionExtension({
+          sessionKey: "agent:main:main",
+          namespace: "workflow",
+        });
+        const lateSessionWrite = capturedApi?.session?.state.setSessionExtension({
+          sessionKey: "agent:main:main",
+          namespace: "workflow",
+          value: { checkpoint: "PR118" },
+        });
+        const lateSessionClear = capturedApi?.session?.state.clearSessionExtension({
+          sessionKey: "agent:main:main",
+          namespace: "workflow",
+        });
         const lateWorkflowResult =
           capturedApi?.session?.workflow.sendSessionAttachment(attachmentParams);
         const eventParams = {
@@ -2232,6 +2251,12 @@ describe("loadOpenClawPlugins", () => {
         expect(emitAgentEvent).toHaveBeenCalledTimes(2);
         expect(emitAgentEvent).toHaveBeenCalledWith(eventParams);
         expect(registerSessionExtension).not.toHaveBeenCalled();
+        expect(lateSessionState).toEqual({ checkpoint: "PR117" });
+        expect(getSessionExtension).toHaveBeenCalledTimes(1);
+        await expect(lateSessionWrite).resolves.toEqual({ checkpoint: "PR118" });
+        await expect(lateSessionClear).resolves.toBeUndefined();
+        expect(setSessionExtension).toHaveBeenCalledTimes(1);
+        expect(clearSessionExtension).toHaveBeenCalledTimes(1);
       },
     },
     {

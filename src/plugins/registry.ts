@@ -90,7 +90,11 @@ import {
   schedulePluginSessionTurn,
   unschedulePluginSessionTurnsByTag,
 } from "./host-hook-scheduled-turns.js";
-import { enqueuePluginNextTurnInjection } from "./host-hook-state.js";
+import {
+  enqueuePluginNextTurnInjection,
+  getPluginSessionExtensionStateSync,
+  patchPluginSessionExtension,
+} from "./host-hook-state.js";
 import {
   isPluginJsonValue,
   normalizePluginHostHookId,
@@ -3017,6 +3021,39 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerAgentToolResultMiddleware(record, handler, options);
               },
               registerSessionExtension: (extension) => registerSessionExtension(record, extension),
+              getSessionExtension: ({ sessionKey, namespace }) => {
+                const pluginState = getPluginSessionExtensionStateSync({
+                  cfg: registryParams.runtime.config.current() as OpenClawConfig,
+                  pluginId: record.id,
+                  sessionKey,
+                });
+                return pluginState?.[namespace];
+              },
+              setSessionExtension: async ({ sessionKey, namespace, value }) => {
+                const result = await patchPluginSessionExtension({
+                  cfg: registryParams.runtime.config.current() as OpenClawConfig,
+                  pluginId: record.id,
+                  sessionKey,
+                  namespace,
+                  value,
+                });
+                if (!result.ok || result.value === undefined) {
+                  throw new Error(result.ok ? "session extension write failed" : result.error);
+                }
+                return result.value;
+              },
+              clearSessionExtension: async ({ sessionKey, namespace }) => {
+                const result = await patchPluginSessionExtension({
+                  cfg: registryParams.runtime.config.current() as OpenClawConfig,
+                  pluginId: record.id,
+                  sessionKey,
+                  namespace,
+                  unset: true,
+                });
+                if (!result.ok) {
+                  throw new Error(result.error);
+                }
+              },
               enqueueNextTurnInjection: (injection) => {
                 if (params.hookPolicy?.allowPromptInjection === false) {
                   pushDiagnostic({
