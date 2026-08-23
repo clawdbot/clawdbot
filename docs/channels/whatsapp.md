@@ -289,41 +289,26 @@ accepted-send time, so replaying or delaying delivery of the corresponding
 inbound echo has no effect on stored state — there's nothing left for a
 delayed echo to do.
 
-**Retention.** The poll creation message and its decryption key stay only in
-Baileys' bounded, process-local message cache; OpenClaw never writes them to
-plugin state. Consequently, a Gateway restart drops the material required to
-decode later poll votes. The hook resumes normally once the poll creation
-message is observed again in the new process. A vote on a poll OpenClaw never
-created, or one whose creation message is no longer in memory, stays silent to
-avoid exposing third-party vote data.
+**Retention.** The accepted-send ownership marker and the poll creation
+message (including its decryption key) stay only in bounded, process-local
+caches; OpenClaw never writes them to plugin state. A Gateway restart drops
+both caches. Votes for polls sent before that restart are therefore treated as
+unowned and are not decoded or dispatched, even if WhatsApp later redelivers
+their creation message: an inbound echo never recreates the ownership marker.
 
-**Known limitation: a vote cast while the gateway is offline is not
-recovered when it comes back.** A Gateway restart also drops the in-memory
-poll decryption material, so votes for polls created before that restart are
-not decoded unless WhatsApp redelivers the creation message. WhatsApp does not
-appear to redeliver a poll vote that arrived while this account's session was
-disconnected, at least not for a companion/linked device, and at least not
-within several minutes of reconnecting. Two approaches were tried and
-verified live against a real account:
+While the Gateway remains running, a known-owned poll can lose only its cached
+creation message. That vote is not dispatched and produces one bounded,
+identifier-free warning; a redelivery can still decode if the creation message
+returns before the ownership marker expires. Votes for polls OpenClaw never
+created stay silent, including after a restart, to avoid exposing third-party
+vote data.
 
-1. Passive reconnect — simply waiting after the socket reports `open` again.
-   No redelivery observed after 5–11 minutes across two independent runs.
-2. Active on-demand history sync — calling Baileys'
-   `sock.fetchMessageHistory(count, oldestMsgKey, oldestMsgTimestampMs)`
-   (`HISTORY_SYNC_ON_DEMAND` peer-data-operation) on reconnect, anchored to
-   the poll's own creation message. The request was accepted and sent to the
-   linked primary phone, but produced no response within ~4.5 minutes. This
-   likely requires the primary phone's WhatsApp app to be foregrounded to
-   service the request (matching its normal use as an on-demand "load older
-   messages while scrolling" mechanism, not a background catch-up sync) —
-   unconfirmed.
-
-In practice this matters only for votes cast during the (typically short)
-window a gateway process is down; a gateway that stays connected sees every
-vote normally. Recovering votes cast during that window is left as a future
-improvement — candidates include retrying `fetchMessageHistory` on a
-schedule rather than once, or triggering it from a plugin hook when the
-primary phone is known to be active.
+**Known limitation: a restart ends hook observation for polls sent before
+it.** Since the restart clears the accepted-send ownership marker, no vote on
+an earlier poll is decoded or dispatched in the new process — whether that
+vote was cast while the Gateway was offline or after it reconnects. This is
+intentional: OpenClaw never infers ownership from a reobserved inbound echo.
+Send a new poll after reconnecting when the hook must observe its votes.
 
 ## Access control and activation
 
