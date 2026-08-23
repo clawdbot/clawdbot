@@ -12,6 +12,7 @@ import { validateConfigObject } from "../config/validation.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { maybeRepairCodexRoutes } from "./doctor/shared/codex-route-warnings.js";
+import { applyLegacyDoctorMigrations } from "./doctor/shared/legacy-config-compat.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./doctor/shared/legacy-config-migrations.js";
 import { collectBlockedLegacyOpenAICodexProviderPlan } from "./doctor/shared/legacy-config-migrations.runtime.models.js";
@@ -1579,6 +1580,38 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.agents?.defaults?.modelPolicy).toEqual({
       allow: ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"],
     });
+  });
+
+  it("canonicalizes a seeded legacy Claude CLI allowlist in one doctor pass", () => {
+    // Reporter path (#124952): the doctor spec migration copies an unmarked legacy
+    // model map into modelPolicy.allow first, so the normalizer must rewrite the
+    // allowlist and the model map in the same pass, not on a later run.
+    const seeded = applyLegacyDoctorMigrations({
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-7" },
+          models: {
+            "claude-cli/claude-opus-4-7": {},
+            "claude-cli/claude-sonnet-4-6": {},
+          },
+        },
+      },
+    });
+    expect(seeded.next?.agents).toMatchObject({
+      defaults: {
+        modelPolicy: { allow: ["claude-cli/claude-opus-4-7", "claude-cli/claude-sonnet-4-6"] },
+      },
+    });
+
+    const res = normalizeCompatibilityConfigValues(legacyConfig(seeded.next));
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+      "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+    });
+    expect(res.config.agents?.defaults?.modelPolicy).toEqual({
+      allow: ["anthropic/claude-opus-4-7", "anthropic/claude-sonnet-4-6"],
+    });
+    expect(normalizeCompatibilityConfigValues(res.config).changes).toEqual([]);
   });
 
   it("preserves legacy whole-agent Claude CLI intent for canonical Anthropic defaults", () => {

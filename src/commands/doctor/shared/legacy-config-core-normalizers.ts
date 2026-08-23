@@ -266,6 +266,15 @@ function resolveLegacyWholeAgentRuntimePolicy(raw: unknown):
     : undefined;
 }
 
+function migrateUnblockedLegacyRuntimeModelRef(
+  modelRef: string,
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
+) {
+  return isBlockedLegacyCodexModelRef({ modelRef, blockedModelIdentities })
+    ? null
+    : migrateLegacyRuntimeModelRef(modelRef);
+}
+
 function migratedRuntimeRequiresPolicy(legacyProvider: string): boolean {
   return legacyRuntimeModelAliasRequiresRuntimePolicy(legacyProvider);
 }
@@ -304,9 +313,7 @@ function normalizeLegacyRuntimeAgentModelConfig(
   selectedRefs: SelectedRuntimeRef[];
 } {
   if (typeof raw === "string") {
-    const migrated = isBlockedLegacyCodexModelRef({ modelRef: raw, blockedModelIdentities })
-      ? null
-      : migrateLegacyRuntimeModelRef(raw);
+    const migrated = migrateUnblockedLegacyRuntimeModelRef(raw, blockedModelIdentities);
     return migrated
       ? {
           value: migrated.ref,
@@ -328,9 +335,8 @@ function normalizeLegacyRuntimeAgentModelConfig(
   }
 
   const migratedPrimary =
-    typeof raw.primary === "string" &&
-    !isBlockedLegacyCodexModelRef({ modelRef: raw.primary, blockedModelIdentities })
-      ? migrateLegacyRuntimeModelRef(raw.primary)
+    typeof raw.primary === "string"
+      ? migrateUnblockedLegacyRuntimeModelRef(raw.primary, blockedModelIdentities)
       : null;
   let changed = false;
   const next: Record<string, unknown> = { ...raw };
@@ -352,12 +358,10 @@ function normalizeLegacyRuntimeAgentModelConfig(
       if (typeof fallback !== "string") {
         return fallback;
       }
-      const migratedFallback = isBlockedLegacyCodexModelRef({
-        modelRef: fallback,
+      const migratedFallback = migrateUnblockedLegacyRuntimeModelRef(
+        fallback,
         blockedModelIdentities,
-      })
-        ? null
-        : migrateLegacyRuntimeModelRef(fallback);
+      );
       if (
         migratedFallback &&
         (migratedFallback.runtime === selectedRuntime ||
@@ -429,12 +433,7 @@ function normalizeLegacyRuntimeAllowlistModels(
     requiresRuntimePolicy: boolean;
   }> = [];
   for (const [rawKey, entry] of Object.entries(rawModels)) {
-    const migrated = isBlockedLegacyCodexModelRef({
-      modelRef: rawKey,
-      blockedModelIdentities,
-    })
-      ? null
-      : migrateLegacyRuntimeModelRef(rawKey);
+    const migrated = migrateUnblockedLegacyRuntimeModelRef(rawKey, blockedModelIdentities);
     if (
       migrated &&
       (migrated.runtime === selectedRuntime ||
@@ -442,6 +441,8 @@ function normalizeLegacyRuntimeAllowlistModels(
         policyRuntimes.has(migrated.runtime))
     ) {
       changed = true;
+      // Legacy keys only feed the implicit allowlist; once an explicit allowlist
+      // names this runtime, the canonical key replaces them outright.
       if (!policyRuntimes.has(migrated.runtime)) {
         next[rawKey] = mergeModelEntry(entry, next[rawKey]);
       }
@@ -484,12 +485,7 @@ function normalizeLegacyRuntimeModelPolicy(
     if (typeof entry !== "string") {
       return entry;
     }
-    const migrated = isBlockedLegacyCodexModelRef({
-      modelRef: entry,
-      blockedModelIdentities,
-    })
-      ? null
-      : migrateLegacyRuntimeModelRef(entry);
+    const migrated = migrateUnblockedLegacyRuntimeModelRef(entry, blockedModelIdentities);
     if (!migrated) {
       return entry;
     }
