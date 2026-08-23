@@ -4257,12 +4257,12 @@ openclaw-sidebar-attention {
 
 .sidebar-approval-row__action--allow-once {
   border-color: color-mix(in srgb, var(--ok) 32%, var(--border));
-  background: color-mix(in srgb, var(--ok) 14%, var(--bg-elevated));
+  background: color-mix(in srgb, var(--ok) 21%, var(--bg-elevated));
   color: var(--ok);
 }
 
 .sidebar-approval-row__action--allow-once:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--ok) 21%, var(--bg-elevated));
+  background: color-mix(in srgb, var(--ok) 27%, var(--bg-elevated));
   color: var(--ok);
 }
 
