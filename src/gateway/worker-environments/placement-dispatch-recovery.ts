@@ -181,7 +181,8 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
         continue;
       }
       if (isFailedPlacement(placement)) {
-        if (mode !== "startup" || placement.turnClaim || placement.activeOwnerEpoch !== null) {
+        // Terminal cleanup never gates readiness; tracked post-start owners resume it safely.
+        if (mode !== "startup") {
           await failure.retryFailedTeardown(placement);
         }
         continue;
