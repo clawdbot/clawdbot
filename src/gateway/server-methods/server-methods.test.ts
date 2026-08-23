@@ -15,11 +15,13 @@ import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
 import {
-  clearContextEnginesForOwner,
   registerContextEngineForOwner,
   resolveContextEngine,
 } from "../../context-engine/registry.js";
-import { resetContextEngineRuntimeQuarantineForTests } from "../../context-engine/registry.test-support.js";
+import {
+  captureContextEngineRegistryStateForTests,
+  resetContextEngineRuntimeQuarantineForTests,
+} from "../../context-engine/registry.test-support.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
@@ -4410,6 +4412,7 @@ describe("gateway healthHandlers.status scope handling", () => {
 
 describe("gateway healthHandlers.health cache freshness", () => {
   let healthHandlers: typeof import("./health.js").healthHandlers;
+  let restoreContextEngineRegistryState: () => void;
   const contextEngineTestOwner = "plugin:health-test";
 
   function createHealthSnapshot<T extends Record<string, unknown>>(overrides: T) {
@@ -4508,15 +4511,14 @@ describe("gateway healthHandlers.health cache freshness", () => {
   });
 
   beforeEach(() => {
+    restoreContextEngineRegistryState = captureContextEngineRegistryStateForTests();
     registerLegacyContextEngine();
-    clearContextEnginesForOwner(contextEngineTestOwner);
     resetContextEngineRuntimeQuarantineForTests();
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    clearContextEnginesForOwner(contextEngineTestOwner);
-    resetContextEngineRuntimeQuarantineForTests();
+    restoreContextEngineRegistryState();
   });
 
   it("rate-limits request-driven refreshes for fresh cached health", async () => {

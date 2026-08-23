@@ -442,19 +442,9 @@ function listContextEngineIds(): string[] {
   return [...getContextEngines().keys()].toSorted();
 }
 
-export function clearContextEnginesForOwner(owner: string): void {
-  const normalizedOwner = requireContextEngineOwner(owner);
-  const registry = getContextEngines();
-  for (const [id, entry] of registry.entries()) {
-    if (entry.owner === normalizedOwner) {
-      registry.delete(id);
-      clearContextEngineRuntimeQuarantine(id);
-    }
-  }
-}
-
 /**
  * Return the trusted plugin id that registered a resolved context engine.
+ * Downgraded engines intentionally report no plugin owner.
  */
 export function resolveContextEngineOwnerPluginId(
   engine: ContextEngine | undefined | null,
