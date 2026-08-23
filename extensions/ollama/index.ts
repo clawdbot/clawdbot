@@ -807,15 +807,14 @@ async function augmentConfiguredOllamaCatalogModels(params: {
 }
 
 // Local and cloud own distinct auth/catalog policy but share native transport and replay rules.
-const createOllamaSharedProviderHooks = (
-  acquireLocalService: OpenClawPluginApi["runtime"]["llm"]["acquireLocalService"],
-) =>
+const createOllamaSharedProviderHooks = (api: OpenClawPluginApi) =>
   ({
     ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
     createStreamFn: ({ config, model, provider }) => {
       if (model.api !== "ollama") {
         return undefined;
       }
+      const { acquireLocalService } = api.runtime.llm;
       const configuredProviderId =
         findNormalizedProviderKey(config?.models?.providers, provider) ?? provider;
       return createLazyConfiguredOllamaStreamFn({
@@ -856,7 +855,7 @@ export default definePluginEntry({
   description: "Bundled Ollama provider plugin",
   register(api: OpenClawPluginApi) {
     const startupPluginConfig = (api.pluginConfig ?? {}) as OllamaPluginConfig;
-    const providerHooks = createOllamaSharedProviderHooks(api.runtime.llm.acquireLocalService);
+    const providerHooks = createOllamaSharedProviderHooks(api);
     if (api.registrationMode === "full") {
       void checkWsl2CrashLoopRiskLazily(api);
     }
