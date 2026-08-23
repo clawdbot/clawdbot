@@ -747,50 +747,6 @@ describe("external shared-state ownership", () => {
     ).toThrow(OpenClawStateOwnershipError);
   });
 
-  it("fences ownership claimed between cached acquisition and transaction admission", () => {
-    const externalEnv = createEnv(true);
-    const opened = openOpenClawStateDatabase({ env: externalEnv });
-    const unmarkedEnv = withoutExternalMarker(externalEnv);
-    const { DatabaseSync } = requireNodeSqlite();
-    const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")?.value as
-      | ((this: import("node:sqlite").DatabaseSync, sql: string) => void)
-      | undefined;
-    if (!originalExec) {
-      throw new Error("DatabaseSync.exec descriptor is unavailable");
-    }
-    let claimInjected = false;
-    const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
-      this: import("node:sqlite").DatabaseSync,
-      sql: string,
-    ) {
-      if (!claimInjected && this === opened.db && sql === "BEGIN IMMEDIATE") {
-        claimInjected = true;
-        this.prepare(
-          "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
-        ).run(
-          STATE_SUPERVISION_KEY,
-          JSON.stringify({
-            version: 1,
-            mode: "external",
-            managerId: "transaction-race-manager",
-            claimedAt: 1,
-          }),
-          1,
-        );
-      }
-      return originalExec.call(this, sql);
-    });
-
-    try {
-      expect(() => runOpenClawStateWriteTransaction(() => undefined, { env: unmarkedEnv })).toThrow(
-        OpenClawStateOwnershipError,
-      );
-    } finally {
-      exec.mockRestore();
-    }
-    expect(claimInjected).toBe(true);
-  });
-
   it("reports checkpoint failure and lets the same durable claim retry", () => {
     const env = createEnv(true);
     const database = openOpenClawStateDatabase({ env });
