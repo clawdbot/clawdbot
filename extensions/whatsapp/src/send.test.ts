@@ -28,6 +28,9 @@ let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLogge
 const WHATSAPP_TEST_CFG: OpenClawConfig = {
   channels: { whatsapp: {} },
 };
+const WHATSAPP_TEST_CFG_WITH_POLL_HOOK: OpenClawConfig = {
+  channels: { whatsapp: { pluginHooks: { pollVoteReceived: true } } },
+};
 
 vi.mock("./connection-controller-runtime-context.js", async () => {
   const actual = await vi.importActual<typeof import("./connection-controller-runtime-context.js")>(
@@ -947,52 +950,38 @@ describe("web outbound", () => {
     });
   });
 
-  it("sends polls via active listener and records ownership when the hook is enabled", async () => {
-    const cfgWithHookEnabled: OpenClawConfig = {
-      channels: { whatsapp: { pluginHooks: { pollVoteReceived: true } } },
-    };
-    const result = await sendPollWhatsApp(
-      "+1555",
-      { question: "Lunch?", options: ["Pizza", "Sushi"], maxSelections: 2 },
-      { verbose: false, cfg: cfgWithHookEnabled },
-    );
-    expect(result).toEqual({
-      messageId: "poll123",
-      toJid: "1555@s.whatsapp.net",
-    });
-    expect(sendPoll).toHaveBeenCalledWith("+1555", {
-      question: "Lunch?",
-      options: ["Pizza", "Sushi"],
-      maxSelections: 2,
-      durationSeconds: undefined,
-      durationHours: undefined,
-    });
-    // Ownership is recorded from the accepted send itself — not only from
-    // later observing our own message echo on the inbound stream — so a
-    // vote arriving before (or without) that echo isn't silently dropped
-    // by the poll_vote_received hook's ownership gate.
-    expect(hoisted.rememberWhatsAppOwnPollCreation).toHaveBeenCalledWith(
-      "default",
-      "1555@s.whatsapp.net",
-      "poll123",
-    );
-  });
-
-  it("does not record poll ownership when the hook is disabled (default)", async () => {
-    // WHATSAPP_TEST_CFG has no pluginHooks.pollVoteReceived set — the
-    // default-off case. Sending a poll must still succeed without recording
-    // process-local ownership for the opt-in hook.
-    const result = await sendPollWhatsApp(
-      "+1555",
-      { question: "Lunch?", options: ["Pizza", "Sushi"] },
-      { verbose: false, cfg: WHATSAPP_TEST_CFG },
-    );
-    expect(result).toEqual({
-      messageId: "poll123",
-      toJid: "1555@s.whatsapp.net",
-    });
-    expect(hoisted.rememberWhatsAppOwnPollCreation).not.toHaveBeenCalled();
-  });
+  it.each([
+    { cfg: WHATSAPP_TEST_CFG_WITH_POLL_HOOK, ownsPoll: true },
+    { cfg: WHATSAPP_TEST_CFG, ownsPoll: false },
+  ])(
+    "sends polls and records ownership only when the hook is enabled",
+    async ({ cfg, ownsPoll }) => {
+      const result = await sendPollWhatsApp(
+        "+1555",
+        { question: "Lunch?", options: ["Pizza", "Sushi"], maxSelections: 2 },
+        { verbose: false, cfg },
+      );
+      expect(result).toEqual({
+        messageId: "poll123",
+        toJid: "1555@s.whatsapp.net",
+      });
+      expect(sendPoll).toHaveBeenCalledWith("+1555", {
+        question: "Lunch?",
+        options: ["Pizza", "Sushi"],
+        maxSelections: 2,
+        durationSeconds: undefined,
+        durationHours: undefined,
+      });
+      expect(hoisted.rememberWhatsAppOwnPollCreation).toHaveBeenCalledTimes(ownsPoll ? 1 : 0);
+      if (ownsPoll) {
+        expect(hoisted.rememberWhatsAppOwnPollCreation).toHaveBeenCalledWith(
+          "default",
+          "1555@s.whatsapp.net",
+          "poll123",
+        );
+      }
+    },
+  );
 
   it("rejects polls without an accepted provider message key", async () => {
     sendPoll.mockResolvedValueOnce({
