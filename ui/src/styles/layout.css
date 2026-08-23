@@ -3656,7 +3656,7 @@ openclaw-sidebar-attention {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 12px 12px 8px;
+  padding: 8px 12px;
 }
 
 .sidebar-issues-panel__heading {
