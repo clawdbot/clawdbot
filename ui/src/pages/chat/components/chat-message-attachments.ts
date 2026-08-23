@@ -1,12 +1,11 @@
 import { html, nothing } from "lit";
 import { t } from "../../../i18n/index.ts";
+import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
 import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
+import { renderAttachmentCardHeader } from "./chat-attachment-card.ts";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
-import {
-  openAttachmentCardFromClick,
-  renderAttachmentCardHeader,
-} from "./chat-attachment-card.ts";
+import { appendChatMediaPlaybackParam } from "./chat-media-playback.ts";
 import {
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES,
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS,
@@ -41,7 +40,6 @@ import {
   type ChatMediaResource,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
 
 function retainManagedAttachmentUntilExpiry(
   resource: ChatMediaResource<ManagedAttachmentAvailability>,
@@ -92,6 +90,22 @@ function setManagedAttachmentAvailability(
   });
 }
 
+function retryManagedAttachmentAvailability(
+  attachment: AttachmentItem["attachment"],
+  onRequestUpdate: (() => void) | undefined,
+): void {
+  const resource = observeChatMediaResource<ManagedAttachmentAvailability>(
+    "managed-media",
+    `${attachment.url}::${attachment.artifactId}`,
+    onRequestUpdate,
+    attachment.url,
+  );
+  resource.value = undefined;
+  resource.retryAttempted = false;
+  notifyChatMediaResourceSubscribers(resource);
+  onRequestUpdate?.();
+}
+
 function resolveManagedAttachmentAvailability(
   attachment: AttachmentItem["attachment"],
   resolveArtifactDownload: ArtifactDownloadResolver | undefined,
@@ -110,6 +124,7 @@ function resolveManagedAttachmentAvailability(
       checkedAt: Date.now(),
     };
   }
+  const artifactId = attachment.artifactId;
   const sessionKey = resolveManagedOutgoingMediaSessionKey(attachment.url);
   if (!sessionKey) {
     return {
@@ -207,7 +222,7 @@ function resolveManagedAttachmentAvailability(
     setManagedAttachmentAvailability(resource, { status: "checking" });
   }
   const pending = Promise.resolve()
-    .then(() => resolveArtifactDownload({ sessionKey, artifactId: attachment.artifactId! }))
+    .then(() => resolveArtifactDownload({ sessionKey, artifactId }))
     .then((result) => {
       if (!isChatMediaResourceCurrent(resource)) {
         return null;
@@ -338,15 +353,19 @@ function renderAttachmentTablePreview(previewText: string | null | undefined) {
       <table class="chat-assistant-attachment-card__table">
         <thead>
           <tr>
-            ${Array.from({ length: columnCount }, (_, index) =>
-              html`<th>${rows[0]?.[index] ?? ""}</th>`,
+            ${Array.from(
+              { length: columnCount },
+              (_, index) => html`<th>${rows[0]?.[index] ?? ""}</th>`,
             )}
           </tr>
         </thead>
         <tbody>
           ${rows.slice(1).map(
             (row) => html`<tr>
-              ${Array.from({ length: columnCount }, (_, index) => html`<td>${row[index] ?? ""}</td>`)}
+              ${Array.from(
+                { length: columnCount },
+                (_, index) => html`<td>${row[index] ?? ""}</td>`,
+              )}
             </tr>`,
           )}
         </tbody>
@@ -356,15 +375,16 @@ function renderAttachmentTablePreview(previewText: string | null | undefined) {
 }
 
 function renderAttachmentDocumentPreview(
-  previewKind: "html" | "page" | "table",
+  previewKind: "html" | "table" | "text",
   attachment: AttachmentItem["attachment"],
-  attachmentUrl: string,
   previewText: string | null | undefined,
 ) {
   const updatePreviewState = (event: Event, state: "ready" | "failed") => {
-    const card = (event.currentTarget as Element).closest<HTMLElement>(
-      ".chat-assistant-attachment-card",
-    );
+    const currentTarget = event.currentTarget;
+    const card =
+      currentTarget instanceof Element
+        ? currentTarget.closest<HTMLElement>(".chat-assistant-attachment-card")
+        : null;
     if (!card) {
       return;
     }
@@ -382,7 +402,7 @@ function renderAttachmentDocumentPreview(
   if (previewKind === "html") {
     return html`<div class="chat-assistant-attachment-card__html-preview">
       <iframe
-        src=${attachmentUrl}
+        srcdoc=${previewText ?? ""}
         title=${attachment.label}
         sandbox
         loading="lazy"
@@ -396,23 +416,18 @@ function renderAttachmentDocumentPreview(
   if (previewKind === "table") {
     return renderAttachmentTablePreview(previewText);
   }
-  const previewUrl = `${attachmentUrl.split("#", 1)[0]}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
-  return html`<div class="chat-assistant-attachment-card__page-preview">
-    <iframe
-      src=${previewUrl}
-      title=${attachment.label}
-      loading="lazy"
-      @load=${(event: Event) => updatePreviewState(event, "ready")}
-      @error=${(event: Event) => updatePreviewState(event, "failed")}
-    ></iframe>
-  </div>`;
+  if (previewKind === "text") {
+    return previewText === null || previewText === undefined
+      ? null
+      : html`<pre class="chat-assistant-attachment-card__preview-text">${previewText}</pre>`;
+  }
+  return null;
 }
 
 export function renderAssistantAttachments(
   attachments: AttachmentItem[],
   options: ImageRenderOptions,
   onAssistantAttachmentLoaded?: () => void,
-  onOpenSidebar?: (content: SidebarContent) => void,
 ) {
   if (attachments.length === 0) {
     return nothing;
@@ -436,11 +451,7 @@ export function renderAssistantAttachments(
     );
     const managedAvailability =
       assistantAvailability.status === "available"
-        ? resolveManagedAttachmentAvailability(
-            attachment,
-            resolveArtifactDownload,
-            onRequestUpdate,
-          )
+        ? resolveManagedAttachmentAvailability(attachment, resolveArtifactDownload, onRequestUpdate)
         : null;
     const availability =
       assistantAvailability.status !== "available"
@@ -451,8 +462,7 @@ export function renderAssistantAttachments(
             ? managedAvailability
             : assistantAvailability;
     const attachmentUrl =
-      assistantAvailability.status === "available" &&
-      managedAvailability?.status === "available"
+      assistantAvailability.status === "available" && managedAvailability?.status === "available"
         ? isLocalAssistantAttachmentSource(attachment.url)
           ? buildAssistantAttachmentUrl(
               attachment.url,
@@ -470,37 +480,34 @@ export function renderAssistantAttachments(
         ? (assistantAvailability.sizeBytes ?? attachment.sizeBytes)
         : attachment.sizeBytes;
     const serverDurationMs =
+      isLocalAssistantAttachmentSource(attachment.url) &&
       assistantAvailability.status === "available"
-        ? (assistantAvailability.durationMs ?? attachment.durationMs)
-        : attachment.durationMs;
+        ? assistantAvailability.durationMs
+        : undefined;
     const playbackAuthToken = isLocalAssistantAttachmentSource(attachment.url)
       ? (authToken ?? null)
       : null;
     const retryUnavailableAttachment =
       availability.status === "unavailable" &&
       (!("recoverable" in availability) || availability.recoverable)
-        ? () =>
+        ? () => {
             retryAssistantAttachmentAvailability(
               attachment.url,
               resourceBasePath,
               authToken,
               onRequestUpdate,
-            )
+            );
+            if (isManagedOutgoingMediaSource(attachment.url) && attachment.artifactId) {
+              retryManagedAttachmentAvailability(attachment, onRequestUpdate);
+            }
+          }
         : undefined;
-    const openAttachmentSidebar = attachmentUrl
-      ? () =>
-          onOpenSidebar?.({
-            kind: "attachment",
-            title: attachment.label,
-            src: attachmentUrl,
-            mimeType: attachment.mimeType,
-            sourceIdentity: attachment.url,
-            playback,
-            authToken: playbackAuthToken,
-            sizeBytes,
-            durationMs: serverDurationMs,
-            voiceNote: attachment.isVoiceNote === true,
-          })
+    const openAttachment = attachmentUrl
+      ? () => {
+          const href =
+            playback === "transcode" ? appendChatMediaPlaybackParam(attachmentUrl) : attachmentUrl;
+          openExternalUrlSafe(href);
+        }
       : undefined;
     if (attachment.kind === "image") {
       if (!attachmentUrl) {
@@ -518,18 +525,9 @@ export function renderAssistantAttachments(
       }
       const title = attachment.label.trim() || t("chat.imageLightbox.untitled");
       const openImagePreview = () =>
-        openResolvedImage(
-          onOpenImage,
-          attachmentUrl,
-          title,
-          undefined,
-          onRequestOpenImage?.(),
-        );
+        openResolvedImage(onOpenImage, attachmentUrl, title, undefined, onRequestOpenImage?.());
       return html`<div
         class="chat-assistant-attachment-card chat-assistant-attachment-card--image chat-assistant-attachment-card--preview"
-        ?data-openable=${Boolean(openAttachmentSidebar)}
-        @click=${(event: MouseEvent) =>
-          openAttachmentCardFromClick(event, openAttachmentSidebar)}
       >
         ${renderAttachmentCardHeader({
           kind: "image",
@@ -538,7 +536,7 @@ export function renderAssistantAttachments(
           sizeBytes,
           downloadHref: attachmentUrl,
           showExpandAction: true,
-          onExpand: openAttachmentSidebar,
+          onExpand: openAttachment,
           visualMode: "preview-with-favicon",
         })}
         <span class="chat-image-frame">
@@ -578,7 +576,7 @@ export function renderAssistantAttachments(
           .sizeBytes=${sizeBytes}
           .serverDurationMs=${serverDurationMs}
           .voiceNote=${attachment.isVoiceNote === true}
-          .onExpand=${openAttachmentSidebar}
+          .onExpand=${openAttachment}
           .onMediaLoaded=${onAssistantAttachmentLoaded}
         ></openclaw-chat-audio-player>
       `;
@@ -612,7 +610,7 @@ export function renderAssistantAttachments(
           .mediaHeight=${assistantAvailability.status === "available"
             ? (assistantAvailability.height ?? attachment.height)
             : attachment.height}
-          .onExpand=${openAttachmentSidebar}
+          .onExpand=${openAttachment}
           .onMediaLoaded=${onAssistantAttachmentLoaded}
         ></openclaw-chat-video-player>
       `;
@@ -633,24 +631,23 @@ export function renderAssistantAttachments(
     const downloadHref = safeAttachmentHref(attachmentUrl);
     const previewKind = resolveDocumentPreviewKind(attachment);
     const previewText =
-      previewKind === "table" && isTextyDocumentAttachment(attachment)
+      (previewKind === "html" || previewKind === "table" || previewKind === "text") &&
+      isTextyDocumentAttachment(attachment)
         ? resolveDocumentPreviewText(attachmentUrl, attachment.url, sizeBytes, onRequestUpdate)
         : null;
     const tablePreviewFailed =
       previewKind === "table" &&
       previewText !== undefined &&
       parseDelimitedPreview(previewText ?? "").length === 0;
-    const showPreview = previewKind !== null && !tablePreviewFailed;
+    const showPreview =
+      previewKind !== null &&
+      !tablePreviewFailed &&
+      (previewKind !== "text" || previewText !== null);
     return html`
       <div
-        class="chat-assistant-attachment-card chat-assistant-attachment-card--document ${
-          showPreview
-            ? "chat-assistant-attachment-card--preview"
-            : "chat-assistant-attachment-card--compact"
-        }"
-        ?data-openable=${Boolean(openAttachmentSidebar)}
-        @click=${(event: MouseEvent) =>
-          openAttachmentCardFromClick(event, openAttachmentSidebar)}
+        class="chat-assistant-attachment-card chat-assistant-attachment-card--document ${showPreview
+          ? "chat-assistant-attachment-card--preview"
+          : "chat-assistant-attachment-card--compact"}"
       >
         ${renderAttachmentCardHeader({
           kind: "document",
@@ -659,19 +656,15 @@ export function renderAssistantAttachments(
           sizeBytes,
           downloadHref,
           showExpandAction: true,
-          onExpand: openAttachmentSidebar,
+          onExpand: openAttachment,
           visualMode: showPreview ? "preview-with-favicon" : "large-placeholder",
         })}
         ${showPreview && previewKind
-          ? renderAttachmentDocumentPreview(previewKind, attachment, attachmentUrl, previewText)
+          ? renderAttachmentDocumentPreview(previewKind, attachment, previewText)
           : null}
       </div>
     `;
   };
 
-  return html`
-    <div class="chat-assistant-attachments">
-      ${attachments.map(renderAttachment)}
-    </div>
-  `;
+  return html` <div class="chat-assistant-attachments">${attachments.map(renderAttachment)}</div> `;
 }

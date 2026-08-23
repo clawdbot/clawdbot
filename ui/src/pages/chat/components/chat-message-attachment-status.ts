@@ -34,27 +34,33 @@ export function renderAssistantAttachmentStatusCard(params: {
           })}
           <span class="chat-assistant-attachment-card__details">
             <span
-              class="chat-assistant-attachment-card__title ${unavailable
-                ? "chat-assistant-attachment-card__title--unavailable"
-                : ""}"
+              class="chat-assistant-attachment-card__title ${
+                unavailable ? "chat-assistant-attachment-card__title--unavailable" : ""
+              }"
               title=${params.label}
               >${params.label}</span
             >
-            <span class="chat-assistant-attachment-card__meta chat-assistant-attachment-card__status-meta"
-              >${params.badge}${params.reason ? ` · ${params.reason}` : ""}</span
-            >
+            <span class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
+              >${params.badge}</span
           </span>
         </div>
-        ${params.onRetry
-          ? html`<button
-              class="chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled chat-assistant-attachment-card__retry"
-              type="button"
-              @click=${params.onRetry}
-            >
-              ${icons.refresh} ${t("common.retry")}
-            </button>`
-          : nothing}
+        ${
+          params.onRetry
+            ? html`<button
+                class="chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled chat-assistant-attachment-card__retry"
+                type="button"
+                @click=${params.onRetry}
+              >
+                ${icons.refresh} ${t("common.retry")}
+              </button>`
+            : nothing
+        }
       </div>
+      ${
+        params.reason
+          ? html`<div class="chat-assistant-attachment-card__reason">${params.reason}</div>`
+          : nothing
+      }
     </div>
   `;
 }

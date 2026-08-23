@@ -1,14 +1,11 @@
 import { html, type PropertyValues } from "lit";
-import { property, state } from "lit/decorators.js";
+import { property } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
+import { renderAttachmentCardHeader } from "./chat-attachment-card.ts";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
-import {
-  openAttachmentCardFromClick,
-  renderAttachmentCardHeader,
-} from "./chat-attachment-card.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import { ChatMediaSourceController } from "./chat-media-source.ts";
 
@@ -24,8 +21,6 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
   @property({ type: Number }) mediaHeight: number | undefined;
   @property({ attribute: false }) onExpand: (() => void) | undefined;
   @property({ attribute: false }) onMediaLoaded: (() => void) | undefined;
-
-  @state() private metadataLoaded = false;
 
   private media: HTMLVideoElement | null = null;
   private readonly sourceController = new ChatMediaSourceController();
@@ -50,15 +45,6 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
       changedProperties.has("playback") ||
       changedProperties.has("authToken")
     ) {
-      const authenticationChanged = changedProperties.has("authToken");
-      if (
-        authenticationChanged ||
-        (changedProperties.has("sourceIdentity") &&
-          this.sourceController.currentIdentity &&
-          this.sourceController.currentIdentity !== this.sourceIdentity.trim())
-      ) {
-        this.metadataLoaded = false;
-      }
       this.syncSource();
     }
   }
@@ -80,9 +66,6 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
       this.playback,
       this.authToken,
     );
-    if (this.sourceController.readiness === "preparing") {
-      this.metadataLoaded = false;
-    }
     this.requestUpdate();
     void pending?.then(() => {
       if (this.isConnected) {
@@ -102,10 +85,7 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
     return html`
       <div
         class="chat-assistant-attachment-card chat-assistant-attachment-card--video"
-        ?data-metadata-loaded=${this.metadataLoaded}
         ?data-unplayable=${this.sourceController.readiness === "unavailable"}
-        ?data-openable=${Boolean(this.onExpand)}
-        @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, this.onExpand)}
       >
         ${renderAttachmentCardHeader({
           kind: "video",
@@ -125,24 +105,22 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
         <div class="chat-assistant-video-frame" style=${styleMap(dimensions)} ?hidden=${preparing}>
           <video
             controls
-            preload="auto"
+            preload="metadata"
             ${ref(this.setMedia)}
             @loadedmetadata=${() => {
               if (!this.media) {
                 return;
               }
               this.sourceController.handleLoadedMetadata(this.media);
-              this.metadataLoaded = true;
               this.onMediaLoaded?.();
             }}
             @ended=${() => {
-              if (this.media && this.sourceController.handleEnded(this.media)) {
-                this.metadataLoaded = false;
+              if (this.media) {
+                this.sourceController.handleEnded(this.media);
               }
             }}
             @seeking=${() => {
               if (this.media?.error && this.sourceController.handleError(this.media)) {
-                this.metadataLoaded = false;
                 this.requestUpdate();
               }
             }}
@@ -157,6 +135,16 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
         <div class="chat-assistant-video-fallback">
           <div class="chat-assistant-attachment-card__reason">
             ${t("chat.mediaPlayer.videoUnavailable")}
+            ${downloadHref
+              ? html`<a
+                  class="chat-assistant-attachment-card__link"
+                  href=${downloadHref}
+                  download=${this.label}
+                  target="_blank"
+                  rel="noreferrer"
+                  >${t("chat.mediaPlayer.download", { filename: this.label })}</a
+                >`
+              : null}
           </div>
         </div>
       </div>

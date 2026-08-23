@@ -26,6 +26,7 @@ describe("ChatVideoPlayer", () => {
     document.body.append(player);
     await player.updateComplete;
     const video = player.querySelector("video");
+    expect(video?.preload).toBe("metadata");
     await vi.waitFor(() => expect(player.textContent).toContain("Preparing playback…"));
     expect(player.querySelector("video")).toBe(video);
 

@@ -156,14 +156,9 @@ export function sidebarPanelDefinitions(
         .onStateChange=${params.discussion.onStateChange}
       ></openclaw-session-discussion>`
     : null;
-  const attachmentContent = state?.sidebarContent?.kind === "attachment" ? state.sidebarContent : null;
   const detailContent =
-    (state?.sidebarContent?.kind === "attachment" ? null : state?.sidebarContent) ??
+    state?.sidebarContent ??
     (state && params?.detailOpen ? resolveSessionDiffSidebarContent(state) : null);
-  const workspaceContent =
-    attachmentContent && params
-      ? params.renderDetail(attachmentContent)
-      : (params?.workspace ?? null);
   return [
     definePanel(
       "detail",

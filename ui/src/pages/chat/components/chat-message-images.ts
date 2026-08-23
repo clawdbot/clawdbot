@@ -9,10 +9,7 @@ import {
   resolveSafeExternalUrl,
 } from "../../../lib/open-external-url.ts";
 import { showToast } from "../../../lib/toast.ts";
-import {
-  openAttachmentCardFromClick,
-  renderAttachmentCardHeader,
-} from "./chat-attachment-card.ts";
+import { renderAttachmentCardHeader } from "./chat-attachment-card.ts";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import {
@@ -213,16 +210,15 @@ export function renderMessageImages(images: RenderableImageBlock[], opts?: Image
     return html`
       <div
         class="chat-assistant-attachment-card chat-assistant-attachment-card--image chat-assistant-attachment-card--preview"
-        data-openable
-        @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, onOpen)}
       >
         ${renderAttachmentCardHeader({
           kind: "image",
           label: fileName,
-          mimeType: "image/png",
+          mimeType: img.mimeType,
           sizeBytes: img.sizeBytes,
           downloadHref: managed ? undefined : previewUrl,
-          onDownload: managed ? () => void downloadManagedImage(img, opts, fileName) : undefined,
+          onDownload: managed ? () => void downloadManagedImage(img, opts, title) : undefined,
+          onCopy: managed ? () => void copyManagedImage(img, opts) : undefined,
           showExpandAction: true,
           onExpand: onOpen,
           visualMode: "preview-with-favicon",
@@ -264,7 +260,7 @@ function resolveImageFileName(image: ImageBlock): string {
     }
     try {
       const pathname = new URL(candidate, "https://openclaw.invalid").pathname;
-      for (const segment of pathname.split("/").reverse()) {
+      for (const segment of pathname.split("/").toReversed()) {
         const filename = decodeURIComponent(segment);
         if (/\.[a-z0-9]+$/iu.test(filename)) {
           return filename;
@@ -517,6 +513,51 @@ async function downloadManagedImage(
     downloadImageBlob(blob, imageDownloadFileName(fileName, blob.type));
   } catch {
     showToast({ message: t("chat.imageLightbox.downloadFailed") });
+  }
+}
+
+async function convertImageBlobToPng(blob: Blob): Promise<Blob> {
+  if (blob.type === "image/png") {
+    return blob;
+  }
+  const bitmap = await createImageBitmap(blob);
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("image conversion context is unavailable");
+    }
+    context.drawImage(bitmap, 0, 0);
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (converted) =>
+          converted ? resolve(converted) : reject(new Error("image conversion failed")),
+        "image/png",
+      );
+    });
+  } finally {
+    bitmap.close();
+  }
+}
+
+async function copyManagedImage(
+  image: RenderableImageBlock,
+  opts: ImageRenderOptions | undefined,
+): Promise<void> {
+  try {
+    if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+      throw new Error("image clipboard is unavailable");
+    }
+    const png = readManagedOutgoingImageBlob(image.displayUrl, opts, image.artifactId).then(
+      convertImageBlobToPng,
+    );
+    void png.catch(() => {});
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+    showToast({ message: t("common.copied") });
+  } catch {
+    showToast({ message: t("chat.imageLightbox.copyFailed") });
   }
 }
 

@@ -5,11 +5,8 @@ import { styleMap } from "lit/directives/style-map.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
+import { renderAttachmentCardHeader } from "./chat-attachment-card.ts";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
-import {
-  openAttachmentCardFromClick,
-  renderAttachmentCardHeader,
-} from "./chat-attachment-card.ts";
 import {
   canResumeChatAudioPlayback,
   claimChatAudioPlayback,
@@ -21,7 +18,6 @@ import {
   CHAT_AUDIO_WAVEFORM_MAX_BYTES,
   CHAT_AUDIO_WAVEFORM_SAMPLE_RATE,
   computeChatAudioWaveformPeaks,
-  createChatAudioWaveformPlaceholder,
   retainCachedChatAudioBlob,
   shouldFetchChatAudioWaveform,
   type CachedChatAudioBlob,
@@ -103,7 +99,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
   @state() private buffered = 0;
   @state() private playing = false;
   @state() private muted = false;
-  @state() private waveformPeaks: readonly number[] = createChatAudioWaveformPlaceholder();
+  @state() private waveformPeaks: readonly number[] | null = null;
 
   private media: HTMLAudioElement | null = null;
   private readonly sourceController = new ChatMediaSourceController();
@@ -154,7 +150,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
         this.waveformController = null;
         this.releaseWaveformBlob?.();
         this.releaseWaveformBlob = undefined;
-        this.waveformPeaks = createChatAudioWaveformPlaceholder();
+        this.waveformPeaks = null;
         this.waveformAttempted = false;
         this.currentTime = 0;
         this.duration = 0;
@@ -219,7 +215,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     }
     this.releaseWaveformBlob?.();
     this.releaseWaveformBlob = prepared.release;
-    this.waveformPeaks = prepared.value.peaks ?? createChatAudioWaveformPlaceholder();
+    this.waveformPeaks = prepared.value.peaks ?? null;
     if (prepared.value.durationSeconds !== undefined) {
       this.duration = prepared.value.durationSeconds;
     }
@@ -441,16 +437,17 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     const count = this.waveformPeaks.length;
     return html`<div class="chat-audio-player__waveform">
       <svg viewBox="0 0 ${count} 24" preserveAspectRatio="none" aria-hidden="true">
-        ${this.waveformPeaks.map(
-          (_peak, index) => svg`<rect
+        ${this.waveformPeaks.map((peak, index) => {
+          const height = Math.max(2, peak * 22);
+          return svg`<rect
             class=${index / count < progress ? "is-played" : ""}
-            x=${String(index + 0.26)}
-            y="2"
-            width="0.48"
-            height="20"
-            rx="0.24"
-          ></rect>`,
-        )}
+            x=${String(index + 0.18)}
+            y=${String((24 - height) / 2)}
+            width="0.64"
+            height=${String(height)}
+            rx="0.3"
+          ></rect>`;
+        })}
       </svg>
       ${seek}
     </div>`;
@@ -461,11 +458,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
     const downloadHref = safeAttachmentHref(this.src);
     const failed = this.sourceController.readiness === "unavailable";
     return html`
-      <div
-        class="chat-assistant-attachment-card chat-assistant-attachment-card--audio"
-        ?data-openable=${Boolean(this.onExpand)}
-        @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, this.onExpand)}
-      >
+      <div class="chat-assistant-attachment-card chat-assistant-attachment-card--audio">
         ${renderAttachmentCardHeader({
           kind: "audio",
           label: this.label,
@@ -480,6 +473,16 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
         ${failed
           ? html`<div class="chat-assistant-attachment-card__reason">
               ${t("chat.mediaPlayer.videoUnavailable")}
+              ${downloadHref
+                ? html`<a
+                    class="chat-assistant-attachment-card__link"
+                    href=${downloadHref}
+                    download=${this.label}
+                    target="_blank"
+                    rel="noreferrer"
+                    >${t("chat.mediaPlayer.download", { filename: this.label })}</a
+                  >`
+                : null}
             </div> `
           : this.sourceController.readiness === "preparing"
             ? html`<div class="chat-assistant-attachment-card__reason chat-media-preparing">
@@ -501,15 +504,10 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
                   ${this.playing ? icons.pause : icons.play}
                 </button>
                 <div class="chat-audio-player__time" aria-live="off">
-                  <span
-                    >${formatChatMediaTime(this.currentTime)} / ${formatChatMediaTime(
-                      this.duration,
-                    )}</span
-                  >
+                  <span>${formatChatMediaTime(this.currentTime)}</span>
+                  <span>${formatChatMediaTime(this.duration)}</span>
                 </div>
-                <div class="chat-audio-player__timeline">
-                  ${this.renderSeek(progress)}
-                </div>
+                <div class="chat-audio-player__timeline">${this.renderSeek(progress)}</div>
                 <button
                   type="button"
                   class="chat-audio-player__volume"
