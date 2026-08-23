@@ -378,6 +378,67 @@ function createLightDreamingHarness(workspaceDir: string) {
   return createHarness(LIGHT_DREAMING_TEST_CONFIG, workspaceDir);
 }
 
+function createDefaultStorageLightDreamingHarness(
+  workspaceDir: string,
+  options: {
+    includeMainAgent?: boolean;
+    limit?: number;
+    lookbackDays?: number;
+    memorySearchEnabled?: boolean;
+  } = {},
+) {
+  return createHarness(
+    {
+      ...(options.includeMainAgent
+        ? { agents: { list: [{ id: "main", workspace: workspaceDir }] } }
+        : {}),
+      ...(options.memorySearchEnabled === false ? { memory: { search: { enabled: false } } } : {}),
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+                phases: {
+                  light: {
+                    enabled: true,
+                    limit: options.limit ?? 20,
+                    lookbackDays: options.lookbackDays ?? 7,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    workspaceDir,
+  );
+}
+
+function createNarrativeDreamingSweepConfig(workspaceDir: string): OpenClawConfig {
+  return {
+    ...LIGHT_DREAMING_TEST_CONFIG,
+    agents: { defaults: { workspace: workspaceDir, userTimezone: "UTC" } },
+    plugins: {
+      entries: {
+        "memory-core": {
+          config: {
+            dreaming: {
+              enabled: true,
+              timezone: "UTC",
+              phases: {
+                light: { enabled: true, limit: 20, lookbackDays: 2 },
+                rem: { enabled: false, limit: 0, lookbackDays: 2 },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
 async function triggerLightDreaming(
   beforeAgentReply: NonNullable<ReturnType<typeof createHarness>["beforeAgentReply"]>,
   workspaceDir: string,
@@ -487,39 +548,7 @@ describe("memory-core dreaming phases", () => {
       "- Move backups to S3 Glacier.",
       "- Keep retention at 365 days.",
     ]);
-    const testConfig: OpenClawConfig = {
-      ...LIGHT_DREAMING_TEST_CONFIG,
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          userTimezone: "UTC",
-        },
-      },
-      plugins: {
-        entries: {
-          "memory-core": {
-            config: {
-              dreaming: {
-                enabled: true,
-                timezone: "UTC",
-                phases: {
-                  light: {
-                    enabled: true,
-                    limit: 20,
-                    lookbackDays: 2,
-                  },
-                  rem: {
-                    enabled: false,
-                    limit: 0,
-                    lookbackDays: 2,
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    };
+    const testConfig = createNarrativeDreamingSweepConfig(workspaceDir);
     const subagent = createMockNarrativeSubagent("The archive hummed softly.");
     const logger = {
       info: vi.fn(),
@@ -553,39 +582,7 @@ describe("memory-core dreaming phases", () => {
       "- Move backups to S3 Glacier.",
       "- Keep retention at 365 days.",
     ]);
-    const testConfig: OpenClawConfig = {
-      ...LIGHT_DREAMING_TEST_CONFIG,
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          userTimezone: "UTC",
-        },
-      },
-      plugins: {
-        entries: {
-          "memory-core": {
-            config: {
-              dreaming: {
-                enabled: true,
-                timezone: "UTC",
-                phases: {
-                  light: {
-                    enabled: true,
-                    limit: 20,
-                    lookbackDays: 2,
-                  },
-                  rem: {
-                    enabled: false,
-                    limit: 0,
-                    lookbackDays: 2,
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    };
+    const testConfig = createNarrativeDreamingSweepConfig(workspaceDir);
     const subagent = createMockNarrativeSubagent();
     subagent.run.mockRejectedValue(new RequestScopedSubagentRuntimeError());
     subagent.deleteSession.mockImplementation(() => {
@@ -995,29 +992,9 @@ describe("memory-core dreaming phases", () => {
     });
     expect(before).toHaveLength(0);
 
-    const { beforeAgentReply } = createHarness(
-      {
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 2,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+      lookbackDays: 2,
+    });
 
     await withDreamingTestClock(async () => {
       await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
@@ -1061,29 +1038,9 @@ describe("memory-core dreaming phases", () => {
       "utf-8",
     );
 
-    const { beforeAgentReply } = createHarness(
-      {
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 2,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+      lookbackDays: 2,
+    });
 
     await withDreamingTestClock(async () => {
       await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
@@ -1124,29 +1081,10 @@ describe("memory-core dreaming phases", () => {
       );
     }
 
-    const { beforeAgentReply } = createHarness(
-      {
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 1,
-                      lookbackDays: 2,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+      limit: 1,
+      lookbackDays: 2,
+    });
 
     await withDreamingTestClock(async () => {
       await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
@@ -1245,23 +1183,7 @@ describe("memory-core dreaming phases", () => {
       "utf-8",
     );
 
-    const { beforeAgentReply } = createHarness(
-      {
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: { light: { enabled: true, limit: 20, lookbackDays: 7 } },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir);
     await withDreamingTestClock(async () => {
       await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
     });
@@ -1317,35 +1239,9 @@ describe("memory-core dreaming phases", () => {
         },
       ],
     });
-    const { beforeAgentReply } = createHarness(
-      {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-          list: [{ id: "main", workspace: workspaceDir }],
-        },
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 7,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+      includeMainAgent: true,
+    });
 
     let firstSessionIngestion;
     try {
@@ -1413,35 +1309,9 @@ describe("memory-core dreaming phases", () => {
       ],
     });
 
-    const { beforeAgentReply } = createHarness(
-      {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-          list: [{ id: "main", workspace: workspaceDir }],
-        },
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 7,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+      includeMainAgent: true,
+    });
 
     try {
       await withDreamingTestClock(async () => {
@@ -1485,35 +1355,9 @@ describe("memory-core dreaming phases", () => {
       ],
     });
 
-    const { beforeAgentReply } = createHarness(
-      {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-          list: [{ id: "main", workspace: workspaceDir }],
-        },
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 7,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+      includeMainAgent: true,
+    });
 
     try {
       await beforeAgentReply(
@@ -1553,35 +1397,9 @@ describe("memory-core dreaming phases", () => {
       ],
     });
 
-    const { beforeAgentReply } = createHarness(
-      {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-          list: [{ id: "main", workspace: workspaceDir }],
-        },
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 7,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+      includeMainAgent: true,
+    });
 
     try {
       await beforeAgentReply(
@@ -1664,35 +1482,9 @@ describe("memory-core dreaming phases", () => {
       ],
     });
 
-    const { beforeAgentReply } = createHarness(
-      {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-          list: [{ id: "main", workspace: workspaceDir }],
-        },
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 7,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+      includeMainAgent: true,
+    });
 
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-16T19:00:00.000Z"));
@@ -1794,35 +1586,9 @@ describe("memory-core dreaming phases", () => {
       ],
     });
 
-    const { beforeAgentReply } = createHarness(
-      {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-          list: [{ id: "main", workspace: workspaceDir }],
-        },
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 7,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+      includeMainAgent: true,
+    });
 
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-16T19:00:00.000Z"));
@@ -1900,35 +1666,9 @@ describe("memory-core dreaming phases", () => {
       ],
     });
 
-    const { beforeAgentReply } = createHarness(
-      {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-          list: [{ id: "main", workspace: workspaceDir }],
-        },
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 7,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+      includeMainAgent: true,
+    });
 
     try {
       await beforeAgentReply(
@@ -1977,34 +1717,7 @@ describe("memory-core dreaming phases", () => {
       ],
     });
 
-    const { beforeAgentReply } = createHarness(
-      {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-        },
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 7,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir);
 
     try {
       await withDreamingTestClock(async () => {
@@ -2077,34 +1790,7 @@ describe("memory-core dreaming phases", () => {
     const mtime = new Date("2026-04-06T01:05:00.000Z");
     await fs.utimes(archivePath, mtime, mtime);
 
-    const { beforeAgentReply } = createHarness(
-      {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-        },
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 7,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir);
 
     try {
       await withDreamingTestClock(async () => {
@@ -2141,34 +1827,9 @@ describe("memory-core dreaming phases", () => {
       ],
     });
 
-    const { beforeAgentReply } = createHarness(
-      {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-        },
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 2,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+      lookbackDays: 2,
+    });
 
     try {
       await withDreamingTestClock(async () => {
@@ -2200,34 +1861,7 @@ describe("memory-core dreaming phases", () => {
       })),
     });
 
-    const { beforeAgentReply } = createHarness(
-      {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-        },
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 7,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir);
 
     try {
       await withDreamingTestClock(async () => {
@@ -2362,34 +1996,7 @@ describe("memory-core dreaming phases", () => {
       ],
     });
 
-    const { beforeAgentReply } = createHarness(
-      {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-        },
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 7,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir);
 
     try {
       await withDreamingTestClock(async () => {
@@ -2440,40 +2047,9 @@ describe("memory-core dreaming phases", () => {
       ],
     });
 
-    const { beforeAgentReply } = createHarness(
-      {
-        memory: {
-          search: {
-            enabled: false,
-          },
-        },
-
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-        },
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 7,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+      memorySearchEnabled: false,
+    });
 
     try {
       await withDreamingTestClock(async () => {
@@ -2505,29 +2081,9 @@ describe("memory-core dreaming phases", () => {
       "utf-8",
     );
 
-    const { beforeAgentReply } = createHarness(
-      {
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 2,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+      lookbackDays: 2,
+    });
 
     await withDreamingTestClock(async () => {
       await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
@@ -2576,23 +2132,9 @@ describe("memory-core dreaming phases", () => {
         "utf-8",
       );
     }
-    const { beforeAgentReply } = createHarness(
-      {
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: { light: { enabled: true, limit: 20, lookbackDays: 2 } },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+      lookbackDays: 2,
+    });
 
     await withDreamingTestClock(async () => {
       await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
@@ -2646,23 +2188,7 @@ describe("memory-core dreaming phases", () => {
         "utf-8",
       );
     }
-    const { beforeAgentReply } = createHarness(
-      {
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: { light: { enabled: true, limit: 20, lookbackDays: 7 } },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir);
 
     await withDreamingTestClock(async () => {
       await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
@@ -2742,29 +2268,9 @@ describe("memory-core dreaming phases", () => {
       "utf-8",
     );
 
-    const { beforeAgentReply } = createHarness(
-      {
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 2,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+      lookbackDays: 2,
+    });
 
     await withDreamingTestClock(async () => {
       await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
@@ -2810,29 +2316,9 @@ describe("memory-core dreaming phases", () => {
       "utf-8",
     );
 
-    const { beforeAgentReply } = createHarness(
-      {
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 2,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
+    const { beforeAgentReply } = createDefaultStorageLightDreamingHarness(workspaceDir, {
+      lookbackDays: 2,
+    });
 
     await withDreamingTestClock(async () => {
       await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);

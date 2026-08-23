@@ -409,6 +409,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "nodeHost.agentRuns.claude.enabled": "Node Claude Agent Runs Enabled",
   "nodeHost.workerRuns": "Node Worker Runs",
   "nodeHost.workerRuns.enabled": "Node Worker Runs Enabled",
+  "nodeHost.workerRuns.capacity": "Node Worker Run Capacity",
   "nodeHost.browserProxy": "Node Browser Proxy",
   "nodeHost.browserProxy.enabled": "Node Browser Proxy Enabled",
   "nodeHost.browserProxy.allowProfiles": "Node Browser Proxy Allowed Profiles",

@@ -5,7 +5,7 @@ import {
   installChannelStatusContractSuite,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, describe, expect, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { slackPlugin } from "../api.js";
 import { slackSetupPlugin } from "../setup-plugin-api.js";
 
@@ -64,6 +64,24 @@ describe("slack actions contract", () => {
 });
 
 describe("slack setup contract", () => {
+  it("recognizes HTTP bot accounts at the setup plugin boundary without an app token", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          mode: "http",
+          botToken: "xoxb-test",
+          signingSecret: "test-signing-secret",
+        },
+      },
+    } as OpenClawConfig;
+    const account = slackSetupPlugin.config.resolveAccount(cfg, "default");
+
+    expect(slackSetupPlugin.config.isConfigured?.(account, cfg)).toBe(true);
+    expect(slackSetupPlugin.config.describeAccount?.(account, cfg)).toMatchObject({
+      configured: true,
+    });
+  });
+
   installChannelSetupContractSuite({
     plugin: slackSetupPlugin,
     cases: [

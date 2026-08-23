@@ -848,7 +848,7 @@ suite.define(() => {
           'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
         );
         const sidebarAutomation = sidebar.locator('[data-attention-kind="cronFailed"]');
-        await expect.poll(() => sidebar.locator(".sidebar-footer-update").count()).toBe(0);
+        await expect.poll(() => sidebar.locator(".sidebar-footer-update").count()).toBe(1);
         await sidebar.locator(".sidebar-issues-button").click();
         await expect.poll(() => sidebarUpdate.count()).toBe(1);
         await expect.poll(() => sidebarAutomation.count()).toBe(1);

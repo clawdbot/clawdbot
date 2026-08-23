@@ -304,7 +304,7 @@ select it to open the owning Approvals page.
     - Session grouping: a Group by control organizes the sessions table into sections by custom groups, channel, kind, agent, or date. Custom groups persist per session via `sessions.patch` (`category`), so sessions started from message channels (Discord, Telegram, WhatsApp, ...) can be categorized too; assign groups by dragging rows onto a section, or with the per-row group selector, and create groups with the New group action.
     - Memory (a tab on the Agents page, scoped to the selected agent): dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`). When the `memory-wiki` plugin is enabled, the Diary view adds **Imported Insights** and **Memory Wiki** sub-tabs that browse imported source chats and the compiled wiki — clustered synthesis, entity, and concept pages plus annotated sources and reports, with claims, open questions, contradictions, and inline page previews (`wiki.importInsights`, `wiki.overview`, `wiki.get`).
     - Import Memory (`/memory-import`, reached from the Agents page's Memory tab): preview and copy local Claude Code auto-memory, Codex consolidated memory, or Hermes memory files into the selected agent workspace (`migrations.memory.plan`, `migrations.memory.apply`).
-    - Onboarding memory offer: when the Control UI opens in [onboarding mode](/web/urls#special-documents-and-startup-modes), a one-page dialog offers to import detected memories with the same plan/apply flow; skipping leaves the settings page as the later entry point.
+    - Onboarding memory offer: when the Control UI opens in [onboarding mode](/web/urls#other-special-documents-and-startup-modes), a one-page dialog offers to import detected memories with the same plan/apply flow; skipping leaves the settings page as the later entry point.
 
   </Accordion>
   <Accordion title="Cron, tasks, plugins, skills, devices, exec approvals">
@@ -766,7 +766,7 @@ UI clients during the compatibility window.
 
 ## Approval links
 
-Operator approval notifications can deep-link to a [standalone approval document](/web/urls#special-documents-and-startup-modes). The URL is stable for the lifetime of the approval and safe to forward between your own devices: it identifies the approval, never authorizes it.
+Operator approval notifications can deep-link to a [standalone approval document](/web/urls#other-special-documents-and-startup-modes). The URL is stable for the lifetime of the approval and safe to forward between your own devices: it identifies the approval, never authorizes it.
 
 - The approval namespace is reserved by the Gateway ahead of plugin HTTP routes for **all** HTTP methods, so a plugin route can never shadow or intercept an approval document.
 - Opening an approval document requires the same gateway auth as the rest of the Control UI (token/password, Tailscale Serve identity, or trusted-proxy identity); credentials are never part of the approval URL.

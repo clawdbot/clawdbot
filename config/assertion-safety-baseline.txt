@@ -1497,7 +1497,7 @@ packages/acp-core/src/runtime/session-identity.ts	2
 packages/acp-core/src/types.ts	2
 packages/agent-core/src/agent-loop.ts	3
 packages/agent-core/src/harness/compaction/branch-summarization.ts	1
-packages/agent-core/src/harness/compaction/compaction.ts	5
+packages/agent-core/src/harness/compaction/compaction.ts	3
 packages/agent-core/src/harness/messages.ts	3
 packages/agent-core/src/harness/session/session.ts	1
 packages/agent-core/src/harness/session/tool-result-pairing.ts	17
@@ -2473,8 +2473,8 @@ src/cli/program/register.audit.ts	12
 src/cli/program/register.backup.ts	14
 src/cli/program/register.configure.ts	1
 src/cli/program/register.migrate.ts	12
-src/cli/program/register.onboard.ts	37
-src/cli/program/register.setup.ts	10
+src/cli/program/register.onboard.ts	28
+src/cli/program/register.setup.ts	2
 src/cli/program/register.status-health-sessions.ts	29
 src/cli/program/route-specs.ts	1
 src/cli/run-main.ts	1
@@ -3548,7 +3548,7 @@ src/plugins/bundled-channel-config-metadata.ts	4
 src/plugins/bundled-plugin-scan.ts	1
 src/plugins/candidate-install-owner.ts	2
 src/plugins/capability-provider-runtime.ts	16
-src/plugins/captured-registration.ts	3
+src/plugins/captured-registration.ts	2
 src/plugins/channel-presence-policy.ts	2
 src/plugins/channel-validation.ts	1
 src/plugins/clawhub.ts	10
@@ -4063,7 +4063,6 @@ ui/src/components/session-menu.ts	1
 ui/src/components/session-organizer-controller.ts	5
 ui/src/components/settings-sidebar.ts	3
 ui/src/components/settings-ui.ts	7
-ui/src/components/sidebar-attention-dismissals.ts	1
 ui/src/components/sidebar-attention.ts	4
 ui/src/components/terminal/terminal-connection.ts	2
 ui/src/components/terminal/terminal-controller-lifecycle.ts	1

@@ -1266,7 +1266,7 @@ export async function handleOpenResponsesHttpRequest(
         const finalText =
           accumulatedText || resultPayloadText || bufferedReplaceableAssistantContent;
 
-        if (toolChoiceConstraint && finalText && !sawAssistantDelta) {
+        if (finalText && !sawAssistantDelta) {
           sawAssistantDelta = true;
           writeSseEvent(res, {
             type: "response.output_text.delta",

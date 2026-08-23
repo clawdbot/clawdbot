@@ -326,6 +326,7 @@ function attachGatewayHarness(options: {
   });
   attachGatewayWsMessageHandler({
     socket,
+    bootId: "post-connect-health-test-boot",
     upgradeReq: {
       headers: {
         host: requestHost,

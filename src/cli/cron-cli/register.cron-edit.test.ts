@@ -55,6 +55,9 @@ describe("cron edit command", () => {
     expect(help).toContain("--best-effort-deliver");
     expect(help).toContain("--display-name <name>");
     expect(help).toContain("--clear-display-name");
+    expect(help).toContain("--on-exit <shell>");
+    expect(help).toContain("--on-exit-cwd <path>");
+    expect(help).toContain("main|isolated|current|session:<id>");
     expect(help).toMatch(/also\s+implies --announce when used alone/);
   });
 
