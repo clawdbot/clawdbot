@@ -1,22 +1,49 @@
 name: Setup Android toolchain
 description: Set up the pinned Java and Android SDK toolchain used by OpenClaw builds.
+inputs:
+  cache-mode:
+    description: Cache authority for this job (off, restore, or read-write).
+    required: false
+    default: "off"
+outputs:
+  cache-mode:
+    description: Validated cache authority for downstream save gates.
+    value: ${{ inputs.cache-mode }}
 runs:
   using: composite
   steps:
+    - name: Validate cache mode
+      shell: bash
+      env:
+        CACHE_MODE: ${{ inputs.cache-mode }}
+      run: |
+        case "$CACHE_MODE" in
+          off|restore|read-write) ;;
+          *)
+            echo "::error::Invalid cache-mode input: '$CACHE_MODE' (expected off, restore, or read-write)"
+            exit 2
+            ;;
+        esac
+
     - name: Setup Java
       uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5
       with:
         distribution: temurin
         # Keep sdkmanager on the stable JDK path for Linux CI runners.
         java-version: 17
-        cache: gradle
-        cache-dependency-path: |
-          apps/android/**/*.gradle*
-          apps/android/**/gradle-wrapper.properties
-          apps/android/gradle/libs.versions.toml
 
-    - name: Cache Android SDK
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+    - name: Setup Gradle cache
+      if: inputs.cache-mode != 'off'
+      uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+      with:
+        cache-provider: basic
+        cache-read-only: ${{ inputs.cache-mode != 'read-write' }}
+        add-job-summary: never
+
+    - name: Restore Android SDK cache
+      id: android-sdk-cache
+      if: inputs.cache-mode != 'off'
+      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
       with:
         path: ~/.android-sdk
         key: ${{ runner.os }}-android-sdk-v1-cmdline-14742923-platform-37.0-build-tools-36.0.0
@@ -56,3 +83,10 @@ runs:
           "platform-tools" \
           "platforms;android-37.0" \
           "build-tools;36.0.0"
+
+    - name: Save Android SDK cache
+      if: inputs.cache-mode == 'read-write' && steps.android-sdk-cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      with:
+        path: ~/.android-sdk
+        key: ${{ steps.android-sdk-cache.outputs.cache-primary-key }}

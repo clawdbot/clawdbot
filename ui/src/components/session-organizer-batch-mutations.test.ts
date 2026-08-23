@@ -482,8 +482,16 @@ describe("session organizer destructive confirmations", () => {
     harness.deleteMany.mockResolvedValueOnce({
       deleted: [rows[1]!.key],
       errors: [retryError],
-      preservedWorktrees: [],
+      preservedWorktrees: [
+        {
+          id: "wt-busy",
+          branch: "openclaw/busy",
+          path: "/worktrees/busy",
+          reason: "busy",
+        },
+      ],
     });
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
 
     const pending = deleteSessionsBatch(harness.host, rows, harness.scope);
     const actions = await waitForConfirmDialogActions();
@@ -509,6 +517,10 @@ describe("session organizer destructive confirmations", () => {
     ]);
     expect(harness.publishSessionMutationError).toHaveBeenCalledWith(harness.scope, retryError);
     expect(retryError).not.toContain("GatewayRequestError");
+    expect(alertSpy).toHaveBeenCalledWith(
+      "Managed Worktrees:\nopenclaw/busy — live run or cleanup active",
+    );
+    alertSpy.mockRestore();
   });
 
   it.each(destructiveOperations)("sends no $name request when cancelled", async (operation) => {
@@ -562,7 +574,12 @@ describe("session organizer destructive confirmations", () => {
     });
     harness.deleteOne.mockResolvedValueOnce({
       deleted: true,
-      worktreePreserved: { id: "wt-1", branch: "feature", path: "/tmp/worktree" },
+      worktreePreserved: {
+        id: "wt-1",
+        branch: "feature",
+        path: "/tmp/worktree",
+        reason: "cleanup-failed",
+      },
     } as never);
     const active = { ...sessionRow(0), active: true } as SidebarRecentSession;
 
@@ -578,7 +595,7 @@ describe("session organizer destructive confirmations", () => {
     // The session delete already landed; the worktree just stays put, same as
     // the no-access branch, so the operator learns where it went.
     expect(showToast).toHaveBeenCalledWith({
-      message: t("sessionsView.deletePreservedWorktrees", { count: "1", branches: "feature" }),
+      message: "Managed Worktrees:\nfeature — cleanup failed",
     });
   });
 
@@ -589,7 +606,12 @@ describe("session organizer destructive confirmations", () => {
     });
     harness.deleteOne.mockResolvedValueOnce({
       deleted: true,
-      worktreePreserved: { id: "wt-1", branch: "feature", path: "/tmp/worktree" },
+      worktreePreserved: {
+        id: "wt-1",
+        branch: "feature",
+        path: "/tmp/worktree",
+        reason: "snapshot-failed",
+      },
     } as never);
     harness.request.mockResolvedValueOnce({
       removed: true,
@@ -598,7 +620,11 @@ describe("session organizer destructive confirmations", () => {
 
     const pending = deleteSession(harness.host, sessionRow(0), harness.scope);
     answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
-    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
+    const worktreeActions = await waitForConfirmDialogActions();
+    expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+      "OpenClaw could not create a safety snapshot",
+    );
+    answerConfirmDialog(worktreeActions, "confirm");
     await pending;
 
     expect(harness.request).toHaveBeenCalledWith("worktrees.remove", {
@@ -650,7 +676,12 @@ describe("session organizer destructive confirmations", () => {
       run: (harness: OperationsHarness) => {
         harness.deleteOne.mockResolvedValueOnce({
           deleted: true,
-          worktreePreserved: { id: "wt-1", branch: "feature", path: "/tmp/worktree" },
+          worktreePreserved: {
+            id: "wt-1",
+            branch: "feature",
+            path: "/tmp/worktree",
+            reason: "foreign-lock",
+          },
         } as never);
         return deleteSession(harness.host, sessionRow(0), harness.scope);
       },

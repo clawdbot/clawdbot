@@ -600,8 +600,28 @@ describe("resolveOutboundMediaUrls", () => {
       },
       expected: ["https://example.com/legacy.png"],
     },
+    {
+      name: "falls back to the legacy single-media field when plural entries are blank",
+      payload: {
+        mediaUrls: ["   "],
+        mediaUrl: "https://example.com/legacy.png",
+      },
+      expected: ["https://example.com/legacy.png"],
+    },
+    {
+      name: "preserves raw plural entries and duplicates when one attachment is valid",
+      payload: {
+        mediaUrls: ["   ", " https://example.com/a.png ", " https://example.com/a.png "],
+        mediaUrl: "https://example.com/legacy.png",
+      },
+      expected: ["   ", " https://example.com/a.png ", " https://example.com/a.png "],
+    },
   ])("$name", ({ payload, expected }) => {
-    expect(resolveOutboundMediaUrls(payload)).toEqual(expected);
+    const mediaUrls = resolveOutboundMediaUrls(payload);
+    expect(mediaUrls).toEqual(expected);
+    if (payload.mediaUrls?.some((mediaUrl) => mediaUrl.trim())) {
+      expect(mediaUrls).toBe(payload.mediaUrls);
+    }
   });
 });
 
@@ -869,24 +889,26 @@ describe("deliverTextOrMediaReply", () => {
     expect(sendMedia).not.toHaveBeenCalled();
   });
 
-  it("ignores blank media urls before sending", async () => {
+  it.each([
+    {
+      name: "mixed plural entries",
+      payload: { text: "hello", mediaUrls: ["   ", " https://a "] },
+    },
+    {
+      name: "blank plural entries with a valid single attachment",
+      payload: { text: "hello", mediaUrls: ["   "], mediaUrl: " https://a " },
+    },
+  ])("delivers the valid attachment from $name", async ({ payload }) => {
     const sendMedia = vi.fn(async () => undefined);
     const sendText = vi.fn(async () => undefined);
 
     await expect(
-      deliverTextOrMediaReply({
-        payload: { text: "hello", mediaUrls: ["   ", " https://a "] },
-        text: "hello",
-        sendText,
-        sendMedia,
-      }),
+      deliverTextOrMediaReply({ payload, text: "hello", sendText, sendMedia }),
     ).resolves.toBe("media");
 
-    expect(sendMedia).toHaveBeenCalledTimes(1);
-    expect(sendMedia).toHaveBeenCalledWith({
-      mediaUrl: "https://a",
-      caption: "hello",
-    });
+    expect(sendMedia).toHaveBeenCalledOnce();
+    expect(sendMedia).toHaveBeenCalledWith({ mediaUrl: "https://a", caption: "hello" });
+    expect(sendText).not.toHaveBeenCalled();
   });
 });
 

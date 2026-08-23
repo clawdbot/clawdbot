@@ -8,7 +8,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
+import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { CHANNEL_MESSAGE_ACTION_NAMES } from "../channels/plugins/message-action-names.js";
 import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import { resolveCommandConfigWithSecrets } from "../cli/command-config-resolution.js";
@@ -18,7 +18,6 @@ import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
 import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { tryGetLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import {
   resolveMessageBroadcastAccountPlan,
@@ -67,7 +66,6 @@ export async function messageCommand(
   runtime: RuntimeEnv,
 ) {
   const loadedRaw = getRuntimeConfig();
-  const compatibilityAgentId = tryGetLegacyDefaultAgentId(loadedRaw);
   const rawAction = normalizeOptionalString(opts.action) ?? "";
   const actionInput = rawAction || "send";
   const normalizedActionInput = normalizeLowercaseStringOrEmpty(actionInput);
@@ -110,7 +108,7 @@ export async function messageCommand(
     runtime,
     autoEnable: true,
   });
-  const agentId = compatibilityAgentId ?? resolveSystemAgentTargetAgentId(cfg);
+  const agentId = resolveAmbientOwnerAgentId(cfg);
   const actionMatch = (CHANNEL_MESSAGE_ACTION_NAMES as readonly string[]).find(
     (name) => normalizeLowercaseStringOrEmpty(name) === normalizedActionInput,
   );

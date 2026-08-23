@@ -181,6 +181,7 @@ type SlackTraceScenarioName =
   | "final-blocks-and-text"
   | "cancel-mid-stream"
   | "preview-edit-fallback"
+  | "progress-compact-commentary"
   | "progress-session-card"
   | "progress-native-unified";
 
@@ -209,6 +210,10 @@ const SHORT_FINAL_TEXT = "All checks passed. Ship it.";
 const PREVIEW_PARTIAL_ONE = "Compiling the changelog";
 const PREVIEW_PARTIAL_TWO = "Compiling the changelog for 2026.1.0.";
 const PREVIEW_FINAL_TEXT = "Compiling the changelog for 2026.1.0.\n\nDone: 12 entries.";
+const COMPACT_COMMENTARY_TEXT = "Checking the current Slack behavior.";
+const COMPACT_COMMENTARY_TEXT_UPDATED =
+  "Checking the current Slack behavior and preparing the focused fix.";
+const COMPACT_FINAL_TEXT = "Compact Slack progress is ready.";
 
 const BLOCKS_FINAL_TEXT = "Release 2026.1.0 is ready to ship.";
 // Portable presentation actions; slack renders them as Block Kit and must
@@ -274,6 +279,16 @@ const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTrace
     { kind: "partial", text: PREVIEW_PARTIAL_TWO },
     { kind: "advance", ms: 1100 },
     { kind: "final", text: PREVIEW_FINAL_TEXT },
+    { kind: "idle" },
+  ],
+  "progress-compact-commentary": [
+    { kind: "reply-start" },
+    { kind: "partial", text: COMPACT_COMMENTARY_TEXT },
+    { kind: "advance", ms: 2000 },
+    { kind: "tool-progress", name: "read", phase: "start" },
+    { kind: "partial", text: COMPACT_COMMENTARY_TEXT_UPDATED },
+    { kind: "advance", ms: 2000 },
+    { kind: "final", text: COMPACT_FINAL_TEXT },
     { kind: "idle" },
   ],
   "progress-session-card": [
@@ -460,6 +475,7 @@ function createRecordingSlackClient(): Record<string, unknown> {
 }
 
 function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedSlackMessage {
+  const compactProgress = scenario === "progress-compact-commentary";
   const progressCard = scenario === "progress-session-card";
   const nativeProgress = scenario === "progress-native-unified";
   const cfg = {
@@ -520,19 +536,33 @@ function createPreparedTraceMessage(scenario: SlackTraceScenarioName): PreparedS
     },
     account: {
       accountId: "default",
-      config: progressCard
-        ? // Native task cards are the progress default; this scenario owns the
-          // Block Kit opt-out path.
-          { streaming: { progress: { nativeTaskCards: false } } }
-        : nativeProgress
-          ? // Empty progress config on purpose: proves the shipped default.
-            { streaming: { mode: "progress" } }
-          : {
-              streaming: {
-                mode: "partial",
-                nativeTransport: NATIVE_SCENARIOS.has(scenario),
+      config: compactProgress
+        ? {
+            streaming: {
+              mode: "progress",
+              nativeTransport: true,
+              progress: {
+                style: "compact",
+                nativeTaskCards: true,
+                label: false,
+                commentary: true,
+                toolProgress: false,
               },
             },
+          }
+        : progressCard
+          ? // Native task cards are the progress default; this scenario owns the
+            // Block Kit opt-out path.
+            { streaming: { progress: { nativeTaskCards: false } } }
+          : nativeProgress
+            ? // Empty progress config on purpose: proves the shipped default.
+              { streaming: { mode: "progress" } }
+            : {
+                streaming: {
+                  mode: "partial",
+                  nativeTransport: NATIVE_SCENARIOS.has(scenario),
+                },
+              },
     },
     message: {
       type: "message",
@@ -611,7 +641,13 @@ async function setupSlackTrace(
       case "partial":
         // Present only on the draft-preview tier; native streaming leaves
         // onPartialReply undefined and partials stay IN-only script context.
-        if (scenario === "progress-native-unified") {
+        if (scenario === "progress-compact-commentary") {
+          await turn.replyOptions.onItemEvent?.({
+            kind: "preamble",
+            itemId: "preamble-1",
+            progressText: step.text,
+          });
+        } else if (scenario === "progress-native-unified") {
           await turn.replyOptions.onItemEvent?.({
             kind: "preamble",
             itemId: "preamble-1",

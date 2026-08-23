@@ -1638,7 +1638,14 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         .deliver({ text }, { kind: "final" })
         .catch((caught: unknown) => caught);
 
-      expect(isChannelPartialDeliveryError(error)).toBe(true);
+      expect(error).toMatchObject({
+        code: "CHANNEL_PARTIAL_DELIVERY",
+        deliveryResult: {
+          content: text,
+          messageIds: [],
+          visibleReplySent: true,
+        },
+      });
       expect(provider).toHaveBeenCalledOnce();
       await Promise.resolve(options.onError?.(error, { kind: "final" }));
       expect(result.getVisibleReplyState().visibleReplySent).toBe(true);
@@ -1647,6 +1654,50 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       if (provider !== sendMessageFeishuMock) {
         expect(sendMessageFeishuMock).not.toHaveBeenCalled();
       }
+    },
+  );
+
+  it.each([
+    { kind: "text", provider: sendMessageFeishuMock, acceptedBeforeReceiptLoss: 0 },
+    { kind: "text", provider: sendMessageFeishuMock, acceptedBeforeReceiptLoss: 1 },
+    { kind: "card", provider: sendStructuredCardFeishuMock, acceptedBeforeReceiptLoss: 0 },
+    { kind: "card", provider: sendStructuredCardFeishuMock, acceptedBeforeReceiptLoss: 1 },
+  ])(
+    "retains accepted $kind chunk content after receipt loss with $acceptedBeforeReceiptLoss prior receipts",
+    async ({ kind, provider, acceptedBeforeReceiptLoss }) => {
+      useNonStreamingAutoAccount();
+      const runtime = getFeishuRuntimeMock();
+      runtime.channel.text.resolveTextChunkLimit.mockReturnValue(6);
+      runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue(["first", "second", "third"]);
+
+      if (acceptedBeforeReceiptLoss > 0) {
+        provider.mockResolvedValueOnce({ messageId: "om-first" });
+      }
+      provider.mockRejectedValueOnce(
+        createChannelPartialDeliveryError(
+          new Error("Feishu reply failed: no message_id returned"),
+          {
+            messageIds: [],
+            visibleReplySent: true,
+          },
+        ),
+      );
+      const { options } = createDispatcherHarness();
+      const text = kind === "card" ? "| first | second |\n| - | - |" : "firstsecondthird";
+
+      const error = await options
+        .deliver({ text }, { kind: "final" })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toMatchObject({
+        code: "CHANNEL_PARTIAL_DELIVERY",
+        deliveryResult: {
+          content: acceptedBeforeReceiptLoss > 0 ? "firstsecond" : "first",
+          messageIds: acceptedBeforeReceiptLoss > 0 ? ["om-first"] : [],
+          visibleReplySent: true,
+        },
+      });
+      expect(provider).toHaveBeenCalledTimes(acceptedBeforeReceiptLoss + 1);
     },
   );
 
@@ -2381,6 +2432,71 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("reports every accepted voice upload fallback in the successful delivery result", async () => {
+    sendMediaFeishuMock
+      .mockRejectedValueOnce(new Error("first upload failed"))
+      .mockRejectedValueOnce(new Error("second upload failed"));
+    sendMessageFeishuMock
+      .mockResolvedValueOnce({ messageId: "om-first-fallback" })
+      .mockResolvedValueOnce({ messageId: "om-second-fallback" });
+    const { options } = createDispatcherHarness();
+
+    const delivery = await options.deliver(
+      {
+        text: "spoken reply",
+        mediaUrls: ["https://example.com/first.mp3", "https://example.com/second.mp3"],
+        audioAsVoice: true,
+      },
+      { kind: "final" },
+    );
+
+    expect(delivery).toMatchObject({
+      messageIds: ["om-first-fallback", "om-second-fallback"],
+      visibleReplySent: true,
+      content:
+        "spoken reply\n\n📎 https://example.com/first.mp3\n\n📎 https://example.com/second.mp3",
+    });
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains every accepted voice upload fallback when a later fallback fails", async () => {
+    sendMediaFeishuMock
+      .mockRejectedValueOnce(new Error("first upload failed"))
+      .mockRejectedValueOnce(new Error("second upload failed"))
+      .mockRejectedValueOnce(new Error("third upload failed"));
+    sendMessageFeishuMock
+      .mockResolvedValueOnce({ messageId: "om-first-fallback" })
+      .mockResolvedValueOnce({ messageId: "om-second-fallback" })
+      .mockRejectedValueOnce(new Error("third fallback failed"));
+    const { options } = createDispatcherHarness();
+
+    const error = await options
+      .deliver(
+        {
+          text: "spoken reply",
+          mediaUrls: [
+            "https://example.com/first.mp3",
+            "https://example.com/second.mp3",
+            "https://example.com/third.mp3",
+          ],
+          audioAsVoice: true,
+        },
+        { kind: "final" },
+      )
+      .catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
+        messageIds: ["om-first-fallback", "om-second-fallback"],
+        visibleReplySent: true,
+        content:
+          "spoken reply\n\n📎 https://example.com/first.mp3\n\n📎 https://example.com/second.mp3",
+      },
+    });
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(3);
+  });
+
   it("does not leak local media paths in the upload failure fallback", async () => {
     const mediaPath = path.join(os.tmpdir(), "openclaw-feishu-reply-local-voice.mp3");
     sendMediaFeishuMock.mockRejectedValueOnce(new Error("media failed"));
@@ -2401,20 +2517,23 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(fallbackText).not.toContain(mediaPath);
   });
 
-  it("falls back to legacy mediaUrl when mediaUrls is an empty array", async () => {
-    useNonStreamingAutoAccount();
-    const { options } = createDispatcherHarness();
-    await options.deliver(
-      { text: "caption", mediaUrl: "https://example.com/a.png", mediaUrls: [] },
-      { kind: "final" },
-    );
+  it.each([{ mediaUrls: [] }, { mediaUrls: ["   "] }])(
+    "falls back to legacy mediaUrl when mediaUrls has no usable entries",
+    async ({ mediaUrls }) => {
+      useNonStreamingAutoAccount();
+      const { options } = createDispatcherHarness();
+      await options.deliver(
+        { text: "caption", mediaUrl: "https://example.com/a.png", mediaUrls },
+        { kind: "final" },
+      );
 
-    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
-    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
-    expectMockArgFields(sendMediaFeishuMock, "media send params", {
-      mediaUrl: "https://example.com/a.png",
-    });
-  });
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+      expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+      expectMockArgFields(sendMediaFeishuMock, "media send params", {
+        mediaUrl: "https://example.com/a.png",
+      });
+    },
+  );
 
   it("sends attachments after streaming final markdown replies", async () => {
     const { options } = createDispatcherHarness({

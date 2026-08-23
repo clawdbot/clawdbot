@@ -152,6 +152,7 @@ type StatusMemorySearchManagerResolver = (params: {
   cfg: OpenClawConfig;
   agentId: string;
   purpose: "status";
+  inspectSources: true;
 }) => Promise<{
   manager: StatusMemorySearchManager | null;
 }>;
@@ -440,6 +441,7 @@ async function resolveMemoryManagerStatusSnapshot(
     cfg: params.cfg,
     agentId,
     purpose: "status",
+    inspectSources: true,
   });
   if (!manager) {
     return null;

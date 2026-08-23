@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { RequestedModelUnsupportedError } from "acpx/runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AcpRuntimeError,
@@ -197,6 +198,76 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     }
 
     expect(ensureSpy).not.toHaveBeenCalled();
+  });
+
+  it("advertises elicitation modes and forwards the exact handler through every delegate", async () => {
+    const onElicitation = vi.fn(async () => ({ action: "cancel" as const }));
+    const handle = (sessionKey: string) => ({
+      sessionKey,
+      backend: "acpx",
+      runtimeSessionName: sessionKey,
+      acpxRecordId: sessionKey,
+    });
+    const runThrough = async (runtime: AcpxRuntime, sessionKey: string) => {
+      for await (const event of runtime.runTurn({
+        handle: handle(sessionKey),
+        text: "ask",
+        mode: "prompt",
+        requestId: `request:${sessionKey}`,
+        onElicitation,
+      })) {
+        void event;
+      }
+    };
+    const baseStore = (agentCommand: string): TestSessionStore => ({
+      load: vi.fn(async (sessionId: string) => ({ acpxRecordId: sessionId, agentCommand })),
+      save: vi.fn(async () => {}),
+    });
+
+    const defaultRuntime = makeRuntime(baseStore(CODEX_ACP_COMMAND), {
+      elicitationModes: ["form", "url"],
+    });
+    const defaultTurn = vi
+      .spyOn(defaultRuntime.delegate, "runTurn")
+      .mockImplementation(async function* () {
+        yield { type: "done" };
+      });
+    await runThrough(defaultRuntime.runtime, "agent:codex:acp:default");
+
+    const bridgeRuntime = makeRuntime(baseStore(DOCUMENTED_OPENCLAW_BRIDGE_COMMAND), {
+      elicitationModes: ["form", "url"],
+      mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
+    });
+    const bridgeDelegate = bridgeRuntime.bridgeSafeDelegate as typeof bridgeRuntime.delegate;
+    const bridgeTurn = vi.spyOn(bridgeDelegate, "runTurn").mockImplementation(async function* () {
+      yield { type: "done" };
+    });
+    await runThrough(bridgeRuntime.runtime, "agent:openclaw:acp:bridge");
+
+    const managedRuntime = makeRuntime(baseStore(CODEX_ACP_COMMAND), {
+      elicitationModes: ["form", "url"],
+      openclawToolsMcpBridgeEnabled: true,
+      mcpServers: [{ name: "openclaw-tools", command: "node", args: [], env: [] }],
+    });
+    const managedDelegate = (
+      managedRuntime.runtime as unknown as {
+        resolveManagedToolsDelegateForSession(sessionKey: string): typeof managedRuntime.delegate;
+      }
+    ).resolveManagedToolsDelegateForSession("agent:codex:acp:managed");
+    const managedTurn = vi.spyOn(managedDelegate, "runTurn").mockImplementation(async function* () {
+      yield { type: "done" };
+    });
+    await runThrough(managedRuntime.runtime, "agent:codex:acp:managed");
+
+    for (const turn of [defaultTurn, bridgeTurn, managedTurn]) {
+      expect(turn).toHaveBeenCalledOnce();
+      expect(turn.mock.calls[0]?.[0].onElicitation).toBe(onElicitation);
+    }
+    for (const delegate of [defaultRuntime.delegate, bridgeDelegate, managedDelegate] as Array<{
+      options?: { elicitationModes?: readonly string[] };
+    }>) {
+      expect(delegate.options?.elicitationModes).toEqual(["form", "url"]);
+    }
   });
 
   it("adds the OpenClaw session key to both managed tools MCP bridges", () => {
@@ -868,6 +939,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("adds Codex wrapper stderr tail to generic startTurn failure results", async () => {
+    const promptStarted = createDeferred<void>();
     const wrapperRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-"));
     await fs.writeFile(
       path.join(wrapperRoot, "codex-acp-wrapper.stderr.lease-start-turn.log"),
@@ -893,6 +965,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     vi.spyOn(delegate, "startTurn").mockImplementation(
       (input): AcpRuntimeTurn => ({
         requestId: input.requestId,
+        promptStarted: promptStarted.promise,
         events: (async function* () {
           yield {
             type: "text_delta" as const,
@@ -923,10 +996,19 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       mode: "prompt",
       requestId: "turn-1",
     });
+    expect(turn.promptStarted).toBeDefined();
+    let submitted = false;
+    const observedPromptStarted = turn.promptStarted.then(() => {
+      submitted = true;
+    });
     const events: AcpRuntimeEvent[] = [];
     for await (const event of turn.events) {
       events.push(event);
     }
+    expect(submitted).toBe(false);
+    promptStarted.resolve();
+    await observedPromptStarted;
+    expect(submitted).toBe(true);
 
     await expect(turn.result).resolves.toMatchObject({
       status: "failed",
@@ -984,6 +1066,13 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       requestId: "turn-1",
     });
 
+    const promptStarted = turn.promptStarted;
+    expect(promptStarted).toBeDefined();
+    await expect(promptStarted).rejects.toMatchObject({
+      name: "AcpRuntimeError",
+      code: "ACP_TURN_FAILED",
+      message: expect.stringContaining("adapter failed before returning turn"),
+    });
     await expect(turn.result).rejects.toMatchObject({
       name: "AcpRuntimeError",
       code: "ACP_TURN_FAILED",
@@ -1012,6 +1101,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     const startTurn = vi.spyOn(delegate, "startTurn").mockImplementation(
       (input): AcpRuntimeTurn => ({
         requestId: input.requestId,
+        promptStarted: Promise.resolve(),
         events: (async function* () {
           yield { type: "done" as const, stopReason: "end_turn" };
         })(),
@@ -2710,6 +2800,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       });
       return {
         requestId: input.requestId,
+        promptStarted: Promise.resolve(),
         events: (async function* () {})(),
         result: Promise.resolve({ status: "completed" }),
         cancel: vi.fn(async () => {}),
@@ -2757,6 +2848,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       expectPendingLease();
       return {
         requestId: input.requestId,
+        promptStarted: Promise.resolve(),
         events: (async function* () {})(),
         result: Promise.resolve({ status: "completed" }),
         cancel: vi.fn(async () => {}),

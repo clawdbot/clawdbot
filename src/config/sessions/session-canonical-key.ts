@@ -3,6 +3,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import {
   normalizeAgentId,
@@ -136,13 +137,11 @@ export function isCanonicalSqliteRetainedHistoryPlaceholder(
   );
 }
 
-export function assertCanonicalSqliteSessionKeysCurrent(
+export function scanCanonicalSqliteSessionEntries(
   database: { agentId: string; db: DatabaseSync },
+  visit?: (summary: { entry: SessionEntry; sessionKey: string }) => void,
   mainKey?: string,
-): void {
-  if (validatedDatabases.has(database.db)) {
-    return;
-  }
+): number {
   // This connection validates once. External direct-SQLite edits surface at the next
   // process start, not the next topology change; doctor owns live repair.
   const db = getNodeSqliteKysely<CanonicalSessionDatabase>(database.db);
@@ -151,7 +150,8 @@ export function assertCanonicalSqliteSessionKeysCurrent(
     db.selectFrom("session_key_contract").select("main_key").where("id", "=", 1),
   )?.main_key;
   const canonicalMainKey = normalizeMainKey(mainKey ?? storedMainKey);
-  for (const row of executeSqliteQuerySync(
+  let count = 0;
+  for (const row of iterateSqliteQuerySync(
     database.db,
     db
       .selectFrom("session_nodes")
@@ -169,8 +169,9 @@ export function assertCanonicalSqliteSessionKeysCurrent(
         "session_nodes.parent_session_key",
         "session_nodes.spawned_by",
         "retained_window.session_id as retained_window_id",
-      ]),
-  ).rows) {
+      ])
+      .orderBy("session_nodes.session_key"),
+  )) {
     if (isCanonicalSqliteRetainedHistoryPlaceholder(row)) {
       continue;
     }
@@ -234,8 +235,20 @@ export function assertCanonicalSqliteSessionKeysCurrent(
         );
       }
     }
+    visit?.({ entry, sessionKey: row.session_key });
+    count += 1;
   }
   validatedDatabases.add(database.db);
+  return count;
+}
+
+export function assertCanonicalSqliteSessionKeysCurrent(
+  database: { agentId: string; db: DatabaseSync },
+  mainKey?: string,
+): void {
+  if (!validatedDatabases.has(database.db)) {
+    scanCanonicalSqliteSessionEntries(database, undefined, mainKey);
+  }
 }
 
 export function setCanonicalSqliteSessionMainKey(

@@ -386,6 +386,7 @@ function cloneSqliteCheckpointSessionEntry(params: {
     systemSent: false,
     abortedLastRun: false,
     lifecycleRunId: undefined,
+    lastRunId: undefined,
     startedAt: undefined,
     endedAt: undefined,
     runtimeMs: undefined,

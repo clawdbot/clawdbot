@@ -1,4 +1,5 @@
 export * from "./error-details.js";
+export * from "./github-publication-api.js";
 export * from "./session-agent-status.js";
 export * from "./terminal-validators.js";
 export {
@@ -27,6 +28,7 @@ export {
 } from "./schema/sessions-row.js";
 export * from "./schema/session-classification.js";
 export * from "./schema/sessions-suggestions.js";
+export * from "./schema/sessions-delete.js";
 export * from "./schema/projects.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";

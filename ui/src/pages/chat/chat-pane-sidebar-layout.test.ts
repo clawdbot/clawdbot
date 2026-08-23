@@ -114,6 +114,36 @@ describe("chat pane sidebar layout", () => {
     expect(layout.columns).toHaveLength(1);
     expect(layout.columns[0]?.side).toBe("right");
     expect(layout.columns[0]?.panels[0]?.slot).toBe("chat");
+    expect(layout.open).toBe(true);
+
+    const closedBoardChat = resolveSidebarLayoutForBoard({
+      board: board("right"),
+      layout: { ...layout, open: false },
+      paneWidth: 1_400,
+    });
+    expect(closedBoardChat.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["chat"]);
+    expect(closedBoardChat.open).toBe(false);
+
+    const closed = resolveSidebarLayoutForBoard({
+      board: board("right"),
+      layout: { ...openSlot({ columns: [] }, "browser"), open: false },
+      paneWidth: 1_400,
+    });
+    expect(closed.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["browser", "chat"]);
+    expect(closed.open).toBe(false);
+  });
+
+  it("does not reactivate projected Board chat over the selected side-panel tab", () => {
+    const selectedSideChat = openSlot(openSlot({ columns: [] }, "chat"), "companion");
+
+    const layout = resolveSidebarLayoutForBoard({
+      board: board("right"),
+      layout: selectedSideChat,
+      paneWidth: 1_400,
+    });
+
+    expect(layout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["chat", "companion"]);
+    expect(layout.columns[0]?.activePanelId).toBe("companion");
   });
 
   it("keeps bottom and hidden board chat outside the side panel", () => {

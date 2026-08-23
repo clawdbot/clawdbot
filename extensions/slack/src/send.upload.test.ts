@@ -276,6 +276,45 @@ describe("sendMessageSlack file upload with user IDs", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["first", "batched"] as const)(
+    "records an accepted %s upload when its remaining caption post fails",
+    async (replyToMode) => {
+      const { handleSlackAction, slackActionRuntime } = await import("./action-runtime.js");
+      const { sendSlackMessage: sendSlackMessageThroughPublicOwner } = await import("./actions.js");
+      const originalSender = slackActionRuntime.sendSlackMessage;
+      const hasRepliedRef = { value: false };
+      client.chat.postMessage.mockRejectedValueOnce(new Error("Remaining Slack caption failed"));
+      slackActionRuntime.sendSlackMessage = async (target, content, options) =>
+        await sendSlackMessageThroughPublicOwner(target, content, { ...options, client });
+
+      try {
+        await expect(
+          handleSlackAction(
+            {
+              action: "uploadFile",
+              to: "channel:C123CHAN",
+              filePath: "/tmp/report.txt",
+              initialComment: "a".repeat(8500),
+            },
+            SLACK_TEST_CFG,
+            {
+              currentChannelId: "C123CHAN",
+              currentThreadTs: "1111111111.111111",
+              replyToMode,
+              hasRepliedRef,
+            },
+          ),
+        ).rejects.toThrow("Remaining Slack caption failed");
+
+        expect(client.files.completeUploadExternal).toHaveBeenCalledOnce();
+        expect(client.chat.postMessage).toHaveBeenCalledOnce();
+        expect(hasRepliedRef.value).toBe(true);
+      } finally {
+        slackActionRuntime.sendSlackMessage = originalSender;
+      }
+    },
+  );
+
   it("disables image optimization for forced-media uploads", async () => {
     await sendUpload(client, {
       mediaUrl: "/tmp/original.png",

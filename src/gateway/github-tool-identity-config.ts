@@ -1,4 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
+import {
+  matchesAgentLifecycleBinding,
+  type AgentLifecycleBinding,
+} from "../agents/agent-lifecycle-registry.js";
 import { resolveMutableAgentEntry } from "../agents/agent-scope.js";
 import { applyAgentConfig } from "../commands/agents.config.js";
 import { unsetConfigValueAtPath } from "../config/config-paths.js";
@@ -18,6 +22,7 @@ export async function updateGitHubToolIdentityConfig(params: {
   agentId: string;
   identity?: GitHubToolIdentityConfig;
   expectedIdentity?: GitHubToolIdentityConfig | null;
+  agentLifecycleBinding?: AgentLifecycleBinding;
 }): Promise<OpenClawConfig> {
   const mutation = await mutateConfigFileWithRetry({
     afterWrite: { mode: "auto" },
@@ -38,14 +43,23 @@ export async function updateGitHubToolIdentityConfig(params: {
         return;
       }
 
+      if (
+        params.agentLifecycleBinding &&
+        !matchesAgentLifecycleBinding(draft, params.agentLifecycleBinding)
+      ) {
+        throw new Error("Agent changed while GitHub setup was in progress.");
+      }
       let entry = resolveMutableAgentEntry(draft, params.agentId);
+      if (params.agentLifecycleBinding && !entry) {
+        throw new Error("Agent changed while GitHub setup was in progress.");
+      }
       if (
         params.expectedIdentity !== undefined &&
         !sameIdentity(entry?.tools?.github, params.expectedIdentity)
       ) {
         throw new Error("GitHub identity changed while setup was in progress.");
       }
-      if (!entry && params.identity) {
+      if (!entry && params.identity && !params.agentLifecycleBinding) {
         Object.assign(draft, applyAgentConfig(draft, { agentId: params.agentId }));
         entry = resolveMutableAgentEntry(draft, params.agentId);
       }

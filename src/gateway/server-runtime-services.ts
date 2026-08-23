@@ -7,8 +7,10 @@ import {
   resolveHeartbeatAgents,
   startHeartbeatRunner,
   type HeartbeatRunner,
+  runHeartbeatOnce,
 } from "../infra/heartbeat-runner.js";
 import { resolveHeartbeatIntervalMs } from "../infra/heartbeat-summary.js";
+import type { DeliverOutboundPayloadsParams } from "../infra/outbound/deliver.js";
 import {
   schedulePendingSessionDeliveries,
   startSessionDeliveryRuntime,
@@ -18,6 +20,12 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { startSessionUpstreamMonitor } from "../sessions/session-upstream-monitor.js";
+import { assertQueuedConversationDeliveryAttemptAuthorized } from "./conversation-route-ownership.js";
+import { resolveGatewayPluginConfig } from "./runtime-plugin-config.js";
+import {
+  fenceScheduledGatewayContextResolver,
+  runWithScheduledGatewayContext,
+} from "./scheduled-run-gateway-context.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { startGatewayMaintenanceTimers } from "./server-maintenance.js";
@@ -190,11 +198,13 @@ function startPendingOutboundDeliveryRecovery(params: {
   log: GatewayRuntimeServiceLogger;
 }): () => Promise<void> {
   let stopped = false;
+  let migrationPending = true;
+  let initialPass = true;
   let inFlight: Promise<void> | null = null;
   let stopPromise: Promise<void> | null = null;
   let logRecovery: ReturnType<GatewayRuntimeServiceLogger["child"]> | undefined;
 
-  const recover = (startup: boolean): void => {
+  const recover = (): void => {
     if (stopped || inFlight || isGatewayWorkAdmissionClosed()) {
       return;
     }
@@ -208,23 +218,62 @@ function startPendingOutboundDeliveryRecovery(params: {
       if (stopped) {
         return;
       }
+      const deliverWithCurrentConversationAuthority = async (
+        deliveryParams: DeliverOutboundPayloadsParams,
+      ) => {
+        const completion = deliveryParams.deliveryCompletion;
+        const attemptAuthority =
+          completion?.kind === "conversation"
+            ? completion
+            : deliveryParams.conversationDeliveryAttemptAuthority;
+        if (!attemptAuthority) {
+          return await deliverOutboundPayloadsInternal(deliveryParams);
+        }
+        return await deliverOutboundPayloadsInternal({
+          ...deliveryParams,
+          onDeliveryAttempt: async () => {
+            await deliveryParams.onDeliveryAttempt?.();
+            if (!attemptAuthority.routeFingerprint) {
+              return;
+            }
+            assertQueuedConversationDeliveryAttemptAuthorized({
+              config: resolveGatewayPluginConfig({ config: getRuntimeConfig() }),
+              agentId: attemptAuthority.agentId,
+              operationId: attemptAuthority.operationId,
+              ...(attemptAuthority.storePath ? { storePath: attemptAuthority.storePath } : {}),
+              routeFingerprint: attemptAuthority.routeFingerprint,
+            });
+          },
+        });
+      };
       logRecovery ??= params.log.child("delivery-recovery");
-      if (startup) {
-        await recoverPendingDeliveries({
-          deliver: deliverOutboundPayloadsInternal,
+      if (migrationPending) {
+        const cfg = initialPass ? params.cfg : getRuntimeConfig();
+        initialPass = false;
+        const { migrateLegacyPendingOutboundDeliveries } =
+          await import("../infra/outbound/delivery-queue-migration.js");
+        const migration = await migrateLegacyPendingOutboundDeliveries({
+          cfg,
           log: logRecovery,
-          cfg: params.cfg,
+        });
+        // A new scheduled-service lifecycle starts unchecked. Latch only after
+        // one pass neither skipped ownership nor left retired rows behind.
+        migrationPending = migration.skipped > 0 || migration.remaining > 0;
+        await recoverPendingDeliveries({
+          deliver: deliverWithCurrentConversationAuthority,
+          log: logRecovery,
+          cfg,
         });
         return;
       }
-      // Startup migration runs once. Normal retries use fresh config so revoked
-      // accounts cannot inherit the authority captured at gateway startup.
+      // Normal retries use fresh config so revoked accounts cannot inherit the
+      // authority captured at gateway startup.
       await drainPendingDeliveriesCore({
         drainKey: "gateway:outbound",
         logLabel: "Outbound delivery retry",
         cfg: getRuntimeConfig(),
         log: logRecovery,
-        deliver: deliverOutboundPayloadsInternal,
+        deliver: deliverWithCurrentConversationAuthority,
         selectEntry: () => ({ match: true, bypassBackoff: false }),
       });
     }).catch((err: unknown) => params.log.error(`Delivery recovery failed: ${String(err)}`));
@@ -238,9 +287,9 @@ function startPendingOutboundDeliveryRecovery(params: {
 
   // Match the queue's first backoff window without holding admission between
   // ticks; otherwise suspended/restarting gateways retain invisible work.
-  const retryTimer = setInterval(() => recover(false), computeBackoffMs(1));
+  const retryTimer = setInterval(recover, computeBackoffMs(1));
   retryTimer.unref?.();
-  recover(true);
+  recover();
   return () => {
     stopped = true;
     clearInterval(retryTimer);
@@ -361,9 +410,23 @@ export function activateGatewayScheduledServices(params: {
         "scheduled heartbeats are disabled because the cron scheduler is disabled; enable cron and restart the gateway",
       );
   }
+  // Scheduled heartbeat wakes fire from a timer with no Gateway request, so
+  // without this the turn runs contextless and trusted built-in tools fail.
+  const heartbeatGatewayContextResolver = fenceScheduledGatewayContextResolver(
+    params.resolveGatewayContext,
+  );
   const heartbeatRunner = startHeartbeatRunner({
     cfg: params.cfgAtStart,
     readCurrentConfig: getRuntimeConfig,
+    ...(heartbeatGatewayContextResolver
+      ? {
+          runOnce: async (opts: Parameters<typeof runHeartbeatOnce>[0]) =>
+            await runWithScheduledGatewayContext({
+              resolveGatewayContext: heartbeatGatewayContextResolver,
+              run: async () => await runHeartbeatOnce(opts),
+            }),
+        }
+      : {}),
   });
   const sessionUpstreamMonitor = startSessionUpstreamMonitor();
   const stopSessionDeliveryRuntime = startPendingSessionDeliveryRuntime({

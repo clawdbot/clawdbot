@@ -564,6 +564,112 @@ describe("sqlite WAL maintenance", () => {
     expect(db["exec"]).toHaveBeenCalledTimes(4);
   });
 
+  it.runIf(process.platform === "linux")(
+    "invalidates an unlinked WAL family and permits a clean reopen",
+    () => {
+      vi.useFakeTimers();
+      const tempDir = tempDirs.make("openclaw-sqlite-wal-split-brain-");
+      const databasePath = path.join(tempDir, "state.sqlite");
+      const { DatabaseSync } = requireNodeSqlite();
+      const writer = new DatabaseSync(databasePath);
+      const events: unknown[] = [];
+      let reopened: InstanceType<typeof DatabaseSync> | undefined;
+      let reopenedMaintenance: ReturnType<typeof configureSqliteWalMaintenance> | undefined;
+      const maintenance = configureSqliteWalMaintenance(writer, {
+        checkpointIntervalMs: 100,
+        databaseLabel: "split-brain-test",
+        databasePath,
+        onWalSplitBrain: (event) => events.push(event),
+      });
+      try {
+        writer.exec("CREATE TABLE events (id INTEGER PRIMARY KEY, value TEXT NOT NULL);");
+        writer.prepare("INSERT INTO events (value) VALUES (?)").run("before-unlink");
+        expect(maintenance.checkpoint()).toBe(true);
+        fs.unlinkSync(`${databasePath}-wal`);
+        fs.unlinkSync(`${databasePath}-shm`);
+
+        vi.advanceTimersByTime(100);
+
+        expect(events).toEqual([
+          expect.objectContaining({
+            event: "sqlite_wal_sidecar_identity_mismatch",
+            databasePath,
+            sidecarPath: expect.stringMatching(/-wal$|-shm$/u),
+          }),
+        ]);
+        expect(writer.isOpen).toBe(false);
+        expect(() => writer.prepare("INSERT INTO events (value) VALUES ('stale')").run()).toThrow();
+
+        const fresh = new DatabaseSync(databasePath);
+        reopened = fresh;
+        reopenedMaintenance = configureSqliteWalMaintenance(fresh, {
+          checkpointIntervalMs: 0,
+          databasePath,
+        });
+        expect(() =>
+          fresh.prepare("INSERT INTO events (value) VALUES (?)").run("after-reopen"),
+        ).not.toThrow();
+      } finally {
+        maintenance.close();
+        reopenedMaintenance?.close();
+        if (reopened?.isOpen) {
+          reopened.close();
+        }
+        if (writer.isOpen) {
+          writer.close();
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform === "linux").each(["EACCES", "EPERM"] as const)(
+    "disables split-brain detection after a %s scan error",
+    (code) => {
+      vi.useFakeTimers();
+      const tempDir = tempDirs.make("openclaw-sqlite-wal-tripwire-error-");
+      const databasePath = path.join(tempDir, "state.sqlite");
+      const { DatabaseSync } = requireNodeSqlite();
+      const writer = new DatabaseSync(databasePath);
+      const events: unknown[] = [];
+      const maintenance = configureSqliteWalMaintenance(writer, {
+        checkpointIntervalMs: 100,
+        databasePath,
+        onWalSplitBrain: (event) => events.push(event),
+      });
+      const prepare = vi.spyOn(writer, "prepare");
+      const readdir = vi.spyOn(fs, "readdirSync").mockImplementationOnce(() => {
+        const error = new Error("restricted procfs");
+        (error as NodeJS.ErrnoException).code = code;
+        throw error;
+      });
+      try {
+        writer.exec("CREATE TABLE events (value TEXT NOT NULL);");
+
+        expect(() => vi.advanceTimersByTime(100)).not.toThrow();
+        expect(readdir).toHaveBeenCalledTimes(1);
+        expect(() =>
+          writer.prepare("INSERT INTO events VALUES (?)").run("still-open"),
+        ).not.toThrow();
+
+        fs.unlinkSync(`${databasePath}-wal`);
+        fs.unlinkSync(`${databasePath}-shm`);
+        expect(() => vi.advanceTimersByTime(100)).not.toThrow();
+
+        expect(readdir).toHaveBeenCalledTimes(1);
+        expect(events).toEqual([]);
+        expect(
+          prepare.mock.calls.filter(([sql]) => sql === "PRAGMA wal_checkpoint(PASSIVE);"),
+        ).toHaveLength(2);
+        expect(writer.isOpen).toBe(true);
+      } finally {
+        maintenance.close();
+        if (writer.isOpen) {
+          writer.close();
+        }
+      }
+    },
+  );
+
   it("clamps oversized checkpoint intervals before arming timers", () => {
     vi.useFakeTimers();
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");

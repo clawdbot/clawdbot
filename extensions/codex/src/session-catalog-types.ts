@@ -15,6 +15,8 @@ export type CodexCatalogHome = {
   label: string;
   agentDir: string;
   appServer: CodexAppServerRuntimeOptions;
+  /** Trusted local root for rollout provenance reads; absent for remote app-server connections. */
+  localSessionsRoot?: string;
   usesProcessHomeFallback: boolean;
 };
 
@@ -44,6 +46,8 @@ export type CodexSessionCatalogSession = {
 
 export type CodexSessionCatalogPage = {
   sessions: CodexSessionCatalogSession[];
+  /** Internal provenance filtered before this page reaches the provider catalog. */
+  managedThreads?: Array<{ threadId: string; rolloutPath?: string }>;
   nextCursor?: string;
   backwardsCursor?: string;
 };

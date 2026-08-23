@@ -419,6 +419,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                       handleChatAttachmentPaste(event, props);
                     }
                   }}
+                  aria-label=${placeholder}
                   placeholder=${placeholder}
                   rows="1"
                 ></textarea>

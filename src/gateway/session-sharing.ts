@@ -191,15 +191,32 @@ function incognitoSessionNotFound(sessionKey: string): ErrorShape {
   return errorShape(ErrorCodes.INVALID_REQUEST, `Incognito session "${sessionKey}" was not found.`);
 }
 
+function isIncognitoSessionTarget(params: {
+  sessionKey: string;
+  target: Pick<SessionSharingTarget, "canonicalKey" | "entry"> | null;
+}): boolean {
+  return params.target
+    ? params.target.entry.incognito === true || isIncognitoSessionKey(params.target.canonicalKey)
+    : isIncognitoSessionKey(params.sessionKey);
+}
+
+export function isResolvedIncognitoSession(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId?: string;
+}): boolean {
+  return isIncognitoSessionTarget({
+    sessionKey: params.sessionKey,
+    target: resolveSessionSharingTarget(params),
+  });
+}
+
 export function authorizeIncognitoSessionTarget(params: {
   client: GatewayClient | null;
   sessionKey: string;
   target: SessionSharingTarget | null;
 }): ErrorShape | null {
-  const incognito = params.target
-    ? params.target.entry.incognito === true || isIncognitoSessionKey(params.target.canonicalKey)
-    : isIncognitoSessionKey(params.sessionKey);
-  if (!incognito) {
+  if (!isIncognitoSessionTarget(params)) {
     return null;
   }
   if (isGatewayAdmin(params.client)) {
@@ -423,7 +440,7 @@ export function resolveSessionMutationAuthorization(params: {
     storeCache: GatewaySessionStoreCache;
     targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
   } => ({ storeCache: new Map(), targetDiscoveryCache: new Map() });
-  const lookupCaches = createLookupCaches();
+  let lookupCaches: ReturnType<typeof createLookupCaches> | undefined;
   const resolveAuthorizedTarget = (
     targetRef: SessionMutationTarget,
   ): { target: SessionSharingTarget | null } | { error: ErrorShape } => {
@@ -433,7 +450,7 @@ export function resolveSessionMutationAuthorization(params: {
           cfg: getCfg(),
           sessionKey: targetRef.sessionKey,
           agentId: targetRef.agentId,
-          ...lookupCaches,
+          ...(lookupCaches ??= createLookupCaches()),
         }),
       };
     } catch (error) {
@@ -486,14 +503,11 @@ export function resolveSessionMutationAuthorization(params: {
     }
     const target = resolved.target;
     const error =
-      (params.method === "sessions.patchMany"
-        ? authorizeIncognitoSessionTarget({
-            client: params.client,
-            sessionKey: targetRef.sessionKey,
-            target,
-          })
-        : null) ??
-      (target ? authorizeSessionSharingTarget({ client: params.client, target }) : null);
+      authorizeIncognitoSessionTarget({
+        client: params.client,
+        sessionKey: targetRef.sessionKey,
+        target,
+      }) ?? (target ? authorizeSessionSharingTarget({ client: params.client, target }) : null);
     if (error) {
       return { error };
     }
@@ -554,13 +568,11 @@ export function resolveSessionMutationAuthorization(params: {
           return;
         }
         const error =
-          (params.method === "sessions.patchMany"
-            ? authorizeIncognitoSessionTarget({
-                client: params.client,
-                sessionKey: targetRef.sessionKey,
-                target: current,
-              })
-            : null) ?? authorizeSessionSharingTarget({ client: params.client, target: current });
+          authorizeIncognitoSessionTarget({
+            client: params.client,
+            sessionKey: targetRef.sessionKey,
+            target: current,
+          }) ?? authorizeSessionSharingTarget({ client: params.client, target: current });
         if (error) {
           throw new SessionMutationAuthorizationChangedError(error);
         }

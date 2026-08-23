@@ -216,13 +216,21 @@ describe("Control UI mount fallback", () => {
   it("bounds automatic recovery attempts while the gateway is unavailable", async () => {
     const frameWindow = createIsolatedWindow();
     const fetch = vi.fn().mockRejectedValue(new Error("gateway unavailable"));
+    const unregister = vi.fn().mockResolvedValue(true);
+    const getRegistrations = vi.fn().mockResolvedValue([{ unregister }]);
     Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
+    Object.defineProperty(frameWindow.navigator, "serviceWorker", {
+      configurable: true,
+      value: { getRegistrations },
+    });
     installFallbackShell(frameWindow, await readIndexHtmlWithDelay(1));
 
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(6));
+    await vi.waitFor(() => expect(unregister).toHaveBeenCalled());
     await waitForWindowTimeout(frameWindow, 10);
 
     expect(fetch).toHaveBeenCalledTimes(6);
+    expect(getRegistrations).toHaveBeenCalled();
     expect(
       requireElementById(
         frameWindow,

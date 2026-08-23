@@ -7,6 +7,7 @@ export type BackendAttempt = {
   backend: string;
   error: string;
   code: AcpRuntimeErrorCode;
+  promptStarted: boolean;
   sawOutput: boolean;
 };
 
@@ -41,6 +42,7 @@ export function resolveBackendCandidatePlan(params: {
 /** Returns true for early transient backend errors where trying another backend is safe. */
 export function isFailoverWorthyBackendError(attempt: BackendAttempt): boolean {
   return (
+    !attempt.promptStarted &&
     !attempt.sawOutput &&
     (attempt.code === "ACP_TURN_FAILED" ||
       attempt.code === "ACP_SESSION_INIT_FAILED" ||
