@@ -1,13 +1,15 @@
 // Gateway run loop tests cover foreground gateway lifecycle and restart behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayServer } from "../../gateway/server-public.js";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
+import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
   GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
   OpenClawAgentDatabaseMediaMigrationRequiredError,
 } from "../../state/openclaw-agent-db-migration-required.js";
+import { captureEnv, deleteTestEnvValue } from "../../test-utils/env.js";
 import { pickBeaconHost, pickGatewayPort } from "./discover.js";
 
 const acquireGatewayLock = vi.fn(async (_opts?: { port?: number }) => ({
@@ -487,8 +489,29 @@ function expectRestartHandoffCall(expected: {
 }
 
 let gatewayWorkAdmissionActual: typeof import("../../process/gateway-work-admission.js");
+let supervisorEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
 beforeEach(async () => {
+  vi.useRealTimers();
+  supervisorEnvSnapshot = captureEnv([...SUPERVISOR_HINT_ENV_VARS]);
+  for (const key of SUPERVISOR_HINT_ENV_VARS) {
+    deleteTestEnvValue(key);
+  }
+
+  // clearAllMocks preserves queued one-shot results. A skipped lifecycle branch
+  // must not shift a stale supervisor or respawn decision into the next case.
+  consumeGatewaySigusr1RestartIntent.mockReset();
+  consumeGatewaySigusr1RestartIntent.mockReturnValue(null);
+  peekGatewaySigusr1RestartReason.mockReset();
+  peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
+  restartGatewayProcessWithFreshPid.mockReset();
+  restartGatewayProcessWithFreshPid.mockReturnValue({ mode: "disabled" });
+  respawnGatewayProcessForUpdate.mockReset();
+  respawnGatewayProcessForUpdate.mockReturnValue({
+    mode: "disabled",
+    detail: "OPENCLAW_NO_RESPAWN",
+  });
+
   gatewayWorkAdmissionActual = await vi.importActual("../../process/gateway-work-admission.js");
   gatewayWorkAdmissionActual.resetGatewayWorkAdmission();
   createGatewayActiveWorkSnapshot.mockReset();
@@ -503,6 +526,15 @@ beforeEach(async () => {
   parkCurrentLaunchAgentForMaintenance.mockResolvedValue(true);
   parkCurrentSystemdServiceForMaintenance.mockReset();
   parkCurrentSystemdServiceForMaintenance.mockResolvedValue();
+});
+
+afterEach(() => {
+  supervisorEnvSnapshot?.restore();
+  supervisorEnvSnapshot = undefined;
+  vi.useRealTimers();
+  if (originalPlatformDescriptor) {
+    Object.defineProperty(process, "platform", originalPlatformDescriptor);
+  }
 });
 
 describe("runGatewayLoop", () => {
