@@ -1602,3 +1602,33 @@ These repair bytes are not yet a frozen candidate. They must be committed,
 pushed, and remotely verified, after which Gates 2, 2.5, and 2.7 restart at the
 new exact SHA. Presentation remains untouched; no deployment or proof fire
 occurred.
+
+## 2026-08-23T10:55:54Z - Repair checkpoint and second upstream freeze
+
+The integrated-contract repair and its complete historical gate corpus were
+committed and pushed as
+`3330ac1c5bfc4a6ada3491251ca0568c11f5ac2c`. Local and remote candidate refs
+matched exactly. The production repair is net +17 lines: the complete
+two-phase lifecycle moved into its existing handler owner, and the explicit
+`stale | completed` result closes a state that the prior cross-module contract
+could not represent. Tests are net -9 lines, and the assertion allowance
+shrinks by three.
+
+The mandatory immediate upstream recheck found 12 new commits after the first
+freeze, so `3330ac1c5bf...` is a checkpoint only. The new exact frozen upstream
+is `28393d4bbd82327aefe7db8e2d5f41721bb77eab`.
+
+- merge base:
+  `23854c39fc7d87b659d5ae1ab86a97880f2fd210`;
+- frozen-upstream distance from merge base: 90 commits;
+- accepted feature paths: 929;
+- upstream-drift paths: 581;
+- shared paths: 35;
+- source classifier: 289 `SAFE-NEW`, 312 `GENUINE`, 328
+  `MIXED-CLOBBER`, zero `FROZEN-STALE`, exit 0;
+- exact prospective merge tree: conflict-free, exit 0.
+
+The freeze inventory and source-classifier receipt are under
+`.gate-out/continuation-drift-cure/freeze-2-28393d4bbd82327aefe7db8e2d5f41721bb77eab/`.
+No presentation, PR-head, deployment, live Gateway, or behavioral-proof
+surface moved.
