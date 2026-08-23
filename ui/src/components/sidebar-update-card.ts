@@ -154,9 +154,11 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     const blockedReason = statusBanner?.text.trim() || t("updates.sidebar.blockedSummary");
     return {
       detail: blocked
-        ? targetLabel
-          ? `${targetLabel} · ${blockedReason}`
-          : blockedReason
+        ? campaign?.state === "waiting-for-idle" && targetLabel
+          ? t("updates.sidebar.blockedWaiting", { target: targetLabel })
+          : targetLabel
+            ? `${targetLabel} · ${blockedReason}`
+            : blockedReason
         : campaignLabel && targetLabel
           ? t("updates.sidebar.campaignTarget", { status: campaignLabel, target: targetLabel })
           : (campaignLabel ??
@@ -164,6 +166,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
             statusBanner?.text ??
             t("updates.sidebar.availableSummary")),
       icon: statusBanner ? icons.alertTriangle : busy ? icons.refresh : icons.download,
+      critical: Boolean(blocked),
       severity: statusBanner?.tone === "danger" ? ("error" as const) : ("warning" as const),
       title: blocked
         ? t("updates.sidebar.blockedTitle")
@@ -182,25 +185,16 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
       class="sidebar-issues-panel__details sidebar-issues-panel__details--${summary.severity}"
     >
       <summary class="sidebar-issues-panel__summary" data-issue-row-focus>
-        <span class="sidebar-issues-panel__icon" aria-hidden="true">${summary.icon}</span>
+        <span
+          class="sidebar-issues-panel__icon ${summary.critical
+            ? "sidebar-issues-panel__icon--critical"
+            : ""}"
+          aria-hidden="true"
+          >${summary.icon}</span
+        >
         <span class="sidebar-issues-panel__content">
           <span class="sidebar-issues-panel__entity" title=${summary.title}>${summary.title}</span>
-          <span class="sidebar-issues-panel__state-row">
-            <span class="sidebar-issues-panel__state" title=${summary.detail}
-              >${summary.detail}</span
-            >
-            <button
-              type="button"
-              class="sidebar-issues-panel__inline-action"
-              @click=${(event: Event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                this.onReviewUpdate();
-              }}
-            >
-              ${t("updates.sidebar.viewDetails")}
-            </button>
-          </span>
+          <span class="sidebar-issues-panel__state" title=${summary.detail}>${summary.detail}</span>
         </span>
         ${this.onDismiss
           ? html`<button
@@ -219,8 +213,52 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
           : nothing}
         <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </summary>
-      <div class="sidebar-issues-panel__body sidebar-update-issue__body">${this.renderCard()}</div>
+      <div class="sidebar-issues-panel__body sidebar-update-issue__body">
+        ${this.renderCompactDetails()}
+      </div>
     </details>`;
+  }
+
+  private renderCompactDetails() {
+    const statusBanner = this.statusBanner;
+    if (!statusBanner) {
+      return this.renderCard();
+    }
+    const campaign = this.updateSchedule?.campaign;
+    const holdActive = campaign?.holdUntilMs !== undefined && campaign.holdUntilMs > Date.now();
+    const showHold = Boolean(
+      campaign &&
+      campaign.state !== "applying" &&
+      this.canUpdate &&
+      this.canHoldUpdate &&
+      !this.updateBusy &&
+      !holdActive &&
+      this.heldUpdateCampaignId !== campaign.id,
+    );
+    return html`<div class="sidebar-update-card sidebar-update-card--compact-details">
+      <p class="sidebar-update-card__compact-reason" title=${statusBanner.text}>
+        ${statusBanner.text}
+      </p>
+      <div class="sidebar-update-card__compact-actions">
+        <button
+          class="sidebar-update-card__review sidebar-update-card__review--primary"
+          type="button"
+          @click=${this.onReviewUpdate}
+        >
+          ${t("updates.reviewUpdate")}
+        </button>
+        ${showHold && campaign
+          ? html`<button
+              class="sidebar-update-card__hold"
+              type="button"
+              ?disabled=${this.holdingCampaignId === campaign.id}
+              @click=${() => this.holdUpdate(campaign.id)}
+            >
+              ${t("updates.holdOneHour")}
+            </button>`
+          : nothing}
+      </div>
+    </div>`;
   }
 
   private renderCard() {

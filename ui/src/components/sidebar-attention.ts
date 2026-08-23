@@ -6,6 +6,7 @@ import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
+import { pathForRoute } from "../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
@@ -15,6 +16,7 @@ import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { createInitialCronState, loadCronJobsPage } from "../lib/cron/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../lib/model-auth.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
@@ -660,38 +662,107 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     });
   }
 
+  private renderItemMeta(item: SidebarAttentionItem) {
+    if (!item.meta) {
+      return html`<span class="sidebar-issues-panel__state" title=${item.detail}
+        >${item.detail}</span
+      >`;
+    }
+    const inlineAction = item.inlineAction;
+    return html`<span class="sidebar-issues-panel__state-row" title=${item.detail}>
+      ${item.meta.context
+        ? html`<span class="sidebar-issues-panel__meta-context">${item.meta.context}</span>
+            <span aria-hidden="true">·</span>`
+        : nothing}
+      <span class="sidebar-issues-panel__meta-status">${item.meta.status}</span>
+      <span aria-hidden="true">·</span>
+      <span class="sidebar-issues-panel__meta-time">${item.meta.time}</span>
+      ${inlineAction
+        ? html`<button
+            type="button"
+            class="sidebar-issues-panel__inline-action"
+            @click=${(event: Event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              (this.onNavigate ?? ((routeId) => this.context?.navigate(routeId)))(
+                inlineAction.routeId,
+              );
+            }}
+          >
+            ${inlineAction.label}
+          </button>`
+        : nothing}
+    </span>`;
+  }
+
+  private renderNavigationItem(item: SidebarAttentionItem) {
+    if (item.action.kind !== "navigate") {
+      return nothing;
+    }
+    const routeId = item.action.routeId;
+    return html`<div
+      class="sidebar-issues-panel__details sidebar-issues-panel__details--${item.severity}"
+      data-attention-kind=${item.kind}
+    >
+      <div class="sidebar-issues-panel__summary sidebar-issues-panel__summary--navigation">
+        <a
+          class="sidebar-issues-panel__navigation-link"
+          href=${pathForRoute(routeId, this.context?.basePath ?? "")}
+          data-issue-row-focus
+          @click=${(event: MouseEvent) => {
+            if (!shouldHandleNavigationClick(event)) {
+              return;
+            }
+            event.preventDefault();
+            this.closePanel(false);
+            (this.onNavigate ?? ((nextRoute) => this.context?.navigate(nextRoute)))(routeId);
+          }}
+        >
+          <span class="sidebar-issues-panel__icon" aria-hidden="true">${icons[item.icon]}</span>
+          <span class="sidebar-issues-panel__content">
+            <span class="sidebar-issues-panel__entity" title=${item.label}>${item.label}</span>
+            ${this.renderItemMeta(item)}
+          </span>
+        </a>
+        <button
+          type="button"
+          class="sidebar-issues-panel__dismiss"
+          aria-label=${t("attention.dismissItem", { item: item.label })}
+          title=${t("attention.dismissItem", { item: item.label })}
+          @click=${() => this.dismiss(item)}
+        >
+          ${icons.x}
+        </button>
+        <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
+      </div>
+    </div>`;
+  }
+
   private renderItem(item: SidebarAttentionItem) {
     if (item.approvalQueue?.length) {
       return item.approvalQueue.map((approval) => this.renderApprovalItem(approval));
     }
+    if (item.action.kind === "navigate") {
+      return this.renderNavigationItem(item);
+    }
     const facts = item.action.kind === "askCustodian" ? item.action.alert.facts : [];
     const visibleFacts = facts.filter((fact) => fact !== item.label);
     const actionLabel = item.action.kind === "askCustodian" ? t("nav.askOpenClaw") : item.label;
-    const inlineAction = item.inlineAction;
     return html`<details
       class="sidebar-issues-panel__details sidebar-issues-panel__details--${item.severity}"
       data-attention-kind=${item.kind}
     >
       <summary class="sidebar-issues-panel__summary" data-issue-row-focus>
-        <span class="sidebar-issues-panel__icon" aria-hidden="true">${icons[item.icon]}</span>
+        <span
+          class="sidebar-issues-panel__icon ${item.kind === "modelAuthExpired"
+            ? "sidebar-issues-panel__icon--critical"
+            : ""}"
+          aria-hidden="true"
+          >${icons[item.icon]}</span
+        >
         <span class="sidebar-issues-panel__content">
           <span class="sidebar-issues-panel__entity" title=${item.label}>${item.label}</span>
-          <span class="sidebar-issues-panel__state-row">
-            <span class="sidebar-issues-panel__state" title=${item.detail}>${item.detail}</span>
-            ${inlineAction
-              ? html`<button
-                  type="button"
-                  class="sidebar-issues-panel__inline-action"
-                  @click=${(event: Event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    this.onNavigate?.(inlineAction.routeId);
-                  }}
-                >
-                  ${inlineAction.label}
-                </button>`
-              : nothing}
-          </span>
+          ${this.renderItemMeta(item)}
         </span>
         <button
           type="button"

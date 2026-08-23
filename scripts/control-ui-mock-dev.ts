@@ -1686,11 +1686,11 @@ async function createChatPickerScenario(
           provider.provider === "google"
             ? {
                 ...provider,
-                displayName: "Google Gemini for the shared engineering workspace",
+                displayName: "Google Gemini",
                 status: "expired" as const,
                 profiles: [
                   {
-                    profileId: "google:workspace",
+                    profileId: "shared engineering",
                     type: "oauth" as const,
                     status: "expired" as const,
                     expiry: {

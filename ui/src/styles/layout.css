@@ -3731,6 +3731,10 @@ openclaw-sidebar-attention {
   background: var(--bg-hover);
 }
 
+.sidebar-issues-panel__details[open] {
+  background: var(--bg-hover);
+}
+
 .sidebar-issues-panel__summary:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
@@ -3824,6 +3828,40 @@ openclaw-sidebar-attention {
   min-width: 0;
   align-items: center;
   gap: 6px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  white-space: nowrap;
+}
+
+.sidebar-issues-panel__meta-context,
+.sidebar-issues-panel__meta-time {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-issues-panel__meta-status {
+  flex: none;
+  color: var(--muted-strong);
+  font-weight: 600;
+}
+
+.sidebar-issues-panel__navigation-link {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.sidebar-issues-panel__navigation-link:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .sidebar-issues-panel__entity {
@@ -3837,6 +3875,10 @@ openclaw-sidebar-attention {
   flex: 1 1 auto;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
+}
+
+.sidebar-issues-panel__icon--critical {
+  color: var(--danger);
 }
 
 .sidebar-issues-panel__inline-action {
@@ -3929,9 +3971,52 @@ openclaw-sidebar-attention {
   margin: 0;
 }
 
+.sidebar-update-card--compact-details {
+  display: grid;
+  gap: 8px;
+}
+
+.sidebar-update-card__compact-reason {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.sidebar-update-card__compact-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sidebar-update-card__compact-actions .sidebar-update-card__review {
+  width: auto;
+  min-height: 28px;
+  margin: 0;
+}
+
+.sidebar-update-card__review--primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.sidebar-update-card__review--primary:hover {
+  background: var(--accent-hover);
+  color: var(--accent-foreground);
+}
+
 .sidebar-approval-row {
   min-width: 0;
   border-radius: var(--radius-md);
+}
+
+.sidebar-approval-row--expanded {
+  background: var(--bg-hover);
 }
 
 .sidebar-approval-row + :not(.sidebar-approval-row) {
@@ -4043,7 +4128,7 @@ openclaw-sidebar-attention {
 }
 
 .sidebar-approval-row__timer--urgent {
-  color: var(--danger);
+  color: var(--warn);
 }
 
 .sidebar-approval-row__command {

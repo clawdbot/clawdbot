@@ -15,7 +15,7 @@ import {
 } from "../app/update-overlay-helpers.ts";
 import { t } from "../i18n/index.ts";
 import { isCronJobActiveFailure, isCronJobRunning } from "../lib/cron-status.ts";
-import { clampText, formatDurationHuman, formatTimeAgo } from "../lib/format.ts";
+import { clampText, formatTimeAgo } from "../lib/format.ts";
 import { isMonitoredAuthProvider, listEffectiveModelAuthProviders } from "../lib/model-auth.ts";
 import type { CustodianAlert } from "./custodian-alert-contract.ts";
 import type { IconName } from "./icons.ts";
@@ -24,8 +24,6 @@ import type { SidebarAttentionKind } from "./sidebar-attention-dismissals.ts";
 // A cron job counts as overdue when its next planned run is this far in the
 // past; mirrors the threshold the Overview attention list used.
 const CRON_OVERDUE_GRACE_MS = 300_000;
-// Per-job cap so a stack-trace-sized lastError cannot balloon the tooltip.
-const CRON_ERROR_MAX_LENGTH = 200;
 const ALERT_QUESTION_MAX_LENGTH = 1_000;
 
 type SidebarAttentionAction =
@@ -39,6 +37,7 @@ export type SidebarAttentionItem = {
   icon: IconName;
   label: string;
   detail: string;
+  meta?: { context?: string; status: string; time: string };
   action: SidebarAttentionAction;
   inlineAction?: { label: string; routeId: NavigationRouteId };
   /** Pending approvals stay attached to their canonical overlay queue so the
@@ -149,78 +148,59 @@ export function buildSidebarAttentionItems(params: {
     });
   }
 
-  const failedCron = params.cronJobs.filter(isCronJobActiveFailure);
+  const failedCron = params.cronJobs
+    .filter(isCronJobActiveFailure)
+    .toSorted(
+      (left, right) =>
+        (right.state?.lastRunAtMs ?? right.updatedAtMs) -
+        (left.state?.lastRunAtMs ?? left.updatedAtMs),
+    );
   for (const job of failedCron) {
     const jobName = cronJobName(job);
-    const errorText = [job.state?.lastError, job.state?.lastErrorReason]
-      .map((value) => value?.trim())
-      .find((value): value is string => Boolean(value));
-    const fact = `${jobName}: ${clampText(
-      errorText ?? t("attention.cronErrorUnknown"),
-      CRON_ERROR_MAX_LENGTH,
-    )}`;
-    const alertTitle = t("attention.cronFailed", { job: jobName });
-    items.push(
-      explainedItem(
-        {
-          kind: "cronFailed",
-          severity: "error",
-          icon: "clock",
-          label: jobName,
-          detail: t("attention.automationFailed", {
-            time: formatTimeAgo(
-              Math.max(0, params.now - (job.state?.lastRunAtMs ?? job.updatedAtMs)),
-            ),
-          }),
-          signature: job.id,
-        },
-        {
-          title: alertTitle,
-          facts: [fact],
-          question: boundedQuestion(t("attention.alerts.cronFailedQuestion", { facts: fact })),
-          action: { label: t("tabs.cron"), target: { kind: "navigate", routeId: "cron" } },
-        },
-      ),
+    const time = formatTimeAgo(
+      Math.max(0, params.now - (job.state?.lastRunAtMs ?? job.updatedAtMs)),
     );
+    items.push({
+      kind: "cronFailed",
+      severity: "error",
+      icon: "clock",
+      label: jobName,
+      detail: t("attention.automationFailed", { time }),
+      meta: { status: t("attention.failed"), time },
+      action: { kind: "navigate", routeId: "cron" },
+      signature: job.id,
+    });
   }
-  const overdueCron = params.cronJobs.filter(
-    (job) =>
-      job.enabled &&
-      !isCronJobRunning(job) &&
-      job.state?.nextRunAtMs != null &&
-      params.now - job.state.nextRunAtMs > CRON_OVERDUE_GRACE_MS,
-  );
+  const overdueCron = params.cronJobs
+    .filter(
+      (job) =>
+        job.enabled &&
+        !isCronJobRunning(job) &&
+        job.state?.nextRunAtMs != null &&
+        params.now - job.state.nextRunAtMs > CRON_OVERDUE_GRACE_MS,
+    )
+    .toSorted(
+      (left, right) =>
+        (right.state?.nextRunAtMs ?? right.updatedAtMs) -
+        (left.state?.nextRunAtMs ?? left.updatedAtMs),
+    );
   for (const job of overdueCron) {
     const jobName = cronJobName(job);
-    const fact = t("attention.alerts.cronOverdueFact", {
-      job: jobName,
-      duration: formatDurationHuman(params.now - (job.state?.nextRunAtMs ?? params.now)),
-    });
     // The planned run changes after recovery, so a later overdue episode resurfaces.
     const signature = `${job.id}@${job.state?.nextRunAtMs}`;
-    const alertTitle = t("attention.cronOverdue", { job: jobName });
-    items.push(
-      explainedItem(
-        {
-          kind: "cronOverdue",
-          severity: "warning",
-          icon: "clock",
-          label: jobName,
-          detail: t("attention.automationOverdue", {
-            time: formatTimeAgo(
-              Math.max(0, params.now - (job.state?.nextRunAtMs ?? job.updatedAtMs)),
-            ),
-          }),
-          signature,
-        },
-        {
-          title: alertTitle,
-          facts: [fact],
-          question: boundedQuestion(t("attention.alerts.cronOverdueQuestion", { facts: fact })),
-          action: { label: t("tabs.cron"), target: { kind: "navigate", routeId: "cron" } },
-        },
-      ),
+    const time = formatTimeAgo(
+      Math.max(0, params.now - (job.state?.nextRunAtMs ?? job.updatedAtMs)),
     );
+    items.push({
+      kind: "cronOverdue",
+      severity: "warning",
+      icon: "clock",
+      label: jobName,
+      detail: t("attention.automationOverdue", { time }),
+      meta: { status: t("attention.overdue"), time },
+      action: { kind: "navigate", routeId: "cron" },
+      signature,
+    });
   }
 
   const monitored = listEffectiveModelAuthProviders(params.modelAuthStatus?.providers ?? []).filter(
@@ -229,27 +209,33 @@ export function buildSidebarAttentionItems(params: {
   const expired = monitored.filter(
     (provider) => provider.status === "expired" || provider.status === "missing",
   );
-  if (expired.length > 0) {
-    const providerSignature = signatureOf(expired.map((provider) => provider.provider));
+  for (const provider of expired) {
     // Auth is agent-scoped; one agent's dismissal must not hide another's warning.
     const signature = params.modelAuthAgentId
-      ? `agent:${params.modelAuthAgentId}\n${providerSignature}`
-      : providerSignature;
-    const facts = expired.map((provider) => `${provider.displayName}: ${provider.status}`);
-    const providerNames = expired.map((provider) => provider.displayName).join(", ");
-    const alertTitle = t("attention.modelAuthExpired", { providers: providerNames });
+      ? `agent:${params.modelAuthAgentId}\n${provider.provider}`
+      : provider.provider;
+    const fact = `${provider.displayName}: ${provider.status}`;
+    const scope =
+      provider.profiles.find(
+        (profile) => profile.status === "expired" || profile.status === "missing",
+      )?.profileId ?? params.modelAuthAgentId?.trim();
+    const time = formatTimeAgo(
+      Math.max(0, params.now - (params.modelAuthStatus?.ts ?? params.now)),
+      { suffix: false },
+    );
+    const detail = scope
+      ? t("attention.modelAuthExpiredWithScope", { scope, time })
+      : t("attention.modelAuthExpiredState", { time });
+    const alertTitle = t("attention.modelAuthExpired", { providers: provider.displayName });
     items.push(
       explainedItem(
         {
           kind: "modelAuthExpired",
           severity: "error",
           icon: "plug",
-          label: providerNames,
-          detail: t("attention.modelAuthExpiredState", {
-            time: formatTimeAgo(
-              Math.max(0, params.now - (params.modelAuthStatus?.ts ?? params.now)),
-            ),
-          }),
+          label: provider.displayName,
+          detail,
+          meta: { ...(scope ? { context: scope } : {}), status: t("attention.authExpired"), time },
           inlineAction: {
             label: t("attention.reconnect"),
             routeId: "model-providers",
@@ -258,9 +244,9 @@ export function buildSidebarAttentionItems(params: {
         },
         {
           title: alertTitle,
-          facts,
+          facts: [fact],
           question: boundedQuestion(
-            t("attention.alerts.modelAuthExpiredQuestion", { facts: facts.join("\n") }),
+            t("attention.alerts.modelAuthExpiredQuestion", { facts: fact }),
           ),
           action: {
             label: t("routeTitles.modelProviders"),

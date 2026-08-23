@@ -266,7 +266,7 @@ export function renderSidebarApprovalRow(props: SidebarApprovalRowProps) {
     (sessionKey ? resolveSessionDisplayName(sessionKey) : approvalTitle(approval));
   const createdActorLabel = props.createdActor?.label?.trim() || props.createdActor?.id?.trim();
   const agentActorLabel = props.agentActor?.label?.trim() || props.agentActor?.id?.trim();
-  const expiryUrgent = expired || approval.expiresAtMs - props.nowMs < 5 * 60_000;
+  const expiryUrgent = expired || approval.expiresAtMs - props.nowMs < 2 * 60_000;
   const remainingLabel = expired
     ? t("execApproval.expired")
     : formatCountdown(approval.expiresAtMs, props.nowMs, true);
@@ -275,7 +275,9 @@ export function renderSidebarApprovalRow(props: SidebarApprovalRowProps) {
   const reviewOnlyMessage = t("execApproval.reviewOnly");
   const grantError = !props.canGrant && props.error === reviewOnlyMessage;
   return html`<article
-    class="sidebar-approval-row sidebar-issues-panel__details--warning"
+    class="sidebar-approval-row sidebar-issues-panel__details--warning ${props.expanded
+      ? "sidebar-approval-row--expanded"
+      : ""}"
     data-attention-kind="pendingApproval"
     data-approval-id=${approval.id}
   >

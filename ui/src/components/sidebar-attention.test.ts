@@ -99,10 +99,6 @@ function cronItems(cronJobs: readonly CronJob[], now = 0) {
   });
 }
 
-function itemFacts(item: ReturnType<typeof cronItems>[number] | undefined): string | undefined {
-  return item?.action.kind === "askCustodian" ? item.action.alert.facts.join("\n") : undefined;
-}
-
 function authItems(agentId: string) {
   return buildSidebarAttentionItems({
     cronJobs: [],
@@ -126,8 +122,8 @@ function authItems(agentId: string) {
   }).filter((item) => item.kind === "modelAuthExpired");
 }
 
-describe("cron attention details", () => {
-  it("lists each failed job with its preferred error", () => {
+describe("automation attention", () => {
+  it("lists each failed job as direct automation navigation", () => {
     const primary = cronJob("primary");
     primary.name = "Nightly backup";
     primary.state = { lastRunStatus: "error", lastError: "  disk full  " };
@@ -145,22 +141,10 @@ describe("cron attention details", () => {
     );
 
     expect(failed.map((item) => item.label)).toEqual(["Nightly backup", "reason-id", "unknown-id"]);
-    expect(failed.map(itemFacts)).toEqual([
-      "Nightly backup: disk full",
-      "reason-id: timeout",
-      "unknown-id: Unknown error",
-    ]);
-  });
-
-  it("caps failure errors at 200 characters with an ellipsis", () => {
-    const job = cronJob("long-error");
-    job.state = { lastRunStatus: "error", lastError: "x".repeat(201) };
-
-    const detail = itemFacts(cronItems([job]).find((item) => item.kind === "cronFailed"));
-    const errorText = detail?.slice("long-error: ".length);
-
-    expect(errorText).toHaveLength(200);
-    expect(errorText).toBe(`${"x".repeat(199)}…`);
+    expect(failed.every((item) => item.action.kind === "navigate")).toBe(true);
+    expect(
+      failed.every((item) => item.action.kind !== "navigate" || item.action.routeId === "cron"),
+    ).toBe(true);
   });
 
   it("lists overdue job names", () => {
@@ -176,7 +160,6 @@ describe("cron attention details", () => {
     );
 
     expect(overdue.map((item) => item.label)).toEqual(["Nightly backup", "unnamed-id"]);
-    expect(overdue.map(itemFacts)).toEqual(["Nightly backup: 5m late", "unnamed-id: 5m late"]);
   });
 
   it("does not flag an actively running job as overdue", () => {
@@ -192,28 +175,30 @@ describe("cron attention details", () => {
       (item) => item.kind === "cronOverdue",
     );
 
-    expect(itemFacts(overdue)).toBe("stalled-id: 5m late");
+    expect(overdue?.label).toBe("stalled-id");
   });
 
-  it("presents failed and overdue jobs to the custodian with raw facts", () => {
+  it("orders failed before overdue and newest first within each group", () => {
     const failedJob = cronJob("failed");
-    failedJob.state = { lastRunStatus: "error", lastError: "disk full" };
+    failedJob.state = { lastRunStatus: "error", lastRunAtMs: 200 };
+    const olderFailedJob = cronJob("older-failed");
+    olderFailedJob.state = { lastRunStatus: "error", lastRunAtMs: 100 };
     const overdueJob = cronJob("overdue");
-    overdueJob.state = { lastRunStatus: "ok", nextRunAtMs: 1 };
+    overdueJob.state = { lastRunStatus: "ok", nextRunAtMs: 2 };
+    const olderOverdueJob = cronJob("older-overdue");
+    olderOverdueJob.state = { lastRunStatus: "ok", nextRunAtMs: 1 };
 
-    const items = cronItems([failedJob, overdueJob], 300_002);
+    const items = cronItems(
+      [olderOverdueJob, olderFailedJob, overdueJob, failedJob],
+      300_003,
+    ).filter((item) => item.kind === "cronFailed" || item.kind === "cronOverdue");
 
-    for (const kind of ["cronFailed", "cronOverdue"] as const) {
-      const action = items.find((item) => item.kind === kind)?.action;
-      expect(action).toMatchObject({ kind: "askCustodian" });
-      if (action?.kind !== "askCustodian") {
-        throw new Error(`expected ${kind} custodian action`);
-      }
-      expect(action.alert.facts.length).toBeGreaterThan(0);
-      expect(action.alert.question).toContain(kind === "cronFailed" ? "failed" : "not run");
-      expect(action.alert.question).toContain(action.alert.facts[0]);
-      expect(action.alert.action?.target).toEqual({ kind: "navigate", routeId: "cron" });
-    }
+    expect(items.map((item) => item.label)).toEqual([
+      "failed",
+      "older-failed",
+      "overdue",
+      "older-overdue",
+    ]);
   });
 
   it("keeps each failed job as its own bounded incident", () => {
@@ -225,11 +210,7 @@ describe("cron attention details", () => {
     });
     const failed = cronItems(jobs).filter((item) => item.kind === "cronFailed");
     expect(failed).toHaveLength(100);
-    expect(
-      failed.every(
-        (item) => item.action.kind === "askCustodian" && item.action.alert.question.length <= 1_000,
-      ),
-    ).toBe(true);
+    expect(failed.every((item) => item.action.kind === "navigate")).toBe(true);
   });
 });
 
