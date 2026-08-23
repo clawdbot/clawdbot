@@ -123,9 +123,12 @@ export function resolveIMessageChatDbLookupPath(params: {
   dbPath?: string;
   remoteHost?: string;
 }): string | undefined {
+  if (params.remoteHost?.trim()) {
+    return undefined;
+  }
   const configured = params.dbPath?.trim();
   if (configured) {
-    return configured;
+    return expandIMessageUserPath(configured);
   }
   // Receipt recovery is best effort and preserves the shipped wrapper heuristic.
   if (!isLikelyLocalIMessageCliPath({ cliPath: params.cliPath, remoteHost: params.remoteHost })) {

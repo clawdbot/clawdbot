@@ -4,19 +4,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildDiscordActivitySdk } from "../../scripts/build-discord-activity-sdk.mjs";
+import { buildDiscordActivitySdk } from "../../scripts/build-discord-activity-sdk.mts";
 import {
   listStaleGeneratedPluginAssets,
   parseBundledPluginAssetArgs,
   readBundledPluginAssetHooks,
   runBundledPluginAssetHooks,
-} from "../../scripts/bundled-plugin-assets.mjs";
-import { listGeneratedExtensionAssetSources } from "../../scripts/lib/static-extension-assets.mjs";
+} from "../../scripts/bundled-plugin-assets.mts";
+import { listGeneratedExtensionAssetSources } from "../../scripts/lib/static-extension-assets.mts";
 import {
   createRunNodePathClassifier,
   isBuildRelevantRunNodePath,
   isRestartRelevantRunNodePath,
-} from "../../scripts/run-node-watch-paths.mjs";
+} from "../../scripts/run-node-watch-paths.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -31,7 +31,7 @@ async function withPluginAssetFixture(run: (rootDir: string) => Promise<void>) {
         name: "@openclaw/canvas-plugin",
         openclaw: {
           assetScripts: {
-            build: "node scripts/bundle-a2ui.mjs",
+            build: "node --import tsx scripts/bundle-a2ui.mts",
             buildOutputs: ["assets/generated-runtime.js"],
             copy: "node scripts/copy-a2ui.mjs",
           },
@@ -82,7 +82,7 @@ describe("bundled plugin assets", () => {
 
     expect(hooks).toMatchObject([
       {
-        command: "node ../../scripts/build-discord-activity-sdk.mjs",
+        command: "node --import tsx ../../scripts/build-discord-activity-sdk.mts",
         packageName: "@openclaw/discord",
         phase: "build",
         pluginId: "discord",
@@ -103,9 +103,6 @@ describe("bundled plugin assets", () => {
       ).toBe(true);
     }
 
-    expect(generatedAssetSources).toContain(
-      "extensions/browser/chrome-extension/modules/copilot-runtime.js",
-    );
     expect(generatedAssetSources).toContain("extensions/canvas/src/host/a2ui/.bundle.hash");
     expect(generatedAssetSources).toContain("extensions/canvas/src/host/a2ui/a2ui.bundle.js");
     expect(generatedAssetSources).toContain("extensions/discord/assets/embedded-app-sdk.mjs");
@@ -113,11 +110,16 @@ describe("bundled plugin assets", () => {
       expect(isBuildRelevantRunNodePath(source), source).toBe(false);
       expect(isRestartRelevantRunNodePath(source), source).toBe(false);
     }
-    expect(
-      isRestartRelevantRunNodePath("extensions/browser/scripts/copilot-runtime-entry.ts"),
-    ).toBe(true);
     expect(isRestartRelevantRunNodePath("extensions/discord/src/activities/http.ts")).toBe(true);
   });
+
+  it.each(["packages/ai/src/host.ts", "packages/llm-core/src/types.ts"])(
+    "rebuilds the root runtime for %s",
+    (source) => {
+      expect(isBuildRelevantRunNodePath(source)).toBe(true);
+      expect(isRestartRelevantRunNodePath(source)).toBe(true);
+    },
+  );
 
   it("refreshes generated output metadata without recreating the watcher", async () => {
     await withPluginAssetFixture(async (rootDir) => {
@@ -153,7 +155,7 @@ describe("bundled plugin assets", () => {
       expect(hooks).toEqual([
         {
           aliases: ["@openclaw/canvas-plugin", "canvas", "canvas-plugin"],
-          command: "node scripts/bundle-a2ui.mjs",
+          command: "node --import tsx scripts/bundle-a2ui.mts",
           packageName: "@openclaw/canvas-plugin",
           phase: "build",
           pluginDir: path.join(rootDir, "extensions", "canvas"),

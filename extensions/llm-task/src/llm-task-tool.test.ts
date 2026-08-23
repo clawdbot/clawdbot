@@ -382,6 +382,20 @@ describe("llm-task tool (json-only)", () => {
     expect(call.messages).toEqual([{ role: "user", content: expect.stringContaining("TASK:\nx") }]);
   });
 
+  it("forwards caller cancellation to the isolated completion", async () => {
+    const controller = new AbortController();
+    const cancellation = new Error("caller cancelled");
+    complete.mockImplementationOnce(async (params) => {
+      controller.abort(cancellation);
+      params.signal?.throwIfAborted();
+      return completionResult(params, '{"ok":true}');
+    });
+
+    const tool = createLlmTaskTool(fakeApi());
+    await expect(tool.execute("id", { prompt: "x" }, controller.signal)).rejects.toBe(cancellation);
+    expect(firstIsolatedCompletionCall().signal).toBe(controller.signal);
+  });
+
   it("rejects malformed numeric run options before dispatch", async () => {
     const tool = createLlmTaskTool(fakeApi());
 

@@ -56,7 +56,9 @@ describe("sandbox bind mounts", () => {
   });
 
   it("detects bind mounts whose container path differs from the host path", () => {
-    expect(hasSandboxBindContainerPathAliases(["/tmp/data:/tmp/data:rw"])).toBe(false);
+    expect(hasSandboxBindContainerPathAliases(["/tmp/data:/tmp/data:rw"])).toBe(
+      process.platform === "win32",
+    );
     expect(hasSandboxBindContainerPathAliases(["/tmp/data:/data:rw"])).toBe(true);
     expect(hasSandboxBindContainerPathAliases(["invalid-bind"])).toBe(false);
   });
@@ -181,11 +183,36 @@ describe("resolveSandboxFsPathWithMounts", () => {
     expect(thrown).toBeInstanceOf(Error);
     const message = (thrown as Error).message;
     expect(message).toContain(
-      "Path escapes sandbox root (~/workspace-coder; container root /workspace): /tmp/outside",
+      `Path escapes sandbox root (~${path.sep}workspace-coder; container root /workspace): /tmp/outside`,
     );
     expect(message).toContain("Use a path under /workspace/ instead.");
     expect(message).not.toContain(os.homedir());
   });
+
+  it.skipIf(process.platform !== "win32")(
+    "does not expose real Windows home casing aliases in escape errors",
+    () => {
+      const homeAlias = os.homedir().toUpperCase();
+      expect(fs.statSync(homeAlias).isDirectory()).toBe(true);
+      const workspaceDir = path.join(homeAlias, "workspace-coder");
+      const sandbox = createSandbox({
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+      });
+
+      expect(() =>
+        resolveSandboxFsPathWithMounts({
+          filePath: "C:\\outside\\secret.txt",
+          cwd: sandbox.workspaceDir,
+          defaultWorkspaceRoot: sandbox.workspaceDir,
+          defaultContainerRoot: sandbox.containerWorkdir,
+          mounts: buildSandboxFsMounts(sandbox),
+        }),
+      ).toThrow(
+        `Path escapes sandbox root (~${path.sep}workspace-coder; container root /workspace)`,
+      );
+    },
+  );
 
   it("prefers custom bind mounts over default workspace mount at /workspace", () => {
     const sandbox = createSandbox({

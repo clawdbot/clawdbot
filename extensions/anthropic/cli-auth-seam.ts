@@ -11,7 +11,18 @@ export function readClaudeCliCredentialsForSetup() {
 
 /** Read Claude CLI credentials for setup checks that must not prompt. */
 export function readClaudeCliCredentialsForSetupNonInteractive() {
-  return readClaudeCliCredentialsCached({ allowKeychainPrompt: false });
+  let unreadable = false;
+  const credential = readClaudeCliCredentialsCached({
+    allowKeychainPrompt: false,
+    tryKeychainWithoutPrompt: true,
+    ttlMs: 0,
+    onStoredCredentialUnreadable: () => {
+      unreadable = true;
+    },
+  });
+  return credential
+    ? ({ status: "available", credential } as const)
+    : ({ status: unreadable ? "unreadable" : "missing" } as const);
 }
 
 /** Read Claude CLI credentials for runtime without keychain prompts. */

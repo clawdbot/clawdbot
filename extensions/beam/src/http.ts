@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
+import { buildControlUiCatalogSessionUrl } from "openclaw/plugin-sdk/session-catalog-runtime";
 import {
   beginWebhookRequestPipelineOrReject,
   createFixedWindowRateLimiter,
@@ -38,28 +39,11 @@ function canPublish(scopes: readonly string[]): boolean {
   return scopes.includes("operator.write") || scopes.includes("operator.admin");
 }
 
-function normalizeControlUiBasePath(value: unknown): string {
-  if (typeof value !== "string") {
-    return "";
-  }
-  const trimmed = value.trim();
-  if (!trimmed || trimmed === "/") {
-    return "";
-  }
-  const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  return withLeadingSlash.replace(/\/+$/, "");
-}
-
-function catalogSessionUrl(beamId: string, basePath: unknown): string {
-  const sessionKey = `catalog:beam:${BEAM_HOST_ID}:${beamId}`;
-  return `${normalizeControlUiBasePath(basePath)}/chat?session=${encodeURIComponent(sessionKey)}`;
-}
-
 export function createBeamRequestHandler(params: {
   store: BeamStore;
   now?: () => number;
   resolveClient?: (req: IncomingMessage) => BeamRequestClient;
-  resolveControlUiBasePath?: () => unknown;
+  resolveControlUiTarget: () => { agentId: string; basePath?: string };
 }): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
   const rateLimiter = createFixedWindowRateLimiter({
     windowMs: 60_000,
@@ -123,7 +107,13 @@ export function createBeamRequestHandler(params: {
       sendJson(res, 200, {
         ok: true,
         beamId: parsed.value.beamId,
-        url: catalogSessionUrl(parsed.value.beamId, params.resolveControlUiBasePath?.()),
+        url: buildControlUiCatalogSessionUrl({
+          namespace: "chat",
+          ...params.resolveControlUiTarget(),
+          catalog: "beam",
+          host: BEAM_HOST_ID,
+          thread: parsed.value.beamId,
+        }),
       });
       return true;
     } finally {

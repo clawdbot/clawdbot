@@ -2,6 +2,7 @@
 // termination semantics used by agent sessions.
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 
 const { completionMock, killProcessTreeMock, spawnMock, windowsLegacyOutput } = vi.hoisted(() => ({
   completionMock: vi.fn(),
@@ -62,16 +63,6 @@ function createStubChild(): StubChild {
   // oxlint-disable-next-line unicorn/no-thenable -- Stub matches Execa's event-emitting promise shape.
   child.then = vi.fn() as unknown as Promise<unknown>["then"];
   return child;
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
 }
 
 describe("execCommand", () => {

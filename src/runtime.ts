@@ -31,7 +31,7 @@ function shouldEmitRuntimeLog(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.OPENCLAW_TEST_RUNTIME_LOG === "1") {
     return true;
   }
-  const maybeMockedLog = console.log as unknown as { mock?: unknown };
+  const maybeMockedLog = console.log as typeof console.log & { mock?: unknown };
   return typeof maybeMockedLog.mock === "object";
 }
 

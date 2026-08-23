@@ -2,10 +2,11 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { beforeAll, describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
-import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
+import { collectBundledChannelConfigsCore } from "./bundled-channel-config-metadata.js";
 import {
   listBundledPluginMetadata,
   resolveBundledPluginGeneratedPath,
@@ -45,7 +46,6 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "diffs-language-pack",
   "file-transfer",
   "google-meet",
-  "linux-canvas",
   "linux-node",
   "llm-task",
   "lobster",
@@ -58,7 +58,6 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "reef",
   "talk-voice",
   "teams-meetings",
-  "thread-ownership",
   "voice-call",
   "webhooks",
   "workboard",
@@ -72,13 +71,13 @@ const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "device-pair",
   "file-transfer",
   "google-meet",
-  "linux-canvas",
   "linux-node",
   "memory-core",
   "ollama",
   "opencode",
   "talk-voice",
   "teams-meetings",
+  "xai",
   "zoom-meetings",
 ] as const;
 
@@ -144,7 +143,7 @@ let repoBundledPluginManifestsCache:
   | undefined;
 const repoBundledChannelConfigsCache = new Map<
   string,
-  ReturnType<typeof collectBundledChannelConfigs>
+  ReturnType<typeof collectBundledChannelConfigsCore>
 >();
 
 function listRepoBundledPluginMetadata(): readonly BundledPluginMetadata[] {
@@ -293,7 +292,7 @@ function collectRepoBundledChannelConfigsForTest(dirName: string) {
   if (!manifest.ok) {
     throw toLintErrorObject(manifest.error, "Non-Error thrown");
   }
-  const configs = collectBundledChannelConfigs({
+  const configs = collectBundledChannelConfigsCore({
     pluginDir,
     manifest: manifest.manifest,
     packageManifest: getPackageManifestMetadata(readPackageManifest(pluginDir)),
@@ -430,10 +429,12 @@ describe("bundled plugin metadata", () => {
     });
   });
 
-  it("keeps CUA's doctor contract sidecar on the bundled public surface", () => {
-    const cua = listRepoBundledPluginMetadata().find((entry) => entry.dirName === "cua-computer");
-    expectArtifactPresence(cua?.publicSurfaceArtifacts, {
-      contains: ["doctor-contract-api.js"],
+  it("keeps Memory Core's health checks on a narrow public surface", () => {
+    const memoryCore = listRepoBundledPluginMetadata().find(
+      (entry) => entry.dirName === "memory-core",
+    );
+    expectArtifactPresence(memoryCore?.publicSurfaceArtifacts, {
+      contains: ["doctor-health-api.js"],
     });
   });
 
@@ -1127,17 +1128,4 @@ describe("bundled plugin metadata", () => {
   });
 });
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

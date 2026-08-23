@@ -136,19 +136,20 @@ export function applyModelOverrideToSessionEntry(params: {
   // contextTokens are derived from the active session model. When the selected
   // model changes (or runtime model is already stale), the cached window can
   // pin the session to an older/smaller limit until another run refreshes it.
-  if (
-    entry.contextTokens !== undefined &&
-    (selectionUpdated || (runtimePresent && !runtimeAligned))
-  ) {
-    delete entry.contextTokens;
-    updated = true;
-  }
-  if (
-    entry.contextBudgetStatus !== undefined &&
-    (selectionUpdated || (runtimePresent && !runtimeAligned))
-  ) {
-    delete entry.contextBudgetStatus;
-    updated = true;
+  const shouldClearModelDerivedState = selectionUpdated || (runtimePresent && !runtimeAligned);
+  if (shouldClearModelDerivedState) {
+    if (entry.contextTokens !== undefined) {
+      delete entry.contextTokens;
+      updated = true;
+    }
+    if (entry.contextTokensSource !== undefined) {
+      delete entry.contextTokensSource;
+      updated = true;
+    }
+    if (entry.contextBudgetStatus !== undefined) {
+      delete entry.contextBudgetStatus;
+      updated = true;
+    }
   }
 
   if (profileOverride) {

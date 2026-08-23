@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { root, type Root } from "@openclaw/fs-safe";
+import { mcpOAuthStoreKeyFromLegacyFileName } from "../agents/mcp-oauth-identity.js";
 import { parseMcpOAuthStoreJson } from "../agents/mcp-oauth-store.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
@@ -36,7 +37,6 @@ const LEGACY_MCP_OAUTH_DIR = "mcp-oauth";
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 const MIGRATION_KIND = "legacy-mcp-oauth-json";
 const MAX_LEGACY_STORE_BYTES = 4 * 1024 * 1024;
-const LEGACY_STORE_NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{0,29}-[0-9a-f]{16}\.json$/u;
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
 type McpOAuthMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "mcp_oauth_stores">;
@@ -55,7 +55,7 @@ function exactLegacyBaseName(name: string): string | null {
   const baseName = name.endsWith(DOCTOR_CLAIM_SUFFIX)
     ? name.slice(0, -DOCTOR_CLAIM_SUFFIX.length)
     : name;
-  return LEGACY_STORE_NAME_RE.test(baseName) ? baseName : null;
+  return mcpOAuthStoreKeyFromLegacyFileName(baseName) ? baseName : null;
 }
 
 function exactLegacyBaseNames(entries: Iterable<{ name: string }>): string[] {
@@ -130,11 +130,11 @@ async function readLegacySourceSnapshot(
 }
 
 function storeKeyForSource(sourcePath: string): string {
-  const fileName = path.basename(sourcePath);
-  if (!LEGACY_STORE_NAME_RE.test(fileName)) {
+  const storeKey = mcpOAuthStoreKeyFromLegacyFileName(path.basename(sourcePath));
+  if (!storeKey) {
     throw new Error("legacy MCP OAuth filename is invalid");
   }
-  return fileName.slice(0, -".json".length);
+  return storeKey;
 }
 
 function importAndRecordReceipt(params: {

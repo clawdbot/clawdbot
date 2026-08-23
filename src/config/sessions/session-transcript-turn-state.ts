@@ -12,6 +12,7 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
   selected: T | undefined,
   expected: {
     expectedLifecycleRevision?: string;
+    expectedWriterRunId?: SessionTranscriptTurnExpectedState["expectedWriterRunId"];
     expectedSessionState?: SessionTranscriptTurnExpectedState;
     expectedSessionId: string;
   },
@@ -22,6 +23,8 @@ export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionE
     selected.entry.sessionId === expected.expectedSessionId &&
     (expected.expectedLifecycleRevision === undefined ||
       selected.entry.lifecycleRevision === expected.expectedLifecycleRevision) &&
+    (expected.expectedWriterRunId === undefined ||
+      selected.entry.activeWriterRunId === expected.expectedWriterRunId) &&
     (expectedState === undefined ||
       (selected.entry.abortedLastRun === expectedState.abortedLastRun &&
         selected.entry.mainRestartRecovery?.cycleId === expectedState.mainRestartRecoveryCycleId &&

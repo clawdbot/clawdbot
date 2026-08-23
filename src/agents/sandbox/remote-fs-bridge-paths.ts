@@ -1,6 +1,6 @@
 /** Pure mount and path helpers for the remote sandbox filesystem bridge. */
 import path from "node:path";
-import { normalizeContainerPath as normalizeSandboxContainerPath } from "./path-utils.js";
+import { normalizeContainerPathCore } from "./path-utils.js";
 import {
   isExistingWorkspaceSkillMountSource,
   resolveMaterializedSandboxSkillsWorkspaceDir,
@@ -132,7 +132,7 @@ function mountPriority(mount: RemoteMountInfo): number {
 }
 
 export function normalizeContainerPath(value: string): string {
-  const normalized = normalizeSandboxContainerPath(value.trim() || "/");
+  const normalized = normalizeContainerPathCore(value.trim() || "/");
   return normalized.startsWith("/") ? normalized : `/${normalized}`;
 }
 

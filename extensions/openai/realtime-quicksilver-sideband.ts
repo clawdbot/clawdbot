@@ -1,3 +1,4 @@
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { ClientOptions, RawData } from "ws";
 import {
   openAIQuicksilverAuthHeaders,
@@ -128,38 +129,6 @@ function waitForSocketOpen(params: {
   });
 }
 
-function waitForRetryDelay(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    // Typed as Error so the rejection reason is provably an Error at the call site;
-    // onAbort normalizes a non-Error AbortSignal reason before it reaches here.
-    const finish = (error?: Error) => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-    const onAbort = () => {
-      const reason = signal.reason;
-      finish(
-        reason instanceof Error
-          ? reason
-          : new Error(reason === undefined ? "GPT-Live session stopped" : String(reason), {
-              cause: reason,
-            }),
-      );
-    };
-    const timer = setTimeout(() => finish(), ms);
-    timer.unref?.();
-    signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) {
-      onAbort();
-    }
-  });
-}
-
 export async function connectOpenAIQuicksilverSideband(params: {
   auth: OpenAIQuicksilverAuth;
   createSocket: OpenAIQuicksilverSocketFactory;
@@ -226,7 +195,16 @@ export async function connectOpenAIQuicksilverSideband(params: {
         throw params.signal.reason;
       }
       if (attempt + 1 < SIDEBAND_CONNECT_ATTEMPTS) {
-        await waitForRetryDelay(SIDEBAND_RETRY_BASE_MS * 2 ** attempt, params.signal);
+        await sleepWithAbort(SIDEBAND_RETRY_BASE_MS * 2 ** attempt, params.signal, {
+          ref: false,
+        }).catch(() => {
+          const reason = params.signal.reason;
+          throw reason instanceof Error
+            ? reason
+            : new Error(reason === undefined ? "GPT-Live session stopped" : String(reason), {
+                cause: reason,
+              });
+        });
       }
     }
   }

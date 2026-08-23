@@ -1,6 +1,7 @@
 // Wizard session tests cover session creation and state transitions.
 
 import { describe, expect, test, vi } from "vitest";
+import { DEVICE_CODE_PHISHING_WARNING } from "./prompts.js";
 import { WizardSession, wizardStepAwaitsInput, type WizardStep } from "./session.js";
 
 function noteRunner() {
@@ -138,8 +139,12 @@ describe("WizardSession", () => {
     expect(first.step).toMatchObject({
       type: "note",
       title: "Provider sign-in",
-      message:
-        "Enter this one-time code in your browser.\nCode: ABCD-1234\nCode expires in 15 minutes. Never share it.",
+      message: [
+        "Enter this one-time code in your browser.",
+        "Code: ABCD-1234",
+        "Code expires in 15 minutes.",
+        DEVICE_CODE_PHISHING_WARNING,
+      ].join("\n"),
       externalUrl: "https://provider.example/device",
       deviceCode: {
         code: "ABCD-1234",

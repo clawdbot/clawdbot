@@ -50,7 +50,7 @@ every human `Thanks @...` attribution.
    writing grouped prose:
 
    ```bash
-   node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
+   node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
      --base <base-tag> \
      --target <target-ref> \
      --main-ref origin/main \
@@ -58,6 +58,10 @@ every human `Thanks @...` attribution.
      --manifest /tmp/openclaw-release-<YYYY.M.PATCH>.json \
      --write-ledger
    ```
+
+   Add repeatable `--release-provenance '<40sha> -> #PR[, #PR]'` inputs when
+   release commits cannot carry provenance metadata. These use the same exact
+   marker grammar and current-main validation as commit-body markers.
 
    The verifier automatically reuses public GitHub GraphQL responses from an
    exact base/target SHA snapshot under the worktree's git metadata. Iterative
@@ -69,11 +73,17 @@ every human `Thanks @...` attribution.
      audit; it contains every referenced PR, eligible contributor credit,
      inline issue context, every direct commit, and an editorial-eligibility
      classification for PRs and direct commits
+   - schema version 3 is the required ephemeral manifest contract. Regenerate
+     older manifests; version 2 is not a supported downstream-reader boundary
    - for a historical backfill, add `--seed-ref <pre-backfill-ref>` once so
      contribution records from the prior changelog are retained even when an
      older merged commit omitted its PR number; the verifier excludes records
      for work reverted after the base tag, including beta work reverted before
      the stable release
+   - generated provenance reports in-range PRs separately from retained
+     seed-only PRs, then states the unique row total. A PR present in both
+     inventories counts as in-range; never describe the seed-inclusive total
+     as work merged in the current release range
    - add repeatable `--shipped-ref <prior-shipped-tag>` when the reachable main
      closeout differs from the shipped tag or later forward-port commits
      re-associate PRs that were already released. Each tag is a cumulative
@@ -150,6 +160,8 @@ every human `Thanks @...` attribution.
      PR references explicitly present in active commit subjects/bodies. It
      preserves author/co-author credit and any issue references in the original
      title
+   - the provenance arithmetic and unique total must match the rendered PR
+     rows exactly; candidate validation rejects malformed or forged counts
    - direct commits remain in the manifest with GitHub-resolved author,
      co-author, issue, and editorial-eligibility data. They inform grouped
      prose but are never rendered as a public `#### Direct commits` dump. Add
@@ -164,7 +176,7 @@ every human `Thanks @...` attribution.
      untyped title is not automatically editorial
    - do not add GHSA references, advisory IDs, or security advisory slugs to
      changelog entries or GitHub release-note text unless explicitly requested
-   - never thank bots, `@claude`, `@openclaw`, `@clawsweeper`, or `@steipete`
+   - never thank bots, `@claude`, `@codex`, `@openclaw`, `@clawsweeper`, or `@steipete`
    - do not use GitHub's release contributor count as the source of truth; the
      changelog must carry the complete human credit set itself
 7. Sorting preference:
@@ -180,14 +192,15 @@ every human `Thanks @...` attribution.
 9. Check release-note side conditions:
    - inspect `src/plugins/compat/registry.ts`
    - inspect `src/commands/doctor/shared/deprecation-compat.ts`
-   - if any compatibility `removeAfter` is on/before release date, resolve it
-     or explicitly record the blocker before shipping
+   - if a deprecated compatibility record reaches `removeAfter`, remove it when
+     proven safe or move it to `removal-pending` and record the blocker; keep a
+     due `removal-pending` record only until its documented conditions are met
 10. Validate and ship:
 
 - after the manifest-driven rewrite, regenerate and verify the complete
   contribution record before committing:
   ```bash
-  node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
+  node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
     --base <base-tag> \
     --target <target-ref> \
     --main-ref origin/main \
@@ -215,7 +228,7 @@ every human `Thanks @...` attribution.
 - after the GitHub release or prerelease is published, verify every matching
   release page against the same source section:
   ```bash
-  node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
+  node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \
     --base <base-tag> \
     --target <target-ref> \
     --version <YYYY.M.PATCH> \
@@ -225,7 +238,7 @@ every human `Thanks @...` attribution.
 - add one `--release-tag` for every beta and stable page in the train; a
   `### Release verification` tail is permitted, but any other body drift
   fails the check
-- `scripts/render-github-release-notes.mjs` is the canonical release-body
+- `scripts/render-github-release-notes.mts` is the canonical release-body
   renderer used by candidate validation, publish, and verification. When the
   complete `## YYYY.M.PATCH` section fits GitHub's 125,000-character limit and
   the renderer's matching 125,000-byte safety ceiling, the body must contain
@@ -245,7 +258,7 @@ every human `Thanks @...` attribution.
   generated checks are explicitly skipped
 - `git diff --check`
 - for docs/changelog-only changes, no broad tests are required
-- commit with `scripts/committer "docs(changelog): refresh YYYY.M.PATCH notes" CHANGELOG.md`
+- stage `CHANGELOG.md` and commit with `git commit -m "docs(changelog): refresh YYYY.M.PATCH notes"`
 - record the new commit as the Release SHA and require
   `git diff --name-only <code-sha>..<release-sha>` to print only
   `CHANGELOG.md`

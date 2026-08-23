@@ -18,7 +18,8 @@ import type {
   TelegramSendOpts,
 } from "./send-message-types.js";
 import { prepareTelegramOutbound } from "./send-outbound.js";
-import { parseTelegramTarget } from "./targets.js";
+import { resolveTelegramReactionEmoji } from "./status-reaction-variants.js";
+import { parseTelegramTarget, type TelegramTarget } from "./targets.js";
 
 type TelegramReactionOpts = TelegramApiCallOpts & {
   remove?: boolean;
@@ -31,17 +32,24 @@ export async function sendTypingTelegram(
   to: string,
   opts: TelegramTypingOpts,
 ): Promise<{ ok: true }> {
+  const target = parseTelegramTarget(to);
+  if (target.directMessagesTopicId != null) {
+    throw new Error("Telegram typing is not supported in channel Direct Messages chats.");
+  }
   const context = resolveTelegramApiContext(opts);
-  return withTelegramApiContextLease(context, sendTypingTelegramWithContext(to, opts, context));
+  return withTelegramApiContextLease(
+    context,
+    sendTypingTelegramWithContext(to, target, opts, context),
+  );
 }
 
 async function sendTypingTelegramWithContext(
   to: string,
+  target: TelegramTarget,
   opts: TelegramTypingOpts,
   context: TelegramApiContext,
 ): Promise<{ ok: true }> {
   const { cfg, account, api } = context;
-  const target = parseTelegramTarget(to);
   const chatId = await resolveAndPersistChatId({
     cfg,
     api,
@@ -102,12 +110,11 @@ async function reactMessageTelegramWithContext(
   });
   const remove = opts.remove === true;
   const trimmedEmoji = emoji.trim();
-  // Build the reaction array. We cast emoji to the grammY union type since
-  // Telegram validates emoji server-side; invalid emojis fail gracefully.
+  // Unsupported emoji remain server-validated so existing graceful failures stay intact.
+  const reactionEmoji =
+    resolveTelegramReactionEmoji(trimmedEmoji) ?? (trimmedEmoji as ReactionTypeEmoji["emoji"]);
   const reactions: ReactionType[] =
-    remove || !trimmedEmoji
-      ? []
-      : [{ type: "emoji", emoji: trimmedEmoji as ReactionTypeEmoji["emoji"] }];
+    remove || !trimmedEmoji ? [] : [{ type: "emoji", emoji: reactionEmoji }];
   if (typeof api.setMessageReaction !== "function") {
     throw new Error("Telegram reactions are unavailable in this bot API.");
   }

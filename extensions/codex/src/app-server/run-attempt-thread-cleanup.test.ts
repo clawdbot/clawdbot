@@ -1,22 +1,26 @@
 // Codex tests cover run attempt thread cleanup plugin behavior.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import {
-  resetAgentEventsForTest,
-  type EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { CodexAppServerClient } from "./client.js";
 import type { CodexServerNotification } from "./protocol.js";
-import { runCodexAppServerAttempt } from "./run-attempt.js";
+import {
+  createParams as createSharedParams,
+  mockClientRuntimeMethods,
+  multiplexCodexTestClientHandlers,
+  runCodexAppServerAttempt,
+  setupRunAttemptTestHooks,
+  tempDir,
+  threadStartResult,
+  turnStartResult,
+} from "./run-attempt-test-harness.js";
 import {
   readCodexAppServerBinding,
-  registerCodexTestSessionIdentity,
-  resetCodexTestBindingStore,
+  sessionBindingIdentity,
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
+import { retireCodexAppServerSessionGeneration } from "./session-retirement.js";
 import {
   resetSharedCodexAppServerClientForTests,
   retainSharedCodexAppServerClientIfCurrent,
@@ -25,7 +29,6 @@ import {
 import {
   adaptCodexTestClientFactory,
   createClientHarness,
-  createCodexTestModel,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
@@ -37,165 +40,66 @@ function multiplexedClientFactory(
 ): CodexAppServerClientFactory {
   return adaptCodexTestClientFactory(async (...args) => {
     const client = await factory(...args);
-    const notificationHandlers = new Set<Parameters<typeof client.addNotificationHandler>[0]>();
-    const requestHandlers = new Set<Parameters<typeof client.addRequestHandler>[0]>();
-    client.addNotificationHandler((notification) =>
-      Promise.all(
-        [...notificationHandlers].map((handler) => Promise.resolve(handler(notification))),
-      ).then(() => undefined),
-    );
-    client.addRequestHandler(async (request) => {
-      for (const handler of requestHandlers) {
-        const result = await handler(request);
-        if (result !== undefined) {
-          return result;
-        }
-      }
-      return undefined;
-    });
-    client.addNotificationHandler = (handler) => {
-      notificationHandlers.add(handler);
-      return () => notificationHandlers.delete(handler);
-    };
-    client.addRequestHandler = (handler) => {
-      requestHandlers.add(handler);
-      return () => requestHandlers.delete(handler);
-    };
+    multiplexCodexTestClientHandlers(client);
     return client;
   });
 }
-
-let tempDir: string;
 
 function createParams(
   sessionFile: string,
   workspaceDir: string,
   sessionKey = "agent:main:session-1",
 ): EmbeddedRunAttemptParams {
-  registerCodexTestSessionIdentity(sessionFile, "session-1", sessionKey);
-  return {
-    prompt: "hello",
-    sessionId: "session-1",
-    sessionKey,
-    sessionFile,
-    workspaceDir,
-    runId: "run-1",
-    provider: "codex",
-    modelId: "gpt-5.4-codex",
-    model: createCodexTestModel("codex"),
-    thinkLevel: "medium",
-    disableTools: true,
-    timeoutMs: 5_000,
-    authStorage: {} as never,
-    authProfileStore: { version: 1, profiles: {} },
-    modelRegistry: {} as never,
-  } as EmbeddedRunAttemptParams;
-}
-
-function threadStartResult(threadId = "thread-1") {
-  return {
-    thread: {
-      id: threadId,
-      sessionId: "session-1",
-      forkedFromId: null,
-      preview: "",
-      ephemeral: false,
-      modelProvider: "openai",
-      createdAt: 1,
-      updatedAt: 1,
-      status: { type: "idle" },
-      path: null,
-      cwd: tempDir || "/tmp/openclaw-codex-test",
-      cliVersion: "0.146.1",
-      source: "unknown",
-      agentNickname: null,
-      agentRole: null,
-      gitInfo: null,
-      name: null,
-      turns: [],
-    },
-    model: "gpt-5.4-codex",
-    modelProvider: "openai",
-    serviceTier: null,
-    cwd: tempDir || "/tmp/openclaw-codex-test",
-    instructionSources: [],
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: { type: "dangerFullAccess" },
-    permissionProfile: null,
-    reasoningEffort: null,
-  };
-}
-
-function turnStartResult(turnId = "turn-1") {
-  return {
-    turn: {
-      id: turnId,
-      status: "inProgress",
-      items: [],
-      error: null,
-      startedAt: null,
-      completedAt: null,
-      durationMs: null,
-    },
-  };
+  const params = createSharedParams(sessionFile, workspaceDir, { sessionKey });
+  params.disableTools = true;
+  params.config = undefined;
+  delete params.contextTokenBudget;
+  delete params.contextWindowInfo;
+  delete params.observeToolTerminal;
+  return params;
 }
 
 async function waitForHarnessRequest(
   harness: ReturnType<typeof createClientHarness>,
   method: string,
-): Promise<{ id: number | string }> {
-  let request: { id?: number | string; method?: string } | undefined;
+  startIndex = 0,
+): Promise<{ id: number | string; params?: unknown }> {
+  let request: { id?: number | string; method?: string; params?: unknown } | undefined;
   await vi.waitFor(
     () => {
       request = harness.writes
-        .map((write) => JSON.parse(write) as { id?: number | string; method?: string })
+        .slice(startIndex)
+        .map(
+          (write) =>
+            JSON.parse(write) as { id?: number | string; method?: string; params?: unknown },
+        )
         .find((message) => message.method === method);
-      expect(request?.id).toBeDefined();
+      expect(
+        request?.id,
+        `expected ${method} after write ${startIndex}; observed ${JSON.stringify(
+          harness.writes
+            .slice(startIndex)
+            .map((write) => (JSON.parse(write) as { method: string }).method),
+        )}`,
+      ).toBeDefined();
     },
     { interval: 1, timeout: 5_000 },
   );
   if (request?.id === undefined) {
     throw new Error(`Codex harness did not write ${method}`);
   }
-  return { id: request.id };
+  return { id: request.id, params: request.params };
 }
 
-function getMockServerVersion() {
-  return CODEX_APP_SERVER_VERSION;
-}
-
-function getMockRuntimeIdentity() {
-  return { serverVersion: getMockServerVersion() };
-}
-
-function mockClientRuntimeMethods() {
-  return {
-    getInstanceId: () => "test-client-1",
-    getRuntimeIdentity: getMockRuntimeIdentity,
-    getServerVersion: getMockServerVersion,
-  };
-}
+setupRunAttemptTestHooks();
 
 describe("Codex app-server main thread cleanup", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     resetSharedCodexAppServerClientForTests();
-    resetCodexTestBindingStore();
-    vi.useRealTimers();
-    resetAgentEventsForTest();
-    vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
-    vi.stubEnv("CODEX_API_KEY", "");
-    vi.stubEnv("OPENAI_API_KEY", "");
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-run-cleanup-"));
   });
 
-  afterEach(async () => {
-    vi.useRealTimers();
+  afterEach(() => {
     resetSharedCodexAppServerClientForTests();
-    resetAgentEventsForTest();
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   it.each([
@@ -276,44 +180,281 @@ describe("Codex app-server main thread cleanup", () => {
     expect(requests.map((entry) => entry.method)).toEqual(["thread/start", "turn/start"]);
   });
 
+  it("keeps alternating conversations subscribed on their shared physical Codex client", async () => {
+    const workspaceDir = path.join(tempDir, "shared-workspace");
+    const sessionFiles = {
+      a: path.join(tempDir, "session-a.jsonl"),
+      b: path.join(tempDir, "session-b.jsonl"),
+    };
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+
+    for (const [index, label] of (["a", "b", "a", "b"] as const).entries()) {
+      const sessionKey = `agent:main:session-${label}`;
+      const params = createParams(sessionFiles[label], workspaceDir, sessionKey);
+      params.sessionId = `session-${label}`;
+      params.runId = `run-${index + 1}`;
+      params.provider = "openai";
+      // Ordinary Codex conversations retain their native tool surface; a
+      // disableTools turn is intentionally isolated on a temporary thread.
+      params.disableTools = false;
+      const requestStart = harness.writes.length;
+      const run = runCodexAppServerAttempt(params, {
+        bindingStore: testCodexAppServerBindingStore,
+      });
+      if (index === 0) {
+        const initialize = await waitForHarnessRequest(harness, "initialize", requestStart);
+        harness.send({
+          id: initialize.id,
+          result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+        });
+      }
+      const threadId = `thread-${label}`;
+      if (index < 2) {
+        const start = await waitForHarnessRequest(harness, "thread/start", requestStart);
+        harness.send({ id: start.id, result: threadStartResult(threadId, { cwd: workspaceDir }) });
+      }
+      const turn = await waitForHarnessRequest(harness, "turn/start", requestStart);
+      const turnId = `turn-${index + 1}`;
+      harness.send({ id: turn.id, result: turnStartResult(turnId) });
+      harness.send({
+        method: "turn/completed",
+        params: { threadId, turnId, turn: { id: turnId, status: "completed" } },
+      });
+      expect(readAttemptTerminal(await run).aborted).toBe(false);
+    }
+
+    const userRequestMethods = () =>
+      harness.writes
+        .map((write) => (JSON.parse(write) as { method: string }).method)
+        .filter((method) => method !== "initialize" && method !== "initialized");
+    expect(userRequestMethods()).toEqual([
+      "thread/start",
+      "turn/start",
+      "thread/start",
+      "turn/start",
+      "turn/start",
+      "turn/start",
+    ]);
+    await expect(readCodexAppServerBinding(sessionFiles.a)).resolves.toMatchObject({
+      threadId: "thread-a",
+    });
+    await expect(readCodexAppServerBinding(sessionFiles.b)).resolves.toMatchObject({
+      threadId: "thread-b",
+    });
+
+    const retirementStart = harness.writes.length;
+    const retirement = retireCodexAppServerSessionGeneration({
+      bindingStore: testCodexAppServerBindingStore,
+      identity: sessionBindingIdentity({
+        agentId: "main",
+        sessionId: "session-a",
+        sessionKey: "agent:main:session-a",
+      }),
+      mode: "reset",
+    });
+    const unsubscribe = await waitForHarnessRequest(harness, "thread/unsubscribe", retirementStart);
+    expect(unsubscribe.params).toEqual({ threadId: "thread-a" });
+    harness.send({ id: unsubscribe.id, result: {} });
+    await expect(retirement).resolves.toBe("applied");
+
+    const siblingParams = createParams(sessionFiles.b, workspaceDir, "agent:main:session-b");
+    siblingParams.sessionId = "session-b";
+    siblingParams.runId = "run-surviving-sibling";
+    siblingParams.provider = "openai";
+    siblingParams.disableTools = false;
+    const siblingRequestStart = harness.writes.length;
+    const siblingRun = runCodexAppServerAttempt(siblingParams, {
+      bindingStore: testCodexAppServerBindingStore,
+    });
+    const siblingTurn = await waitForHarnessRequest(harness, "turn/start", siblingRequestStart);
+    harness.send({ id: siblingTurn.id, result: turnStartResult("turn-5") });
+    harness.send({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-b",
+        turnId: "turn-5",
+        turn: { id: "turn-5", status: "completed" },
+      },
+    });
+    expect(readAttemptTerminal(await siblingRun).aborted).toBe(false);
+    expect(userRequestMethods().slice(-2)).toEqual(["thread/unsubscribe", "turn/start"]);
+  });
+
+  it("preserves a quiet long-running native tool while a distinct shared-client turn completes", async () => {
+    const physical = createClientHarness();
+    const startClient = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(physical.client);
+    const firstParams = createParams(
+      path.join(tempDir, "concurrent-first.jsonl"),
+      path.join(tempDir, "concurrent-first-workspace"),
+      "agent:main:telegram:topic:first",
+    );
+    const secondParams = createParams(
+      path.join(tempDir, "concurrent-second.jsonl"),
+      path.join(tempDir, "concurrent-second-workspace"),
+      "agent:main:telegram:topic:second",
+    );
+    firstParams.timeoutMs = 100;
+    secondParams.timeoutMs = 100;
+
+    const firstRun = runCodexAppServerAttempt(firstParams, {
+      bindingStore: testCodexAppServerBindingStore,
+      turnCompletionIdleTimeoutMs: 1_000,
+      turnTerminalIdleTimeoutMs: 1_000,
+    });
+    const initialize = await waitForHarnessRequest(physical, "initialize");
+    physical.send({
+      id: initialize.id,
+      result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+    });
+    const firstThreadStart = await waitForHarnessRequest(physical, "thread/start");
+    physical.send({ id: firstThreadStart.id, result: threadStartResult("thread-1") });
+    const firstTurnStart = await waitForHarnessRequest(physical, "turn/start");
+    physical.send({ id: firstTurnStart.id, result: turnStartResult("turn-1") });
+
+    physical.send({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "cmd-silent",
+          type: "commandExecution",
+          command: "sleep 1",
+          status: "inProgress",
+        },
+      },
+    });
+
+    const secondRequestStart = physical.writes.length;
+    const secondRun = runCodexAppServerAttempt(secondParams, {
+      bindingStore: testCodexAppServerBindingStore,
+      turnCompletionIdleTimeoutMs: 1_000,
+      turnTerminalIdleTimeoutMs: 1_000,
+    });
+    const secondThreadStart = await waitForHarnessRequest(
+      physical,
+      "thread/start",
+      secondRequestStart,
+    );
+    physical.send({ id: secondThreadStart.id, result: threadStartResult("thread-2") });
+    const secondTurnStart = await waitForHarnessRequest(physical, "turn/start", secondRequestStart);
+    physical.send({ id: secondTurnStart.id, result: turnStartResult("turn-2") });
+    physical.send({
+      method: "item/started",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-2",
+        item: {
+          id: "cmd-ticking",
+          type: "commandExecution",
+          command: "printf tick",
+          status: "inProgress",
+        },
+      },
+    });
+    physical.send({
+      method: "item/commandExecution/outputDelta",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-2",
+        itemId: "cmd-ticking",
+        delta: "tick\n",
+      },
+    });
+    physical.send({
+      method: "item/completed",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-2",
+        item: {
+          id: "cmd-ticking",
+          type: "commandExecution",
+          command: "printf tick",
+          status: "completed",
+          aggregatedOutput: "tick\n",
+          exitCode: 0,
+        },
+      },
+    });
+    physical.send({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-2",
+        turn: { id: "turn-2", status: "completed" },
+      },
+    });
+
+    const secondResult = await secondRun;
+    let firstSettled = false;
+    void firstRun.then(
+      () => {
+        firstSettled = true;
+      },
+      () => {
+        firstSettled = true;
+      },
+    );
+    await new Promise((resolve) => {
+      setTimeout(resolve, 150);
+    });
+    expect(firstSettled).toBe(false);
+
+    physical.send({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "cmd-silent",
+          type: "commandExecution",
+          command: "sleep 1",
+          status: "completed",
+          aggregatedOutput: "silent command finished\n",
+          exitCode: 0,
+        },
+      },
+    });
+    physical.send({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+
+    const firstResult = await firstRun;
+    expect(startClient).toHaveBeenCalledOnce();
+    expect(readAttemptTerminal(firstResult)).toMatchObject({ timedOut: false, promptError: null });
+    expect(readAttemptTerminal(secondResult)).toMatchObject({ timedOut: false, promptError: null });
+    expect(JSON.stringify(firstResult.messagesSnapshot)).toContain("silent command finished");
+    expect(JSON.stringify(firstResult.messagesSnapshot)).not.toContain("matching tool.result");
+    expect(JSON.stringify(secondResult.messagesSnapshot)).toContain("tick");
+    expect(JSON.stringify(secondResult.messagesSnapshot)).not.toContain("cmd-silent");
+  });
+
   it("keeps an incognito thread subscribed for live in-process reuse", async () => {
     const sessionFile = path.join(tempDir, "incognito-session.jsonl");
     const workspaceDir = path.join(tempDir, "incognito-workspace");
     const sessionKey = "agent:main:dashboard:incognito-live-thread";
-    const requests: Array<{ method: string; params: unknown }> = [];
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      requests.push({ method, params });
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      if (method === "turn/start") {
-        return turnStartResult();
-      }
-      return {};
-    });
-    const clientFactory: CodexAppServerClientFactory = multiplexedClientFactory(async () => {
-      return {
-        ...mockClientRuntimeMethods(),
-        request,
-        addNotificationHandler: (handler: typeof notify) => {
-          notify = handler;
-          return () => undefined;
-        },
-        addRequestHandler: () => () => undefined,
-        addCloseHandler: () => () => undefined,
-      } as never;
-    });
-
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(harness.client);
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir, sessionKey), {
       bindingStore: testCodexAppServerBindingStore,
-      clientFactory,
     });
-    await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain("turn/start"), {
-      interval: 1,
-      timeout: 5_000,
+    const initialize = await waitForHarnessRequest(harness, "initialize");
+    harness.send({
+      id: initialize.id,
+      result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
     });
-    await notify({
+    const start = await waitForHarnessRequest(harness, "thread/start");
+    expect(start.params).toEqual(expect.objectContaining({ ephemeral: true }));
+    harness.send({ id: start.id, result: threadStartResult() });
+    const turn = await waitForHarnessRequest(harness, "turn/start");
+    harness.send({ id: turn.id, result: turnStartResult() });
+    harness.send({
       method: "turn/completed",
       params: {
         threadId: "thread-1",
@@ -324,8 +465,21 @@ describe("Codex app-server main thread cleanup", () => {
 
     const result = await run;
     expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
-    expect(requests.map((entry) => entry.method)).toEqual(["thread/start", "turn/start"]);
-    expect(requests[0]?.params).toEqual(expect.objectContaining({ ephemeral: true }));
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-1",
+      clientId: harness.client.getInstanceId(),
+    });
+
+    const requestStart = harness.writes.length;
+    const retirement = retireCodexAppServerSessionGeneration({
+      bindingStore: testCodexAppServerBindingStore,
+      identity: sessionBindingIdentity({ agentId: "main", sessionId: "session-1", sessionKey }),
+      mode: "retire",
+    });
+    const unsubscribe = await waitForHarnessRequest(harness, "thread/unsubscribe", requestStart);
+    expect(unsubscribe.params).toEqual({ threadId: "thread-1" });
+    harness.send({ id: unsubscribe.id, result: {} });
+    await expect(retirement).resolves.toBe("applied");
   });
 
   it.each([

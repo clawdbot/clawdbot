@@ -117,9 +117,11 @@ const migrateLegacyNodePairingStore = vi.hoisted(() =>
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => "/workspace",
   resolveDefaultAgentId: () => "default",
+  tryResolveConfiguredAgentWorkspaceDir: () => "/workspace",
+  tryResolveSystemAgentWorkspaceDir: () => "/workspace",
 }));
 
-vi.mock("../agents/subagent-registry.js", () => ({
+vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
   initSubagentRegistry: () => initSubagentRegistry(),
 }));
 
@@ -203,6 +205,7 @@ function slackConfig(): OpenClawConfig {
 async function prepareBootstrapWithRuntimeConfig(
   cfg: OpenClawConfig,
   options: {
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
     workerProviderIds?: readonly string[];
   } = {},
 ) {
@@ -321,6 +324,15 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     expect(runStartupSessionMigration).not.toHaveBeenCalled();
     expect(migrateLegacyDevicePairingStore).not.toHaveBeenCalled();
     expect(migrateLegacyNodePairingStore).not.toHaveBeenCalled();
+  });
+
+  it("hydrates the subagent registry before plugin bootstrap", async () => {
+    await prepareBootstrapWithRuntimeConfig({});
+
+    expect(initSubagentRegistry).toHaveBeenCalledOnce();
+    expect(initSubagentRegistry.mock.invocationCallOrder[0]).toBeLessThan(
+      loadPluginLookUpTable.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("derives startup activation from source config instead of runtime plugin defaults", async () => {
@@ -481,9 +493,11 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     } as OpenClawConfig;
 
     const result = await prepareBootstrapWithRuntimeConfig(cfg, {
+      pluginMetadataSnapshot,
       workerProviderIds: ["static-ssh"],
     });
     expect(result.startupPluginIds).toEqual([]);
+    expect(result.pluginMetadataSnapshot).toBe(pluginMetadataSnapshot);
     expect(result.pluginLookUpTable).toBeUndefined();
     expect(result.baseGatewayMethods).toEqual(["ping"]);
 
@@ -535,8 +549,9 @@ describe("loadGatewayStartupPluginRuntime", () => {
 describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {
   function registry(providerIds: string[], options: { embeddingProviderIds?: string[] } = {}) {
     return {
-      memoryEmbeddingProviders: providerIds.map((id) => ({ provider: { id } })),
-      embeddingProviders: (options.embeddingProviderIds ?? []).map((id) => ({ provider: { id } })),
+      embeddingProviders: [...providerIds, ...(options.embeddingProviderIds ?? [])].map((id) => ({
+        provider: { id },
+      })),
     } as never;
   }
 

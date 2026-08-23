@@ -1,5 +1,7 @@
-// Ollama tests cover stream runtime plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+// Ollama tests cover stream runtime plugin behavior.
+import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock, ollamaStreamWarnMock } = vi.hoisted(() => ({
@@ -44,12 +46,7 @@ function requireEntry<T>(entries: readonly T[], index: number, context: string):
   return expectDefined(entries[index], context);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function requireOptionalRecord(value: unknown): Record<string, unknown> | undefined {
   return value === undefined ? undefined : requireRecord(value, "request options");
@@ -324,7 +321,16 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
     expect(payload.options).toEqual({ num_ctx: 131072 });
   });
 
-  it.each([
+  it.each<{
+    name: string;
+    id: string;
+    contextWindow: number;
+    provider?: string;
+    reasoning?: boolean;
+    thinkingLevel: string;
+    params?: Record<string, unknown>;
+    expectedThink: boolean | string | undefined;
+  }>([
     {
       name: "forwards think=false on native Ollama chat requests when thinking is off",
       id: "qwen3:32b",
@@ -357,55 +363,121 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
       thinkingLevel: "low",
       expectedThink: undefined,
     },
-    {
-      name: "forwards the native think effort on native Ollama chat requests when thinking is enabled",
-      id: "qwen3:32b",
+    ...(["low", "medium", "high"] as const).map((thinkingLevel) => ({
+      name: `preserves native Ollama ${thinkingLevel} thinking on the wire`,
+      id: "gpt-oss:20b",
       contextWindow: 131072,
-      thinkingLevel: "low",
-      expectedThink: "low",
-    },
+      thinkingLevel,
+      expectedThink: thinkingLevel,
+    })),
     {
-      name: "maps native Ollama max thinking to think=high on the wire",
+      name: "keeps the compatible local Ollama max mapping",
       id: "gpt-oss:20b",
       contextWindow: 131072,
       thinkingLevel: "max",
       expectedThink: "high",
     },
-  ])("$name", async ({ id, contextWindow, reasoning, thinkingLevel, params, expectedThink }) => {
-    await withSuccessfulOllamaFetch(async (fetchMock) => {
-      const model = {
-        api: "ollama",
-        provider: "ollama",
-        id,
-        contextWindow,
-        ...(reasoning === undefined ? {} : { reasoning }),
-        ...(params ? { params } : {}),
-      };
-      const wrapped = expectDefined(
-        createConfiguredOllamaCompatStreamWrapper({
-          provider: "ollama",
-          modelId: id,
-          model,
-          streamFn: createOllamaStreamFn("http://ollama-host:11434"),
-          thinkingLevel,
-        } as never),
-        "wrapped Ollama stream function",
-      );
-      const stream = await Promise.resolve(
-        wrapped(
-          model as never,
-          { messages: [{ role: "user", content: "hello" }] } as never,
-          {} as never,
-        ),
-      );
+    {
+      name: "does not infer native max support from a local cloud model alias",
+      id: "glm-5.2:cloud",
+      contextWindow: 131072,
+      thinkingLevel: "max",
+      expectedThink: "high",
+    },
+    {
+      name: "preserves native Ollama Cloud max thinking on the wire",
+      id: "glm-5.2",
+      provider: "ollama-cloud",
+      contextWindow: 131072,
+      thinkingLevel: "max",
+      expectedThink: "max",
+    },
+    {
+      name: "keeps the high fallback for Ollama Cloud GPT-OSS",
+      id: "gpt-oss:120b",
+      provider: "ollama-cloud",
+      contextWindow: 131072,
+      thinkingLevel: "max",
+      expectedThink: "high",
+    },
+    {
+      name: "keeps the high fallback for Cloud models without a verified max tier",
+      id: "kimi-k2.5",
+      provider: "ollama-cloud",
+      contextWindow: 131072,
+      thinkingLevel: "max",
+      expectedThink: "high",
+    },
+  ])(
+    "$name",
+    async ({
+      id,
+      provider = "ollama",
+      contextWindow,
+      reasoning,
+      thinkingLevel,
+      params,
+      expectedThink,
+    }) => {
+      await withSuccessfulOllamaFetch(async (fetchMock) => {
+        const model = {
+          api: "ollama",
+          provider,
+          id,
+          contextWindow,
+          ...(reasoning === undefined ? {} : { reasoning }),
+          ...(params ? { params } : {}),
+        };
+        const wrapped = expectDefined(
+          createConfiguredOllamaCompatStreamWrapper({
+            provider,
+            modelId: id,
+            model,
+            streamFn: createOllamaStreamFn("http://ollama-host:11434"),
+            thinkingLevel,
+          } as never),
+          "wrapped Ollama stream function",
+        );
+        const stream = await Promise.resolve(
+          wrapped(
+            model as never,
+            { messages: [{ role: "user", content: "hello" }] } as never,
+            {} as never,
+          ),
+        );
+        await collectStreamEvents(stream);
+
+        const requestBody = getGuardedFetchJsonBody(fetchMock);
+        expect(requestBody.think).toBe(expectedThink);
+        expect(requireOptionalRecord(requestBody.options)?.think).toBeUndefined();
+        if (reasoning !== false) {
+          expect(requireOptionalRecord(requestBody.options)?.num_ctx).toBeUndefined();
+        }
+      });
+    },
+  );
+
+  it("reports the real HTTP response before consuming native Ollama output", async () => {
+    await withSuccessfulOllamaFetch(async () => {
+      const acceptanceObserver = vi.fn();
+      const onResponse = vi.fn();
+      const options = withProviderAcceptanceObserver({ onResponse }, acceptanceObserver);
+      const stream = await createOllamaTestStream({
+        baseUrl: "http://ollama-host:11434",
+        options,
+      });
+
       await collectStreamEvents(stream);
 
-      const requestBody = getGuardedFetchJsonBody(fetchMock);
-      expect(requestBody.think).toBe(expectedThink);
-      expect(requireOptionalRecord(requestBody.options)?.think).toBeUndefined();
-      if (reasoning !== false) {
-        expect(requireOptionalRecord(requestBody.options)?.num_ctx).toBeUndefined();
-      }
+      expect(acceptanceObserver).toHaveBeenCalledWith({
+        kind: "http_response",
+        status: 200,
+        headers: { "content-type": "application/x-ndjson" },
+      });
+      expect(onResponse).toHaveBeenCalledWith(
+        { status: 200, headers: { "content-type": "application/x-ndjson" } },
+        expect.objectContaining({ provider: "custom-ollama" }),
+      );
     });
   });
 
@@ -742,6 +814,50 @@ describe("convertToOllamaMessages", () => {
     expect(result).toEqual([{ role: "tool", content: "file contents here", tool_name: "read" }]);
   });
 
+  it("preserves structured, image, error, and call identity in tool results", () => {
+    const result = convertToOllamaMessages([
+      {
+        role: "toolResult",
+        toolCallId: "call_inspect",
+        toolName: "inspect",
+        isError: true,
+        content: [
+          { type: "text", text: "inspection failed" },
+          { type: "json", value: { retry: false } },
+          { type: "image", mimeType: "image/png", data: "aW1hZ2U=" },
+          { type: "audio", mimeType: "audio/wav", data: "YXVkaW8=" },
+        ],
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "tool",
+        content:
+          '[tool error] inspection failed\n{"type":"json","value":{"retry":false}}\n[unsupported tool-result audio omitted]',
+        images: ["aW1hZ2U="],
+        tool_call_id: "call_inspect",
+        tool_name: "inspect",
+      },
+    ]);
+    expect(result[0]?.content).not.toContain("YXVkaW8=");
+
+    expect(
+      convertToOllamaMessages([
+        {
+          role: "toolResult",
+          toolCallId: "call_empty_error",
+          toolName: "inspect",
+          isError: true,
+          content: [],
+        },
+      ])[0],
+    ).toMatchObject({
+      content: "[tool error] (no tool output)",
+      tool_call_id: "call_empty_error",
+    });
+  });
+
   it("omits tool_name when not provided in toolResult", () => {
     const messages = [{ role: "toolResult", content: "output" }];
     const result = convertToOllamaMessages(messages);
@@ -1045,17 +1161,6 @@ describe("buildAssistantMessage", () => {
     });
   });
 
-  it("falls back to empty arguments for malformed stringified tool call arguments", () => {
-    const response = createToolCallResponse([
-      { function: { name: "bash", arguments: '{"command":"ls"' } },
-    ]);
-    const result = buildAssistantMessage(response, modelInfo);
-    expectToolCallContent(requireEntry(result.content, 0, "Ollama tool-call content"), {
-      name: "bash",
-      arguments: {},
-    });
-  });
-
   it("sets all costs to zero for local models", () => {
     const response = createAssistantResponse({ content: "ok" });
     const result = buildAssistantMessage(response, modelInfo);
@@ -1193,25 +1298,29 @@ describe("parseNdjsonStream", () => {
     await expectNoParsedChunks(reader);
   });
 
-  it("does not log a dangling surrogate for a malformed complete line", async () => {
+  it("rejects malformed complete lines without exposing their bytes", async () => {
     const prefix = "x".repeat(119);
     const reader = mockNdjsonReader([`${prefix}😀tail`]);
 
-    await expectNoParsedChunks(reader);
-
-    expect(ollamaStreamWarnMock).toHaveBeenCalledExactlyOnceWith(
-      `Skipping malformed NDJSON line: ${prefix}`,
+    await expect(expectNoParsedChunks(reader)).rejects.toThrow(
+      "OpenClaw transport error: malformed_streaming_fragment",
     );
+    expect(ollamaStreamWarnMock).not.toHaveBeenCalled();
   });
 
-  it("does not log a dangling surrogate for malformed trailing data", async () => {
+  it("rejects malformed trailing data without exposing its bytes", async () => {
     const prefix = "x".repeat(119);
     const reader = mockNdjsonReader([`${prefix}😀tail`], { trailingNewline: false });
 
-    await expectNoParsedChunks(reader);
+    await expect(expectNoParsedChunks(reader)).rejects.toThrow(
+      "OpenClaw transport error: malformed_streaming_fragment",
+    );
+    expect(ollamaStreamWarnMock).not.toHaveBeenCalled();
+  });
 
-    expect(ollamaStreamWarnMock).toHaveBeenCalledExactlyOnceWith(
-      `Skipping malformed trailing data: ${prefix}`,
+  it.each(["null", "[]", "42"])("rejects non-object NDJSON records: %s", async (record) => {
+    await expect(expectNoParsedChunks(mockNdjsonReader([record]))).rejects.toThrow(
+      "OpenClaw transport error: malformed_streaming_fragment",
     );
   });
 
@@ -1365,20 +1474,16 @@ describe("parseNdjsonStream", () => {
     await source.cancelPending;
   });
 
-  it("skips malformed NDJSON and unlocks after a valid terminal record", async () => {
+  it("rejects malformed NDJSON before a later valid terminal record", async () => {
     const stream = createClosedNdjsonStream([
       "not-json",
       '{"model":"m","created_at":"t","message":{"role":"assistant","content":"done"},"done":true}',
     ]);
-    const chunks = [];
 
-    for await (const chunk of parseNdjsonStream(stream.getReader())) {
-      chunks.push(chunk);
-    }
-
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0]?.done).toBe(true);
-    expect(ollamaStreamWarnMock).toHaveBeenCalledWith("Skipping malformed NDJSON line: not-json");
+    await expect(expectNoParsedChunks(stream.getReader())).rejects.toThrow(
+      "OpenClaw transport error: malformed_streaming_fragment",
+    );
+    expect(ollamaStreamWarnMock).not.toHaveBeenCalled();
     expect(stream.locked).toBe(false);
   });
 });
@@ -1571,6 +1676,230 @@ async function nextEventWithin<T>(
 }
 
 describe("createOllamaStreamFn streaming events", () => {
+  it("preserves coded connection failures through shared error projection", async () => {
+    fetchWithSsrFGuardMock.mockRejectedValue(
+      Object.assign(new Error("connect failed"), { code: "ECONNREFUSED" }),
+    );
+
+    const events = await collectStreamEvents(
+      await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" }),
+    );
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "error",
+      reason: "error",
+      error: { errorMessage: "connect failed", errorCode: "ECONNREFUSED" },
+    });
+  });
+
+  it("reports the successful HTTP response before streaming events", async () => {
+    const timeline: string[] = [];
+    const onResponse = vi.fn((response, callbackModel) => {
+      timeline.push("response");
+      expect(response).toEqual({
+        status: 200,
+        headers: {
+          "content-type": "application/x-ndjson",
+          "x-ollama-request-id": "req-1",
+        },
+      });
+      expect(callbackModel.id).toBe("qwen3:32b");
+    });
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        [
+          '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+          '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true}',
+        ].join("\n"),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/x-ndjson",
+            "X-Ollama-Request-Id": "req-1",
+          },
+        },
+      ),
+      release: vi.fn(async () => undefined),
+    });
+
+    const stream = await createOllamaTestStream({
+      baseUrl: "http://ollama-host:11434",
+      options: { onResponse },
+    });
+    for await (const event of stream) {
+      timeline.push(event.type);
+    }
+
+    expect(onResponse).toHaveBeenCalledTimes(1);
+    expect(timeline).toEqual(["response", "start", "text_start", "text_delta", "text_end", "done"]);
+  });
+
+  it("reports failed HTTP responses before the stream error", async () => {
+    const timeline: string[] = [];
+    let terminalError:
+      | { errorMessage?: string; errorCode?: string; errorBody?: string }
+      | undefined;
+    const onResponse = vi.fn(() => {
+      timeline.push("response");
+    });
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response("rate limited", {
+        status: 429,
+        headers: { "Retry-After": "30" },
+      }),
+      release: vi.fn(async () => undefined),
+    });
+
+    const stream = await createOllamaTestStream({
+      baseUrl: "http://ollama-host:11434",
+      options: { onResponse },
+    });
+    for await (const event of stream) {
+      timeline.push(event.type);
+      if (event.type === "error") {
+        terminalError = event.error;
+      }
+    }
+
+    expect(onResponse).toHaveBeenCalledWith(
+      { status: 429, headers: { "content-type": "text/plain;charset=UTF-8", "retry-after": "30" } },
+      expect.objectContaining({ id: "qwen3:32b" }),
+    );
+    expect(timeline).toEqual(["response", "error"]);
+    expect(terminalError).toMatchObject({
+      errorMessage: "429 rate limited",
+      errorCode: "429",
+      errorBody: "rate limited",
+    });
+  });
+
+  it("does not wait for unread response cancellation when the response hook fails", async () => {
+    const source = createPendingCancelNdjsonStream([
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":true}',
+    ]);
+    source.reader.releaseLock();
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(source.stream, {
+        status: 200,
+        headers: { "Content-Type": "application/x-ndjson" },
+      }),
+      release,
+    });
+
+    const stream = await createOllamaTestStream({
+      baseUrl: "http://ollama-host:11434",
+      options: {
+        onResponse: () => {
+          throw new Error("response hook failed");
+        },
+      },
+    });
+    const event = await nextEventWithin(stream[Symbol.asyncIterator]());
+    await source.cancelStarted;
+    source.settleCancel();
+    await source.cancelPending;
+
+    expect(event).not.toBe("timeout");
+    if (event !== "timeout") {
+      expect(event.done).toBe(false);
+      expect(event.value).toMatchObject({ type: "error", reason: "error" });
+    }
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops waiting for the response hook when the request is aborted", async () => {
+    let markHookStarted: () => void = () => undefined;
+    const hookStarted = new Promise<void>((resolve) => {
+      markHookStarted = resolve;
+    });
+    const onResponse = vi.fn(async () => {
+      markHookStarted();
+      await new Promise<void>(() => {
+        // Keep the hook pending so the request signal must end the stream.
+      });
+    });
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":true}',
+        {
+          status: 200,
+          headers: { "Content-Type": "application/x-ndjson" },
+        },
+      ),
+      release,
+    });
+    const abortController = new AbortController();
+
+    const eventsPromise = collectStreamEvents(
+      await createOllamaTestStream({
+        baseUrl: "http://ollama-host:11434",
+        options: { onResponse, signal: abortController.signal },
+      }),
+    );
+    await hookStarted;
+    abortController.abort();
+    const events = await eventsPromise;
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "error", reason: "aborted" });
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not resume response handling after the hook resolves concurrently with abort", async () => {
+    let markHookStarted: () => void = () => undefined;
+    const hookStarted = new Promise<void>((resolve) => {
+      markHookStarted = resolve;
+    });
+    let settleHook: () => void = () => undefined;
+    const hookPending = new Promise<void>((resolve) => {
+      settleHook = resolve;
+    });
+    const getReader = vi.fn(() => ({
+      read: vi.fn(async () => ({ done: true as const, value: undefined })),
+      cancel: vi.fn(async () => undefined),
+      releaseLock: vi.fn(),
+    }));
+    const cancel = vi.fn(async () => undefined);
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: {
+        status: 200,
+        ok: true,
+        headers: new Headers({ "Content-Type": "application/x-ndjson" }),
+        body: { getReader, cancel },
+      } as unknown as Response,
+      release,
+    });
+    const abortController = new AbortController();
+
+    const eventsPromise = collectStreamEvents(
+      await createOllamaTestStream({
+        baseUrl: "http://ollama-host:11434",
+        options: {
+          onResponse: () => {
+            markHookStarted();
+            return hookPending;
+          },
+          signal: abortController.signal,
+        },
+      }),
+    );
+    await hookStarted;
+    await Promise.resolve();
+    void hookPending.then(() => abortController.abort());
+    settleHook();
+    const events = await eventsPromise;
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "error", reason: "aborted" });
+    expect(getReader).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("emits start, text_start, text_delta, text_end, done for text responses", async () => {
     const events = await collectMockedOllamaEvents([
       '{"model":"m","created_at":"t","message":{"role":"assistant","content":"Hello"},"done":false}',
@@ -1642,6 +1971,64 @@ describe("createOllamaStreamFn streaming events", () => {
         id: events[3]?.type === "toolcall_end" ? events[3].toolCall.id : undefined,
       });
     }
+  });
+
+  it("fails the full stream for malformed terminal tool arguments", async () => {
+    const events = await collectMockedOllamaEvents([
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"","tool_calls":[{"id":"call_valid","function":{"name":"read","arguments":{"path":"README.md"}}},{"id":"call_invalid","function":{"name":"bash","arguments":"{\\"command\\":\\"ls\\""}}]},"done":false}',
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true}',
+    ]);
+
+    expect(events.map((event) => event.type)).toEqual(["error"]);
+    expect(events[0]).toMatchObject({
+      type: "error",
+      error: { errorMessage: "Provider completed tool call with malformed JSON arguments" },
+    });
+  });
+
+  it("fails on malformed NDJSON without accepting a later terminal record", async () => {
+    const events = await collectMockedOllamaEvents([
+      "not-json",
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"done"},"done":true}',
+    ]);
+
+    expect(events.map((event) => event.type)).toEqual(["error"]);
+    expect(events[0]).toMatchObject({
+      type: "error",
+      error: { errorMessage: "OpenClaw transport error: malformed_streaming_fragment" },
+    });
+  });
+
+  it.each([
+    ["malformed", "not-json"],
+    [
+      "additional",
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"extra"},"done":false}',
+    ],
+  ])("fails when %s data trails a terminal Ollama record", async (_label, trailing) => {
+    const events = await collectMockedOllamaEvents([
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"done"},"done":true}',
+      trailing,
+    ]);
+
+    const eventTypes = events.map((event) => event.type);
+    expect(eventTypes.at(-1)).toBe("error");
+    expect(eventTypes).not.toContain("text_end");
+    expect(eventTypes).not.toContain("done");
+  });
+
+  it("projects official streamed Ollama error records with status metadata", async () => {
+    const events = await collectMockedOllamaEvents(['{"error":"model failed","status":503}']);
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "error",
+      error: {
+        errorMessage: "503: model failed",
+        errorCode: "503",
+        errorBody: '{"error":"model failed","status":503}',
+      },
+    });
   });
 
   it("estimates usage when the final Ollama chunk omits counters", async () => {
@@ -2649,15 +3036,54 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
-  it("maps configured native Ollama params.thinking=max to the stable top-level think value", async () => {
+  it.each(["low", "medium", "high"] as const)(
+    "preserves configured native Ollama params.thinking=%s",
+    async (thinking) => {
+      await expectSuccessfulOllamaRequest(
+        { baseUrl: "http://ollama-host:11434", model: { params: { thinking } } },
+        ({ body }) => {
+          expect(body.think).toBe(thinking);
+          expect(requireOptionalRecord(body.options)?.think).toBeUndefined();
+        },
+      );
+    },
+  );
+
+  it("keeps configured local Ollama params.thinking=max compatible", async () => {
     await expectSuccessfulOllamaRequest(
       { baseUrl: "http://ollama-host:11434", model: { params: { thinking: "max" } } },
       ({ body }) => {
         expect(body.think).toBe("high");
-        expect(requireOptionalRecord(body.options)?.think).toBeUndefined();
       },
     );
   });
+
+  it("preserves configured Ollama Cloud params.thinking=max", async () => {
+    await expectSuccessfulOllamaRequest(
+      {
+        baseUrl: "https://ollama.com",
+        model: { provider: "ollama-cloud", id: "glm-5.2", params: { thinking: "max" } },
+      },
+      ({ body }) => {
+        expect(body.think).toBe("max");
+      },
+    );
+  });
+
+  it.each(["gpt-oss:120b", "kimi-k2.5", "custom-thinking-model"])(
+    "keeps configured Ollama Cloud %s params.thinking=max compatible",
+    async (id) => {
+      await expectSuccessfulOllamaRequest(
+        {
+          baseUrl: "https://ollama.com",
+          model: { provider: "ollama-cloud", id, params: { thinking: "max" } },
+        },
+        ({ body }) => {
+          expect(body.think).toBe("high");
+        },
+      );
+    },
+  );
 
   it("uses the default loopback policy when baseUrl is empty", async () => {
     await expectSuccessfulOllamaRequest({ baseUrl: "" }, ({ request }) => {

@@ -9,8 +9,8 @@ import * as musicGenerationRuntime from "../../music-generation/runtime.js";
 import * as fetchTimeout from "../../utils/fetch-timeout.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
+import * as musicGenerateBackground from "./media-generate-background.js";
 import { canonicalizeMediaGenerationTestConfig } from "./media-generation-config.test-support.js";
-import * as musicGenerateBackground from "./music-generate-background.js";
 import { createMusicGenerateTool as createMusicGenerateToolImpl } from "./music-generate-tool.js";
 
 function createMusicGenerateTool(
@@ -167,7 +167,7 @@ vi.mock("../../utils/fetch-timeout.js", async () => {
     buildTimeoutAbortSignal: vi.fn(actual.buildTimeoutAbortSignal),
   };
 });
-vi.mock("./music-generate-background.js", () => musicGenerateBackgroundMocks);
+vi.mock("./media-generate-background.js", () => musicGenerateBackgroundMocks);
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 vi.mock("../../tasks/detached-task-runtime.js", () => taskExecutorMocks);
 
@@ -641,7 +641,6 @@ describe("createMusicGenerateTool", () => {
     expect(immediate.mediaUrls ?? []).toEqual([]);
     expect(immediate.replyToId).toBeUndefined();
     expect(immediate.audioAsVoice).toBeUndefined();
-    expect(immediate.reaction).toBeUndefined();
     expect(details.lyrics).toEqual(lyrics);
 
     const detached = formatAgentInternalEventsForPrompt([
@@ -667,7 +666,6 @@ describe("createMusicGenerateTool", () => {
     expect(delivered.mediaUrls).toEqual(["/tmp/operator-approved-song.mp3"]);
     expect(delivered.replyToId).toBeUndefined();
     expect(delivered.audioAsVoice).toBeUndefined();
-    expect(delivered.reaction).toBeUndefined();
   });
 
   it("starts background generation and wakes the session with MEDIA lines", async () => {

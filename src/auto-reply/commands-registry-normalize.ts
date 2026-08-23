@@ -28,6 +28,9 @@ type CommandRegistryLookup = {
 
 let cachedRegistryLookup: CommandRegistryLookup | undefined;
 
+const TARGETED_COMMAND_BODY_RE =
+  /^\/([^\s@]+)@([A-Za-z0-9_]+)(?=$|\s|[.!?！？…,，。;；:：'"’”)\]}])([\s\S]*)$/u;
+
 function appendMultilineTail(head: string, tail: string | undefined, spec?: TextAliasSpec): string {
   if (!tail) {
     return head;
@@ -105,11 +108,14 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
     : singleLine;
 
   const normalizedBotUsername = normalizeOptionalLowercaseString(options?.botUsername);
-  const mentionMatch = normalizedBotUsername
-    ? normalized.match(/^\/([^\s@]+)@([^\s]+)(.*)$/)
-    : null;
+  const mentionMatch = normalized.match(TARGETED_COMMAND_BODY_RE);
+  const targetBotUsername = normalizeOptionalLowercaseString(mentionMatch?.[2]);
+  const targetMatchesBot =
+    normalizedBotUsername !== undefined && targetBotUsername === normalizedBotUsername;
+  const resolveBeforeIdentity =
+    normalizedBotUsername === undefined && options?.targetedCommandMode === "pre-identity";
   const commandBody =
-    mentionMatch && normalizeLowercaseStringOrEmpty(mentionMatch[2]) === normalizedBotUsername
+    mentionMatch && (targetMatchesBot || resolveBeforeIdentity)
       ? `/${mentionMatch[1]}${mentionMatch[3] ?? ""}`
       : normalized;
 

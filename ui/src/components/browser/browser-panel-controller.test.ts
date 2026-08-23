@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { BROWSER_ANNOTATION_EVENT, type BrowserAnnotationEvent } from "./browser-annotation.ts";
 import {
   createBrowserClient,
   createBrowserPanelTestController,
   createBrowserPanelTestMetrics,
   createBrowserPanelTestTab,
-  createDeferred,
   createInspectedNode,
   createPointer,
   createView,
@@ -19,6 +20,40 @@ import { BrowserPanelController } from "./browser-panel-controller.ts";
 setupBrowserPanelTestCleanup();
 
 describe("BrowserPanelController tab and lifecycle ownership", () => {
+  it("keeps rejected capture state and replaces stale feedback with the limit error", async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      drawImage: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      stroke: vi.fn(),
+    } as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(
+      "data:image/png;base64,annotated",
+    );
+    const { client } = createBrowserClient(async () => ({ running: true, tabs: [] }));
+    const controller = createBrowserPanelTestController(client, "tab-a");
+    controller.setMode("annotate");
+    controller.strokes = [{ points: [{ x: 0.25, y: 0.5 }] }];
+    controller.errorText = "Stale error";
+    controller.noticeText = "Previously sent";
+    const reject = (event: Event) => {
+      (event as BrowserAnnotationEvent).rejection = "limit";
+    };
+    window.addEventListener(BROWSER_ANNOTATION_EVENT, reject);
+
+    try {
+      await controller.sendAnnotation({});
+    } finally {
+      window.removeEventListener(BROWSER_ANNOTATION_EVENT, reject);
+    }
+
+    expect(controller.mode).toBe("annotate");
+    expect(controller.strokes).toHaveLength(1);
+    expect(controller.noticeText).toBeNull();
+    expect(controller.errorText).toContain("maximum 4 cards and 8,000 characters");
+  });
+
   it.each(["reject", "resolve"] as const)(
     "preserves pending new-tab ownership when the previous capture %ss",
     async (completion) => {
@@ -306,6 +341,9 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
       committedNavigation.resolve({ targetId: "raw-stable", url: committedUrl });
       await expect(Promise.all([previous, latest])).resolves.toEqual([undefined, undefined]);
 
+      expect(controller.activeTargetId).toBeNull();
+      expect(controller.view).toBeNull();
+      expect(controller.urlDraft).toBe("");
       expect(controller.errorText).toBe("Browser request failed: Original navigation rejected");
       expect(controller.loading).toBe(false);
     },

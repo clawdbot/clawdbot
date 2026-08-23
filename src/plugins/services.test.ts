@@ -23,10 +23,22 @@ import {
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import { markHostPluginUsageDiagnosticEvent } from "../infra/diagnostic-plugin-usage-provenance.js";
+import {
+  getDiagnosticStabilitySnapshot,
+  resetDiagnosticStabilityRecorderForTest,
+  type DiagnosticExporterHealthUpdate,
+} from "../logging/diagnostic-stability.js";
 import { queuePluginSessionsChanged, subscribePluginSessionsChanged } from "./gateway-events.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
-import { startPluginServices } from "./services.js";
+import { listPluginServiceHealthFailures } from "./service-health.js";
+import { startPluginServices, type PluginServicesHandle } from "./services.js";
+
+type TrustedExporterInternalDiagnostics = NonNullable<
+  OpenClawPluginServiceContext["internalDiagnostics"]
+> & {
+  reportExporterHealth?: (update: DiagnosticExporterHealthUpdate) => void;
+};
 
 function createRegistry(
   services: OpenClawPluginService[],
@@ -149,6 +161,7 @@ describe("startPluginServices", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetDiagnosticEventsForTest();
+    resetDiagnosticStabilityRecorderForTest();
     resetPluginRuntimeStateForTest();
   });
 
@@ -170,6 +183,75 @@ describe("startPluginServices", () => {
     await handle.stop();
 
     expectServiceLifecycleState({ starts, stops, contexts, config });
+  });
+
+  it("publishes cleanup ownership before service startup can yield", async () => {
+    let releaseStart: (() => void) | undefined;
+    const serviceStarted = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const stopService = vi.fn();
+    const siblingStart = vi.fn();
+    let lifecycleHandle: PluginServicesHandle | undefined;
+
+    const starting = startPluginServices({
+      registry: createRegistry([
+        { id: "blocking", start: () => serviceStarted, stop: stopService },
+        { id: "sibling", start: siblingStart },
+      ]),
+      config: createServiceConfig(),
+      onHandle: (handle) => {
+        lifecycleHandle = handle;
+      },
+    });
+
+    expect(lifecycleHandle).toBeDefined();
+    let stopSettled = false;
+    const stopping = lifecycleHandle!.stop().then(() => {
+      stopSettled = true;
+    });
+    await Promise.resolve();
+    expect(stopSettled).toBe(false);
+    expect(stopService).not.toHaveBeenCalled();
+
+    releaseStart?.();
+    await starting;
+    await stopping;
+
+    expect(stopService).toHaveBeenCalledOnce();
+    expect(siblingStart).not.toHaveBeenCalled();
+  });
+
+  it("fences service health reporters to their owning generation", async () => {
+    const contexts: OpenClawPluginServiceContext[] = [];
+    const registry = createRegistry([
+      {
+        id: "service",
+        start: (ctx) => {
+          contexts.push(ctx);
+        },
+      },
+    ]);
+    const generationA = await startPluginServices({ registry, config: createServiceConfig() });
+    const generationB = await startPluginServices({ registry, config: createServiceConfig() });
+
+    contexts[0]?.serviceHealth?.reportFailure(new Error("stale failure"));
+    expect(listPluginServiceHealthFailures(registry)).toEqual([]);
+    contexts[1]?.serviceHealth?.reportFailure(new Error("current failure"));
+    expect(listPluginServiceHealthFailures(registry)).toEqual([
+      {
+        pluginId: "plugin:test",
+        serviceId: "service",
+        origin: "workspace",
+        error: "current failure",
+      },
+    ]);
+
+    await generationA.stop();
+    expect(listPluginServiceHealthFailures(registry)).toHaveLength(1);
+    contexts[1]?.serviceHealth?.clearFailure();
+    expect(listPluginServiceHealthFailures(registry)).toEqual([]);
+    await generationB.stop();
   });
 
   it("drains producer diagnostics before exporters stop and propagates exporter failures", async () => {
@@ -661,6 +743,59 @@ describe("startPluginServices", () => {
     ]);
   });
 
+  it("retains trusted exporter startup health after host rollback", async () => {
+    const rollback = vi.fn();
+    const handle = await startPluginServices({
+      registry: createRegistry(
+        [
+          {
+            id: "diagnostics-otel",
+            start: (ctx) => {
+              const reportExporterHealth = (
+                ctx.internalDiagnostics as TrustedExporterInternalDiagnostics | undefined
+              )?.reportExporterHealth;
+              if (!reportExporterHealth) {
+                throw new Error("expected trusted exporter health reporter");
+              }
+              reportExporterHealth({
+                signal: "traces",
+                transport: "otlp-http-protobuf",
+                endpointMode: "configured",
+                status: "failure",
+                reason: "start_failed",
+                errorCategory: "TypeError",
+              });
+              throw new TypeError("SDK startup failed");
+            },
+            stop: rollback,
+          },
+        ],
+        "diagnostics-otel",
+        "bundled",
+      ),
+      config: createServiceConfig(),
+    });
+
+    expect(rollback).toHaveBeenCalledOnce();
+    await handle.stop();
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(
+      getDiagnosticStabilitySnapshot({
+        type: "telemetry.exporter",
+        limit: 1000,
+      }).events,
+    ).toEqual([
+      expect.objectContaining({
+        source: "diagnostics-otel",
+        target: "traces",
+        transport: "otlp-http-protobuf",
+        outcome: "failure",
+        reason: "start_failed",
+        errorCategory: "TypeError",
+      }),
+    ]);
+  });
+
   it("emits per-service startup trace spans and summary", async () => {
     const measured: string[] = [];
     const details: Array<{
@@ -789,6 +924,10 @@ describe("startPluginServices", () => {
     expect(contexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
     expect(contexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
     expect(contexts[0]?.internalDiagnostics?.registerTracePropagationBridge).toBeTypeOf("function");
+    expect(
+      (contexts[0]?.internalDiagnostics as TrustedExporterInternalDiagnostics | undefined)
+        ?.reportExporterHealth,
+    ).toBeTypeOf("function");
 
     const prometheusContexts: OpenClawPluginServiceContext[] = [];
     const prometheusService = createTrackingService("diagnostics-prometheus", {
@@ -804,6 +943,10 @@ describe("startPluginServices", () => {
     expect(prometheusContexts[0]?.internalDiagnostics?.registerTracePropagationBridge).toBeTypeOf(
       "function",
     );
+    expect(
+      (prometheusContexts[0]?.internalDiagnostics as TrustedExporterInternalDiagnostics | undefined)
+        ?.reportExporterHealth,
+    ).toBeTypeOf("function");
 
     const officialDiagnosticsOtelContexts: OpenClawPluginServiceContext[] = [];
     const officialDiagnosticsOtelService = createTrackingService("diagnostics-otel", {
@@ -824,6 +967,13 @@ describe("startPluginServices", () => {
     expect(
       officialDiagnosticsOtelContexts[0]?.internalDiagnostics?.registerTracePropagationBridge,
     ).toBeTypeOf("function");
+    expect(
+      (
+        officialDiagnosticsOtelContexts[0]?.internalDiagnostics as
+          | TrustedExporterInternalDiagnostics
+          | undefined
+      )?.reportExporterHealth,
+    ).toBeTypeOf("function");
 
     const officialInstallContexts: OpenClawPluginServiceContext[] = [];
     const officialInstallService = createTrackingService("diagnostics-prometheus", {
@@ -838,6 +988,13 @@ describe("startPluginServices", () => {
     expect(officialInstallContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
     expect(
       officialInstallContexts[0]?.internalDiagnostics?.registerTracePropagationBridge,
+    ).toBeTypeOf("function");
+    expect(
+      (
+        officialInstallContexts[0]?.internalDiagnostics as
+          | TrustedExporterInternalDiagnostics
+          | undefined
+      )?.reportExporterHealth,
     ).toBeTypeOf("function");
 
     const untrustedContexts: OpenClawPluginServiceContext[] = [];
@@ -861,6 +1018,26 @@ describe("startPluginServices", () => {
     });
 
     expect(spoofedContexts[0]?.internalDiagnostics).toBeUndefined();
+
+    (
+      contexts[0]?.internalDiagnostics as TrustedExporterInternalDiagnostics | undefined
+    )?.reportExporterHealth?.({
+      signal: "traces",
+      transport: "otlp-http-protobuf",
+      status: "recovered",
+      reason: "export_failed",
+    });
+    expect(
+      getDiagnosticStabilitySnapshot({ type: "telemetry.exporter", limit: 1000 }).events,
+    ).toEqual([
+      expect.objectContaining({
+        source: "diagnostics-otel",
+        target: "traces",
+        transport: "otlp-http-protobuf",
+        outcome: "recovered",
+        reason: "export_failed",
+      }),
+    ]);
   });
 
   it("delivers host plugin attribution only to the trusted OTel listener lane", async () => {

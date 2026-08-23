@@ -19,7 +19,7 @@ function makeZeroUsageSnapshot() {
   };
 }
 
-export const asRecord = (value: unknown): Record<string, unknown> => {
+export const assertRecord = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("expected record");
   }
@@ -34,8 +34,8 @@ type ConvertedTools = ReadonlyArray<{
 }>;
 
 export const getFirstToolParameters = (converted: ConvertedTools): Record<string, unknown> => {
-  const functionDeclaration = asRecord(converted?.[0]?.functionDeclarations?.[0]);
-  return asRecord(functionDeclaration.parametersJsonSchema ?? functionDeclaration.parameters);
+  const functionDeclaration = assertRecord(converted?.[0]?.functionDeclarations?.[0]);
+  return assertRecord(functionDeclaration.parametersJsonSchema ?? functionDeclaration.parameters);
 };
 
 export const makeModel = (id: string): Model<"google-generative-ai"> =>

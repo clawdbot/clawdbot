@@ -102,6 +102,10 @@ def validate_skill(skill_path):
         "license",
         "allowed-tools",
         "user-invocable",
+        "disable-model-invocation",
+        "command-dispatch",
+        "command-tool",
+        "command-arg-mode",
         "metadata",
     }
 

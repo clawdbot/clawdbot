@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 // Cron edit command registration and patch construction for existing jobs.
 import {
   normalizeOptionalLowercaseString,
@@ -6,8 +7,9 @@ import {
 import type { Command } from "commander";
 import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import type { CronJob } from "../../cron/types.js";
+import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { danger } from "../../globals.js";
-import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -17,6 +19,7 @@ import {
 } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { isUnknownCronGetMethodError, listCronJobsFromGateway } from "./list-jobs.js";
+import { createCronOutputCommand } from "./output-mode.js";
 import { resolveCronEditPayloadDeliveryPatch } from "./register.cron-edit-options.js";
 import {
   applyExistingCronSchedulePatch,
@@ -54,11 +57,12 @@ async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<Cro
 
 export function registerCronEditCommand(cron: Command) {
   addGatewayClientOptions(
-    cron
-      .command("edit")
+    createCronOutputCommand(cron, "edit")
       .description("Edit an automation (patch fields)")
       .argument("<id>", "Job id")
       .option("--name <name>", "Set name")
+      .option("--display-name <name>", "Set human-readable display name")
+      .option("--clear-display-name", "Restore the stable name in list and detail views", false)
       .option("--description <text>", "Set description")
       .option("--enable", "Enable job", false)
       .option("--disable", "Disable job", false)
@@ -167,6 +171,10 @@ export function registerCronEditCommand(cron: Command) {
           if (opts.clearTools && opts.tools !== undefined) {
             throw new Error("Use --tools or --clear-tools, not both");
           }
+          const commandCwd = normalizeOptionalString(opts.commandCwd);
+          if (typeof opts.commandCwd === "string" && !commandCwd) {
+            throw new Error("--command-cwd must not be blank");
+          }
           let existingJobPromise: Promise<CronJobForEdit> | undefined;
           let expectedConfigRevision: string | undefined;
           const readExistingCronJob = async (): Promise<CronJobForEdit> => {
@@ -218,7 +226,14 @@ export function registerCronEditCommand(cron: Command) {
               "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery.",
             );
           }
-          const hasWebhookDelivery = typeof opts.webhook === "string";
+          const webhookUrl =
+            typeof opts.webhook === "string"
+              ? (normalizeHttpWebhookUrl(opts.webhook) ?? undefined)
+              : undefined;
+          if (typeof opts.webhook === "string" && !webhookUrl) {
+            throw new Error("--webhook must be a valid http(s) URL");
+          }
+          const hasWebhookDelivery = Boolean(webhookUrl);
           const deliveryModeFlagCount = [
             Boolean(opts.announce),
             typeof opts.deliver === "boolean",
@@ -227,9 +242,34 @@ export function registerCronEditCommand(cron: Command) {
           if (deliveryModeFlagCount > 1) {
             throw new Error("Choose at most one of --announce, --no-deliver, or --webhook.");
           }
+          const triggerScriptPath = normalizeOptionalString(opts.triggerScript);
+          if (typeof opts.triggerScript === "string" && !triggerScriptPath) {
+            throw new Error("--trigger-script must not be blank");
+          }
+          if (opts.clearTrigger && (triggerScriptPath || opts.triggerOnce)) {
+            throw new Error("Use --clear-trigger or trigger options, not both");
+          }
+          // Local input errors must not depend on Gateway availability, even when
+          // another edit field needs the existing job.
+          const triggerScript = triggerScriptPath
+            ? await readCronTriggerScript(triggerScriptPath)
+            : undefined;
           const patch: Record<string, unknown> = {};
           if (typeof opts.name === "string") {
             patch.name = opts.name;
+          }
+          const displayName = normalizeOptionalString(opts.displayName);
+          if (typeof opts.displayName === "string" && !displayName) {
+            throw new Error("--display-name must not be blank");
+          }
+          if (displayName && opts.clearDisplayName) {
+            throw new Error("Use --display-name or --clear-display-name, not both");
+          }
+          if (displayName) {
+            patch.displayName = displayName;
+          }
+          if (opts.clearDisplayName) {
+            patch.displayName = null;
           }
           if (typeof opts.description === "string") {
             patch.description = opts.description;
@@ -262,20 +302,28 @@ export function registerCronEditCommand(cron: Command) {
             }
             patch.wakeMode = wakeMode;
           }
-          if (opts.agent && opts.clearAgent) {
+          const agentId = normalizeOptionalString(opts.agent);
+          if (typeof opts.agent === "string" && !agentId) {
+            throw new Error("--agent must not be blank");
+          }
+          if (agentId && opts.clearAgent) {
             throw new Error("Use --agent or --clear-agent, not both");
           }
-          if (typeof opts.agent === "string" && opts.agent.trim()) {
-            patch.agentId = sanitizeAgentId(opts.agent.trim());
+          if (agentId) {
+            patch.agentId = sanitizeAgentId(agentId);
           }
           if (opts.clearAgent) {
             patch.agentId = null;
           }
-          if (opts.sessionKey && opts.clearSessionKey) {
+          const sessionKey = normalizeOptionalString(opts.sessionKey);
+          if (typeof opts.sessionKey === "string" && !sessionKey) {
+            throw new Error("--session-key must not be blank");
+          }
+          if (sessionKey && opts.clearSessionKey) {
             throw new Error("Use --session-key or --clear-session-key, not both");
           }
-          if (typeof opts.sessionKey === "string" && opts.sessionKey.trim()) {
-            patch.sessionKey = opts.sessionKey.trim();
+          if (sessionKey) {
+            patch.sessionKey = sessionKey;
           }
           if (opts.clearSessionKey) {
             patch.sessionKey = null;
@@ -304,16 +352,13 @@ export function registerCronEditCommand(cron: Command) {
               ...(pacingMax ? { max: pacingMax } : {}),
             };
           }
-
-          const triggerScriptPath = normalizeOptionalString(opts.triggerScript);
-          if (opts.clearTrigger && (triggerScriptPath || opts.triggerOnce)) {
-            throw new Error("Use --clear-trigger or trigger options, not both");
-          }
           if (opts.clearTrigger) {
             patch.trigger = null;
-          } else if (triggerScriptPath) {
+          } else if (triggerScript !== undefined) {
+            const existing = await readExistingCronJob();
             patch.trigger = {
-              script: await readCronTriggerScript(triggerScriptPath),
+              ...existing.trigger,
+              script: triggerScript,
               ...(opts.triggerOnce ? { once: true } : {}),
             };
           } else if (opts.triggerOnce) {
@@ -380,7 +425,12 @@ export function registerCronEditCommand(cron: Command) {
 
           Object.assign(
             patch,
-            await resolveCronEditPayloadDeliveryPatch(opts, readExistingCronJob),
+            await resolveCronEditPayloadDeliveryPatch(
+              opts,
+              readExistingCronJob,
+              webhookUrl,
+              commandCwd,
+            ),
           );
 
           const hasFailureAlertAfter = typeof opts.failureAlertAfter === "string";
@@ -464,7 +514,7 @@ export function registerCronEditCommand(cron: Command) {
           defaultRuntime.writeJson(res);
           await warnIfCronSchedulerDisabled(opts);
         } catch (err) {
-          defaultRuntime.error(danger(String(err)));
+          defaultRuntime.error(danger(formatErrorMessage(err)));
           defaultRuntime.exit(1);
         }
       }),

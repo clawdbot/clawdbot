@@ -4,6 +4,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { icon, type IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
@@ -24,9 +25,11 @@ type TasksProps = {
   agentId: string;
   mainKey: string;
   connected: boolean;
+  canCopy: boolean;
   canCancel: boolean;
   loading: boolean;
   error: string | null;
+  copyResultError: string | null;
   tasks: TaskSummary[];
   cancellingTaskIds: ReadonlySet<string>;
   sessionRow: (sessionKey: string) => GatewaySessionRow | undefined;
@@ -56,14 +59,7 @@ function renderSessionLink(task: TaskSummary, props: TasksProps) {
     class="session-link"
     href=${href}
     @click=${(event: MouseEvent) => {
-      if (
-        event.defaultPrevented ||
-        event.button !== 0 ||
-        event.metaKey ||
-        event.ctrlKey ||
-        event.shiftKey ||
-        event.altKey
-      ) {
+      if (!shouldHandleNavigationClick(event)) {
         return;
       }
       event.preventDefault();
@@ -121,36 +117,34 @@ function renderTask(task: TaskSummary, props: TasksProps) {
               ${cancelling ? t("tasksPage.cancelling") : t("common.cancel")}
             </button>`
           : nothing}
-        ${retainedResult && props.canCancel
+        ${retainedResult && props.canCopy
+          ? html`<button
+              class="btn"
+              type="button"
+              ?disabled=${cancelling || !props.connected}
+              @click=${() => props.onCopyResult(task.taskId)}
+            >
+              ${t("tasksPage.copyResult")}
+            </button>`
+          : nothing}
+        ${recoverableDelivery && props.canCancel
           ? html`
               <button
                 class="btn"
                 type="button"
                 ?disabled=${cancelling || !props.connected}
-                @click=${() => props.onCopyResult(task.taskId)}
+                @click=${() => props.onRetry(task.taskId)}
               >
-                ${t("tasksPage.copyResult")}
+                ${t("tasksPage.retryDelivery")}
               </button>
-              ${recoverableDelivery
-                ? html`
-                    <button
-                      class="btn"
-                      type="button"
-                      ?disabled=${cancelling || !props.connected}
-                      @click=${() => props.onRetry(task.taskId)}
-                    >
-                      ${t("tasksPage.retryDelivery")}
-                    </button>
-                    <button
-                      class="btn"
-                      type="button"
-                      ?disabled=${cancelling || !props.connected}
-                      @click=${() => props.onDismiss(task.taskId)}
-                    >
-                      ${t("tasksPage.dismissDelivery")}
-                    </button>
-                  `
-                : nothing}
+              <button
+                class="btn"
+                type="button"
+                ?disabled=${cancelling || !props.connected}
+                @click=${() => props.onDismiss(task.taskId)}
+              >
+                ${t("tasksPage.dismissDelivery")}
+              </button>
             `
           : nothing}
       </div>
@@ -262,7 +256,10 @@ export function renderTasks(props: TasksProps) {
       ${!props.connected
         ? html`<div class="callout warn">${t("tasksPage.disconnected")}</div>`
         : nothing}
-      ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
+      ${props.error ? html`<div class="callout danger" role="alert">${props.error}</div>` : nothing}
+      ${props.copyResultError
+        ? html`<div class="callout danger" role="alert">${props.copyResultError}</div>`
+        : nothing}
       ${renderSummaryStrip(props.tasks)}
       ${props.loading && props.tasks.length === 0
         ? html`<div class="card muted">${t("tasksPage.loading")}</div>`

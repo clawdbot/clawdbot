@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createContractRunResult,
@@ -420,7 +420,12 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
           {
             name: "cron",
             description: "Cron",
-            parameters: { type: "object", properties: {} },
+            parameters: {
+              type: "object",
+              properties: { action: { type: "string" } },
+              required: ["action"],
+              additionalProperties: false,
+            },
             execute: vi.fn(async () => toolResult),
           } as never,
         ],

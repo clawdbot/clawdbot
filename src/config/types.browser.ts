@@ -33,6 +33,10 @@ export type BrowserTabCleanupConfig = {
   /** Enable best-effort cleanup for tracked primary-agent browser tabs. Default: true */
   enabled?: boolean;
 };
+export type BrowserExtensionRelayConfig = {
+  /** Temporarily accept legacy relay bearer/basic/subprotocol auth. Default: true. */
+  allowLegacyAuth?: boolean;
+};
 export type BrowserSsrFPolicyConfig = SsrFPolicyConfig;
 export type BrowserConfig = {
   /** @deprecated Doctor-only legacy input; canonical schema rejects this field. */
@@ -52,7 +56,7 @@ export type BrowserConfig = {
   noSandbox?: boolean;
   /** If true: never launch; only attach to an existing browser. Default: false */
   attachOnly?: boolean;
-  /** Default profile to use when profile param is omitted. Default: "chrome" */
+  /** Default profile to use when profile param is omitted. Default: "openclaw" */
   defaultProfile?: string;
   /** Named browser profiles with explicit CDP ports or URLs. */
   profiles?: Record<string, BrowserProfileConfig>;
@@ -60,6 +64,8 @@ export type BrowserConfig = {
   snapshotDefaults?: BrowserSnapshotDefaults;
   /** Best-effort cleanup policy for tabs opened by primary-agent browser sessions. */
   tabCleanup?: BrowserTabCleanupConfig;
+  /** Chrome extension relay authentication compatibility settings. */
+  extensionRelay?: BrowserExtensionRelayConfig;
   /** SSRF policy for browser navigation/open-tab operations. */
   ssrfPolicy?: BrowserSsrFPolicyConfig;
   /**

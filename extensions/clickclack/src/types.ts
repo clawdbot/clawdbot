@@ -1,7 +1,11 @@
 /**
  * Shared ClickClack config, runtime account, API object, and target types.
  */
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  ChannelBotLoopProtectionConfig,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/config-contracts";
+import type { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 
 /** Session-linked ClickClack discussion settings for one account. */
 type ClickClackDiscussionsConfig = {
@@ -15,6 +19,8 @@ type ClickClackDiscussionsConfig = {
 export type ClickClackGroupConfig = {
   requireMention?: boolean;
   mentionPatterns?: string[];
+  allowBots?: boolean | "mentions";
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
 };
 
 /** User-configurable settings for one ClickClack account. */
@@ -34,9 +40,15 @@ export type ClickClackAccountConfig = {
   toolsAllow?: string[];
   defaultTo?: string;
   allowFrom?: string[];
+  /** Accept messages authored by other ClickClack bots. */
+  allowBots?: boolean | "mentions";
+  /** Sliding-window bot-pair loop guard for accepted bot messages. */
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
   reconnectMs?: number;
   /** Opt-in: publish durable agent activity (commentary + tool) rows. */
   agentActivity?: boolean;
+  /** Opt-in: publish ephemeral native progress while an agent turn runs. */
+  nativeProgress?: boolean;
   /** Publish the native command catalog to ClickClack composer autocomplete. */
   commandMenu?: boolean;
   /** Create and synchronize one managed ClickClack channel per OpenClaw session. */
@@ -71,6 +83,12 @@ export type ResolvedClickClackAccount = {
   baseUrl: string;
   apiEndpoint: string;
   token: string;
+  tokenSource?: "env" | "tokenFile" | "config" | "none";
+  tokenStatus?: "available" | "configured_unavailable" | "missing";
+  credentialDiagnostics?: Extract<
+    ReturnType<typeof tryReadSecretFileSync>,
+    { status: "configured_unavailable" }
+  >["diagnostic"][];
   workspace: string;
   botUserId?: string;
   botHandle?: string;
@@ -81,8 +99,11 @@ export type ResolvedClickClackAccount = {
   toolsAllow?: string[];
   defaultTo: string;
   allowFrom: string[];
+  allowBots: boolean | "mentions";
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
   reconnectMs: number;
   agentActivity: boolean;
+  nativeProgress?: boolean;
   commandMenu: boolean;
   discussions: {
     enabled: boolean;
@@ -182,6 +203,7 @@ export type ClickClackMessage = {
   body: string;
   body_format: "markdown";
   created_at: string;
+  kind?: "message" | "agent_commentary" | "agent_tool";
   author?: ClickClackUser;
   thread_state?: {
     root_message_id: string;

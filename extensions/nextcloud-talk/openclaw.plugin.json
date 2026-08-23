@@ -1,5 +1,8 @@
 {
   "id": "nextcloud-talk",
+  "doctorContract": {
+    "configRepair": true
+  },
   "name": "Nextcloud Talk",
   "description": "OpenClaw Nextcloud Talk channel plugin for conversations.",
   "icon": "https://cdn.simpleicons.org/nextcloud",

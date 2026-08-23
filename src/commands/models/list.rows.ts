@@ -3,16 +3,20 @@ import {
   normalizeProviderId,
   normalizeProviderIdForAuth,
 } from "@openclaw/model-catalog-core/provider-id";
+import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import {
   projectModelCatalogEntryForRoute,
   resolveConfiguredModelCatalogOverrides,
 } from "../../agents/model-catalog-route.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
-import { modelKey } from "../../agents/model-ref-shared.js";
+import {
+  modelKey,
+  normalizeConfiguredProviderCatalogModelId,
+} from "../../agents/model-ref-shared.js";
 import { modelCatalogLogicalKey } from "../../agents/model-selection-shared.js";
 import {
-  shouldSuppressBuiltInModel,
+  shouldSuppressBuiltInModelCore,
   shouldSuppressBuiltInModelFromManifest,
 } from "../../agents/model-suppression.js";
 import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
@@ -231,7 +235,7 @@ function shouldSuppressListModel(params: {
       config: params.context.cfg,
     });
   }
-  return shouldSuppressBuiltInModel({
+  return shouldSuppressBuiltInModelCore({
     provider: params.model.provider,
     id: params.model.id,
     baseUrl: params.model.baseUrl,
@@ -512,25 +516,50 @@ export async function appendConfiguredProviderRows(params: {
   context: RowBuilderContext;
   seenKeys: Set<string>;
 }): Promise<void> {
+  const replaceMode = params.context.cfg.models?.mode === "replace";
   for (const [provider, providerConfig] of Object.entries(
     params.context.cfg.models?.providers ?? {},
   )) {
     for (const configuredModel of providerConfig.models ?? []) {
-      if (!shouldListConfiguredProviderModel({ providerConfig, model: configuredModel })) {
+      if (
+        !replaceMode &&
+        !shouldListConfiguredProviderModel({ providerConfig, model: configuredModel })
+      ) {
         continue;
       }
-      const key = modelKey(provider, configuredModel.id);
+      // Strip a self-prefix against the source provider before display aliasing.
+      // Auth stays on the source provider so alias-backed profiles remain valid.
+      const modelId = replaceMode
+        ? normalizeConfiguredProviderCatalogModelId(
+            provider,
+            stripSelfProviderModelPrefix(provider, configuredModel.id),
+            {
+              manifestPlugins: params.context.metadataSnapshot?.manifestRegistry.plugins,
+            },
+          )
+        : configuredModel.id;
+      const displayProvider = replaceMode
+        ? canonicalizeModelCatalogProviderAlias(provider, {
+            cfg: params.context.cfg,
+            metadataSnapshot: params.context.metadataSnapshot,
+          })
+        : provider;
+      const key = modelKey(displayProvider, modelId);
       const model = toConfiguredProviderListModel({
         provider,
         providerConfig,
-        model: configuredModel,
+        model: { ...configuredModel, id: modelId },
       });
+      const authEvaluation = replaceMode
+        ? params.context.authIndex.evaluateModelAuth(provider, toModelAuthRef(model))
+        : undefined;
       await appendVisibleRow({
         rows: params.rows,
         model,
         key,
         context: params.context,
         seenKeys: params.seenKeys,
+        ...(authEvaluation ? { authEvaluation } : {}),
         allowAuthAvailabilityOverride: true,
         normalizeWithProviderPlugin: true,
       });
@@ -545,6 +574,9 @@ export async function appendAuthenticatedCatalogRows(params: {
   seenKeys: Set<string>;
   catalogSnapshot?: ModelCatalogSnapshot;
 }): Promise<void> {
+  if (params.context.cfg.models?.mode === "replace") {
+    return;
+  }
   const { entries: catalog, routeVariants } =
     params.catalogSnapshot ?? (await loadListModelCatalogSnapshot(params.context));
   const routeIndex = createModelCatalogLogicalRouteIndex(routeVariants);

@@ -1,12 +1,13 @@
 // Proves queue caps and depth describe pending work while active identities remain in shared state.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   completeFollowupRunLifecycle,
   enqueueFollowupRun,
   getFollowupQueueDepth,
   scheduleFollowupDrain,
 } from "./queue.js";
-import { createDeferred, createQueueTestRun as createRun } from "./queue.test-helpers.js";
+import { createQueueTestRun as createRun } from "./queue.test-helpers.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import type { FollowupRun, QueueDropPolicy, QueueSettings } from "./queue/types.js";
 
@@ -37,8 +38,8 @@ describe("followup queue in-flight ownership", () => {
     "keeps an active single delivery out of %s overflow victims",
     async (dropPolicy) => {
       const key = createKey(dropPolicy);
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
+      const entered = createDeferred();
+      const release = createDeferred();
       const activeComplete = vi.fn();
       const pendingComplete = vi.fn();
       const calls: FollowupRun[] = [];
@@ -105,8 +106,8 @@ describe("followup queue in-flight ownership", () => {
 
   it("admits one pending item under drop:new while another item is active", async () => {
     const key = createKey("new");
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
+    const entered = createDeferred();
+    const release = createDeferred();
     const rejectedEnqueued = vi.fn();
     const rejectedComplete = vi.fn();
     const active = createRun({ prompt: "active" });
@@ -161,8 +162,8 @@ describe("followup queue in-flight ownership", () => {
 
   it("protects a collect group and counts only active identities still present", async () => {
     const key = createKey("collect");
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
+    const entered = createDeferred();
+    const release = createDeferred();
     const groupCompletions = [vi.fn(), vi.fn()];
     const pendingComplete = vi.fn();
     const rejectedComplete = vi.fn();

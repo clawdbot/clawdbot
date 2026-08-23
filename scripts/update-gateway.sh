@@ -38,11 +38,6 @@ if [ -d "$git_dir/rebase-merge" ] || [ -d "$git_dir/rebase-apply" ] || \
   exit 1
 fi
 
-# `pnpm build` rewrites this tracked bundle, which would make the tree look
-# dirty and block the rebase below. Restoring it loses nothing: the build
-# regenerates it from source every run.
-git checkout -- extensions/browser/chrome-extension/modules/copilot-runtime.js 2>/dev/null || true
-
 # Fail closed on any other local changes: an agent or operator may have
 # uncommitted work in this checkout, and an update must never eat it.
 if ! git diff --quiet || ! git diff --cached --quiet; then

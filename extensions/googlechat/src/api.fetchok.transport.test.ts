@@ -64,6 +64,7 @@ vi.mock("./auth.js", () => ({
 }));
 
 let deleteGoogleChatMessage: typeof import("./api.js").deleteGoogleChatMessage;
+let sendGoogleChatMessage: typeof import("./api.js").sendGoogleChatMessage;
 
 const account = {
   accountId: "default",
@@ -117,7 +118,7 @@ async function withinDeadline<T>(promise: Promise<T>, timeoutMs = 2_000): Promis
 
 describe("deleteGoogleChatMessage real guarded transport", () => {
   beforeAll(async () => {
-    ({ deleteGoogleChatMessage } = await import("./api.js"));
+    ({ deleteGoogleChatMessage, sendGoogleChatMessage } = await import("./api.js"));
   });
 
   beforeEach(() => {
@@ -131,6 +132,32 @@ describe("deleteGoogleChatMessage real guarded transport", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("rejects malformed UTF-8 JSON through the real guarded transport", async () => {
+    const body = new Uint8Array([
+      ...new TextEncoder().encode('{"name":"spaces/'),
+      0xff,
+      ...new TextEncoder().encode('AAA"}'),
+    ]);
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(body);
+    });
+
+    loopback.baseUrl = await listen(server);
+    try {
+      const outcome = await withinDeadline(
+        sendGoogleChatMessage({ account, space: "spaces/AAA", text: "hello" }).then(
+          () => undefined,
+          (error: unknown) => error,
+        ),
+      );
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toMatch(/malformed JSON response/);
+    } finally {
+      await closeServer(server);
+    }
   });
 
   it("cancels a streaming authenticated DELETE before releasing its real dispatcher", async () => {
@@ -216,9 +243,16 @@ describe("deleteGoogleChatMessage real guarded transport", () => {
   });
 
   it("preserves Google Chat errors without exposing the bearer token", async () => {
-    const server = createServer((_request, response) => {
+    let receivedAuthorization: string | undefined;
+    const server = createServer((request, response) => {
+      receivedAuthorization = request.headers.authorization;
       response.writeHead(403, { "Content-Type": "application/json" });
-      response.end(JSON.stringify({ error: { message: "Chat permission denied" } }));
+      response.end(
+        JSON.stringify({
+          error: { message: "Chat permission denied" },
+          reflectedHeader: `Authorization: ${receivedAuthorization}`,
+        }),
+      );
     });
 
     loopback.baseUrl = await listen(server);
@@ -230,8 +264,10 @@ describe("deleteGoogleChatMessage real guarded transport", () => {
         ),
       );
       expect(outcome).toBeInstanceOf(Error);
+      expect(receivedAuthorization).toBe(`Bearer ${proofToken}`);
       expect((outcome as Error).message).toContain("Google Chat API 403");
       expect((outcome as Error).message).toContain("Chat permission denied");
+      expect((outcome as Error).message).toContain("Authorization: Bearer");
       expect((outcome as Error).message).not.toContain(proofToken);
       expect(loopback.releases).toEqual([{ bodyIsNull: false, bodyUsed: true }]);
     } finally {

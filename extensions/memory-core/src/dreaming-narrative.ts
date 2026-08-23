@@ -26,6 +26,7 @@ export type SubagentSurface = {
     idempotencyKey: string;
     sessionKey: string;
     message: string;
+    disableTools?: boolean;
     model?: string;
     extraSystemPrompt?: string;
     lane?: string;
@@ -244,6 +245,7 @@ async function startNarrativeRunOrFallback(params: {
       idempotencyKey: `${params.runKey}-${params.nowMs}`,
       sessionKey: params.sessionKey,
       message: params.message,
+      disableTools: true,
       ...(params.model ? { model: params.model } : {}),
       extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
       lane: `dreaming-narrative:${params.sessionKey}`,
@@ -793,7 +795,8 @@ async function generateAndAppendDreamNarrative(
   params: DreamNarrativeRequest,
 ): Promise<DreamNarrativeOutcome> {
   // `runDreamNarrative` is the only entry point and already dropped empty narrative data.
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const nowMs =
+    typeof params.nowMs === "number" && Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
   const runKey = buildNarrativeRunKey({
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
@@ -1039,7 +1042,8 @@ export async function runDreamNarrative(
     : async () => {
         await appendFallbackNarrativeEntry({
           ...rest,
-          nowMs: Number.isFinite(rest.nowMs) ? (rest.nowMs as number) : Date.now(),
+          nowMs:
+            typeof rest.nowMs === "number" && Number.isFinite(rest.nowMs) ? rest.nowMs : Date.now(),
           reason: "the dreaming sweep has no owning agent id",
         });
         return { status: "completed" as const };

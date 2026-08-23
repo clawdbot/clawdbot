@@ -6,20 +6,23 @@ import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import { encodeSessionArchiveContent } from "../../../../src/config/sessions/archive-compression.js";
 import {
   appendTranscriptMessage,
   persistSessionTranscriptTurn,
   resetSessionEntryLifecycle,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import {
   buildSessionEntry,
   listSessionFilesForAgent,
   listSessionTranscriptCorpusEntriesForAgent,
   loadSessionTranscriptClassificationForAgent,
+  normalizeSessionTranscriptPathForComparison,
   parseCanonicalSessionSyncTargetFromPath,
   resolveSessionIdentityForTranscriptFile,
   resolveSessionFileForSyncTarget,
@@ -70,10 +73,15 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Agent close releases leases through shared state; close agent handles first while the fixture
+  // env is active, then close shared state before removing the Windows-owned directory.
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
   envSnapshot?.restore();
   envSnapshot = undefined;
   clearRuntimeConfigSnapshot();
   clearConfigCache();
+  fsSync.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 function requireSessionEntry(entry: SessionFileEntry | null): SessionFileEntry {
@@ -85,11 +93,11 @@ function requireSessionEntry(entry: SessionFileEntry | null): SessionFileEntry {
 
 async function upsertTestSessionEntries(
   storePath: string,
-  entries: Record<string, Parameters<typeof upsertSessionEntry>[1]>,
+  entries: Record<string, Parameters<typeof upsertSessionEntryCore>[1]>,
 ): Promise<void> {
   fsSync.mkdirSync(path.dirname(storePath), { recursive: true });
   for (const [sessionKey, entry] of Object.entries(entries)) {
-    await upsertSessionEntry({ sessionKey, storePath }, entry);
+    await upsertSessionEntryCore({ sessionKey, storePath }, entry);
   }
 }
 
@@ -122,13 +130,30 @@ describe("listSessionFilesForAgent", () => {
 });
 
 describe("listSessionTranscriptCorpusEntriesForAgent", () => {
+  it("surfaces unexpected archive-directory scan failures", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const scanError = Object.assign(new Error("transient session archive scan failure"), {
+      code: "EIO",
+    });
+    const readdirSpy = vi.spyOn(fsSync, "readdirSync").mockImplementation(() => {
+      throw scanError;
+    });
+
+    try {
+      await expect(listSessionTranscriptCorpusEntriesForAgent("main")).rejects.toBe(scanError);
+    } finally {
+      readdirSpy.mockRestore();
+    }
+  });
+
   it("includes rotated SQLite sessions only when retained history is requested", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionKey = "agent:main:main";
     fsSync.mkdirSync(sessionsDir, { recursive: true });
 
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       { sessionId: "retained-old", updatedAt: 10 },
     );
@@ -221,7 +246,9 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
 
     const classification = loadSessionTranscriptClassificationForAgent("main");
 
-    expect(classification.cronRunTranscriptPaths).toEqual(new Set([path.resolve(archivePath)]));
+    expect(classification.cronRunTranscriptPaths).toEqual(
+      new Set([normalizeSessionTranscriptPathForComparison(archivePath)]),
+    );
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual({
       agentId: "main",
       artifactKind: "archive-artifact",
@@ -241,7 +268,10 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     const updatedAt = Date.parse("2026-06-25T12:00:00.000Z");
     fsSync.mkdirSync(sessionsDir, { recursive: true });
 
-    await upsertSessionEntry({ agentId: "main", sessionKey, storePath }, { sessionId, updatedAt });
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey, storePath },
+      { sessionId, updatedAt },
+    );
     await persistSessionTranscriptTurn(
       { agentId: "main", sessionId, sessionKey, storePath },
       {
@@ -337,7 +367,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       `${sessionId}.jsonl.deleted.2026-06-25T12-01-00.000Z`,
     );
     fsSync.mkdirSync(sessionsDir, { recursive: true });
-    await upsertSessionEntry(
+    await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       { sessionId, updatedAt: 1 },
     );
@@ -447,7 +477,9 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     const expectedArchivePath = archivePath;
     const classification = loadSessionTranscriptClassificationForAgent("main");
 
-    expect(classification.cronRunTranscriptPaths).toEqual(new Set([expectedArchivePath]));
+    expect(classification.cronRunTranscriptPaths).toEqual(
+      new Set([normalizeSessionTranscriptPathForComparison(expectedArchivePath)]),
+    );
     await expect(listSessionFilesForAgent("main")).resolves.toEqual([expectedArchivePath]);
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual(
       expect.arrayContaining([
@@ -481,22 +513,30 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
   });
 
-  it("omits active session entries whose transcript path is a symlink", async () => {
+  it("omits symlinked archive artifacts from the session corpus", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     const targetPath = path.join(tmpDir, "external.jsonl");
-    const symlinkPath = path.join(sessionsDir, "linked.jsonl");
+    const symlinkPath = path.join(sessionsDir, "linked.jsonl.deleted.2026-02-16T22-27-33.000Z");
     fsSync.mkdirSync(sessionsDir, { recursive: true });
-    fsSync.writeFileSync(targetPath, "");
-    fsSync.symlinkSync(targetPath, symlinkPath);
-    fsSync.writeFileSync(
-      path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
-        "agent:main:chat:linked": {
-          sessionFile: "linked.jsonl",
-          sessionId: "linked",
-        },
+    fsSync.writeFileSync(symlinkPath, "");
+    await expect(listSessionFilesForAgent("main")).resolves.toEqual([symlinkPath]);
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual(
+      expect.objectContaining({
+        artifactKind: "archive-artifact",
+        sessionFile: symlinkPath,
+        sessionId: "linked",
       }),
     );
+    fsSync.unlinkSync(symlinkPath);
+
+    if (process.platform === "win32") {
+      fsSync.mkdirSync(targetPath);
+      fsSync.symlinkSync(targetPath, symlinkPath, "junction");
+    } else {
+      fsSync.writeFileSync(targetPath, "");
+      fsSync.symlinkSync(targetPath, symlinkPath);
+    }
+    expect(fsSync.lstatSync(symlinkPath).isSymbolicLink()).toBe(true);
 
     await expect(listSessionFilesForAgent("main")).resolves.toEqual([]);
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);

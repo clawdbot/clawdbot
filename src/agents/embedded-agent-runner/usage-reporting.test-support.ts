@@ -12,7 +12,7 @@ import {
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
-let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
+let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 
 function makeAssistantMessage(
   overrides: Partial<AssistantMessage> = {},
@@ -87,7 +87,7 @@ describe("runEmbeddedAgent usage reporting", () => {
           expect.objectContaining({ provider: "openai", modelId: "gpt-5.5" }),
         ]),
       }),
-      expect.anything(),
+      expect.objectContaining({ catalogMode: "static" }),
     );
   });
 
@@ -186,6 +186,7 @@ describe("runEmbeddedAgent usage reporting", () => {
       prompt: "hello",
       timeoutMs: 30000,
       runId: "run-gateway-bind",
+      config: {},
       allowGatewaySubagentBinding: true,
     });
 
@@ -273,10 +274,10 @@ describe("runEmbeddedAgent usage reporting", () => {
     expect(attemptInput.memoryFlushWritePath).toBe("memory/2026-03-10.md");
   });
 
-  it("uses current-attempt usage when the persisted assistant snapshot is zeroed", async () => {
+  it("keeps Anthropic multi-call billing usage separate from the final context snapshot", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
-        assistantTexts: ["Response 1", "Response 2"],
+        assistantTexts: ["Tool loop complete"],
         lastAssistant: makeAssistantMessage({
           usage: {
             input: 0,
@@ -287,9 +288,18 @@ describe("runEmbeddedAgent usage reporting", () => {
           } as unknown as AssistantMessage["usage"],
         }),
         currentAttemptAssistant: makeAssistantMessage({
-          usage: { input: 150, output: 50, total: 200 } as unknown as AssistantMessage["usage"],
+          api: "anthropic-messages",
+          provider: "minimax",
+          model: "Minimax-M3",
+          usage: {
+            input: 67_932,
+            output: 2_000,
+            cacheRead: 18_944,
+            totalTokens: 88_876,
+          } as unknown as AssistantMessage["usage"],
         }),
-        attemptUsage: { input: 250, output: 100, total: 350 },
+        // Three model calls in one tool loop; this remains cumulative billing data.
+        attemptUsage: { input: 110_337, output: 4_000, cacheRead: 40_000, total: 154_337 },
       }),
     );
 
@@ -300,20 +310,21 @@ describe("runEmbeddedAgent usage reporting", () => {
       workspaceDir: "/tmp/workspace",
       prompt: "hello",
       timeoutMs: 30000,
-      runId: "run-zeroed-persisted-usage",
+      runId: "run-anthropic-multi-call-usage",
     });
 
     expect(result.meta.agentMeta?.usage).toMatchObject({
-      input: 250,
-      output: 100,
-      total: 350,
+      input: 110_337,
+      output: 4_000,
+      cacheRead: 40_000,
+      total: 154_337,
     });
     expect(result.meta.agentMeta?.lastCallUsage).toMatchObject({
-      input: 150,
-      output: 50,
-      total: 200,
+      input: 67_932,
+      output: 2_000,
+      cacheRead: 18_944,
     });
-    expect(result.meta.agentMeta?.promptTokens).toBe(150);
+    expect(result.meta.agentMeta?.promptTokens).toBe(86_876);
   });
 
   it("reports the resolved model provider when OpenClaw marks the assistant message as the native runtime", async () => {

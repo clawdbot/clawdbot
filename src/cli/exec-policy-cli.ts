@@ -103,15 +103,8 @@ type ExecPolicyShowScope = Omit<
   };
 };
 
-class ExecPolicyCliError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ExecPolicyCliError";
-  }
-}
-
 function failExecPolicy(message: string): never {
-  throw new ExecPolicyCliError(message);
+  throw new Error(message);
 }
 
 function formatExecPolicyError(err: unknown): string {

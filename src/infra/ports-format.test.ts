@@ -167,7 +167,7 @@ describe("ports-format", () => {
     ).toEqual([gatewayAlreadyRunningHint, multipleListenersHint]);
   });
 
-  it("formats free and busy port diagnostics", () => {
+  it("formats free, unknown, and busy port diagnostics", () => {
     expect(
       formatPortDiagnostics({
         port: 18789,
@@ -176,6 +176,15 @@ describe("ports-format", () => {
         hints: [],
       }),
     ).toEqual(["Port 18789 is free."]);
+
+    expect(
+      formatPortDiagnostics({
+        port: 18789,
+        status: "unknown",
+        listeners: [],
+        hints: [],
+      }),
+    ).toEqual(["Port 18789 availability could not be determined."]);
 
     const lines = formatPortDiagnostics({
       port: 18789,

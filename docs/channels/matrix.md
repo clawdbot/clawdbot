@@ -74,7 +74,7 @@ Password-based (token is cached after first login):
 <Warning>
 Set `autoJoin: "allowlist"` plus `autoJoinAllowlist` to restrict accepted invites, or `autoJoin: "always"` to accept every invite.
 
-`autoJoinAllowlist` accepts only `!roomId:server`, `#alias:server`, or `*`. Plain room names are rejected; aliases resolve against the homeserver, not against state the invited room claims.
+`autoJoinAllowlist` accepts only a literal room ID (`!roomId:server`, or the suffixless `!roomId` form used by [room version 12](https://spec.matrix.org/latest/rooms/v12/) and later), `#alias:server`, or `*`. Plain room names are rejected; aliases resolve against the homeserver, not against state the invited room claims.
 </Warning>
 
 ```json5
@@ -93,9 +93,12 @@ Set `autoJoin: "allowlist"` plus `autoJoinAllowlist` to restrict accepted invite
 
 ### Allowlist target formats
 
+Matrix user IDs are case-sensitive. Copy the exact `@user:server` value Matrix reports for every allowlist, approver, and approval-target field. If an existing config used different casing, update it manually; OpenClaw cannot safely infer or rewrite the intended account because case-distinct IDs can identify different users.
+
 - DMs (`dm.allowFrom`, `groupAllowFrom`, `groups.<room>.users`): use `@user:server`. Display names are ignored by default (mutable); set `dangerouslyAllowNameMatching: true` only for explicit display-name compatibility.
-- Room allowlist keys (`groups`, legacy alias `rooms`): use `!room:server` or `#alias:server`. Plain names are ignored unless `dangerouslyAllowNameMatching: true`.
-- Invite allowlists (`autoJoinAllowlist`): use `!room:server`, `#alias:server`, or `*`. Plain names are always rejected.
+- Approval forwarding (`approvals.exec.targets[].to` with `channel: "matrix"`): use `user:@user:server` with the exact Matrix casing.
+- Room allowlist keys (`groups`, legacy alias `rooms`): use `!room:server` (or the suffixless `!room` form on room version 12+) or `#alias:server`. Plain names are ignored unless `dangerouslyAllowNameMatching: true`.
+- Invite allowlists (`autoJoinAllowlist`): use `!room:server` (or suffixless `!room` on room version 12+), `#alias:server`, or `*`. Plain names are always rejected.
 
 ### Account ID normalization
 
@@ -234,7 +237,7 @@ The full config accepts `{ mode, chunkMode, block, preview, progress }`:
 Notes:
 
 - If a preview grows past Matrix's per-event size limit, OpenClaw stops preview streaming and falls back to final-only delivery.
-- Media replies always send attachments normally; if a stale preview cannot be reused safely, OpenClaw redacts it before sending the final media reply.
+- Media replies always send attachments normally. If a visible preview cannot be reused safely, OpenClaw keeps it until the complete replacement is confirmed and then redacts it. If replacement delivery fails, is partial, or produces no visible event, the preview remains visible.
 - Tool-progress preview updates are on by default when preview streaming is active. Set `streaming.preview.toolProgress: false` to keep preview edits for answer text but leave tool progress on the normal delivery path.
 - Preview edits cost extra Matrix API calls. Leave `streaming.mode: "off"` for the most conservative rate-limit profile.
 - Legacy scalar/boolean `streaming` values and the flat `blockStreaming` / `chunkMode` keys are rewritten to this nested shape by `openclaw doctor --fix`.
@@ -820,7 +823,7 @@ Named accounts can override the top-level default with `channels.matrix.accounts
 Matrix accepts these target forms anywhere OpenClaw asks for a room or user target:
 
 - Users: `@user:server`, `user:@user:server`, or `matrix:user:@user:server`
-- Rooms: `!room:server`, `room:!room:server`, or `matrix:room:!room:server`
+- Rooms: `!room:server`, `room:!room:server`, or `matrix:room:!room:server` (room version 12+ room IDs have no `:server` suffix — `!room`, `room:!room`, `matrix:room:!room` — and are accepted the same way)
 - Aliases: `#alias:server`, `channel:#alias:server`, or `matrix:channel:#alias:server`
 
 Matrix room IDs are case-sensitive. Use the exact room ID casing from Matrix when configuring explicit delivery targets, cron jobs, bindings, or allowlists. OpenClaw keeps internal session keys canonical for storage, so those lowercase keys are not a reliable source for Matrix delivery IDs.
@@ -847,7 +850,7 @@ Room allowlist keys (`groups`, legacy `rooms`) should be room IDs or aliases. Pl
 - `network.dangerouslyAllowPrivateNetwork`: allow this account to connect to `localhost`, LAN/Tailscale IPs, or internal hostnames.
 - `proxy`: optional HTTP(S) proxy URL for Matrix traffic. Per-account override supported.
 - `userId`: full Matrix user ID (`@bot:example.org`).
-- `accessToken`: access token for token-based auth. Plaintext and SecretRef values supported across env/file/exec providers ([Secrets Management](/gateway/secrets)).
+- `accessToken`: access token for token-based auth. Plaintext and SecretRef values supported across env/file/exec/store providers ([Secrets Management](/gateway/secrets)).
 - `password`: password for password-based login. Plaintext and SecretRef values supported.
 - `deviceId`: explicit Matrix device ID.
 - `deviceName`: device display name used at password-login time.

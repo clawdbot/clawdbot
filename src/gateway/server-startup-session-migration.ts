@@ -55,8 +55,9 @@ export async function runStartupSessionMigration(params: {
   log: SessionStartupMigrationLogger;
   deps?: SessionMigrationDeps;
 }): Promise<void> {
-  await runSessionStartupMigration(params);
-  await runStartupSessionSqliteImport(params);
+  if (await runSessionStartupMigration(params)) {
+    await runStartupSessionSqliteImport(params);
+  }
   await reconcileStartupSessionTranscriptIndexes(params);
 }
 

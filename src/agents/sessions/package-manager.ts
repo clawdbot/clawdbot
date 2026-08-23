@@ -15,10 +15,15 @@ import {
   statSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { minimatch } from "minimatch";
 import { isDefaultStateDir } from "../../config/paths.js";
-import { addIgnoreRules, toPosixPath, type IgnoreMatcher } from "../../shared/ignore-rules.js";
+import { isPathInside } from "../../infra/path-guards.js";
+import {
+  addIgnoreRules,
+  normalizeNativePathSeparators,
+  type IgnoreMatcher,
+} from "../../shared/ignore-rules.js";
 import { CONFIG_DIR_NAME } from "../config.js";
 import { type GitSource, parseGitUrl } from "../utils/git.js";
 import { canonicalizePath, isLocalPath } from "../utils/paths.js";
@@ -213,7 +218,7 @@ function collectFiles(
         }
       }
 
-      const relPath = toPosixPath(relative(root, fullPath));
+      const relPath = normalizeNativePathSeparators(relative(root, fullPath));
       const ignorePath = isDir ? `${relPath}/` : relPath;
       if (ig.ignores(ignorePath)) {
         continue;
@@ -271,7 +276,7 @@ function collectSkillEntries(
         }
       }
 
-      const relPath = toPosixPath(relative(root, fullPath));
+      const relPath = normalizeNativePathSeparators(relative(root, fullPath));
       if (isFile && !ig.ignores(relPath)) {
         entries.push(fullPath);
         return entries;
@@ -303,7 +308,7 @@ function collectSkillEntries(
         }
       }
 
-      const relPath = toPosixPath(relative(root, fullPath));
+      const relPath = normalizeNativePathSeparators(relative(root, fullPath));
       if (
         mode === "openclaw" &&
         dir === root &&
@@ -404,7 +409,7 @@ function collectTopLevelAutoResourceEntries(
         }
       }
 
-      const relPath = toPosixPath(relative(dir, fullPath));
+      const relPath = normalizeNativePathSeparators(relative(dir, fullPath));
       if (ig.ignores(relPath)) {
         continue;
       }
@@ -502,7 +507,7 @@ function collectAutoExtensionEntries(dir: string): string[] {
         }
       }
 
-      const relPath = toPosixPath(relative(dir, fullPath));
+      const relPath = normalizeNativePathSeparators(relative(dir, fullPath));
       const ignorePath = isDir ? `${relPath}/` : relPath;
       if (ig.ignores(ignorePath)) {
         continue;
@@ -546,13 +551,8 @@ function resolveRealPathIfPossible(path: string): string {
   }
 }
 
-function isPathWithinRoot(root: string, candidate: string): boolean {
-  const rel = relative(root, candidate);
-  return rel === "" || (rel !== "" && !rel.startsWith("..") && !isAbsolute(rel));
-}
-
 function isRealPathWithinRoot(root: string, candidate: string): boolean {
-  return isPathWithinRoot(
+  return isPathInside(
     resolveRealPathIfPossible(resolve(root)),
     resolveRealPathIfPossible(candidate),
   );
@@ -560,13 +560,19 @@ function isRealPathWithinRoot(root: string, candidate: string): boolean {
 
 function getMatchCandidates(filePath: string, baseDir: string, includeNames: boolean): string[] {
   const name = basename(filePath);
-  const candidates = [toPosixPath(relative(baseDir, filePath)), toPosixPath(filePath)];
+  const candidates = [
+    normalizeNativePathSeparators(relative(baseDir, filePath)),
+    normalizeNativePathSeparators(filePath),
+  ];
   if (includeNames) {
     candidates.push(name);
   }
   if (name === "SKILL.md") {
     const parentDir = dirname(filePath);
-    candidates.push(toPosixPath(relative(baseDir, parentDir)), toPosixPath(parentDir));
+    candidates.push(
+      normalizeNativePathSeparators(relative(baseDir, parentDir)),
+      normalizeNativePathSeparators(parentDir),
+    );
     if (includeNames) {
       candidates.push(basename(parentDir));
     }
@@ -576,13 +582,15 @@ function getMatchCandidates(filePath: string, baseDir: string, includeNames: boo
 
 function matchesAnyPattern(filePath: string, patterns: string[], baseDir: string): boolean {
   const candidates = getMatchCandidates(filePath, baseDir, true);
-  return patterns.some((pattern) => minimatch.match(candidates, toPosixPath(pattern)).length > 0);
+  return patterns.some(
+    (pattern) => minimatch.match(candidates, normalizeNativePathSeparators(pattern)).length > 0,
+  );
 }
 
 function normalizeExactPattern(pattern: string): string {
   const normalized =
     pattern.startsWith("./") || pattern.startsWith(".\\") ? pattern.slice(2) : pattern;
-  return toPosixPath(normalized);
+  return normalizeNativePathSeparators(normalized);
 }
 
 function matchesAnyExactPattern(filePath: string, patterns: string[], baseDir: string): boolean {
@@ -1197,10 +1205,10 @@ export class DefaultPackageManager implements PackageManager {
     const realRoot = resolveRealPathIfPossible(resolvedRoot);
     return paths.filter((path) => {
       const resolvedPath = resolve(path);
-      if (!isPathWithinRoot(resolvedRoot, resolvedPath)) {
+      if (!isPathInside(resolvedRoot, resolvedPath)) {
         return false;
       }
-      return isPathWithinRoot(realRoot, resolveRealPathIfPossible(resolvedPath));
+      return isPathInside(realRoot, resolveRealPathIfPossible(resolvedPath));
     });
   }
 

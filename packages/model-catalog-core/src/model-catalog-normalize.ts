@@ -1,15 +1,17 @@
 // Model Catalog Core helper module supports model catalog normalize behavior.
+import {
+  asFiniteNumber as normalizeFiniteNumber,
+  asNonNegativeFiniteNumber as normalizeNonNegativeNumber,
+  asPositiveFiniteNumber as normalizePositiveNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeOptionalTrimmedStringList,
   normalizeTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
-import {
-  buildModelCatalogMergeKey,
-  buildModelCatalogRef,
-  normalizeModelCatalogProviderId,
-} from "./model-catalog-refs.js";
+import { normalizeModelCatalogContextWindowSelection } from "./model-catalog-context-windows.js";
+import { buildModelCatalogMergeKey, buildModelCatalogRef } from "./model-catalog-refs.js";
 import {
   MODEL_CATALOG_APIS,
   MODEL_CATALOG_THINKING_LEVELS,
@@ -34,6 +36,7 @@ import {
   type ModelCatalogVercelGatewayRouting,
   type NormalizedModelCatalogRow,
 } from "./model-catalog-types.js";
+import { normalizeProviderId } from "./provider-id.js";
 
 // Normalizes raw provider model catalogs into stable rows for lookup and merging.
 
@@ -78,7 +81,7 @@ function normalizeSafeRecordKey(value: unknown): string {
 function normalizeOwnedProviderSet(providers: ReadonlySet<string>): ReadonlySet<string> {
   const normalized = new Set<string>();
   for (const provider of providers) {
-    const providerId = normalizeModelCatalogProviderId(provider);
+    const providerId = normalizeProviderId(provider);
     if (providerId) {
       normalized.add(providerId);
     }
@@ -123,20 +126,8 @@ function normalizeModelCatalogInputs(value: unknown): ModelCatalogInput[] | unde
   return inputs.length > 0 ? inputs : undefined;
 }
 
-function normalizeNonNegativeNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-function normalizeFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 function normalizeStringOrNumber(value: unknown): string | number | undefined {
   return normalizeOptionalString(value) ?? normalizeFiniteNumber(value);
-}
-
-function normalizePositiveNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 function normalizePositiveInteger(value: unknown): number | undefined {
@@ -489,6 +480,7 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
   const input = normalizeModelCatalogInputs(value.input);
   const reasoning = typeof value.reasoning === "boolean" ? value.reasoning : undefined;
   const contextWindow = normalizePositiveNumber(value.contextWindow);
+  const contextWindowSelection = normalizeModelCatalogContextWindowSelection(value);
   const contextTokens = normalizePositiveInteger(value.contextTokens);
   const maxTokens = normalizePositiveNumber(value.maxTokens);
   const thinkingLevelMap = normalizeModelCatalogThinkingLevelMap(value.thinkingLevelMap);
@@ -509,6 +501,7 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
     ...(input ? { input } : {}),
     ...(reasoning !== undefined ? { reasoning } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...contextWindowSelection,
     ...(contextTokens !== undefined ? { contextTokens } : {}),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
@@ -559,7 +552,7 @@ function normalizeModelCatalogProviders(
   }
   const providers: Record<string, ModelCatalogProvider> = {};
   for (const [rawProviderId, rawProvider] of Object.entries(value)) {
-    const providerId = normalizeModelCatalogProviderId(rawProviderId);
+    const providerId = normalizeProviderId(rawProviderId);
     if (!providerId || !ownedProviders.has(providerId)) {
       continue;
     }
@@ -580,13 +573,11 @@ function normalizeModelCatalogAliases(
   }
   const aliases: Record<string, ModelCatalogAlias> = {};
   for (const [rawAlias, rawTarget] of Object.entries(value)) {
-    const alias = normalizeModelCatalogProviderId(rawAlias);
+    const alias = normalizeProviderId(rawAlias);
     if (!alias || !isRecord(rawTarget)) {
       continue;
     }
-    const provider = normalizeModelCatalogProviderId(
-      normalizeOptionalString(rawTarget.provider) ?? "",
-    );
+    const provider = normalizeProviderId(normalizeOptionalString(rawTarget.provider) ?? "");
     if (!provider || !ownedProviders.has(provider)) {
       continue;
     }
@@ -610,7 +601,7 @@ function normalizeModelCatalogSuppressions(value: unknown): ModelCatalogSuppress
     if (!isRecord(entry)) {
       continue;
     }
-    const provider = normalizeModelCatalogProviderId(normalizeOptionalString(entry.provider) ?? "");
+    const provider = normalizeProviderId(normalizeOptionalString(entry.provider) ?? "");
     const model = normalizeOptionalString(entry.model) ?? "";
     if (!provider || !model) {
       continue;
@@ -649,7 +640,7 @@ function normalizeModelCatalogDiscovery(
   }
   const discovery: Record<string, ModelCatalogDiscovery> = {};
   for (const [rawProviderId, rawMode] of Object.entries(value)) {
-    const providerId = normalizeModelCatalogProviderId(rawProviderId);
+    const providerId = normalizeProviderId(rawProviderId);
     const mode = normalizeOptionalString(rawMode) ?? "";
     if (providerId && ownedProviders.has(providerId) && MODEL_CATALOG_DISCOVERY_MODES.has(mode)) {
       discovery[providerId] = mode as ModelCatalogDiscovery;
@@ -688,7 +679,7 @@ export function normalizeModelCatalogProviderRows(params: {
   providerCatalog: ModelCatalogProvider;
   source: ModelCatalogSource;
 }): NormalizedModelCatalogRow[] {
-  const provider = normalizeModelCatalogProviderId(params.provider);
+  const provider = normalizeProviderId(params.provider);
   if (!provider || !Array.isArray(params.providerCatalog.models)) {
     return [];
   }
@@ -706,6 +697,7 @@ export function normalizeModelCatalogProviderRows(params: {
     const baseUrl = normalizeOptionalString(model.baseUrl) ?? providerBaseUrl;
     const headers = mergeStringMaps(providerHeaders, normalizeStringMap(model.headers));
     const contextWindow = normalizePositiveNumber(model.contextWindow);
+    const contextWindowSelection = normalizeModelCatalogContextWindowSelection(model);
     const contextTokens = normalizePositiveInteger(model.contextTokens);
     const maxTokens = normalizePositiveNumber(model.maxTokens);
     const thinkingLevelMap = normalizeModelCatalogThinkingLevelMap(model.thinkingLevelMap);
@@ -730,6 +722,7 @@ export function normalizeModelCatalogProviderRows(params: {
       ...(baseUrl ? { baseUrl } : {}),
       ...(headers ? { headers } : {}),
       ...(contextWindow !== undefined ? { contextWindow } : {}),
+      ...contextWindowSelection,
       ...(contextTokens !== undefined ? { contextTokens } : {}),
       ...(maxTokens !== undefined ? { maxTokens } : {}),
       ...(thinkingLevelMap ? { thinkingLevelMap } : {}),

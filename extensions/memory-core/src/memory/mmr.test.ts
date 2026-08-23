@@ -16,37 +16,43 @@ describe("memory MMR", () => {
     expect(textSimilarity("🦞🦞", "🦞🦞")).toBe(1);
   });
 
-  it("promotes a diverse result over a near duplicate", () => {
-    const results = [
-      {
-        path: "/a.ts",
-        startLine: 1,
-        endLine: 10,
-        score: 1,
-        snippet: "function add numbers together",
-        source: "memory",
-      },
-      {
-        path: "/b.ts",
-        startLine: 1,
-        endLine: 10,
-        score: 0.95,
-        snippet: "function add values together",
-        source: "memory",
-      },
-      {
-        path: "/c.ts",
-        startLine: 1,
-        endLine: 10,
-        score: 0.9,
-        snippet: "database connection pool",
-        source: "memory",
-      },
-    ];
+  it.each([
+    {
+      name: "demotes a near duplicate below a relevant diverse result",
+      results: [
+        ["/primary.md", 1, "omada router vlan ten iot devices configured"],
+        ["/duplicate.md", 0.98, "omada router vlan ten iot devices configuration"],
+        ["/diverse.md", 0.94, "adguard dns resolver address local network"],
+        ["/tail.md", 0.4, "garden compost schedule"],
+      ],
+      expected: ["/primary.md", "/diverse.md", "/duplicate.md", "/tail.md"],
+    },
+    {
+      name: "preserves relevance for distinct non-tokenized snippets",
+      results: [
+        ["/arabic.md", 1, "إعداد الشبكة الرئيسي"],
+        ["/cyrillic.md", 0.98, "резервная конфигурация сети"],
+        ["/ascii.md", 0.9, "database connection pool"],
+        ["/tail.md", 0.1, "garden compost schedule"],
+      ],
+      expected: ["/arabic.md", "/cyrillic.md", "/ascii.md", "/tail.md"],
+    },
+  ])("$name", ({ results, expected }) => {
+    const candidates = results.map(([path, score, snippet]) => ({
+      path: String(path),
+      startLine: 1,
+      endLine: 1,
+      score: Number(score),
+      snippet: String(snippet),
+    }));
+    const scores = new Map(candidates.map((result) => [result.path, result.score]));
 
-    const reranked = applyMMRToHybridResults(results, { enabled: true, lambda: 0.5 });
+    const reranked = applyMMRToHybridResults(candidates, { enabled: true, lambda: 0.7 });
 
-    expect(reranked.map((result) => result.path)).toStrictEqual(["/a.ts", "/c.ts", "/b.ts"]);
+    expect(reranked.map((result) => result.path)).toEqual(expected);
+    expect(reranked.map((result) => result.score)).toEqual(
+      expected.map((path) => scores.get(path)),
+    );
   });
 
   it("keeps input order when disabled", () => {

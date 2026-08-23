@@ -37,8 +37,8 @@ describe("delivery producer lease", () => {
 
     expect(lease.signal.aborted).toBe(true);
     expect(lease.signal.reason).toMatchObject({
-      name: "StableDeliveryProducerLeaseLostError",
-      message: "Stable delivery platform claim was lost: stable-lost",
+      name: "DeliveryProducerLeaseLostError",
+      message: "Delivery platform claim was lost: stable-lost",
     });
   });
 
@@ -72,8 +72,8 @@ describe("delivery producer lease", () => {
 
     expect(lease.signal.aborted).toBe(true);
     expect(lease.signal.reason).toMatchObject({
-      name: "StableDeliveryProducerLeaseLostError",
-      message: "Stable delivery platform claim was lost: stable-expired",
+      name: "DeliveryProducerLeaseLostError",
+      message: "Delivery platform claim was lost: stable-expired",
     });
   });
 
@@ -87,8 +87,8 @@ describe("delivery producer lease", () => {
         renew: async () => undefined,
       }),
     ).rejects.toMatchObject({
-      name: "StableDeliveryProducerLeaseLostError",
-      message: "Stable delivery platform claim was lost: stable-missing",
+      name: "DeliveryProducerLeaseLostError",
+      message: "Delivery platform claim was lost: stable-missing",
     });
     await expect(
       startDeliveryProducerLease({
@@ -98,8 +98,8 @@ describe("delivery producer lease", () => {
         },
       }),
     ).rejects.toMatchObject({
-      name: "StableDeliveryProducerLeaseLostError",
-      message: "Stable delivery platform claim was lost: stable-storage-error",
+      name: "DeliveryProducerLeaseLostError",
+      message: "Delivery platform claim was lost: stable-storage-error",
     });
   });
 });

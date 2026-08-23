@@ -20,6 +20,11 @@ function loadDaemonStatusModule() {
   return daemonStatusModuleLoader.load();
 }
 
+function resolveJsonOption(cmdOpts: { json?: boolean }, command?: Command): boolean {
+  const parentJson = inheritOptionFromParent<boolean>(command, "json", "cli");
+  return Boolean(cmdOpts.json || parentJson);
+}
+
 function resolveInstallOptions(
   cmdOpts: DaemonInstallOptions,
   command?: Command,
@@ -32,6 +37,7 @@ function resolveInstallOptions(
     force: Boolean(cmdOpts.force || parentForce),
     port: cmdOpts.port ?? parentPort,
     token: cmdOpts.token ?? parentToken,
+    json: resolveJsonOption(cmdOpts, command),
   };
 }
 
@@ -51,6 +57,7 @@ function resolveRestartOptions(cmdOpts: DaemonLifecycleOptions, command?: Comman
     ...cmdOpts,
     force: Boolean(cmdOpts.force || parentForce),
     safe: Boolean(cmdOpts.safe),
+    json: resolveJsonOption(cmdOpts, command),
   };
 }
 
@@ -59,6 +66,7 @@ function resolveStopOptions(cmdOpts: DaemonLifecycleOptions, command?: Command) 
   return {
     ...cmdOpts,
     force: Boolean(cmdOpts.force || parentForce),
+    json: resolveJsonOption(cmdOpts, command),
   };
 }
 
@@ -84,7 +92,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
         probe: Boolean(cmdOpts.probe),
         requireRpc: Boolean(cmdOpts.requireRpc),
         deep: Boolean(cmdOpts.deep),
-        json: Boolean(cmdOpts.json),
+        json: resolveJsonOption(cmdOpts, command),
       });
     });
 
@@ -106,18 +114,18 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .command("uninstall")
     .description("Uninstall the Gateway service (launchd/systemd/schtasks)")
     .option("--json", "Output JSON", false)
-    .action(async (cmdOpts) => {
+    .action(async (cmdOpts, command) => {
       const { runDaemonUninstall } = await loadDaemonLifecycleModule();
-      await runDaemonUninstall(cmdOpts);
+      await runDaemonUninstall({ ...cmdOpts, json: resolveJsonOption(cmdOpts, command) });
     });
 
   parent
     .command("start")
     .description("Start the Gateway service (launchd/systemd/schtasks)")
     .option("--json", "Output JSON", false)
-    .action(async (cmdOpts) => {
+    .action(async (cmdOpts, command) => {
       const { runDaemonStart } = await loadDaemonLifecycleModule();
-      await runDaemonStart(cmdOpts);
+      await runDaemonStart({ ...cmdOpts, json: resolveJsonOption(cmdOpts, command) });
     });
 
   parent

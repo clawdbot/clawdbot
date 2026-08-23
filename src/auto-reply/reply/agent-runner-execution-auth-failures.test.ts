@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { FailoverError } from "../../agents/failover-error.js";
-import { MissingProviderAuthError } from "../../agents/model-auth.js";
+import { MissingProviderAuthError, ProviderAuthError } from "../../agents/model-auth.js";
 import type { TemplateContext } from "../templating.js";
 import {
   setupAgentRunnerExecutionTestState,
@@ -9,16 +9,15 @@ import {
   createMockTypingSignaler,
   createFollowupRun,
   createMinimalRunAgentTurnParams,
+  createTestFallbackSummaryError,
 } from "./agent-runner-execution.test-support.js";
 
 const state = setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: authentication failures", () => {
-  it("surfaces gateway reauth guidance for known OAuth refresh failures", async () => {
+  it("surfaces gateway reauth guidance without a profile id", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error(
-        "OAuth token refresh failed for openai: refresh_token_reused. Please try again or re-authenticate.",
-      ),
+      new OAuthRefreshFailureError({ provider: "openai", message: "refresh_token_reused" }),
     );
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
@@ -115,9 +114,8 @@ describe("executeAgentTurn: authentication failures", () => {
       status: 401,
       cause: refreshError,
     });
-    const summaryError = new Error("All models failed", { cause: failoverError });
-    summaryError.name = "FallbackSummaryError";
-    Object.assign(summaryError, {
+    const summaryError = createTestFallbackSummaryError({
+      message: "All models failed",
       attempts: [
         {
           provider: "openai",
@@ -127,6 +125,7 @@ describe("executeAgentTurn: authentication failures", () => {
         },
       ],
       soonestCooldownExpiry: null,
+      cause: failoverError,
     });
     state.runEmbeddedAgentMock.mockRejectedValueOnce(summaryError);
 
@@ -192,8 +191,8 @@ describe("executeAgentTurn: authentication failures", () => {
     // When the claude subprocess emits a 401 "Failed to authenticate" because
     // its OAuth token has expired, the error is wrapped as a FailoverError with
     // reason:"auth" and status:401.  Without the ordering fix, this would be
-    // caught by classifyProviderRequestError before reaching classifyOAuthRefreshFailure,
-    // producing the generic "re-authenticate this provider" copy instead of the
+    // caught by generic provider-auth mapping before the typed refresh cause,
+    // producing generic provider copy instead of the
     // targeted claude-cli re-auth command.
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new FailoverError(
@@ -265,8 +264,11 @@ describe("executeAgentTurn: authentication failures", () => {
 
   it("surfaces direct provider auth guidance for missing API keys", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error(
-        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth; OpenAI agent model runs use openai/gpt-* through the Codex runtime. Set OPENAI_API_KEY only for direct OpenAI API-key surfaces. | No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth; OpenAI agent model runs use openai/gpt-* through the Codex runtime. Set OPENAI_API_KEY only for direct OpenAI API-key surfaces.',
+      new ProviderAuthError(
+        "missing-provider-auth",
+        "openai",
+        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth.',
+        { providerGuidance: true },
       ),
     );
 
@@ -368,7 +370,11 @@ describe("executeAgentTurn: authentication failures", () => {
 
   it("points stale openai missing-key failures at doctor repair with re-auth fallback", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error('No API key found for provider "openai".'),
+      new ProviderAuthError(
+        "missing-provider-auth",
+        "openai",
+        'No API key found for provider "openai".',
+      ),
     );
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
@@ -384,7 +390,11 @@ describe("executeAgentTurn: authentication failures", () => {
 
   it("falls back to a generic provider message for unsafe missing-key provider ids", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error('No API key found for provider "openai`\nrm -rf /".'),
+      new ProviderAuthError(
+        "missing-provider-auth",
+        "openai`\nrm -rf /",
+        'No API key found for provider "openai`\nrm -rf /".',
+      ),
     );
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
@@ -421,9 +431,7 @@ describe("executeAgentTurn: authentication failures", () => {
 
   it("falls back to a generic reauth command when the provider in the OAuth error is unsafe", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new Error(
-        "OAuth token refresh failed for openai`\nrm -rf /: invalid_grant. Please try again or re-authenticate.",
-      ),
+      new OAuthRefreshFailureError({ provider: "openai`\nrm -rf /", message: "invalid_grant" }),
     );
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();

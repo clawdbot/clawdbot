@@ -2,6 +2,8 @@
 import { stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 
 export type LobsterEnvelope =
   | {
@@ -79,11 +81,6 @@ type EmbeddedToolRuntime = {
 
 const workflowExts = new Set([".lobster", ".yaml", ".yml", ".json"]);
 
-function normalizeForCwdSandbox(p: string): string {
-  const normalized = path.normalize(p);
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
 export function resolveLobsterCwd(cwdRaw: unknown): string {
   if (typeof cwdRaw !== "string" || !cwdRaw.trim()) {
     return process.cwd();
@@ -95,11 +92,7 @@ export function resolveLobsterCwd(cwdRaw: unknown): string {
   const base = process.cwd();
   const resolved = path.resolve(base, cwd);
 
-  const rel = path.relative(normalizeForCwdSandbox(base), normalizeForCwdSandbox(resolved));
-  if (rel === "" || rel === ".") {
-    return resolved;
-  }
-  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+  if (!isPathInside(base, resolved)) {
     throw new Error("cwd must stay within the gateway working directory");
   }
   return resolved;
@@ -280,18 +273,4 @@ export function createEmbeddedLobsterRunner(options?: {
       });
     },
   };
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

@@ -130,6 +130,32 @@ describe("refreshQueuedFollowupSession", () => {
     });
   });
 
+  it("clears queued model override strictness when retargeting to the configured default", () => {
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    queue.items.push({
+      prompt: "queued message",
+      enqueuedAt: Date.now(),
+      run: {
+        ...makeRun(),
+        hasSessionModelOverride: true,
+        modelOverrideSource: "user",
+      },
+    });
+
+    refreshQueuedFollowupSession({
+      key: QUEUE_KEY,
+      nextProvider: "anthropic",
+      nextModel: "claude-opus-4-6",
+      nextRouteResolution: "resolved",
+      nextModelOverrideSource: undefined,
+    });
+
+    expect(queue.items[0]?.run).toMatchObject({
+      hasSessionModelOverride: false,
+      modelOverrideSource: undefined,
+    });
+  });
+
   it("clamps queued Sol Ultra work to Codex Luna Max", () => {
     const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     queue.items.push({

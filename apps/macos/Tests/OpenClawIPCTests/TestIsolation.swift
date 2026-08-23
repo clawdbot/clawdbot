@@ -1,4 +1,7 @@
 import Foundation
+import Testing
+@testable import OpenClaw
+@testable import OpenClawKit
 
 actor TestIsolationLock {
     static let shared = TestIsolationLock()
@@ -65,7 +68,7 @@ enum TestIsolation {
             }
         }
 
-        let userDefaults = UserDefaults.standard
+        let userDefaults = AppDefaults.standard
         var previousDefaults: [String: Any?] = [:]
         for (key, value) in defaults {
             previousDefaults[key] = userDefaults.object(forKey: key)
@@ -108,5 +111,25 @@ enum TestIsolation {
         FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-test-config-\(UUID().uuidString).json")
             .path
+    }
+}
+
+struct ExecApprovalsStateIsolationTrait: TestTrait, TestScoping {
+    func provideScope(
+        for test: Test,
+        testCase: Test.Case?,
+        performing function: @Sendable () async throws -> Void) async throws
+    {
+        let stateDirectory = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-approvals-state-\(UUID().uuidString)", isDirectory: true)
+        try FileManager().createDirectory(at: stateDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager().removeItem(at: stateDirectory) }
+        try await ExecApprovalsStore.withStateDirectory(stateDirectory, operation: function)
+    }
+}
+
+extension Trait where Self == ExecApprovalsStateIsolationTrait {
+    static var execApprovalsStateIsolated: Self {
+        Self()
     }
 }

@@ -1,22 +1,28 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BoardViewWidget } from "../../lib/board/view-types.ts";
+import type { BoardWidget } from "../../lib/board/types.ts";
 import { recordBoardWidgetTicketReceipt } from "../../lib/board/widget-ticket-lifetime.ts";
 import { BoardWidgetFrameLifecycle } from "./board-widget-frame.ts";
 
 type LifecycleInternals = {
   sandboxOrigin: string;
+  sandboxHost: {
+    dispose: () => void;
+    handleMessage: (event: MessageEvent) => void;
+    setActive: (active: boolean) => void;
+  } | null;
   frameFailureKey: string;
   frameRefreshAttempts: number;
-  refreshFailedFrame: (widget: BoardViewWidget) => void;
+  refreshFailedFrame: (widget: BoardWidget) => void;
 };
 
 function createTicketRefreshLifecycle(
-  widget: BoardViewWidget,
+  widget: BoardWidget,
   refreshFrame: (name: string) => Promise<void>,
 ): BoardWidgetFrameLifecycle {
   const lifecycle = new BoardWidgetFrameLifecycle({
+    active: () => true,
     connected: () => true,
     context: () => undefined,
     refreshFrame: () => refreshFrame,
@@ -24,7 +30,6 @@ function createTicketRefreshLifecycle(
     requestUpdate: () => {},
     resolveFrameUrl: () => () => "",
     root: () => document,
-    ticketRefreshEnabled: () => true,
     widget: () => widget,
   });
   lifecycle.connect();
@@ -33,6 +38,7 @@ function createTicketRefreshLifecycle(
 }
 
 afterEach(() => {
+  document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -40,11 +46,12 @@ afterEach(() => {
 // Drives the private terminal-failure path directly: attempts are exhausted so
 // refreshFailedFrame surfaces the terminal message for the given sandbox origin.
 function terminalFailureError(params: {
-  widget: Partial<BoardViewWidget>;
+  widget: Partial<BoardWidget>;
   resolvedSandboxOrigin: string;
 }): string {
-  const widget = { name: "clock", revision: 1, ...params.widget } as BoardViewWidget;
+  const widget = { name: "clock", revision: 1, ...params.widget } as BoardWidget;
   const lifecycle = new BoardWidgetFrameLifecycle({
+    active: () => true,
     connected: () => true,
     context: () => undefined,
     refreshFrame: () => undefined,
@@ -52,7 +59,6 @@ function terminalFailureError(params: {
     requestUpdate: () => {},
     resolveFrameUrl: () => () => "",
     root: () => document,
-    ticketRefreshEnabled: () => true,
     widget: () => widget,
   });
   const internals = lifecycle as unknown as LifecycleInternals;
@@ -101,6 +107,76 @@ describe("board widget frame terminal failure message", () => {
 });
 
 describe("board widget frame ticket refresh", () => {
+  it("suspends frame work while inactive and reconnects on activation", async () => {
+    vi.useFakeTimers();
+    let active = true;
+    const refreshFrame = vi.fn(async () => undefined);
+    const widget = {
+      name: "clock",
+      revision: 1,
+      viewTicket: "ticket",
+      viewTicketTtlMs: 30_000,
+    } as BoardWidget;
+    recordBoardWidgetTicketReceipt(widget);
+    const lifecycle = new BoardWidgetFrameLifecycle({
+      active: () => active,
+      connected: () => true,
+      context: () => undefined,
+      refreshFrame: () => refreshFrame,
+      reportContentHeight: () => {},
+      requestUpdate: () => {},
+      resolveFrameUrl: () => () => "",
+      root: () => document,
+      widget: () => widget,
+    });
+    const frame = document.createElement("iframe");
+    frame.className = "board-widget__frame";
+    document.body.append(frame);
+    const removeWindowListener = vi.spyOn(window, "removeEventListener");
+    const removeDocumentListener = vi.spyOn(document, "removeEventListener");
+    const dispose = vi.fn();
+    const handleMessage = vi.fn();
+    const setActive = vi.fn();
+    const internals = lifecycle as unknown as LifecycleInternals;
+
+    lifecycle.connect();
+    lifecycle.update();
+    internals.sandboxOrigin = "https://sandbox.example";
+    internals.sandboxHost = { dispose, handleMessage, setActive };
+    active = false;
+    lifecycle.activityChanged();
+    lifecycle.update();
+
+    expect(dispose).not.toHaveBeenCalled();
+    expect(setActive).toHaveBeenCalledWith(false);
+    expect(removeWindowListener).not.toHaveBeenCalledWith("message", expect.any(Function));
+    expect(removeDocumentListener).toHaveBeenCalledWith("visibilitychange", expect.any(Function));
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        origin: "https://sandbox.example",
+        data: { method: "ui/notifications/sandbox-proxy-ready" },
+      }),
+    );
+    expect(handleMessage).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(refreshFrame).not.toHaveBeenCalled();
+
+    active = true;
+    lifecycle.activityChanged();
+    expect(setActive).toHaveBeenLastCalledWith(true);
+    internals.sandboxHost = null;
+    lifecycle.update();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(refreshFrame).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refreshFrame).toHaveBeenCalledOnce();
+    internals.sandboxHost = { dispose, handleMessage, setActive };
+    lifecycle.disconnect();
+    expect(removeWindowListener).toHaveBeenCalledWith("message", expect.any(Function));
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
   it("pauses while hidden and re-arms when the document becomes visible", async () => {
     vi.useFakeTimers();
     let visibilityState: DocumentVisibilityState = "hidden";
@@ -111,7 +187,7 @@ describe("board widget frame ticket refresh", () => {
       revision: 1,
       viewTicket: "ticket",
       viewTicketTtlMs: 30_000,
-    } as BoardViewWidget;
+    } as BoardWidget;
     recordBoardWidgetTicketReceipt(widget);
     const lifecycle = createTicketRefreshLifecycle(widget, refreshFrame);
 
@@ -139,7 +215,7 @@ describe("board widget frame ticket refresh", () => {
       revision: 1,
       viewTicket: "ticket",
       viewTicketTtlMs: 30_000,
-    } as BoardViewWidget;
+    } as BoardWidget;
     recordBoardWidgetTicketReceipt(widget);
     await vi.advanceTimersByTimeAsync(10_000);
     const lifecycle = createTicketRefreshLifecycle(widget, refreshFrame);

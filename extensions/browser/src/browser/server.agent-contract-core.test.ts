@@ -1,5 +1,7 @@
 // Browser tests cover server.agent contract core plugin behavior.
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./constants.js";
@@ -849,6 +851,8 @@ describe("browser control server", () => {
 });
 
 describe("profile CRUD endpoints", () => {
+  const tempDirsToCleanup = new Set<string>();
+
   beforeEach(async () => {
     await resetBrowserControlServerTestContext();
 
@@ -865,7 +869,14 @@ describe("profile CRUD endpoints", () => {
   });
 
   afterEach(async () => {
-    await cleanupBrowserControlServerTestContext();
+    try {
+      await cleanupBrowserControlServerTestContext();
+    } finally {
+      await Promise.allSettled(
+        [...tempDirsToCleanup].map((dir) => fs.promises.rm(dir, { recursive: true, force: true })),
+      );
+      tempDirsToCleanup.clear();
+    }
   });
 
   it("validates profile create/delete endpoints", async () => {
@@ -941,8 +952,10 @@ describe("profile CRUD endpoints", () => {
     expect(createClawdBody.cdpPort).toBeTypeOf("number");
     expect(createClawdBody.userDataDir).toBeNull();
 
-    const explicitUserDataDir = "/tmp/openclaw-brave-profile";
-    await fs.promises.mkdir(explicitUserDataDir, { recursive: true });
+    const explicitUserDataDir = await fs.promises.realpath(
+      await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-brave-profile-")),
+    );
+    tempDirsToCleanup.add(explicitUserDataDir);
     const createExistingSession = await realFetch(`${base}/profiles/create`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

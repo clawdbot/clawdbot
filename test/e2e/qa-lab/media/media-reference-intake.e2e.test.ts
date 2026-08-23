@@ -50,7 +50,7 @@ describe("media reference intake product proof", () => {
   });
 
   it("loads every supported reference and trusts PNG bytes over text hints", async () => {
-    const root = await fs.realpath(tempDirs.make("openclaw-media-reference-intake-"));
+    const root = tempDirs.make("openclaw-media-reference-intake-");
     const png = createSolidPngBuffer(2, 2, { r: 32, g: 96, b: 224 });
     const localPath = path.join(root, "misleading.txt");
     await fs.writeFile(localPath, png);

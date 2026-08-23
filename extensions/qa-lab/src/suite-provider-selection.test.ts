@@ -1,8 +1,9 @@
 // QA Lab suite selection keeps scenario requirements on their declared provider lane.
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { QaTransportAdapterFactory } from "./qa-transport-registry.js";
 import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import { runQaSuite } from "./suite-launch.runtime.js";
 import { selectQaFlowSuiteScenarios } from "./suite-planning.js";
@@ -76,8 +77,19 @@ describe("qa suite provider selection", () => {
       scenarioId: "matrix-room-block-streaming",
       channelDriver: "live" as const,
       channelId: "matrix",
+      adapterFactories: [
+        {
+          id: "matrix",
+          supportsModuleFlows: true,
+          matches: ({ driver, channelId }) => driver === "live" && channelId === "matrix",
+          create: async () => {
+            throw new Error("Matrix adapter creation must remain unreachable");
+          },
+        } satisfies QaTransportAdapterFactory,
+      ],
     },
-    { scenarioId: "goal-context-next-turn" },
+    { scenarioId: "goal-context-next-turn", adapterFactories: undefined },
+    { scenarioId: "subagent-completion-direct-fallback", adapterFactories: undefined },
   ])("adopts the provider requirement for directly selected $scenarioId", async (selection) => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-provider-lane-"));
     const startLab = vi.fn(async () => {
@@ -92,10 +104,42 @@ describe("qa suite provider selection", () => {
           ...("channelDriver" in selection
             ? { channelDriver: selection.channelDriver, channelId: selection.channelId }
             : {}),
+          adapterFactories: selection.adapterFactories,
           startLab,
         }),
       ).rejects.toThrow("selected provider lane reached lab startup");
       expect(startLab).toHaveBeenCalledOnce();
+    } finally {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("invalidates prior terminal artifacts before replacement startup fails", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-suite-generation-"));
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "replacement");
+    const artifactPaths = [
+      path.join(outputDir, "qa-suite-summary.json"),
+      path.join(outputDir, "qa-evidence.json"),
+      path.join(outputDir, "qa-suite-report.md"),
+    ];
+    await mkdir(outputDir, { recursive: true });
+    await Promise.all(artifactPaths.map((artifactPath) => writeFile(artifactPath, "stale\n")));
+
+    try {
+      await expect(
+        runQaFlowSuiteFromRuntime({
+          repoRoot,
+          outputDir,
+          scenarioIds: ["goal-context-next-turn"],
+          concurrency: 1,
+          startLab: async () => {
+            throw new Error("replacement startup failed");
+          },
+        }),
+      ).rejects.toThrow("replacement startup failed");
+      for (const artifactPath of artifactPaths) {
+        await expect(access(artifactPath)).rejects.toMatchObject({ code: "ENOENT" });
+      }
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
     }
@@ -127,9 +171,10 @@ describe("qa suite provider selection", () => {
       };
       expect(summary.run).toMatchObject({
         providerMode: "live-frontier",
-        primaryModel: expect.stringMatching(/^openai\//),
-        alternateModel: expect.stringMatching(/^openai\//),
+        primaryModel: "openai/gpt-5.6",
+        alternateModel: "openai/gpt-5.6-luna",
       });
+      expect(summary.run.primaryModel).not.toBe(summary.run.alternateModel);
     } finally {
       await rm(repoRoot, { recursive: true, force: true });
     }

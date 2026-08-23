@@ -1,6 +1,10 @@
 // Signal plugin module implements message actions behavior.
-import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
-import { createActionGate, jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
+import {
+  createActionGate,
+  jsonResult,
+  readStringParam,
+  resolveReactionMessageId,
+} from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,

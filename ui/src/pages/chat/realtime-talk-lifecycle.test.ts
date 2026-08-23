@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { RealtimeTalkTransportContext } from "./realtime-talk-shared.ts";
 
 const transportMock = vi.hoisted(() => ({
@@ -52,16 +53,6 @@ type TranscriptContext = RealtimeTalkTransportContext & {
   };
   flushTranscriptWrites?: () => Promise<void>;
 };
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-}
 
 function transcriptContext(contexts: RealtimeTalkTransportContext[], index = 0): TranscriptContext {
   const context = contexts[index];
@@ -422,7 +413,7 @@ describe("RealtimeTalkSession lifecycle", () => {
   it("stops a pending replacement when transcript overflow closes the active call", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const replacementStart = createDeferred<"ready">();
-    const firstTranscript = createDeferred<void>();
+    const firstTranscript = createDeferred();
     const request = vi.fn(async (method: string, params?: { entryId?: string }) => {
       if (method === "talk.client.create") {
         return {
@@ -720,7 +711,7 @@ describe("RealtimeTalkSession lifecycle", () => {
         };
       }
       if (method === "talk.client.close") {
-        const close = createDeferred<void>();
+        const close = createDeferred();
         closes.push(close);
         await close.promise;
       }

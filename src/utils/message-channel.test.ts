@@ -7,6 +7,7 @@ import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/c
 import {
   isBrowserCopilotClient,
   isBrowserOperatorUiClient,
+  isDeliverableMessageChannel,
   isEphemeralGatewayClient,
   isInternalNonDeliveryChannel,
   isMarkdownCapableMessageChannel,
@@ -60,8 +61,13 @@ describe("message-channel", () => {
   it("normalizes gateway message channels and rejects unknown values", () => {
     expect(resolveGatewayMessageChannel("discord")).toBe("discord");
     expect(resolveGatewayMessageChannel(" imsg ")).toBe("imessage");
+    expect(resolveGatewayMessageChannel("webchat")).toBe("webchat");
     expect(resolveGatewayMessageChannel("web")).toBeUndefined();
     expect(resolveGatewayMessageChannel("nope")).toBeUndefined();
+    expect(isDeliverableMessageChannel("discord")).toBe(true);
+    expect(isDeliverableMessageChannel("imsg")).toBe(false);
+    expect(isDeliverableMessageChannel("webchat")).toBe(false);
+    expect(isDeliverableMessageChannel("nope")).toBe(false);
   });
 
   it("classifies ephemeral Gateway client modes", () => {
@@ -90,6 +96,8 @@ describe("message-channel", () => {
       ]),
     );
     expect(resolveGatewayMessageChannel("workspace-chat")).toBe("demo-alias-channel");
+    expect(isDeliverableMessageChannel("demo-alias-channel")).toBe(true);
+    expect(isDeliverableMessageChannel("workspace-chat")).toBe(false);
   });
 
   it("recognises internal non-delivery channel sources", () => {
@@ -111,10 +119,11 @@ describe("message-channel", () => {
     try {
       const channelModule = await import("./message-channel.js");
       const promptModule = await import("../channels/plugins/native-approval-prompt.js");
-      for (const channel of ["webchat", "discord", "imessage", "telegram", "whatsapp"]) {
+      for (const channel of ["webchat", "discord", "imessage", "qqbot", "telegram", "whatsapp"]) {
         expect(channelModule.isNativeApprovalChannel(channel), channel).toBe(true);
       }
       expect(promptModule.isKnownNativeApprovalPromptChannel("whatsapp")).toBe(true);
+      expect(promptModule.isKnownNativeApprovalPromptChannel("qqbot")).toBe(true);
       for (const channel of ["feishu", "msteams", "line", "heartbeat", "", "TELEGRAM"]) {
         expect(channelModule.isNativeApprovalChannel(channel), channel).toBe(false);
       }

@@ -64,6 +64,7 @@ jobs:
               "scripts/format-swift.sh",
               "scripts/install-swift-tools.sh",
               "scripts/ios-write-swift-filelist.mjs",
+              "scripts/ios-write-swift-filelist.mts",
               "scripts/lint-swift.sh",
             ], { ignoreReturnCode: true, silent: true });
             if (result.exitCode !== 0 && result.exitCode !== 1) {
@@ -106,6 +107,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
 
       - name: Install iOS Swift tooling

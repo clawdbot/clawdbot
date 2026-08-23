@@ -22,7 +22,6 @@ const MAX_TIMEOUT_MS = 120_000;
 const MAX_SETUP_GRACE_TIMEOUT_MS = 30_000;
 const DEFAULT_QUERY_MODE = "recent" as const;
 const DEFAULT_ACTIVE_MEMORY_MODE = "escalate" as const;
-const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
 const ACTIVE_MEMORY_RECALL_LANE = "active-memory";
 const ACTIVE_MEMORY_CLEANUP_RETRY_DELAYS_MS = [0, 50, 250] as const;
@@ -82,7 +81,7 @@ const ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW = new Set([
   "sessions_yield",
   "subagents",
   "tts",
-  "update_plan",
+  "progress_card",
   "video_generate",
   "web_fetch",
   "web_search",
@@ -165,12 +164,7 @@ type ActiveRecallPluginConfig = {
   circuitBreakerCooldownMs?: number;
   persistTranscripts?: boolean;
   transcriptDir?: string;
-  qmd?: {
-    searchMode?: ActiveMemoryQmdSearchMode;
-  };
 };
-
-type ActiveMemoryQmdSearchMode = "inherit" | "search" | "vsearch" | "query";
 
 type ResolvedActiveRecallPluginConfig = {
   enabled: boolean;
@@ -210,9 +204,6 @@ type ResolvedActiveRecallPluginConfig = {
   circuitBreakerCooldownMs: number;
   persistTranscripts: boolean;
   transcriptDir: string;
-  qmd: {
-    searchMode: ActiveMemoryQmdSearchMode;
-  };
 };
 
 type ActiveRecallRecentTurn = {
@@ -365,7 +356,6 @@ export {
   DEFAULT_MAX_SUMMARY_CHARS,
   DEFAULT_MIN_TIMEOUT_MS,
   DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS,
-  DEFAULT_QMD_SEARCH_MODE,
   DEFAULT_QUERY_MODE,
   DEFAULT_RECENT_ASSISTANT_CHARS,
   DEFAULT_RECENT_ASSISTANT_TURNS,
@@ -399,7 +389,6 @@ export type {
   ActiveMemoryFastMode,
   ActiveMemoryPartialTimeoutError,
   ActiveMemoryPromptStyle,
-  ActiveMemoryQmdSearchMode,
   ActiveMemorySearchDebug,
   ActiveMemoryThinkingLevel,
   ActiveMemoryToggleEntry,

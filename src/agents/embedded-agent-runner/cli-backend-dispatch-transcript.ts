@@ -63,6 +63,8 @@ export function createCliDispatchTranscriptRecorder(params: {
   model?: string;
   cwd?: string;
   config?: OpenClawConfig;
+  expectedLifecycleRevision?: string;
+  expectedWriterRunId?: string;
   senderIsOwner?: boolean;
 }): CliDispatchTranscriptRecorder {
   let tail: Promise<void> = Promise.resolve();
@@ -77,6 +79,8 @@ export function createCliDispatchTranscriptRecorder(params: {
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     sessionFile: params.sessionFile,
+    expectedLifecycleRevision: params.expectedLifecycleRevision,
+    expectedWriterRunId: params.expectedWriterRunId,
   };
 
   const enqueue = (build: () => AgentMessage) => {

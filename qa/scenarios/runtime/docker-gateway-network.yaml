@@ -23,7 +23,7 @@ scenario:
     - docs/help/testing.md
   codeRefs:
     - scripts/e2e/gateway-network-docker.sh
-    - scripts/e2e/lib/gateway-network/client.mjs
+    - scripts/e2e/lib/gateway-network/client.mts
   execution:
     kind: script
     path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts

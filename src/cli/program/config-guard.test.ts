@@ -7,6 +7,7 @@ import { note } from "../../../packages/terminal-core/src/note.js";
 import type { ConfigSnapshotReadMeasure } from "../../config/io.js";
 import { ExitError } from "../../runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
+import { VERSION } from "../../version.js";
 import { formatCliCommand } from "../command-format.js";
 import { ensureConfigReady, testApi } from "./config-guard.js";
 
@@ -28,12 +29,15 @@ vi.mock("../../config/config.js", () => ({
   setRuntimeConfigSnapshot: setRuntimeConfigSnapshotMock,
 }));
 
-type ConfigIssue = { path: string; message: string };
+type ConfigIssue = { path: string; pathSegments?: Array<string | number>; message: string };
 
 function makeSnapshot() {
   return {
     exists: false,
     valid: true,
+    raw: null as string | null,
+    parsed: {},
+    sourceConfig: {},
     issues: [] as ConfigIssue[],
     warnings: [] as ConfigIssue[],
     legacyIssues: [] as ConfigIssue[],
@@ -170,13 +174,53 @@ describe("ensureConfigReady", () => {
       expectedDoctorCalls: 0,
     },
     {
+      name: "skips doctor flow for health",
+      commandPath: ["health"],
+      expectedDoctorCalls: 0,
+    },
+    {
       name: "skips doctor flow for logs",
       commandPath: ["logs"],
       expectedDoctorCalls: 0,
     },
     {
+      name: "skips doctor flow for sessions",
+      commandPath: ["sessions"],
+      expectedDoctorCalls: 0,
+    },
+    {
       name: "skips doctor flow for remote gateway calls",
       commandPath: ["gateway", "call"],
+      expectedDoctorCalls: 0,
+    },
+    {
+      name: "skips doctor flow for gateway restart control",
+      commandPath: ["gateway", "restart"],
+      expectedDoctorCalls: 0,
+    },
+    {
+      name: "skips doctor flow for legacy daemon restart control",
+      commandPath: ["daemon", "restart"],
+      expectedDoctorCalls: 0,
+    },
+    {
+      name: "skips doctor flow for config set",
+      commandPath: ["config", "set"],
+      expectedDoctorCalls: 0,
+    },
+    {
+      name: "skips doctor flow for config patch",
+      commandPath: ["config", "patch"],
+      expectedDoctorCalls: 0,
+    },
+    {
+      name: "skips doctor flow for config get",
+      commandPath: ["config", "get"],
+      expectedDoctorCalls: 0,
+    },
+    {
+      name: "skips doctor flow for config unset",
+      commandPath: ["config", "unset"],
       expectedDoctorCalls: 0,
     },
     {
@@ -192,6 +236,16 @@ describe("ensureConfigReady", () => {
     {
       name: "runs doctor flow for commands that may mutate state without legacy state",
       commandPath: ["message"],
+      expectedDoctorCalls: 1,
+    },
+    {
+      name: "runs doctor flow for unknown commands",
+      commandPath: ["unknown-command"],
+      expectedDoctorCalls: 1,
+    },
+    {
+      name: "runs doctor flow when the command path is empty",
+      commandPath: [],
       expectedDoctorCalls: 1,
     },
   ])("$name", async ({ commandPath, expectedDoctorCalls }) => {
@@ -218,8 +272,22 @@ describe("ensureConfigReady", () => {
 
     expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({
       observe: false,
-      skipPluginValidation: true,
+      pluginValidation: "core-only",
     });
+  });
+
+  it("validates config without observing health, plugins, or startup migrations", async () => {
+    await ensureConfigReady({
+      runtime: makeRuntime() as never,
+      commandPath: ["nodes", "approve"],
+      validateConfigOnly: true,
+    });
+
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({
+      observe: false,
+      pluginValidation: "core-only",
+    });
+    expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
   });
 
   it("keeps remote gateway call config reads non-observing", async () => {
@@ -250,6 +318,19 @@ describe("ensureConfigReady", () => {
     await runEnsureConfigReady(["gateway", "call"]);
 
     expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["gateway", "restart"],
+    ["daemon", "restart"],
+  ])("keeps %s control from migrating existing local legacy state", async (command, action) => {
+    const root = useTempOpenClawHome();
+    writeLegacyTaskSidecarMarker(root);
+
+    await runEnsureConfigReady([command, action]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ observe: false });
   });
 
   it("keeps logs from migrating existing local legacy state", async () => {
@@ -613,7 +694,7 @@ describe("ensureConfigReady", () => {
     }
 
     expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(2);
-    expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(undefined, undefined);
+    expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(undefined, {});
   });
 
   it("exits for invalid config on non-allowlisted commands", async () => {
@@ -632,6 +713,56 @@ describe("ensureConfigReady", () => {
     ]);
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
+
+  it("renders unknown keys and received values with the shared source diagnostics", async () => {
+    setInvalidSnapshot({
+      raw: '{\n  "meta": { "migrations": { "futureMarker": true } },\n  "gateway": { "port": "nope" }\n}',
+      parsed: {
+        meta: { migrations: { futureMarker: true } },
+        gateway: { port: "nope" },
+      },
+      sourceConfig: {
+        meta: { migrations: { futureMarker: true } },
+        gateway: { port: "nope" },
+      },
+      issues: [
+        {
+          path: "meta",
+          pathSegments: ["meta"],
+          message: 'Unrecognized key: "migrations"',
+        },
+        {
+          path: "gateway.port",
+          pathSegments: ["gateway", "port"],
+          message: "Invalid input: expected number",
+        },
+      ],
+    });
+
+    const runtime = await runEnsureConfigReady(["message"]);
+    const output = plainErrorCalls(runtime).join("\n");
+
+    expect(output).toContain('  - openclaw.json:2 — meta: Unrecognized key: "migrations"');
+    expect(output).toContain(
+      '  - openclaw.json:3 — gateway.port: Invalid input: expected number, got: "nope"',
+    );
+  });
+
+  it.each([
+    { touchedVersion: "9999.1.1", expected: true },
+    { touchedVersion: VERSION, expected: false },
+  ])(
+    "shows a config version-skew hint only for newer writers ($touchedVersion)",
+    async ({ touchedVersion, expected }) => {
+      setInvalidSnapshot({ sourceConfig: { meta: { lastTouchedVersion: touchedVersion } } });
+
+      const runtime = await runEnsureConfigReady(["message"]);
+      const output = plainErrorCalls(runtime).join("\n");
+      const hint = `Config was last written by OpenClaw ${touchedVersion}, but you are running ${VERSION} — upgrade or re-run setup.`;
+
+      expect(output.includes(hint)).toBe(expected);
+    },
+  );
 
   it("runs doctor and retries the config guard once after consent", async () => {
     writeLegacyTaskSidecarMarker(useTempOpenClawHome());

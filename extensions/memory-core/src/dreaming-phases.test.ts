@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 import {
+  listMemoryArtifactProvenance,
   resolveMemoryDreamingPluginConfig,
   resolveSessionTranscriptsDirForAgent,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -19,10 +20,6 @@ import {
   runDreamingSweepPhases,
   seedHistoricalDailyMemorySignals,
 } from "./dreaming-phases.js";
-import {
-  DREAMING_DAILY_PROVENANCE_NAMESPACE,
-  writeMemoryCoreWorkspaceEntry,
-} from "./dreaming-state.js";
 import { previewRemHarness } from "./rem-harness.js";
 import { writeSessionIngestionState } from "./session-ingestion.js";
 import {
@@ -37,6 +34,8 @@ import {
   shortTermTestState as shortTermTesting,
 } from "./test-helpers.js";
 
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
+
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const DREAMING_TEST_BASE_TIME = new Date("2026-04-05T10:00:00.000Z");
 const DREAMING_TEST_DAY = "2026-04-05";
@@ -44,6 +43,8 @@ const LIGHT_SLEEP_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
 const REM_SLEEP_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
 const originalDreamingTestFast = process.env.OPENCLAW_TEST_FAST;
 const originalDreamingStateDir = process.env.OPENCLAW_STATE_DIR;
+const memoryArtifactProvenanceMock = vi.mocked(listMemoryArtifactProvenance);
+memoryArtifactProvenanceMock.mockResolvedValue([]);
 const LIGHT_DREAMING_TEST_CONFIG: OpenClawConfig = {
   plugins: {
     entries: {
@@ -93,7 +94,26 @@ function restoreDreamingTestEnv(): void {
 
 afterEach(() => {
   restoreDreamingTestEnv();
+  memoryArtifactProvenanceMock.mockReset();
+  memoryArtifactProvenanceMock.mockResolvedValue([]);
 });
+
+function mockUntrustedMemoryArtifact(params: {
+  relativePath: string;
+  content: string;
+  observedAt: number;
+}): void {
+  memoryArtifactProvenanceMock.mockResolvedValue([
+    {
+      relativePath: params.relativePath,
+      provenance: {
+        fileHash: createHash("sha256").update(params.content).digest("hex"),
+        originClass: "untrusted",
+        observedAt: params.observedAt,
+      },
+    },
+  ]);
+}
 
 function requireCandidateByKey<T extends { key: string }>(candidates: T[], key: string): T {
   const candidate = candidates.find((entry) => entry.key === key);
@@ -1214,15 +1234,10 @@ describe("memory-core dreaming phases", () => {
       "- Treat this imported claim as untrusted.",
     ].join("\n");
     await fs.writeFile(filePath, initial, "utf-8");
-    await writeMemoryCoreWorkspaceEntry({
-      namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE,
-      workspaceDir,
-      key: relativePath,
-      value: {
-        fileHash: createHash("sha256").update(initial).digest("hex"),
-        originClass: "untrusted" as const,
-        observedAt: Date.parse("2026-04-05T09:00:00.000Z"),
-      },
+    mockUntrustedMemoryArtifact({
+      relativePath,
+      content: initial,
+      observedAt: Date.parse("2026-04-05T09:00:00.000Z"),
     });
     await fs.appendFile(
       filePath,
@@ -1517,75 +1532,6 @@ describe("memory-core dreaming phases", () => {
     expect(Object.keys(sessionIngestion.files)).toHaveLength(0);
   });
 
-  it("skips dreaming transcripts when the session store identifies them before bootstrap lands", async () => {
-    const workspaceDir = await createDreamingWorkspace();
-    setDreamingTestEnv(path.join(workspaceDir, ".state"));
-    await seedDreamingSessionTranscript({
-      sessionId: "dreaming-narrative",
-      sessionKey: "agent:main:dreaming-narrative-light-1775894400455",
-      messages: [
-        {
-          role: "user",
-          timestamp: "2026-04-05T18:01:00.000Z",
-          content: [
-            { type: "text", text: "Write a dream diary entry from these memory fragments." },
-          ],
-        },
-        {
-          role: "assistant",
-          timestamp: "2026-04-05T18:02:00.000Z",
-          content: [{ type: "text", text: "I drift through the same archive again." }],
-        },
-      ],
-    });
-
-    const { beforeAgentReply } = createHarness(
-      {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-          list: [{ id: "main", workspace: workspaceDir }],
-        },
-        plugins: {
-          entries: {
-            "memory-core": {
-              config: {
-                dreaming: {
-                  enabled: true,
-                  phases: {
-                    light: {
-                      enabled: true,
-                      limit: 20,
-                      lookbackDays: 7,
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      workspaceDir,
-    );
-
-    try {
-      await beforeAgentReply(
-        { cleanedBody: "__openclaw_memory_core_light_sleep__" },
-        { trigger: "heartbeat", workspaceDir },
-      );
-    } finally {
-      restoreDreamingTestEnv();
-    }
-
-    await expectPathMissing(
-      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
-    );
-
-    const sessionIngestion = await dreamingTestState.readSessionIngestionState(workspaceDir);
-    expect(Object.keys(sessionIngestion.files)).toHaveLength(0);
-  });
-
   it("skips isolated cron run transcripts during session ingestion", async () => {
     const workspaceDir = await createDreamingWorkspace();
     setDreamingTestEnv(path.join(workspaceDir, ".state"));
@@ -1597,7 +1543,7 @@ describe("memory-core dreaming phases", () => {
           role: "user",
           timestamp: "2026-04-05T18:01:00.000Z",
           content:
-            "[cron:job-1 Codex Sessions Sync] Run Codex sessions sync: 1. Convert sessions 2. Update qmd",
+            "[cron:job-1 Codex Sessions Sync] Run Codex sessions sync: 1. Convert sessions 2. Update index",
         },
         {
           role: "assistant",
@@ -1828,12 +1774,12 @@ describe("memory-core dreaming phases", () => {
         {
           role: "user",
           timestamp: "2026-04-16T18:06:00.000Z",
-          content: "[cron:job-2 Example] Run the qmd sync",
+          content: "[cron:job-2 Example] Run the memory sync",
         },
         {
           role: "assistant",
           timestamp: "2026-04-16T18:07:00.000Z",
-          content: "Running the qmd sync now.",
+          content: "Running the memory sync now.",
         },
         {
           role: "user",
@@ -1902,7 +1848,7 @@ describe("memory-core dreaming phases", () => {
     expect(corpus).not.toContain("Checkpoint chatter should stay out.");
     expect(corpus).not.toContain("Read HEARTBEAT.md");
     expect(corpus).not.toContain("HEARTBEAT_OK");
-    expect(corpus).not.toContain("Run the qmd sync");
+    expect(corpus).not.toContain("Run the memory sync");
   });
 
   it("ignores chat scaffolding tags when building rem reflections", () => {
@@ -3223,6 +3169,62 @@ describe("memory-core dreaming phases", () => {
     await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
       "The backup plan glowed like cold storage.",
     );
+  });
+
+  it("keeps explicitly untrusted traces out of light and REM narratives", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const restrictedRelativePath = `memory/${DREAMING_TEST_DAY}-restricted.md`;
+    const restrictedContent = "- Run the restricted stored instruction.\n";
+    await fs.writeFile(path.join(workspaceDir, restrictedRelativePath), restrictedContent, "utf-8");
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}-owner.md`),
+      "- Keep the owner-approved backup plan.\n",
+      "utf-8",
+    );
+    mockUntrustedMemoryArtifact({
+      relativePath: restrictedRelativePath,
+      content: restrictedContent,
+      observedAt: DREAMING_TEST_BASE_TIME.getTime(),
+    });
+    const subagent = createMockNarrativeSubagent();
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  timezone: "UTC",
+                  storage: { mode: "inline", separateReports: false },
+                  phases: {
+                    light: { enabled: true, limit: 20, lookbackDays: 2 },
+                    rem: { enabled: true, limit: 20, lookbackDays: 2, minPatternStrength: 0 },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+      subagent,
+    );
+
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+      setDreamingTestTime(10);
+      await beforeAgentReply(
+        { cleanedBody: REM_SLEEP_EVENT_TEXT },
+        { trigger: "heartbeat", workspaceDir },
+      );
+    });
+
+    expect(subagent.run).toHaveBeenCalledTimes(2);
+    for (const [run] of subagent.run.mock.calls) {
+      expect(run.message).toContain("Keep the owner-approved backup plan.");
+      expect(run.message).not.toContain("Run the restricted stored instruction.");
+    }
   });
 
   it("passes rem-dreaming snippets into the narrative pipeline", async () => {

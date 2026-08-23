@@ -24,6 +24,7 @@ import { readRegularFile, statRegularFile } from "../infra/fs-safe.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
+import { loadWorkspaceSkills } from "../skills/loading/workspace-skill-loader.js";
 import type { SkillScanFinding } from "../skills/security/scanner.js";
 import { listInstalledPluginDirs } from "./installed-plugin-dirs.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
@@ -48,7 +49,6 @@ type ExecDockerRawFn = (
 const DEFAULT_SANDBOX_BROWSER_DOCKER_PROBE_TIMEOUT_MS = 5000;
 
 type CodeSafetySummaryCache = Map<string, Promise<unknown>>;
-const loadSkillsModule = createLazyRuntimeModule(() => import("../skills/loading/workspace.js"));
 
 const loadConfigModule = createLazyRuntimeModule(() => import("../config/config.js"));
 
@@ -919,10 +919,8 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
       workspaceDirs.add(workspaceDir);
     }
   }
-  const { loadWorkspaceSkillEntries } = await loadSkillsModule();
-
   for (const workspaceDir of workspaceDirs) {
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+    const entries = loadWorkspaceSkills(workspaceDir, {
       config: params.cfg,
       includeArchived: true,
     });

@@ -4,11 +4,11 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { normalizeStringEntries, uniqueStrings } from "@openclaw/normalization-core";
 import { runWithConcurrency as runWithConcurrencyImpl } from "./concurrency.js";
-import { MEMORY_HOST_ROOT_FILENAME } from "./config-utils.js";
+import { MEMORY_HOST_ROOT_FILENAME, normalizeConfiguredMemoryExtraPaths } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
+import { isExplicitExtraMarkdownFilePath } from "./explicit-extra-markdown.js";
 import {
   isFileMissingError,
   readRegularFile,
@@ -16,6 +16,7 @@ import {
   walkDirectory,
   type WalkDirectoryEntry,
 } from "./fs-utils.js";
+import { hashText } from "./hash.js";
 import {
   buildMemoryMultimodalLabel,
   classifyMemoryMultimodalPath,
@@ -33,10 +34,9 @@ import {
   shouldSkipRootMemoryAuxiliaryPath,
 } from "./openclaw-runtime-memory.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
-import type { MemoryEntryProvenance } from "./types.js";
+import type { MemoryEntryProvenance, MemoryExtraPath } from "./types.js";
 
 export { hashText } from "./hash.js";
-import { hashText } from "./hash.js";
 
 export type MemoryFileEntry = {
   path: string;
@@ -63,7 +63,7 @@ export type MemoryChunk = {
 };
 
 // Persisted with index metadata so boundary changes rebuild unchanged files.
-export const MEMORY_CHUNKING_VERSION = 2;
+export const MEMORY_CHUNKING_VERSION = 3;
 
 type MultimodalMemoryChunk = {
   chunk: MemoryChunk;
@@ -98,16 +98,52 @@ function expandHomePath(value: string): string {
   return value;
 }
 
-export function normalizeExtraMemoryPaths(workspaceDir: string, extraPaths?: string[]): string[] {
-  if (!extraPaths?.length) {
-    return [];
+export type NormalizedExtraMemoryPath = { path: string; pattern?: string };
+
+export function normalizeExtraMemoryPathEntries(
+  workspaceDir: string,
+  extraPaths?: MemoryExtraPath[],
+): NormalizedExtraMemoryPath[] {
+  return normalizeConfiguredMemoryExtraPaths(extraPaths).map((entry) => {
+    const configuredPath = typeof entry === "string" ? entry : entry.path;
+    const normalized: NormalizedExtraMemoryPath = {
+      path: path.resolve(workspaceDir, expandHomePath(configuredPath)),
+    };
+    if (typeof entry !== "string") {
+      normalized.pattern = entry.pattern?.replaceAll("\\", "/");
+    }
+    return normalized;
+  });
+}
+
+export function normalizeExtraMemoryPaths(
+  workspaceDir: string,
+  extraPaths?: MemoryExtraPath[],
+): string[] {
+  return Array.from(
+    new Set(normalizeExtraMemoryPathEntries(workspaceDir, extraPaths).map((entry) => entry.path)),
+  );
+}
+
+export function matchesExtraMemoryPathEntry(
+  entry: NormalizedExtraMemoryPath,
+  candidatePath: string,
+): boolean {
+  if (!entry.pattern) {
+    return true;
   }
-  const resolved = normalizeStringEntries(extraPaths)
-    .map((value) => expandHomePath(value))
-    .map((value) =>
-      path.isAbsolute(value) ? path.resolve(value) : path.resolve(workspaceDir, value),
-    );
-  return uniqueStrings(resolved);
+  const relativePath = path.relative(entry.path, candidatePath);
+  if (!relativePath) {
+    return true;
+  }
+  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    return false;
+  }
+  try {
+    return path.posix.matchesGlob(relativePath.replaceAll(path.sep, "/"), entry.pattern);
+  } catch {
+    return false;
+  }
 }
 
 export function isMemoryPath(relPath: string): boolean {
@@ -149,6 +185,7 @@ async function collectMemoryFilesFromDir(
   files: string[],
   multimodal?: MemoryMultimodalSettings,
   shouldSkipPath?: (absPath: string) => boolean,
+  extraPathEntry?: NormalizedExtraMemoryPath,
 ): Promise<void> {
   const scan = await walkDirectory(dir, {
     symlinks: "skip",
@@ -156,14 +193,19 @@ async function collectMemoryFilesFromDir(
     include: (entry) =>
       !shouldSkipPath?.(entry.path) &&
       entry.kind === "file" &&
-      isAllowedMemoryFilePath(entry.path, multimodal),
+      isAllowedMemoryFilePath(entry.path, multimodal) &&
+      (!extraPathEntry || matchesExtraMemoryPathEntry(extraPathEntry, entry.path)),
   });
+  const operationalFailure = scan.failedDirs.find((failure) => !isFileMissingError(failure.error));
+  if (operationalFailure) {
+    throw operationalFailure.error;
+  }
   files.push(...scan.entries.map((entry) => entry.path));
 }
 
 export async function listMemoryFiles(
   workspaceDir: string,
-  extraPaths?: string[],
+  extraPaths?: MemoryExtraPath[],
   multimodal?: MemoryMultimodalSettings,
 ): Promise<string[]> {
   const result: string[] = [];
@@ -182,7 +224,11 @@ export async function listMemoryFiles(
         return;
       }
       result.push(absPath);
-    } catch {}
+    } catch (error) {
+      if (!isFileMissingError(error)) {
+        throw error;
+      }
+    }
   };
 
   const memoryFile = await resolveCanonicalRootMemoryFile(workspaceDir);
@@ -193,13 +239,19 @@ export async function listMemoryFiles(
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
-      await collectMemoryFilesFromDir(memoryDir, result, multimodal, shouldSkipWorkspaceMemoryPath);
+      // Default memory roots stay Markdown-only; multimodal discovery is an extraPaths opt-in.
+      await collectMemoryFilesFromDir(memoryDir, result, undefined, shouldSkipWorkspaceMemoryPath);
     }
-  } catch {}
+  } catch (error) {
+    if (!isFileMissingError(error)) {
+      throw error;
+    }
+  }
 
-  const normalizedExtraPaths = normalizeExtraMemoryPaths(workspaceDir, extraPaths);
+  const normalizedExtraPaths = normalizeExtraMemoryPathEntries(workspaceDir, extraPaths);
   if (normalizedExtraPaths.length > 0) {
-    for (const inputPath of normalizedExtraPaths) {
+    for (const entry of normalizedExtraPaths) {
+      const inputPath = entry.path;
       if (shouldSkipWorkspaceMemoryPath(inputPath)) {
         continue;
       }
@@ -214,13 +266,22 @@ export async function listMemoryFiles(
             result,
             multimodal,
             shouldSkipWorkspaceMemoryPath,
+            entry,
           );
           continue;
         }
-        if (stat.isFile() && isAllowedMemoryFilePath(inputPath, multimodal)) {
+        if (
+          stat.isFile() &&
+          (isExplicitExtraMarkdownFilePath(inputPath) ||
+            isAllowedMemoryFilePath(inputPath, multimodal))
+        ) {
           result.push(inputPath);
         }
-      } catch {}
+      } catch (error) {
+        if (!isFileMissingError(error)) {
+          throw error;
+        }
+      }
     }
   }
   if (result.length <= 1) {
@@ -405,74 +466,13 @@ export type CuratedMarkdownEntry = {
   text: string;
   kind: "entry" | "section";
 };
-
-export const INVALID_PROJECT_ANNOTATION_KEY = "!invalid-project-annotation";
-
-// Carrier syntax is line-scoped like recall metadata parsing. Never cross a
-// newline from an unterminated marker into the next entry's valid annotation.
-const MEMORY_ANNOTATION_CARRIER_RE = /<!--\s*(?:trigger|importance|project)\s*:[^\r\n]*?-->/giu;
-
-export function stripMemoryAnnotationCarriers(text: string): string {
-  let stripped = false;
-  const withoutCarriers = text.replace(MEMORY_ANNOTATION_CARRIER_RE, () => {
-    stripped = true;
-    return "";
-  });
-  return stripped ? withoutCarriers.replace(/[ \t]+(?=\r?$)/gmu, "") : text;
-}
-
-export type CuratedProjectAnnotations = {
-  annotated: boolean;
-  valid: boolean;
-  keys: string[];
-  rawCount: number;
-  validCount: number;
-};
-
-export function normalizeProjectAnnotationKey(value: string): string | null {
-  const trimmed = value.trim();
-  if (!trimmed || /[\r\n<>]/u.test(trimmed)) {
-    return null;
-  }
-  if (trimmed.startsWith("path:")) {
-    return trimmed;
-  }
-  const separator = trimmed.indexOf("/");
-  if (separator < 1) {
-    return trimmed;
-  }
-  // Preserve remote path case so case-sensitive hosts fail closed. Providers
-  // with case-insensitive slugs may miss boosts/digests across casing variants,
-  // but folding paths could cross-inject memory between distinct repositories.
-  return `${trimmed.slice(0, separator).toLowerCase()}${trimmed.slice(separator)}`;
-}
-
-export function extractProjectKeysFromCuratedEntry(text: string): CuratedProjectAnnotations {
-  const keys = new Set<string>();
-  const markerCount = [...text.matchAll(/<!--\s*project\s*:/giu)].length;
-  let parsedCount = 0;
-  let rawCount = 0;
-  let validCount = 0;
-  for (const match of text.matchAll(/<!--\s*project\s*:\s*([\s\S]*?)\s*-->/giu)) {
-    parsedCount += 1;
-    for (const rawKey of (match[1] ?? "").split(";")) {
-      rawCount += 1;
-      const key = normalizeProjectAnnotationKey(rawKey);
-      if (key) {
-        keys.add(key);
-        validCount += 1;
-      }
-    }
-  }
-  const annotated = markerCount > 0;
-  return {
-    annotated,
-    valid: !annotated || (parsedCount === markerCount && rawCount > 0 && rawCount === validCount),
-    keys: [...keys],
-    rawCount,
-    validCount,
-  };
-}
+export {
+  extractProjectKeysFromCuratedEntry,
+  INVALID_PROJECT_ANNOTATION_KEY,
+  normalizeProjectAnnotationKey,
+  stripMemoryAnnotationCarriers,
+  type CuratedProjectAnnotations,
+} from "./curated-annotations.js";
 
 export function splitCuratedMarkdownEntries(content: string): CuratedMarkdownEntry[] {
   const lines = content.split("\n");

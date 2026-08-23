@@ -224,6 +224,112 @@ private func assertConfigLookupCannotRecreateRoute(
 }
 
 @Suite(.serialized) struct GatewayConnectionControlTests {
+    @Test @MainActor
+    func `cancelled pending request never activates local gateway recovery`() async throws {
+        try await self.withIsolatedRecoveryFixture { _, _, _ in } operation: { connection, session in
+            let request = Task {
+                try await connection.request(method: "status", params: nil)
+            }
+            try #require(await self.waitForRequest(on: session))
+
+            request.cancel()
+
+            do {
+                _ = try await request.value
+                Issue.record("expected the cancelled caller to throw CancellationError")
+            } catch is CancellationError {} catch {
+                Issue.record("unexpected cancellation error: \(error)")
+            }
+
+            #expect(GatewayProcessManager.shared.status == .stopped)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+            #expect(session.snapshotMakeCount() == 1)
+            #expect(session.latestTask()?.snapshotSendCount() == 2)
+        }
+    }
+
+    @Test @MainActor
+    func `genuine transport failure still activates and retries local gateway recovery`() async throws {
+        try await self.assertUncancelledFailureRecovers(URLError(.networkConnectionLost))
+    }
+
+    @Test @MainActor
+    func `send-side cancellation without caller cancellation still activates gateway recovery`() async throws {
+        try await self.assertUncancelledFailureRecovers(CancellationError())
+    }
+
+    @Test @MainActor
+    func `gateway response errors never activate transport recovery`() async throws {
+        try await self.withIsolatedRecoveryFixture { socket, message, sendIndex in
+            guard sendIndex > 0,
+                  let id = GatewayWebSocketTestSupport.requestID(from: message)
+            else { return }
+            let response = #"{"type":"res","id":"\#(id)","ok":false,"# +
+                #""error":{"code":"INVALID_REQUEST","message":"response rejected"}}"#
+            socket.emitReceiveSuccess(.data(Data(response.utf8)))
+        } operation: { connection, session in
+            do {
+                _ = try await connection.request(method: "status", params: nil)
+                Issue.record("expected the Gateway response error")
+            } catch is GatewayResponseError {} catch {
+                Issue.record("unexpected response error: \(error)")
+            }
+
+            #expect(GatewayProcessManager.shared.status == .stopped)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+            #expect(session.snapshotMakeCount() == 1)
+            #expect(session.latestTask()?.snapshotSendCount() == 2)
+        }
+    }
+
+    @Test func `uncancelled trusted TLS mismatch still repairs its stored pin`() async throws {
+        try await withFakeGatewayTLSKeychain {
+            let url = try #require(URL(string: "wss://gateway.example.ts.net"))
+            let storeKey = "autoqa-185-tls-recovery"
+            GatewayTLSStore.saveFingerprint("old", stableID: storeKey)
+            let route = try #require(GatewayTLSRoute.resolve(
+                url: url,
+                connectionMode: .remote,
+                configuredFingerprint: nil,
+                storedFingerprint: "old",
+                storeKey: storeKey))
+            let failure = GatewayTLSValidationFailure(
+                kind: .pinMismatch,
+                host: "gateway.example.ts.net",
+                storeKey: storeKey,
+                expectedFingerprint: "old",
+                observedFingerprint: "new",
+                systemTrustOk: true,
+                port: 443)
+            let requests = WebSocketMessageRecorder()
+            let session = GatewayTestWebSocketSession(taskFactory: {
+                GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+                    guard sendIndex > 0 else { return }
+                    requests.append(message)
+                    if requests.snapshot().count == 1 {
+                        throw GatewayTLSValidationError(failure: failure, context: "isolated TLS test")
+                    }
+                    guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+                    socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+                })
+            })
+            let connection = GatewayConnection(
+                testEndpointProvider: {
+                    GatewayConnection.EndpointSnapshot(
+                        config: (url: url, token: nil, password: nil),
+                        tls: route,
+                        routeAuthority: nil)
+                },
+                sessionBox: WebSocketSessionBox(session: session))
+
+            _ = try await connection.request(method: "status", params: nil)
+
+            #expect(GatewayTLSStore.loadFingerprint(stableID: storeKey) == "new")
+            #expect(requests.snapshot().count == 2)
+            await connection.shutdown()
+        }
+    }
+
     @Test func `operator widget capability refresh is shared and retained`() async throws {
         let rawOldSurface = "http://127.0.0.1:18789/__openclaw__/cap/old-token"
         let rawNewSurface = "http://127.0.0.1:18789/__openclaw__/cap/new-token"
@@ -709,6 +815,111 @@ private func assertConfigLookupCannotRecreateRoute(
         @unknown default:
             nil
         }
+    }
+
+    @MainActor
+    private func withIsolatedRecoveryFixture<T>(
+        _ sendHook: @escaping GatewayTestWebSocketTask.SendHook,
+        operation: (GatewayConnection, GatewayTestWebSocketSession) async throws -> T) async throws -> T
+    {
+        let isolatedState = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-gateway-recovery-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: isolatedState, withIntermediateDirectories: true)
+        let configURL = isolatedState.appendingPathComponent("openclaw.json")
+        let port = Int.random(in: 30000...59999)
+        try Data(#"{"gateway":{"mode":"local","port":\#(port)}}"#.utf8).write(to: configURL)
+        defer { try? FileManager.default.removeItem(at: isolatedState) }
+
+        return try await TestIsolation.withEnvValues([
+            "OPENCLAW_PROFILE": "autoqa-185-tests",
+            "OPENCLAW_CONFIG_PATH": configURL.path,
+            "OPENCLAW_STATE_DIR": isolatedState.path,
+        ]) {
+            try await DeviceIdentityStore.withStateDirectory(isolatedState) {
+                let session = GatewayTestWebSocketSession(taskFactory: {
+                    GatewayTestWebSocketTask(sendHook: sendHook)
+                })
+                let connection = GatewayConnection(
+                    endpointProvider: {
+                        GatewayConnection.EndpointSnapshot(
+                            config: (url: URL(string: "ws://127.0.0.1:\(port)")!, token: nil, password: nil),
+                            routeAuthority: nil)
+                    },
+                    supportsSharedEndpointRecovery: true,
+                    activationBindingKeyProvider: { nil },
+                    sessionBox: WebSocketSessionBox(session: session))
+                let manager = GatewayProcessManager.shared
+                let priorMode = AppStateStore.shared.connectionMode
+                AppStateStore.shared.connectionMode = .local
+                manager._testResetGatewayStartTask()
+                manager.setTestingStatus(.stopped)
+                manager.setTestingConnection(connection)
+                manager.setTestingSkipControlChannelRefresh(true)
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(
+                    isolatedState.appendingPathComponent("disable-launch-agent"))
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                    #"{"ok":true,"service":{"loaded":false}}"#)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                defer {
+                    manager._testResetGatewayStartTask()
+                    manager.setTestingStatus(.stopped)
+                    manager.setTestingConnection(nil)
+                    manager.setTestingSkipControlChannelRefresh(false)
+                    manager.setTestingDesiredActive(false)
+                    GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+                    GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                    GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                    GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                    AppStateStore.shared.connectionMode = priorMode
+                }
+
+                do {
+                    let result = try await operation(connection, session)
+                    await connection.shutdown()
+                    return result
+                } catch {
+                    await connection.shutdown()
+                    throw error
+                }
+            }
+        }
+    }
+
+    @MainActor
+    private func assertUncancelledFailureRecovers(_ failure: any Error & Sendable) async throws {
+        let requests = WebSocketMessageRecorder()
+        try await self.withIsolatedRecoveryFixture { socket, message, sendIndex in
+            guard sendIndex > 0,
+                  let id = GatewayWebSocketTestSupport.requestID(from: message),
+                  let data = Self.messageData(message),
+                  let frame = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return }
+            if frame["method"] as? String == "status" {
+                requests.append(message)
+                if requests.snapshot().count == 1 {
+                    throw failure
+                }
+            }
+            socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+        } operation: { connection, session in
+            _ = try await connection.request(method: "status", params: nil)
+
+            #expect(GatewayProcessManager.shared.status != .stopped)
+            #expect(requests.snapshot().count == 2)
+            #expect(session.snapshotMakeCount() >= 1)
+        }
+    }
+
+    private func waitForRequest(on session: GatewayTestWebSocketSession) async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while ContinuousClock.now < deadline {
+            if session.latestTask()?.snapshotSendCount() ?? 0 >= 2 {
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+        return false
     }
 
     private func assertDeviceTokenIsolation(

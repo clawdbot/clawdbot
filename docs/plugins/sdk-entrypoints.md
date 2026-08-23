@@ -144,13 +144,52 @@ export default definePluginEntry({
 
 - `id` must match your `openclaw.plugin.json` manifest.
 - External session catalogs use
-  `openclaw/plugin-sdk/session-catalog` and
-  `api.registerSessionCatalog({ id, label, list, read, continueSession?, archive? })`.
-  Core owns the `sessions.catalog.*` Gateway methods; providers return host,
-  session, and normalized transcript projections without registering RPCs. A
-  list provider should call the optional `onHost(host)` callback as each host
-  settles; the returned host array remains required as the final compatibility
-  snapshot.
+  `openclaw/plugin-sdk/session-catalog` and register a
+  `SessionCatalogProvider` with `api.registerSessionCatalog(...)`. Required
+  provider fields are `id`, `label`, `list`, and `read`; optional hooks are
+  `resolveCreateSession`, `continueSession`, `checkUpstreamActivity`, `archive`,
+  `openTerminal`, and `startTerminalSession`. Core owns the
+  `sessions.catalog.*` Gateway methods; providers return host, session,
+  transcript, and terminal-plan projections without registering RPCs. A list
+  provider should call the optional
+  `onHost(host)` callback as each host settles; the returned host array remains
+  required as the final compatibility snapshot.
+
+  CLI-backed catalogs that expose the same local-plus-paired-node shape can use
+  `createSessionCatalogFamily(...)`. The family composer owns canonical cursor
+  validation, node payload validation, host projection, adopted-session
+  projection, per-host publication, read routing, single-flight continuation,
+  and terminal plan routing. The provider must supply its local store reads,
+  identifiers and commands, error text, capability projection, continuation
+  availability and persistence operations, upstream-activity check, and terminal
+  executable/arguments. There are no default continuation, capability-mutation,
+  or terminal authorities. Use `createSessionCatalogNodeHostBindings(...)` to
+  build the matching list/read/terminal node commands and terminal-only invoke
+  policy from those explicit provider inputs.
+
+  The same entrypoint exports `sessionCatalogPaging`, which groups the bounded
+  list/read parameter parsers, canonical base64url cursor codec, and bounded
+  UTF-8 transcript pager. Providers pass their own identifier pattern and
+  validation messages into `parseReadParams(...)` and `parseListParams(...)`.
+
+  `resolveCreateSession({ agentId })` must return a config-derived model/runtime
+  target before OpenClaw advertises creation or calls `startTerminalSession`.
+  Use
+  [`api.runtime.agent.resolveSessionCatalogCreateTarget(...)`](/plugins/sdk-runtime#api-runtime-agent)
+  to apply the host's runtime and model-allowlist policy instead of duplicating
+  it.
+
+  `startTerminalSession({ agentId, cwd, initialMessage?, nodeId? })` creates a
+  fresh CLI terminal plan. Return either a local plan (`kind: "local"`, `argv`,
+  and the exact `cwd`, plus optional `env`, `pathEnv`, and `title`) or a paired-node
+  plan (`kind: "node"`, `nodeId`, `command`, `paramsJSON`, and the exact `cwd`).
+  The `sessions.catalog.startTerminal` RPC requires `operator.admin` plus
+  `gateway.cliAgents.enabled` and `gateway.terminal.enabled`. The caller
+  provisions `cwd`; the Gateway requires an existing absolute local directory,
+  rejects a changed plan cwd or host, and applies the normal agent-sandbox,
+  node-pairing, deadline, and connection-ownership checks before opening the
+  PTY.
+
 - `kind` is deprecated: declare an exclusive slot (`"memory"` or
   `"context-engine"`) in the `openclaw.plugin.json` manifest `kind` field
   instead. Runtime-entry `kind` remains only as a compatibility fallback for
@@ -163,6 +202,22 @@ export default definePluginEntry({
   node's Gateway declaration. OpenClaw evaluates it against the node-local
   startup config; command handlers should still validate availability when
   invoked.
+
+### Computer Use providers
+
+**Import:** `openclaw/plugin-sdk/computer-use`
+
+Node-local Computer Use plugins register one provider through
+`registerComputerUseProvider(api, provider)`. The helper owns the
+`screen.snapshot` and dangerous `computer.act` command registrations and the
+matching Gateway invoke policy; the provider owns availability, execution,
+serialization, frame state, driver lifecycle, and cleanup.
+
+The same entry point exports the canonical TypeBox schemas, static types, and
+compiled validators for the two command payloads and the snapshot result. A
+node host accepts one provider for the command pair; registering another
+provider conflicts with the existing command registration instead of creating
+a fallback stack.
 
 ## `defineChannelPluginEntry`
 
@@ -240,7 +295,9 @@ CLI registration:
   parse tree. Descriptor names must match letters, numbers, hyphen, and
   underscore, starting with a letter or number; OpenClaw rejects other
   shapes and strips terminal control sequences from descriptions before
-  rendering help. Cover every top-level command root the registrar exposes.
+  rendering help. Cover every top-level command root the registrar exposes,
+  and declare the same name, description, and subcommand marker in the
+  plugin manifest's `cliCommands` field so root help does not import plugin code.
   `commands` alone stays on the eager compatibility path.
 - Root descriptors may define a synchronous, pure
   `machineOutput({ argv, stdoutIsTTY })` resolver for JSON, JSONL, or other

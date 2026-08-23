@@ -1,7 +1,7 @@
 // Settings design-language primitives. Every settings surface builds its
 // layout through these helpers so pages cannot drift back into bespoke
-// card/pill markup. Styles live in ui/src/styles/settings.css; rules in
-// ui/docs/settings-design.md.
+// card/pill markup. Styles live in ui/src/styles/settings.css and the shared
+// ui/src/styles/settings-controls.css; rules in ui/docs/design-system/settings-design.md.
 import "@awesome.me/webawesome/dist/components/radio/radio.js";
 import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import "@awesome.me/webawesome/dist/components/switch/switch.js";
@@ -312,11 +312,12 @@ export function renderSettingsSegmented<T extends string>(props: {
 export function renderSettingsStatus(props: {
   kind: SettingsStatusKind;
   label: unknown;
+  dot?: boolean;
 }): TemplateResult {
   const modifier = props.kind === "muted" ? "" : ` settings-status--${props.kind}`;
   return html`
     <span class="settings-status${modifier}">
-      <span class="settings-status__dot"></span>
+      ${props.dot === false ? nothing : html`<span class="settings-status__dot"></span>`}
       ${props.label}
     </span>
   `;
@@ -341,6 +342,7 @@ export function renderSettingsSecretInput(props: {
   value: string;
   placeholder?: string;
   visible: boolean;
+  disabled?: boolean;
   showLabel: string;
   hideLabel: string;
   toggleLabel: string;
@@ -357,6 +359,7 @@ export function renderSettingsSecretInput(props: {
         spellcheck="false"
         .value=${props.value}
         placeholder=${props.placeholder ?? ""}
+        ?disabled=${props.disabled ?? false}
         @input=${(e: Event) => props.onInput((e.target as HTMLInputElement).value)}
       />
       <openclaw-tooltip .content=${props.visible ? props.hideLabel : props.showLabel}>
@@ -365,6 +368,7 @@ export function renderSettingsSecretInput(props: {
           class="settings-secret__toggle"
           aria-label=${props.toggleLabel}
           aria-pressed=${props.visible}
+          ?disabled=${props.disabled ?? false}
           @click=${props.onToggle}
         >
           ${props.visible ? icons.eye : icons.eyeOff}

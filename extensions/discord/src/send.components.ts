@@ -2,6 +2,7 @@
 import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
@@ -34,7 +35,6 @@ import {
   createDiscordMessageNonce,
   resolveChannelId,
   resolveDiscordChannel,
-  stripUndefinedFields,
   SUPPRESS_NOTIFICATIONS_FLAG,
   type DiscordAllowedMentions,
 } from "./send.shared.js";
@@ -172,6 +172,7 @@ type DiscordComponentSendOpts = {
   allowedMentions?: DiscordAllowedMentions;
   /** Persist the concrete platform send before component bookkeeping can fail. */
   onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
+  onPlatformSendDispatch?: () => Promise<void>;
 };
 
 export function registerBuiltDiscordComponentMessage(params: {
@@ -200,10 +201,7 @@ async function buildDiscordComponentPayload(params: {
   spec: DiscordComponentMessageSpec;
   opts: DiscordComponentSendOpts;
   accountId: string;
-}): Promise<{
-  body: ReturnType<typeof stripUndefinedFields>;
-  buildResult: ReturnType<typeof buildDiscordComponentMessage>;
-}> {
+}) {
   const messageReference = params.opts.reply
     ? { message_id: params.opts.reply.messageId, fail_if_not_exists: false }
     : undefined;
@@ -218,9 +216,14 @@ async function buildDiscordComponentPayload(params: {
       mediaReadFile: params.opts.mediaReadFile,
     });
     const filenameOverride = params.opts.filename?.trim();
-    resolvedFileName = filenameOverride || media.fileName || "upload";
+    const explicitAttachmentName = extractComponentAttachmentNames(spec)[0];
+    resolvedFileName =
+      filenameOverride ||
+      media.fileName ||
+      explicitAttachmentName ||
+      `upload${extensionForMime(media.contentType) ?? ""}`;
     spec = withImplicitComponentAttachmentBlock(spec, resolvedFileName);
-    files = [{ data: media.buffer, name: resolvedFileName }];
+    files = [{ data: media.buffer, name: resolvedFileName, contentType: media.contentType }];
   }
 
   const attachmentNames = extractComponentAttachmentNames(spec);
@@ -259,10 +262,10 @@ async function buildDiscordComponentPayload(params: {
     ...(finalFlags ? { flags: finalFlags } : {}),
     ...(files ? { files } : {}),
   };
-  const body = stripUndefinedFields({
+  const body = {
     ...serializePayload(payload),
     ...(messageReference ? { message_reference: messageReference } : {}),
-  });
+  };
 
   return { body, buildResult };
 }
@@ -291,6 +294,7 @@ export async function sendDiscordComponentMessage(
       tableMode: opts.tableMode,
       chunkMode: opts.chunkMode,
       onDeliveryResult: opts.onDeliveryResult,
+      onPlatformSendDispatch: opts.onPlatformSendDispatch,
       ...(opts.suppressEmbeds === undefined ? {} : { suppressEmbeds: opts.suppressEmbeds }),
     });
   }
@@ -321,6 +325,7 @@ export async function sendDiscordComponentMessage(
 
   let result: { id: string; channel_id: string };
   try {
+    await opts.onPlatformSendDispatch?.();
     result = (await request(
       () =>
         createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, {

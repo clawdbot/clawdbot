@@ -70,7 +70,7 @@ function createParams(overrides: Partial<ApplySessionModelSelectionParams> = {})
   const sessionEntry = overrides.sessionEntry ?? createEntry();
   const sessionKey = overrides.sessionKey ?? "agent:main:dm:1";
   return {
-    cfg: { agents: { defaults: { contextTokens: 12_000 } } },
+    cfg: {},
     agentId: "main",
     sessionKey,
     sessionEntry,
@@ -135,7 +135,8 @@ describe("applySessionModelSelection", () => {
       model: "gpt-4o",
       effectiveModelRef: "openai/gpt-4o",
       changed: true,
-      contextTokens: 12_000,
+      contextTokens: 16_000,
+      configuredDefaultUpdate: "requested",
     });
     expect(sessionEntry).toMatchObject({
       providerOverride: "openai",
@@ -159,7 +160,7 @@ describe("applySessionModelSelection", () => {
     );
   });
 
-  it("resets to default and clears auth plus a provider-incompatible runtime", async () => {
+  it("resets to a cross-provider default and clears incompatible auth plus runtime", async () => {
     const sessionEntry = createEntry({
       providerOverride: "openai",
       modelOverride: "gpt-4o",
@@ -167,6 +168,7 @@ describe("applySessionModelSelection", () => {
       modelOverrideRouteResolution: "resolved",
       authProfileOverride: "openai:work",
       authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: 3,
       agentHarnessId: "codex",
       agentRuntimeOverride: "codex",
     });
@@ -189,8 +191,54 @@ describe("applySessionModelSelection", () => {
     expect(sessionEntry.modelOverride).toBeUndefined();
     expect(sessionEntry.authProfileOverride).toBeUndefined();
     expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
+    expect(sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
     expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
     expect(sessionEntry.agentHarnessId).toBe("codex");
+    expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+  });
+
+  it("resets to a same-provider default without clearing compatible auth or writing config", async () => {
+    const sessionEntry = createEntry({
+      providerOverride: "openai",
+      modelOverride: "gpt-4.1",
+      modelOverrideSource: "user",
+      modelOverrideRouteResolution: "resolved",
+      authProfileOverride: "openai:work",
+      authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: 3,
+    });
+
+    const result = await applySessionModelSelection(
+      createParams({
+        sessionEntry,
+        defaultProvider: "openai",
+        defaultModel: "gpt-4o",
+        currentProvider: "openai",
+        currentModel: "gpt-4.1",
+        canPersistStickyModelSelection: true,
+        request: {
+          provider: "openai",
+          model: "gpt-4o",
+          isDefault: true,
+          runtime: { kind: "unchanged" },
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({ status: "applied", changed: true });
+    expect(result).not.toHaveProperty("configuredDefaultUpdate");
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    expect(sessionEntry.modelOverrideSource).toBeUndefined();
+    expect(sessionEntry.modelOverrideRouteResolution).toBeUndefined();
+    expect(sessionEntry).toMatchObject({
+      authProfileOverride: "openai:work",
+      authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: 3,
+    });
+    expect(effects.refreshQueuedFollowupSession).toHaveBeenCalledWith(
+      expect.objectContaining({ nextModelOverrideSource: undefined }),
+    );
     expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
   });
 
@@ -220,6 +268,38 @@ describe("applySessionModelSelection", () => {
     });
   });
 
+  it.each([
+    { name: "legacy user", marker: undefined, expectedSource: "user" as const },
+    { name: "marker-backed auto", marker: 0, expectedSource: "auto" as const },
+  ])(
+    "forwards a source-less $name auth profile canonically to queued work",
+    async ({ marker, expectedSource }) => {
+      const sessionEntry = createEntry({
+        providerOverride: "openai",
+        modelOverride: "gpt-4.1",
+        authProfileOverride: "openai:work",
+        ...(marker === undefined ? {} : { authProfileOverrideCompactionCount: marker }),
+      });
+
+      await applySessionModelSelection(
+        createParams({
+          sessionEntry,
+          currentProvider: "openai",
+          currentModel: "gpt-4.1",
+        }),
+      );
+
+      expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
+      expect(sessionEntry.authProfileOverrideCompactionCount).toBe(marker);
+      expect(effects.refreshQueuedFollowupSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          nextAuthProfileId: "openai:work",
+          nextAuthProfileIdSource: expectedSource,
+        }),
+      );
+    },
+  );
+
   it("keeps an accepted selection session-scoped without config authority", async () => {
     const sessionEntry = createEntry();
 
@@ -228,6 +308,7 @@ describe("applySessionModelSelection", () => {
     );
 
     expect(result.status).toBe("applied");
+    expect(result).not.toHaveProperty("configuredDefaultUpdate");
     expect(sessionEntry).toMatchObject({
       providerOverride: "openai",
       modelOverride: "gpt-4o",
@@ -243,7 +324,10 @@ describe("applySessionModelSelection", () => {
       createParams({ sessionEntry, canPersistStickyModelSelection: true }),
     );
 
-    expect(result.status).toBe("applied");
+    expect(result).toMatchObject({
+      status: "applied",
+      configuredDefaultUpdate: "requested",
+    });
     expect(sessionEntry).toMatchObject({
       providerOverride: "openai",
       modelOverride: "gpt-4o",

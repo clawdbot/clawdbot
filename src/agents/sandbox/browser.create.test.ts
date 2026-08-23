@@ -1,11 +1,11 @@
 // Sandbox browser creation tests cover Docker args, bridge auth, noVNC access,
 // config hashing, and cached bridge invalidation.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   computeSandboxBrowserConfigHash,
   SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
@@ -45,13 +45,7 @@ const runtimeMocks = vi.hoisted(() => ({
   log: vi.fn(),
 }));
 
-const tmpDirs: string[] = [];
-
-function makeTempDir(): string {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-browser-mounts-"));
-  tmpDirs.push(dir);
-  return dir;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("./docker.js", async () => {
   const actual = await vi.importActual<typeof import("./docker.js")>("./docker.js");
@@ -238,12 +232,6 @@ function latestBridgeResolved(): Record<string, unknown> {
 describe("ensureSandboxBrowser create args", () => {
   beforeAll(async () => {
     await loadFreshBrowserModulesForTest();
-  });
-
-  afterEach(() => {
-    for (const dir of tmpDirs.splice(0)) {
-      rmSync(dir, { recursive: true, force: true });
-    }
   });
 
   beforeEach(() => {
@@ -518,8 +506,8 @@ describe("ensureSandboxBrowser create args", () => {
     // Protected skill overlays are authoritative; a browser bind targeting the same
     // container path is skipped so the read-only skill overlay wins and Docker does
     // not reject the container with a "Duplicate mount point" error.
-    const workspaceDir = makeTempDir();
-    const customRoot = makeTempDir();
+    const workspaceDir = tempDirs.make("openclaw-browser-mounts-");
+    const customRoot = tempDirs.make("openclaw-browser-mounts-");
     mkdirSync(path.join(workspaceDir, "skills", "demo"), { recursive: true });
     const cfg = buildConfig(false);
     cfg.workspaceAccess = "rw";
@@ -906,25 +894,7 @@ describe("ensureSandboxBrowser create args", () => {
     });
 
     const cfg = buildConfig(false);
-    cfg.browser.autoStartTimeoutMs = 25;
-
-    const originalSetTimeout = globalThis.setTimeout;
-    let requestTimeoutMs: number | undefined;
-    let fireRequestTimeout: (() => void) | undefined;
-    // Fire the production request timer only after the real loopback server sees
-    // the request, keeping the stalled-fetch proof deterministic and fast.
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
-      callback: (...args: unknown[]) => void,
-      timeout?: number,
-      ...args: unknown[]
-    ) => {
-      if (requestTimeoutMs === undefined) {
-        requestTimeoutMs = timeout;
-        fireRequestTimeout = () => callback(...args);
-        return 0 as unknown as ReturnType<typeof setTimeout>;
-      }
-      return originalSetTimeout(() => callback(...args), timeout);
-    }) as typeof setTimeout);
+    cfg.browser.autoStartTimeoutMs = 250;
 
     try {
       const startup = ensureTestSandboxBrowser({
@@ -933,23 +903,28 @@ describe("ensureSandboxBrowser create args", () => {
         agentWorkspaceDir: "/tmp/workspace",
         cfg,
       });
+      const startupResult = startup.then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
       await Promise.race([
         requestReceived,
         new Promise<never>((_resolve, reject) => {
-          originalSetTimeout(
-            () => reject(new Error("CDP request was not received")),
-            1_000,
-          ).unref();
+          setTimeout(() => reject(new Error("CDP request was not received")), 2_000).unref();
         }),
       ]);
 
       expect(requestPath).toBe("/json/version");
-      expect(requestTimeoutMs).toBeGreaterThanOrEqual(1);
-      expect(requestTimeoutMs).toBeLessThanOrEqual(cfg.browser.autoStartTimeoutMs);
-      fireRequestTimeout?.();
-      await expect(startup).rejects.toThrow("hung container has been forcefully removed");
+      const result = await startupResult;
+      expect(result.ok).toBe(false);
+      if (result.ok) {
+        throw new Error("expected stalled CDP startup to fail");
+      }
+      expect(result.error).toBeInstanceOf(Error);
+      expect((result.error as Error).message).toContain(
+        `within ${cfg.browser.autoStartTimeoutMs}ms. The hung container has been forcefully removed.`,
+      );
     } finally {
-      setTimeoutSpy.mockRestore();
       for (const socket of sockets) {
         socket.destroy();
       }

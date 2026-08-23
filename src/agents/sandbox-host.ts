@@ -230,7 +230,14 @@ export function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   }
   const createInner = () => {
     const frame = document.createElement("iframe");
-    frame.setAttribute("sandbox", "allow-scripts allow-forms");
+    // Nested sandbox restrictions compose with the host iframe. The inner
+    // document must declare popup support so a granted outer widget can open
+    // user-clicked links, while ungranted widgets remain blocked by the outer
+    // frame's stricter sandbox.
+    frame.setAttribute(
+      "sandbox",
+      "allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox",
+    );
     return frame;
   };
   let inner = createInner();

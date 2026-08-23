@@ -5,8 +5,12 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
-import { withTimeout } from "../../node-host/with-timeout.js";
-import { getReplyPayloadMetadata, isReplyPayloadStatusNotice } from "../reply-payload.js";
+import { runAbortableTimeout } from "../../node-host/with-timeout.js";
+import {
+  getReplyPayloadMetadata,
+  isReplyPayloadStatusNotice,
+  isReplyPayloadTerminalContent,
+} from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
@@ -145,7 +149,7 @@ export function createBlockReplyPipeline(params: {
         if (aborted) {
           return false;
         }
-        await withTimeout(
+        await runAbortableTimeout(
           async (signal) => {
             timeoutSignal = signal;
             await onBlockReply(payload, {
@@ -180,8 +184,7 @@ export function createBlockReplyPipeline(params: {
         if (!isStatusNotice) {
           didStream = true;
           if (
-            payload.isReasoning !== true &&
-            payload.isCommentary !== true &&
+            isReplyPayloadTerminalContent(payload) &&
             hasOutboundReplyContent(payload, { trimText: true })
           ) {
             didStreamTerminalReply = true;

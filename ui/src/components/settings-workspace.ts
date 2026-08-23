@@ -2,6 +2,7 @@
 // section navigation lives in the takeover sidebar (settings-sidebar.ts).
 import { html } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
+import "../styles/settings.css";
 
 export function renderSettingsWorkspace(
   body: unknown,

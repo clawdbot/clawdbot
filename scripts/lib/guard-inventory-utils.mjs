@@ -213,7 +213,17 @@ function hasSupplementalModuleReference(ts, source, acceptSpecifier) {
   return false;
 }
 
-/** Lexically reject clean files before parsing candidate module-boundary violations. */
+/**
+ * Lexically reject clean files before parsing candidate module-boundary violations.
+ *
+ * @param {string} source
+ * @param {{
+ *   acceptSpecifier?: (specifier: string) => boolean;
+ *   fileName?: string;
+ *   ts?: typeof import("typescript");
+ * }} [options]
+ * @returns {Array<{ kind: string; line: number; specifier: string }>}
+ */
 export function collectModuleReferencesFromSource(source, options = {}) {
   const ts = options.ts ?? (cachedTypeScript ??= require("typescript"));
   const acceptSpecifier = options.acceptSpecifier ?? (() => true);

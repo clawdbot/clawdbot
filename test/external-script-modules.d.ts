@@ -4,43 +4,6 @@ declare module "*security/opengrep/check-rule-metadata.mjs" {
   ): string[];
 }
 
-declare module "*scripts/ui.js" {
-  type SpawnCall = {
-    command: string;
-    args: string[];
-    options: {
-      cwd?: string;
-      env?: NodeJS.ProcessEnv;
-      shell: boolean;
-      stdio: string;
-      windowsVerbatimArguments?: boolean;
-    };
-  };
-  export function assertUiBuildOutputRoot(params?: {
-    rootDir?: string;
-    fs?: {
-      lstatSync(path: string): { isSymbolicLink(): boolean };
-    };
-  }): void;
-  export function shouldUseCmdExeForCommand(cmd: string, platform?: NodeJS.Platform): boolean;
-  export function resolveSpawnCall(
-    cmd: string,
-    args: string[],
-    envOverride?: NodeJS.ProcessEnv,
-    params?: { comSpec?: string; cwd?: string; nodeExecPath?: string; platform?: NodeJS.Platform },
-  ): SpawnCall;
-  export function resolvePnpmSpawnCall(
-    pnpmArgs: string[],
-    envOverride?: NodeJS.ProcessEnv,
-    params?: { comSpec?: string; cwd?: string; nodeExecPath?: string; platform?: NodeJS.Platform },
-  ): SpawnCall;
-  export function isDirectScriptExecution(
-    entry?: string,
-    scriptPath?: string,
-    realpath?: (path: string) => string,
-  ): boolean;
-}
-
 declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
   type ContributionRecord = {
     externalReferences?: string[];
@@ -143,7 +106,12 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
   ): Array<{ commit: string; pullRequests: number[] }>;
   export function collectReleaseProvenanceOverrides(
     activeCommits: Array<{ body: string; hash: string }>,
+    releaseProvenance?: string[],
   ): Map<string, number[]>;
+  export function parseArgs(argv: string[]): {
+    releaseProvenance: string[];
+    [key: string]: unknown;
+  };
   export function resolvedReleasePullRequests(
     currentPullRequests: number[],
     mainPullRequests: number[],
@@ -173,168 +141,4 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
   export function highlightCountError(sectionSource: string): string | undefined;
   export function isEligibleHandle(handle: string): boolean;
   export function ledgerChecks(...args: unknown[]): string[];
-}
-
-declare module "*openclaw-live-updater/scripts/update-main.mjs" {
-  type GatewayDeployment = Record<string, unknown> & {
-    entrypoint: string;
-    exitTimeoutSeconds?: number;
-    workingDirectory?: string | null;
-  };
-  type UpdateResult = Record<string, unknown> & {
-    actions: Record<string, unknown>;
-    buildBefore: Record<string, unknown>;
-    changedPaths?: string[];
-    macTarget?: Record<string, unknown>;
-    release?: () => void;
-  };
-  export function originMatches(remoteUrl: string): boolean;
-  export function formatUpdateFailure(error: unknown): {
-    schemaVersion: 1;
-    ok: false;
-    error: {
-      code: string;
-      message: string;
-      diagnostics: Record<string, unknown>;
-    };
-  };
-  export function isOwnedGatewayEntrypoint(
-    checkout: string,
-    home: string,
-    entrypoint: string,
-  ): boolean;
-  export function isGatewayProbeResponse(route: string, payload: unknown): boolean;
-  export function parseLaunchctlArguments(output: string): string[];
-  export function resolveManagedGatewayEntrypoint(
-    programArguments: string[],
-    home: string,
-    stateDir?: string,
-  ): string | null;
-  export function resolveLaunchAgentExitTimeoutSeconds(value: unknown): number;
-  export function assertNoSystemLaunchDaemonOwnership(
-    label: string,
-    dependencies?: {
-      readdirSync?: (path: string) => string[];
-      spawnSync?: (
-        command: string,
-        args: string[],
-        options?: Record<string, unknown>,
-      ) => { status: number | null; stdout?: string; stderr?: string };
-    },
-  ): void;
-  export function replaceLaunchAgentProgramArgument(
-    programArguments: unknown,
-    index: number,
-    expected: string,
-    replacement: string,
-  ): string[];
-  export function repointManagedGatewayDeployment(
-    checkout: string,
-    deployment: GatewayDeployment,
-    replaceEntrypoint: (deployment: GatewayDeployment, replacement: string) => void,
-    inspectDeployment?: (checkout: string) => GatewayDeployment | null,
-  ): GatewayDeployment & { changed: boolean; previousEntrypoint?: string };
-  export function runBuiltGatewayCall(
-    checkout: string,
-    method: string,
-    params: Record<string, unknown>,
-    deployment?: GatewayDeployment | null,
-  ): string;
-  export function classifyActions(
-    changedPaths: string[],
-    options: Record<string, unknown>,
-  ): Record<string, unknown>;
-  export function inspectBuildState(checkout: string, expectedSha: string): UpdateResult;
-  export function acquireMaintenanceLock(
-    checkout: string,
-    requestedPath?: string,
-  ): {
-    acquired: boolean;
-    owner: {
-      pid: number;
-      checkout?: string;
-      manualRecoveryRequired?: boolean;
-      processGroupId?: number;
-      processTreeState?: string;
-      reason?: string;
-      serviceState?: string;
-      startedAt?: string;
-    };
-    retainForCleanupFailure?: (details?: {
-      manualRecoveryRequired?: boolean;
-      phase?: string;
-      processGroupId?: number;
-      processTreeState?: string;
-      serviceState?: string;
-    }) => Record<string, unknown>;
-    release?: () => void;
-  };
-  export function parseGatewayLogAudit(
-    output: string,
-    sinceMs: number,
-    sourceRoot?: string | null,
-    managedSourceRoots?: string[] | null,
-  ): Record<string, unknown>;
-  export function resolveManagedPluginSourceRoots(report: unknown): string[] | null;
-  export function resolveManagedGatewaySourceRoot(
-    checkout: string,
-    deployment?: GatewayDeployment | null,
-  ): string;
-  export function prepareGatewaySuspension(
-    checkout: string,
-    callGateway?: (
-      checkout: string,
-      method: string,
-      params: { requestId: string },
-      deployment: GatewayDeployment | null,
-    ) => string,
-    deployment?: GatewayDeployment | null,
-  ):
-    | { status: "ready"; suspensionId: string }
-    | {
-        status: "busy";
-        reason: string;
-        retryAfterMs: number;
-        activeCount: number;
-        blockers: Array<{ kind: string; count: number; message: string }>;
-      };
-  export function runBuiltGatewayCli(
-    checkout: string,
-    args: string[],
-    deployment?: GatewayDeployment | null,
-    options?: { stderr?: "inherit" | "pipe"; timeoutMs?: number },
-  ): string;
-  export function verifyGatewayReadiness(
-    runCommand: (
-      command: string,
-      args: string[],
-      checkout: string,
-      options?: Record<string, unknown>,
-    ) => unknown | Promise<unknown>,
-    checkout: string,
-    expectedSha: string,
-    sleep?: (ms: number) => void | Promise<void>,
-    deployment?: GatewayDeployment | null,
-    options?: {
-      now?: () => number;
-      probeMilestones?: (deployment: GatewayDeployment) => {
-        listenerReady: boolean;
-        healthzReady: boolean;
-        readyzReady: boolean;
-      };
-      timing?: Record<string, unknown>;
-    },
-  ): Promise<Record<string, unknown>>;
-  export function findExactMacTarget(
-    processes: string,
-    executable: string,
-  ): { executable: string; pid: number } | null;
-  export function maintainMain(
-    options: Record<string, unknown>,
-    dependencies?: Record<string, unknown>,
-  ): Promise<UpdateResult>;
-  export function runLiveUpdaterMain(
-    argv?: string[],
-    dependencies?: Record<string, unknown>,
-  ): Promise<void>;
 }

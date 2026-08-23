@@ -1,5 +1,6 @@
 import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatAudioTranscriptForAgent } from "openclaw/plugin-sdk/media-understanding-runtime";
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
 import { isMatrixMediaSizeLimitError } from "../media-errors.js";
 import { isLikelyBareFilename } from "../media-text.js";
@@ -20,7 +21,6 @@ import type { MatrixHandlerRuntimeConfig } from "./handler-types.js";
 import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions, stripMatrixMentionPrefix } from "./mentions.js";
 import {
-  formatMatrixAudioTranscript,
   isMatrixAudioContent,
   resolveMatrixPreflightAudioTranscript,
   sendMatrixPreflightAudioTranscriptEcho,
@@ -28,7 +28,7 @@ import {
 import { createRoomHistoryTracker, type HistoryEntry } from "./room-history.js";
 import { resolveMatrixInboundRoute } from "./route.js";
 import { logInboundDrop } from "./runtime-api.js";
-import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
+import type { MatrixRawEvent } from "./types.js";
 
 export async function resolveMatrixIngressContent(config: {
   handler: MatrixHandlerRuntimeConfig;
@@ -95,6 +95,7 @@ export async function resolveMatrixIngressContent(config: {
     effectiveGroupAllowFrom,
     effectiveRoomUsers,
   } = access;
+  const { messageIngress, resolveMessageIngress } = accessState;
   let content = accessContent;
   let pollSnapshotPromise: Promise<MatrixPollSnapshot | null> | null = null;
   const getPollSnapshot = async (): Promise<MatrixPollSnapshot | null> => {
@@ -327,7 +328,7 @@ export async function resolveMatrixIngressContent(config: {
   const canDetectMention = agentMentionRegexes.length > 0 || hasExplicitMention;
   if (mentionDecision.shouldSkip) {
     const pendingHistoryBody = preflightAudioTranscript
-      ? formatMatrixAudioTranscript(preflightAudioTranscript)
+      ? formatAudioTranscriptForAgent(preflightAudioTranscript)
       : pendingHistoryText || pendingHistoryPollText;
     if (historyLimit > 0 && pendingHistoryBody) {
       const pendingEntry: HistoryEntry = {
@@ -371,7 +372,7 @@ export async function resolveMatrixIngressContent(config: {
     content = {
       msgtype: "m.text",
       body: pollSnapshot.text,
-    } as unknown as RoomMessageEventContent;
+    };
   }
 
   let media: {
@@ -447,7 +448,7 @@ export async function resolveMatrixIngressContent(config: {
     bodyText = preflightMedia.placeholder;
   }
   if (preflightAudioTranscript) {
-    const transcriptBody = formatMatrixAudioTranscript(preflightAudioTranscript);
+    const transcriptBody = formatAudioTranscriptForAgent(preflightAudioTranscript);
     bodyText =
       !bodyText || bodyText === media?.placeholder
         ? transcriptBody
@@ -521,6 +522,8 @@ export async function resolveMatrixIngressContent(config: {
   const triggerSnapshot = preparedTrigger;
 
   return {
+    messageIngress,
+    resolveMessageIngress,
     route: _route,
     hasExplicitSessionBinding,
     roomConfig,

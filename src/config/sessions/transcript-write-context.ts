@@ -1,49 +1,28 @@
-// Transcript write contexts let nested append paths reuse an already-owned session write lock.
+// Transcript write contexts carry the admitted run fence and teardown tracking
+// through nested session-manager callbacks.
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 
-type OwnedSessionTranscriptWriteContext = {
-  sessionFile?: string;
-  sessionKey?: string;
-  sessionTarget?: SessionTranscriptWriteLockTarget;
-  canAdvanceSessionEntryCache?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
-  publishSessionFileSnapshot?: (snapshot: OwnedSessionTranscriptCacheSnapshot) => boolean;
-  withSessionWriteLock: <T>(
-    run: () => Promise<T> | T,
-    options?: OwnedSessionTranscriptWriteOptions<T>,
-  ) => Promise<T>;
-};
-
-export type SessionTranscriptWriteLockTarget = {
+type SessionTranscriptWriteTarget = {
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
   storePath?: string;
+  expectedLifecycleRevision?: string;
+  expectedWriterRunId?: string;
 };
 
-export type OwnedSessionTranscriptWriteOptions<T> = {
-  publishOwnedWrite?: boolean;
-  resolvePublishedEntries?: (result: T) => readonly OwnedSessionTranscriptPublishedEntry[];
-  resolvePublishedEntriesAfterFailure?: () => readonly OwnedSessionTranscriptPublishedEntry[];
-};
-
-export type OwnedSessionTranscriptPublishedEntry =
-  | { kind: "id"; id: string }
-  | { kind: "header"; serialized: string }
-  | { kind: "serialized"; serialized: string };
-
-export type OwnedSessionTranscriptCacheSnapshot = {
-  dev: bigint;
-  ino: bigint;
-  size: bigint;
-  mtimeNs: bigint;
-  ctimeNs: bigint;
+export type OwnedSessionTranscriptWriteContext = {
+  sessionFile?: string;
+  sessionKey?: string;
+  sessionTarget?: SessionTranscriptWriteTarget;
+  withTranscriptWrite: <T>(run: () => Promise<T> | T) => Promise<T>;
 };
 
 const ownedTranscriptWriteContext = new AsyncLocalStorage<OwnedSessionTranscriptWriteContext>();
 
 // Compare concrete files when available; SQLite markers fall back to session
-// identity because they are storage references rather than lockable paths.
+// identity because they are storage references rather than filesystem paths.
 function normalizeConcretePathForCompare(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed || !path.isAbsolute(trimmed) || !trimmed.endsWith(".jsonl")) {
@@ -56,9 +35,9 @@ function contextMatches(params: {
   context: OwnedSessionTranscriptWriteContext;
   sessionFile?: string;
   sessionKey?: string;
-  sessionTarget?: SessionTranscriptWriteLockTarget;
+  sessionTarget?: SessionTranscriptWriteTarget;
 }): boolean {
-  const normalizeTarget = (target: SessionTranscriptWriteLockTarget | undefined) => {
+  const normalizeTarget = (target: SessionTranscriptWriteTarget | undefined) => {
     const agentId = target?.agentId?.trim();
     const sessionId = target?.sessionId?.trim();
     const sessionKey = target?.sessionKey?.trim();
@@ -94,7 +73,7 @@ function contextMatches(params: {
   return Boolean(contextSessionKey && sessionKey && contextSessionKey === sessionKey);
 }
 
-/** Runs transcript writes with an owned write-lock context. */
+/** Runs transcript writes with the admitted run's teardown and writer-fence context. */
 export async function withOwnedSessionTranscriptWrites<T>(
   context: OwnedSessionTranscriptWriteContext,
   run: () => Promise<T>,
@@ -102,7 +81,7 @@ export async function withOwnedSessionTranscriptWrites<T>(
   return await ownedTranscriptWriteContext.run(context, run);
 }
 
-/** Runs detached work without retaining an attempt-owned transcript lock. */
+/** Runs detached work without retaining an attempt-owned transcript context. */
 export function runWithoutOwnedSessionTranscriptWrites<T>(run: () => T): T {
   return ownedTranscriptWriteContext.exit(run);
 }
@@ -111,76 +90,67 @@ export function bindOwnedSessionTranscriptWrites<TArgs extends unknown[], TResul
   context: OwnedSessionTranscriptWriteContext,
   run: (...args: TArgs) => TResult,
 ): (...args: TArgs) => TResult {
-  // Bind callbacks that will run later but must still see the parent write-lock context.
   return (...args) => ownedTranscriptWriteContext.run(context, () => run(...args));
 }
 
-export async function runWithOwnedSessionTranscriptWriteLock<T>(
+/** Returns the matching admitted-run fence for a durable write boundary. */
+export function getOwnedSessionTranscriptWriterFence(
   params: {
     sessionFile?: string;
     sessionKey?: string;
-    sessionTarget?: SessionTranscriptWriteLockTarget;
-  },
-  run: () => Promise<T> | T,
-): Promise<T> {
-  return await runWithOwnedSessionTranscriptWriteContext(params, run);
-}
-
-export async function acquireOwnedSessionTranscriptWriteLock(params: {
-  sessionFile?: string;
-  sessionKey?: string;
-  sessionTarget?: SessionTranscriptWriteLockTarget;
-}): Promise<{ release: () => Promise<void> } | undefined> {
+    sessionTarget?: SessionTranscriptWriteTarget;
+  } = {},
+):
+  | {
+      expectedLifecycleRevision?: string;
+      expectedWriterRunId: string;
+    }
+  | undefined {
   const context = ownedTranscriptWriteContext.getStore();
-  if (!context || !contextMatches({ context, ...params })) {
+  if (!context || (Object.keys(params).length > 0 && !contextMatches({ context, ...params }))) {
     return undefined;
   }
-
-  // Keep the owner callback pending until release so release-shaped callers
-  // cannot outlive the logical writer lock or leak a tracked nested operation.
-  let markAcquired!: () => void;
-  let rejectAcquire!: (error: unknown) => void;
-  const acquired = new Promise<void>((resolve, reject) => {
-    markAcquired = resolve;
-    rejectAcquire = reject;
-  });
-  let releaseOperation!: () => void;
-  const releaseRequested = new Promise<void>((resolve) => {
-    releaseOperation = resolve;
-  });
-  const operation = context.withSessionWriteLock(async () => {
-    markAcquired();
-    await releaseRequested;
-  });
-  void operation.catch(rejectAcquire);
-  await acquired;
-
-  let released = false;
+  const target = context.sessionTarget;
+  const expectedWriterRunId = target?.expectedWriterRunId?.trim();
+  if (!expectedWriterRunId) {
+    return undefined;
+  }
+  const expectedLifecycleRevision = target?.expectedLifecycleRevision;
   return {
-    release: async () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      releaseOperation();
-      await operation;
-    },
+    ...(expectedLifecycleRevision !== undefined ? { expectedLifecycleRevision } : {}),
+    expectedWriterRunId,
   };
 }
 
-async function runWithOwnedSessionTranscriptWriteContext<T>(
+/** Applies the admitted-run fence inherited by a matching synchronous writer. */
+export function withOwnedSessionTranscriptWriterFence<T extends SessionTranscriptWriteTarget>(
+  scope: T,
+): T {
+  const fence = getOwnedSessionTranscriptWriterFence({
+    sessionKey: scope.sessionKey,
+    sessionTarget: scope,
+  });
+  return fence ? { ...scope, ...fence } : scope;
+}
+
+export class SessionTranscriptWriterClaimReboundError extends Error {
+  constructor(sessionKey: string | undefined) {
+    super(`session writer claim changed before transcript persistence: ${sessionKey ?? "unknown"}`);
+    this.name = "SessionTranscriptWriterClaimReboundError";
+  }
+}
+
+export async function runWithOwnedSessionTranscriptWrite<T>(
   params: {
     sessionFile?: string;
     sessionKey?: string;
-    sessionTarget?: SessionTranscriptWriteLockTarget;
+    sessionTarget?: SessionTranscriptWriteTarget;
   },
   run: () => Promise<T> | T,
-  options?: OwnedSessionTranscriptWriteOptions<T>,
 ): Promise<T> {
   const context = ownedTranscriptWriteContext.getStore();
   if (!context || !contextMatches({ context, ...params })) {
-    // No matching owner means the caller is responsible for acquiring its normal lock.
     return await run();
   }
-  return await context.withSessionWriteLock(run, options);
+  return await context.withTranscriptWrite(run);
 }

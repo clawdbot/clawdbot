@@ -2,16 +2,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Doctor enumeration cold-loads this closure; the state-DB helpers stay behind a
+// lazy doctor-repair-runtime import so enumeration never pulls the kysely/state-db graph.
+import type { OpenClawStateDatabaseSchemaMigration } from "openclaw/plugin-sdk/doctor-repair-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   archiveLegacyStateSource,
-  detectOpenClawStateDatabaseSchemaMigrations,
   type PluginDoctorStateMigration,
   type PluginStateKeyedStore,
-  repairOpenClawStateDatabaseSchema,
-  type OpenClawStateDatabaseSchemaMigration,
-} from "openclaw/plugin-sdk/runtime-doctor";
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildVoiceCallLegacyJsonlEventKey,
   CALL_RECORD_CHUNK_MAX_ENTRIES,
@@ -88,12 +89,6 @@ type PluginDoctorStateMigrationParams = Parameters<
   PluginDoctorStateMigration["detectLegacyState"]
 >[0];
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 /** Return Voice Call agents whose templated core session stores need migration. */
 export function resolveSessionStoreAgentIds(params: { cfg: OpenClawConfig }): string[] {
   const agentIds = new Set<string>();
@@ -102,14 +97,14 @@ export function resolveSessionStoreAgentIds(params: { cfg: OpenClawConfig }): st
     if (!entry) {
       continue;
     }
-    const config = entry.config === undefined ? {} : asRecord(entry.config);
+    const config = entry.config === undefined ? {} : asOptionalRecord(entry.config);
     if (!config) {
       continue;
     }
     agentIds.add(normalizeAgentId(typeof config.agentId === "string" ? config.agentId : undefined));
-    const numbers = asRecord(config.numbers);
+    const numbers = asOptionalRecord(config.numbers);
     for (const route of Object.values(numbers ?? {})) {
-      const agentId = asRecord(route)?.agentId;
+      const agentId = asOptionalRecord(route)?.agentId;
       if (typeof agentId === "string") {
         agentIds.add(normalizeAgentId(agentId));
       }
@@ -143,8 +138,14 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
   switch (migration.kind) {
     case "agent-databases-composite-primary-key":
       return "agent database registry primary key -> agent_id,path";
+    case "agent-databases-relative-paths-v9":
+      return "agent database registry paths -> state-relative paths";
     case "audit-events-v2":
       return "audit event ledger -> versioned message lifecycle schema";
+    case "commitments-retirement-v7":
+      return "retired commitments storage -> removed table and indexes";
+    case "worker-placement-execution-mode-v8":
+      return "cloud worker placements -> execution-mode claims";
     case "operator-approvals-system-agent":
       return "operator approvals -> OpenClaw system changes";
     case "session-watch-cursor-provenance-v4":
@@ -303,6 +304,8 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     id: "voice-call-calls-jsonl-to-plugin-state",
     label: "Voice Call call log",
     async detectLegacyState(params) {
+      const { detectOpenClawStateDatabaseSchemaMigrations } =
+        await import("openclaw/plugin-sdk/doctor-repair-runtime");
       const storePath = resolveVoiceCallStorePath(params);
       const filePath = resolveVoiceCallLegacyCallLogPath(storePath);
       const { entries } = await readLegacyCallRecords(filePath);
@@ -327,6 +330,8 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       };
     },
     async migrateLegacyState(params) {
+      const { detectOpenClawStateDatabaseSchemaMigrations, repairOpenClawStateDatabaseSchema } =
+        await import("openclaw/plugin-sdk/doctor-repair-runtime");
       const changes: string[] = [];
       const warnings: string[] = [];
       const storePath = resolveVoiceCallStorePath(params);

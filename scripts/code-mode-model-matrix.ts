@@ -669,8 +669,8 @@ async function hashRuntimeArtifacts(repoRoot: string): Promise<string> {
 
 async function buildMatrixCliArtifacts(repoRoot: string): Promise<void> {
   for (const args of [
-    ["scripts/bundled-plugin-assets.mjs", "--phase", "build"],
-    ["scripts/tsdown-build.mjs", "--no-clean"],
+    ["--import", "tsx", "scripts/bundled-plugin-assets.mts", "--phase", "build"],
+    ["--import", "tsx", "scripts/tsdown-build.mts", "--no-clean"],
     ["scripts/runtime-postbuild.mjs"],
   ]) {
     const { stderr, stdout } = await execFileAsync(process.execPath, args, {

@@ -52,6 +52,13 @@ describe("normalizeJsonSchemaForTypeBox", () => {
     ).toBeUndefined();
   });
 
+  it.each(["#%", "#foo%zz", "#anchor%"])(
+    "reports malformed percent-encoding in local ref anchor %s as unresolved instead of throwing",
+    (ref) => {
+      expect(findJsonSchemaShapeError({ $ref: ref })).toBe("<schema>.$ref: unresolved ref");
+    },
+  );
+
   it("preserves Control UI nullable value semantics", () => {
     const schema = {
       type: "string",

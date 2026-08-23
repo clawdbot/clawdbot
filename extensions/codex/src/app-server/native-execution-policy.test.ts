@@ -72,6 +72,8 @@ describe("resolveCodexNativeExecutionPolicy", () => {
       requestedExecHost: "node",
       effectiveExecHost: "node",
       node: "worker-1",
+      blockReason:
+        "OpenClaw exec host=node is active for this session. Codex app-server native execution cannot route shell, filesystem, MCP, or app-backed work through the selected OpenClaw node.",
     });
   });
 
@@ -164,12 +166,65 @@ describe("resolveCodexNativeExecutionPolicy", () => {
     });
   });
 
+  it("does not read an unscoped session entry for an explicit multi-agent roster", () => {
+    sessionStoreMocks.getSessionEntry.mockReturnValue({
+      sessionId: "session-1",
+      updatedAt: 1,
+      execHost: "node",
+      execNode: "worker-6",
+    });
+
+    expect(
+      resolveCodexNativeExecutionPolicy({
+        config: {
+          tools: { exec: { host: "gateway" } },
+          agents: { entries: { alpha: {}, beta: {} } },
+        },
+        sessionKey: "node-session",
+        agentId: "alpha",
+        readRuntimeSessionEntry: true,
+      }),
+    ).toMatchObject({
+      nativeToolSurfaceAllowed: true,
+      requestedExecHost: "gateway",
+      effectiveExecHost: "gateway",
+    });
+    expect(sessionStoreMocks.getSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("uses global policy when an explicit multi-agent roster has no selected agent", () => {
+    sessionStoreMocks.getSessionEntry.mockReturnValue({
+      sessionId: "session-1",
+      updatedAt: 1,
+      execHost: "node",
+      execNode: "worker-6",
+    });
+
+    expect(
+      resolveCodexNativeExecutionPolicy({
+        config: {
+          tools: { exec: { host: "gateway" } },
+          agents: { entries: { alpha: {}, beta: {} } },
+        },
+        sessionKey: "node-session",
+        readRuntimeSessionEntry: true,
+      }),
+    ).toMatchObject({
+      nativeToolSurfaceAllowed: true,
+      requestedExecHost: "gateway",
+      effectiveExecHost: "gateway",
+    });
+    expect(sessionStoreMocks.getSessionEntry).not.toHaveBeenCalled();
+  });
+
   it("honors agent exec config before global exec config", () => {
     expect(
       resolveCodexNativeExecutionPolicy({
         config: {
           tools: { exec: { host: "gateway" } },
-          agents: { list: [{ id: "main", tools: { exec: { host: "node", node: "worker-4" } } }] },
+          agents: {
+            entries: { main: { tools: { exec: { host: "node", node: "worker-4" } } } },
+          },
         },
         sessionKey: "agent:main:session-1",
       }),

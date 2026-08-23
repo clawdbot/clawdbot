@@ -14,6 +14,19 @@ vi.mock("openclaw/plugin-sdk/gateway-method-runtime", () => ({
   dispatchGatewayMethod,
 }));
 
+vi.mock("node:timers", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:timers")>();
+  return {
+    ...actual,
+    // The canonical reader deliberately captures Node timers. Route them through
+    // the test clock here so the 30-second response-flush contract stays fast.
+    setTimeout: ((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) =>
+      globalThis.setTimeout(callback, delay, ...args)) as typeof actual.setTimeout,
+    clearTimeout: ((timer: ReturnType<typeof globalThis.setTimeout> | undefined) =>
+      globalThis.clearTimeout(timer)) as typeof actual.clearTimeout,
+  };
+});
+
 type CapturedResponse = {
   statusCode: number;
   headers: Record<string, string | number | readonly string[]>;
@@ -46,6 +59,12 @@ function createHangingRequest() {
     },
   });
   return req as import("node:http").IncomingMessage;
+}
+
+function expectBodyReadListenersCleaned(req: import("node:http").IncomingMessage) {
+  for (const event of ["data", "end", "error", "close"] as const) {
+    expect(req.listenerCount(event), event).toBe(0);
+  }
 }
 
 function createResponse() {
@@ -250,6 +269,20 @@ describe("admin-http-rpc plugin handler", () => {
     expect(dispatchGatewayMethod).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["", "request body must be JSON"],
+    ["{", "request body must be valid JSON"],
+  ])("preserves the invalid JSON response for %j", async (body, message) => {
+    const result = await invoke(body);
+
+    expect(result.captured.statusCode).toBe(400);
+    expect(result.json).toEqual({
+      ok: false,
+      error: { type: "invalid_request", message },
+    });
+    expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+  });
+
   it("only accepts POST", async () => {
     const result = await invoke({ method: "status" }, "GET");
 
@@ -261,7 +294,8 @@ describe("admin-http-rpc plugin handler", () => {
   it("times out incomplete request bodies before dispatch", async () => {
     vi.useFakeTimers();
     try {
-      const resultPromise = invokeRequest(createHangingRequest());
+      const req = createHangingRequest();
+      const resultPromise = invokeRequest(req);
       await vi.advanceTimersByTimeAsync(30_000);
       const result = await resultPromise;
 
@@ -274,9 +308,74 @@ describe("admin-http-rpc plugin handler", () => {
           message: "Request body timeout",
         },
       });
+      expectBodyReadListenersCleaned(req);
       expect(dispatchGatewayMethod).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("settles an early client close and removes request-body listeners", async () => {
+    const req = createHangingRequest();
+    const resultPromise = invokeRequest(req);
+
+    req.emit("close");
+    const result = await resultPromise;
+
+    expect(result.captured.statusCode).toBe(400);
+    expect(result.json).toEqual({
+      ok: false,
+      error: {
+        type: "invalid_request",
+        message: "Connection closed",
+      },
+    });
+    expectBodyReadListenersCleaned(req);
+    expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+  });
+
+  it("flushes a real HTTP 413 response before closing an oversized request", async () => {
+    const server = createServer((req, res) => {
+      void handleAdminHttpRpcRequest(req, res);
+    });
+    let socket: Socket | undefined;
+    try {
+      const port = await listen(server);
+      socket = connect({ host: "127.0.0.1", port });
+      await new Promise<void>((resolve) => {
+        socket?.once("connect", resolve);
+      });
+
+      socket.write(
+        [
+          "POST /api/v1/admin/rpc HTTP/1.1",
+          "Host: 127.0.0.1",
+          "Content-Type: application/json",
+          `Content-Length: ${1024 * 1024 + 1}`,
+          "Connection: keep-alive",
+          "",
+          "{",
+        ].join("\r\n"),
+      );
+
+      const response = await readSocketResponse(socket);
+      const [, rawBody = ""] = response.split("\r\n\r\n", 2);
+
+      expect(response).toContain("HTTP/1.1 413");
+      expect(response).toContain("Connection: close");
+      expect(JSON.parse(rawBody) as unknown).toEqual({
+        ok: false,
+        error: {
+          type: "invalid_request",
+          message: "Payload too large",
+        },
+      });
+      expect(dispatchGatewayMethod).not.toHaveBeenCalled();
+    } finally {
+      socket?.destroy();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     }
   });
 

@@ -48,6 +48,11 @@ on:
         required: false
         default: false
         type: boolean
+      discord_provider_mode:
+        description: Provider mode for the Discord live transport lane
+        required: false
+        default: live-frontier
+        type: string
       run_whatsapp:
         description: Run the WhatsApp live lane
         required: false
@@ -92,6 +97,14 @@ on:
         description: Optional comma-separated Discord scenario ids
         required: false
         type: string
+      discord_provider_mode:
+        description: Provider mode for the Discord live transport lane
+        required: false
+        default: live-frontier
+        type: choice
+        options:
+          - live-frontier
+          - mock-openai
       whatsapp_scenario:
         description: Optional comma-separated WhatsApp scenario ids
         required: false
@@ -107,6 +120,7 @@ permissions:
 concurrency:
   group: qa-lab-all-lanes-${{ github.event_name != 'schedule' && inputs.ref || github.sha }}
   cancel-in-progress: false
+  queue: max
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -120,6 +134,7 @@ jobs:
   authorize_actor:
     name: Authorize workflow actor
     runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 10
     outputs:
       authorized: ${{ steps.permission.outputs.authorized }}
     steps:
@@ -158,6 +173,7 @@ jobs:
     needs: authorize_actor
     if: needs.authorize_actor.outputs.authorized == 'true'
     runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 30
     outputs:
       selected_revision: ${{ steps.validate.outputs.selected_revision }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
@@ -258,6 +274,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -327,6 +344,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -373,6 +391,25 @@ jobs:
             --allow-failures \
             --output-dir "${output_dir}/runtime-suite"
 
+      - name: Run pinned GPT-5.4 gateway restart runtime pair
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_LIVE_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          pnpm openclaw qa suite \
+            --repo-root . \
+            --provider-mode live-frontier \
+            --scenario gateway-restart-multi-live \
+            --concurrency 1 \
+            --model openai/gpt-5.4 \
+            --alt-model openai/gpt-5.4 \
+            --runtime-pair openclaw,codex \
+            --fast \
+            --output-dir "${{ steps.run_lane.outputs.output_dir }}/gateway-restart-gpt-5.4-runtime-pair"
+
       - name: Generate live runtime token-efficiency report
         if: steps.run_lane.outcome == 'success'
         shell: bash
@@ -413,6 +450,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -477,6 +515,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -612,6 +651,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -709,6 +749,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -728,11 +769,24 @@ jobs:
           OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           INPUT_SCENARIO: ${{ github.event_name == 'workflow_dispatch' && inputs.discord_scenario || '' }}
+          PROVIDER_MODE: ${{ inputs.discord_provider_mode || 'live-frontier' }}
         run: |
           set -euo pipefail
 
           output_dir=".artifacts/qa-e2e/discord-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           scenario_args=()
+          provider_args=(--provider-mode "${PROVIDER_MODE}")
+
+          if [[ "${PROVIDER_MODE}" == "live-frontier" ]]; then
+            provider_args+=(
+              --model openai/gpt-5.6-luna
+              --alt-model "${OPENCLAW_CI_OPENAI_FALLBACK_MODEL}"
+              --fast
+            )
+          elif [[ "${PROVIDER_MODE}" != "mock-openai" ]]; then
+            echo "Unsupported Discord provider mode: ${PROVIDER_MODE}" >&2
+            exit 2
+          fi
 
           if [[ -n "${INPUT_SCENARIO// }" ]]; then
             IFS=',' read -r -a raw_scenarios <<<"${INPUT_SCENARIO}"
@@ -749,10 +803,7 @@ jobs:
           pnpm openclaw qa discord \
             --repo-root . \
             --output-dir "${output_dir}" \
-            --provider-mode live-frontier \
-            --model openai/gpt-5.6-luna \
-            --alt-model "${OPENCLAW_CI_OPENAI_FALLBACK_MODEL}" \
-            --fast \
+            "${provider_args[@]}" \
             --credential-source convex \
             --credential-role ci \
             "${scenario_args[@]}"
@@ -787,6 +838,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -862,6 +914,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 

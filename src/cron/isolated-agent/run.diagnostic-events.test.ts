@@ -5,7 +5,7 @@ import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
 } from "../../infra/diagnostic-events.js";
-import { resetDiagnosticStateForTest } from "../../logging/diagnostic.js";
+import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
 
 vi.mock("../../agents/auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => false),
@@ -229,6 +229,13 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
             provider: "test-provider",
             model: "test-model",
             usage: { input: 50, output: 100, cacheRead: 7, cacheWrite: 3, total: 55 },
+            diagnosticUsage: {
+              input: 150,
+              output: 200,
+              cacheRead: 17,
+              cacheWrite: 13,
+              total: 380,
+            },
             lastCallUsage: { input: 40, output: 5, cacheRead: 6, cacheWrite: 4 },
           },
         },
@@ -237,8 +244,9 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       model: "fallback-model",
     });
 
+    let result: Awaited<ReturnType<typeof runCronIsolatedAgentTurn>> | undefined;
     try {
-      const result = await runCronIsolatedAgentTurn(makeParams());
+      result = await runCronIsolatedAgentTurn(makeParams());
       expect(result.status).toBe("ok");
     } finally {
       unsubscribe();
@@ -254,18 +262,19 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       provider: "test-provider",
       model: "test-model",
       usage: {
-        input: 50,
-        output: 100,
-        cacheRead: 7,
-        cacheWrite: 3,
-        promptTokens: 60,
-        total: 160,
+        input: 150,
+        output: 200,
+        cacheRead: 17,
+        cacheWrite: 13,
+        promptTokens: 180,
+        total: 380,
       },
       lastCallUsage: { input: 40, output: 5, cacheRead: 6, cacheWrite: 4 },
       context: { limit: 128000, used: 50 },
     });
     expect(usageEvents[0]?.durationMs).toEqual(expect.any(Number));
     expect(usageEvents[0]?.durationMs).toBeGreaterThanOrEqual(0);
+    expect(result?.usage).toEqual({ input_tokens: 50, output_tokens: 100, total_tokens: 160 });
   });
 
   it("does not emit model.usage when diagnostics are disabled", async () => {

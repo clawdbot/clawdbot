@@ -3,6 +3,12 @@ import { describe, expect, it } from "vitest";
 import { nextcloudTalkPlugin } from "./channel.js";
 
 describe("nextcloud-talk channel status", () => {
+  it("classifies room tokens as groups", () => {
+    expect(nextcloudTalkPlugin.messaging?.inferTargetChatType?.({ to: "room:abcdefgh" })).toBe(
+      "group",
+    );
+  });
+
   it("surfaces missing response feature probes as config issues", () => {
     const issues = nextcloudTalkPlugin.status?.collectStatusIssues?.([
       {

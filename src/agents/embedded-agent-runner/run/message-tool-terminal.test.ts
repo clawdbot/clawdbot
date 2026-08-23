@@ -71,7 +71,7 @@ describe("message-tool-only source replies", () => {
       context: createAfterToolCallContext({
         toolName: "message",
         args: { action: "send", message: "visible reply" },
-        result: createSuppressedSendResult(),
+        result: { content: [], details: {} },
       }),
       hookResult: { details: { result: { messageId: "discord-message-2" } } },
       expected: true,
@@ -139,15 +139,6 @@ describe("message-tool-only source replies", () => {
       expected: false,
     },
     {
-      label: "dry-run hook result",
-      context: createAfterToolCallContext({
-        toolName: "message",
-        args: { action: "send", message: "preview reply" },
-      }),
-      hookResult: { details: { deliveryStatus: "dry_run" } },
-      expected: false,
-    },
-    {
       label: "dry-run serialized result",
       context: createAfterToolCallContext({
         toolName: "message",
@@ -204,12 +195,13 @@ describe("message-tool-only source replies", () => {
     ).resolves.toEqual({
       content: [{ type: "text", text: "rewritten" }],
       details: { rewritten: true },
+      terminate: true,
     });
     expect(previousAfterToolCall).toHaveBeenCalledTimes(1);
     expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
   });
 
-  it("records delivery evidence without rewriting the default result", async () => {
+  it("terminates after a delivered completed source reply", async () => {
     const agent = {} as unknown as Agent;
     const onDeliveredSourceReply = vi.fn();
     installMessageToolOnlyTerminalHook({
@@ -225,8 +217,25 @@ describe("message-tool-only source replies", () => {
           args: { action: "send", message: "visible reply" },
         }),
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ terminate: true });
     expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("continues after delivered progress", async () => {
+    const agent = {} as unknown as Agent;
+    installMessageToolOnlyTerminalHook({
+      agent,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    await expect(
+      agent.afterToolCall?.(
+        createAfterToolCallContext({
+          toolName: "message",
+          args: { action: "send", message: "still working", final: false },
+        }),
+      ),
+    ).resolves.toBeUndefined();
   });
 
   it("leaves existing after-tool-call output alone when the send failed", async () => {
@@ -298,6 +307,11 @@ function createAfterToolCallContext(params: {
       details: {
         status: "ok",
         deliveryStatus: "sent",
+        messageDelivery: {
+          status: params.args.dryRun ? "dryRun" : params.isError ? "failed" : "settled",
+          partialDelivery: false,
+          createdThreadIds: [],
+        },
         sourceReplySink: "internal-ui",
         sourceReply: { text: params.args.message },
       },
@@ -326,7 +340,15 @@ function createDirectSendResult(params: { messageId: string }): AfterToolCallCon
   };
   return {
     content: [{ type: "text", text: JSON.stringify(payload) }],
-    details: payload,
+    details: {
+      ...payload,
+      messageDelivery: {
+        status: "settled",
+        primaryPlatformMessageId: params.messageId,
+        partialDelivery: false,
+        createdThreadIds: [],
+      },
+    },
   };
 }
 
@@ -341,7 +363,14 @@ function createSuppressedSendResult(): AfterToolCallContext["result"] {
   };
   return {
     content: [{ type: "text", text: JSON.stringify(payload) }],
-    details: payload,
+    details: {
+      ...payload,
+      messageDelivery: {
+        status: "suppressed",
+        partialDelivery: false,
+        createdThreadIds: [],
+      },
+    },
   };
 }
 

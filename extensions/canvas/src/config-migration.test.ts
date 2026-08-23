@@ -1,82 +1,77 @@
-// Canvas tests cover config migration plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, test } from "vitest";
-import { migrateLegacyCanvasHostConfig } from "./config-migration.js";
+import { describe, expect, it } from "vitest";
+import { migrateCanvasHostConfig } from "./config-migration.js";
 
-describe("migrateLegacyCanvasHostConfig", () => {
-  test("moves legacy canvasHost into the Canvas plugin config", () => {
-    const result = migrateLegacyCanvasHostConfig({
-      canvasHost: {
-        enabled: false,
-        root: "~/canvas",
-        liveReload: false,
-      },
+describe("migrateCanvasHostConfig", () => {
+  it("keeps only enabled from the legacy root host config", () => {
+    const result = migrateCanvasHostConfig({
+      canvasHost: { enabled: false, root: "~/canvas", port: 18793, liveReload: true },
     } as OpenClawConfig);
 
-    if (!result) {
-      throw new Error("expected Canvas config migration result");
-    }
-    expect(result.changes).toEqual(["migrated canvasHost to plugins.entries.canvas.config.host"]);
-    expect(result.config).toEqual({
-      plugins: {
-        entries: {
-          canvas: {
-            config: {
-              host: {
-                enabled: false,
-                root: "~/canvas",
-                liveReload: false,
-              },
-            },
-          },
+    expect(result).toEqual({
+      config: {
+        plugins: {
+          entries: { canvas: { config: { host: { enabled: false } } } },
         },
       },
+      changes: ["Migrated canvasHost.enabled to plugins.entries.canvas.config.host.enabled."],
     });
   });
 
-  test("preserves plugin-owned Canvas host values when both shapes exist", () => {
-    const result = migrateLegacyCanvasHostConfig({
-      canvasHost: {
-        enabled: false,
-        root: "~/legacy-canvas",
-        liveReload: false,
-      },
+  it("strips retired plugin host keys and preserves explicit plugin enablement", () => {
+    const host = { enabled: true, root: "~/current", port: 18793, liveReload: false };
+    const config = {
+      canvasHost: { enabled: false, root: "~/legacy" },
       plugins: {
         entries: {
           canvas: {
             enabled: true,
             config: {
-              host: {
-                root: "~/plugin-canvas",
-              },
+              host,
             },
           },
         },
       },
-    } as OpenClawConfig);
+    } as OpenClawConfig;
 
-    if (!result) {
-      throw new Error("expected Canvas config migration result");
-    }
-    expect(result.config).toEqual({
+    const result = migrateCanvasHostConfig(config);
+
+    expect(result?.config).toEqual({
       plugins: {
         entries: {
-          canvas: {
-            enabled: true,
-            config: {
-              host: {
-                enabled: false,
-                root: "~/plugin-canvas",
-                liveReload: false,
-              },
-            },
-          },
+          canvas: { enabled: true, config: { host: { enabled: true } } },
         },
       },
     });
+    expect(result?.changes).toEqual([
+      "Migrated canvasHost.enabled to plugins.entries.canvas.config.host.enabled.",
+      "Removed retired Canvas host config: plugins.entries.canvas.config.host.root, plugins.entries.canvas.config.host.port, plugins.entries.canvas.config.host.liveReload.",
+    ]);
+    expect(host).toEqual({
+      enabled: true,
+      root: "~/current",
+      port: 18793,
+      liveReload: false,
+    });
   });
 
-  test("ignores configs without legacy canvasHost", () => {
-    expect(migrateLegacyCanvasHostConfig({} as OpenClawConfig)).toBeNull();
+  it("removes an empty retired host object without creating replacement config", () => {
+    expect(
+      migrateCanvasHostConfig({
+        plugins: { entries: { canvas: { config: { host: { root: "~/canvas" } } } } },
+      }),
+    ).toEqual({
+      config: { plugins: { entries: { canvas: { config: {} } } } },
+      changes: ["Removed retired Canvas host config: plugins.entries.canvas.config.host.root."],
+    });
+  });
+
+  it("is idempotent for canonical or absent config", () => {
+    expect(migrateCanvasHostConfig({} as OpenClawConfig)).toBeNull();
+    expect(
+      migrateCanvasHostConfig({
+        plugins: { entries: { canvas: { config: { host: { enabled: true } } } } },
+      }),
+    ).toBeNull();
   });
 });

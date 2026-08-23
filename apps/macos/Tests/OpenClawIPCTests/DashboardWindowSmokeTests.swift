@@ -92,12 +92,14 @@ struct DashboardWindowSmokeTests {
 
     @Test func `dashboard window controller shows and closes`() throws {
         let url = try #require(URL(string: "http://127.0.0.1:18789/control/#token=device-token"))
+        let windowAutosaveName = "OpenClawDashboardWindow-Test-\(UUID().uuidString)"
         let controller = DashboardWindowController(
             url: url,
             auth: DashboardWindowAuth(
                 gatewayUrl: "ws://127.0.0.1:18789/control/",
                 token: "device-token",
-                password: nil))
+                password: nil),
+            windowAutosaveName: windowAutosaveName)
         controller.show()
         #expect(controller.window?.styleMask.contains(.titled) == true)
         #expect(controller.window?.styleMask.contains(.closable) == true)
@@ -115,7 +117,7 @@ struct DashboardWindowSmokeTests {
         #expect(controller.window?.toolbar?.isVisible == true)
         #expect((controller.window?.frame.width ?? 0) >= DashboardWindowLayout.windowMinSize.width)
         #expect((controller.window?.frame.height ?? 0) >= DashboardWindowLayout.windowMinSize.height)
-        #expect(controller.window?.frameAutosaveName == DashboardWindowLayout.windowFrameAutosaveName)
+        #expect(controller.window?.frameAutosaveName == windowAutosaveName)
         controller.closeDashboard()
     }
 

@@ -1,8 +1,7 @@
 // Default CLI dependency surface with lazy outbound channel send adapters.
-import { normalizeChannelId } from "../channels/registry.js";
+import { normalizeChatChannelId } from "../channels/registry.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { CliDeps } from "./deps.types.js";
-import { CLI_OUTBOUND_SEND_FACTORY } from "./outbound-send-mapping.js";
 
 /**
  * Lazy-loaded per-channel send functions, keyed by channel ID.
@@ -46,7 +45,7 @@ const NON_CHANNEL_DEP_KEYS = new Set([
 ]);
 
 function resolveKnownChannelId(raw: string): string | undefined {
-  return normalizeChannelId(raw) ?? undefined;
+  return normalizeChatChannelId(raw) ?? undefined;
 }
 
 // Per-channel module caches for lazy loading.
@@ -86,13 +85,6 @@ export function createDefaultDeps(): CliDeps {
       } satisfies RuntimeSendModule;
     });
 
-  Object.defineProperty(deps, CLI_OUTBOUND_SEND_FACTORY, {
-    configurable: false,
-    enumerable: false,
-    value: resolveSender,
-    writable: false,
-  });
-
   return new Proxy(deps, {
     get(target, property, receiver) {
       if (typeof property !== "string") {
@@ -106,9 +98,9 @@ export function createDefaultDeps(): CliDeps {
       if (!channelId) {
         return existing;
       }
-      const sender = resolveSender(channelId);
-      Reflect.set(target, property, sender, receiver);
-      return sender;
+      // Synthesized senders re-enter the full channel adapter. Keep them off the
+      // enumerable target so transport dependency mapping cannot inject them back into it.
+      return resolveSender(channelId);
     },
   });
 }

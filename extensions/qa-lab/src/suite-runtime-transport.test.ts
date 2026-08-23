@@ -15,6 +15,7 @@ describe("qa suite transport helpers", () => {
     const state = createQaBusState();
     state.addOutboundMessage({
       to: "dm:qa-operator",
+      isError: true,
       text: "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.",
       senderId: "openclaw",
       senderName: "OpenClaw QA",
@@ -36,6 +37,7 @@ describe("qa suite transport helpers", () => {
 
     state.addOutboundMessage({
       to: "dm:qa-operator",
+      isError: true,
       text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.6-luna with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
       senderId: "openclaw",
       senderName: "OpenClaw QA",
@@ -54,6 +56,7 @@ describe("qa suite transport helpers", () => {
 
     state.addOutboundMessage({
       to: "channel:qa-room",
+      isError: true,
       text: "⚠️ ✉️ Message failed",
       senderId: "openclaw",
       senderName: "OpenClaw QA",
@@ -150,6 +153,7 @@ describe("qa suite transport helpers", () => {
     state.addOutboundMessage({
       accountId: "other",
       to: "dm:qa-operator",
+      isError: true,
       text: "⚠️ agent failed before reply: foreign account failure",
     });
     const expected = state.addOutboundMessage({
@@ -185,6 +189,7 @@ describe("qa suite transport helpers", () => {
 
     state.addOutboundMessage({
       to: "dm:qa-operator",
+      isError: true,
       text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.6-luna with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
       senderId: "openclaw",
       senderName: "OpenClaw QA",
@@ -232,6 +237,7 @@ describe("qa suite transport helpers", () => {
 
     state.addOutboundMessage({
       to: "dm:qa-operator",
+      isError: true,
       text: '⚠️ No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai/gpt-5.6-luna with the Codex OAuth profile, or set OPENAI_API_KEY for direct OpenAI API access.',
       senderId: "openclaw",
       senderName: "OpenClaw QA",

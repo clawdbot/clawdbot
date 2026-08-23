@@ -641,6 +641,14 @@ describe("ClickClack HTTP client", () => {
   });
 
   it("uploads multipart bytes with filename and MIME, then attaches by id", async () => {
+    const NativeBlob = Blob;
+    let uploadBlobPart: BlobPart | undefined;
+    class CapturingBlob extends NativeBlob {
+      constructor(parts?: BlobPart[], options?: BlobPropertyBag) {
+        uploadBlobPart = parts?.[0];
+        super(parts, options);
+      }
+    }
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -669,15 +677,24 @@ describe("ClickClack HTTP client", () => {
       fetch: fetchMock as unknown as typeof fetch,
     });
 
-    const upload = await client.createUpload({
-      workspaceId: "wsp_1",
-      buffer: Buffer.from("const proof = true;"),
-      filename: "viewer-proof.ts",
-      contentType: "text/typescript",
-      nonce: "upload-queue-1",
-    });
+    const uploadBuffer = Buffer.from("const proof = true;");
+    vi.stubGlobal("Blob", CapturingBlob);
+    const upload = await client
+      .createUpload({
+        workspaceId: "wsp_1",
+        buffer: uploadBuffer,
+        filename: "viewer-proof.ts",
+        contentType: "text/typescript",
+        nonce: "upload-queue-1",
+      })
+      .finally(() => vi.unstubAllGlobals());
     await client.attachUpload("msg_1", upload.id);
 
+    expect(uploadBlobPart).toBeInstanceOf(Uint8Array);
+    const uploadBytes = uploadBlobPart as Uint8Array;
+    expect(uploadBytes.buffer).toBe(uploadBuffer.buffer);
+    expect(uploadBytes.byteOffset).toBe(uploadBuffer.byteOffset);
+    expect(uploadBytes.byteLength).toBe(uploadBuffer.byteLength);
     const uploadRequest = fetchMock.mock.calls[0];
     expect(uploadRequest?.[0]).toBe(
       "https://clickclack.example/api/uploads?workspace_id=wsp_1&nonce=upload-queue-1",
@@ -919,6 +936,90 @@ describe("ClickClack HTTP client", () => {
     );
     const init = fetchMock.mock.calls[0]?.[1];
     expect(requestBodyJson(init)).toEqual({ body: "longer" });
+  });
+
+  it("POSTs ephemeral agent progress frames to the realtime endpoint", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
+      Response.json({ event: { id: "evt_1" } }, { status: 202 }),
+    );
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "placeholder",
+      fetch: fetchMock,
+    });
+
+    await client.publishEphemeral({
+      workspaceId: "wsp_1",
+      channelId: "chn_1",
+      type: "agent.progress",
+      payload: { op: "append", turn_id: "msg_1" },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://clickclack.example/api/realtime/ephemeral",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(requestBodyJson(fetchMock.mock.calls[0]?.[1])).toEqual({
+      workspace_id: "wsp_1",
+      channel_id: "chn_1",
+      type: "agent.progress",
+      payload: { op: "append", turn_id: "msg_1" },
+    });
+  });
+
+  it.each([200, 202, 204])("accepts an empty %i ephemeral success response", async (status) => {
+    const fetchMock = vi.fn(async () => new Response(null, { status }));
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "placeholder",
+      fetch: fetchMock,
+    });
+
+    await expect(
+      client.publishEphemeral({
+        workspaceId: "wsp_1",
+        channelId: "chn_1",
+        type: "agent.progress",
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("aborts a stalled ephemeral request", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(
+        async (_input: string | URL | Request, init?: RequestInit): Promise<Response> =>
+          await new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => {
+                const error = new Error("aborted");
+                error.name = "AbortError";
+                reject(error);
+              },
+              { once: true },
+            );
+          }),
+      );
+      const client = createClickClackClient({
+        baseUrl: "https://clickclack.example",
+        token: "placeholder",
+        fetch: fetchMock,
+      });
+
+      const pending = client.publishEphemeral({
+        workspaceId: "wsp_1",
+        channelId: "chn_1",
+        type: "agent.progress",
+      });
+      const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await rejected;
+      expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeDefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

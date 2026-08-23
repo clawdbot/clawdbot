@@ -2,6 +2,9 @@ import { randomUUID } from "node:crypto";
 import { Value } from "typebox/value";
 import { WebSocket } from "ws";
 import {
+  type WorkerGitHubPublishParams,
+  type WorkerGitHubPublishResponseFrame,
+  WorkerGitHubPublishResponseFrameSchema,
   type WorkerConnectParams,
   type WorkerHeartbeatParams,
   type WorkerHeartbeatResponseFrame,
@@ -10,6 +13,12 @@ import {
   type WorkerLiveEventResponseFrame,
   WorkerLiveEventResponseFrameSchema,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
+  type WorkerSessionsSendParams,
+  type WorkerSessionsSendResponseFrame,
+  WorkerSessionsSendResponseFrameSchema,
+  type WorkerSessionsSpawnParams,
+  type WorkerSessionsSpawnResponseFrame,
+  WorkerSessionsSpawnResponseFrameSchema,
   type WorkerTranscriptCommitParams,
   type WorkerTranscriptCommitResponseFrame,
   WorkerTranscriptCommitResponseFrameSchema,
@@ -32,7 +41,10 @@ import {
   createPendingRequestRegistry,
   type PendingRequestEntry,
 } from "../shared/pending-request-registry.js";
-import { WorkerConnectionInterruptedError, toError } from "./worker-connection-contract.js";
+import {
+  WorkerConnectionInterruptedError,
+  toWorkerConnectionError,
+} from "./worker-connection-contract.js";
 
 const WORKER_REQUEST_SPECS = {
   heartbeat: {
@@ -46,6 +58,18 @@ const WORKER_REQUEST_SPECS = {
   "live-event": {
     method: "worker.live-event",
     responseSchema: WorkerLiveEventResponseFrameSchema,
+  },
+  "sessions-spawn": {
+    method: "worker.sessions.spawn",
+    responseSchema: WorkerSessionsSpawnResponseFrameSchema,
+  },
+  "sessions-send": {
+    method: "worker.sessions.send",
+    responseSchema: WorkerSessionsSendResponseFrameSchema,
+  },
+  "github-publish": {
+    method: "worker.github.publish",
+    responseSchema: WorkerGitHubPublishResponseFrameSchema,
   },
   "inference-start": {
     method: "worker.inference.start",
@@ -62,6 +86,9 @@ type WorkerRequestParams = {
   heartbeat: WorkerHeartbeatParams;
   transcript: WorkerTranscriptCommitParams;
   "live-event": WorkerLiveEventParams;
+  "sessions-spawn": WorkerSessionsSpawnParams;
+  "sessions-send": WorkerSessionsSendParams;
+  "github-publish": WorkerGitHubPublishParams;
   "inference-start": WorkerInferenceStartParams;
   "inference-cancel": WorkerInferenceCancelParams;
 };
@@ -69,12 +96,16 @@ type WorkerResponseFrames = {
   heartbeat: WorkerHeartbeatResponseFrame;
   transcript: WorkerTranscriptCommitResponseFrame;
   "live-event": WorkerLiveEventResponseFrame;
+  "sessions-spawn": WorkerSessionsSpawnResponseFrame;
+  "sessions-send": WorkerSessionsSendResponseFrame;
+  "github-publish": WorkerGitHubPublishResponseFrame;
   "inference-start": WorkerInferenceStartResponseFrame;
   "inference-cancel": WorkerInferenceCancelResponseFrame;
 };
 type WorkerResponseFrame = WorkerResponseFrames[WorkerRequestKind];
 type PendingRequestValue = {
   kind: WorkerRequestKind;
+  timeoutMs?: number;
   // Durable replay can emit its terminal as the next socket frame. Reset the
   // consumer cursor synchronously after validation, before Promise continuation.
   beforeResolve?: (frame: WorkerResponseFrame) => void;
@@ -169,6 +200,7 @@ export class WorkerConnectionFrameDispatcher {
     kind: K,
     params: WorkerRequestParams[K],
     beforeResolve?: (frame: WorkerResponseFrames[K]) => void,
+    timeoutMs?: number,
   ): Promise<WorkerResponseFrames[K]> {
     const id = randomUUID();
     const spec = WORKER_REQUEST_SPECS[kind];
@@ -179,6 +211,7 @@ export class WorkerConnectionFrameDispatcher {
     return this.sendRequest(id, frame, {
       kind,
       ...(wrappedBeforeResolve ? { beforeResolve: wrappedBeforeResolve } : {}),
+      ...(timeoutMs === undefined ? {} : { timeoutMs }),
     }) as Promise<WorkerResponseFrames[K]>;
   }
 
@@ -195,7 +228,7 @@ export class WorkerConnectionFrameDispatcher {
     try {
       completed.value.beforeResolve?.(response);
     } catch (error) {
-      completed.reject(toError(error));
+      completed.reject(toWorkerConnectionError(error));
       return true;
     }
     completed.resolve(response);
@@ -220,7 +253,7 @@ export class WorkerConnectionFrameDispatcher {
     try {
       encoded = JSON.stringify(frame);
     } catch (error) {
-      return Promise.reject(toError(error));
+      return Promise.reject(toWorkerConnectionError(error));
     }
     const payloadLimit =
       value.kind === "inference-start"
@@ -231,7 +264,7 @@ export class WorkerConnectionFrameDispatcher {
     }
     const pending = this.pending.add(id, {
       value,
-      timeoutMs: this.options.requestTimeoutMs,
+      timeoutMs: value.timeoutMs ?? this.options.requestTimeoutMs,
       timeoutError: () =>
         new WorkerConnectionInterruptedError(`worker ${value.kind} response timed out`),
       onTimeout: () => this.options.interruptReadySocket(readySocket),
@@ -254,7 +287,7 @@ export class WorkerConnectionFrameDispatcher {
     } catch (error) {
       this.pending
         .take(id, pending)
-        ?.reject(new WorkerConnectionInterruptedError(toError(error).message));
+        ?.reject(new WorkerConnectionInterruptedError(toWorkerConnectionError(error).message));
       this.options.interruptReadySocket(readySocket);
     }
     return pending.promise;

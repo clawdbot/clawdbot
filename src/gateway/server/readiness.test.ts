@@ -30,6 +30,7 @@ function snapshotWith(
 function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
   return {
     getRuntimeSnapshot: vi.fn(() => snapshot),
+    getPluginCommandCatalogAccounts: vi.fn(() => new Map()),
     startChannels: vi.fn(),
     startChannel: vi.fn(),
     stopChannel: vi.fn(),
@@ -257,6 +258,20 @@ describe("createReadinessChecker", () => {
         },
       });
       expect(readiness()).toEqual(failingSnapshot(["discord"]));
+    });
+  });
+
+  it("keeps a long-running Reef account ready during fresh reconnect grace", () => {
+    withReadinessClock(() => {
+      const { readiness } = createLongRunningReadinessHarness({
+        reef: managedAccount({
+          connected: false,
+          lifecycle: "recovering",
+          lastStartAt: Date.now() - THIRTY_ONE_MIN_MS,
+          lastDisconnect: { at: Date.now() - 5_000, error: "socket closed" },
+        }),
+      });
+      expect(readiness()).toEqual(readySnapshot(THIRTY_ONE_MIN_MS));
     });
   });
 

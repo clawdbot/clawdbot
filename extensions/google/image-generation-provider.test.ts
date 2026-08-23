@@ -290,6 +290,72 @@ describe("Google image-generation provider", () => {
     ).rejects.toThrow("Google image generation response malformed");
   });
 
+  it("accepts URL-safe base64 image bytes", async () => {
+    mockGoogleApiKeyAuth();
+    const imageBytes = Buffer.from([0xfb, 0xff, 0x50, 0x4e, 0x47]);
+    const imageBase64url = imageBytes.toString("base64url");
+    expect(imageBase64url).toMatch(/[-_]/);
+    expect(imageBase64url).not.toMatch(/[+/]/);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: "image/png",
+                      data: imageBase64url,
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      ),
+    );
+
+    const result = await buildGoogleImageGenerationProvider().generateImage({
+      provider: "google",
+      model: "gemini-3.1-flash-image",
+      prompt: "draw a cat",
+      cfg: {},
+    });
+
+    expect(result.images[0]?.buffer).toEqual(imageBytes);
+  });
+
+  it("rejects mixed-alphabet inline image data", async () => {
+    mockGoogleApiKeyAuth();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          candidates: [
+            {
+              content: {
+                parts: [{ inlineData: { mimeType: "image/png", data: "aGVsbG8+_" } }],
+              },
+            },
+          ],
+        }),
+      ),
+    );
+
+    const provider = buildGoogleImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "google",
+        model: "gemini-3.1-flash-image",
+        prompt: "draw a cat",
+        cfg: {},
+      }),
+    ).rejects.toThrow("Google image generation response malformed");
+  });
+
   it("accepts OAuth JSON auth and inline_data responses", async () => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: JSON.stringify({ token: "oauth-token" }),

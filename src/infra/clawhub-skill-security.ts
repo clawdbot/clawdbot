@@ -1,4 +1,6 @@
 // Shared owner-qualified ClawHub security verdict resolution.
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord as readObject } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import pLimit from "p-limit";
 import {
@@ -6,7 +8,7 @@ import {
   fetchClawHubSkillVerification,
   type ClawHubSkillSecurityVerdictItem,
   type ClawHubSkillVerificationResponse,
-} from "./clawhub.js";
+} from "./clawhub-skills.js";
 
 const MAX_SECURITY_VERDICT_BATCH_SIZE = 100;
 const OWNER_QUALIFIED_FALLBACK_CONCURRENCY = 6;
@@ -76,19 +78,12 @@ function partitionCompatibleBatches(
   return batches.map((batch) => batch.items);
 }
 
-function readObject(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function readOptionalStringField(value: unknown, field: string): string | undefined {
   return normalizeOptionalString(readObject(value)?.[field]);
 }
 
 function readOptionalNumberField(value: unknown, field: string): number | undefined {
-  const raw = readObject(value)?.[field];
-  return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
+  return asFiniteNumber(readObject(value)?.[field]);
 }
 
 function normalizeReason(reason: string | null | undefined): string {

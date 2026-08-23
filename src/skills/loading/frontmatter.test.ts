@@ -1,8 +1,8 @@
 // Frontmatter tests cover skill metadata parsing and validation.
 import { describe, expect, it } from "vitest";
 import {
-  parseFrontmatter,
-  resolveOpenClawMetadata,
+  parseSkillFrontmatter,
+  resolveSkillManifestMetadata,
   resolveSkillInvocationPolicy,
 } from "./frontmatter.js";
 
@@ -23,105 +23,107 @@ describe("resolveSkillInvocationPolicy", () => {
   });
 });
 
-describe("parseFrontmatter", () => {
-  it("keeps recoverable colon-rich scalar values", () => {
-    const frontmatter = parseFrontmatter(`---
+describe("parseSkillFrontmatter", () => {
+  it.each([
+    {
+      title: "keeps recoverable colon-rich scalar values",
+      frontmatter: `---
 name: sample-skill
 description: Use anime style IMPORTANT: Must be kawaii
----`);
-
-    expect(frontmatter.description).toBe("Use anime style IMPORTANT: Must be kawaii");
-  });
-
-  it("keeps recoverable description values beginning with punctuation", () => {
-    const frontmatter = parseFrontmatter(`---
+---`,
+      expectedDescription: "Use anime style IMPORTANT: Must be kawaii",
+    },
+    {
+      title: "keeps recoverable description values beginning with punctuation",
+      frontmatter: `---
 name: sample-skill
 description: [Beta] Builds prereleases
----`);
-
-    expect(frontmatter.description).toBe("[Beta] Builds prereleases");
-  });
-
-  it("keeps recoverable description values beginning with YAML-reserved characters", () => {
-    const frontmatter = parseFrontmatter(`---
+---`,
+      expectedDescription: "[Beta] Builds prereleases",
+    },
+    {
+      title: "keeps recoverable description values beginning with YAML-reserved characters",
+      frontmatter: `---
 name: sample-skill
 description: @scope/package helper
----`);
-
-    expect(frontmatter.description).toBe("@scope/package helper");
-  });
-
-  it("keeps recoverable description values that resemble YAML aliases", () => {
-    const frontmatter = parseFrontmatter(`---
+---`,
+      expectedDescription: "@scope/package helper",
+    },
+    {
+      title: "keeps recoverable description values that resemble YAML aliases",
+      frontmatter: `---
 name: sample-skill
 description: *Experimental
----`);
+---`,
+      expectedDescription: "*Experimental",
+    },
+  ])("$title", ({ frontmatter, expectedDescription }) => {
+    const parsed = parseSkillFrontmatter(frontmatter);
 
-    expect(frontmatter.description).toBe("*Experimental");
+    expect(parsed.description).toBe(expectedDescription);
   });
 
-  it("rejects malformed structured fallback values with the YAML parse error", () => {
-    expect(() =>
-      parseFrontmatter(`---
+  it.each([
+    {
+      title: "rejects malformed structured fallback values with the YAML parse error",
+      frontmatter: `---
 name: [broken
 description: Broken skill
----`),
-    ).toThrow("invalid frontmatter: BAD_INDENT");
-  });
-
-  it("rejects unresolved YAML aliases", () => {
-    expect(() =>
-      parseFrontmatter(`---
+---`,
+      expectedError: "invalid frontmatter: BAD_INDENT",
+    },
+    {
+      title: "rejects unresolved YAML aliases",
+      frontmatter: `---
 name: sample-skill
 description: Broken skill
 metadata: *missing
----`),
-    ).toThrow("invalid frontmatter: YAML_EXCEPTION: Unresolved alias");
-  });
-
-  it("rejects duplicate keys after a recoverable description", () => {
-    expect(() =>
-      parseFrontmatter(`---
+---`,
+      expectedError: "invalid frontmatter: YAML_EXCEPTION: Unresolved alias",
+    },
+    {
+      title: "rejects duplicate keys after a recoverable description",
+      frontmatter: `---
 name: first
 description: Working skill
 name: second
----`),
-    ).toThrow("invalid frontmatter: DUPLICATE_KEY");
-  });
-
-  it("rejects invalid structured values under quoted keys", () => {
-    expect(() =>
-      parseFrontmatter(`---
+---`,
+      expectedError: "invalid frontmatter: DUPLICATE_KEY",
+    },
+    {
+      title: "rejects invalid structured values under quoted keys",
+      frontmatter: `---
 name: sample-skill
 description: Working skill
 "metadata": *missing
----`),
-    ).toThrow("invalid frontmatter: YAML_EXCEPTION: Unresolved alias");
-  });
-
-  it("does not let a description alias mask a later structured alias", () => {
-    expect(() =>
-      parseFrontmatter(`---
+---`,
+      expectedError: "invalid frontmatter: YAML_EXCEPTION: Unresolved alias",
+    },
+    {
+      title: "does not let a description alias mask a later structured alias",
+      frontmatter: `---
 name: sample-skill
 description: *legacy
 metadata: *missing
----`),
-    ).toThrow("invalid frontmatter: YAML_EXCEPTION: Unresolved alias");
-  });
-
-  it("does not let a colon-rich description mask a structured alias", () => {
-    expect(() =>
-      parseFrontmatter(`---
+---`,
+      expectedError: "invalid frontmatter: YAML_EXCEPTION: Unresolved alias",
+    },
+    {
+      title: "does not let a colon-rich description mask a structured alias",
+      frontmatter: `---
 name: sample-skill
 description: Use anime style IMPORTANT: Must be kawaii
 metadata: *missing
----`),
-    ).toThrow("invalid frontmatter: YAML_EXCEPTION: Unresolved alias");
+---`,
+      expectedError: "invalid frontmatter: YAML_EXCEPTION: Unresolved alias",
+    },
+  ])("$title", ({ frontmatter, expectedError }) => {
+    expect(() => parseSkillFrontmatter(frontmatter)).toThrow(expectedError);
   });
 
   it("rejects indentation errors following a description", () => {
     expect(() =>
-      parseFrontmatter(`---
+      parseSkillFrontmatter(`---
 name: sample-skill
 description: Working skill
 \tmetadata: {}
@@ -131,7 +133,7 @@ description: Working skill
 
   it("rejects unresolved aliases under explicit YAML keys", () => {
     expect(() =>
-      parseFrontmatter(`---
+      parseSkillFrontmatter(`---
 name: sample-skill
 description: Working skill
 ? metadata
@@ -142,7 +144,7 @@ description: Working skill
 
   it("does not recover nested description keys inside malformed metadata", () => {
     expect(() =>
-      parseFrontmatter(`---
+      parseSkillFrontmatter(`---
 name: sample-skill
 description: Working skill
 metadata: {
@@ -153,9 +155,9 @@ description: *missing
   });
 });
 
-describe("resolveOpenClawMetadata install validation", () => {
+describe("resolveSkillManifestMetadata install validation", () => {
   function resolveInstall(frontmatter: Record<string, string>) {
-    return resolveOpenClawMetadata(frontmatter)?.install;
+    return resolveSkillManifestMetadata(frontmatter)?.install;
   }
 
   it("accepts safe install specs", () => {
@@ -201,7 +203,7 @@ describe("resolveOpenClawMetadata install validation", () => {
   });
 
   it("parses Link-style YAML metadata with node install hints", () => {
-    const frontmatter = parseFrontmatter(`---
+    const frontmatter = parseSkillFrontmatter(`---
 name: create-payment-credential
 description: |
   Gets secure, one-time-use payment credentials from a Link wallet so agents can complete purchases.
@@ -226,7 +228,7 @@ user-invocable: true
 # Creating Payment Credentials
 `);
 
-    const metadata = resolveOpenClawMetadata(frontmatter);
+    const metadata = resolveSkillManifestMetadata(frontmatter);
 
     expect(frontmatter.name).toBe("create-payment-credential");
     expect(frontmatter.description).toContain("one-time-use payment credentials");

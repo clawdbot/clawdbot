@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
@@ -16,7 +17,6 @@ import {
   resolveUiGlobalAliasAgentId,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -24,9 +24,9 @@ import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./i
 // Control UI chat module implements run lifecycle behavior.
 import {
   resetToolStream,
+  resetToolStreamRun,
   type CompactionStatus,
   type FallbackStatus,
-  type PlanStatus,
   type WaitingApprovalStatus,
 } from "./tool-stream.ts";
 
@@ -41,7 +41,7 @@ export type ChatRunUiStatus = {
 
 type TerminalSessionRunStatus = Exclude<SessionRunStatus, "running">;
 
-type LocalTerminalReconcile = {
+export type LocalTerminalReconcile = {
   sessionKey: string;
   runId: string | null;
   phase: ChatRunUiStatus["phase"];
@@ -65,12 +65,11 @@ type RunLifecycleHost = Omit<
   compactionClearTimer?: TimerHandle | number | null;
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: TimerHandle | number | null;
-  planStatus?: PlanStatus | null;
   waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
   chatRunStatus?: ChatRunUiStatus | null;
   chatRunStatusClearTimer?: TimerHandle | number | null;
   sessionsResult?: SessionsListResult | null;
-  sessions?: Pick<SessionCapability, "reconcileRunTerminal" | "setModelOverride">;
+  sessions?: Partial<Pick<SessionCapability, "reconcileRunTerminal" | "setModelOverride">>;
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
   requestUpdate?: () => void;
 };
@@ -85,6 +84,7 @@ type ReconcileOptions = {
   clearChatStream?: boolean;
   clearIndicators?: boolean;
   clearToolStream?: boolean;
+  clearToolStreamForRun?: boolean;
   clearRunStatus?: boolean;
   publishRunStatus?: boolean;
   armLocalTerminalReconcile?: boolean;
@@ -142,19 +142,32 @@ export function isChatBusy(host: { chatSending?: boolean; chatRunId?: string | n
   return Boolean(host.chatSending || host.chatRunId);
 }
 
-export function hasAbortableSessionRun(host: {
+type SessionRunHost = {
   chatRunId?: string | null;
   sessionKey: string;
   sessionsResult?: SessionsListResult | null;
-}): boolean {
-  if (host.chatRunId) {
-    return true;
-  }
+};
+
+export function hasDirectSessionRun(host: SessionRunHost): boolean {
   return Boolean(
+    host.chatRunId ||
     host.sessionsResult?.sessions.some(
       (session) =>
         areUiSessionKeysEquivalent(session.key, host.sessionKey) && isSessionRunActive(session),
     ),
+  );
+}
+
+export function hasAbortableSessionRun(host: SessionRunHost): boolean {
+  return (
+    hasDirectSessionRun(host) ||
+    Boolean(
+      host.sessionsResult?.sessions.some(
+        (session) =>
+          areUiSessionKeysEquivalent(session.key, host.sessionKey) &&
+          session.hasActiveSubagentRun === true,
+      ),
+    )
   );
 }
 
@@ -355,12 +368,6 @@ function clearRunIndicators(host: RunLifecycleHost, runId?: string | null) {
       host.waitingApprovalStatuses?.delete(approvalId);
     }
   }
-  // Plan checklists are run-owned (unlike the transient compaction/fallback
-  // toasts): a terminal reconcile for another run must not clear them.
-  const planOwner = host.planStatus?.runId;
-  if (host.planStatus && (!runId || !planOwner || planOwner === runId)) {
-    host.planStatus = null;
-  }
 }
 
 function sessionKeysFor(host: RunLifecycleHost, options: ReconcileOptions): Set<string> {
@@ -409,7 +416,7 @@ function reconcileSessionRows(
   if (host.sessionsResult) {
     host.sessionsResult = reconcileSessionRunTerminal(host.sessionsResult, terminal);
   }
-  host.sessions?.reconcileRunTerminal(terminal);
+  host.sessions?.reconcileRunTerminal?.(terminal);
 }
 
 function reconcileYieldedSessionRows(
@@ -429,7 +436,7 @@ function reconcileYieldedSessionRows(
   if (host.sessionsResult) {
     host.sessionsResult = reconcileSessionRunTerminal(host.sessionsResult, terminal);
   }
-  host.sessions?.reconcileRunTerminal(terminal);
+  host.sessions?.reconcileRunTerminal?.(terminal);
 }
 
 export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions = {}) {
@@ -447,8 +454,12 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
   if (options.clearLocalRun) {
     host.chatRunId = null;
   }
-  if (options.clearToolStream && canResetToolStream(host)) {
-    resetToolStream(host);
+  if (canResetToolStream(host)) {
+    if (options.clearToolStream) {
+      resetToolStream(host);
+    } else if (options.clearToolStreamForRun && runId) {
+      resetToolStreamRun(host, runId);
+    }
   }
   if (options.outcome) {
     const status: ChatRunUiStatus = {
@@ -601,6 +612,7 @@ export function reconcileChatRunFromSessionRow(
     sessionKeys: [row.key],
     clearLocalRun: true,
     clearChatStream: true,
+    clearToolStreamForRun: true,
     publishRunStatus: options.publishRunStatus,
   });
   return true;

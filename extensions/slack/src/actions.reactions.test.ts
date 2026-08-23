@@ -1,7 +1,15 @@
 // Slack tests cover actions.reactions plugin behavior.
 import type { WebClient } from "@slack/web-api";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { reactSlackMessage, removeOwnSlackReactions, removeSlackReaction } from "./actions.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
+
+const getSlackWriteClientMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./client.js", async () => {
+  const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
+  return { ...actual, getSlackWriteClient: getSlackWriteClientMock };
+});
 
 function createClient() {
   return {
@@ -39,6 +47,43 @@ function slackPlatformError(error: string) {
 }
 
 describe("reactSlackMessage", () => {
+  beforeEach(() => {
+    getSlackWriteClientMock.mockReset();
+  });
+
+  it("uses a workspace-scoped write client for Enterprise Grid reactions", async () => {
+    const client = createClient();
+    getSlackWriteClientMock.mockReturnValue(client);
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      await reactSlackMessage("C1", "123.456", "✅", {
+        teamId: "T1",
+        token: "xoxb-test",
+      });
+
+      expect(getSlackWriteClientMock).toHaveBeenCalledWith("xoxb-test", { teamId: "T1" });
+      expect(client.reactions.add).toHaveBeenCalledWith({
+        channel: "C1",
+        timestamp: "123.456",
+        name: "white_check_mark",
+      });
+    } finally {
+      installationState.release();
+    }
+  });
+
+  it("rejects an unscoped exported Enterprise Grid reaction", async () => {
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      await expect(
+        reactSlackMessage("C1", "123.456", "✅", { token: "xoxb-test" }),
+      ).rejects.toThrow("unsupported_enterprise_slack_delivery");
+      expect(getSlackWriteClientMock).not.toHaveBeenCalled();
+    } finally {
+      installationState.release();
+    }
+  });
+
   it("treats already_reacted as idempotent success", async () => {
     const client = createClient();
     client.reactions.add.mockRejectedValueOnce(slackPlatformError("already_reacted"));

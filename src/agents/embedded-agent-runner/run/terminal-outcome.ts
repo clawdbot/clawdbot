@@ -1,5 +1,6 @@
 import {
   buildAgentRunTerminalOutcomeFromAttempt,
+  classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agent-run-terminal-outcome.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
@@ -29,11 +30,11 @@ export function resolveEmbeddedRunAttemptTerminalOutcome(params: {
 }
 
 export function isEmbeddedRunTerminalTimeout(outcome: AgentRunTerminalOutcome): boolean {
-  return outcome.reason === "hard_timeout" || outcome.reason === "timed_out";
+  return classifyAgentRunTerminalOutcome(outcome) === "timeout";
 }
 
 export function isEmbeddedRunTerminalAbort(outcome: AgentRunTerminalOutcome): boolean {
-  return outcome.reason === "aborted" || outcome.reason === "cancelled";
+  return classifyAgentRunTerminalOutcome(outcome) === "cancellation";
 }
 
 export function isEmbeddedRunTerminalInterrupted(outcome: AgentRunTerminalOutcome): boolean {

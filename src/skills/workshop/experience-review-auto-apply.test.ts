@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import { createSkillWorkshopTool } from "../../agents/tools/skill-workshop-tool.js";
 import {
   isGatewaySubordinateWorkAdmissionClosed,
@@ -91,8 +93,102 @@ describe("experience review auto apply", () => {
     );
   });
 
-  it("leaves reviewer update proposals pending instead of auto-applying them", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-experience-auto-apply-update-");
+  it("auto-applies updates to the durable workspace from a session worktree", async () => {
+    const canonicalWorkspaceDir = await tempDirs.make("openclaw-experience-canonical-");
+    const worktreeWorkspaceDir = await tempDirs.make("openclaw-experience-worktree-");
+    const skillDir = path.join(canonicalWorkspaceDir, "skills", "deployment-preflight");
+    const seedTool = createSkillWorkshopTool({
+      workspaceDir: canonicalWorkspaceDir,
+      config: { skills: { workshop: { approvalPolicy: "auto" } } },
+    });
+    const seeded = await seedTool.execute("seed-create", {
+      action: "create",
+      name: "deployment-preflight",
+      description: "Check deployment prerequisites before retrying.",
+      proposal_content: "# Deployment Preflight\n\nOperator-authored preflight steps.\n",
+    });
+    await seedTool.execute("seed-apply", {
+      action: "apply",
+      proposal_id: (seeded.details as { id: string }).id,
+      reason: "seed live skill",
+    });
+    await fs.cp(skillDir, path.join(worktreeWorkspaceDir, "skills", "deployment-preflight"), {
+      recursive: true,
+    });
+
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      expect(params.skillWorkshopUpdateProposals).toBe(true);
+      const tool = createSkillWorkshopTool({
+        workspaceDir: params.workspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        origin: params.skillWorkshopOrigin,
+        proposalOnly: params.skillWorkshopProposalOnly,
+        updateProposals: params.skillWorkshopUpdateProposals,
+        autonomousCapture: params.skillWorkshopAutonomousCapture,
+        proposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+      });
+      await tool.execute("review-read", {
+        action: "read",
+        skill_name: "deployment-preflight",
+      });
+      await tool.execute("review-update", {
+        action: "update",
+        skill_name: "deployment-preflight",
+        proposal_content: "# Deployment Preflight\n\nReviewer-rewritten steps.\n",
+      });
+      return {};
+    });
+    const candidate: ExperienceReviewCandidate = {
+      ctx: {
+        agentId: "main",
+        runId: "foreground-run",
+        sessionKey: "agent:main:main",
+        workspaceDir: worktreeWorkspaceDir,
+        modelProviderId: "openai",
+        modelId: "gpt-test",
+      },
+      config: {
+        agents: { list: [{ id: "main", default: true, workspace: canonicalWorkspaceDir }] },
+        skills: { workshop: { autonomous: { mode: "auto" as const } } },
+      },
+      transcript: "[user]\nRefine the deployment workflow.",
+      modelIterations: 10,
+    };
+
+    await runWithCanonicalSkillWorkspace(canonicalWorkspaceDir, () =>
+      runSkillExperienceReview(candidate, {
+        getCurrentConfig: () => candidate.config ?? {},
+      }),
+    );
+
+    const manifest = await listSkillProposals({
+      agentId: "main",
+      workspaceDir: canonicalWorkspaceDir,
+    });
+    const updateEntry = manifest.proposals.find((entry) => entry.kind === "update");
+    expect(updateEntry).toMatchObject({
+      skillKey: "deployment-preflight",
+      status: "applied",
+    });
+    const inspected = await inspectSkillProposal(updateEntry?.id ?? "", {
+      agentId: "main",
+      workspaceDir: canonicalWorkspaceDir,
+    });
+    expect(inspected?.record.target.skillFile).toBe(path.join(skillDir, "SKILL.md"));
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "Reviewer-rewritten steps.",
+    );
+    await expect(
+      fs.readFile(
+        path.join(worktreeWorkspaceDir, "skills", "deployment-preflight", "SKILL.md"),
+        "utf8",
+      ),
+    ).resolves.toContain("Operator-authored preflight steps.");
+  });
+
+  it("auto-applies reviewer patch proposals composed from the live body", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-auto-apply-extend-");
     const seedTool = createSkillWorkshopTool({
       workspaceDir,
       config: { skills: { workshop: { approvalPolicy: "auto" } } },
@@ -110,7 +206,6 @@ describe("experience review auto apply", () => {
     });
 
     runEmbeddedAgent.mockImplementation(async (params) => {
-      expect(params.skillWorkshopUpdateProposals).toBe(true);
       const tool = createSkillWorkshopTool({
         workspaceDir: params.workspaceDir,
         config: params.config,
@@ -121,10 +216,12 @@ describe("experience review auto apply", () => {
         autonomousCapture: params.skillWorkshopAutonomousCapture,
         proposalMutationBudget: params.skillWorkshopProposalMutationBudget,
       });
-      await tool.execute("review-update", {
-        action: "update",
+      await tool.execute("review-read", { action: "read", skill_name: "deployment-preflight" });
+      await tool.execute("review-patch", {
+        action: "patch",
         skill_name: "deployment-preflight",
-        proposal_content: "# Deployment Preflight\n\nReviewer-rewritten steps.\n",
+        old_string: "",
+        new_string: "## Learned\n\nCheck alerts and timing before retrying.",
       });
       return {};
     });
@@ -150,11 +247,14 @@ describe("experience review auto apply", () => {
     const updateEntry = manifest.proposals.find((entry) => entry.kind === "update");
     expect(updateEntry).toMatchObject({
       skillKey: "deployment-preflight",
-      status: "pending",
+      status: "applied",
     });
-    await expect(
-      fs.readFile(`${workspaceDir}/skills/deployment-preflight/SKILL.md`, "utf8"),
-    ).resolves.toContain("Operator-authored preflight steps.");
+    const liveSkill = await fs.readFile(
+      `${workspaceDir}/skills/deployment-preflight/SKILL.md`,
+      "utf8",
+    );
+    expect(liveSkill).toContain("Operator-authored preflight steps.");
+    expect(liveSkill).toContain("Check alerts and timing before retrying.");
   });
 
   it("re-enters gateway admission when fired from a released request root", async () => {

@@ -277,8 +277,6 @@ describe("ACP translator event ledger replay", () => {
     await expect(
       eventLedger.readReplayBySessionId({ sessionId: firstSession.sessionKey }),
     ).resolves.toEqual({ complete: false, events: [] });
-
-    firstSessionStore.clearAllSessionsForTest();
   });
 
   it("does not replay prompts that Gateway rejected before accepting the send", async () => {

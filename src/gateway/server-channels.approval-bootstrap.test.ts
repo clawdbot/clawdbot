@@ -2,6 +2,7 @@
  * Server channel approval bootstrap tests.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.public.js";
 import { getGatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
@@ -24,14 +25,6 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("../infra/approval-handler-bootstrap.js", () => ({
   startChannelApprovalHandlerBootstrap: hoisted.startChannelApprovalHandlerBootstrap,
 }));
-
-function createDeferred() {
-  let resolvePromise = () => {};
-  const promise = new Promise<void>((resolve) => {
-    resolvePromise = resolve;
-  });
-  return { promise, resolve: resolvePromise };
-}
 
 function createTestPlugin(params: {
   startAccount: NonNullable<NonNullable<ChannelPlugin["gateway"]>["startAccount"]>;

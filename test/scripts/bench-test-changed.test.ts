@@ -5,13 +5,17 @@ import {
   formatRss,
   parseMaxRssBytes,
   resolveBenchRssResult,
-} from "../../scripts/bench-test-changed.mjs";
+} from "../../scripts/bench-test-changed.mts";
 
 function runBenchTestChanged(args: string[]) {
-  return spawnSync(process.execPath, ["scripts/bench-test-changed.mjs", ...args], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-  });
+  return spawnSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/bench-test-changed.mts", ...args],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    },
+  );
 }
 
 describe("bench-test-changed script", () => {

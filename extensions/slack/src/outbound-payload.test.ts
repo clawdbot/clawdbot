@@ -482,9 +482,9 @@ describe("slackOutbound sendPayload", () => {
     expect(client.chat.postMessage.mock.calls.length).toBeGreaterThanOrEqual(3);
     expect(capturedSendOptions).not.toHaveLength(0);
     expect(capturedSendOptions.every((opts) => opts.deliveryQueueId === undefined)).toBe(true);
-    expect(capturedSendOptions.every((opts) => opts.onPlatformSendDispatch === undefined)).toBe(
-      true,
-    );
+    expect(
+      capturedSendOptions.every((opts) => opts.onPlatformSendDispatch === onPlatformSendDispatch),
+    ).toBe(true);
     expect(postedSlackMessage(client, 0)).toMatchObject({
       text: expect.stringContaining("Pipeline <!channel>"),
       mrkdwn: false,
@@ -660,6 +660,37 @@ describe("slackOutbound sendPayload", () => {
       kind: "blocks",
       blocks: [{ type: "divider" }, { type: "actions" }],
     });
+  });
+
+  it("refreshes dispatch custody before each structured fanout request", async () => {
+    const payload: ReplyPayload = {
+      channelData: {
+        slack: { blocks: Array.from({ length: 49 }, () => ({ type: "divider" })) },
+      },
+      presentation: { title: "Deploy status", blocks: [{ type: "divider" }] },
+      interactive: interactiveButtons("Allow", "pluginbind:approval-123:o"),
+    };
+    const onPlatformSendDispatch = vi.fn(async () => undefined);
+
+    const { capturedSendOptions, client } = await sendThroughRealSlack({
+      payload,
+      deliveryQueueId: "queue-1",
+      onPlatformSendDispatch,
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(capturedSendOptions).toHaveLength(2);
+    expect(capturedSendOptions.every((opts) => opts.deliveryQueueId === undefined)).toBe(true);
+    expect(
+      capturedSendOptions.every((opts) => opts.onPlatformSendDispatch === onPlatformSendDispatch),
+    ).toBe(true);
+    expect(onPlatformSendDispatch).toHaveBeenCalledTimes(2);
+    for (const [
+      index,
+      dispatchOrder,
+    ] of onPlatformSendDispatch.mock.invocationCallOrder.entries()) {
+      expect(dispatchOrder).toBeLessThan(client.chat.postMessage.mock.invocationCallOrder[index]!);
+    }
   });
 
   it("uses the full ordered table fallback when preserved siblings exceed the block limit", async () => {

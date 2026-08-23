@@ -1,24 +1,14 @@
 import { t } from "../../i18n/index.ts";
+import {
+  matchesBoardFilter,
+  workboardCardBoardId,
+  WORKBOARD_ALL_BOARDS_FILTER,
+} from "../../lib/workboard/board-filter.ts";
 import { workboardBoardLabel } from "../../lib/workboard/board-presentation.ts";
-import type {
-  WorkboardBoardSummary,
-  WorkboardCard,
-  WorkboardUiState,
-} from "../../lib/workboard/index.ts";
+import type { WorkboardBoardSummary, WorkboardCard } from "../../lib/workboard/index.ts";
 import type { WorkboardSelectOption } from "./workboard-select.ts";
 
-export const WORKBOARD_ALL_BOARDS_FILTER = "__all__";
-
-function cardBoardId(card: WorkboardCard): string {
-  return card.metadata?.automation?.boardId?.trim() || "default";
-}
-
-export function matchesBoardFilter(
-  card: WorkboardCard,
-  filter: WorkboardUiState["boardFilter"],
-): boolean {
-  return filter === WORKBOARD_ALL_BOARDS_FILTER || cardBoardId(card) === filter;
-}
+export { matchesBoardFilter, WORKBOARD_ALL_BOARDS_FILTER };
 
 function boardDescription(board: WorkboardBoardSummary): string {
   const params = { active: String(board.active), total: String(board.total) };
@@ -46,7 +36,7 @@ export function buildBoardFilterOptions(
     }
   }
   for (const card of cards) {
-    const id = cardBoardId(card);
+    const id = workboardCardBoardId(card);
     const board: WorkboardBoardSummary = uniqueBoards.get(id) ?? {
       id,
       total: 0,

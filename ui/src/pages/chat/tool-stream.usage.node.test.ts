@@ -1,29 +1,9 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import {
-  handleAgentEvent,
-  resolveActiveRunOutputTokens,
-  type ToolStreamEntry,
-} from "./tool-stream.ts";
+import { createHost } from "./tool-stream.test-helpers.ts";
+import { handleAgentEvent, resolveActiveRunOutputTokens } from "./tool-stream.ts";
 
-type ToolStreamHost = Parameters<typeof handleAgentEvent>[0];
 type AgentEvent = NonNullable<Parameters<typeof handleAgentEvent>[1]>;
-
-function createHost(overrides?: Partial<ToolStreamHost>): ToolStreamHost {
-  return {
-    sessionKey: "main",
-    chatRunId: null,
-    chatStream: null,
-    chatStreamStartedAt: null,
-    chatStreamSegments: [],
-    toolStreamById: new Map<string, ToolStreamEntry>(),
-    toolStreamOrder: [],
-    chatToolMessages: [],
-    toolStreamSyncTimer: null,
-    sessions: { setModelOverride: () => undefined },
-    ...overrides,
-  };
-}
 
 function agentEvent(
   runId: string,

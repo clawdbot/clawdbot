@@ -2,20 +2,14 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/core";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { handleDreamingCommand } from "./dreaming-command.js";
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as Record<string, unknown>;
-}
-
 function resolveStoredDreaming(config: OpenClawConfig): Record<string, unknown> {
-  const entry = asRecord(config.plugins?.entries?.["memory-core"]);
-  const pluginConfig = asRecord(entry?.config);
-  return asRecord(pluginConfig?.dreaming) ?? {};
+  const entry = asNullableRecord(config.plugins?.entries?.["memory-core"]);
+  const pluginConfig = asNullableRecord(entry?.config);
+  return asNullableRecord(pluginConfig?.dreaming) ?? {};
 }
 
 function createHarness(initialConfig: OpenClawConfig = {}) {
@@ -62,6 +56,7 @@ function createHarness(initialConfig: OpenClawConfig = {}) {
 
 function createCommandContext(
   args?: string,
+  config: OpenClawConfig = {},
   overrides?: Partial<Pick<PluginCommandContext, "gatewayClientScopes" | "senderIsOwner">>,
 ): PluginCommandContext {
   return {
@@ -69,7 +64,7 @@ function createCommandContext(
     isAuthorizedSender: true,
     commandBody: args ? `/dreaming ${args}` : "/dreaming",
     args,
-    config: {},
+    config,
     gatewayClientScopes: overrides?.gatewayClientScopes,
     senderIsOwner: overrides?.senderIsOwner,
     requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
@@ -83,7 +78,10 @@ async function runDreamingCommand(
   args?: string,
   overrides?: Partial<Pick<PluginCommandContext, "gatewayClientScopes" | "senderIsOwner">>,
 ) {
-  return await handleDreamingCommand(harness.api, createCommandContext(args, overrides));
+  return await handleDreamingCommand(
+    harness.api,
+    createCommandContext(args, harness.getRuntimeConfig(), overrides),
+  );
 }
 
 describe("memory-core /dreaming command", () => {

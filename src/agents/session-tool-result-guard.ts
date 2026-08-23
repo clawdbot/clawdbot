@@ -8,6 +8,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { publishTranscriptUpdate } from "../config/sessions/session-accessor.js";
+import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import {
   boundedJsonUtf8Bytes,
   firstEnumerableOwnKeys,
@@ -23,6 +24,7 @@ import type {
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
 } from "../plugins/types.js";
+import { resolveTerminalAssistantTranscriptRunId } from "../sessions/transcript-events.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import { formatContextLimitTruncationNotice } from "./embedded-agent-runner/context-truncation-notice.js";
 import {
@@ -63,6 +65,14 @@ function resolveMaxToolResultChars(opts?: { maxToolResultChars?: number }): numb
 type UserAgentMessage = Extract<AgentMessage, { role: "user" }>;
 type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
 type AsyncMessageCallback<T extends AgentMessage> = (message: T) => void | Promise<void>;
+type UserMessagePersistedCallback = (
+  message: UserAgentMessage,
+  context: {
+    anchor?: TranscriptEntryAnchor;
+    entryId: string;
+    sessionTarget?: ReturnType<SessionManager["getSessionTarget"]>;
+  },
+) => void | Promise<void>;
 type CompactionAppendValidator = (entryId: string, appendedText: string) => boolean;
 type AppendMessageOptions = Parameters<SessionManager["appendMessage"]>[1];
 
@@ -579,6 +589,8 @@ export function installSessionToolResultGuard(
     sessionKey?: string;
     /** Optional agent id for selected-global transcript update broadcasts. */
     agentId?: string;
+    /** Exact run that owns terminal assistant transcript updates. */
+    runId?: string;
     /**
      * Optional transform applied to any message before persistence.
      */
@@ -615,7 +627,7 @@ export function installSessionToolResultGuard(
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
     suppressAssistantErrorPersistence?: boolean;
-    onUserMessagePersisted?: AsyncMessageCallback<UserAgentMessage>;
+    onUserMessagePersisted?: UserMessagePersistedCallback;
     onUserMessagePersistenceSuppressed?: AsyncMessageCallback<UserAgentMessage>;
     onUserMessageBlocked?: (message: UserAgentMessage) => void;
     onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
@@ -630,8 +642,11 @@ export function installSessionToolResultGuard(
   clearPendingToolResults: () => void;
   clearNextUserMessagePersistenceSuppression: () => void;
   getPendingIds: () => string[];
+  setTranscriptRunId: (runId: string | undefined) => void;
 } {
   const originalAppend = getRawSessionAppendMessage(sessionManager);
+  const originalAppendWithTranscriptAnchor =
+    sessionManager.appendMessageWithTranscriptAnchor.bind(sessionManager);
   setRawSessionAppendMessage(sessionManager, originalAppend);
   const pendingState = createPendingToolCallState();
   const persistMessage = (message: AgentMessage) => {
@@ -654,29 +669,32 @@ export function installSessionToolResultGuard(
   const redactionConfig = opts?.redactLoggingConfig;
   const maxToolResultChars = resolveMaxToolResultChars(opts);
   const transcriptSeqByEntryId: TranscriptSeqByEntryId = new Map();
+  let transcriptRunId = opts?.runId;
   let suppressNextUserMessagePersistence = opts?.suppressNextUserMessagePersistence === true;
 
   const appendMessageAndCacheTranscriptSeq = (
     message: AgentMessage,
     options?: AppendMessageOptions,
   ): {
+    anchor?: TranscriptEntryAnchor;
     entryId: string;
     messageSeq?: number;
     sessionTarget?: ReturnType<SessionManager["getSessionTarget"]>;
   } => {
     const parentEntryId = sessionManager.getLeafId();
     const appendParentEntryId = sessionManager.getAppendParentId();
-    const entryId = originalAppend(message as never, options);
+    const { entryId, anchor } = originalAppendWithTranscriptAnchor(message as never, options);
     if (sessionManager.getAppendParentId() === appendParentEntryId) {
-      return { entryId };
+      return { entryId, ...(anchor ? { anchor } : {}) };
     }
     void opts?.onMessagePersisted?.(message);
     const sessionTarget = sessionManager.getSessionTarget();
     if (!sessionTarget) {
-      return { entryId };
+      return { entryId, ...(anchor ? { anchor } : {}) };
     }
     return {
       entryId,
+      ...(anchor ? { anchor } : {}),
       sessionTarget,
       messageSeq: resolveAppendedMessageSeq({
         sessionManager,
@@ -887,6 +905,7 @@ export function installSessionToolResultGuard(
       return undefined;
     }
     const {
+      anchor,
       entryId: result,
       messageSeq,
       sessionTarget,
@@ -895,10 +914,12 @@ export function installSessionToolResultGuard(
         callerInvalidatesCache || transformedMessage !== nextMessage || finalWrite.changed,
     });
     if (sessionTarget) {
+      const runId = resolveTerminalAssistantTranscriptRunId(finalMessage, transcriptRunId);
       void publishTranscriptUpdate(sessionTarget, {
         message: finalMessage,
         messageId: typeof result === "string" ? result : undefined,
         ...(messageSeq !== undefined ? { messageSeq } : {}),
+        ...(runId ? { runId } : {}),
       });
     }
 
@@ -906,7 +927,11 @@ export function installSessionToolResultGuard(
       pendingState.trackToolCalls(toolCalls);
     }
     if (isUserAgentMessage(finalMessage)) {
-      void opts?.onUserMessagePersisted?.(finalMessage);
+      void opts?.onUserMessagePersisted?.(finalMessage, {
+        ...(anchor ? { anchor } : {}),
+        entryId: result,
+        ...(sessionTarget ? { sessionTarget } : {}),
+      });
     }
     if (
       finalRole === "assistant" &&
@@ -931,6 +956,9 @@ export function installSessionToolResultGuard(
       suppressNextUserMessagePersistence = false;
     },
     getPendingIds: pendingState.getPendingIds,
+    setTranscriptRunId: (runId) => {
+      transcriptRunId = runId;
+    },
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

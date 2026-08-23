@@ -131,6 +131,7 @@ describe("agent handler session create events", () => {
         expect(call?.[1]?.reason).toBe("create");
         expect(call?.[2]).toEqual(new Set(["conn-1"]));
         expect(call?.[3]).toEqual({
+          agentId: "main",
           dropIfSlow: true,
           sessionKeys: ["agent:main:subagent:create-test"],
         });

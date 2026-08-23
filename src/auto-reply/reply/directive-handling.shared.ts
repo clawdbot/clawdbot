@@ -1,5 +1,6 @@
 // Shared directive parsing helpers used by model and auth directive handlers.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { StickyModelSelectionDispatchOutcome } from "../../agents/sticky-model-selection.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   adoptPersistedSessionSnapshot,
@@ -7,7 +8,7 @@ import {
   sessionModelOverrideChangesApplied,
   sessionSnapshotChangesApplied,
 } from "../../config/sessions/session-snapshot-merge.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { SYSTEM_MARK, prefixSystemMessage } from "../../infra/system-message.js";
 import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -60,6 +61,23 @@ export const formatInternalVerbosePersistenceDeniedText = () =>
 
 export const formatInternalVerboseCurrentReplyOnlyText = () =>
   "Verbose logging set for the current reply only.";
+
+export function formatModelSelectionScopeAck(params: {
+  isDefault: boolean;
+  label: string;
+  configuredDefaultUpdate?: StickyModelSelectionDispatchOutcome;
+}): string {
+  if (params.isDefault) {
+    return `Session model reset to configured default (${params.label}).`;
+  }
+  if (params.configuredDefaultUpdate === "requested") {
+    return `Model set to ${params.label} for this session. Configured default update requested.`;
+  }
+  if (params.configuredDefaultUpdate === "skipped-immutable") {
+    return `Model set to ${params.label} for this session. Configured default unchanged because configuration is immutable.`;
+  }
+  return `Model set to ${params.label} for this session only; configured default unchanged.`;
+}
 
 export function canPersistSessionDirectiveDefaults(params: {
   messageProvider?: string;
@@ -153,7 +171,7 @@ export function rejectSessionDirectiveTransaction(
   if (persistenceState) {
     persistenceState.outcome = { kind: "rejected", errorText };
   }
-  return { text: errorText };
+  return { text: errorText, isError: true };
 }
 
 /** Keeps the first informational/denied acknowledgement while committing valid siblings once. */

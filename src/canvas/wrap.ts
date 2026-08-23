@@ -52,7 +52,7 @@ const WIDGET_BASE_STYLES = `:root{color-scheme:light dark;
 --border:#1e2028;--border-strong:#2e3040;
 --accent:#ff5c5c;--accent-fill:#d13c3c;--accent-fg:#ffffff;
 --ok:#22c55e;--warn:#f59e0b;--danger:#ef4444;--info:#3b82f6}}
-*{box-sizing:border-box}html,body{margin:0}
+*{box-sizing:border-box}html,body{margin:0}.openclaw-chat-host,.openclaw-chat-host body{scrollbar-width:none}.openclaw-chat-host::-webkit-scrollbar,.openclaw-chat-host body::-webkit-scrollbar{display:none}
 body{font:14px/1.5 var(--font-body);color:var(--text)}
 h1,h2,h3{margin:0 0 8px;color:var(--text-strong);font-weight:600}
 h1{font-size:18px}h2{font-size:16px}h3{font-size:14px}
@@ -81,6 +81,7 @@ code{padding:1px 5px}pre{padding:10px;overflow-x:auto}
 
 type WidgetDocumentOptions = {
   connectOrigins?: readonly string[];
+  scriptOrigins?: readonly string[];
 };
 
 /** Wraps agent-authored widget markup in the stable isolated Canvas document shell. */
@@ -126,11 +127,12 @@ export function buildWidgetDocument(
     "if(d&&d.get)act=d.get.bind(ua);}catch{}" +
     'post({type:"openclaw:widget-prompt-offer"},"*",[c.port2]);' +
     'post({type:"openclaw:widget-bridge-port-offer"},"*",[b.port2]);' +
-    "let ticket=null;let sequence=0;let hostInitExpired=false;const pending=new Map();const waiting=[];" +
+    "let ticket=null;let controlUiBaseUrl=null;let sequence=0;let hostInitExpired=false;const pending=new Map();const waiting=[];" +
     'const initTimer=later(()=>{hostInitExpired=true;while(waiting.length){const entry=shift.call(waiting);if(entry)entry.reject(new ErrorCtor("widget host capabilities unavailable"));}' +
     'while(promptWaiting.length){const entry=shift.call(promptWaiting);if(entry)entry.reject(new ErrorCtor("widget prompt host unavailable"));}},5000);' +
     'b.port1.addEventListener("message",event=>{const data=event.data;' +
     'if(data?.type==="openclaw:widget-host-init"&&typeof data.ticket==="string"){ticket=data.ticket;' +
+    'const base=data.controlUiBaseUrl;controlUiBaseUrl=typeof base==="string"&&/^https?:\\/\\//.test(base)?base:null;' +
     'bridgePost({type:"openclaw:widget-host-init-ack",ticket});cancel(initTimer);' +
     "while(waiting.length){const entry=shift.call(waiting);if(entry)entry.send();}" +
     "while(promptWaiting.length){const entry=shift.call(promptWaiting);if(entry)entry.send();}return;}" +
@@ -149,9 +151,11 @@ export function buildWidgetDocument(
     'const inline=()=>{promptPost({type:"openclaw:widget-prompt",prompt:value});resolve(true);};' +
     'if(inlinePromptReady)inline();else if(hostInitExpired)reject(new ErrorCtor("widget prompt host unavailable"));' +
     "else push.call(promptWaiting,{send,inline,reject});});};" +
-    "const api=freeze({" +
+    'const host={};define(host,"controlUiBaseUrl",{enumerable:true,get:()=>controlUiBaseUrl});freeze(host);' +
+    "const api=freeze({host," +
     'prompt:freeze({send:sendPrompt}),state:freeze({emit:payload=>request("state.emit",{payload})}),' +
     'data:freeze({read:(bindingId,params)=>request("data.read",{bindingId:stringify(bindingId),params})}),' +
+    'action:freeze({run:(action,params)=>request("action.run",{action:stringify(action),params:params===undefined?{}:params})}),' +
     'cron:freeze({trigger:jobId=>request("cron.trigger",{jobId:stringify(jobId)})})});' +
     'define(window,"openclaw",{value:api,writable:false,configurable:false});' +
     "window.sendPrompt=text=>{void sendPrompt(text);};" +
@@ -176,6 +180,10 @@ export function buildWidgetDocument(
     'const value=typeof raw==="string"?raw.trim():"";' +
     'if(value&&value.length<=256)set("--"+key,value);else rm("--"+key);}' +
     'if(data.mode==="light"||data.mode==="dark")set("color-scheme",data.mode);});})();</script>';
+  const chatHostBridge =
+    "<script>(()=>{if(!window.parent||window.parent===window)return;" +
+    'addEventListener("message",event=>{if(event.source===window.parent&&event.data?.type==="openclaw:widget-chat-host")' +
+    'document.documentElement.classList.add("openclaw-chat-host");});})();</script>';
   /*
    * Snapshot requests come from the embedding parent and replies return only
    * there. Capture the response channel and rendering primitives before widget
@@ -237,6 +245,7 @@ export function buildWidgetDocument(
   const connectSources = options.connectOrigins?.length
     ? options.connectOrigins.join(" ")
     : "'none'";
+  const scriptSources = options.scriptOrigins?.length ? ` ${options.scriptOrigins.join(" ")}` : "";
   return `<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src ${connectSources};"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${widgetBridge}${themeBridge}${snapshotBridge}${widgetCode}${sizeReporter}</body></html>`;
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'${scriptSources}; img-src data:; connect-src ${connectSources};"><title>${escapeHtml(title)}</title><style>${WIDGET_BASE_STYLES}</style></head><body${bodyClass}>${widgetBridge}${themeBridge}${chatHostBridge}${snapshotBridge}${widgetCode}${sizeReporter}</body></html>`;
 }

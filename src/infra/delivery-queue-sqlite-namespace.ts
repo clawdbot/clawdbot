@@ -4,6 +4,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   completeDeliveryQueueEntry,
   deleteDeliveryQueueEntry,
+  getDeliveryQueueEntryStatuses,
   upsertDeliveryQueueEntry,
   type DeliveryQueueEntryState,
 } from "./delivery-queue-sqlite.js";
@@ -49,15 +50,12 @@ export function commitStagedDeliveryQueueEntryOnceAcrossNamespaces(params: {
       if (!staging) {
         return "missing";
       }
-      const owner = executeSqliteQueryTakeFirstSync(
-        database.db,
-        queueDb
-          .selectFrom("delivery_queue_entries")
-          .select("id")
-          .where("queue_name", "in", [params.queueName, ...params.conflictQueueNames])
-          .where("id", "=", params.entry.id),
+      const owner = getDeliveryQueueEntryStatuses(
+        [params.queueName, ...params.conflictQueueNames],
+        params.entry.id,
+        params.stateDir,
       );
-      if (owner) {
+      if (owner.size > 0) {
         return "existing";
       }
       const inserted = upsertDeliveryQueueEntry({
@@ -99,19 +97,15 @@ export function upsertDeliveryQueueEntryOnceAcrossNamespaces(params: {
   stateDir?: string;
 }): boolean {
   const database = openStateDatabase(params.stateDir);
-  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
   return runSqliteImmediateTransactionSync(
     database.db,
     () => {
-      const owner = executeSqliteQueryTakeFirstSync(
-        database.db,
-        queueDb
-          .selectFrom("delivery_queue_entries")
-          .select("id")
-          .where("queue_name", "in", [params.queueName, ...params.conflictQueueNames])
-          .where("id", "=", params.entry.id),
+      const owner = getDeliveryQueueEntryStatuses(
+        [params.queueName, ...params.conflictQueueNames],
+        params.entry.id,
+        params.stateDir,
       );
-      if (owner) {
+      if (owner.size > 0) {
         return false;
       }
       return upsertDeliveryQueueEntry({
@@ -249,18 +243,12 @@ export function movePendingDeliveryQueueEntryNamespace(
       ) {
         return "source-changed";
       }
-      const destination = executeSqliteQueryTakeFirstSync(
-        database.db,
-        queueDb
-          .selectFrom("delivery_queue_entries")
-          .select("id")
-          .where("queue_name", "in", [
-            params.destinationQueueName,
-            ...(params.conflictQueueNames ?? []),
-          ])
-          .where("id", "=", params.destinationEntry.id),
+      const destination = getDeliveryQueueEntryStatuses(
+        [params.destinationQueueName, ...(params.conflictQueueNames ?? [])],
+        params.destinationEntry.id,
+        params.stateDir,
       );
-      if (destination) {
+      if (destination.size > 0) {
         return "destination-exists";
       }
       if (params.stagingId && params.stagingQueueName) {

@@ -16,24 +16,13 @@ import {
 } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { pluginTabSearch } from "../pages/plugin/route.ts";
 import type { SidebarWorkboardBoard, SidebarWorkboardRenderers } from "./app-sidebar-workboard.ts";
 import { icons, type IconName } from "./icons.ts";
 import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
 type SidebarMenuPosition = { x: number; y: number };
-
-/** Ordinary primary click without modifiers; anything else keeps native link behavior. */
-export function shouldHandleNavigationClick(event: MouseEvent): boolean {
-  return (
-    !event.defaultPrevented &&
-    event.button === 0 &&
-    !event.metaKey &&
-    !event.ctrlKey &&
-    !event.shiftKey &&
-    !event.altKey
-  );
-}
 
 /** Settings routes highlight Settings; hub tabs highlight their hub entry. */
 export function isSidebarRouteActive(
@@ -139,7 +128,6 @@ type SidebarMoreMenuParams = SidebarMenuNavigationHandlers & {
   position: SidebarMenuPosition | null;
   basePath: string;
   activeRouteId: NavigationRouteId | undefined;
-  activeWorkboardBoardId: string;
   sidebarEntries: readonly string[];
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
   onEditPinnedItems: () => void;
@@ -148,9 +136,7 @@ type SidebarMoreMenuParams = SidebarMenuNavigationHandlers & {
 };
 
 function renderMoreMenuRoute(params: SidebarMoreMenuParams, routeId: SidebarNavRoute) {
-  const active =
-    isSidebarRouteActive(params.activeRouteId, routeId) &&
-    !(routeId === "workboard" && params.activeWorkboardBoardId);
+  const active = isSidebarRouteActive(params.activeRouteId, routeId);
   return html`
     <wa-dropdown-item
       value=${routeId}
@@ -160,6 +146,7 @@ function renderMoreMenuRoute(params: SidebarMoreMenuParams, routeId: SidebarNavR
       @pointerleave=${params.onCancelPreload}
       @click=${(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
+          // wa-select also fires for native clicks; mark them so it does not add SPA navigation.
           (event.currentTarget as HTMLElement).dataset.nativeNavigation = "true";
           return;
         }
@@ -234,6 +221,7 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
 type SidebarCustomizeMenuParams = {
   position: SidebarMenuPosition | null;
   sidebarEntries: readonly string[];
+  preferencesBrowserOnly: boolean;
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
   workboardBoards: readonly SidebarWorkboardBoard[];
   workboardRenderers?: SidebarWorkboardRenderers;
@@ -284,6 +272,11 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
           style="position: fixed; left: ${position.x}px; top: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
         <div class="sidebar-customize-menu__title">${t("nav.customize")}</div>
+        ${params.preferencesBrowserOnly
+          ? html`<div class="sidebar-customize-menu__provenance" role="note">
+              ${t("quickSettings.personal.browserOnly")}
+            </div>`
+          : nothing}
         ${SIDEBAR_NAV_ROUTES.filter((routeId) => params.isRouteEnabled(routeId)).map((routeId) => {
           const visible = params.sidebarEntries.includes(
             serializeSidebarEntry({ type: "route", route: routeId }),

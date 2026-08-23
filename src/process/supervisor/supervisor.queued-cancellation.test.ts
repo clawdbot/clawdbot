@@ -1,6 +1,6 @@
 // Queued supervisor replacements must not launch after their caller cancels.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test-utils/deferred.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createProcessSupervisor } from "./supervisor.js";
 import type { SpawnInput, SpawnProcessAdapter } from "./types.js";
 

@@ -84,11 +84,18 @@ const ExecSecretRefSchema = closedObject({
   id: Type.String({ pattern: EXEC_SECRET_REF_ID_JSON_SCHEMA_PATTERN }),
 });
 
+const StoreSecretRefSchema = closedObject({
+  source: Type.Literal("store"),
+  provider: SecretProviderAliasString,
+  id: Type.String({ pattern: ENV_SECRET_REF_ID_RE.source }),
+});
+
 /** Structured secret reference accepted by config and channel protocol payloads. */
 export const SecretRefSchema = Type.Union([
   EnvSecretRefSchema,
   FileSecretRefSchema,
   ExecSecretRefSchema,
+  StoreSecretRefSchema,
 ]);
 
 /** Secret input value: either an inline string or a structured SecretRef. */

@@ -61,6 +61,7 @@ vi.mock("./resolve.js", () => ({
 }));
 
 import { startClickClackGatewayAccount } from "./gateway.js";
+import { ClickClackHttpError } from "./http-client.js";
 
 function createGatewayContext(
   abortSignal: AbortSignal,
@@ -247,23 +248,28 @@ describe("ClickClack gateway", () => {
 
   it.each([
     {
-      label: "missing command scope",
-      error: { status: 403 },
+      label: "workspace command permission rejection",
+      error: new ClickClackHttpError(
+        403,
+        "workspace role no longer permits command updates",
+        new Headers(),
+      ),
       level: "warn" as const,
-      message: "ClickClack command menu sync skipped: bot token lacks commands:write",
+      message:
+        "[default] ClickClack command menu sync skipped: ClickClack 403: workspace role no longer permits command updates; verify token/workspace command permissions or set commandMenu: false if menus are not needed",
     },
     {
       label: "older server",
       error: { status: 404 },
       level: "debug" as const,
       message:
-        "ClickClack command menu sync skipped: server does not support /api/bots/self/commands",
+        "[default] ClickClack command menu sync skipped: server does not support /api/bots/self/commands",
     },
     {
       label: "network failure",
       error: new Error("network unavailable"),
       level: "warn" as const,
-      message: "ClickClack command menu sync failed: network unavailable",
+      message: "[default] ClickClack command menu sync failed: network unavailable",
     },
   ])("continues startup after $label", async ({ error, level, message }) => {
     mocks.client.setBotCommands.mockRejectedValueOnce(error);
@@ -563,6 +569,39 @@ describe("ClickClack gateway", () => {
     expect(ctx.log?.info).toHaveBeenCalledWith(
       expect.stringContaining("skipped ClickClack message before agent dispatch"),
     );
+    abort.abort();
+    await run;
+  });
+
+  it("passes other bot-authored messages to ClickClack access policy", async () => {
+    const socket = new FakeSocket();
+    mocks.client.websocket.mockReturnValue(socket);
+    mocks.client.message.mockResolvedValueOnce({
+      id: "msg-1",
+      workspace_id: "workspace-1",
+      channel_id: "chan-1",
+      author_id: "other-bot",
+      thread_root_id: "msg-1",
+      body: "coordinate",
+      body_format: "markdown",
+      created_at: "2026-01-01T00:00:00.000Z",
+      author: {
+        id: "other-bot",
+        kind: "bot",
+        display_name: "Other bot",
+        handle: "other-bot",
+        avatar_url: "",
+        created_at: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    const abort = new AbortController();
+    const run = startClickClackGatewayAccount(createGatewayContext(abort.signal));
+
+    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    emitMessageEvent(socket, 1, { author_id: "other-bot" });
+
+    await waitForGatewayState(() => expect(mocks.handleClickClackInbound).toHaveBeenCalledTimes(1));
+    expect(mocks.resolveClickClackInboundAccess).toHaveBeenCalledTimes(1);
     abort.abort();
     await run;
   });

@@ -69,7 +69,6 @@ describe("shared question panel", () => {
       render(
         html`<openclaw-chat-question-panel
           .props=${createGatewayQuestionPanelProps(prompt, {
-            nowMs: 2_000,
             collapsed,
             onCollapsedChange: (nextCollapsed) => {
               collapsed = nextCollapsed;
@@ -249,7 +248,7 @@ describe("shared question panel", () => {
   it("disables actions whose gateway callbacks are unavailable", async () => {
     render(
       html`<openclaw-chat-question-panel
-        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), { nowMs: 2_000 })}
+        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), {})}
       ></openclaw-chat-question-panel>`,
       container,
     );
@@ -261,10 +260,18 @@ describe("shared question panel", () => {
     expect(container.querySelector(".chat-question-panel__skip")).toBeNull();
   });
 
+  it("does not render the request expiry countdown", async () => {
+    drawGateway(gatewayPrompt());
+    await panelIn(container);
+
+    expect(container.querySelector(".chat-question-panel__countdown")).toBeNull();
+    expect(container.textContent).not.toContain("1:00");
+  });
+
   it("manages collapse state when no controlled callback is supplied", async () => {
     render(
       html`<openclaw-chat-question-panel
-        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), { nowMs: 2_000 })}
+        .props=${createGatewayQuestionPanelProps(gatewayPrompt(), {})}
       ></openclaw-chat-question-panel>`,
       container,
     );
@@ -284,7 +291,6 @@ describe("shared question panel", () => {
     render(
       html`<openclaw-chat-question-panel
         .props=${createGatewayQuestionPanelProps(gatewayPrompt(), {
-          nowMs: 2_000,
           onSubmit,
         })}
       ></openclaw-chat-question-panel>`,
@@ -304,7 +310,6 @@ describe("shared question panel", () => {
     render(
       html`<openclaw-chat-question-panel
         .props=${createGatewayQuestionPanelProps(gatewayPrompt(), {
-          nowMs: 2_000,
           onSkip,
         })}
       ></openclaw-chat-question-panel>`,

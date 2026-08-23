@@ -1,3 +1,4 @@
+import { normalizeUsage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -18,10 +19,25 @@ import {
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector usage projection", () => {
+  it("keeps the startup harness window when no token-usage update arrives", async () => {
+    const projector = await createProjector(undefined, { initialContextTokens: 1_050_000 });
+
+    await projector.handleNotification(agentMessageDelta("done"));
+    await projector.handleNotification(turnCompleted());
+
+    expect(projector.buildResult(buildEmptyToolTelemetry())).toMatchObject({
+      contextTokens: 1_050_000,
+      contextTokensSource: "resolved",
+    });
+  });
+
   it("emits native context-window and prompt-token snapshots", async () => {
     const params = await createParams();
     const onAgentEvent = vi.fn();
-    const projector = await createProjector({ ...params, onAgentEvent });
+    const projector = await createProjector(
+      { ...params, onAgentEvent },
+      { initialContextTokens: 1_050_000 },
+    );
 
     await projector.handleNotification(
       forCurrentTurn("thread/tokenUsage/updated", {
@@ -31,7 +47,9 @@ describe("CodexAppServerEventProjector usage projection", () => {
             totalTokens: 300_010,
             inputTokens: 300_000,
             cachedInputTokens: 250_000,
+            cacheWriteInputTokens: 5_000,
             outputTokens: 10,
+            reasoningOutputTokens: 4,
           },
         },
       }),
@@ -39,7 +57,36 @@ describe("CodexAppServerEventProjector usage projection", () => {
 
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "codex_app_server.usage",
-      data: { modelContextWindow: 875_900, promptTokens: 300_000 },
+      data: {
+        activeContextTokens: 300_010,
+        cachedInputTokens: 250_000,
+        cacheWriteInputTokens: 5_000,
+        inputTokens: 300_000,
+        modelContextWindow: 875_900,
+        outputTokens: 10,
+        promptTokens: 300_000,
+        reasoningOutputTokens: 4,
+      },
+    });
+    expect(projector.buildResult(buildEmptyToolTelemetry())).toMatchObject({
+      contextTokens: 875_900,
+      contextTokensSource: "runtime",
+    });
+  });
+
+  it("marks native telemetry constrained by an authored context cap", async () => {
+    const params = await createParams();
+    const projector = await createProjector({ ...params, authoredContextTokenCap: 272_000 });
+
+    await projector.handleNotification(
+      forCurrentTurn("thread/tokenUsage/updated", {
+        tokenUsage: { modelContextWindow: 272_000 },
+      }),
+    );
+
+    expect(projector.buildResult(buildEmptyToolTelemetry())).toMatchObject({
+      contextTokens: 272_000,
+      contextTokensSource: "runtime-configured",
     });
   });
 
@@ -95,7 +142,7 @@ describe("CodexAppServerEventProjector usage projection", () => {
     expect(projector.buildResult(buildEmptyToolTelemetry()).modelIterations).toBe(2);
   });
 
-  it("keeps cumulative-only thread usage unknown", async () => {
+  it("uses current-turn thread usage when exact response events are unavailable", async () => {
     const projector = await createProjector();
 
     await projector.handleNotification(agentMessageDelta("done"));
@@ -112,7 +159,9 @@ describe("CodexAppServerEventProjector usage projection", () => {
             totalTokens: 12,
             inputTokens: 5,
             cachedInputTokens: 2,
+            cacheWriteInputTokens: 1,
             outputTokens: 7,
+            reasoningOutputTokens: 3,
           },
         },
       }),
@@ -121,19 +170,36 @@ describe("CodexAppServerEventProjector usage projection", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(result.assistantTexts).toEqual(["done"]);
-    expectUsageFields(result.attemptUsage, { input: 3, output: 7, cacheRead: 2, total: 12 });
-    expect(result.attemptUsage?.contextUsage).toEqual({ state: "unavailable" });
-    expectUsageFields(result.lastAssistant?.usage, {
-      input: 3,
+    expectUsageFields(result.attemptUsage, {
+      input: 2,
       output: 7,
       cacheRead: 2,
+      cacheWrite: 1,
       total: 12,
     });
-    expect(result.lastAssistant?.usage.contextUsage).toEqual({ state: "unavailable" });
+    expect(result.attemptUsage?.reasoningTokens).toBe(3);
+    expect(result.attemptUsage?.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 5,
+      totalTokens: 12,
+    });
+    expectUsageFields(result.lastAssistant?.usage, {
+      input: 2,
+      output: 7,
+      cacheRead: 2,
+      cacheWrite: 1,
+      total: 12,
+    });
+    expect(result.lastAssistant?.usage.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 5,
+      totalTokens: 12,
+    });
+    expect(normalizeUsage(result.lastAssistant?.usage)?.reasoningTokens).toBe(3);
   });
 
   it.each([
-    ["incomplete", { totalTokens: 12 }],
+    ["incomplete", { totalTokens: 12 }, { total: 12 }],
     [
       "incoherent total",
       {
@@ -143,6 +209,7 @@ describe("CodexAppServerEventProjector usage projection", () => {
         outputTokens: 7,
         reasoningOutputTokens: 0,
       },
+      { input: 3, output: 7, cacheRead: 2, cacheWrite: 0, total: 6 },
     ],
     [
       "impossible cache counts",
@@ -154,8 +221,9 @@ describe("CodexAppServerEventProjector usage projection", () => {
         outputTokens: 7,
         reasoningOutputTokens: 0,
       },
+      { output: 7, cacheRead: 4, cacheWrite: 2, total: 12 },
     ],
-  ])("keeps %s response usage unknown", async (_label, usage) => {
+  ])("keeps valid fields from %s response usage", async (_label, usage, expectedUsage) => {
     const projector = await createProjector();
 
     await projector.handleNotification(agentMessageDelta("done"));
@@ -166,8 +234,9 @@ describe("CodexAppServerEventProjector usage projection", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(result.assistantTexts).toEqual(["done"]);
-    expect(result.attemptUsage).toBeUndefined();
-    expect(result.lastAssistant?.usage.contextUsage).toBeUndefined();
+    expect(result.attemptUsage).toMatchObject(expectedUsage);
+    expect(result.attemptUsage?.contextUsage).toEqual({ state: "unavailable" });
+    expect(result.lastAssistant?.usage.contextUsage).toEqual({ state: "unavailable" });
   });
 
   it("clears prior response usage when the final response omits usage", async () => {

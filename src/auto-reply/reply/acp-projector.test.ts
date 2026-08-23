@@ -22,6 +22,7 @@ function createProjectorHarness(
     onProgress?: () => void;
     shouldSendToolSummaries?: boolean;
     shouldSendToolSummariesNow?: () => boolean;
+    shouldSendFullToolDetails?: boolean;
   },
 ) {
   const deliveries: Delivery[] = [];
@@ -29,6 +30,7 @@ function createProjectorHarness(
     cfg: createCfg(cfgOverrides),
     shouldSendToolSummaries: opts?.shouldSendToolSummaries ?? true,
     shouldSendToolSummariesNow: opts?.shouldSendToolSummariesNow,
+    shouldSendFullToolDetails: opts?.shouldSendFullToolDetails ?? false,
     deliver: async (kind, payload) => {
       deliveries.push({ kind, text: payload.text });
       return true;
@@ -112,13 +114,6 @@ function emitTool(projector: Projector, event: Omit<EventOf<"tool_call">, "type"
   return projector.onEvent({ type: "tool_call", ...event });
 }
 
-function finishTurn(
-  projector: Projector,
-  event: EventOf<"done"> | EventOf<"error"> = { type: "done" },
-) {
-  return projector.onEvent(event);
-}
-
 async function runHiddenBoundaryCase(params: {
   streamOverrides?: Record<string, unknown>;
   toolCallId: string;
@@ -152,6 +147,35 @@ async function runHiddenBoundaryCase(params: {
 }
 
 describe("createAcpReplyProjector", () => {
+  it("shows execute details only in full verbose mode", async () => {
+    const summary = createLiveToolLifecycleHarness();
+    await emitTool(summary.projector, {
+      tag: "tool_call",
+      toolCallId: "call_execute_summary",
+      kind: "execute",
+      status: "in_progress",
+      title: "exec: cat /private/operator-file",
+      text: "exec: cat /private/operator-file (in_progress)",
+    });
+    expect(summary.deliveries[0]?.text).not.toContain("cat /private/operator-file");
+    expect(summary.deliveries[0]?.text).toContain("status=in_progress");
+
+    const full = createStreamHarness(
+      "live",
+      { tagVisibility: { tool_call: true } },
+      { shouldSendFullToolDetails: true },
+    );
+    await emitTool(full.projector, {
+      tag: "tool_call",
+      toolCallId: "call_execute_full",
+      kind: "execute",
+      status: "in_progress",
+      title: "exec: cat /private/operator-file",
+      text: "exec: cat /private/operator-file (in_progress)",
+    });
+    expect(full.deliveries[0]?.text).toContain("cat /private/operator-file");
+  });
+
   it("reports progress for ACP runtime events before delivery filtering", async () => {
     const onProgress = vi.fn();
     const { projector } = createProjectorHarness(undefined, { onProgress });
@@ -230,7 +254,7 @@ describe("createAcpReplyProjector", () => {
     await emitText(projector, "done");
     allowToolSummaries = false;
 
-    await finishTurn(projector);
+    await projector.flush(true);
 
     expect(deliveries).toEqual([{ kind: "final", text: "done" }]);
   });
@@ -258,23 +282,9 @@ describe("createAcpReplyProjector", () => {
     await emitText(projector, "I don't");
     allowToolSummaries = false;
 
-    await finishTurn(projector);
+    await projector.flush(true);
 
     expect(deliveries).toEqual([{ kind: "final", text: "fallback.\n\nI don't" }]);
-  });
-
-  it("does not suppress identical short text across terminal turn boundaries", async () => {
-    const { deliveries, projector } = createStreamHarness("live");
-
-    await emitText(projector, "A");
-    await finishTurn(projector, { type: "done", stopReason: "end_turn" });
-    await emitText(projector, "A");
-    await finishTurn(projector, { type: "done", stopReason: "end_turn" });
-
-    expect(blockDeliveries(deliveries)).toEqual([
-      { kind: "block", text: "A" },
-      { kind: "block", text: "A" },
-    ]);
   });
 
   it("flushes staggered live text deltas after idle gaps", async () => {
@@ -343,7 +353,7 @@ describe("createAcpReplyProjector", () => {
     await emitText(projector, " now?");
     expect(deliveries).toStrictEqual([]);
 
-    await finishTurn(projector);
+    await projector.flush(true);
     expect(deliveries).toHaveLength(3);
     expect(deliveries[0]).toEqual({
       kind: "tool",
@@ -366,7 +376,7 @@ describe("createAcpReplyProjector", () => {
     });
     expect(deliveries).toStrictEqual([]);
 
-    await finishTurn(projector, { type: "error", message: "turn failed" });
+    await projector.flush(true);
     expect(deliveries).toHaveLength(2);
     expect(deliveries[0]).toEqual({
       kind: "tool",

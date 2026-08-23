@@ -1,36 +1,19 @@
+import { normalizeOptionalString as normalizeQaConfigString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
-import { isQaProviderModeInput } from "./providers/index.js";
-import type { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import {
+  resolveQaScenarioRequiredProviderMode,
+  type QaSeedScenarioWithSource,
+} from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 
-type QaSeedScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
+type QaSeedScenario = QaSeedScenarioWithSource;
 
 export type QaScenarioExecutionCell = {
   scenarioId: string;
   executionKind: QaSeedScenario["execution"]["kind"];
   channel: string | null;
 };
-
-function normalizeQaConfigString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-export function resolveQaScenarioRequiredProviderMode(scenario: QaSeedScenario) {
-  const configuredMode = normalizeQaConfigString(scenario.execution.config?.requiredProviderMode);
-  const executionMode =
-    scenario.execution.kind === "flow" ? scenario.execution.providerMode : undefined;
-  if (configuredMode && executionMode && configuredMode !== executionMode) {
-    throw new Error(
-      `QA scenario ${scenario.id} declares conflicting provider modes: execution.providerMode=${executionMode}, execution.config.requiredProviderMode=${configuredMode}`,
-    );
-  }
-  const providerMode = configuredMode ?? executionMode;
-  if (providerMode !== undefined && !isQaProviderModeInput(providerMode)) {
-    throw new Error(`QA scenario ${scenario.id} declares unknown provider mode: ${providerMode}`);
-  }
-  return providerMode;
-}
 
 function resolveQaScenarioLaneChannels(params: {
   scenario: QaSeedScenario;
@@ -46,21 +29,19 @@ function resolveQaScenarioLaneChannels(params: {
   if (selectedChannel) {
     return [selectedChannel];
   }
-  const scenarioChannel = params.scenario.execution.channel?.trim().toLowerCase();
-  if (scenarioChannel) {
-    return [scenarioChannel];
+  const declaredChannels = params.scenario.execution.channels ?? [];
+  if (declaredChannels.length === 1) {
+    return declaredChannels;
   }
   if (params.scenario.execution.kind === "flow") {
-    const driverChannels = params.scenario.execution.channels?.filter(
-      (channel) => channel !== "qa-channel",
-    );
-    const supportedChannels = driverChannels?.filter(
+    const driverChannels = declaredChannels.filter((channel) => channel !== "qa-channel");
+    const supportedChannels = driverChannels.filter(
       (channel) => !params.supportsChannel || params.supportsChannel(channel),
     );
-    if (supportedChannels?.length) {
+    if (supportedChannels.length) {
       return supportedChannels;
     }
-    if (driverChannels?.length) {
+    if (driverChannels.length) {
       return driverChannels;
     }
   }
@@ -102,6 +83,7 @@ export function describeQaProviderLaneMismatches(params: {
   channelDriver?: QaScorecardChannelDriver | null;
   channel?: string | null;
   claudeCliAuthMode?: QaCliBackendAuthMode;
+  supportsModuleFlows?: boolean;
 }) {
   const mismatches: string[] = [];
   const config = params.scenario.execution.config ?? {};
@@ -118,14 +100,20 @@ export function describeQaProviderLaneMismatches(params: {
     effectiveChannelDriver === "qa-channel"
       ? "qa-channel"
       : params.channel?.trim().toLowerCase() || undefined;
-  const scenarioChannel = params.scenario.execution.channel?.trim().toLowerCase();
-  if (scenarioChannel && effectiveChannel !== scenarioChannel) {
-    mismatches.push(`channel=${scenarioChannel}`);
+  const declaredChannels = params.scenario.execution.channels ?? [];
+  if (declaredChannels.length > 0 && !declaredChannels.includes(effectiveChannel ?? "")) {
+    mismatches.push(`channel=${declaredChannels.join("|")}`);
   }
-  const allowedChannels =
-    params.scenario.execution.kind === "flow" ? params.scenario.execution.channels : undefined;
-  if (allowedChannels && !allowedChannels.includes(effectiveChannel ?? "")) {
-    mismatches.push(`channel=${allowedChannels.join("|")}`);
+  if (
+    params.scenario.execution.kind === "flow" &&
+    params.scenario.execution.flowKind === "module" &&
+    params.supportsModuleFlows !== true
+  ) {
+    const implementation =
+      effectiveChannel && effectiveChannel !== effectiveChannelDriver
+        ? `${effectiveChannelDriver}:${effectiveChannel}`
+        : effectiveChannelDriver;
+    mismatches.push(`module flow unsupported by implementation=${implementation}`);
   }
   const selected = splitQaModelRef(params.primaryModel);
   const requiredProvider = normalizeQaConfigString(config.requiredProvider);

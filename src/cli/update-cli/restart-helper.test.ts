@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { getWindowsCmdExePath } from "../../infra/windows-install-roots.js";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 
@@ -41,6 +42,7 @@ vi.mock("node:child_process", async () => {
 });
 
 describe("restart-helper", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const originalPlatform = process.platform;
   const originalGetUid = process.getuid;
   const originalGetEuid = process.geteuid;
@@ -89,7 +91,7 @@ describe("restart-helper", () => {
     if (!powerShellPath) {
       throw new Error("PowerShell is unavailable");
     }
-    const scriptDir = await makeTempDir("openclaw-restart-policy-");
+    const scriptDir = tempDirs.make("openclaw-restart-policy-");
     const scriptPath = path.join(scriptDir, "policy-test.ps1");
     const policy = extractWindowsKillPolicy(content);
     await fs.writeFile(
@@ -123,10 +125,6 @@ describe("restart-helper", () => {
     } finally {
       await fs.rm(scriptDir, { recursive: true, force: true });
     }
-  }
-
-  async function makeTempDir(prefix: string) {
-    return await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   }
 
   async function writeFakeLaunchctl(
@@ -252,7 +250,7 @@ ${body}`,
       process.getuid = () => 2000;
       process.geteuid = () => 1000;
       const statSpy = mockLinuxUserBusSocket();
-      const tmpDir = await makeTempDir("openclaw-restart-helper-");
+      const tmpDir = tempDirs.make("openclaw-restart-helper-");
       const fakeBinDir = path.join(tmpDir, "bin");
       const callsPath = path.join(tmpDir, "systemctl-calls.log");
       await fs.mkdir(fakeBinDir, { recursive: true });
@@ -417,7 +415,7 @@ exit 1
       Object.defineProperty(process, "platform", { value: "linux" });
       const timestamp = 1_727_201_234_567;
       const oldCandidatePath = path.join(os.tmpdir(), `openclaw-restart-${timestamp}.sh`);
-      const victimDir = await makeTempDir("openclaw-restart-helper-victim-");
+      const victimDir = tempDirs.make("openclaw-restart-helper-victim-");
       const victimPath = path.join(victimDir, "restart.sh");
       await fs.rm(oldCandidatePath, { force: true });
       await fs.writeFile(victimPath, "preexisting script\n", "utf-8");
@@ -478,7 +476,7 @@ exit 1
 
     it("fails with sudo systemd guidance when the gateway unit is system-scoped", async () => {
       Object.defineProperty(process, "platform", { value: "linux" });
-      const tmpDir = await makeTempDir("openclaw-restart-helper-");
+      const tmpDir = tempDirs.make("openclaw-restart-helper-");
       const fakeBinDir = path.join(tmpDir, "bin");
       const callsPath = path.join(tmpDir, "systemctl-calls.log");
       await fs.mkdir(fakeBinDir, { recursive: true });
@@ -577,7 +575,7 @@ exit 1
     it("returns the final macOS launchctl kickstart failure after logging cleanup", async () => {
       Object.defineProperty(process, "platform", { value: "darwin" });
       process.getuid = () => 501;
-      const tmpDir = await makeTempDir("openclaw-restart-helper-");
+      const tmpDir = tempDirs.make("openclaw-restart-helper-");
       const fakeBinDir = path.join(tmpDir, "bin");
       const stateDir = path.join(tmpDir, "state");
       await fs.mkdir(fakeBinDir, { recursive: true });
@@ -616,7 +614,7 @@ exit 0
     it("continues the macOS restart path when log setup fails", async () => {
       Object.defineProperty(process, "platform", { value: "darwin" });
       process.getuid = () => 501;
-      const tmpDir = await makeTempDir("openclaw-restart-helper-");
+      const tmpDir = tempDirs.make("openclaw-restart-helper-");
       const fakeBinDir = path.join(tmpDir, "bin");
       const stateFile = path.join(tmpDir, "state-file");
       const markerPath = path.join(tmpDir, "launchctl-ran");

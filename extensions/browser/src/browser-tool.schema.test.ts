@@ -1,7 +1,7 @@
 // Browser tests cover browser tool.schema plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { BrowserToolOutputSchema, BrowserToolSchema } from "./browser-tool.schema.js";
+import { createBrowserToolSchema, resolveBrowserToolCapabilities } from "./browser-tool.schema.js";
 import { ACT_MAX_VIEWPORT_DIMENSION } from "./browser/act-policy.js";
 
 type SchemaRecord = Record<string, { maximum?: number; properties?: SchemaRecord }>;
@@ -18,6 +18,7 @@ function requireSchemaProperty<T>(properties: Record<string, T>, name: string, c
 }
 
 describe("browser tool schema", () => {
+  const BrowserToolSchema = createBrowserToolSchema(resolveBrowserToolCapabilities());
   it("advertises the viewport resize maximum on nested and flattened act params", () => {
     const properties = BrowserToolSchema.properties as SchemaRecord;
     const requestProperties =
@@ -60,26 +61,6 @@ describe("browser tool schema", () => {
       expect.arrayContaining(["download", "waitfordownload"]),
     );
     expect(properties.path).toBeDefined();
-  });
-
-  it("exposes extract input and output fields", () => {
-    const properties = BrowserToolSchema.properties as BrowserSchemaRecord;
-    const output = BrowserToolOutputSchema.properties as BrowserSchemaRecord;
-
-    expect(requireSchemaProperty(properties, "action", "browser action schema").enum).toContain(
-      "extract",
-    );
-    expect(properties.query).toBeDefined();
-    expect(properties.selector).toBeDefined();
-    expect(properties.ignoreSelectors).toBeDefined();
-    expect(properties.schema).toBeDefined();
-    expect(properties.targetId).toBeDefined();
-    expect(properties.timeoutMs).toBeDefined();
-    expect(output.url).toBeDefined();
-    expect(output.chars).toBeDefined();
-    expect(output.truncated).toBeDefined();
-    expect(output.model).toBeDefined();
-    expect(output.json).toBeDefined();
   });
 
   it("exposes scrollIntoView on nested and flattened act params", () => {

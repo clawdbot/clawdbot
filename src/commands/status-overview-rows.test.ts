@@ -23,6 +23,7 @@ describe("status-overview-rows", () => {
       "1 files · 2 chunks · plugin memory · ok(vector ready) · warn(fts ready) · muted(cache warm)",
     );
     expect(findRowValue(rows, "Plugin compatibility")).toBe("warn(1 notice · 1 plugin)");
+    expect(findRowValue(rows, "Host desktop")).toBe("muted(disabled)");
     expect(findRowValue(rows, "Sessions")).toBe(
       "2 active · default gpt-5.5 (12k ctx) · store.json",
     );
@@ -38,6 +39,28 @@ describe("status-overview-rows", () => {
 
     expect(findRowValue(rows, "Memory")).toBe(
       "muted(enabled (plugin memory-lancedb-pro) · not checked)",
+    );
+  });
+
+  it("shows managed host desktop coordinates", () => {
+    const params = createStatusCommandOverviewRowsParams();
+    const rows = buildStatusCommandOverviewRows({
+      ...params,
+      summary: {
+        ...params.summary,
+        hostDesktop: {
+          enabled: true,
+          state: "managed",
+          managedState: "running",
+          display: 99,
+          port: 46_001,
+          security: "VncAuth",
+        },
+      },
+    });
+
+    expect(findRowValue(rows, "Host desktop")).toBe(
+      "managed · running · display :99 · 127.0.0.1:46001 · security VncAuth",
     );
   });
 
@@ -75,12 +98,36 @@ describe("status-overview-rows", () => {
   });
 
   it("builds status-all overview rows from the shared surface", () => {
+    const summary = createStatusCommandOverviewRowsParams().summary;
     const rows = buildStatusAllOverviewRows({
       surface: {
         ...baseStatusOverviewSurface,
         tailscaleMode: "off",
         tailscaleHttpsUrl: null,
         gatewayConnection: { url: "wss://gateway.example.com", urlSource: "config" },
+      },
+      summary: {
+        ...summary,
+        degradedSecretOwners: [
+          {
+            ownerKind: "capability",
+            ownerId: "tts",
+            state: "unavailable",
+            paths: ["tts.providers.elevenlabs.apiKey"],
+            reason: "secret reference was not found",
+          },
+        ],
+        degradedPlugins: [
+          {
+            pluginId: "discord",
+            state: "configured-unavailable",
+            diagnostic: {
+              kind: "plugin-verification",
+              reason: "unreadable-package-json",
+              detail: "permission denied",
+            },
+          },
+        ],
       },
       osLabel: "macOS",
       configPath: "/tmp/openclaw.json",
@@ -99,6 +146,8 @@ describe("status-overview-rows", () => {
     expect(findRowValue(rows, "Config")).toBe("/tmp/openclaw.json");
     expect(findRowValue(rows, "Update restart")).toBe("restart pending health verification");
     expect(findRowValue(rows, "Security")).toBe("Run: openclaw security audit --deep");
+    expect(findRowValue(rows, "Degraded secrets")).toBe("1 degraded · capability:tts");
+    expect(findRowValue(rows, "Degraded plugins")).toBe("1 configured-unavailable · discord");
     expect(findRowValue(rows, "Secrets")).toBe("2 diagnostics");
   });
 });

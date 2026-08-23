@@ -11,6 +11,28 @@ const TELEGRAM_TERMINAL_BAD_REQUEST_RE = /\b(?:chat|message thread) not found\b/
 
 type PartialDeliveryResult = Parameters<typeof createChannelPartialDeliveryError>[1];
 
+export function mergeTelegramPartialDeliveryError(
+  error: unknown,
+  priorDeliveryResult: PartialDeliveryResult,
+): ReturnType<typeof createChannelPartialDeliveryError> {
+  if (!isChannelPartialDeliveryError(error)) {
+    return createChannelPartialDeliveryError(error, priorDeliveryResult);
+  }
+  const currentDeliveryResult = error.deliveryResult;
+  const messageIds = [
+    ...new Set([
+      ...(priorDeliveryResult.messageIds ?? []),
+      ...(currentDeliveryResult.messageIds ?? []),
+    ]),
+  ];
+  return createChannelPartialDeliveryError(error, {
+    ...priorDeliveryResult,
+    ...currentDeliveryResult,
+    ...(messageIds.length > 0 ? { messageIds } : {}),
+    visibleReplySent: true,
+  });
+}
+
 function isTelegramSkippableChunkSendError(error: unknown): boolean {
   if (isSafeToRetrySendError(error)) {
     return true;
@@ -35,10 +57,10 @@ export function createTelegramChunkDeliveryTracker(params: {
   let firstSilentSkipError: unknown;
 
   const throwAfterAccepted = (error: unknown): never => {
-    if (acceptedCount === 0 || isChannelPartialDeliveryError(error)) {
+    if (acceptedCount === 0) {
       throw error;
     }
-    throw createChannelPartialDeliveryError(error, params.partialDeliveryResult());
+    throw mergeTelegramPartialDeliveryError(error, params.partialDeliveryResult());
   };
 
   const reject = (error: unknown): "rejected" | "silent-skip" => {

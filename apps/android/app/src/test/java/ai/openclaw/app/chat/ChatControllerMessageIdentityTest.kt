@@ -122,6 +122,69 @@ class ChatControllerMessageIdentityTest {
     }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun liveHistoryDecodesSystemNoticeMetadataWithoutChangingRoles() =
+    runTest {
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            if (method == "chat.history") {
+              """
+              {
+                "messages": [
+                  {
+                    "role": "user",
+                    "content": "[System] Continue the interrupted turn.",
+                    "provenance": {
+                      "kind": "internal_system",
+                      "sourceTool": "main_session_restart_recovery"
+                    }
+                  },
+                  {
+                    "role": "system",
+                    "content": "Compaction",
+                    "__openclaw": {
+                      "kind": "compaction",
+                      "id": "checkpoint-1",
+                      "tokensBefore": 900000.5,
+                      "tokensAfter": 24700.25
+                    }
+                  }
+                ]
+              }
+              """.trimIndent()
+            } else {
+              "{}"
+            }
+          },
+        )
+
+      controller.load("main")
+      advanceUntilIdle()
+
+      val messages = controller.messages.value
+      assertEquals(listOf("user", "system"), messages.map { it.role })
+      assertEquals(
+        ChatMessageProvenance(
+          kind = "internal_system",
+          sourceTool = "main_session_restart_recovery",
+        ),
+        messages[0].provenance,
+      )
+      assertEquals(
+        ChatTranscriptMarker(
+          kind = "compaction",
+          id = "checkpoint-1",
+          tokensBefore = 900000.5,
+          tokensAfter = 24700.25,
+        ),
+        messages[1].transcriptMarker,
+      )
+    }
+
+  @Test
   fun reconcileMessageIdsReusesMatchingIdsAcrossHistoryReload() {
     val previous =
       listOf(

@@ -223,6 +223,16 @@ node scripts/e2e/lib/plugins/assertions.mjs plugin-npm
 openclaw_e2e_maybe_timeout "$OPENCLAW_PLUGINS_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" plugins update demo-plugin-npm >"$OPENCLAW_PLUGINS_TMP_DIR/plugins-npm-update.log" 2>&1
 node scripts/e2e/lib/plugins/assertions.mjs plugin-npm-update
 
+run_plugins_openclaw_logged uninstall-npm-retained plugins uninstall demo-plugin-npm --force --keep-files
+run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-npm-retained.json" plugins list --json
+node scripts/e2e/lib/plugins/assertions.mjs plugin-npm-retained
+
+run_plugins_openclaw_logged reinstall-npm plugins install "npm:@openclaw/demo-plugin-npm@0.0.1" --force
+run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-npm.json" plugins list --json
+run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-npm-inspect.json" plugins inspect demo-plugin-npm --runtime --json
+run_plugins_shell_logged exec-reinstalled-npm-plugin-cli 'node "$OPENCLAW_ENTRY" demo-npm ping >"$OPENCLAW_PLUGINS_TMP_DIR/plugins-npm-cli.txt"'
+node scripts/e2e/lib/plugins/assertions.mjs plugin-npm
+
 run_plugins_openclaw_logged uninstall-npm plugins uninstall demo-plugin-npm --force
 run_plugins_openclaw_capture "$OPENCLAW_PLUGINS_TMP_DIR/plugins-npm-uninstalled.json" plugins list --json
 node scripts/e2e/lib/plugins/assertions.mjs plugin-npm-removed

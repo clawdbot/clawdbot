@@ -1,10 +1,7 @@
-import type { Message } from "grammy/types";
+import type { Message, MessageEntity } from "grammy/types";
 import { describe, expect, it } from "vitest";
-import {
-  getTelegramTextParts,
-  joinTelegramTextParts,
-  renderTelegramTextEntities,
-} from "./body-helpers.js";
+import { getTelegramTextParts, joinTelegramTextParts } from "./body-helpers.js";
+import { renderTelegramTextEntities } from "./inbound-text-entities.js";
 
 function asTelegramMessage(message: unknown): Message {
   return message as Message;
@@ -99,5 +96,38 @@ describe("joinTelegramTextParts", () => {
       text: "bold",
       entities: [{ type: "bold", offset: 0, length: 4 }],
     });
+  });
+});
+
+describe("renderTelegramTextEntities quoted blocks", () => {
+  it.each(["blockquote", "expandable_blockquote"] as const)(
+    "preserves multiline %s entities and nested formatting",
+    (type) => {
+      const text = "Before\n😀 quoted\nsecond link\nAfter";
+      const quote = "😀 quoted\nsecond link";
+      const quoteOffset = text.indexOf(quote);
+
+      const entities: MessageEntity[] = [
+        { type, offset: quoteOffset, length: quote.length },
+        { type: "bold", offset: quoteOffset + "😀 ".length, length: "quoted".length },
+      ];
+
+      expect(renderTelegramTextEntities(text, entities)).toBe(
+        "Before\n> 😀 **quoted**\n> second link\n\nAfter",
+      );
+    },
+  );
+
+  it("reopens enclosing formatting across a quote block", () => {
+    const text = "bold before\nquoted\nbold after";
+    const quoteOffset = text.indexOf("quoted");
+    const entities: MessageEntity[] = [
+      { type: "bold", offset: 0, length: text.length },
+      { type: "blockquote", offset: quoteOffset, length: "quoted".length },
+    ];
+
+    expect(renderTelegramTextEntities(text, entities)).toBe(
+      "**bold before**\n> **quoted**\n\n**bold after**",
+    );
   });
 });

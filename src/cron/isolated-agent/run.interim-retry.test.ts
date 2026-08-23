@@ -1,16 +1,16 @@
 // Interim retry tests cover retry behavior for incomplete isolated cron runs.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   countActiveDescendantRunsMock,
   dispatchCronDeliveryMock,
-  isHeartbeatOnlyResponseMock,
   listDescendantRunsForRequesterMock,
   loadRunCronIsolatedAgentTurn,
   mockRunCronFallbackPassthrough,
   pickLastNonEmptyTextFromPayloadsMock,
   resolveCronDeliveryPlanMock,
+  resolveCronPayloadOutcomeMock,
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
@@ -81,9 +81,11 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
   };
 
   it("regression, retries once when cron returns interim acknowledgement and no descendants were spawned", async () => {
+    const onExecutionStarted = vi.fn();
     usePayloadTextExtraction();
     runEmbeddedAgentMock
       .mockImplementationOnce(async (request) => {
+        request.onExecutionStarted?.();
         request.userTurnTranscriptRecorder?.markRuntimePersisted({
           role: "user",
           content: "test",
@@ -97,17 +99,25 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
           meta: { agentMeta: { usage: { input: 10, output: 20 } } },
         };
       })
-      .mockResolvedValueOnce({
-        payloads: [
-          {
-            text: "SF is 62F and SD is 67F. SD is warmer by 5F.",
-          },
-        ],
-        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      .mockImplementationOnce(async (request) => {
+        request.onExecutionStarted?.();
+        return {
+          payloads: [
+            {
+              text: "SF is 62F and SD is 67F. SD is warmer by 5F.",
+            },
+          ],
+          meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+        };
       });
 
     mockRunCronFallbackPassthrough();
-    await runTurnAndExpectOk(2, 2);
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({ onExecutionStarted }),
+    );
+    expect(result.status).toBe("ok");
+    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(2);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
     const firstCall = requireEmbeddedAgentCall(0);
     const continuationCall = requireEmbeddedAgentCall(1);
     expect(continuationCall.prompt).toContain("previous response was only an acknowledgement");
@@ -116,6 +126,10 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     );
     expect(firstCall.suppressNextUserMessagePersistence).toBe(false);
     expect(continuationCall.suppressNextUserMessagePersistence).toBe(false);
+    expect(onExecutionStarted.mock.calls.map(([info]) => info?.isFallback)).toEqual([
+      undefined,
+      undefined,
+    ]);
   });
 
   it("does not retry when the first turn is already a concrete result", async () => {
@@ -127,6 +141,36 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
 
     mockRunCronFallbackPassthrough();
     await runTurnAndExpectOk(1, 1);
+  });
+
+  it("delivers only the final result after an earlier heartbeat acknowledgement", async () => {
+    const finalResult = "Critical deployment failure: database unavailable.";
+    const { resolveCronPayloadOutcome } =
+      await vi.importActual<typeof import("./helpers.js")>("./helpers.js");
+    usePayloadTextExtraction();
+    resolveCronPayloadOutcomeMock.mockImplementation(resolveCronPayloadOutcome);
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "123",
+    });
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "HEARTBEAT_OK" }, { text: finalResult }],
+      meta: {
+        finalAssistantVisibleText: finalResult,
+        agentMeta: { usage: { input: 10, output: 20 } },
+      },
+    });
+
+    mockRunCronFallbackPassthrough();
+    const result = await runTurnAndExpectOk(1, 1);
+
+    expect(result.delivered).toBe(true);
+    expect(requireDeliveryRequest()).toMatchObject({
+      skipHeartbeatDelivery: false,
+      deliveryPayloads: [{ text: finalResult }],
+    });
   });
 
   it("does not retry over a fatal structured failure signal", async () => {
@@ -163,7 +207,6 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
       channel: "messagechat",
       to: "123",
     });
-    isHeartbeatOnlyResponseMock.mockReturnValue(true);
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
       meta: {

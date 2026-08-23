@@ -1,18 +1,18 @@
 // Per-gateway, per-browser snooze state for the sidebar attention chips.
 // Deliberately client-side chrome (like nav width / dock layout), not gateway
 // state: dismissing a nag on one device should not acknowledge it everywhere.
-import { normalizeGatewayTokenScope } from "../app/gateway-scope.ts";
+import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { getSafeLocalStorage } from "../local-storage.ts";
 
 const SIDEBAR_ATTENTION_KINDS = [
+  "updateAvailable",
   "cronFailed",
   "cronOverdue",
   "modelAuthExpired",
-  "pendingApproval",
 ] as const;
 export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_KINDS)[number];
 
-export type SidebarAttentionDismissals = Partial<Record<SidebarAttentionKind, string>>;
+export type SidebarAttentionDismissals = Partial<Record<SidebarAttentionKind, string[]>>;
 
 // Minimal chip shape the snooze logic needs; keeps this module free of the
 // component's item type so the two files cannot form an import cycle.
@@ -21,7 +21,7 @@ type DismissableChip = { kind: SidebarAttentionKind; signature: string };
 const DISMISSED_STORE_PREFIX = "openclaw.control.sidebarAttention.v1:";
 
 export function dismissalStoreKey(gatewayUrl: string): string {
-  return `${DISMISSED_STORE_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
+  return `${DISMISSED_STORE_PREFIX}${gatewayOriginScope(gatewayUrl)}`;
 }
 
 export function loadDismissals(gatewayUrl: string): SidebarAttentionDismissals {
@@ -37,8 +37,13 @@ export function loadDismissals(gatewayUrl: string): SidebarAttentionDismissals {
     const result: SidebarAttentionDismissals = {};
     for (const kind of SIDEBAR_ATTENTION_KINDS) {
       const value = (parsed as Record<string, unknown>)[kind];
-      if (typeof value === "string") {
-        result[kind] = value;
+      const signatures = Array.isArray(value)
+        ? value.filter((entry): entry is string => typeof entry === "string")
+        : typeof value === "string"
+          ? [value]
+          : [];
+      if (signatures.length > 0) {
+        result[kind] = [...new Set(signatures)];
       }
     }
     return result;
@@ -73,7 +78,8 @@ export function addDismissal(
   kind: SidebarAttentionKind,
   signature: string,
 ): SidebarAttentionDismissals {
-  const next = { ...loadDismissals(gatewayUrl), [kind]: signature };
+  const stored = loadDismissals(gatewayUrl);
+  const next = { ...stored, [kind]: [...new Set([...(stored[kind] ?? []), signature])] };
   saveDismissals(gatewayUrl, next);
   return next;
 }
@@ -91,12 +97,16 @@ export function pruneDismissals(
   let changed = false;
   for (const kind of SIDEBAR_ATTENTION_KINDS) {
     const stored = dismissals[kind];
-    if (stored === undefined) {
+    if (!stored) {
       continue;
     }
-    if (items.some((item) => item.kind === kind && item.signature === stored)) {
-      next[kind] = stored;
-    } else {
+    const current = stored.filter((signature) =>
+      items.some((item) => item.kind === kind && item.signature === signature),
+    );
+    if (current.length > 0) {
+      next[kind] = current;
+    }
+    if (current.length !== stored.length) {
       changed = true;
     }
   }

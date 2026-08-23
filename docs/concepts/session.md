@@ -11,19 +11,22 @@ OpenClaw routes every inbound message to a **session** based on where it came
 from: DMs, group chats, cron jobs, etc. All session state is owned by the
 **gateway**; UI clients query the gateway for session data.
 
+To continue the same Gateway-owned session in the Control UI, terminal, or a
+coding harness, see [Session synchronization and attachment](/concepts/session-attachment).
+
 For the personal-agent default — one rolling conversation shared by all your
 DM channels, with group activity and background work flowing into it — see
 [The main session](/concepts/main-session).
 
 ## How messages are routed
 
-| Source          | Behavior                  |
-| --------------- | ------------------------- |
-| Direct messages | Shared session by default |
-| Group chats     | Isolated per group        |
-| Rooms/channels  | Isolated per room         |
-| Cron jobs       | Fresh session per run     |
-| Webhooks        | Isolated per hook         |
+| Source          | Behavior                      |
+| --------------- | ----------------------------- |
+| Direct messages | Shared session by default     |
+| Group chats     | Isolated per group by default |
+| Rooms/channels  | Isolated per room by default  |
+| Cron jobs       | Fresh session per run         |
+| Webhooks        | Isolated per hook             |
 
 ## DM isolation
 
@@ -68,6 +71,39 @@ troubleshooting.
 
 Verify your setup with `openclaw security audit`.
 
+## Group and room routing
+
+`session.groupScope` controls where non-direct peers store conversation
+context:
+
+| Value                 | Behavior                                                                                  |
+| --------------------- | ----------------------------------------------------------------------------------------- |
+| `per-group` (default) | Keep each group, room, or channel in its existing channel-scoped session                  |
+| `main`                | Route groups, rooms, and channels into the agent's [main session](/concepts/main-session) |
+
+A route binding can override the global value. This is useful when only a
+named team room should join the main conversation:
+
+```json5
+{
+  bindings: [
+    {
+      agentId: "main",
+      match: {
+        channel: "slack",
+        peer: { kind: "channel", id: "C0123TEAM" },
+      },
+      session: { groupScope: "main" },
+    },
+  ],
+}
+```
+
+Use `peer.kind: "group"` for providers that classify the room as a group.
+The binding override wins over global `session.groupScope`. This setting
+changes session-key selection only: DM routing, mention gating, delivery
+context, and replies to the source room remain unchanged.
+
 ## Incognito sessions
 
 Incognito sessions are available only from the Control UI's **New thread** screen. Turn on **Incognito** before starting the thread to keep its session entry, transcript, and compaction state in process memory instead of on disk. The thread disappears when the Gateway restarts, does not run OpenClaw's automatic memory flush, and does not create a transcript archive when you reset or delete it. Codex-backed runs also start their harness thread in ephemeral mode, so Codex writes no rollout or local session-state files; other model providers use HTTP APIs and keep no local provider transcript in OpenClaw.
@@ -86,7 +122,7 @@ adds an optional retrieval step across that agent's other private
 conversations; it does not combine their transcripts.
 
 Private direct and persistent explicit UI conversations can supply relevant
-context to one another. Groups and channels stay separate in both directions:
+context to one another. Under default `session.groupScope: "per-group"`, groups and channels stay separate in both directions:
 their transcripts are not private recall sources, and replies in those
 conversations do not receive private transcript context. The current
 conversation is also excluded because its history is already loaded.
@@ -181,7 +217,9 @@ shown:
     maintenance: {
       mode: "enforce", // "enforce" applies cleanup; "warn" only reports
       pruneAfter: "30d",
+      archiveDashboardAfter: "7d", // false or 0 disables
       maxEntries: 500,
+      preserveRecent: "7d", // optional; false or omitted disables
     },
   },
 }
@@ -192,6 +230,15 @@ high-water buffer and clean back down to the configured cap in batches.
 Session store reads do not prune or cap entries during Gateway startup, so
 startup and isolated cron sessions do not pay for a full store cleanup.
 `openclaw sessions cleanup --enforce` applies the cap immediately.
+
+`maxEntries` counts every live session row. Archived or pinned sessions, active
+or admitted work, model-locked sessions, and durable external conversation
+pointers are protected from automatic eviction, but still consume the cap.
+Cleanup removes the oldest unprotected rows until it reaches `maxEntries` or
+runs out of eligible victims. The total can therefore remain above the cap when
+protected rows alone exceed it or active work temporarily blocks eviction.
+Cleanup does not unprotect those rows; unarchive, unpin, wait for active work to
+finish, or explicitly delete sessions you no longer want to retain.
 
 Gateway model-run probe sessions are short-lived by default. Rows matching
 `agent:*:explicit:model-run-<uuid>` use fixed `24h` retention, but cleanup is
@@ -204,10 +251,22 @@ Maintenance preserves durable external conversation pointers, including group
 sessions and thread-scoped chat sessions, while still allowing synthetic cron,
 hook, heartbeat, ACP, and sub-agent entries to age out.
 
-Archived sessions are user-shelved and exempt from every automatic maintenance
-path, including age pruning, entry caps, model-run cleanup, and disk-budget
-eviction. They remain archived until you unarchive them or explicitly delete
-them.
+Shared or high-volume installations can set `preserveRecent` to protect
+recently active interactive sessions and every SQLite history generation owned
+by those sessions. The option is disabled when omitted or set to `false`, so
+personal installations keep the normal oldest-first policy. Synthetic
+model-run, cron, hook, heartbeat, ACP, and sub-agent sessions remain eligible
+for bounded cleanup. Protection can temporarily keep the store above its entry
+or disk target; it expires after the configured inactivity window.
+
+Recent-session protection does not change managed-worktree garbage collection;
+durable dashboard sessions auto-archive after 7 days of inactivity by default,
+while other session types still require an explicit archive action.
+
+Archived and pinned sessions are user-protected and exempt from every automatic
+maintenance path, including age pruning, entry caps, model-run cleanup, and
+disk-budget eviction. They remain protected until you unarchive, unpin, or
+explicitly delete them.
 
 If you previously used DM isolation and later returned `session.dmScope` to
 `main`, preview stale peer-keyed DM rows with

@@ -1,7 +1,9 @@
+import { isDeepStrictEqual } from "node:util";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { replaceConfigFile } from "../config/config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -10,8 +12,10 @@ import { diffConfigPaths } from "../gateway/config-diff.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.js";
 import { danger, info } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
+import { toDotPath } from "../shared/dot-path.js";
 import { shortenHomePath } from "../utils.js";
 import {
   ConfigSetDryRunValidationError,
@@ -28,12 +32,12 @@ import {
   getAtPath,
   mergeAtPath,
   setAtPath,
-  toDotPath,
   type JsonSchemaRecord,
   type PathSegment,
   unsetAtPath,
 } from "./config-cli-path.js";
 import {
+  assertStrictConfigForMutation,
   collectDryRunRefs,
   collectDryRunResolvabilityErrors,
   collectDryRunSchemaErrors,
@@ -41,7 +45,7 @@ import {
   collectPluginIntegrationProviderErrors,
   dedupeDryRunErrors,
   formatDryRunFailureMessage,
-  loadValidConfig,
+  loadValidConfigForWrite,
   selectDryRunRefsForResolution,
 } from "./config-cli-validation.js";
 import { checkTouchedTextModelRefs } from "./config-model-validation.js";
@@ -235,10 +239,10 @@ export function configApplyHintForOperations(
     beforeConfig,
     afterConfig,
   );
-  if (
-    paths.length === 0 ||
-    paths.some((path) => path === "plugins.entries" || path.startsWith("plugins.entries."))
-  ) {
+  if (paths.length === 0) {
+    return "No gateway restart needed.";
+  }
+  if (paths.some((path) => path === "plugins.entries" || path.startsWith("plugins.entries."))) {
     return "Restart the gateway to apply.";
   }
   const plan = buildGatewayReloadPlan(paths, { candidateConfig: afterConfig });
@@ -290,7 +294,8 @@ export async function runConfigOperations(params: {
   if (autoManagedTargets.length > 0) {
     throw new Error(formatAutoManagedMetaError(autoManagedTargets));
   }
-  const snapshot = await loadValidConfig(runtime);
+  const mutationStart = await loadValidConfigForWrite(runtime);
+  const { snapshot } = mutationStart;
   // Mutate resolved config so runtime defaults never leak into the authored file.
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
   const currentConfig = normalizeConfigMutationModelRefs(
@@ -338,7 +343,6 @@ export async function runConfigOperations(params: {
     config: nextConfig,
     operations,
   });
-
   if (options.dryRun) {
     const hasJsonMode = operations.some(({ inputMode }) => inputMode === "json");
     const hasBuilderMode = operations.some(({ inputMode }) => inputMode === "builder");
@@ -367,7 +371,12 @@ export async function runConfigOperations(params: {
     }
     errors.push(...pluginIntegrationErrors);
     if (requiresFullSchemaValidation) {
-      errors.push(...collectDryRunSchemaErrors(nextConfig));
+      errors.push(
+        ...collectDryRunSchemaErrors(
+          nextConfig,
+          mutationStart.writeOptions.basePluginMetadataSnapshot,
+        ),
+      );
     }
     if (checksRefs) {
       errors.push(
@@ -450,6 +459,14 @@ export async function runConfigOperations(params: {
       ].join("\n"),
     );
   }
+  if (params.successMode === "set" && isDeepStrictEqual(currentConfig, nextConfig)) {
+    assertStrictConfigForMutation(
+      nextConfig,
+      mutationStart.writeOptions.basePluginMetadataSnapshot,
+    );
+    runtime.log(info("No change"));
+    return;
+  }
   const modelRefCheck = await checkTouchedTextModelRefs({
     config: nextConfig,
     previousConfig: currentConfig,
@@ -462,8 +479,10 @@ export async function runConfigOperations(params: {
 
   await replaceConfigFile({
     nextConfig,
+    snapshot,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
     writeOptions: {
+      ...mutationStart.writeOptions,
       auditOrigin: "cli",
       ...(unsetPaths.length > 0 ? { unsetPaths } : {}),
       ...(normalizedExplicitSetPaths.length > 0
@@ -495,13 +514,17 @@ export function handleConfigMutationError(params: {
   runtime: RuntimeEnv;
   options: ConfigMutationOptions;
 }) {
+  const isConflict = params.err instanceof ConfigMutationConflictError;
+  const detail = formatErrorMessage(params.err);
+  const message = isConflict
+    ? `The config file changed while this command was writing (${detail}), so nothing was changed. Re-run the same command to pick up the new file and try again.`
+    : detail;
   if (params.options.dryRun && params.options.json) {
     if (params.err instanceof ConfigSetDryRunValidationError) {
       writeRuntimeJson(params.runtime, params.err.result);
       params.runtime.exit(1);
       return;
     }
-    const message = params.err instanceof Error ? params.err.message : String(params.err);
     const result: ConfigSetDryRunResult = {
       ok: false,
       operations: 0,
@@ -510,13 +533,13 @@ export function handleConfigMutationError(params: {
       checks: { schema: false, resolvability: false, resolvabilityComplete: false },
       refsChecked: 0,
       skippedExecRefs: 0,
-      errors: [{ kind: "schema", message }],
+      errors: [{ kind: isConflict ? "conflict" : "schema", message }],
     };
     writeRuntimeJson(params.runtime, result);
-    params.runtime.error(danger(String(params.err)));
+    params.runtime.error(danger(message));
     params.runtime.exit(1);
     return;
   }
-  params.runtime.error(danger(String(params.err)));
+  params.runtime.error(danger(message));
   params.runtime.exit(1);
 }

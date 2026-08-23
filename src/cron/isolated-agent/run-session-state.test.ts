@@ -19,7 +19,9 @@ import {
   CronSessionLifecycleClaimError,
   createCronRunContinuationSession,
   createPersistCronSessionEntry,
+  markCronSessionPreRun,
   resolveCronLifecycleRevisionIdentity,
+  syncCronSessionLiveSelection,
   type MutableCronSession,
 } from "./run-session-state.js";
 
@@ -64,6 +66,128 @@ function makeGuardedPersistSessionEntry(persistedStore: Record<string, SessionEn
     },
   );
 }
+
+describe("markCronSessionPreRun", () => {
+  it("clears model-derived state when the selected model changes", () => {
+    const entry = makeSessionEntry({
+      modelProvider: "openai",
+      model: "gpt-5.3",
+      contextTokens: 272_000,
+      contextTokensSource: "runtime",
+      contextBudgetStatus: {} as NonNullable<SessionEntry["contextBudgetStatus"]>,
+    });
+
+    markCronSessionPreRun({ entry, provider: "openai", model: "gpt-5.4" });
+
+    expect(entry.modelProvider).toBe("openai");
+    expect(entry.model).toBe("gpt-5.4");
+    expect(entry.contextTokens).toBeUndefined();
+    expect(entry.contextTokensSource).toBeUndefined();
+    expect(entry.contextBudgetStatus).toBeUndefined();
+  });
+
+  it("preserves model-derived state when the selected model is unchanged", () => {
+    const contextBudgetStatus = {} as NonNullable<SessionEntry["contextBudgetStatus"]>;
+    const entry = makeSessionEntry({
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      contextTokens: 272_000,
+      contextTokensSource: "runtime",
+      contextBudgetStatus,
+    });
+
+    markCronSessionPreRun({ entry, provider: "openai", model: "gpt-5.4" });
+
+    expect(entry.contextTokens).toBe(272_000);
+    expect(entry.contextTokensSource).toBe("runtime");
+    expect(entry.contextBudgetStatus).toBe(contextBudgetStatus);
+  });
+});
+
+describe("syncCronSessionLiveSelection", () => {
+  it("clears model-derived state when only the agent runtime changes", () => {
+    const entry = makeSessionEntry({
+      modelProvider: "openai",
+      model: "gpt-5.6-luna",
+      agentRuntimeOverride: "openclaw",
+      contextTokens: 272_000,
+      contextTokensSource: "runtime",
+      contextBudgetStatus: {} as NonNullable<SessionEntry["contextBudgetStatus"]>,
+    });
+
+    syncCronSessionLiveSelection({
+      entry,
+      liveSelection: {
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        agentRuntimeOverride: "codex",
+      },
+    });
+
+    expect(entry.agentRuntimeOverride).toBe("codex");
+    expect(entry.contextTokens).toBeUndefined();
+    expect(entry.contextTokensSource).toBeUndefined();
+    expect(entry.contextBudgetStatus).toBeUndefined();
+  });
+
+  it("stamps a source-less live profile as a user pin", () => {
+    const entry = makeSessionEntry({
+      compactionCount: 4,
+      authProfileOverrideCompactionCount: 2,
+    });
+
+    syncCronSessionLiveSelection({
+      entry,
+      liveSelection: {
+        provider: "openai",
+        model: "gpt-5.4",
+        authProfileId: "openai:work",
+      },
+    });
+
+    expect(entry.authProfileOverride).toBe("openai:work");
+    expect(entry.authProfileOverrideSource).toBe("user");
+    expect(entry.authProfileOverrideCompactionCount).toBeUndefined();
+  });
+
+  it("stamps an automatic profile with the current compaction generation", () => {
+    const entry = makeSessionEntry({ compactionCount: 4 });
+
+    syncCronSessionLiveSelection({
+      entry,
+      liveSelection: {
+        provider: "openai",
+        model: "gpt-5.4",
+        authProfileId: "openai:fallback",
+        authProfileIdSource: "auto",
+      },
+    });
+
+    expect(entry.authProfileOverride).toBe("openai:fallback");
+    expect(entry.authProfileOverrideSource).toBe("auto");
+    expect(entry.authProfileOverrideCompactionCount).toBe(4);
+  });
+
+  it("retains legacy automatic provenance for the same live profile", () => {
+    const entry = makeSessionEntry({
+      compactionCount: 4,
+      authProfileOverride: "openai:fallback",
+      authProfileOverrideCompactionCount: 2,
+    });
+
+    syncCronSessionLiveSelection({
+      entry,
+      liveSelection: {
+        provider: "openai",
+        model: "gpt-5.4",
+        authProfileId: "openai:fallback",
+      },
+    });
+
+    expect(entry.authProfileOverrideSource).toBe("auto");
+    expect(entry.authProfileOverrideCompactionCount).toBe(4);
+  });
+});
 
 describe("createPersistCronSessionEntry", () => {
   it("commits a pending reset boundary with the guarded session row", async () => {
@@ -153,6 +277,7 @@ describe("createPersistCronSessionEntry", () => {
         ownerSessionKey: "agent:main:discord:group:ops",
         ownerAccountId: "work",
       },
+      scheduledToolCallerOrigin: { kind: "local" },
       persistSessionEntry,
     });
 
@@ -165,6 +290,15 @@ describe("createPersistCronSessionEntry", () => {
     });
     expect(store[runSessionKey]?.previousSessionId).toBeUndefined();
     expect(store[runSessionKey]?.forkSource).toBeUndefined();
+    expect(store[runSessionKey]?.cronRunContinuation?.scheduledToolPolicy).toEqual({
+      version: 1,
+      mode: "account",
+      ownerSessionKey: "agent:main:discord:group:ops",
+      ownerAccountId: "work",
+    });
+    expect(store[runSessionKey]?.cronRunContinuation?.scheduledToolCallerOrigin).toEqual({
+      kind: "local",
+    });
     expect(store[runSessionKey]).toMatchObject({
       createdVia: "cron",
       createdActor: { type: "system" },
@@ -178,12 +312,6 @@ describe("createPersistCronSessionEntry", () => {
         phase: "running",
         toolsAllow: ["image_generate", "write"],
         toolsAllowIsDefault: true,
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: "agent:main:discord:group:ops",
-          ownerAccountId: "work",
-        },
       },
     });
 

@@ -20,7 +20,6 @@ import {
 } from "../../infra/update-doctor-result.js";
 import {
   createGlobalInstallEnv,
-  cleanupGlobalRenameDirs,
   resolveGlobalInstallSpec,
   resolveGlobalInstallTarget,
   type ResolvedGlobalInstallTarget,
@@ -42,7 +41,7 @@ import {
   runUpdateStep,
 } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config.js";
-import { resolvePostInstallDoctorEnv } from "./update-command-service.js";
+import { resolvePostInstallDoctorEnv } from "./update-command-service-env.js";
 
 const CLI_NAME = resolveCliName();
 
@@ -94,12 +93,6 @@ export async function runPackageInstallUpdate(params: {
     });
 
   const beforeVersion = pkgRoot ? await readPackageVersion(pkgRoot) : null;
-  if (pkgRoot) {
-    await cleanupGlobalRenameDirs({
-      globalRoot: path.dirname(pkgRoot),
-      packageName,
-    });
-  }
 
   const diskWarning = createLowDiskSpaceWarning({
     targetPath: pkgRoot ? path.dirname(pkgRoot) : params.root,

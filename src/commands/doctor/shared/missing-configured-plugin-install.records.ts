@@ -37,7 +37,7 @@ export function isInstalledRecordMissingOnDisk(
   return !existsSync(path.join(resolved, "package.json"));
 }
 
-export function pathsEqual(left: string, right: string): boolean {
+export function installPathsEqual(left: string, right: string): boolean {
   return path.resolve(left) === path.resolve(right);
 }
 
@@ -139,7 +139,7 @@ export function resolveSafeBrokenOfficialInstallRemovalPath(params: {
   try {
     const extensionsDir = resolveDefaultPluginExtensionsDir(params.env);
     const expectedExtensionPath = resolvePluginInstallDir(params.pluginId, extensionsDir);
-    if (pathsEqual(resolvedInstallPath, expectedExtensionPath)) {
+    if (installPathsEqual(resolvedInstallPath, expectedExtensionPath)) {
       return resolvedInstallPath;
     }
   } catch {
@@ -162,7 +162,9 @@ export function resolveSafeBrokenOfficialInstallRemovalPath(params: {
       npmRoot,
     }),
   ];
-  return expectedNpmPaths.some((expectedPath) => pathsEqual(resolvedInstallPath, expectedPath))
+  return expectedNpmPaths.some((expectedPath) =>
+    installPathsEqual(resolvedInstallPath, expectedPath),
+  )
     ? resolvedInstallPath
     : null;
 }

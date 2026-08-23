@@ -57,6 +57,15 @@ function normalizeNostrTarget(target: string): string {
   }
 }
 
+function inferNostrTargetChatType(target: string): "direct" | undefined {
+  try {
+    normalizePubkey(stripNostrTargetPrefix(target));
+    return "direct";
+  } catch {
+    return undefined;
+  }
+}
+
 const resolveNostrDmPolicy = createScopedDmSecurityResolver<ResolvedNostrAccount>({
   channelKey: "nostr",
   resolvePolicy: (account) => account.config.dmPolicy,
@@ -156,6 +165,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
     messaging: {
       targetPrefixes: ["nostr"],
       normalizeTarget: normalizeNostrTarget,
+      inferTargetChatType: ({ to }) => inferNostrTargetChatType(to),
       targetResolver: {
         looksLikeId: (input, normalized) => {
           const trimmed = normalized?.trim() || stripNostrTargetPrefix(input);

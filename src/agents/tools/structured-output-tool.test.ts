@@ -1,6 +1,6 @@
 import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it } from "vitest";
-import { validateStructuredOutputSchema } from "../swarm-output-schema.js";
+import { validateStructuredOutputSchema } from "../subagents/swarm/swarm-output-schema.js";
 import { isToolResultError } from "../tool-result-error.js";
 import { createStructuredOutputTool } from "./structured-output-tool.js";
 import { testing } from "./structured-output-tool.test-support.js";

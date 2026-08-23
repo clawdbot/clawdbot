@@ -10,7 +10,7 @@ import type {
 } from "@openclaw/llm-core";
 import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
 import { TranscriptNotContinuableError } from "./errors.js";
-import { getInternalBeforeToolBatch } from "./internal-hooks.js";
+import { attachInternalSyncSteeringGetter, getInternalBeforeToolBatch } from "./internal-hooks.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import {
@@ -146,7 +146,7 @@ export interface AgentOptions {
     context: PrepareNextTurnContext,
     signal?: AbortSignal,
   ) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
-  /** Queue drain mode for steering messages injected before the next assistant response. */
+  /** Queue drain mode for steering messages applied before the next unstarted tool or model turn. */
   steeringMode?: QueueMode;
   /** Queue drain mode for follow-up messages injected after the agent would otherwise stop. */
   followUpMode?: QueueMode;
@@ -330,7 +330,10 @@ export class Agent {
     return this.followUpQueue.mode;
   }
 
-  /** Queue a message to be injected after the current assistant turn finishes. */
+  /**
+   * Queue a message for the active run. Running tools finish, while sequential
+   * tail calls or a parallel batch that has not launched yet are skipped.
+   */
   steer(message: AgentMessage): void {
     this.steeringQueue.enqueue(message);
   }
@@ -498,6 +501,17 @@ export class Agent {
 
   private createLoopConfig(options: { skipInitialSteeringPoll?: boolean } = {}): AgentLoopConfig {
     let skipInitialSteeringPoll = options.skipInitialSteeringPoll === true;
+    const drainSteeringMessages = () => {
+      if (skipInitialSteeringPoll) {
+        skipInitialSteeringPoll = false;
+        return [];
+      }
+      return this.steeringQueue.drain();
+    };
+    const getSteeringMessages = attachInternalSyncSteeringGetter(
+      async () => drainSteeringMessages(),
+      drainSteeringMessages,
+    );
     return {
       model: this.mutableState.model,
       thinkingLevel: this.mutableState.thinkingLevel,
@@ -530,13 +544,7 @@ export class Agent {
       convertToLlm: this.convertToLlm,
       transformContext: this.transformContext,
       getApiKey: this.getApiKey,
-      getSteeringMessages: async () => {
-        if (skipInitialSteeringPoll) {
-          skipInitialSteeringPoll = false;
-          return [];
-        }
-        return this.steeringQueue.drain();
-      },
+      getSteeringMessages,
       getFollowUpMessages: async () => this.followUpQueue.drain(),
     };
   }

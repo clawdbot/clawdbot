@@ -13,10 +13,24 @@ export function buildExecForegroundResult(params: {
   outcome: ExecProcessOutcome;
   cwd?: string;
   warningText?: string;
+  aggregateOutputDropped?: boolean;
 }): AgentToolResult<ExecToolDetails> {
   const warningText = params.warningText?.trim() ? `${params.warningText}\n\n` : "";
+  const retentionCapNote = params.aggregateOutputDropped
+    ? "\n\n[earlier output was discarded at the retention cap and cannot be recovered]"
+    : "";
   if (params.outcome.status === "failed") {
-    return failedTextResult(`${warningText}${params.outcome.reason}`, {
+    const linuxOomGuidance =
+      params.outcome.failureKind === "signal" &&
+      params.outcome.exitReason === "signal" &&
+      params.outcome.oomScoreWrapperSelected === true &&
+      (params.outcome.exitSignal === "SIGKILL" || params.outcome.exitSignal === 9)
+        ? "\n\nOpenClaw selected its Linux OOM-score wrapper, which attempts to set this child's oom_score_adj to 1000. " +
+          "SIGKILL alone does not identify whether the Linux OOM killer, an operator, or another process sent it. " +
+          "Check cgroup memory events or kernel logs. If they show memory pressure, narrow the command or adjust memory, concurrency, or resource limits."
+        : "";
+    const outputText = `${warningText}${params.outcome.reason}${linuxOomGuidance}${retentionCapNote}`;
+    return failedTextResult(outputText, {
       status: "failed",
       exitCode: params.outcome.exitCode ?? null,
       exitSignal: params.outcome.exitSignal,
@@ -29,7 +43,8 @@ export function buildExecForegroundResult(params: {
       cwd: params.cwd,
     });
   }
-  return textResult(`${warningText}${renderExecOutputText(params.outcome.aggregated)}`, {
+  const outputText = `${warningText}${renderExecOutputText(params.outcome.aggregated)}${retentionCapNote}`;
+  return textResult(outputText, {
     status: "completed",
     exitCode: params.outcome.exitCode,
     exitSignal: params.outcome.exitSignal,

@@ -132,7 +132,44 @@ class RoomChatTranscriptCacheTest {
     }
 
   @Test
-  fun legacyStringArrayTranscriptRowsRemainReadable() =
+  fun transcriptRoundTripKeepsSystemNoticeMetadataIncludingMarkerOnlyRows() =
+    runTest {
+      val provenance =
+        ChatMessageProvenance(
+          kind = "internal_system",
+          sourceTool = "restart-sentinel",
+        )
+      val marker =
+        ChatTranscriptMarker(
+          kind = "compaction",
+          id = "checkpoint-1",
+          tokensBefore = 42_500.0,
+          tokensAfter = 2_000.0,
+        )
+      saveTranscript(
+        messages =
+          listOf(
+            message("[System] Gateway restarted.").copy(provenance = provenance),
+            ChatMessage(
+              id = "marker-only",
+              role = "system",
+              content = emptyList(),
+              timestampMs = 2L,
+              transcriptMarker = marker,
+            ),
+          ),
+      )
+
+      val loaded = loadTranscript()
+
+      assertEquals(2, loaded.size)
+      assertEquals(provenance, loaded[0].provenance)
+      assertEquals(marker, loaded[1].transcriptMarker)
+      assertTrue(loaded[1].content.isEmpty())
+    }
+
+  @Test
+  fun legacyTranscriptRowsRemainReadable() =
     runTest {
       database.dao().insertMessages(
         listOf(
@@ -146,12 +183,23 @@ class RoomChatTranscriptCacheTest {
             timestampMs = 10,
             idempotencyKey = null,
           ),
+          CachedMessageEntity(
+            gatewayId = "gateway-a",
+            agentId = "main",
+            sessionKey = "main",
+            rowOrder = 1,
+            role = "assistant",
+            textPartsJson = """[{"type":"text","text":"structured legacy"}]""",
+            timestampMs = 11,
+            idempotencyKey = null,
+          ),
         ),
       )
 
-      val loaded = loadTranscript().single()
+      val loaded = loadTranscript()
 
-      assertEquals(listOf("legacy one", "legacy two"), loaded.content.map { it.text })
+      assertEquals(listOf("legacy one", "legacy two"), loaded[0].content.map { it.text })
+      assertEquals(listOf("structured legacy"), loaded[1].content.map { it.text })
     }
 
   @Test
@@ -250,6 +298,23 @@ class RoomChatTranscriptCacheTest {
       assertEquals(4_000L, loaded.runtimeMs)
       assertEquals(485L, loaded.outputTokens)
       assertTrue(loaded.hasRunMetadata)
+    }
+
+  @Test
+  fun sessionCacheDoesNotPersistDurableSessionIdentity() =
+    runTest {
+      saveSessions(
+        sessions =
+          listOf(
+            ChatSessionEntry(
+              key = "main",
+              updatedAtMs = 20L,
+              sessionId = "live-session-id",
+            ),
+          ),
+      )
+
+      assertEquals(null, loadSessions().single().sessionId)
     }
 
   @Test

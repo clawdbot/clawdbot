@@ -349,7 +349,7 @@ describe("buildStatusText thinking facts", () => {
       includeTranscriptUsage: false,
     });
 
-    expect(text).toContain("Think: high");
-    expect(text).not.toMatch(/Think:\s*off\b/);
+    expect(text).toContain("think high");
+    expect(text).not.toMatch(/think\s+off\b/);
   });
 });

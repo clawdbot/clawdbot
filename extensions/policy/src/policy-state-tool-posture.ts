@@ -1,4 +1,5 @@
 import {
+  asNonArrayRecord,
   isRecord,
   asBoolean as readBoolean,
   normalizeOptionalString as readString,
@@ -9,10 +10,10 @@ import type { PolicyToolPostureEvidence } from "./policy-state-types.js";
 export function scanPolicyToolPosture(
   cfg: Record<string, unknown>,
 ): readonly PolicyToolPostureEvidence[] {
-  const globalTools = isRecord(cfg.tools) ? cfg.tools : {};
-  const agents = isRecord(cfg.agents) ? cfg.agents : {};
-  const defaults = isRecord(agents.defaults) ? agents.defaults : {};
-  const defaultSandbox = isRecord(defaults.sandbox) ? defaults.sandbox : {};
+  const globalTools = asNonArrayRecord(cfg.tools);
+  const agents = asNonArrayRecord(cfg.agents);
+  const defaults = asNonArrayRecord(agents.defaults);
+  const defaultSandbox = asNonArrayRecord(defaults.sandbox);
   const entries: PolicyToolPostureEvidence[] = [];
   pushToolPostureEvidence(entries, {
     id: "tools",
@@ -36,9 +37,9 @@ export function scanPolicyToolPosture(
       id: agentId ?? `agent-${index}`,
       scope: "agent",
       agentId,
-      tools: isRecord(agent.tools) ? agent.tools : {},
+      tools: asNonArrayRecord(agent.tools),
       inheritedTools: globalTools,
-      sandbox: isRecord(agent.sandbox) ? agent.sandbox : {},
+      sandbox: asNonArrayRecord(agent.sandbox),
       inheritedSandbox: defaultSandbox,
       sourceBase: `oc://openclaw.config/agents/list/#${index}/tools`,
       inheritedSourceBase: "oc://openclaw.config/tools",
@@ -81,8 +82,8 @@ function pushToolPostureEvidence(
 }
 
 function pushToolFsPosture(entries: PolicyToolPostureEvidence[], params: ToolPostureParams): void {
-  const localFs = isRecord(params.tools.fs) ? params.tools.fs : {};
-  const inheritedFs = isRecord(params.inheritedTools.fs) ? params.inheritedTools.fs : {};
+  const localFs = asNonArrayRecord(params.tools.fs);
+  const inheritedFs = asNonArrayRecord(params.inheritedTools.fs);
   const localWorkspaceOnly = readBoolean(localFs.workspaceOnly);
   const inheritedWorkspaceOnly = readBoolean(inheritedFs.workspaceOnly);
   pushToolPostureValue(entries, params, {
@@ -98,8 +99,8 @@ function pushToolExecPosture(
   entries: PolicyToolPostureEvidence[],
   params: ToolPostureParams,
 ): void {
-  const localExec = isRecord(params.tools.exec) ? params.tools.exec : {};
-  const inheritedExec = isRecord(params.inheritedTools.exec) ? params.inheritedTools.exec : {};
+  const localExec = asNonArrayRecord(params.tools.exec);
+  const inheritedExec = asNonArrayRecord(params.inheritedTools.exec);
   const localHost = readString(localExec.host);
   const inheritedHost = readString(inheritedExec.host);
   const host = localHost ?? inheritedHost ?? "auto";
@@ -142,7 +143,7 @@ function pushToolElevatedPosture(
   entries: PolicyToolPostureEvidence[],
   params: ToolPostureParams,
 ): void {
-  const localElevated = isRecord(params.tools.elevated) ? params.tools.elevated : {};
+  const localElevated = asNonArrayRecord(params.tools.elevated);
   const inheritedElevated = isRecord(params.inheritedTools.elevated)
     ? params.inheritedTools.elevated
     : {};
@@ -160,7 +161,7 @@ function pushToolElevatedPosture(
       (localEnabled === undefined && inheritedEnabled !== undefined),
   });
 
-  const localAllowFrom = isRecord(localElevated.allowFrom) ? localElevated.allowFrom : {};
+  const localAllowFrom = asNonArrayRecord(localElevated.allowFrom);
   const inheritedAllowFrom = isRecord(inheritedElevated.allowFrom)
     ? inheritedElevated.allowFrom
     : {};

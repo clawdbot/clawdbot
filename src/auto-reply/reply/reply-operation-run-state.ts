@@ -10,6 +10,7 @@ type ReplyOperationAdmissionSnapshot =
 
 export type ReplyOperationRunState = {
   admission?: ReplyOperationAdmissionSnapshot;
+  messageInjectionAborted?: true;
 };
 
 // Carries this invocation's admission decision through reply option spreads so

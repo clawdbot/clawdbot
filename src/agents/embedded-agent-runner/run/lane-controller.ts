@@ -20,7 +20,7 @@ import {
   withEmbeddedRunLaneTimeout,
 } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
-import { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
+import { claimAgentSessionWriter } from "./session-bootstrap.js";
 
 type LaneParams = RunEmbeddedAgentParams & {
   sessionFile: string;
@@ -152,7 +152,18 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       }
       // Queue waits can outlive durable harness and placement bindings.
       // Recheck and claim only after lifecycle admission, before context or hooks execute.
-      assertAgentHarnessRunAdmission(params);
+      const writerClaim = await claimAgentSessionWriter(params);
+      if (writerClaim) {
+        params = {
+          ...params,
+          sessionTarget: {
+            ...params.sessionTarget,
+            expectedLifecycleRevision: writerClaim.expectedLifecycleRevision,
+            expectedWriterRunId: writerClaim.expectedWriterRunId,
+          },
+        };
+        options.setParams(params);
+      }
       return await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
         withSessionPlacementTurnAdmission(
           {
@@ -170,6 +181,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
             // Queue-stage rotation may rebind, but placement admitted into a retired runtime must fail.
             claimAgentRunContext(params.runId, {
               ...existingContext,
+              agentId: params.agentId ?? existingContext?.agentId,
               sessionKey: params.sessionKey ?? existingContext?.sessionKey,
               sessionId: params.sessionId ?? existingContext?.sessionId,
               lifecycleGeneration,

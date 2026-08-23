@@ -50,7 +50,7 @@ Anonymized models are not fully private. Venice strips metadata before forwardin
       </Tab>
       <Tab title="Non-interactive">
         ```bash
-        openclaw onboard --non-interactive \
+        openclaw onboard --non-interactive --accept-risk --skip-health \
           --auth-choice venice-api-key \
           --venice-api-key "vapi_xxxxxxxxxxxx"
         ```
@@ -216,7 +216,7 @@ More help: [Troubleshooting](/help/troubleshooting) and [FAQ](/help/faq).
   <Accordion title="Config file example">
     ```json5
     {
-      env: { VENICE_API_KEY: "vapi_..." },
+      env: { vars: { VENICE_API_KEY: "vapi_..." } },
       agents: { defaults: { model: { primary: "venice/zai-org-glm-4.7" } } },
       models: {
         mode: "merge",

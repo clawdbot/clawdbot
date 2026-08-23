@@ -70,46 +70,6 @@ describe("ChatVideoPlayer", () => {
     );
   });
 
-  it("does not retain an errored source when a refreshed rendition is unavailable", async () => {
-    let resolveFirstRefresh: ((response: Response) => void) | undefined;
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(null, { status: 200 }))
-      .mockImplementationOnce(
-        async () =>
-          await new Promise<Response>((resolve) => {
-            resolveFirstRefresh = resolve;
-          }),
-      )
-      .mockResolvedValueOnce(new Response(null, { status: 500 }));
-    vi.stubGlobal("fetch", fetchMock);
-    const player = document.createElement("openclaw-chat-video-player");
-    player.src = "/__openclaw__/assistant-media?source=clip.avi&mediaTicket=old";
-    player.sourceIdentity = "media:clip";
-    player.label = "clip.avi";
-    player.playback = "transcode";
-    document.body.append(player);
-    await vi.waitFor(() =>
-      expect(player.querySelector("video")?.getAttribute("src")).toContain("mediaTicket=old"),
-    );
-
-    player.querySelector("video")?.dispatchEvent(new Event("error"));
-    await player.updateComplete;
-    player.src = "/__openclaw__/assistant-media?source=clip.avi&mediaTicket=refresh-1";
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    player.src = "/__openclaw__/assistant-media?source=clip.avi&mediaTicket=refresh-2";
-
-    await vi.waitFor(() =>
-      expect(
-        player
-          .querySelector(".chat-assistant-attachment-card--video")
-          ?.hasAttribute("data-unplayable"),
-      ).toBe(true),
-    );
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    resolveFirstRefresh?.(new Response(null, { status: 200 }));
-  });
-
   it("hides a previous attachment while the replacement HEAD is stalled", async () => {
     const player = document.createElement("openclaw-chat-video-player");
     player.src = "https://example.com/first.mp4";
@@ -129,68 +89,6 @@ describe("ChatVideoPlayer", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     await vi.waitFor(() => expect(player.textContent).toContain("Preparing playback…"));
     expect(player.querySelector("video")?.hasAttribute("src")).toBe(false);
-  });
-
-  it("clears authorized video while a new principal is checked", async () => {
-    let resolveRefresh: ((response: Response) => void) | undefined;
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(null, { status: 200 }))
-      .mockImplementationOnce(
-        async () =>
-          await new Promise<Response>((resolve) => {
-            resolveRefresh = resolve;
-          }),
-      );
-    vi.stubGlobal("fetch", fetchMock);
-    const player = document.createElement("openclaw-chat-video-player");
-    player.src = "/__openclaw__/assistant-media?source=clip.avi&mediaTicket=ticket";
-    player.sourceIdentity = "media:principal-clip";
-    player.authToken = "principal-a";
-    player.label = "clip.avi";
-    player.playback = "transcode";
-    document.body.append(player);
-    await vi.waitFor(() =>
-      expect(player.querySelector("video")?.getAttribute("src")).toContain("playback=1"),
-    );
-
-    player.authToken = "principal-b";
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(player.textContent).toContain("Preparing playback…"));
-    expect(player.querySelector("video")?.hasAttribute("src")).toBe(false);
-    resolveRefresh?.(new Response(null, { status: 500 }));
-  });
-
-  it("clears a failed rendition after reconnect succeeds", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(null, { status: 500 }))
-      .mockResolvedValueOnce(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-    const player = document.createElement("openclaw-chat-video-player");
-    player.src = "/__openclaw__/assistant-media?source=clip.avi&mediaTicket=ticket";
-    player.sourceIdentity = "media:retry-clip";
-    player.label = "clip.avi";
-    player.playback = "transcode";
-    document.body.append(player);
-    await vi.waitFor(() =>
-      expect(
-        player
-          .querySelector(".chat-assistant-attachment-card--video")
-          ?.hasAttribute("data-unplayable"),
-      ).toBe(true),
-    );
-
-    player.remove();
-    document.body.append(player);
-    await vi.waitFor(() =>
-      expect(player.querySelector("video")?.getAttribute("src")).toContain("playback=1"),
-    );
-    expect(
-      player
-        .querySelector(".chat-assistant-attachment-card--video")
-        ?.hasAttribute("data-unplayable"),
-    ).toBe(false);
   });
 
   it("pauses and clears the source when disconnected while playing", async () => {

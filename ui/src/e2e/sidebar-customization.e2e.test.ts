@@ -1,28 +1,26 @@
 // Control UI tests cover customizable sidebar navigation and persistence.
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type Locator, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { Locator, Page } from "playwright";
+import { expect, it } from "vitest";
 import {
-  canRunPlaywrightChromium,
   controlUiSessionPath,
   controlUiSessionUrl,
   installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
-  type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Control UI sidebar customization mocked Gateway E2E",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+});
 
-let browser: Browser;
-let server: ControlUiE2eServer;
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const hiddenSessionCatalogsStorageKey = "openclaw:sidebar:sessions:hidden-catalogs";
 const uiProofArtifactDir = path.join(
   process.cwd(),
   ".artifacts",
@@ -96,40 +94,103 @@ async function holdUiProof(page: Page, durationMs = 600) {
   }
 }
 
+async function setThemeMode(page: Page, mode: "dark" | "light") {
+  await page.emulateMedia({ colorScheme: mode });
+  await page.evaluate((nextMode) => {
+    const root = document.documentElement;
+    root.dataset.themeMode = nextMode;
+    root.dataset.themeResolved = nextMode;
+    root.classList.toggle("wa-light", nextMode === "light");
+    root.classList.toggle("wa-dark", nextMode === "dark");
+    root.style.colorScheme = nextMode;
+  }, mode);
+  await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
+}
+
 async function openSidebarTestPage() {
-  const context = await browser.newContext({
+  const context = await suite.browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",
     viewport: { height: 900, width: 1440 },
   });
   const page = await context.newPage();
   await installMockGateway(page);
-  await page.goto(`${server.baseUrl}chat`);
+  await page.goto(`${suite.server.baseUrl}chat`);
   await page.waitForFunction(() => Boolean(customElements.get("openclaw-lobster-pet")));
   return { context, page };
 }
 
-describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(
-        `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-      );
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
+suite.define(() => {
+  it("uses catalog labels in the hidden-section recovery rows", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await page.addInitScript(({ key, value }) => localStorage.setItem(key, JSON.stringify(value)), {
+      key: hiddenSessionCatalogsStorageKey,
+      value: ["claude", "offline-catalog"],
+    });
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["sessions.catalog.list"],
+      methodResponses: {
+        "sessions.catalog.list": {
+          catalogs: [
+            {
+              id: "claude",
+              label: "Claude Code",
+              capabilities: { continueSession: true, archive: false },
+              hosts: [],
+            },
+          ],
+        },
+      },
+    });
 
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
+    try {
+      await page.goto(`${suite.server.baseUrl}settings/appearance`);
+      await waitForControlUiSettingsTakeover(page);
+      await gateway.waitForRequest("sessions.catalog.list");
+      const sidebarSettings = page.locator("#settings-appearance-sidebar");
+      await sidebarSettings.getByRole("heading", { name: "Hidden session sections" }).waitFor();
+      const recovery = sidebarSettings.locator(".settings-group", { hasText: "offline-catalog" });
+      const row = recovery.locator(".settings-row", { hasText: "Claude Code" });
+      await expect.poll(() => recovery.textContent()).toContain("Claude Code");
+      await expect.poll(() => recovery.textContent()).toContain("offline-catalog");
+      expect(await recovery.getByText("claude", { exact: true }).count()).toBe(0);
+
+      if (captureUiProofEnabled) {
+        await mkdir(uiProofArtifactDir, { recursive: true });
+        await recovery.scrollIntoViewIfNeeded();
+        for (const theme of ["light", "dark"] as const) {
+          await setThemeMode(page, theme);
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(uiProofArtifactDir, `after-${theme}-context.png`),
+          });
+          await recovery.screenshot({
+            animations: "disabled",
+            path: path.join(uiProofArtifactDir, `after-${theme}-rows.png`),
+          });
+        }
+      }
+
+      await row.getByRole("button", { name: "Show" }).click();
+      await expect.poll(() => row.count()).toBe(0);
+      expect(
+        await page.evaluate((key) => localStorage.getItem(key), hiddenSessionCatalogsStorageKey),
+      ).toBe('["offline-catalog"]');
+    } finally {
+      await context.close();
+    }
   });
 
   it("pins routes, restores defaults, and persists navigation state across reloads", async () => {
     if (captureUiProofEnabled) {
       await mkdir(uiProofArtifactDir, { recursive: true });
     }
-    const context = await browser.newContext({
+    const context = await suite.browser.newContext({
       locale: "en-US",
       recordVideo: captureUiProofEnabled
         ? { dir: path.join(uiProofArtifactDir, "video"), size: { height: 900, width: 1300 } }
@@ -180,7 +241,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
 
       const sidebar = page.locator("openclaw-app-sidebar");
       const pinnedItems = sidebar.locator(
@@ -306,6 +367,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
           "Advanced",
           "Debug",
           "Logs",
+          "Updates",
           "About",
           "Appearance",
           "Notifications",
@@ -434,7 +496,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect
         .poll(() => page.getByRole("button", { name: "Exit setup" }).isVisible())
         .toBe(false);
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
       await captureUiProof(page, "01-default-pinned.png");
 
       const moreButton = sidebar.locator(".sidebar-nav__head-action");
@@ -607,112 +669,273 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     }
   });
 
-  it("shows the Workboard route when the plugin is enabled in config", async () => {
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      methodResponses: {
-        "config.get": {
-          config: { plugins: { entries: { workboard: { enabled: true } } } },
-        },
+  it("opens the start screen from the sidebar action without carrying the active session", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
       },
-    });
+      async ({ page }) => {
+        await installMockGateway(page);
 
-    try {
-      await page.goto(`${server.baseUrl}chat`);
-      const sidebar = page.locator("openclaw-app-sidebar");
-      await sidebar.locator(".sidebar-nav__head-action").click();
-      await expect
-        .poll(() =>
-          trimmedTextContents(
-            sidebar.locator("wa-dropdown.sidebar-more-menu").getByRole("menuitem"),
-          ),
-        )
-        .toContain("Workboard");
-    } finally {
-      await context.close();
-    }
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:work"));
+        await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
+
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+        await expect.poll(() => new URL(page.url()).searchParams.get("agent")).toBe("main");
+        await expect.poll(() => new URL(page.url()).searchParams.has("session")).toBe(false);
+        await expect.poll(() => page.locator(".new-session-page").isVisible()).toBe(true);
+        await captureUiProof(page, "07-sidebar-start-screen.png");
+      },
+    );
   });
 
-  it("opens the start screen from the sidebar action without carrying the active session", async () => {
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page);
+  it("moves Home activity clear of the aligned Pages editor", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+      },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "sessions.list": {
+              count: 1,
+              defaults: {
+                contextTokens: null,
+                model: "gpt-5.5",
+                modelProvider: "openai",
+              },
+              path: "",
+              sessions: [
+                {
+                  hasActiveRun: true,
+                  key: "main",
+                  kind: "direct",
+                  status: "running",
+                  updatedAt: 100,
+                },
+              ],
+              ts: 100,
+            },
+          },
+        });
 
-    try {
-      await page.goto(controlUiSessionUrl(server.baseUrl, "agent:main:work"));
-      await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const sidebar = page.locator("openclaw-app-sidebar");
+        const home = sidebar.locator(".nav-item--home");
+        await expect.poll(() => home.isVisible()).toBe(true);
+        await sidebar.evaluate(async (element) => {
+          const host = element as HTMLElement & {
+            requestUpdate(): void;
+            updateComplete: Promise<unknown>;
+          };
+          // The shell refreshes this callback whenever its lazy outbox runtime
+          // loads. Keep the warning fixture stable until geometry is measured.
+          Object.defineProperty(host, "outboxAttentionCountForSession", {
+            configurable: true,
+            get: () => () => 1,
+            set: () => undefined,
+          });
+          host.requestUpdate();
+          await host.updateComplete;
+        });
 
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-      await expect.poll(() => new URL(page.url()).searchParams.get("agent")).toBe("main");
-      await expect.poll(() => new URL(page.url()).searchParams.has("session")).toBe(false);
-      await expect.poll(() => page.locator(".new-session-page").isVisible()).toBe(true);
-      await captureUiProof(page, "07-sidebar-start-screen.png");
-    } finally {
-      await context.close();
-    }
+        const activity = home.locator(".sidebar-home-session-states");
+        const editor = sidebar.locator(".sidebar-nav__head-action");
+        await expect.poll(() => activity.locator(".session-run-spinner").count()).toBe(1);
+        await expect.poll(() => activity.locator(".session-row-badge--attention").count()).toBe(1);
+
+        await page.mouse.move(900, 400);
+        const restingActivity = await activity.boundingBox();
+        expect(restingActivity).not.toBeNull();
+        await sidebar.locator(".sidebar-nav").hover();
+        await expect
+          .poll(() => editor.evaluate((element) => getComputedStyle(element).opacity))
+          .toBe("1");
+        await expect
+          .poll(async () => {
+            const [homeBox, activityBox, editorBox] = await Promise.all([
+              home.boundingBox(),
+              activity.boundingBox(),
+              editor.boundingBox(),
+            ]);
+            if (!homeBox || !activityBox || !editorBox || !restingActivity) {
+              return null;
+            }
+            return {
+              activityShift: Math.round(restingActivity.x - activityBox.x),
+              centerDelta: Math.abs(
+                editorBox.y + editorBox.height / 2 - (homeBox.y + homeBox.height / 2),
+              ),
+              gap: Math.round(editorBox.x - (activityBox.x + activityBox.width)),
+            };
+          })
+          .toEqual({ activityShift: 25, centerDelta: 0, gap: 4 });
+        await captureUiProof(page, "07-home-activity-editor.png");
+      },
+    );
+  });
+
+  it("keeps mobile attention in the drawer while desktop remains unchanged", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "cron.list": {
+              jobs: [
+                {
+                  id: "release-digest",
+                  name: "Release digest",
+                  enabled: true,
+                  createdAtMs: 0,
+                  updatedAtMs: 0,
+                  schedule: { kind: "every", everyMs: 60_000 },
+                  sessionTarget: "isolated",
+                  wakeMode: "now",
+                  payload: { kind: "agentTurn", message: "test" },
+                  state: {
+                    lastRunStatus: "error",
+                    lastError: "Provider request failed",
+                  },
+                },
+              ],
+              snapshotRevision: "sidebar-mobile-attention",
+              total: 1,
+              offset: 0,
+              limit: 50,
+              hasMore: false,
+              nextOffset: null,
+            },
+            "models.authStatus": { providers: [], ts: 1 },
+          },
+        });
+
+        await page.goto(`${suite.server.baseUrl}new`);
+        await gateway.waitForRequest("cron.list");
+        await gateway.emitGatewayEvent("update.available", {
+          schedule: {
+            autoEnabled: false,
+            channel: "dev",
+            install: { kind: "git", git: { status: "behind", commitsBehind: 246 } },
+            target: {
+              kind: "git",
+              commitsBehind: 246,
+              upstreamRef: "origin/main",
+              upstreamSha: "9f3c21a0000000000000000000000000000000aa",
+            },
+          },
+          updateAvailable: {
+            channel: "dev",
+            commitsBehind: 246,
+            currentSha: "1111111111111111111111111111111111111111",
+            currentVersion: "2026.8.1",
+            latestVersion: "2026.8.1",
+            upstreamRef: "origin/main",
+            upstreamSha: "9f3c21a0000000000000000000000000000000aa",
+          },
+        });
+
+        const sidebar = page.locator("openclaw-app-sidebar");
+        const sidebarUpdate = sidebar.locator(".sidebar-footer-update");
+        const sidebarAutomation = sidebar.locator('[data-attention-kind="cronFailed"]');
+        await expect.poll(() => sidebarUpdate.count()).toBe(1);
+        await sidebar.locator(".sidebar-issues-button").click();
+        await expect.poll(() => sidebarAutomation.count()).toBe(1);
+        await captureUiProof(page, "08-desktop-attention-unchanged.png");
+        await sidebar.locator(".sidebar-issues-button").click();
+
+        await page.setViewportSize({ height: 852, width: 393 });
+        await expect
+          .poll(() => page.locator(".shell").getAttribute("class"))
+          .toContain("shell--mobile-nav");
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
+        );
+        const floatingKinds = await page
+          .locator(".sidebar-attention--floating [data-attention-kind]")
+          .evaluateAll((elements) =>
+            elements.map((element) => element.getAttribute("data-attention-kind")),
+          );
+        await captureUiProof(page, "09-mobile-attention-closed.png");
+
+        await visibleDrawerButton(page).click();
+        await expect
+          .poll(() => page.locator(".shell").getAttribute("class"))
+          .toContain("shell--nav-drawer-open");
+        await expect.poll(() => sidebarUpdate.isVisible()).toBe(true);
+        await sidebar.locator(".sidebar-issues-button").click();
+        await expect.poll(() => sidebarAutomation.isVisible()).toBe(true);
+        await captureUiProof(page, "10-mobile-attention-drawer.png");
+
+        expect(floatingKinds).toEqual([]);
+      },
+    );
   });
 
   it("passes failed run outcomes through the desktop and drawer sidebar", async () => {
-    const context = await browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1440 },
-    });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": {
-          count: 1,
-          defaults: {
-            contextTokens: null,
-            model: "gpt-5.5",
-            modelProvider: "openai",
-          },
-          path: "",
-          sessions: [
-            {
-              endedAt: 100,
-              key: "main",
-              kind: "direct",
-              status: "failed",
-              updatedAt: 100,
-            },
-          ],
-          ts: 100,
-        },
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
       },
-    });
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "sessions.list": {
+              count: 1,
+              defaults: {
+                contextTokens: null,
+                model: "gpt-5.5",
+                modelProvider: "openai",
+              },
+              path: "",
+              sessions: [
+                {
+                  endedAt: 100,
+                  key: "main",
+                  kind: "direct",
+                  status: "failed",
+                  updatedAt: 100,
+                },
+              ],
+              ts: 100,
+            },
+          },
+        });
 
-    const outcome = (locator: Locator) =>
-      locator.evaluate((element) => (element as HTMLElement & { runOutcome: string }).runOutcome);
+        const outcome = (locator: Locator) =>
+          locator.evaluate(
+            (element) => (element as HTMLElement & { runOutcome: string }).runOutcome,
+          );
 
-    try {
-      await page.goto(`${server.baseUrl}chat`);
-      const sidebar = page.locator("openclaw-app-sidebar");
-      const pet = sidebar.locator(".sidebar-shell openclaw-lobster-pet");
-      await expect.poll(() => pet.count()).toBe(1);
-      await expect.poll(() => outcome(pet)).toBe("error");
-      await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const sidebar = page.locator("openclaw-app-sidebar");
+        const pet = sidebar.locator(".sidebar-shell openclaw-lobster-pet");
+        await expect.poll(() => pet.count()).toBe(1);
+        await expect.poll(() => outcome(pet)).toBe("error");
+        await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
 
-      await page.setViewportSize({ height: 900, width: 900 });
-      const drawerButton = visibleDrawerButton(page);
-      await expect.poll(() => drawerButton.isVisible()).toBe(true);
-      await drawerButton.click();
-      await expect.poll(() => sidebar.isVisible()).toBe(true);
-      await expect.poll(() => pet.count()).toBe(1);
-      await expect.poll(() => outcome(pet)).toBe("error");
-    } finally {
-      await context.close();
-    }
+        await page.setViewportSize({ height: 900, width: 900 });
+        const drawerButton = visibleDrawerButton(page);
+        await expect.poll(() => drawerButton.isVisible()).toBe(true);
+        await drawerButton.click();
+        await expect.poll(() => sidebar.isVisible()).toBe(true);
+        await expect.poll(() => pet.count()).toBe(1);
+        await expect.poll(() => outcome(pet)).toBe("error");
+      },
+    );
   });
 
   it("keeps the lobster on the footer ledge across desktop and drawer layouts", async () => {

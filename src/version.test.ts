@@ -1,11 +1,12 @@
 // Tests package version resolution and generated version metadata.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSuiteTempRootTracker } from "./test-helpers/temp-dir.js";
 import {
   VERSION,
+  readBuildIdFromBuildInfoForModuleUrl,
   readVersionFromBuildInfoForModuleUrl,
   resolveCompatibilityHostVersion,
   readVersionFromPackageJsonForModuleUrl,
@@ -51,14 +52,6 @@ function expectVersionMetadataToBeMissing(moduleUrl: string) {
 }
 
 describe("version resolution", () => {
-  it("keeps bundled version injection as a direct define identifier", async () => {
-    const source = await fs.readFile(fileURLToPath(new URL("./version.ts", import.meta.url)), {
-      encoding: "utf-8",
-    });
-    expect(source).toContain("typeof __OPENCLAW_VERSION__");
-    expect(source).toContain("? __OPENCLAW_VERSION__");
-  });
-
   it("resolves package version from nested dist/plugin-sdk module URL", async () => {
     await withVersionFixtureDir(async (root) => {
       await writeJsonFixture(root, "package.json", { name: "openclaw", version: "1.2.3" });
@@ -87,6 +80,19 @@ describe("version resolution", () => {
       expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBeNull();
       expect(readVersionFromBuildInfoForModuleUrl(moduleUrl)).toBe("4.5.6");
       expect(resolveVersionFromModuleUrl(moduleUrl)).toBe("4.5.6");
+    });
+  });
+
+  it("reads the bounded immutable build id from generated provenance", async () => {
+    await withVersionFixtureDir(async (root) => {
+      const moduleUrl = await ensureModuleFixture(root);
+      await writeJsonFixture(root, "build-info.json", { buildId: "build-a" });
+      expect(readBuildIdFromBuildInfoForModuleUrl(moduleUrl)).toBe("build-a");
+    });
+    await withVersionFixtureDir(async (root) => {
+      const moduleUrl = await ensureModuleFixture(root);
+      await writeJsonFixture(root, "build-info.json", { buildId: "x".repeat(97) });
+      expect(readBuildIdFromBuildInfoForModuleUrl(moduleUrl)).toBeNull();
     });
   });
 
@@ -119,14 +125,6 @@ describe("version resolution", () => {
       expect(
         resolveBinaryVersion({
           moduleUrl,
-          injectedVersion: "9.9.9",
-          bundledVersion: "8.8.8",
-          fallback: "0.0.0",
-        }),
-      ).toBe("9.9.9");
-      expect(
-        resolveBinaryVersion({
-          moduleUrl,
           bundledVersion: "8.8.8",
           fallback: "0.0.0",
         }),
@@ -148,11 +146,10 @@ describe("version resolution", () => {
     });
   });
 
-  it("prefers OPENCLAW_VERSION over service and package versions", () => {
+  it("prefers OPENCLAW_VERSION over package versions", () => {
     expect(
       resolveRuntimeServiceVersion({
         OPENCLAW_VERSION: "9.9.9",
-        OPENCLAW_SERVICE_VERSION: "2.2.2",
         npm_package_version: "1.1.1",
       }),
     ).toBe("9.9.9");
@@ -169,18 +166,15 @@ describe("version resolution", () => {
   it("prefers runtime VERSION over stale OPENCLAW_VERSION for compatibility checks", () => {
     const previousCompatibility = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
     const previous = process.env.OPENCLAW_VERSION;
-    const previousService = process.env.OPENCLAW_SERVICE_VERSION;
     const previousPackage = process.env.npm_package_version;
     try {
       delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
       process.env.OPENCLAW_VERSION = "2026.3.25";
-      process.env.OPENCLAW_SERVICE_VERSION = "2026.3.25-service";
       process.env.npm_package_version = "2026.3.25-package";
       expect(resolveCompatibilityHostVersion()).toBe(VERSION);
     } finally {
       restoreEnvValue("OPENCLAW_COMPATIBILITY_HOST_VERSION", previousCompatibility);
       restoreEnvValue("OPENCLAW_VERSION", previous);
-      restoreEnvValue("OPENCLAW_SERVICE_VERSION", previousService);
       restoreEnvValue("npm_package_version", previousPackage);
     }
   });
@@ -189,7 +183,6 @@ describe("version resolution", () => {
     expect(
       resolveCompatibilityHostVersion({
         OPENCLAW_VERSION: "2026.3.99",
-        OPENCLAW_SERVICE_VERSION: "2026.3.98",
         npm_package_version: "2026.3.97",
       }),
     ).toBe("2026.3.99");
@@ -200,7 +193,6 @@ describe("version resolution", () => {
       resolveCompatibilityHostVersion({
         OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.4.8",
         OPENCLAW_VERSION: "2026.3.99",
-        OPENCLAW_SERVICE_VERSION: "2026.3.98",
         npm_package_version: "2026.3.97",
       }),
     ).toBe("2026.4.8");
@@ -216,11 +208,10 @@ describe("version resolution", () => {
     expect(resolveUsableRuntimeVersion(" 2026.3.2 ")).toBe("2026.3.2");
   });
 
-  it("prefers runtime VERSION over service/package markers and ignores unusable env values", () => {
+  it("prefers runtime VERSION over package markers and ignores unusable env values", () => {
     expect(
       resolveRuntimeServiceVersion({
         OPENCLAW_VERSION: "   ",
-        OPENCLAW_SERVICE_VERSION: "  2.0.0  ",
         npm_package_version: "1.0.0",
       }),
     ).toBe(VERSION);
@@ -228,7 +219,6 @@ describe("version resolution", () => {
     expect(
       resolveRuntimeServiceVersion({
         OPENCLAW_VERSION: " ",
-        OPENCLAW_SERVICE_VERSION: "\t",
         npm_package_version: " 1.0.0-package ",
       }),
     ).toBe(VERSION);
@@ -237,7 +227,6 @@ describe("version resolution", () => {
       resolveRuntimeServiceVersion(
         {
           OPENCLAW_VERSION: "",
-          OPENCLAW_SERVICE_VERSION: " ",
           npm_package_version: "",
         },
         "fallback",
@@ -247,7 +236,6 @@ describe("version resolution", () => {
     expect(
       resolveRuntimeServiceVersion({
         OPENCLAW_VERSION: "undefined",
-        OPENCLAW_SERVICE_VERSION: "null",
         npm_package_version: "1.0.0-package",
       }),
     ).toBe(VERSION);

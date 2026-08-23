@@ -8,6 +8,19 @@ import path from "node:path";
 type TempDirCollection = string[] | Set<string>;
 type RegisterTempDirCleanup = (cleanup: () => void) => unknown;
 
+const canonicalSystemTempRoots = new Map<string, string>();
+
+function resolveCanonicalSystemTempRoot(): string {
+  const rawRoot = os.tmpdir();
+  const cachedRoot = canonicalSystemTempRoots.get(rawRoot);
+  if (cachedRoot !== undefined) {
+    return cachedRoot;
+  }
+  const canonicalRoot = fs.realpathSync(rawRoot);
+  canonicalSystemTempRoots.set(rawRoot, canonicalRoot);
+  return canonicalRoot;
+}
+
 interface TestTempDirTracker {
   readonly dirs: ReadonlySet<string>;
   make(prefix: string, root?: string): string;
@@ -20,12 +33,9 @@ interface AutoCleanupTempDirTracker {
 }
 
 /** Create a temp dir and register it in an array or set for cleanup. */
-export function makeTempDir(
-  tempDirs: TempDirCollection,
-  prefix: string,
-  root = os.tmpdir(),
-): string {
-  const dir = fs.mkdtempSync(path.join(root, prefix));
+export function makeTempDir(tempDirs: TempDirCollection, prefix: string, root?: string): string {
+  const tempRoot = root ?? resolveCanonicalSystemTempRoot();
+  const dir = fs.mkdtempSync(path.join(tempRoot, prefix));
   if (Array.isArray(tempDirs)) {
     tempDirs.push(dir);
   } else {
@@ -63,13 +73,6 @@ export function useAutoCleanupTempDirTracker(
   registerCleanup: RegisterTempDirCleanup,
 ): AutoCleanupTempDirTracker {
   const tracker = createTempDirTracker();
-  registerCleanup(() => {
-    tracker.cleanup();
-  });
-  return {
-    dirs: tracker.dirs,
-    make(prefix: string, root?: string): string {
-      return tracker.make(prefix, root);
-    },
-  };
+  registerCleanup(tracker.cleanup);
+  return tracker;
 }

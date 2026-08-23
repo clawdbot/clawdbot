@@ -1,8 +1,7 @@
 // Verifies OpenAI strict tool schema normalization and cache behavior.
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { projectOpenAITools } from "./openai-tool-projection.js";
 import {
-  clearOpenAIToolSchemaCacheForTest,
   findOpenAIStrictSchemaViolations,
   findOpenAIStrictToolProjectionDiagnostics,
   isStrictOpenAIJsonSchemaCompatible,
@@ -12,10 +11,6 @@ import {
 } from "./openai-tool-schema.js";
 
 describe("OpenAI strict tool schema normalization", () => {
-  beforeEach(() => {
-    clearOpenAIToolSchemaCacheForTest();
-  });
-
   it("repairs top-level object schemas with missing or invalid properties", () => {
     const schemas = [
       { type: "object" },

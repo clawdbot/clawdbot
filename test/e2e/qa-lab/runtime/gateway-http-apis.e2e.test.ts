@@ -7,10 +7,10 @@ import { describe, expect, it } from "vitest";
 import { createConfigIO, resetConfigRuntimeState } from "../../../../src/config/config.js";
 import { resolveMainSessionKeyFromConfig } from "../../../../src/config/sessions.js";
 import {
-  agentCommand,
-  getFreePort,
+  agentCommandMock,
+  getGatewayTestPort,
   installGatewayTestHooks,
-  startGatewayServer,
+  startTestGatewayServer,
   testState,
 } from "../../../../src/gateway/test-helpers.js";
 import { peekSystemEventEntries } from "../../../../src/infra/system-events.js";
@@ -86,7 +86,7 @@ async function fetchJson(port: number, pathname: string, init?: RequestInit) {
 describe("Gateway HTTP API product proof", () => {
   it("serves OpenAI-compatible, tool invocation, and hook ingress APIs over TCP", async () => {
     const embeddingFixture = await startEmbeddingFixture();
-    let gateway: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    let gateway: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
 
     try {
       const configPath = createConfigIO().configPath;
@@ -118,12 +118,12 @@ describe("Gateway HTTP API product proof", () => {
         },
       };
       testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
-      agentCommand
+      agentCommandMock
         .mockResolvedValueOnce({ payloads: [{ text: "qa chat response" }] } as never)
         .mockResolvedValueOnce({ payloads: [{ text: "qa responses response" }] } as never);
 
-      const port = await getFreePort();
-      gateway = await startGatewayServer(port, {
+      const port = await getGatewayTestPort();
+      gateway = await startTestGatewayServer(port, {
         host: "127.0.0.1",
         auth: { mode: "token", token: GATEWAY_TOKEN },
         controlUiEnabled: false,
@@ -174,8 +174,8 @@ describe("Gateway HTTP API product proof", () => {
         type: "output_text",
         text: "qa responses response",
       });
-      expect(agentCommand).toHaveBeenCalledTimes(2);
-      expect(agentCommand.mock.calls.map((call) => call[0])).toEqual([
+      expect(agentCommandMock).toHaveBeenCalledTimes(2);
+      expect(agentCommandMock.mock.calls.map((call) => call[0])).toEqual([
         expect.objectContaining({
           message: "qa chat request",
           sessionKey: expect.stringMatching(/^agent:main:openai:/),

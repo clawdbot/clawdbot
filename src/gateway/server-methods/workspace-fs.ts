@@ -3,6 +3,7 @@
 // hardlink rejection) so no caller can access files outside a workspace root.
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { readFileWindowFully } from "../../infra/file-read.js";
 import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 
 type WorkspaceRoot = Awaited<ReturnType<typeof fsSafeRoot>>;
@@ -108,7 +109,7 @@ export async function readWorkspaceFilePrefix(
     });
     try {
       const buffer = Buffer.allocUnsafe(Math.min(maxBytes, opened.stat.size));
-      const { bytesRead } = await opened.handle.read(buffer, 0, buffer.byteLength, 0);
+      const bytesRead = await readFileWindowFully(opened.handle, buffer, 0);
       return {
         buffer: buffer.subarray(0, bytesRead),
         canonicalPath: path
