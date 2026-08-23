@@ -127,6 +127,7 @@ export function renderSidebarUpdateSurface(params: {
     .onHoldUpdate=${() => context.overlays.holdUpdate()}
     .onReviewUpdate=${params.onNavigate}
     .onDismiss=${params.onDismiss}
+    .recoverNativeDecline=${false}
   ></openclaw-sidebar-update-card>`;
 }
 

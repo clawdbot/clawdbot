@@ -293,6 +293,10 @@ suite.define(() => {
       ).toEqual([{ type: "start-update" }]);
       expect(await gateway.getRequests("update.run")).toHaveLength(0);
 
+      // The confirmation closes the lazy Inbox. Recovery belongs to the
+      // persistent attention owner, not the now-disconnected update card.
+      await page.keyboard.press("Escape");
+      await expect.poll(() => page.locator(".sidebar-issues-panel").count()).toBe(0);
       await page.evaluate(
         (eventName) => window.dispatchEvent(new CustomEvent(eventName)),
         NATIVE_UPDATE_DECLINED_EVENT,

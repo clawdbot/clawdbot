@@ -876,8 +876,8 @@ suite.define(() => {
         await expect
           .poll(() => page.locator(".shell").getAttribute("class"))
           .toContain("shell--nav-drawer-open");
-        await expect.poll(() => sidebarUpdate.isVisible()).toBe(true);
         await sidebar.locator(".sidebar-issues-button").click();
+        await expect.poll(() => sidebarUpdate.isVisible()).toBe(true);
         await expect.poll(() => sidebarAutomation.isVisible()).toBe(true);
         await captureUiProof(page, "10-mobile-attention-drawer.png");
 

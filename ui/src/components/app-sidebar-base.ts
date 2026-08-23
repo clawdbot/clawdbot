@@ -10,6 +10,7 @@ import {
 } from "../app/context.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { ThemeMode } from "../app/theme.ts";
+import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { readSessionMethodAccess, type SessionMethodAccess } from "../lib/session-method-access.ts";
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
 import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
@@ -46,6 +47,9 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) lobsterPetSounds = false;
   @property({ attribute: false }) gatewayVersion: string | null = null;
   @property({ attribute: false }) devGitBranch: string | null = null;
+  @property({ attribute: false }) watchUpdateProgress:
+    | ((listener: (progress: UpdateProgress) => void) => () => void)
+    | undefined = undefined;
   @property({ attribute: false }) onOpenApprovals?: () => void;
   @property({ attribute: false }) onRetryConnect?: () => void;
   @property({ attribute: false }) onOpenNewSession?: (

@@ -375,6 +375,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       lobsterPetSounds: uiSettings.lobsterPetSounds === true,
       gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? null,
       devGitBranch: config.devGitBranch,
+      watchUpdateProgress,
       onOpenApprovals: () => host.openApprovals(),
       onRetryConnect: () => context.gateway.connect(),
       onOpenNewSession: openNewSession,
