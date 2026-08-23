@@ -1,4 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasUnresolvedConfigPath } from "../config/resolution-facts.js";
+import { isSecretRef } from "../config/types.secrets.js";
 /**
  * Shared MCP config coercion helpers.
  *
@@ -46,6 +48,21 @@ export function isDangerousMcpStdioEnvVarName(rawKey: string): boolean {
 /** Whether the selected MCP auth flow replaces a configured Authorization header. */
 export function mcpUsesManagedAuthorization(rawServer: unknown, authProfileId?: string): boolean {
   return Boolean(authProfileId) || (isRecord(rawServer) && rawServer.auth === "oauth");
+}
+
+/**
+ * Selects MCP values that still require secret materialization.
+ *
+ * Structured refs are explicit. Missing authored `${NAME}` substitutions are
+ * recovered from config resolution facts. Bare `$NAME` and escaped `$${NAME}`
+ * scalar values intentionally remain literals for MCP compatibility.
+ */
+export function isMcpSecretRefCandidate(params: {
+  config: unknown;
+  path: string;
+  value: unknown;
+}): boolean {
+  return isSecretRef(params.value) || hasUnresolvedConfigPath(params.config, params.path);
 }
 
 function toMcpFilteredStringRecord(

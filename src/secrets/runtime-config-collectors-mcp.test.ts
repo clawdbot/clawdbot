@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { resolveConfigForRead } from "../config/io.read-helpers.js";
+import { setConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { collectCoreConfigAssignments } from "./runtime-config-collectors-core.js";
 import { createResolverContext } from "./runtime-shared.js";
@@ -34,6 +36,53 @@ describe("core MCP SecretRef collection", () => {
       "mcp.servers.local.headers.Authorization",
     ]);
     expect(config.mcp?.servers?.local?.env?.LITERAL).toBe("$UNCHANGED");
+  });
+
+  it("collects pending braced templates from source facts without reinterpreting literals", () => {
+    const read = resolveConfigForRead(
+      {
+        mcp: {
+          servers: {
+            local: {
+              command: "example-mcp",
+              env: {
+                BRACED: "${MISSING_LOCAL_TOKEN}",
+                BARE: "$MISSING_LOCAL_LITERAL",
+                ESCAPED: "$${MISSING_LOCAL_ESCAPED}",
+              },
+            },
+            remote: {
+              url: "https://mcp.example.test",
+              headers: {
+                "X-Braced": "${MISSING_REMOTE_TOKEN}",
+                "X-Bare": "$MISSING_REMOTE_LITERAL",
+                "X-Escaped": "$${MISSING_REMOTE_ESCAPED}",
+              },
+            },
+          },
+        },
+      },
+      {},
+    );
+    const config = read.resolvedConfigRaw as OpenClawConfig;
+    setConfigResolutionFacts(config, read.resolutionFacts);
+
+    const context = collect(config);
+
+    expect(context.assignments.map((entry) => entry.path)).toEqual([
+      "mcp.servers.local.env.BRACED",
+      "mcp.servers.remote.headers.X-Braced",
+    ]);
+    expect(config.mcp?.servers?.local?.env).toMatchObject({
+      BRACED: "${MISSING_LOCAL_TOKEN}",
+      BARE: "$MISSING_LOCAL_LITERAL",
+      ESCAPED: "${MISSING_LOCAL_ESCAPED}",
+    });
+    expect(config.mcp?.servers?.remote?.headers).toMatchObject({
+      "X-Braced": "${MISSING_REMOTE_TOKEN}",
+      "X-Bare": "$MISSING_REMOTE_LITERAL",
+      "X-Escaped": "${MISSING_REMOTE_ESCAPED}",
+    });
   });
 
   it("does not resolve refs for disabled servers or blocked stdio env keys", () => {

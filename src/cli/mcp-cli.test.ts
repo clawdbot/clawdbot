@@ -17,6 +17,7 @@ import {
   readMcpOAuthCredentialsStatus,
   resetMcpCliTestState,
   runMcpCommand,
+  setCatalogOnlyMcpRuntimeOverride,
   setCreateSessionMcpRuntimeOverride,
   serveOpenClawChannelMcp,
 } from "./mcp-cli.test-harness.js";
@@ -812,32 +813,11 @@ describe("mcp cli", () => {
         })}\n`,
         "utf8",
       );
-      setCreateSessionMcpRuntimeOverride((params) => {
-        resolvedEnvValues.push(params.cfg?.mcp?.servers?.proof?.env?.API_TOKEN);
-        return {
-          sessionId: params.sessionId,
-          workspaceDir: params.workspaceDir,
-          configFingerprint: "cli-probe-secret-ref",
-          createdAt: 0,
-          lastUsedAt: 0,
-          getCatalog: async () => ({
-            version: 1,
-            generatedAt: Date.now(),
-            servers: {
-              proof: {
-                serverName: "proof",
-                launchSummary: process.execPath,
-                toolCount: 0,
-              },
-            },
-            tools: [],
-            diagnostics: [],
-          }),
-          peekCatalog: () => null,
-          markUsed: () => {},
-          callTool: async () => ({ content: [] }),
-          dispose: async () => {},
-        };
+      setCatalogOnlyMcpRuntimeOverride({
+        configFingerprint: "cli-probe-secret-ref",
+        onCreate: (params) => {
+          resolvedEnvValues.push(params.cfg?.mcp?.servers?.proof?.env?.API_TOKEN);
+        },
       });
 
       await withEnvAsync({ OPENCLAW_MCP_PROBE_TEST_TOKEN: "resolved-probe-token" }, async () => {
@@ -886,37 +866,12 @@ describe("mcp cli", () => {
         })}\n`,
         "utf8",
       );
-      setCreateSessionMcpRuntimeOverride((params) => {
-        const entry = Object.entries(params.cfg?.mcp?.servers ?? {})[0];
-        if (!entry) {
-          throw new Error("expected one MCP probe server");
-        }
-        const [name, server] = entry;
-        capturedServers.push({ name, env: server.env, headers: server.headers });
-        return {
-          sessionId: params.sessionId,
-          workspaceDir: params.workspaceDir,
-          configFingerprint: "cli-probe-literal-shorthand",
-          createdAt: 0,
-          lastUsedAt: 0,
-          getCatalog: async () => ({
-            version: 1,
-            generatedAt: Date.now(),
-            servers: {
-              [name]: {
-                serverName: name,
-                launchSummary: process.execPath,
-                toolCount: 0,
-              },
-            },
-            tools: [],
-            diagnostics: [],
-          }),
-          peekCatalog: () => null,
-          markUsed: () => {},
-          callTool: async () => ({ content: [] }),
-          dispose: async () => {},
-        };
+      setCatalogOnlyMcpRuntimeOverride({
+        configFingerprint: "cli-probe-literal-shorthand",
+        onCreate: (params, name) => {
+          const server = params.cfg?.mcp?.servers?.[name];
+          capturedServers.push({ name, env: server?.env, headers: server?.headers });
+        },
       });
 
       await withEnvAsync({ MCP_PROBE_LITERAL: "must-not-materialize" }, async () => {
@@ -957,6 +912,75 @@ describe("mcp cli", () => {
         { name: "added", env: cliFlagLiterals, headers: undefined },
       ]);
       expect(callGateway).not.toHaveBeenCalled();
+    });
+  });
+
+  it("resolves pending braced templates across CLI probe runtimes", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async (home) => {
+      const workspaceDir = await createWorkspace();
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const capturedEnv: unknown[] = [];
+      const pendingPath = "mcp.servers.proof.env.PENDING";
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({
+          mcp: {
+            servers: {
+              proof: {
+                command: process.execPath,
+                env: {
+                  PENDING: "${OPENCLAW_MCP_PENDING_TEMPLATE}",
+                  BARE: "$OPENCLAW_MCP_PENDING_LITERAL",
+                  ESCAPED: "$${OPENCLAW_MCP_PENDING_ESCAPED}",
+                },
+              },
+            },
+          },
+        })}\n`,
+        "utf8",
+      );
+      callGateway.mockResolvedValue({
+        assignments: [
+          {
+            path: pendingPath,
+            pathSegments: ["mcp", "servers", "proof", "env", "PENDING"],
+            value: "resolved-pending-template",
+          },
+        ],
+        diagnostics: [],
+      });
+      setCatalogOnlyMcpRuntimeOverride({
+        configFingerprint: "cli-probe-pending-template",
+        onCreate: (params) => {
+          capturedEnv.push(params.cfg?.mcp?.servers?.proof?.env);
+        },
+      });
+
+      await runMcpCommand(["mcp", "probe", "proof", "--json"]);
+      await runMcpCommand(["mcp", "doctor", "proof", "--probe", "--json"]);
+
+      expect(capturedEnv).toEqual([
+        {
+          PENDING: "resolved-pending-template",
+          BARE: "$OPENCLAW_MCP_PENDING_LITERAL",
+          ESCAPED: "${OPENCLAW_MCP_PENDING_ESCAPED}",
+        },
+        {
+          PENDING: "resolved-pending-template",
+          BARE: "$OPENCLAW_MCP_PENDING_LITERAL",
+          ESCAPED: "${OPENCLAW_MCP_PENDING_ESCAPED}",
+        },
+      ]);
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      for (const [request] of callGateway.mock.calls) {
+        expect(request.params).toEqual(
+          expect.objectContaining({
+            allowedPaths: [pendingPath],
+          }),
+        );
+      }
     });
   });
 

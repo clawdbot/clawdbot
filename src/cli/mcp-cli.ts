@@ -18,6 +18,7 @@ import {
   updateConfiguredMcpServer,
   updateConfiguredMcpServerTools,
 } from "../agents/mcp-config-mutation.js";
+import { isMcpSecretRefCandidate } from "../agents/mcp-config-shared.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
 import { readMcpOAuthStoreReadOnly } from "../agents/mcp-oauth-store.js";
 import {
@@ -31,9 +32,9 @@ import {
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { parseConfigValue } from "../auto-reply/reply/config-value.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
+import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isSecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   startOAuthLoopbackCallbackServer,
@@ -386,6 +387,7 @@ async function probeMcpServerIssues(params: {
     sessionId: "openclaw-cli-mcp-doctor",
     config: params.config,
     servers: { [params.name]: params.server },
+    preserveSourceResolutionFacts: true,
   });
   try {
     const result = formatMcpProbeResult(await runtime.getCatalog());
@@ -542,14 +544,19 @@ function formatMcpProbeResult(
 function buildMcpProbeConfig(params: {
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
+  preserveSourceResolutionFacts: boolean;
 }): OpenClawConfig {
-  return {
+  const probeConfig = {
     ...params.config,
     mcp: {
       ...params.config.mcp,
       servers: params.servers,
     },
   };
+  if (params.preserveSourceResolutionFacts) {
+    copyConfigResolutionFacts(params.config, probeConfig);
+  }
+  return probeConfig;
 }
 
 async function createMcpProbeRuntime(params: {
@@ -557,14 +564,25 @@ async function createMcpProbeRuntime(params: {
   sessionId: string;
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
+  preserveSourceResolutionFacts: boolean;
 }) {
-  const probeConfig = buildMcpProbeConfig({ config: params.config, servers: params.servers });
+  const probeConfig = buildMcpProbeConfig({
+    config: params.config,
+    servers: params.servers,
+    preserveSourceResolutionFacts: params.preserveSourceResolutionFacts,
+  });
   const targetIds = getMcpCommandSecretTargetIds();
   const scopedTargets = {
     targetIds,
     allowedPaths: new Set(
       discoverConfigSecretTargetsByIds(probeConfig, targetIds)
-        .filter((target) => isSecretRef(target.value))
+        .filter((target) =>
+          isMcpSecretRefCandidate({
+            config: probeConfig,
+            path: target.path,
+            value: target.value,
+          }),
+        )
         .map((target) => target.path),
     ),
   };
@@ -628,6 +646,7 @@ async function probeMcpServersOrFail(params: {
   config: OpenClawConfig;
   servers: Record<string, Record<string, unknown>>;
   path: string;
+  preserveSourceResolutionFacts: boolean;
 }): Promise<ReturnType<typeof formatMcpProbeResult>> {
   const probeServers = Object.fromEntries(
     Object.entries(params.servers).map(([name, server]) => [
@@ -640,6 +659,7 @@ async function probeMcpServersOrFail(params: {
     sessionId: "openclaw-cli-mcp-probe",
     config: params.config,
     servers: probeServers,
+    preserveSourceResolutionFacts: params.preserveSourceResolutionFacts,
   });
   try {
     const result = formatMcpProbeResult(await runtime.getCatalog());
@@ -859,6 +879,7 @@ export function registerMcpCli(program: Command) {
         sessionId: "openclaw-cli-mcp-probe",
         config: loaded.config,
         servers,
+        preserveSourceResolutionFacts: true,
       });
       try {
         const result = formatMcpProbeResult(await runtime.getCatalog());
@@ -1120,6 +1141,7 @@ export function registerMcpCli(program: Command) {
             config: loaded.config,
             path: loaded.path,
             servers: { [name]: server },
+            preserveSourceResolutionFacts: false,
           });
         }
         const result = await setConfiguredMcpServer({ name, server });
@@ -1342,6 +1364,7 @@ export function registerMcpCli(program: Command) {
             config: loaded.config,
             path: loaded.path,
             servers: { [name]: next },
+            preserveSourceResolutionFacts: true,
           });
         }
         if (opts.enable && Object.keys(next).length === 0) {

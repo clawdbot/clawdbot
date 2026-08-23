@@ -1,11 +1,11 @@
 /** Collects MCP Server SecretRefs during core runtime preparation. */
 import {
   isDangerousMcpStdioEnvVarName,
+  isMcpSecretRefCandidate,
   mcpUsesManagedAuthorization,
 } from "../agents/mcp-config-shared.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isSecretRef } from "../config/types.secrets.js";
 import {
   collectRuntimeSecretInputAssignment,
   type ResolverContext,
@@ -38,14 +38,21 @@ export function collectMcpAssignments(params: {
     const env = isRecord(server.env) ? server.env : undefined;
     if (env) {
       for (const [envKey, envValue] of Object.entries(env)) {
-        if (!isSecretRef(envValue)) {
+        const envPath = `mcp.servers.${serverName}.env.${envKey}`;
+        if (
+          !isMcpSecretRefCandidate({
+            config: params.context.sourceConfig,
+            path: envPath,
+            value: envValue,
+          })
+        ) {
           continue;
         }
         const blocked = transport?.kind === "stdio" && isDangerousMcpStdioEnvVarName(envKey);
         const active = transport?.kind === "stdio" && !blocked;
         collectRuntimeSecretInputAssignment({
           value: envValue,
-          path: `mcp.servers.${serverName}.env.${envKey}`,
+          path: envPath,
           expected: "string",
           defaults: params.defaults,
           context: params.context,
@@ -68,7 +75,14 @@ export function collectMcpAssignments(params: {
     const headers = isRecord(server.headers) ? server.headers : undefined;
     if (headers) {
       for (const [headerKey, headerValue] of Object.entries(headers)) {
-        if (!isSecretRef(headerValue)) {
+        const headerPath = `mcp.servers.${serverName}.headers.${headerKey}`;
+        if (
+          !isMcpSecretRefCandidate({
+            config: params.context.sourceConfig,
+            path: headerPath,
+            value: headerValue,
+          })
+        ) {
           continue;
         }
         const authorizationIsReplaced =
@@ -77,7 +91,7 @@ export function collectMcpAssignments(params: {
           mcpUsesManagedAuthorization(server);
         collectRuntimeSecretInputAssignment({
           value: headerValue,
-          path: `mcp.servers.${serverName}.headers.${headerKey}`,
+          path: headerPath,
           expected: "string",
           defaults: params.defaults,
           context: params.context,

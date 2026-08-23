@@ -105,6 +105,43 @@ export function setCreateSessionMcpRuntimeOverride(override: CreateSessionMcpRun
   mocks.createSessionMcpRuntimeOverride = override;
 }
 
+export function setCatalogOnlyMcpRuntimeOverride(params: {
+  configFingerprint: string;
+  onCreate?: (runtimeParams: Parameters<CreateSessionMcpRuntime>[0], serverName: string) => void;
+}): void {
+  setCreateSessionMcpRuntimeOverride((runtimeParams) => {
+    const serverName = Object.keys(runtimeParams.cfg?.mcp?.servers ?? {})[0];
+    if (!serverName) {
+      throw new Error("expected one MCP probe server");
+    }
+    params.onCreate?.(runtimeParams, serverName);
+    return {
+      sessionId: runtimeParams.sessionId,
+      workspaceDir: runtimeParams.workspaceDir,
+      configFingerprint: params.configFingerprint,
+      createdAt: 0,
+      lastUsedAt: 0,
+      getCatalog: async () => ({
+        version: 1,
+        generatedAt: Date.now(),
+        servers: {
+          [serverName]: {
+            serverName,
+            launchSummary: process.execPath,
+            toolCount: 0,
+          },
+        },
+        tools: [],
+        diagnostics: [],
+      }),
+      peekCatalog: () => null,
+      markUsed: () => {},
+      callTool: async () => ({ content: [] }),
+      dispose: async () => {},
+    };
+  });
+}
+
 export function lastLogLine(): string {
   return lastRuntimeLine(mockLog);
 }
