@@ -691,4 +691,23 @@ describe("pending-reset marker retention", () => {
     });
     expect(merged.updatedAt).toBeGreaterThan(0);
   });
+
+  it("mints a fresh updatedAt when a snapshot merge keeps the session id but rotates the lifecycle revision", () => {
+    const tombstoned: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 0,
+      lifecycleRevision: "rev-1",
+    };
+    const next: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      lifecycleRevision: "rev-2",
+    };
+    const merged = mergeSessionSnapshotChanges({
+      initial: tombstoned,
+      next,
+      current: { ...tombstoned },
+    });
+    expect(merged.updatedAt).toBeGreaterThan(0);
+  });
 });

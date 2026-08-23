@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { isSameLifecycleIdentity } from "./reset-policy.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type SessionEntryRecord = Partial<Record<keyof SessionEntry, unknown>>;
@@ -254,10 +255,12 @@ export function projectSessionSnapshotChanges(params: {
       // The legacy updatedAt=0 pending-reset marker (see evaluateSessionFreshness)
       // is a one-time reset contract: a same-identity snapshot merge must not
       // lift it, or the required reset is silently skipped once the active run
-      // completes. Only the rollover that performs the reset mints a fresh
-      // updatedAt (see resolveBookkeepingUpdatedAt).
+      // completes. Identity is the full lifecycle identity (session id and
+      // lifecycle revision): a rollover may retain the session id, but it
+      // rotates the revision when it performs the reset and mints fresh
+      // (see resolveBookkeepingUpdatedAt, isSameLifecycleIdentity).
       patch.updatedAt =
-        params.current.updatedAt === 0 && params.current.sessionId === params.next.sessionId
+        params.current.updatedAt === 0 && isSameLifecycleIdentity(params.current, params.next)
           ? 0
           : Math.max(params.current.updatedAt, params.next.updatedAt);
       continue;

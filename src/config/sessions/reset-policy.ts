@@ -152,6 +152,22 @@ type PendingResetMarkerIdentity = {
 };
 
 /**
+ * The full lifecycle identity used by the pending-reset marker contract: both
+ * the session id and the lifecycle revision. A rollover that performs the
+ * pending reset may retain the session id, but it always rotates the lifecycle
+ * revision, so matching on the session id alone would wrongly preserve the
+ * marker into the new lifecycle.
+ */
+export function isSameLifecycleIdentity(
+  left: PendingResetMarkerIdentity | undefined,
+  right: PendingResetMarkerIdentity | undefined,
+): boolean {
+  return (
+    left?.sessionId === right?.sessionId && left?.lifecycleRevision === right?.lifecycleRevision
+  );
+}
+
+/**
  * Retains the legacy `updatedAt === 0` pending-reset marker (see
  * resolveBookkeepingUpdatedAt) through a same-identity canonical replacement.
  * Replacement choke points call this before persisting so any writer — present
@@ -166,8 +182,7 @@ export function retainPendingResetMarker(
   if (
     previous?.updatedAt === 0 &&
     next.updatedAt !== 0 &&
-    next.sessionId === previous.sessionId &&
-    next.lifecycleRevision === previous.lifecycleRevision
+    isSameLifecycleIdentity(previous, next)
   ) {
     next.updatedAt = 0;
   }
