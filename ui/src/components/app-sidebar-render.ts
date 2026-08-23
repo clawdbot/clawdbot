@@ -8,6 +8,7 @@ import {
 import { isRouteId, isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { resolveControlUiAuthToken } from "../app/control-ui-auth.ts";
 import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
+import { confirmAndStartUpdate } from "../app/update-confirmation.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
@@ -369,6 +370,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
     : gateway
       ? `${gateway.name}${gatewayPrimaryTag ? `, ${gatewayPrimaryTag}` : ""}`
       : buildSubtitle;
+  const updateBusy = host.updateBusy || host.updateSchedule?.campaign?.state === "applying";
   return html`
     <div class="sidebar-footer-bar">
       <button
@@ -413,20 +415,32 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
       <span class="sidebar-identity-card__status" role="status" aria-live="polite"
         >${host.offline ? t("connection.reconnecting") : ""}</span
       >
-      ${host.sidebarMenus.isRouteEnabled("devices")
-        ? html`<button
-            type="button"
-            class="sidebar-brand__icon sidebar-footer-bar__devices"
-            aria-label=${t("tabs.devices")}
-            aria-current=${host.activeRouteId === "devices" ? "page" : nothing}
-            title=${t("tabs.devices")}
-            @click=${() =>
-              host.onNavigate?.("devices", {
-                pathname: pathForRoute("devices", host.basePath),
-              })}
-          >
-            ${icons.monitorSmartphone}
-          </button>`
+      ${host.updateAvailable
+        ? html`<span class="sidebar-footer-update-slot">
+            <button
+              type="button"
+              class="sidebar-footer-update"
+              aria-label=${t("updates.sidebar.availableTitle")}
+              title=${host.canUpdate
+                ? t("updates.sidebar.availableTitle")
+                : t("updates.adminRequired")}
+              ?disabled=${updateBusy || !host.canUpdate}
+              @click=${() => {
+                void confirmAndStartUpdate({
+                  updateAvailable: host.updateAvailable,
+                  updateSchedule: host.updateSchedule,
+                  viaNativeApp: false,
+                  startGatewayUpdate: host.onUpdate,
+                  ...(host.watchUpdateProgress
+                    ? { watchUpdateProgress: host.watchUpdateProgress }
+                    : {}),
+                });
+              }}
+            >
+              <span class="sidebar-footer-update__icon" aria-hidden="true">${icons.download}</span>
+              <span class="sidebar-footer-update__label">${t("updates.sidebar.action")}</span>
+            </button>
+          </span>`
         : nothing}
       ${renderAppSidebarAttention(host)}
     </div>
