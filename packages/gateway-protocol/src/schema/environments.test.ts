@@ -11,6 +11,7 @@ import {
   validateWorkerDesktopLaunchResult,
   WorkerEnvironmentStateSchema,
 } from "../index.js";
+import { WorkerSlotSummarySchema } from "./environments.js";
 
 const workerStates = [
   "requested",
@@ -114,6 +115,92 @@ describe("worker environment protocol schemas", () => {
     ).toBe(true);
   });
 
+  it("accepts only redacted node worker bundle status", () => {
+    const node = {
+      id: "node:build-mac",
+      type: "node",
+      status: "available",
+    };
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: { status: "installed", version: "2026.8.9" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: { status: "missing" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: {
+          status: "installed",
+          version: "2026.8.9",
+          bundleHash: "a".repeat(64),
+        },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        workerBundle: { status: "installed", version: "" },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts only bounded closed worker slot summaries", () => {
+    const slots = { total: 2, available: 1 };
+    expect(Value.Check(WorkerSlotSummarySchema, slots)).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        id: "node:build-mac",
+        type: "node",
+        status: "available",
+        workerSlots: slots,
+      }),
+    ).toBe(true);
+    expect(Value.Check(WorkerSlotSummarySchema, { total: 0, available: 0 })).toBe(false);
+    expect(Value.Check(WorkerSlotSummarySchema, { total: 2, available: 3 })).toBe(false);
+    expect(Value.Check(WorkerSlotSummarySchema, { total: 2, available: 1_025 })).toBe(false);
+    expect(Value.Check(WorkerSlotSummarySchema, { ...slots, busy: 1 })).toBe(false);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        id: "node:build-mac",
+        type: "node",
+        status: "available",
+        workerSlots: { total: 2, available: 3 },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts only bounded, unique effective node command authority", () => {
+    const node = {
+      id: "node:build-mac",
+      type: "node",
+      status: "available",
+    };
+
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        invocableCommands: ["codex.exec-server.stdio.v1", "system.run"],
+      }),
+    ).toBe(true);
+    expect(Value.Check(EnvironmentSummarySchema, { ...node, invocableCommands: [] })).toBe(true);
+
+    for (const invocableCommands of [
+      [""],
+      ["system.run", "system.run"],
+      ["x".repeat(129)],
+      Array.from({ length: 129 }, (_, index) => `command.${index}`),
+    ]) {
+      expect(Value.Check(EnvironmentSummarySchema, { ...node, invocableCommands })).toBe(false);
+    }
+  });
+
   it("accepts bounded node lifecycle history and rejects malformed timestamps", () => {
     const node = {
       id: "node:build-mac",
@@ -162,7 +249,25 @@ describe("worker environment protocol schemas", () => {
     expect(
       Value.Check(EnvironmentsListResultSchema, {
         environments: [],
-        profiles: [{ id: "aws", providerId: "crabbox", trust: "disposable" }],
+        profiles: [
+          {
+            id: "aws",
+            providerId: "crabbox",
+            trust: "disposable",
+            executionMode: "remote-exec",
+            machines: [
+              {
+                id: "standard",
+                label: "Standard",
+                cpu: 32,
+                memoryGb: 64,
+                default: true,
+              },
+            ],
+          },
+          { id: "worker", providerId: "static-ssh", executionMode: "worker-turn" },
+          { id: "legacy", providerId: "static-ssh" },
+        ],
       }),
     ).toBe(true);
     expect(
@@ -175,6 +280,24 @@ describe("worker environment protocol schemas", () => {
       Value.Check(EnvironmentsListResultSchema, {
         environments: [],
         profiles: [{ id: "aws", providerId: "crabbox", trust: "temporary" }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(EnvironmentsListResultSchema, {
+        environments: [],
+        profiles: [{ id: "aws", providerId: "crabbox", executionMode: "sandbox" }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(EnvironmentsListResultSchema, {
+        environments: [],
+        profiles: [
+          {
+            id: "aws",
+            providerId: "crabbox",
+            machines: [{ id: "standard", label: "Standard", cpu: 0 }],
+          },
+        ],
       }),
     ).toBe(false);
   });

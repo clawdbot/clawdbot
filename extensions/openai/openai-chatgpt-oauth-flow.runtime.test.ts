@@ -356,6 +356,30 @@ describe("OpenAI Codex OAuth flow", () => {
     });
   });
 
+  it.each([
+    {
+      operation: "exchange" as const,
+      run: () =>
+        exchangeOpenAIAuthorizationCode("code", "verifier", resolveOpenAIRedirectUri("localhost")),
+    },
+    {
+      operation: "refresh" as const,
+      run: () => refreshOpenAIAccessToken("old-refresh-token"),
+    },
+  ])(
+    "returns a failed result when the token $operation response is malformed JSON",
+    async ({ operation, run }) => {
+      mockTokenResponseText('{"access_token":"access-token","refresh_to');
+
+      const result = await run();
+
+      expect(result).toEqual({
+        type: "failed",
+        message: `OpenAI Codex token ${operation} failed: response is not valid JSON`,
+      });
+    },
+  );
+
   it("times out token refresh requests", async () => {
     ssrfMocks.fetchWithSsrFGuard.mockRejectedValueOnce(timeoutError());
 

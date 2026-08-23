@@ -1,51 +1,60 @@
-/**
- * Canvas config migration from legacy root canvasHost config to plugin config.
- */
+/** Canvas config migration to the single surviving route-enable switch. */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asBoolean,
+  asOptionalRecord as readRecord,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
-type MutableRecord = Record<string, unknown>;
+const RETIRED_HOST_KEYS = ["root", "port", "liveReload"] as const;
 
-function mergeHostConfig(params: {
-  legacyHost: MutableRecord;
-  existingHost: MutableRecord | undefined;
-}): MutableRecord {
-  return Object.assign({}, params.legacyHost, params.existingHost);
-}
-
-/** Migrates root canvasHost config into plugins.entries.canvas.config.host. */
-export function migrateLegacyCanvasHostConfig(config: OpenClawConfig): {
+/** Removes retired file-host settings while preserving the route enablement choice. */
+export function migrateCanvasHostConfig(config: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
 } | null {
   const legacyHost = readRecord((config as { canvasHost?: unknown }).canvasHost);
-  if (!legacyHost) {
+  const plugins = readRecord(config.plugins);
+  const entries = readRecord(plugins?.entries);
+  const canvasEntry = readRecord(entries?.canvas);
+  const canvasConfig = readRecord(canvasEntry?.config);
+  const existingHost = readRecord(canvasConfig?.host);
+  const retiredKeys = RETIRED_HOST_KEYS.filter((key) => Object.hasOwn(existingHost ?? {}, key));
+  if (!legacyHost && retiredKeys.length === 0) {
     return null;
   }
 
-  const plugins = structuredClone(readRecord(config.plugins) ?? {});
-  const entries = readRecord(plugins.entries) ?? {};
-  const canvasEntry = readRecord(entries.canvas) ?? {};
-  const canvasConfig = readRecord(canvasEntry.config) ?? {};
-  const existingHost = readRecord(canvasConfig.host);
-
-  entries.canvas = {
-    ...canvasEntry,
-    config: {
-      ...canvasConfig,
-      host: mergeHostConfig({
-        legacyHost,
-        existingHost,
-      }),
-    },
-  };
-  plugins.entries = entries;
-
-  const next = { ...config, plugins } as OpenClawConfig & { canvasHost?: unknown };
+  const next = structuredClone(config) as OpenClawConfig & { canvasHost?: unknown };
   delete next.canvasHost;
+  const enabled = asBoolean(existingHost?.enabled) ?? asBoolean(legacyHost?.enabled);
+  const nextPlugins = readRecord(next.plugins) ?? {};
+  const nextEntries = readRecord(nextPlugins.entries) ?? {};
+  const nextEntry = readRecord(nextEntries.canvas) ?? {};
+  const nextPluginConfig = readRecord(nextEntry.config) ?? {};
 
-  return {
-    config: next,
-    changes: ["migrated canvasHost to plugins.entries.canvas.config.host"],
-  };
+  if (existingHost || enabled !== undefined) {
+    if (enabled === undefined) {
+      delete nextPluginConfig.host;
+    } else {
+      nextPluginConfig.host = { enabled };
+    }
+    nextEntry.config = nextPluginConfig;
+    nextEntries.canvas = nextEntry;
+    nextPlugins.entries = nextEntries;
+    next.plugins = nextPlugins;
+  }
+
+  const changes: string[] = [];
+  if (legacyHost) {
+    changes.push(
+      enabled === undefined
+        ? "Removed retired canvasHost configuration."
+        : "Migrated canvasHost.enabled to plugins.entries.canvas.config.host.enabled.",
+    );
+  }
+  if (retiredKeys.length > 0) {
+    changes.push(
+      `Removed retired Canvas host config: ${retiredKeys.map((key) => `plugins.entries.canvas.config.host.${key}`).join(", ")}.`,
+    );
+  }
+  return { config: next, changes };
 }

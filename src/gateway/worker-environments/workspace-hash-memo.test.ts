@@ -270,7 +270,6 @@ describe("workspace hash memo", () => {
     };
 
     const first = await capture([]);
-    expect(first.memo).toHaveLength(2);
     expect(
       first.memo
         .map(([identity]) => Number(identity.split(":")[3]))

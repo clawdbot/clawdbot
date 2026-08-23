@@ -20,12 +20,16 @@ import {
 import {
   resolveStatusGatewayDiagnosticsSafe,
   resolveStatusGatewayHealthSafe,
+  type StatusGatewayDiagnosticsResult,
   type resolveStatusServiceSummaries,
 } from "../status-runtime-shared.ts";
 import { formatUpdateRestartStatusValue } from "../status-update-restart.ts";
 import { resolveStatusAllConnectionDetails } from "../status.gateway-connection.ts";
 import type { NodeOnlyGatewayInfo } from "../status.node-mode.js";
-import type { StatusScanOverviewResult } from "../status.scan-overview.ts";
+import {
+  resolveStatusSummaryFromOverview,
+  type StatusScanOverviewResult,
+} from "../status.scan-overview.ts";
 
 type StatusServiceSummaries = Awaited<ReturnType<typeof resolveStatusServiceSummaries>>;
 type StatusGatewayServiceSummary = StatusServiceSummaries[0];
@@ -78,8 +82,8 @@ async function resolveStatusAllLocalDiagnosis(params: {
     agentStatus: StatusScanOverviewResult["agentStatus"];
     gatewayReachable: boolean;
     health: StatusGatewayHealthSafe | undefined;
-    deliveryDiagnostics: unknown;
-    exporterDiagnostics: unknown;
+    deliveryDiagnostics: StatusGatewayDiagnosticsResult | null;
+    exporterDiagnostics: StatusGatewayDiagnosticsResult | null;
     nodeOnlyGateway: NodeOnlyGatewayInfo | null;
   };
 }> {
@@ -198,15 +202,19 @@ export async function buildStatusAllReportData(params: {
   timeoutMs?: number;
 }) {
   const gatewaySnapshot = params.overview.gatewaySnapshot;
-  const { configPath, health, diagnosis } = await resolveStatusAllLocalDiagnosis({
-    overview: params.overview,
-    progress: params.progress,
-    gatewayReachable: gatewaySnapshot.gatewayReachable,
-    gatewayProbe: gatewaySnapshot.gatewayProbe,
-    gatewayCallOverrides: gatewaySnapshot.gatewayCallOverrides,
-    nodeOnlyGateway: params.nodeOnlyGateway,
-    timeoutMs: params.timeoutMs,
-  });
+  const [{ configPath, health, diagnosis }, summary] = await Promise.all([
+    resolveStatusAllLocalDiagnosis({
+      overview: params.overview,
+      progress: params.progress,
+      gatewayReachable: gatewaySnapshot.gatewayReachable,
+      gatewayProbe: gatewaySnapshot.gatewayProbe,
+      gatewayCallOverrides: gatewaySnapshot.gatewayCallOverrides,
+      nodeOnlyGateway: params.nodeOnlyGateway,
+      timeoutMs: params.timeoutMs,
+    }),
+    params.overview.runtimeDegradation ??
+      resolveStatusSummaryFromOverview({ overview: params.overview }),
+  ]);
 
   const overviewSurface: StatusOverviewSurface = buildStatusOverviewSurfaceFromOverview({
     overview: params.overview,
@@ -218,6 +226,7 @@ export async function buildStatusAllReportData(params: {
     surface: overviewSurface,
     osLabel: params.overview.osSummary.label,
     configPath,
+    summary,
     secretDiagnosticsCount: params.overview.secretDiagnostics.length,
     updateRestartValue: formatUpdateRestartStatusValue(diagnosis.sentinel?.payload),
     agentStatus: params.overview.agentStatus,
@@ -225,6 +234,7 @@ export async function buildStatusAllReportData(params: {
   });
 
   return {
+    configDiagnostics: params.overview.configDiagnostics,
     overviewRows,
     channels: params.overview.channels,
     channelIssues: params.overview.channelIssues.map((issue) => ({

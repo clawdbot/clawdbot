@@ -160,9 +160,16 @@ function renderChannelStatusBody(
       ${standardKey && status?.probe ? renderChannelProbeRow(status.probe) : nothing}
       ${renderChannelConfigSection({ channelId: key, props })}
       ${standardKey
-        ? renderChannelActionRow(html`<button class="btn" @click=${() => props.onRefresh(true)}>
-            ${t("common.probe")}
-          </button>`)
+        ? renderChannelActionRow(html`
+            <button
+              class="btn"
+              ?disabled=${props.loading}
+              aria-busy=${String(props.loading)}
+              @click=${() => props.onRefresh(true)}
+            >
+              ${t(props.loading ? "common.refreshing" : "common.probe")}
+            </button>
+          `)
         : nothing}
     `,
   );
@@ -232,7 +239,13 @@ export function renderChannelDetail(params: {
             >
               ${t("common.docs")}
             </a>
-            <button type="button" class="btn btn--sm" @click=${() => params.onSetup()}>
+            <button
+              type="button"
+              class="btn btn--sm"
+              title=${params.props.canAdmin ? "" : t("channels.hub.adminRequired")}
+              ?disabled=${!params.props.canAdmin}
+              @click=${() => params.onSetup()}
+            >
               ${t("channels.hub.runSetup")}
             </button>
             <button

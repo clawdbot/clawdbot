@@ -7,7 +7,7 @@
   "uiHints": {
     "mirror.endpoint": {
       "label": "Mirror Endpoint",
-      "help": "Remote Beam receiver URL, e.g. https://team.example.com/api/v1/beam/sessions."
+      "help": "Final Beam receiver URL, e.g. https://team.example.com/api/v1/beam/sessions. Redirects are not followed; retries pause until the service restarts or the endpoint changes."
     },
     "mirror.token": {
       "label": "Mirror Token",

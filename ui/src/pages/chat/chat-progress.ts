@@ -1,3 +1,4 @@
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../i18n/index.ts";
 import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
@@ -10,6 +11,25 @@ type WorkingProgress = {
 type WorkingProgressCache = WorkingProgress & {
   runId: string | null;
 };
+
+const CONTEXT_COMPACTION_CUSTOM_TYPE = "openclaw.context-compaction";
+
+export function projectContextCompactionActivity(message: unknown): unknown {
+  const record = asRecord(message);
+  if (record?.role !== "custom" || record.customType !== CONTEXT_COMPACTION_CUSTOM_TYPE) {
+    return message;
+  }
+  const metadata = asRecord(record["__openclaw"]);
+  return {
+    ...record,
+    role: "assistant",
+    content: [{ type: "text", text: t("chat.composer.contextCompacted") }],
+    __openclaw: {
+      ...metadata,
+      runtimeActivityKind: "context_compaction",
+    },
+  };
+}
 
 const workingProgressBySession = new Map<string, WorkingProgressCache>();
 let anonymousWorkingProgressId = 0;

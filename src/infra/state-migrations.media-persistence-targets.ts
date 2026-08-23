@@ -11,14 +11,14 @@ import {
 } from "../state/openclaw-agent-db-registry.js";
 import { isPathInside } from "./path-guards.js";
 
-type AgentDatabaseMediaMigrationTarget = {
+type AgentDatabaseMigrationTarget = {
   agentId: string;
   path: string;
   realPath: string;
   source: "configured" | "disk" | "registry";
 };
 
-type CandidateTarget = Omit<AgentDatabaseMediaMigrationTarget, "realPath">;
+type CandidateTarget = Omit<AgentDatabaseMigrationTarget, "realPath">;
 
 function listDefaultAgentDatabaseTargets(
   env: NodeJS.ProcessEnv,
@@ -40,12 +40,12 @@ function listDefaultAgentDatabaseTargets(
   }
 }
 
-export function resolveAgentDatabaseMediaMigrationTargets(params: {
+export function resolveAgentDatabaseMigrationTargets(params: {
   changes: string[];
   configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
   env: NodeJS.ProcessEnv;
   warnings: string[];
-}): AgentDatabaseMediaMigrationTarget[] {
+}): AgentDatabaseMigrationTarget[] {
   let registered: ReturnType<typeof listOpenClawRegisteredAgentDatabases> = [];
   try {
     registered = listOpenClawRegisteredAgentDatabases({
@@ -54,7 +54,7 @@ export function resolveAgentDatabaseMediaMigrationTargets(params: {
     });
   } catch (error) {
     params.warnings.push(
-      `Failed enumerating registered agent databases for media migration: ${String(error)}`,
+      `Failed enumerating registered agent databases for state migration: ${String(error)}`,
     );
   }
   // Owner authority is explicit config, then the recorded registry fact, then
@@ -84,7 +84,7 @@ export function resolveAgentDatabaseMediaMigrationTargets(params: {
     }
   }
   const configuredPathMatcher = createOpenClawAgentDatabasePathMatcher();
-  const targets: AgentDatabaseMediaMigrationTarget[] = [];
+  const targets: AgentDatabaseMigrationTarget[] = [];
   const seenRealPaths = new Set<string>();
   for (const candidate of candidates) {
     // Preserve the original locator: lexical normalization of `link/../file`

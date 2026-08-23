@@ -32,6 +32,7 @@ import {
   type SessionPullRequestGitContext,
   type SessionPullRequestLocalGitDeps,
 } from "./control-ui-session-prs-local-git.js";
+import { resolveGitHubForkParent } from "./github-repository-target.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 const SUCCESS_CACHE_MS = 60_000;
@@ -136,7 +137,7 @@ async function resolveSessionPullRequestGitContext(
   if (!root) {
     return null;
   }
-  return resolveCachedGitContext(root, deps);
+  return resolveCachedGitContext(root, deps, params.refresh === true);
 }
 
 // git push's own "create a pull request" hint URL; GitHub resolves the base
@@ -269,6 +270,7 @@ async function resolveSessionBranch(
   context: SessionPullRequestGitContext,
   mergedHeads: readonly MergedPullHead[],
   deps: LoadSessionPullRequestDeps,
+  refresh: boolean,
 ): Promise<ControlUiSessionBranch | undefined> {
   const root = context.root;
   if (!root) {
@@ -303,6 +305,7 @@ async function resolveSessionBranch(
       // No createUrl until GitHub can compare, but local changes still get a row.
       return !creatable && !(stats && stats.changedFiles > 0) ? undefined : { creatable, stats };
     },
+    refresh,
   );
   if (!facts) {
     return undefined;
@@ -312,7 +315,13 @@ async function resolveSessionBranch(
     repo: context.repo,
     branch: context.branch,
     ...(facts.creatable ? { createUrl: branchCreateUrl(context) } : {}),
-    ...(facts.stats ? { additions: facts.stats.additions, deletions: facts.stats.deletions } : {}),
+    ...(facts.stats
+      ? {
+          additions: facts.stats.additions,
+          deletions: facts.stats.deletions,
+          changedFiles: facts.stats.changedFiles,
+        }
+      : {}),
   };
 }
 
@@ -377,13 +386,7 @@ async function fetchParentRepo(
 ): Promise<{ owner: string; repo: string } | null> {
   const url = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
   const value = await fetchGitHubJson(url, fetchImpl, token);
-  if (!isRecord(value) || value.fork !== true || !isRecord(value.parent)) {
-    return null;
-  }
-  const parentOwner = isRecord(value.parent.owner) ? value.parent.owner : {};
-  const parentLogin = readOptionalGitHubString(parentOwner, "login");
-  const parentName = readOptionalGitHubString(value.parent, "name");
-  return parentLogin && parentName ? { owner: parentLogin, repo: parentName } : null;
+  return resolveGitHubForkParent(value) ?? null;
 }
 
 // Sub-fetch degradation: quota errors abort the whole refresh (so the caller
@@ -399,7 +402,7 @@ async function fetchDiffCounts(
   item: PullListItem,
   fetchImpl: typeof fetch,
   token: string | undefined,
-): Promise<{ additions?: number; deletions?: number }> {
+): Promise<{ additions?: number; deletions?: number; changedFiles?: number }> {
   const url = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(item.owner)}/${encodeURIComponent(item.repo)}/pulls/${item.number}`;
   try {
     const value = await fetchGitHubJson(url, fetchImpl, token);
@@ -409,6 +412,7 @@ async function fetchDiffCounts(
     return {
       additions: optionalNumber(value, "additions"),
       deletions: optionalNumber(value, "deletions"),
+      changedFiles: optionalNumber(value, "changed_files"),
     };
   } catch (error) {
     rethrowRateLimit(error);
@@ -605,14 +609,14 @@ export async function loadControlUiSessionPullRequests(
   if (!context) {
     return { pullRequests: [], rateLimited: false };
   }
-  // Local Git uses a separate short TTL; refresh only forces the GitHub layer.
-  // Branch resolution follows the snapshot because merged head SHAs affect it.
+  // Normal polling keeps the short local-Git TTL; forced structural refreshes
+  // must observe the replacement checkout before publishing its branch facts.
   const { mergedHeads, ...snapshot } = await cachedBranchPullRequests(
     context,
     deps,
     params.refresh === true,
   );
-  const branch = await resolveSessionBranch(context, mergedHeads, deps);
+  const branch = await resolveSessionBranch(context, mergedHeads, deps, params.refresh === true);
   return branch ? { ...snapshot, branch } : snapshot;
 }
 

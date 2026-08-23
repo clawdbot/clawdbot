@@ -49,6 +49,7 @@ export type QaSuiteSummaryJson = {
   };
   evidence?: QaEvidenceSummaryJson;
   run: {
+    status: "running" | "completed";
     startedAt: string;
     finishedAt: string;
     providerMode: QaProviderMode;
@@ -77,17 +78,39 @@ type QaSuiteReportOnlyScenario = {
   status?: unknown;
   details?: unknown;
 };
-type QaEvidenceEntryStatus = {
-  result?: {
-    status?: unknown;
-  };
-};
+function readQaSuiteEvidenceEntries(summary: Record<string, unknown>): unknown[] | undefined {
+  if (isRecord(summary.evidence) && Array.isArray(summary.evidence.entries)) {
+    return summary.evidence.entries;
+  }
+  return Array.isArray(summary.entries) ? summary.entries : undefined;
+}
+
+function readQaSuiteEvidenceEntryStatus(entry: unknown): unknown {
+  return isRecord(entry) && isRecord(entry.result) ? entry.result.status : undefined;
+}
 
 function isQaSuiteFailureStatus(status: unknown): boolean {
   return status !== "pass" && status !== "skip" && status !== "skipped";
 }
 
-async function readQaSuiteSummaryFile(summaryPath: string): Promise<unknown> {
+export function findQaSuiteSummaryCompletionError(summary: unknown): string | undefined {
+  if (!isRecord(summary)) {
+    return "has invalid completion state";
+  }
+  if (!isRecord(summary.run) || !Object.hasOwn(summary.run, "status")) {
+    return "is missing run.status";
+  }
+  const status = summary.run.status;
+  if (status === "completed") {
+    return undefined;
+  }
+  if (status === "running") {
+    return "is still running";
+  }
+  return `has unsupported run.status=${typeof status === "string" ? status : typeof status}`;
+}
+
+export async function readCompletedQaSuiteSummaryFile(summaryPath: string): Promise<unknown> {
   let summaryText: string;
   try {
     summaryText = await fs.readFile(summaryPath, "utf8");
@@ -99,8 +122,19 @@ async function readQaSuiteSummaryFile(summaryPath: string): Promise<unknown> {
     );
   }
   try {
-    return JSON.parse(summaryText) as unknown;
+    const summary = JSON.parse(summaryText) as unknown;
+    const completionError = findQaSuiteSummaryCompletionError(summary);
+    if (completionError) {
+      throw new QaSuiteArtifactError(
+        "summary_not_completed",
+        `QA summary at ${summaryPath} ${completionError}.`,
+      );
+    }
+    return summary;
   } catch (error) {
+    if (error instanceof QaSuiteArtifactError) {
+      throw error;
+    }
     throw new QaSuiteArtifactError(
       "summary_parse_failed",
       `Could not parse QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
@@ -113,6 +147,119 @@ function readNonNegativeCount(value: unknown): number | null {
   return asSafeIntegerInRange(value, { min: 0 }) ?? null;
 }
 
+type QaSuiteOutcomeCounts = {
+  total: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+};
+
+function countQaSuiteScenarioStatuses(statuses: readonly unknown[]): QaSuiteOutcomeCounts {
+  let passed = 0;
+  let failed = 0;
+  let skipped = 0;
+  for (const status of statuses) {
+    if (status === "pass") {
+      passed += 1;
+    } else if (status === "skip" || status === "skipped") {
+      skipped += 1;
+    } else {
+      failed += 1;
+    }
+  }
+  return { total: statuses.length, passed, failed, skipped };
+}
+
+function isQaSuiteScenarioOutcomeStatus(status: unknown): boolean {
+  return status === "pass" || status === "fail" || status === "skip" || status === "skipped";
+}
+
+function isQaSuiteEvidenceOutcomeStatus(status: unknown): boolean {
+  return (
+    status === "pass" ||
+    status === "fail" ||
+    status === "blocked" ||
+    status === "skip" ||
+    status === "skipped"
+  );
+}
+
+function findQaSuiteScenarioCountMismatch(
+  counts: QaSuiteOutcomeCounts,
+  observed: QaSuiteOutcomeCounts,
+): string | undefined {
+  for (const key of ["total", "passed", "failed", "skipped"] as const) {
+    if (counts[key] !== observed[key]) {
+      return `count/scenario mismatch: counts.${key}=${counts[key]}, scenario.${key}=${observed[key]}`;
+    }
+  }
+  return undefined;
+}
+
+export function findQaSuiteSummaryAccountingError(summary: unknown): string | undefined {
+  if (!isRecord(summary) || summary.counts === undefined) {
+    return undefined;
+  }
+  if (!isRecord(summary.counts)) {
+    return "counts must be a non-array object";
+  }
+  for (const countName of ["total", "passed", "failed", "skipped"] as const) {
+    if (
+      Object.hasOwn(summary.counts, countName) &&
+      readNonNegativeCount(summary.counts[countName]) === null
+    ) {
+      return `counts.${countName} must be a non-negative safe integer`;
+    }
+  }
+
+  const total = readNonNegativeCount(summary.counts.total);
+  const passed = readNonNegativeCount(summary.counts.passed);
+  const failed = readNonNegativeCount(summary.counts.failed);
+  const skipped = readNonNegativeCount(summary.counts.skipped);
+  const providedCountSum = (passed ?? 0) + (failed ?? 0) + (skipped ?? 0);
+  if (total !== null && total < providedCountSum) {
+    return `counts.total=${total} is less than provided count sum=${providedCountSum}`;
+  }
+  if (total === null || passed === null || failed === null || skipped === null) {
+    return undefined;
+  }
+  if (total !== providedCountSum) {
+    return `counts.total=${total} does not match counts.passed+counts.failed+counts.skipped=${providedCountSum}`;
+  }
+
+  const counts = { total, passed, failed, skipped };
+  if (Array.isArray(summary.scenarios) && summary.scenarios.length > 0) {
+    const statuses = summary.scenarios.map((scenario) =>
+      isRecord(scenario) ? scenario.status : undefined,
+    );
+    if (statuses.every(isQaSuiteScenarioOutcomeStatus)) {
+      const mismatch = findQaSuiteScenarioCountMismatch(
+        counts,
+        countQaSuiteScenarioStatuses(statuses),
+      );
+      if (mismatch) {
+        return mismatch;
+      }
+    }
+  }
+  const evidenceEntries = readQaSuiteEvidenceEntries(summary);
+  if (evidenceEntries && evidenceEntries.length > 0) {
+    // Evidence rows are producer checks, not scenarios: one passing scenario may
+    // legitimately contain blocked and passing checks. Validate only facts that
+    // can contradict the aggregate without assuming one row per scenario.
+    for (const [index, entry] of evidenceEntries.entries()) {
+      const status = readQaSuiteEvidenceEntryStatus(entry);
+      if (!isQaSuiteEvidenceOutcomeStatus(status)) {
+        return `evidence.entries[${index}].result.status is not a supported outcome`;
+      }
+      if (status === "fail" && failed === 0) {
+        return `counts.failed=0 contradicts failed evidence entry ${index}`;
+      }
+    }
+  }
+  return undefined;
+}
+
 function assertQaSuiteSummaryHasExecutedScenarios(
   summary: unknown,
   summaryPath: string,
@@ -123,45 +270,32 @@ function assertQaSuiteSummaryHasExecutedScenarios(
   if (!summary || typeof summary !== "object") {
     return;
   }
+  const accountingError = findQaSuiteSummaryAccountingError(summary);
+  if (accountingError) {
+    throw new QaSuiteArtifactError(
+      "summary_counts_invalid",
+      `QA summary at ${summaryPath} ${accountingError}.`,
+    );
+  }
   const payload = summary as {
     counts?: { total?: unknown; passed?: unknown; failed?: unknown; skipped?: unknown };
     scenarios?: unknown;
-    entries?: unknown;
   };
-  if (payload.counts !== undefined) {
-    if (!isRecord(payload.counts)) {
-      throw new QaSuiteArtifactError(
-        errorCode,
-        `QA summary at ${summaryPath} counts must be a non-array object.`,
-      );
-    }
-    for (const countName of ["total", "passed", "failed", "skipped"] as const) {
-      if (
-        Object.hasOwn(payload.counts, countName) &&
-        readNonNegativeCount(payload.counts[countName]) === null
-      ) {
-        throw new QaSuiteArtifactError(
-          errorCode,
-          `QA summary at ${summaryPath} counts.${countName} must be a non-negative safe integer.`,
-        );
-      }
-    }
-  }
   const total = readNonNegativeCount(payload.counts?.total);
   const passed = readNonNegativeCount(payload.counts?.passed);
   const failed = readNonNegativeCount(payload.counts?.failed);
   const scenarios = Array.isArray(payload.scenarios)
     ? (payload.scenarios as QaSuiteReportOnlyScenario[])
     : undefined;
-  const entries = Array.isArray(payload.entries)
-    ? (payload.entries as QaEvidenceEntryStatus[])
-    : undefined;
+  const entries = isRecord(summary) ? readQaSuiteEvidenceEntries(summary) : undefined;
   const hasObservedOutcomeRows = (scenarios?.length ?? 0) > 0 || (entries?.length ?? 0) > 0;
   const hasCompletedScenario =
     scenarios?.some((scenario) => scenario.status === "pass" || scenario.status === "fail") ===
       true ||
-    entries?.some((entry) => entry.result?.status === "pass" || entry.result?.status === "fail") ===
-      true ||
+    entries?.some((entry) => {
+      const status = readQaSuiteEvidenceEntryStatus(entry);
+      return status === "pass" || status === "fail";
+    }) === true ||
     (failed ?? 0) > 0 ||
     (!hasObservedOutcomeRows && (passed ?? 0) > 0);
   const hasBlockingNonOptionalSkip =
@@ -174,13 +308,15 @@ function assertQaSuiteSummaryHasExecutedScenarios(
   const hasBlockingUnknownOrFailedScenario =
     scenarios?.some((scenario) => isQaSuiteFailureStatus(scenario.status)) === true;
   const hasBlockingNonPassEvidence =
-    entries?.some(
-      (entry) =>
-        typeof entry.result?.status === "string" &&
+    entries?.some((entry) => {
+      const status = readQaSuiteEvidenceEntryStatus(entry);
+      return (
+        typeof status === "string" &&
         (errorCode === "summary_blocking_count_missing"
-          ? isQaSuiteBlockingStatus(entry.result.status)
-          : isQaSuiteFailureStatus(entry.result.status)),
-    ) === true;
+          ? isQaSuiteBlockingStatus(status)
+          : isQaSuiteFailureStatus(status))
+      );
+    }) === true;
 
   // Optional skips are not execution: only a real scenario, evidence result,
   // or positive legacy count may clear a zero-work suite. Unverified skips
@@ -261,40 +397,34 @@ function countQaSuiteFailedOrSkippedScenarios(
 }
 
 function readQaSuiteFailedScenarioCountFromSummary(summary: unknown): number | null {
-  if (!summary || typeof summary !== "object") {
+  if (!isRecord(summary)) {
     return null;
   }
   const payload = summary as {
     counts?: {
       failed?: unknown;
     };
-    entries?: QaEvidenceEntryStatus[];
     scenarios?: Array<QaSuiteScenarioStatus>;
   };
+  const entries = readQaSuiteEvidenceEntries(summary);
   const countedFailures = readNonNegativeCount(payload.counts?.failed);
   const scenarioFailures = Array.isArray(payload.scenarios)
     ? countQaSuiteFailedScenarios(payload.scenarios)
     : null;
-  const evidenceFailures = Array.isArray(payload.entries)
-    ? payload.entries.filter((entry) => isQaSuiteFailureStatus(entry.result?.status)).length
+  const evidenceFailures = entries
+    ? entries.filter((entry) => isQaSuiteFailureStatus(readQaSuiteEvidenceEntryStatus(entry)))
+        .length
     : null;
-  if (countedFailures !== null && scenarioFailures !== null) {
-    return Math.max(countedFailures, scenarioFailures, evidenceFailures ?? 0);
+  // Counts and scenario rows own scenario cardinality. Raw evidence is a
+  // lower-level fallback only when neither aggregate is available.
+  if (countedFailures !== null || scenarioFailures !== null) {
+    return Math.max(countedFailures ?? 0, scenarioFailures ?? 0);
   }
-  if (countedFailures !== null && evidenceFailures !== null) {
-    return Math.max(countedFailures, evidenceFailures);
-  }
-  if (scenarioFailures !== null) {
-    return Math.max(scenarioFailures, evidenceFailures ?? 0);
-  }
-  if (evidenceFailures !== null) {
-    return evidenceFailures;
-  }
-  return countedFailures;
+  return evidenceFailures;
 }
 
 function readQaSuiteFailedOrSkippedScenarioCountFromSummary(summary: unknown): number | null {
-  if (!summary || typeof summary !== "object") {
+  if (!isRecord(summary)) {
     return null;
   }
   const payload = summary as {
@@ -302,9 +432,9 @@ function readQaSuiteFailedOrSkippedScenarioCountFromSummary(summary: unknown): n
       failed?: unknown;
       skipped?: unknown;
     };
-    entries?: QaEvidenceEntryStatus[];
     scenarios?: Array<QaSuiteScenarioStatus>;
   };
+  const entries = readQaSuiteEvidenceEntries(summary);
   const countedFailures = readNonNegativeCount(payload.counts?.failed);
   const countedSkipped = readNonNegativeCount(payload.counts?.skipped);
   const countedBlocking =
@@ -314,26 +444,18 @@ function readQaSuiteFailedOrSkippedScenarioCountFromSummary(summary: unknown): n
   const scenarioBlocking = Array.isArray(payload.scenarios)
     ? countQaSuiteFailedOrSkippedScenarios(payload.scenarios)
     : null;
-  const evidenceBlocking = Array.isArray(payload.entries)
-    ? payload.entries.filter((entry) => isQaSuiteBlockingStatus(entry.result?.status)).length
+  const evidenceBlocking = entries
+    ? entries.filter((entry) => isQaSuiteBlockingStatus(readQaSuiteEvidenceEntryStatus(entry)))
+        .length
     : null;
-  if (countedBlocking !== null && scenarioBlocking !== null) {
-    return Math.max(countedBlocking, scenarioBlocking, evidenceBlocking ?? 0);
+  if (countedBlocking !== null || scenarioBlocking !== null) {
+    return Math.max(countedBlocking ?? 0, scenarioBlocking ?? 0);
   }
-  if (countedBlocking !== null && evidenceBlocking !== null) {
-    return Math.max(countedBlocking, evidenceBlocking);
-  }
-  if (scenarioBlocking !== null) {
-    return Math.max(scenarioBlocking, evidenceBlocking ?? 0);
-  }
-  if (evidenceBlocking !== null) {
-    return evidenceBlocking;
-  }
-  return countedBlocking;
+  return evidenceBlocking;
 }
 
 export async function readQaSuiteFailedScenarioCountFromFile(summaryPath: string): Promise<number> {
-  const payload = await readQaSuiteSummaryFile(summaryPath);
+  const payload = await readCompletedQaSuiteSummaryFile(summaryPath);
   assertQaSuiteSummaryHasExecutedScenarios(payload, summaryPath, "summary_failure_count_missing");
   const failedScenarioCount = readQaSuiteFailedScenarioCountFromSummary(payload);
   if (failedScenarioCount !== null) {
@@ -349,7 +471,7 @@ export async function readQaSuiteFailedOrSkippedScenarioCountFromFile(
   summaryPath: string,
   options?: { optionalScenarioNames?: ReadonlySet<string>; requireExecutedScenario?: boolean },
 ): Promise<number> {
-  const payload = await readQaSuiteSummaryFile(summaryPath);
+  const payload = await readCompletedQaSuiteSummaryFile(summaryPath);
   assertQaSuiteSummaryHasExecutedScenarios(
     payload,
     summaryPath,
@@ -360,27 +482,22 @@ export async function readQaSuiteFailedOrSkippedScenarioCountFromFile(
   const blockingScenarioCount = readQaSuiteFailedOrSkippedScenarioCountFromSummary(payload);
   if (blockingScenarioCount !== null) {
     const optionalScenarioNames = options?.optionalScenarioNames;
-    if (!optionalScenarioNames?.size || !payload || typeof payload !== "object") {
+    if (!optionalScenarioNames?.size || !isRecord(payload)) {
       return blockingScenarioCount;
     }
-    const { scenarios, entries } = payload as {
+    const { scenarios } = payload as {
       scenarios?: QaSuiteReportOnlyScenario[];
-      entries?: QaEvidenceEntryStatus[];
     };
     const reportOnlyOptionalSkips = Array.isArray(scenarios)
       ? scenarios.filter((scenario) =>
           isQaSuiteReportOnlyOptionalScenario(scenario, optionalScenarioNames),
         ).length
       : 0;
-    const evidenceBlocking = Array.isArray(entries)
-      ? entries.filter((entry) => isQaSuiteBlockingStatus(entry.result?.status)).length
-      : 0;
     // Optional skips may offset only their independently verified scenario results.
-    // Declared failures, unknown evidence, and count disagreements stay fail-closed.
+    // Declared failures and count disagreements stay fail-closed.
     return Math.max(
       readQaSuiteFailedScenarioCountFromSummary(payload) ?? 0,
       blockingScenarioCount - reportOnlyOptionalSkips,
-      evidenceBlocking,
     );
   }
   throw new QaSuiteArtifactError(

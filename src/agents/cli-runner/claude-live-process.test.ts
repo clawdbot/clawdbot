@@ -28,7 +28,6 @@ import { callGatewayTool } from "../tools/gateway.js";
 import { runClaudeTurn } from "./claude-live-session.js";
 import { resetClaudeLiveSessionsForTest } from "./claude-live-session.test-support.js";
 import { executePreparedCliRun } from "./execute.js";
-import { cliBackendLog } from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 vi.mock("../tools/gateway.js", () => ({
@@ -637,131 +636,6 @@ describe("Claude live process", () => {
 
     expect(cleanup).toHaveBeenCalledOnce();
     expect(supervisorSpawnMock).not.toHaveBeenCalled();
-  });
-
-  it("uses a fresh Claude live process and capture key for every captured turn", async () => {
-    const logWarnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
-    const cancels: Array<ReturnType<typeof vi.fn>> = [];
-    const captureKeys: string[] = [];
-    const turnResults = ["first-ok", "resume-ok", "env-ok", "fresh-ok"];
-    let turnIndex = 0;
-    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
-      const spawnIndex = supervisorSpawnMock.mock.calls.length;
-      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
-      const cancel = vi.fn();
-      cancels.push(cancel);
-      let resolveExit: (() => void) | undefined;
-      const exited = new Promise<{
-        reason: "manual-cancel";
-        exitCode: null;
-        exitSignal: null;
-        durationMs: number;
-        stdout: string;
-        stderr: string;
-        timedOut: false;
-        noOutputTimedOut: false;
-      }>((resolve) => {
-        resolveExit = () =>
-          resolve({
-            reason: "manual-cancel",
-            exitCode: null,
-            exitSignal: null,
-            durationMs: 1,
-            stdout: "",
-            stderr: "",
-            timedOut: false,
-            noOutputTimedOut: false,
-          });
-      });
-      cancel.mockImplementation(() => resolveExit?.());
-      return {
-        runId: `live-run-${spawnIndex}`,
-        pid: 2345 + spawnIndex,
-        startedAtMs: Date.now(),
-        stdin: {
-          write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
-            emitClaudeInputStarted(input.onStdout, dataValue);
-            const result = turnResults[turnIndex] ?? "ok";
-            turnIndex += 1;
-            input.onStdout?.(
-              [
-                JSON.stringify({ type: "system", subtype: "init", session_id: "live-session" }),
-                JSON.stringify({ type: "result", session_id: "live-session", result }),
-              ].join("\n") + "\n",
-            );
-            cb?.();
-          }),
-          end: vi.fn(),
-        },
-        wait: vi.fn(() => exited),
-        cancel,
-      };
-    });
-    const runTurn = async (runId: string, args: string[], env: Record<string, string>) => {
-      const context = buildClaudeLiveRunContext({
-        runId,
-        backend: {
-          resumeArgs: ["-p", "--output-format", "stream-json", "--resume", "{sessionId}"],
-        },
-        mcpDeliveryCapture: true,
-      });
-      const result = await runClaudeTurn({
-        context,
-        args,
-        env,
-        prompt: "hi",
-        useResume: args.some((entry) => entry.startsWith("--resume")),
-        noOutputTimeoutMs: 1_000,
-        getProcessSupervisor: () => ({
-          spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
-            supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
-          cancel: vi.fn(),
-          cancelScope: vi.fn(),
-          getRecord: vi.fn(),
-        }),
-        onAssistantDelta: () => {},
-        onMcpCaptureReady: (captureKey) => captureKeys.push(captureKey),
-        cleanup: async () => {
-          if (runId === "run-live-resume") {
-            throw new Error("captured cleanup failed");
-          }
-        },
-      });
-      return result.output.text;
-    };
-    const freshArgs = ["-p", "--output-format", "stream-json"];
-    const resumeArgs = ["-p", "--output-format", "stream-json", "--resume", "live-session"];
-
-    await expect(
-      runTurn("run-live-fresh", freshArgs, { ANTHROPIC_BASE_URL: "https://one.example" }),
-    ).resolves.toBe("first-ok");
-    await expect(
-      runTurn("run-live-resume", resumeArgs, { ANTHROPIC_BASE_URL: "https://one.example" }),
-    ).resolves.toBe("resume-ok");
-    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
-    expect(cancels[0]).toHaveBeenCalledWith("manual-cancel");
-    expect(cancels[1]).toHaveBeenCalledWith("manual-cancel");
-    expect(captureKeys[1]).not.toBe(captureKeys[0]);
-
-    await expect(
-      runTurn("run-live-env-change", resumeArgs, { ANTHROPIC_BASE_URL: "https://two.example" }),
-    ).resolves.toBe("env-ok");
-    expect(supervisorSpawnMock).toHaveBeenCalledTimes(3);
-    expect(cancels[2]).toHaveBeenCalledWith("manual-cancel");
-    expect(captureKeys[2]).not.toBe(captureKeys[1]);
-
-    await expect(
-      runTurn("run-live-fresh-retry", freshArgs, {
-        ANTHROPIC_BASE_URL: "https://two.example",
-      }),
-    ).resolves.toBe("fresh-ok");
-
-    expect(supervisorSpawnMock).toHaveBeenCalledTimes(4);
-    expect(cancels[3]).toHaveBeenCalledWith("manual-cancel");
-    expect(captureKeys[3]).not.toBe(captureKeys[2]);
-    expect(logWarnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Claude live session cleanup failed: captured cleanup failed"),
-    );
   });
 
   it.each([

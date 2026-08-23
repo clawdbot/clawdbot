@@ -216,12 +216,26 @@ NODE
 }
 openclaw_e2e_print_log() {
   local path="$1"
-  local max_bytes max_lines
+  local max_bytes max_lines redactor_module
   max_bytes="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_LOG_TAIL_BYTES 262144)" || return $?
   max_lines="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_LOG_TAIL_LINES 120)" || return $?
   [ -f "$path" ] || return 0
   echo "--- $path ---"
-  tail -c "$max_bytes" "$path" 2>/dev/null | tail -n "$max_lines" || tail -n "$max_lines" "$path" || true
+  redactor_module="${OPENCLAW_E2E_REDACTOR_MODULE:-$(openclaw_e2e_package_root)/dist/plugin-sdk/logging-core.js}"
+  [ -f "$redactor_module" ] || redactor_module="$PWD/dist/plugin-sdk/logging-core.js"
+  if [ ! -f "$redactor_module" ]; then
+    echo "[failure log omitted: canonical redactor unavailable]"
+    return 0
+  fi
+  if ! { tail -c "$max_bytes" "$path" 2>/dev/null | tail -n "$max_lines" || tail -n "$max_lines" "$path" || true; } | \
+    node --input-type=module -e '
+      import fs from "node:fs";
+      import { pathToFileURL } from "node:url";
+      const { redactSensitiveText } = await import(pathToFileURL(process.argv[1]).href);
+      process.stdout.write(redactSensitiveText(fs.readFileSync(0, "utf8"), { mode: "tools" }));
+    ' "$redactor_module"; then
+    echo "[failure log omitted: canonical redaction failed]"
+  fi
 }
 openclaw_e2e_install_package() {
   local log_file="$1"

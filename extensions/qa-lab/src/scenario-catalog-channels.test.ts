@@ -27,7 +27,7 @@ describe("qa scenario catalog channel contracts", () => {
       (scenario) => scenario.execution.flowKind === "module",
     );
 
-    expect(moduleFlows).toHaveLength(145);
+    expect(moduleFlows).toHaveLength(146);
     expect(moduleFlows.every((scenario) => scenario.execution.flow)).toBe(true);
   });
 
@@ -41,6 +41,7 @@ describe("qa scenario catalog channel contracts", () => {
       | undefined;
 
     expect(scenario.execution.channel).toBe("telegram");
+    expect(scenario.execution.channels).toEqual(["telegram"]);
     expect(config?.requiredProviderMode).toBe("mock-openai");
     expect(config?.requiredChannelDriver).toBe("crabline");
     const flow = JSON.stringify(requireFlowScenario(scenario).execution.flow);
@@ -49,19 +50,47 @@ describe("qa scenario catalog channel contracts", () => {
   });
 
   it("keeps channel-owned scenarios independent from the driver implementation", () => {
-    const channelByScenarioId = new Map([
-      ["slack-restart-resume", "slack"],
-      ["whatsapp-restart-resume", "whatsapp"],
-      ["whatsapp-access-control-dm-disabled", "whatsapp"],
-      ["whatsapp-access-control-dm-open", "whatsapp"],
-      ["whatsapp-access-control-group-disabled", "whatsapp"],
-      ["whatsapp-access-control-group-open", "whatsapp"],
-      ["whatsapp-pairing-block", "whatsapp"],
-      ["matrix-allowlist-hot-reload", "matrix"],
+    const channelByScenarioId = new Map<string, { channel: string; sharedCall?: string }>([
+      [
+        "matrix-restart-resume",
+        { channel: "matrix", sharedCall: "env.gateway.restartAfterStateMutation" },
+      ],
+      [
+        "slack-restart-resume",
+        { channel: "slack", sharedCall: "env.gateway.restartAfterStateMutation" },
+      ],
+      [
+        "whatsapp-restart-resume",
+        { channel: "whatsapp", sharedCall: "env.gateway.restartAfterStateMutation" },
+      ],
+      [
+        "whatsapp-access-control-dm-disabled",
+        { channel: "whatsapp", sharedCall: "config.expectReply" },
+      ],
+      [
+        "whatsapp-access-control-dm-open",
+        { channel: "whatsapp", sharedCall: "config.expectReply" },
+      ],
+      [
+        "whatsapp-access-control-group-disabled",
+        { channel: "whatsapp", sharedCall: "config.expectReply" },
+      ],
+      [
+        "whatsapp-access-control-group-open",
+        { channel: "whatsapp", sharedCall: "config.expectReply" },
+      ],
+      ["whatsapp-pairing-block", { channel: "whatsapp" }],
+      ["matrix-allowlist-hot-reload", { channel: "matrix" }],
     ]);
 
-    for (const [scenarioId, channel] of channelByScenarioId) {
-      expect(readQaScenarioById(scenarioId).execution.channel, scenarioId).toBe(channel);
+    for (const [scenarioId, expected] of channelByScenarioId) {
+      const scenario = requireFlowScenario(readQaScenarioById(scenarioId));
+      expect(scenario.execution.channel, scenarioId).toBe(expected.channel);
+      if (expected.sharedCall) {
+        expect(scenario.execution.flowKind, scenarioId).toBe("steps");
+        expect(scenario.execution.suiteIsolation, scenarioId).toBe("isolated");
+        expect(JSON.stringify(scenario.execution.flow), scenarioId).toContain(expected.sharedCall);
+      }
     }
   });
 
@@ -205,7 +234,9 @@ describe("qa scenario catalog channel contracts", () => {
     ]);
     expect(flow).toContain("env.gateway.call('tasks.list'");
     expect(flow).toContain("task.title === `qa-terminal-${caseName}`");
-    expect(flow).toContain("task.status === 'completed'");
+    expect(flow).toContain("terminalTask.status === 'completed'");
+    expect(flow).toContain("emptyTask.status === 'completed'");
+    expect(flow).toContain("emptyTask.terminalOutcome === 'blocked'");
     expect(flow).toContain("task.deliveryStatus === 'delivered'");
     expect(flow).toContain("readSettledTerminalTask('restart')");
     expect(flow).toContain("readSettledTerminalTask('empty')");

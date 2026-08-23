@@ -5,6 +5,7 @@ import type {
   ChannelBotLoopProtectionConfig,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import type { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 
 /** Session-linked ClickClack discussion settings for one account. */
 type ClickClackDiscussionsConfig = {
@@ -82,6 +83,12 @@ export type ResolvedClickClackAccount = {
   baseUrl: string;
   apiEndpoint: string;
   token: string;
+  tokenSource?: "env" | "tokenFile" | "config" | "none";
+  tokenStatus?: "available" | "configured_unavailable" | "missing";
+  credentialDiagnostics?: Extract<
+    ReturnType<typeof tryReadSecretFileSync>,
+    { status: "configured_unavailable" }
+  >["diagnostic"][];
   workspace: string;
   botUserId?: string;
   botHandle?: string;

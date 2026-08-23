@@ -104,6 +104,7 @@ export async function prepareGatewayKernelState(params: {
     startupTailscaleOverride,
     ambientAutostartSuppressedChannelIds,
     minimalTestGateway,
+    pluginGatewayContext,
   } = bootstrap;
   const pluginRuntime = {
     registry: pluginBootstrap.pluginRegistry,
@@ -122,21 +123,22 @@ export async function prepareGatewayKernelState(params: {
     !(nodeCommandConfig?.deny ?? []).some(
       (command) => command.trim() === NODE_DESKTOP_STREAM_COMMAND,
     );
-  const workerGatewayEndpoint = {
-    resolve: (() => undefined) as () => { host: "127.0.0.1" | "::1"; port: number } | undefined,
-  };
+  const workerDesktopObserveAvailable =
+    shouldStartWorkerEnvironmentService &&
+    gatewayPluginConfigAtStart.cloudWorkers?.desktop === true;
   const desktopSessionRegistry =
     shouldStartWorkerEnvironmentService || hostDesktopEnabled || nodeDesktopObserveAvailable
       ? createDesktopSessionRegistry()
       : undefined;
-  const nodeDesktopStreamBroker = nodeDesktopObserveAvailable
-    ? (
-        await startupTrace.measure(
-          "node-desktop.runtime-import",
-          () => import("./desktop/node-stream-broker.js"),
-        )
-      ).createNodeDesktopStreamBroker()
-    : undefined;
+  const nodeDesktopStreamBroker =
+    nodeDesktopObserveAvailable || workerDesktopObserveAvailable
+      ? (
+          await startupTrace.measure(
+            "node-desktop.runtime-import",
+            () => import("./desktop/node-stream-broker.js"),
+          )
+        ).createNodeDesktopStreamBroker()
+      : undefined;
   const hostDesktopService =
     hostDesktopConfig && hostDesktopEnabled && desktopSessionRegistry
       ? (
@@ -155,8 +157,8 @@ export async function prepareGatewayKernelState(params: {
           const workerModule = await loadWorkerEnvironmentStartupModule();
           return await workerModule.createGatewayWorkerEnvironmentRuntime({
             getPluginRegistry: () => pluginRuntime.registry,
-            resolveWorkerGateway: () => workerGatewayEndpoint.resolve(),
             desktopSessionRegistry,
+            ...(nodeDesktopStreamBroker ? { nodeDesktopStreamBroker } : {}),
             startup: workerEnvironmentStartup,
             log,
           });
@@ -167,7 +169,9 @@ export async function prepareGatewayKernelState(params: {
     workerLiveEvents,
     nodeWorkerGatewayNamespace,
     bindDeviceNodeControl,
+    bindWorkerNodeDesktopControl,
     bindNodeWorkspaceBindingResolver,
+    bindGitHubPublication,
     handleNodeWorkerBundleTransferRequest,
     handleNodeWorkspaceTransferRequest,
   } = workerEnvironmentRuntime;
@@ -177,24 +181,58 @@ export async function prepareGatewayKernelState(params: {
       throw new Error("Worker dispatch authority revocation is not ready");
     },
   };
+  const workerPlacementModule = workerEnvironmentStartup
+    ? await startupTrace.measure(
+        "worker-environments.placement-module",
+        loadWorkerPlacementStartupModule,
+      )
+    : undefined;
+  const githubPublicationRuntime =
+    workerEnvironmentStartup && workerPlacementModule
+      ? workerPlacementModule.createGatewayGitHubPublicationRuntime({
+          placements: workerEnvironmentStartup.placementStore,
+          warn: (message) => log.warn(message),
+        })
+      : undefined;
   const workerPlacementRuntime =
-    workerEnvironmentService && workerEnvironmentStartup && nodeWorkerGatewayNamespace
-      ? await startupTrace.measure("worker-environments.placement-runtime", async () => {
-          const placementModule = await loadWorkerPlacementStartupModule();
-          return placementModule.createGatewayWorkerPlacementRuntime({
+    workerEnvironmentService &&
+    workerEnvironmentStartup &&
+    nodeWorkerGatewayNamespace &&
+    workerPlacementModule
+      ? await startupTrace.measure("worker-environments.placement-runtime", async () =>
+          workerPlacementModule.createGatewayWorkerPlacementRuntime({
             placements: workerEnvironmentStartup.placementStore,
             environments: workerEnvironmentService,
             gatewayNamespace: nodeWorkerGatewayNamespace,
+            getSessionChangeContext: () => pluginGatewayContext.current,
+            persistAbandonedPartial: async ({ sessionId, sessionKey, agentId, runId }) => {
+              // Placement runtime starts before chat state exists; moves invoke this only after startup.
+              const text = connectionState.chatRunState.resolveBuffer(runId).text;
+              if (!text.trim()) {
+                return;
+              }
+              const { persistAbortedPartials } =
+                await import("./server-methods/chat-abort-runtime.js");
+              await persistAbortedPartials({
+                context: { logGateway: log },
+                sessionKey,
+                snapshots: [{ sessionId, agentId, runId, text, abortOrigin: "placement-abandon" }],
+              });
+            },
             revokeSessionAuthority: (request) => workerDispatchAuthority.revoke(request),
             warn: (message) => log.warn(message),
-          });
-        })
+            ...(githubPublicationRuntime ? { githubPublicationRuntime } : {}),
+          }),
+        )
       : undefined;
   if (workerPlacementRuntime) {
     bindNodeWorkspaceBindingResolver?.(workerPlacementRuntime.resolveNodeWorkspaceBinding);
     workerEnvironmentRuntime.bindWorkerSessionDispatch?.(
       workerPlacementRuntime.dispatchService.dispatch,
     );
+  }
+  if (githubPublicationRuntime) {
+    bindGitHubPublication?.(githubPublicationRuntime.coordinator);
   }
   const bindDeviceNodeRuntime = bindDeviceNodeControl
     ? (transport: Parameters<NonNullable<typeof bindDeviceNodeControl>>[0]) => {
@@ -204,8 +242,6 @@ export async function prepareGatewayKernelState(params: {
     : undefined;
   const workerPlacementControlAvailable = workerPlacementRuntime?.dispatchService;
   const workerPlacementDispatchAvailable = workerPlacementControlAvailable;
-  const workerDesktopObserveAvailable =
-    Boolean(workerEnvironmentService) && gatewayPluginConfigAtStart.cloudWorkers?.desktop === true;
   const desktopObserveAvailable =
     workerDesktopObserveAvailable || nodeDesktopObserveAvailable || Boolean(hostDesktopService);
   const channelLogs = Object.fromEntries(
@@ -228,7 +264,8 @@ export async function prepareGatewayKernelState(params: {
     uniqueStrings([...nextBaseGatewayMethods, ...listStartupChannelGatewayMethods()]).filter(
       (method) =>
         (workerPlacementDispatchAvailable || method !== "sessions.dispatch") &&
-        (workerPlacementControlAvailable || method !== "sessions.reclaim") &&
+        (workerPlacementControlAvailable ||
+          (method !== "sessions.reclaim" && method !== "sessions.move")) &&
         (desktopObserveAvailable || method !== "desktop.observe") &&
         (workerDesktopObserveAvailable ||
           (method !== "desktop.launch" &&
@@ -367,6 +404,7 @@ export async function prepareGatewayKernelState(params: {
     pendingReason: "startup-sidecars",
     dispatchReady: false,
   };
+  const lifecycle = { closePreludeStarted: false };
   let releaseStartupAccountStarts = () => {};
   const startupAccountStartsReady = new Promise<void>((resolve) => {
     releaseStartupAccountStarts = resolve;
@@ -399,12 +437,13 @@ export async function prepareGatewayKernelState(params: {
   });
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";
-  const isGatewayStartupPending = () => !startupState.sidecarsReady && sidecarStartup === "start";
+  const isGatewayStartupPending = () =>
+    !startupState.sidecarsReady && !lifecycle.closePreludeStarted;
   const startupCheckerDeps = {
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
     getStartupPendingReason: () => startupState.pendingReason,
-    getGatewayDraining: isGatewayDraining,
+    getGatewayDraining: () => lifecycle.closePreludeStarted || isGatewayDraining(),
   };
   const getStartup = createStartupChecker(startupCheckerDeps);
   const getReadiness = createReadinessChecker({
@@ -415,9 +454,6 @@ export async function prepareGatewayKernelState(params: {
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
   });
-  const pluginGatewayContext: { current: GatewayRequestContext | undefined } = {
-    current: undefined,
-  };
   const watchNodeRequestHandler: {
     current?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   } = {};
@@ -462,6 +498,7 @@ export async function prepareGatewayKernelState(params: {
     logPlugins,
     getReadiness,
     getStartup,
+    isStartupPending: isGatewayStartupPending,
     handleWatchNodeRequest: async (req: IncomingMessage, res: ServerResponse) =>
       (await watchNodeRequestHandler.current?.(req, res)) ?? false,
     handleNodeWorkerBundleTransferRequest,
@@ -470,6 +507,7 @@ export async function prepareGatewayKernelState(params: {
     desktopSessionRegistry,
     nodeDesktopStreamBroker,
     clients: connectionState.clients,
+    tailscaleMode,
   });
   const {
     clients,
@@ -487,6 +525,7 @@ export async function prepareGatewayKernelState(params: {
     toolEventRecipients,
     sessionEventSubscribers,
     sessionMessageSubscribers,
+    isConnectionActive,
   } = connectionState;
 
   return {
@@ -495,8 +534,11 @@ export async function prepareGatewayKernelState(params: {
     workerEnvironmentService,
     workerLiveEvents,
     bindDeviceNodeControl: bindDeviceNodeRuntime,
+    bindWorkerNodeDesktopControl,
     workerDispatchAuthority,
     workerPlacementRuntime,
+    githubPublicationRuntime,
+    githubPublicationService: githubPublicationRuntime?.coordinator,
     workerPlacementControlAvailable,
     workerPlacementDispatchAvailable,
     workerDesktopObserveAvailable,
@@ -545,6 +587,7 @@ export async function prepareGatewayKernelState(params: {
     gatewayTls,
     readinessEventLoopHealth,
     startupState,
+    lifecycle,
     releaseStartupAccountStarts,
     gatewayInstanceRuntimeRef,
     channelManager,
@@ -569,10 +612,10 @@ export async function prepareGatewayKernelState(params: {
     toolEventRecipients,
     sessionEventSubscribers,
     sessionMessageSubscribers,
-    getWorkerIngressEndpoint: transportBridge.getWorkerIngressEndpoint,
+    isConnectionActive,
+    getTailscaleIngressEndpoint: transportBridge.getTailscaleIngressEndpoint,
     getMcpAppSandboxPort: transportBridge.getMcpAppSandboxPort,
     ensureSandboxHostPort: transportBridge.ensureSandboxHostPort,
     getPortalService: transportBridge.getPortalService,
-    workerGatewayEndpoint,
   };
 }

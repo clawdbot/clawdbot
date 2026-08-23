@@ -49,7 +49,6 @@ describe("transformMessages", () => {
 
     const transformed = transformProviderMessages(messages, model);
 
-    expect(transformed).toHaveLength(3);
     expect(transformed.map((message) => message.content)).toEqual([[], [], []]);
   });
 

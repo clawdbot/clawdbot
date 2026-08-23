@@ -1,10 +1,19 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
+import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
+import { bindDeviceWorkerAvailability } from "../worker-environments/device-provider.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
+import type { GatewayRequestContext, RespondFn, SessionMutationAuthorization } from "./types.js";
 
 const dispatchTestMocks = vi.hoisted(() => ({
   findLiveByOwner: vi.fn(),
+  runCommandWithTimeout: vi.fn(),
   resolveTarget: vi.fn(),
 }));
 
@@ -18,6 +27,15 @@ vi.mock("../../agents/worktrees/service.js", () => ({
   },
 }));
 
+vi.mock("../../process/exec.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../process/exec.js")>("../../process/exec.js");
+  return {
+    ...actual,
+    runCommandWithTimeout: dispatchTestMocks.runCommandWithTimeout,
+  };
+});
+
 vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
@@ -28,10 +46,20 @@ vi.mock("../session-utils.js", async () => {
 
 import { sessionDispatchHandlers } from "./sessions-dispatch.js";
 
+export function getSessionDispatchHandler() {
+  return expectDefined(
+    sessionDispatchHandlers["sessions.dispatch"],
+    'sessionDispatchHandlers["sessions.dispatch"] test invariant',
+  );
+}
+
 export const dispatchTestSessionKey = "agent:main:cloud-test";
 export const dispatchTestSessionId = "session-cloud-test";
 
-export function makeReclaimedPlacement(): WorkerSessionPlacementRecord {
+export function makeReclaimedPlacement(): Extract<
+  WorkerSessionPlacementRecord,
+  { state: "reclaimed" }
+> {
   return {
     sessionId: dispatchTestSessionId,
     agentId: "main",
@@ -56,7 +84,7 @@ export function makeReclaimedPlacement(): WorkerSessionPlacementRecord {
   };
 }
 
-export function makeFailedPlacement(): WorkerSessionPlacementRecord {
+export function makeFailedPlacement(): Extract<WorkerSessionPlacementRecord, { state: "failed" }> {
   return {
     ...makeReclaimedPlacement(),
     state: "failed",
@@ -65,16 +93,21 @@ export function makeFailedPlacement(): WorkerSessionPlacementRecord {
   };
 }
 
-export function makeSessionTarget(entry?: {
-  sessionId: string;
-  worktree?: { id: string; branch: string; repoRoot: string };
-  agentHarnessId?: string;
-  agentRuntimeOverride?: string;
-  archivedAt?: number;
-  modelSelectionLocked?: boolean;
-  providerOverride?: string;
-  modelOverride?: string;
-}) {
+type DispatchSessionEntry = Pick<
+  SessionEntry,
+  | "sessionId"
+  | "worktree"
+  | "agentHarnessId"
+  | "agentRuntimeOverride"
+  | "archivedAt"
+  | "modelSelectionLocked"
+  | "providerOverride"
+  | "modelOverride"
+  | "permissionMode"
+  | "sessionRoot"
+>;
+
+export function makeSessionTarget(entry?: DispatchSessionEntry) {
   // Pin an anthropic model by default: the effective-runtime fallback consults
   // the process-global harness registry, so the default openai model resolves
   // to "codex" whenever a sibling test in the shard registered that harness.
@@ -93,6 +126,26 @@ export function makeSessionTarget(entry?: {
 export function makeDispatchTestContext(
   overrides: Partial<GatewayRequestContext> = {},
 ): GatewayRequestContext {
+  const workerEnvironmentService = overrides.workerEnvironmentService ?? {
+    supportsExecutionMode: () => true,
+  };
+  if (!overrides.workerEnvironmentService) {
+    bindDeviceWorkerAvailability(workerEnvironmentService, async (deviceId) => {
+      const observed = overrides.nodeRegistry?.get?.(deviceId);
+      const node: NodeWorkerSupervisorNodeProof = {
+        nodeId: deviceId,
+        connId: observed?.connId ?? `conn-${deviceId}`,
+        pairingIdentity: observed?.pairingIdentity ?? `identity-${deviceId}`,
+        pairingGeneration: observed?.pairingGeneration ?? `generation-${deviceId}`,
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+        protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+        workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
+        commands: observed?.commands ?? ["system.run", "codex.exec-server.stdio.v1"],
+      };
+      return { available: true, node };
+    });
+  }
   return {
     getRuntimeConfig: () => ({
       cloudWorkers: {
@@ -102,29 +155,62 @@ export function makeDispatchTestContext(
       },
     }),
     ...overrides,
+    workerEnvironmentService: workerEnvironmentService as never,
   } as unknown as GatewayRequestContext;
 }
 
 export async function invokeSessionDispatch(
   context: GatewayRequestContext,
-  target: { profileId: string } | { deviceId: string } = { profileId: "test" },
+  target: { profileId?: string; machineClass?: string; deviceId?: string } = {
+    profileId: "test",
+  },
+  sessionMutationAuthorization?: SessionMutationAuthorization,
 ) {
   const respond = vi.fn() as unknown as RespondFn;
-  await expectDefined(
-    sessionDispatchHandlers["sessions.dispatch"],
-    'sessionDispatchHandlers["sessions.dispatch"] test invariant',
-  )({
+  await getSessionDispatchHandler()({
     req: { id: "dispatch-request" } as never,
     params: { key: dispatchTestSessionKey, ...target },
     respond,
     context,
     client: null,
     isWebchatConnect: () => false,
+    sessionMutationAuthorization,
   });
   return respond;
 }
 
-export async function invokeSessionReclaim(context: GatewayRequestContext) {
+export async function invokeSessionMove(
+  context: GatewayRequestContext,
+  params: {
+    expected: { generation: number; environmentId: string; ownerEpoch: number };
+    abandonSource?: true;
+    target:
+      | { kind: "gateway" }
+      | { kind: "profile"; profileId: string; machineClass?: string }
+      | { kind: "device"; deviceId: string };
+  },
+  sessionMutationAuthorization?: SessionMutationAuthorization,
+) {
+  const respond = vi.fn() as unknown as RespondFn;
+  await expectDefined(
+    sessionDispatchHandlers["sessions.move"],
+    'sessionDispatchHandlers["sessions.move"] test invariant',
+  )({
+    req: { id: "move-request" } as never,
+    params: { key: dispatchTestSessionKey, ...params },
+    respond,
+    context,
+    client: null,
+    isWebchatConnect: () => false,
+    sessionMutationAuthorization,
+  });
+  return respond;
+}
+
+export async function invokeSessionReclaim(
+  context: GatewayRequestContext,
+  sessionMutationAuthorization?: SessionMutationAuthorization,
+) {
   const respond = vi.fn() as unknown as RespondFn;
   await expectDefined(
     sessionDispatchHandlers["sessions.reclaim"],
@@ -136,6 +222,7 @@ export async function invokeSessionReclaim(context: GatewayRequestContext) {
     context,
     client: null,
     isWebchatConnect: () => false,
+    sessionMutationAuthorization,
   });
   return respond;
 }

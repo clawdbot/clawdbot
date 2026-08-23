@@ -13,6 +13,7 @@ function projectionState(): Parameters<typeof applySelectedSessionProjection>[0]
     chatEffectiveQueueMode: "interrupt",
     chatQueueModeOverride: "interrupt",
     selectedChatSessionArchived: true,
+    selectedChatSessionIncognito: true,
   };
 }
 
@@ -25,6 +26,7 @@ describe("applySelectedSessionProjection", () => {
       chatEffectiveQueueMode: "interrupt",
       chatQueueModeOverride: "interrupt",
       selectedChatSessionArchived: true,
+      selectedChatSessionIncognito: true,
     });
   });
 
@@ -45,6 +47,7 @@ describe("applySelectedSessionProjection", () => {
       chatEffectiveQueueMode: "followup",
       chatQueueModeOverride: "followup",
       selectedChatSessionArchived: false,
+      selectedChatSessionIncognito: false,
     });
   });
 

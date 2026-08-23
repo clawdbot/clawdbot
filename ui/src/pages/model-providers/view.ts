@@ -18,6 +18,7 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount, formatCost, formatTimeMs } from "../../lib/format.ts";
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import "../../styles/model-providers.css";
@@ -43,6 +44,7 @@ type ModelProvidersViewProps = {
   loading: boolean;
   refreshing: boolean;
   error: string | null;
+  providerUsageFailed: boolean;
   updatedAt: number | null;
   costDays: number;
   credentialAgentLabel: string;
@@ -283,7 +285,7 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
             >`
           : nothing}
       </div>
-      ${result.error ? html`<div>${result.error}</div>` : nothing}
+      ${result.error ? html`<div>${formatUiExternalText(result.error)}</div>` : nothing}
       ${result.results.map(
         (target) => html`
           <div class="model-providers__probe-target">
@@ -293,7 +295,7 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
                 ? ` · ${t("modelProviders.probe.latency", { ms: String(target.latencyMs) })}`
                 : ""}
             </span>
-            ${target.error ? html`<small>${target.error}</small>` : nothing}
+            ${target.error ? html`<small>${formatUiExternalText(target.error)}</small>` : nothing}
           </div>
         `,
       )}
@@ -573,6 +575,16 @@ function renderModelReadiness(props: ModelProvidersViewProps) {
   `;
 }
 
+function renderProviderNoticeRow(text: string) {
+  return html`
+    <div class="settings-row">
+      <div class="settings-row__text">
+        <span class="settings-row__desc provider-usage-error">${text}</span>
+      </div>
+    </div>
+  `;
+}
+
 export function renderModelProviders(props: ModelProvidersViewProps) {
   if (!props.connected) {
     return renderSettingsPage(
@@ -586,14 +598,9 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
     `);
   }
   const providerRows = html`
-    ${props.error
-      ? html`
-          <div class="settings-row">
-            <div class="settings-row__text">
-              <span class="settings-row__desc provider-usage-error">${props.error}</span>
-            </div>
-          </div>
-        `
+    ${props.error ? renderProviderNoticeRow(props.error) : nothing}
+    ${props.providerUsageFailed
+      ? renderProviderNoticeRow(t("usage.providerUsage.unavailable"))
       : nothing}
     ${props.cards.length === 0
       ? renderSettingsEmpty(

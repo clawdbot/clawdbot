@@ -987,7 +987,6 @@ describe("SQLite active transcript event projection", () => {
     });
 
     expect(page.totalMessages).toBe(100_000);
-    expect(page.events).toHaveLength(25);
     expect(page.events.map((entry) => entry.seq)).toEqual(
       Array.from({ length: 25 }, (_, index) => 99_976 + index),
     );

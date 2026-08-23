@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   type ErrorShape,
@@ -10,6 +9,7 @@ import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/sess
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeAgentId,
+  normalizeAgentIdStrict,
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
@@ -36,19 +36,19 @@ export function resolveRequestedSessionAgentId(
   cfg: OpenClawConfig,
   key: string,
   explicitAgentId?: string,
-  options?: { allowUnconfiguredExplicitAgent?: boolean },
 ): RequestedSessionAgentIdResolution {
   const parsed = parseAgentSessionKey(key.trim());
-  const requestedAgentId = normalizeOptionalString(explicitAgentId);
   const configuredAgentIds = listAgentIds(cfg);
-  const normalizedRequestedAgentId = requestedAgentId
-    ? normalizeAgentId(requestedAgentId)
-    : undefined;
-  if (
-    normalizedRequestedAgentId &&
-    !options?.allowUnconfiguredExplicitAgent &&
-    !configuredAgentIds.includes(normalizedRequestedAgentId)
-  ) {
+  const normalizedRequest =
+    explicitAgentId === undefined ? null : normalizeAgentIdStrict(explicitAgentId);
+  if (normalizedRequest && !normalizedRequest.ok) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${explicitAgentId}"`),
+    };
+  }
+  const normalizedRequestedAgentId = normalizedRequest?.value;
+  if (normalizedRequestedAgentId && !configuredAgentIds.includes(normalizedRequestedAgentId)) {
     return {
       ok: false,
       error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${explicitAgentId}"`),
@@ -59,11 +59,7 @@ export function resolveRequestedSessionAgentId(
     const keyIsGlobalMainAlias =
       cfg.session?.scope === "global" &&
       (parsed.rest === "main" || parsed.rest === normalizeMainKey(cfg.session?.mainKey));
-    if (
-      keyIsGlobalMainAlias &&
-      !options?.allowUnconfiguredExplicitAgent &&
-      !configuredAgentIds.includes(keyAgentId)
-    ) {
+    if (keyIsGlobalMainAlias && !configuredAgentIds.includes(keyAgentId)) {
       return {
         ok: false,
         error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${parsed.agentId}"`),

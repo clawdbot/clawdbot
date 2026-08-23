@@ -66,8 +66,11 @@ type SlackPresenceEventsConfig = {
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SlackStreamingMode = "off" | "partial" | "block" | "progress";
+// DO NOT REMOVE OR CHANGE THE COMPACT STYLE WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
 export type SlackStreamingProgressConfig = ChannelStreamingProgressConfig & {
-  /** Opt in to Slack-native task cards for progress mode. Default: false. */
+  /** Slack progress presentation. "compact" keeps one editable text draft. Default: "card". */
+  style?: "card" | "compact";
+  /** Use Slack-native task cards for card-style progress. Default: true. */
   nativeTaskCards?: boolean;
 };
 export type SlackChannelStreamingConfig = ChannelStreamingConfig<SlackStreamingProgressConfig>;

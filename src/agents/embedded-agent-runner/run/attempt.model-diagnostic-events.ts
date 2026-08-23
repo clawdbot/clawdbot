@@ -1,3 +1,4 @@
+import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /**
@@ -187,9 +188,17 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
   ctx: ModelCallDiagnosticContext,
 ): StreamFn {
   return ((model, streamContext, options) => {
+    const configuredRequestTimeoutMs = isRecord(model) ? model.requestTimeoutMs : undefined;
+    const requestTimeoutMs =
+      typeof configuredRequestTimeoutMs === "number" &&
+      Number.isFinite(configuredRequestTimeoutMs) &&
+      configuredRequestTimeoutMs > 0
+        ? clampTimerTimeoutMs(configuredRequestTimeoutMs)
+        : undefined;
     const lifecycle = createModelLifecycle({
       ctx,
       options,
+      requestTimeoutMs,
       createObserver: (capturePromptStats) =>
         createModelObserver({
           streamContext,

@@ -37,6 +37,11 @@
               "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
             },
             "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
             "maxTokens": 128000
           },
           {
@@ -48,6 +53,11 @@
               "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
             },
             "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
             "maxTokens": 128000
           },
           {
@@ -59,6 +69,11 @@
               "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
             },
             "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
             "maxTokens": 128000
           },
           {
@@ -91,9 +106,13 @@
             },
             "cost": { "input": 10, "output": 50, "cacheRead": 1, "cacheWrite": 12.5 },
             "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
             "maxTokens": 128000,
             "thinkingLevelMap": {
-              "off": "low",
               "minimal": "low",
               "xhigh": "xhigh",
               "max": "max"
@@ -110,6 +129,11 @@
             },
             "cost": { "input": 5, "output": 25, "cacheRead": 0.5, "cacheWrite": 6.25 },
             "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
             "maxTokens": 128000,
             "thinkingLevelMap": {
               "xhigh": "xhigh",
@@ -127,6 +151,11 @@
             },
             "cost": { "input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2.5 },
             "contextWindow": 1000000,
+            "contextWindows": [
+              { "id": "200k", "label": "200K", "contextWindow": 200000 },
+              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
+            ],
+            "contextWindowDefault": "1m",
             "maxTokens": 128000,
             "thinkingLevelMap": {
               "xhigh": "xhigh",
@@ -146,7 +175,6 @@
             "contextWindow": 1000000,
             "maxTokens": 128000,
             "thinkingLevelMap": {
-              "off": "low",
               "minimal": "low",
               "xhigh": "xhigh",
               "max": "max"

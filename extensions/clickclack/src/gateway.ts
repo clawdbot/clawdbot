@@ -191,7 +191,12 @@ export async function startClickClackGatewayAccount(
       log: ctx.log,
     });
   if (account.commandMenu) {
-    await syncClickClackCommandMenu({ cfg: ctx.cfg, client, log: ctx.log });
+    await syncClickClackCommandMenu({
+      cfg: ctx.cfg,
+      client,
+      log: ctx.log,
+      accountId: account.accountId,
+    });
   }
   ctx.setStatus({
     accountId: account.accountId,

@@ -31,6 +31,10 @@ function gatewayCall(callIndex = 0): ReadonlyArray<unknown> {
   return call;
 }
 
+function jsonFailure(message: string) {
+  return { ok: false, error: { type: "cli_error", message } };
+}
+
 describe("system-cli", () => {
   async function runCli(args: string[]) {
     const program = new Command();
@@ -114,9 +118,9 @@ describe("system-cli", () => {
 
       await runCli(args);
 
-      expect(runtimeLogs).toEqual([JSON.stringify({ error: expectedError }, null, 2)]);
+      expect(runtimeLogs).toEqual([JSON.stringify(jsonFailure(expectedError), null, 2)]);
       expect(runtimeErrors).toEqual([]);
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ error: expectedError });
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(jsonFailure(expectedError));
       expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
       expect(callGatewayFromCli).toHaveBeenCalledTimes(gatewayCalls);
     },
@@ -134,7 +138,7 @@ describe("system-cli", () => {
 
     if (mode === "JSON") {
       const payload = JSON.parse(runtimeLogs.at(-1) ?? "");
-      expect(payload).toEqual({ error: error.message });
+      expect(payload).toEqual(jsonFailure(error.message));
       expect(runtimeErrors).toEqual([]);
     } else {
       expect(runtimeErrors).toEqual([error.message]);
@@ -194,9 +198,9 @@ describe("system-cli", () => {
     expect(params).toBeUndefined();
     expect(requestOptions).toEqual({ expectFinal: false });
     const expectedError = "Gateway unavailable";
-    expect(runtimeLogs).toEqual([JSON.stringify({ error: expectedError }, null, 2)]);
+    expect(runtimeLogs).toEqual([JSON.stringify(jsonFailure(expectedError), null, 2)]);
     expect(runtimeErrors).toEqual([]);
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ error: expectedError });
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(jsonFailure(expectedError));
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 

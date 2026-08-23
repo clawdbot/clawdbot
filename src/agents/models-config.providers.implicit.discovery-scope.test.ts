@@ -209,6 +209,27 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     expect(outcomes).toEqual([{ provider: "openai", status: "unavailable" }]);
   });
 
+  it("rethrows non-timeout live catalog discovery failures", async () => {
+    mocks.runProviderCatalog.mockRejectedValueOnce(
+      new Error("provider catalog timed out after provider-defined retry window"),
+    );
+    const outcomes: Array<{ provider: string; status: string }> = [];
+
+    await expect(
+      resolveImplicitProviders({
+        agentDir: "/tmp/openclaw-agent",
+        config: {},
+        env: {} as NodeJS.ProcessEnv,
+        explicitProviders: {},
+        providerDiscoveryProviderIds: ["openai"],
+        providerDiscoveryTimeoutMs: 1_000,
+        onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
+      }),
+    ).rejects.toThrow("provider catalog timed out after provider-defined retry window");
+
+    expect(outcomes).toEqual([]);
+  });
+
   it("can keep startup discovery on provider discovery entries only", async () => {
     await resolveImplicitProviders({
       agentDir: "/tmp/openclaw-agent",

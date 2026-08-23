@@ -11,6 +11,9 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not available at ${executablePath}`,
 });
 
+const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
+const providerUsageArtifactDir = path.resolve(".artifacts/control-ui-e2e/provider-usage-outcomes");
+
 const totals = {
   input: 1_200_000,
   output: 300_000,
@@ -22,6 +25,20 @@ const totals = {
   outputCost: 12,
   cacheReadCost: 6,
   cacheWriteCost: 2,
+  missingCostEntries: 0,
+};
+
+const emptyTotals = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  totalCost: 0,
+  inputCost: 0,
+  outputCost: 0,
+  cacheReadCost: 0,
+  cacheWriteCost: 0,
   missingCostEntries: 0,
 };
 
@@ -56,7 +73,103 @@ const daily = [
   dailyEntry(0, 11, 1_100_000),
 ];
 
+function emptyUsageResponses() {
+  const updatedAt = Date.now();
+  const date = dayOffset(0);
+  return {
+    "sessions.usage": {
+      updatedAt,
+      startDate: date,
+      endDate: date,
+      sessions: [],
+      totals: emptyTotals,
+      aggregates: {
+        messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
+        tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+        byModel: [],
+        byProvider: [],
+        byAgent: [],
+        byChannel: [],
+        daily: [],
+      },
+    },
+    "usage.cost": { updatedAt, days: 1, daily: [], totals: emptyTotals },
+  };
+}
+
 suite.define(() => {
+  it("shows a visible provider usage warning when the usage status request fails", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 1_000, width: 1_440 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            ...emptyUsageResponses(),
+            "usage.status": {
+              __mockError: { code: "INTERNAL_ERROR", message: "gateway transport unavailable" },
+            },
+          },
+        });
+
+        await page.goto(`${suite.server.baseUrl}usage`);
+        await expect
+          .poll(async () => (await gateway.getRequests("usage.status")).length)
+          .toBeGreaterThan(0);
+        await page.locator(".usage-empty-state").waitFor();
+        await expect
+          .poll(() => page.locator(".usage-page").textContent())
+          .toContain("Provider usage is unavailable; the last request failed. Refresh to retry.");
+        if (recordVisuals) {
+          await mkdir(providerUsageArtifactDir, { recursive: true });
+          await page.locator(".usage-page").screenshot({
+            animations: "disabled",
+            path: path.join(providerUsageArtifactDir, "usage-status-request-failed.png"),
+          });
+        }
+      },
+    );
+  });
+
+  it("does not show the provider usage warning for a valid empty response", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 1_000, width: 1_440 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            ...emptyUsageResponses(),
+            "usage.status": { updatedAt: Date.now(), providers: [] },
+          },
+        });
+
+        await page.goto(`${suite.server.baseUrl}usage`);
+        await expect
+          .poll(async () => (await gateway.getRequests("usage.status")).length)
+          .toBeGreaterThan(0);
+        await page.locator(".usage-empty-state").waitFor();
+        await expect
+          .poll(() => page.locator(".usage-page").textContent())
+          .not.toContain(
+            "Provider usage is unavailable; the last request failed. Refresh to retry.",
+          );
+        if (recordVisuals) {
+          await mkdir(providerUsageArtifactDir, { recursive: true });
+          await page.locator(".usage-page").screenshot({
+            animations: "disabled",
+            path: path.join(providerUsageArtifactDir, "usage-status-empty.png"),
+          });
+        }
+      },
+    );
+  });
+
   it("keeps pending sessions visible when their UTC activity day is selected", async () => {
     const selectedDay = "2026-05-14";
     const updatedAt = Date.parse("2026-05-14T00:30:00.000Z");

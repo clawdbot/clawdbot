@@ -3,6 +3,7 @@ import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
 } from "../../code-mode-control-tools.js";
+import { consumeRepairableCodeModeFailure } from "../../code-mode-repair-provenance.js";
 import type {
   AfterToolCallResult,
   AfterToolOutcomeContext,
@@ -18,6 +19,7 @@ type CodeModeFailure = {
   failurePhase: CodeModeFailurePhase;
   bridgeDispatchStarted: boolean;
   bridgeDispatchKnown: boolean;
+  repairableNoStart: boolean;
   details: Record<string, unknown>;
 };
 
@@ -58,6 +60,7 @@ function codeModeFailureFromOutcome(context: AfterToolOutcomeContext): CodeModeF
       ),
       bridgeDispatchStarted,
       bridgeDispatchKnown: typeof details.bridgeDispatchStarted === "boolean",
+      repairableNoStart: consumeRepairableCodeModeFailure(details),
       details,
     };
   }
@@ -72,6 +75,7 @@ function codeModeFailureFromOutcome(context: AfterToolOutcomeContext): CodeModeF
     failurePhase: argumentValidation ? "input" : "host",
     bridgeDispatchStarted: context.executionStarted,
     bridgeDispatchKnown: argumentValidation,
+    repairableNoStart: false,
     details,
   };
 }
@@ -117,6 +121,7 @@ function preserveOriginalDispatchEvidence(
       failurePhase: "bridge",
       bridgeDispatchStarted: true,
       bridgeDispatchKnown: true,
+      repairableNoStart: original.repairableNoStart || preserved.repairableNoStart,
     };
   }
   if (!original.bridgeDispatchKnown || preserved.bridgeDispatchKnown) {
@@ -127,6 +132,7 @@ function preserveOriginalDispatchEvidence(
     failurePhase: original.failurePhase,
     bridgeDispatchStarted: original.bridgeDispatchStarted,
     bridgeDispatchKnown: true,
+    repairableNoStart: original.repairableNoStart || preserved.repairableNoStart,
   };
 }
 
@@ -206,6 +212,7 @@ function hookFailure(
         : "input",
     bridgeDispatchStarted: original?.bridgeDispatchStarted ?? context.executionStarted,
     bridgeDispatchKnown: original?.bridgeDispatchKnown ?? !context.executionStarted,
+    repairableNoStart: false,
     details: original?.details ?? {},
   };
 }
@@ -215,6 +222,7 @@ export function installCodeModeRepairHook(params: { agent: Agent }): void {
   const previousAfterToolOutcome = params.agent.afterToolOutcome?.bind(params.agent);
   let repairState: RepairState = "ready";
   let repairOfferedBy: AfterToolOutcomeContext["assistantMessage"] | undefined;
+  let repairOfferedFor: AfterToolOutcomeContext["toolCall"] | undefined;
 
   params.agent.afterToolOutcome = async (context, signal) => {
     const codeModeTool =
@@ -264,7 +272,7 @@ export function installCodeModeRepairHook(params: { agent: Agent }): void {
       if (
         effective.toolCall.name === CODE_MODE_EXEC_TOOL_NAME &&
         repairState === "offered" &&
-        effective.assistantMessage !== repairOfferedBy
+        (effective.assistantMessage !== repairOfferedBy || effective.toolCall !== repairOfferedFor)
       ) {
         repairState = "consumed";
       }
@@ -282,7 +290,10 @@ export function installCodeModeRepairHook(params: { agent: Agent }): void {
       });
     }
 
-    if (failure.bridgeDispatchStarted || effective.toolCall.name === CODE_MODE_WAIT_TOOL_NAME) {
+    if (
+      (failure.bridgeDispatchStarted && !failure.repairableNoStart) ||
+      effective.toolCall.name === CODE_MODE_WAIT_TOOL_NAME
+    ) {
       repairState = "consumed";
       return renderFailure({
         failure,
@@ -295,19 +306,10 @@ export function installCodeModeRepairHook(params: { agent: Agent }): void {
     }
 
     const repairable =
-      failure.bridgeDispatchKnown &&
-      (failure.failurePhase === "input" || failure.failurePhase === "guest") &&
-      (failure.code === "invalid_input" || failure.code === "internal_error");
-    if (repairState === "offered" && effective.assistantMessage === repairOfferedBy && repairable) {
-      return renderFailure({
-        failure,
-        allowed: true,
-        remainingAttempts: 1,
-        reason:
-          "Retry exec once with corrected JavaScript or TypeScript. Do not repeat unchanged input.",
-        terminate: false,
-      });
-    }
+      failure.repairableNoStart ||
+      (failure.bridgeDispatchKnown &&
+        (failure.failurePhase === "input" || failure.failurePhase === "guest") &&
+        (failure.code === "invalid_input" || failure.code === "internal_error"));
 
     if (repairState === "offered" || repairState === "consumed") {
       repairState = "consumed";
@@ -333,6 +335,7 @@ export function installCodeModeRepairHook(params: { agent: Agent }): void {
 
     repairState = "offered";
     repairOfferedBy = effective.assistantMessage;
+    repairOfferedFor = effective.toolCall;
     return renderFailure({
       failure,
       allowed: true,

@@ -95,6 +95,9 @@ function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
     return;
   }
   const dispatchResult = params.dispatchResult as ChannelTurnDispatchResultLike;
+  if (dispatchResult?.deferredToActiveRun) {
+    return;
+  }
   // The canonical visible signal includes observed delivery paths with zero queued counts.
   if (hasVisibleChannelTurnDispatch(dispatchResult, NO_ADDITIONAL_DELIVERY_SIGNALS)) {
     return;

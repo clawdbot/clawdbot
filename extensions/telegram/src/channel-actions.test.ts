@@ -54,6 +54,7 @@ describe("telegramMessageActions", () => {
       params: {
         messageId: "9001",
         to: "-1001:topic:77",
+        reply: { replyToId: "forged", source: "explicit", mode: "all" },
         conversationReadOrigin: "direct-operator",
         mediaAccess: { localRoots: ["/tmp/forged-root"], workspaceDir: "/tmp/forged-root" },
       },
@@ -63,6 +64,7 @@ describe("telegramMessageActions", () => {
       mediaLocalRoots: ["/tmp/conflicting-root"],
       requesterAccountId: "work",
       conversationReadOrigin: "delegated",
+      reply: { replyToId: "9001", source: "implicit", mode: "first" },
       toolContext: {
         currentChannelProvider: "telegram",
         currentChannelId: "telegram:-1001:topic:77",
@@ -76,6 +78,7 @@ describe("telegramMessageActions", () => {
       expect.objectContaining({
         conversationReadOrigin: "delegated",
         mediaAccess,
+        reply: { replyToId: "9001", source: "implicit", mode: "first" },
         requesterAccountId: "work",
         toolContext: expect.objectContaining({ currentMessageId: "9001" }),
       }),
@@ -85,6 +88,7 @@ describe("telegramMessageActions", () => {
       messageId: "9001",
     });
     expect(handleTelegramActionMock.mock.calls[0]?.[0]).not.toHaveProperty("mediaAccess");
+    expect(handleTelegramActionMock.mock.calls[0]?.[0]).not.toHaveProperty("reply");
     expect(handleTelegramActionMock.mock.calls[0]?.[2]?.mediaAccess).toBe(mediaAccess);
   });
 

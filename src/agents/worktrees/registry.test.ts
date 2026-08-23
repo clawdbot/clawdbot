@@ -71,12 +71,18 @@ describe("managed worktree registry", () => {
     expect(getRegistryWorktreeProvisionedPaths(env, "second")).toBeUndefined();
 
     updateRegistryWorktree(env, "first", {
+      repositoryIdentity: {
+        repoRoot: path.join(root, "rebound-repo"),
+        repoFingerprint: "fedcba9876543210",
+      },
       lastActiveAt: 30,
       removedAt: 40,
       snapshotRef: "refs/openclaw/snapshots/first",
       provisionedState: [{ path: ".env.local", mode: 0o600, chunks: 1 }],
     });
     expect(getRegistryWorktree(env, "first")).toMatchObject({
+      repoRoot: path.join(root, "rebound-repo"),
+      repoFingerprint: "fedcba9876543210",
       lastActiveAt: 30,
       removedAt: 40,
       snapshotRef: "refs/openclaw/snapshots/first",

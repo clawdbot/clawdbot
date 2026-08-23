@@ -7,6 +7,7 @@ import type { AuthProfileStore } from "../../auth-profiles.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import type { NormalizedUsage, UsageLike } from "../../usage.js";
 import { resolveEmbeddedRunFailureSignal } from "../failure-signal.js";
+import { resolveEmbeddedRunTerminalToolFailure } from "../terminal-tool-failure.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
 import type { UsageAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
@@ -58,6 +59,7 @@ export function prepareEmbeddedRunTerminal(input: {
   hasPartialAssistantTextAfterPromptTimeout: boolean;
   attemptToolSummary: ReturnType<typeof buildTraceToolSummary>;
   failureSignal: ReturnType<typeof resolveEmbeddedRunFailureSignal>;
+  terminalToolFailure: ReturnType<typeof resolveEmbeddedRunTerminalToolFailure>;
 } {
   const { runParams, attempt } = input;
   const { timedOutDuringCompaction, timedOutDuringToolExecution } = projectAgentRunAttemptTerminal(
@@ -96,12 +98,21 @@ export function prepareEmbeddedRunTerminal(input: {
   // Attempt normalization already folded every attempt (terminal included)
   // into the accumulator, so read it directly instead of re-adding the attempt.
   const runAssistantTurns = input.usageAccumulator.assistantTurns;
+  const contextTokens = attempt.contextTokens ?? input.outerContextTokenMeta.contextTokens;
   const agentMeta: EmbeddedAgentMeta = {
     sessionId: input.sessionIdUsed,
     sessionFile: input.sessionFileUsed,
     provider: reportedModelRef.provider,
     model: reportedModelRef.model,
-    contextTokens: attempt.contextTokens ?? input.outerContextTokenMeta.contextTokens,
+    contextTokens,
+    ...(contextTokens !== undefined
+      ? {
+          contextTokensSource:
+            attempt.contextTokens !== undefined
+              ? (attempt.contextTokensSource ?? "resolved")
+              : "resolved",
+        }
+      : {}),
     agentHarnessId: attempt.agentHarnessId,
     usage: usageMeta.usage,
     lastCallUsage: usageMeta.lastCallUsage,
@@ -162,7 +173,10 @@ export function prepareEmbeddedRunTerminal(input: {
         responseModel,
       },
       successfulToolNames,
-      rerouted: responseModel !== input.model,
+      rerouted:
+        reportedModelRef.provider !== input.provider ||
+        reportedModelRef.model !== input.model ||
+        responseModel !== input.model,
     } satisfies Omit<AgentRunTerminalReceipt, "terminalDisposition">,
   });
   // A yielded attempt ends before message_end. Its aborted tool-call assistant,
@@ -259,6 +273,11 @@ export function prepareEmbeddedRunTerminal(input: {
     trigger: runParams.trigger,
     lastToolError: attempt.lastToolError,
   });
+  const terminalToolFailure = resolveEmbeddedRunTerminalToolFailure({
+    trigger: runParams.trigger,
+    codeModeEngaged: attempt.codeModeEngaged,
+    lastToolError: attempt.lastToolError,
+  });
   return {
     agentMeta,
     reportedModelRef,
@@ -272,6 +291,7 @@ export function prepareEmbeddedRunTerminal(input: {
     hasPartialAssistantTextAfterPromptTimeout,
     attemptToolSummary,
     failureSignal,
+    terminalToolFailure,
   };
 }
 

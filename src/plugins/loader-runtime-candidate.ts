@@ -489,17 +489,6 @@ export function loadRuntimePluginCandidate(params: {
       record.memorySlotSelected = true;
     }
   }
-  if (registrationPlan.runFullActivationOnlyRegistrations) {
-    if (definition?.reload) {
-      params.registryBuilder.registerReload(record, definition.reload);
-    }
-    for (const nodeHostCommand of definition?.nodeHostCommands ?? []) {
-      params.registryBuilder.registerNodeHostCommand(record, nodeHostCommand);
-    }
-    for (const collector of definition?.securityAuditCollectors ?? []) {
-      params.registryBuilder.registerSecurityAuditCollector(record, collector);
-    }
-  }
   if (params.validateOnly) {
     registry.plugins.push(record);
     state.seenIds.set(pluginId, candidate.origin);
@@ -517,6 +506,21 @@ export function loadRuntimePluginCandidate(params: {
       pushPluginLoadError(formatMissingPluginRegisterError(mod, context.env));
     }
     return;
+  }
+  // Node-host commands register in every load mode: the node host resolves its
+  // registry without activation (loadPluginRegistryHandle), and each command is
+  // already availability-gated per invocation. Gating them on full activation
+  // silently strips static registrations like browser.proxy from headless nodes.
+  for (const nodeHostCommand of definition?.nodeHostCommands ?? []) {
+    params.registryBuilder.registerNodeHostCommand(record, nodeHostCommand);
+  }
+  if (registrationPlan.runFullActivationOnlyRegistrations) {
+    if (definition?.reload) {
+      params.registryBuilder.registerReload(record, definition.reload);
+    }
+    for (const collector of definition?.securityAuditCollectors ?? []) {
+      params.registryBuilder.registerSecurityAuditCollector(record, collector);
+    }
   }
   const api = params.registryBuilder.createApi(record, {
     config: context.cfg,

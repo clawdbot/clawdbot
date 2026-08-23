@@ -44,16 +44,11 @@ describe("forced worker environment abandonment", () => {
       owner: { kind: "worker", environmentId, ownerEpoch: 2 },
     });
     store.markWorkspaceResultPending(claim);
-    const binding = {
-      sessionId: claim.sessionId,
-      environmentId,
-      ownerEpoch: 2,
-      runId: claim.runId,
-    };
+    const binding = claim;
     store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     expect(
       store.beginWorkerSessionToolOperation({
-        binding,
+        claim: binding,
         toolName: "sessions_send",
         toolCallId: "forced-send",
         requestDigest: "forced-send-digest",
@@ -87,44 +82,47 @@ describe("forced worker environment abandonment", () => {
     expect(store.get(REQUEST.sessionId)).toMatchObject({
       state: "failed",
       turnClaim: null,
-      recoveryError: "Cloud worker result abandoned by forced operator teardown",
+      recoveryError: "Worker result abandoned by forced operator teardown",
     });
     expect(store.listPendingWorkspaceResults()).toEqual([]);
   });
 
-  it("releases a pending worker claim when its workspace is already gone", async () => {
+  it("releases a pending reclaim claim when its workspace is already gone", async () => {
     const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
     const { environmentId } = createDispatchEnvironmentFixtures();
     const active = seedActivePlacement(store, { environmentId, ownerEpoch: 2 });
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = store.claimTurn({
+    store.startDrain({
+      sessionId: active.sessionId,
+      environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      expectedGeneration: active.generation,
+    });
+    const claim = store.claimReclaimWorkspaceResult({
       ...REQUEST,
-      claimId: "forced-missing-workspace-claim",
-      runId: "forced-missing-workspace-run",
+      claimId: "reclaim-forced-missing-workspace",
+      runId: "reclaim-forced-missing-workspace",
       owner: { kind: "worker", environmentId, ownerEpoch: 2 },
     });
-    store.markWorkspaceResultPending(claim);
     store.recordStagedWorkspaceResult(
       claim,
-      "refs/openclaw/worker-results/forced-missing-workspace-claim",
+      "refs/openclaw/worker-results/reclaim-forced-missing-workspace",
     );
-
-    await forceAbandonWorkerEnvironment({
-      placements: store,
-      environmentId,
-      resolveWorkspacePath: async () => {
-        throw new Error("session-owned managed worktree is missing");
-      },
+    const resolveWorkspacePath = vi.fn(async () => {
+      throw new Error("session-owned managed worktree is missing");
     });
+
+    await forceAbandonWorkerEnvironment({ placements: store, environmentId, resolveWorkspacePath });
 
     expect(store.get(REQUEST.sessionId)).toMatchObject({
       state: "failed",
       turnClaim: null,
-      recoveryError: "Cloud worker result abandoned by forced operator teardown",
+      recoveryError: "Worker result abandoned by forced operator teardown",
     });
     expect(store.listPendingWorkspaceResults()).toEqual([]);
+    expect(resolveWorkspacePath).toHaveBeenCalledOnce();
   });
 
   it("deletes a stale journal without replaying it into the current workspace", async () => {

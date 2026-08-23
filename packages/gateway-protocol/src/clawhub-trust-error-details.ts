@@ -1,3 +1,5 @@
+import { isProtocolRecord } from "./protocol-value-normalization.js";
+
 /** Structured ClawHub trust details carried in gateway error payloads. */
 export const ClawHubTrustErrorCodes = {
   SECURITY_UNAVAILABLE: "clawhub_security_unavailable",
@@ -43,7 +45,7 @@ export function buildClawHubTrustErrorDetails(params: {
 export function readClawHubTrustErrorDetails(
   details: unknown,
 ): ClawHubTrustErrorDetails | undefined {
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
+  if (!isProtocolRecord(details)) {
     return undefined;
   }
   const raw = details as {

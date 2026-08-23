@@ -13,7 +13,7 @@ Generate shell completion scripts, cache them under OpenClaw state, and optional
 ## Usage
 
 ```bash
-openclaw completion                          # print zsh script to stdout
+openclaw completion                          # print the detected shell's script
 openclaw completion --shell fish             # print fish script
 openclaw completion --write-state            # cache scripts for all shells
 openclaw completion --write-state --install  # cache, then install in one step
@@ -22,14 +22,14 @@ openclaw completion --shell bash --write-state
 
 ## Options
 
-- `-s, --shell <shell>`: shell target (`zsh`, `bash`, `powershell`, `fish`; default: `zsh`)
+- `-s, --shell <shell>`: shell target (`zsh`, `bash`, `powershell`, `fish`; detected from `$SHELL`, otherwise PowerShell on Windows and zsh elsewhere)
 - `-i, --install`: install completion by adding a source line for the cached script to your shell profile
 - `--write-state`: write completion script(s) to `$OPENCLAW_STATE_DIR/completions` (default `~/.openclaw/completions`) without printing to stdout; with `--shell` writes only that shell, otherwise all four
 - `-y, --yes`: skip install confirmation prompts (non-interactive)
 
 ## Install flow
 
-`--install` points your profile at the cached script, so the cache must exist first: if it is missing, the command fails and tells you to run `openclaw completion --write-state`. Combine `--write-state --install` to do both in one step. Without `--shell`, `--install` detects the shell from `$SHELL` (falling back to zsh).
+`--install` points your profile at the cached script, so the cache must exist first: if it is missing, the command fails and tells you to run `openclaw completion --write-state`. Combine `--write-state --install` to do both in one step. Without `--shell`, the command preserves a recognized `$SHELL`; when `$SHELL` is missing or unrecognized, it defaults to PowerShell on Windows and zsh elsewhere.
 
 The install writes a small `# OpenClaw Completion` block into your shell profile and replaces any older slow `source <(openclaw completion ...)` lines with the cached source line:
 
@@ -38,7 +38,7 @@ The install writes a small `# OpenClaw Completion` block into your shell profile
 | bash       | `~/.bashrc` (falls back to `~/.bash_profile` when `~/.bashrc` is missing)                                                                                                                  |
 | fish       | `~/.config/fish/config.fish`                                                                                                                                                               |
 | powershell | `~/.config/powershell/Microsoft.PowerShell_profile.ps1` (on Windows: `Documents/PowerShell/Microsoft.PowerShell_profile.ps1`, or `Documents/WindowsPowerShell/...` for Windows PowerShell) |
-| zsh        | `~/.zshrc`                                                                                                                                                                                 |
+| zsh        | `$ZDOTDIR/.zshrc` when `ZDOTDIR` is defined; otherwise `~/.zshrc` (an empty `ZDOTDIR` resolves to `/.zshrc`)                                                                               |
 
 Profile changes are staged beside the destination and atomically replace it only after a complete durable write. A failed install leaves an existing profile unchanged.
 

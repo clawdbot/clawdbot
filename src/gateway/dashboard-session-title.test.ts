@@ -341,7 +341,9 @@ describe("buildDashboardSessionTitleSource", () => {
       message: "Review this rollout [[reply_to_current]]",
       attachments: [textAttachment("Deployment context"), textAttachment(pastedText)],
     });
-    expect(source).toBe(`Review this rollout\nDeployment context\n${pastedText}`.slice(0, 1_000));
+    expect(source).toBe(
+      `Review this rollout [[reply_to_current]]\nDeployment context\n${pastedText}`.slice(0, 1_000),
+    );
   });
 
   it.each([

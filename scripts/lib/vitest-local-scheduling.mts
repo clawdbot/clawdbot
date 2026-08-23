@@ -1,3 +1,5 @@
+import os from "node:os";
+import { parsePermissiveBooleanToken } from "./arg-utils.mts";
 export type VitestHostInfo = {
   cpuCount?: number;
   loadAverage1m?: number;
@@ -9,9 +11,6 @@ export type LocalVitestScheduling = {
   fileParallelism: boolean;
   throttledBySystem: boolean;
 };
-
-import os from "node:os";
-import { parsePermissiveBooleanToken } from "./arg-utils.mts";
 
 const MAX_LOCAL_FULL_SUITE_PARALLELISM = 10;
 

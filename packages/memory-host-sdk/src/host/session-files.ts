@@ -31,14 +31,19 @@ import {
   stripInternalRuntimeContext,
 } from "./openclaw-runtime-session.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
+import { classifySessionMessageOrigin } from "./session-provenance.js";
 import { resolveSessionResetRecallCutoff } from "./session-reset-recall.js";
 import {
   listSessionTranscriptCorpusEntriesForAgent,
   listSessionTranscriptCorpusEntriesForAgentSync,
   type SessionTranscriptCorpusEntry,
 } from "./session-transcript-corpus.js";
-import type { MemorySessionSyncTarget } from "./types.js";
-import type { MemoryEntryProvenance, MemoryOriginClass, MemorySessionKind } from "./types.js";
+import type {
+  MemorySessionSyncTarget,
+  MemoryEntryProvenance,
+  MemoryOriginClass,
+  MemorySessionKind,
+} from "./types.js";
 
 export {
   listSessionTranscriptCorpusEntriesForAgent,
@@ -633,36 +638,6 @@ function isRecalledMemoryMessage(message: { provenance?: unknown }): boolean {
     provenance?.kind === "internal_system" &&
     (provenance.sourceTool === "memory_search" || provenance.sourceTool === "memory_get")
   );
-}
-
-function classifySessionMessageOrigin(
-  message: {
-    role?: unknown;
-    provenance?: unknown;
-  } & Record<string, unknown>,
-  turnOrigin: MemoryOriginClass,
-): MemoryOriginClass {
-  if (message.role === "assistant") {
-    const openClawMetadata = message["__openclaw"];
-    if (
-      openClawMetadata &&
-      typeof openClawMetadata === "object" &&
-      (openClawMetadata as { turnTainted?: unknown }).turnTainted === true
-    ) {
-      return "untrusted";
-    }
-    return turnOrigin === "owner" ? "agent" : turnOrigin;
-  }
-  const provenance = message.provenance as { kind?: unknown } | undefined;
-  if (provenance?.kind === "internal_system") {
-    return "system";
-  }
-  const openClawMetadata = message["__openclaw"];
-  const metadata =
-    openClawMetadata && typeof openClawMetadata === "object"
-      ? (openClawMetadata as { senderIsOwner?: unknown })
-      : undefined;
-  return metadata?.senderIsOwner === true ? "owner" : "untrusted";
 }
 
 function parseSessionTimestampMs(

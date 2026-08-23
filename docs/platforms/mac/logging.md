@@ -20,6 +20,12 @@ The macOS app logs through swift-log (unified logging by default) and can also w
 
 Treat the file as sensitive; do not share it without review.
 
+## Export unified logs as JSON
+
+Run `./scripts/clawlog.sh --json` to write recent unified-log events as one JSON array to stdout, or add `--output logs.json` to write the array to a file without printing it. The default output contains the last 50 log records; use `--lines 1` for the most recent record or `--all` for every matching record. `--lines` counts complete records in JSON mode, not physical lines.
+
+JSON export cannot be combined with `--follow` or `--list-categories`. Use those options without `--json`.
+
 ## Unified logging private data on macOS
 
 Unified logging redacts most payloads unless a subsystem opts into `privacy -off`. This is controlled by a plist in `/Library/Preferences/Logging/Subsystems/` keyed by subsystem name. Only new log entries pick up the flag, so enable it before reproducing an issue. Background: [macOS logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans).

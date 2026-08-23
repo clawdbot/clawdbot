@@ -119,10 +119,10 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 3,
   "plugin-entry": 1,
   routing: 1,
-  // +1 each: the shipped default-agent resolver remains available through
+  // +2: the shipped default-agent resolvers remain available through
   // compatibility barrels while callers migrate to explicit/sole selection.
   health: 1,
-  "agent-scope-runtime": 1,
+  "agent-scope-runtime": 2,
   // +1: shipped channel setup state-migration declaration during its migration window.
   "channel-entry-contract": 1,
   "approval-gateway-runtime": 1,
@@ -148,8 +148,9 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
   // +4: legacy AgentHarness, attempt, embedded-run, and side-question contracts remain
   // deprecated while external harnesses migrate to required-capability V2 contracts.
+  // +1: bounded structured-input compiler/executor for native harness protocol adapters.
   "agent-harness": 2,
-  "agent-harness-runtime": 9,
+  "agent-harness-runtime": 10,
   "command-auth": 78,
   discord: 47,
   // +4: deprecated media projection type, builder, and turn aliases.
@@ -169,7 +170,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "reply-runtime": 1,
   "security-runtime": 1,
   "session-store-runtime": 4,
-  "setup-runtime": 0,
+  // +2: shipped Slack and Discord setup helpers retained through their package migration window.
+  "setup-runtime": 2,
   "reply-history": 6,
   "provider-auth": 19,
   "telegram-account": 3,
@@ -194,7 +196,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: registry-bound plugin command planning and exact selected execution.
       // +1: canonical Computer Use wire contract and node-host provider seam.
       // -1: retire the deprecated messaging-targets subpath.
-      144,
+      // +2: bounded provider streams and read-only SecretRef resolution.
+      // +1: read-only authoritative conversation-binding inspection for route-owner plugins.
+      147,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -258,6 +262,7 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: session-catalog terminal-start provider request and Gateway params/result contracts.
       // +1: worker desktop endpoint contract for desktop-capable worker leases.
       // +1: closed worker desktop app metadata for provider-advertised launchers.
+      // +1: provider-authored machine option metadata for cloud-session sizing.
       // +1: native command spec merger through the native-command-registry facade.
       // +8: focused plugin command runtime factory, dispatch symbol, and six readonly contracts.
       // -2: remove unused WhatsApp-specific ack policy exports from channel-feedback.
@@ -283,10 +288,31 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
       //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
       // -1: remove the orphan diagnostic traceparent propagation export.
+      // +4: registry-owned native compaction registration contracts for Codex harnesses.
       // -17: retire the messaging-targets subpath, embedded Pi aliases, and shipped
       // channel setup compatibility helpers.
       // +1: concrete plugin side-effect owner resolution for agent harness runtimes.
-      4313,
+      // +1: strict explicit agent-id normalization without default-agent fallback.
+      // +5: session-catalog paging capability, family/node-host composers, and option contracts.
+      // +3: two focused primitives and the closed read-only SecretRef result contract.
+      // -2: remove obsolete transcript display helper exports.
+      // +2: lightweight agent config resolution and nonthrowing default-agent lookup.
+      // +1: focused media-store URL/path ingestion (saveMediaSource) off the deprecated barrel.
+      // +2: structural Gateway transport and request-error guards for plugin CLI routing.
+      // +1: canonical sensitive-URL redactor so plugin CLI errors never print URL userinfo.
+      // +1: account-scoped model catalog discovery for native agent harnesses.
+      // +2: shared delegation policy (mode resolver + section builder) so harness
+      //     runtimes render the same guidance instead of diverging prompt copies.
+      // +1: shared harness visible-source-reply guidance.
+      // +1: typed guarded-fetch redirect error for direct-only plugin delivery.
+      // -1: remove the test-only channel activity reset export.
+      // +1: named bounded structured-input surface for native harness protocol adapters.
+      // +1: OpenAI-compatible video execution in the existing media-understanding owner.
+      // -2: retire the uncalled secret-plan target resolver and its result type.
+      // +2: conversation-binding inspection result and runtime inspector.
+      // +2: restore shipped channel setup helpers until stable packages migrate.
+      // +1: canonical untrusted audio-transcript formatter for channel plugins.
+      4340,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -361,7 +387,24 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -1: remove the orphan diagnostic traceparent propagation export.
       // -12: retire the callable messaging-targets, embedded Pi, and channel setup helpers.
       // +1: concrete plugin side-effect owner resolution for agent harness runtimes.
-      2565,
+      // +1: strict explicit agent-id normalization without default-agent fallback.
+      // +2: session-catalog family and node-host binding composers.
+      // +2: bounded provider stream and read-only SecretRef resolver.
+      // -1: remove the obsolete transcript tool-call predicate.
+      // +2: lightweight agent config resolution and nonthrowing default-agent lookup.
+      // +1: focused media-store URL/path ingestion (saveMediaSource) off the deprecated barrel.
+      // +2: structural Gateway transport and request-error guards for plugin CLI routing.
+      // +1: canonical sensitive-URL redactor so plugin CLI errors never print URL userinfo.
+      // +2: shared delegation policy (mode resolver + section builder) so harness
+      //     runtimes render the same guidance instead of diverging prompt copies.
+      // +1: shared harness visible-source-reply guidance.
+      // -1: remove the test-only channel activity reset export.
+      // +1: OpenAI-compatible video execution in the existing media-understanding owner.
+      // -1: retire the uncalled secret-plan target resolver.
+      // +1: read-only authoritative conversation-binding inspector.
+      // +2: restore shipped channel setup helpers until stable packages migrate.
+      // +1: canonical untrusted audio-transcript formatter for channel plugins.
+      2581,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -375,12 +418,12 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +4: session-write lease no-op compatibility stubs through the 2026.10 train.
       // +7: restore still-existing deprecated inbound-dispatch compatibility re-exports.
       // +6: source-compatible harness contracts retained during the V2 migration window.
-      // +4: shipped default-agent resolver projections retained during explicit-owner migration.
+      // +5: shipped default-agent resolver projections retained during explicit-owner migration.
       // +5: load-only bridges for published pre-split plugin artifacts
       //     (voice-call/matrix runtime-doctor repair names, WhatsApp ack policy,
       //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
       // -18: retire the expired August compatibility exports and messaging-targets subpath.
-      1133,
+      1134,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

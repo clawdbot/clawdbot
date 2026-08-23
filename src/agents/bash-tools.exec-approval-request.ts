@@ -228,6 +228,7 @@ type HostExecApprovalParams = {
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
   approvalReviewerDeviceIds?: string[];
+  trigger?: string;
   requireDeliveryRoute?: boolean;
   suppressDelivery?: boolean;
 };
@@ -338,7 +339,10 @@ async function buildHostApprovalDecisionParams(
     runId: params.runId,
     toolCallId: params.toolCallId,
     requireDeliveryRoute: params.requireDeliveryRoute,
-    suppressDelivery: params.suppressDelivery,
+    // Cron has no live reviewer. Register for audit/fallback resolution without
+    // exposing an operator-visible request that the scheduled run cannot answer.
+    suppressDelivery:
+      params.suppressDelivery === true || params.trigger === "cron" ? true : undefined,
     approvalReviewerDeviceIds: params.approvalReviewerDeviceIds,
     ...buildExecApprovalTurnSourceContext(params),
   };

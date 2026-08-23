@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { redactSensitiveKeyValuePairs } from "./client-address-utils.js";
+import { normalizeTlsFingerprint, redactSensitiveKeyValuePairs } from "./client-address-utils.js";
 
 /** True when the log path masks this parameter name's value. */
 function redactsName(name: string): boolean {
@@ -66,5 +66,29 @@ describe("redactSensitiveKeyValuePairs", () => {
       "gateway rejected websocket upgrade (HTTP 503)",
     );
     expect(redactSensitiveKeyValuePairs("status=ok retries=2")).toBe("status=ok retries=2");
+
+const CANONICAL_FINGERPRINT = "ab".repeat(32);
+const COLON_FINGERPRINT = CANONICAL_FINGERPRINT.match(/.{2}/gu)?.join(":") ?? "";
+
+describe("TLS fingerprint normalization", () => {
+  it.each([
+    `sha256:${CANONICAL_FINGERPRINT.toUpperCase()}`,
+    CANONICAL_FINGERPRINT.toUpperCase(),
+    COLON_FINGERPRINT,
+    `ShA256:${COLON_FINGERPRINT.toUpperCase()}`,
+  ])("canonicalizes %s", (fingerprint) => {
+    expect(normalizeTlsFingerprint(fingerprint)).toBe(CANONICAL_FINGERPRINT);
+  });
+
+  it.each([
+    "",
+    "abc123",
+    "sha256:abc123",
+    "g".repeat(64),
+    `${CANONICAL_FINGERPRINT}:`,
+    `sha256:${CANONICAL_FINGERPRINT}-junk`,
+    `sha256:${CANONICAL_FINGERPRINT.slice(2)}`,
+  ])("rejects invalid fingerprint %s", (fingerprint) => {
+    expect(normalizeTlsFingerprint(fingerprint)).toBe("");
   });
 });

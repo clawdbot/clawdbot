@@ -1,16 +1,14 @@
-// Runs oxlint with local heavy-check policy, sparse-checkout filtering, and
+// Runs oxlint with local resource policy, sparse-checkout filtering, and
 // plugin package-boundary artifact preparation when needed.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  acquireLocalHeavyCheckLockSync,
   applyLocalOxlintPolicy,
-  resolveLocalHeavyCheckEnv,
+  resolveLocalCheckEnv,
   resolveRepoToolBinPath,
-  shouldAcquireLocalHeavyCheckLockForOxlint,
-} from "./lib/local-heavy-check-runtime.mts";
+} from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation, runManagedCommand } from "./lib/managed-child-process.mts";
 import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
@@ -227,27 +225,14 @@ function resolveOxlintToolchainEnv(
 }
 
 async function prepareExtensionPackageBoundaryArtifacts(env: NodeJS.ProcessEnv) {
-  const releaseArtifactsLock = acquireLocalHeavyCheckLockSync({
-    cwd: process.cwd(),
+  const status = await runManagedCommand({
+    bin: process.execPath,
+    args: PREPARE_EXTENSION_BOUNDARY_ARGS,
     env,
-    toolName: "extension-package-boundary-artifacts",
-    lockName: "extension-package-boundary-artifacts",
   });
 
-  try {
-    const status = await runManagedCommand({
-      bin: process.execPath,
-      args: PREPARE_EXTENSION_BOUNDARY_ARGS,
-      env,
-    });
-
-    if (status !== 0) {
-      throw new Error(
-        `prepare-extension-package-boundary-artifacts failed with exit code ${status}`,
-      );
-    }
-  } finally {
-    releaseArtifactsLock();
+  if (status !== 0) {
+    throw new Error(`prepare-extension-package-boundary-artifacts failed with exit code ${status}`);
   }
 }
 
@@ -260,7 +245,7 @@ async function main(
 ) {
   const focusedConfig = argv.includes(OPENCLAW_FOCUSED_CONFIG_FLAG);
   const oxlintArgs = argv.filter((arg) => arg !== OPENCLAW_FOCUSED_CONFIG_FLAG);
-  const localEnv = resolveLocalHeavyCheckEnv(runtimeEnv);
+  const localEnv = resolveLocalCheckEnv(runtimeEnv);
   // Focused configs are syntax-only guards; keep wrapper process handling
   // without the broad type-aware policy or package artifact preparation.
   const { args: policyArgs, env } = focusedConfig
@@ -292,34 +277,16 @@ async function main(
     return;
   }
 
-  const releaseLock =
-    env.OPENCLAW_OXLINT_SKIP_LOCK === "1" || focusedConfig
-      ? () => {}
-      : shouldAcquireLocalHeavyCheckLockForOxlint(finalArgs, {
-            cwd: process.cwd(),
-            env,
-          })
-        ? acquireLocalHeavyCheckLockSync({
-            cwd: process.cwd(),
-            env,
-            toolName: "oxlint",
-          })
-        : () => {};
-
-  try {
-    if (needsArtifactPreparation) {
-      await prepareExtensionPackageBoundaryArtifacts(env);
-    }
-
-    const status = await runManagedCommand({
-      bin: oxlintPath,
-      args: finalArgs,
-      env: resolveOxlintToolchainEnv(oxlintPath, env),
-    });
-    process.exitCode = status;
-  } finally {
-    releaseLock();
+  if (needsArtifactPreparation) {
+    await prepareExtensionPackageBoundaryArtifacts(env);
   }
+
+  const status = await runManagedCommand({
+    bin: oxlintPath,
+    args: finalArgs,
+    env: resolveOxlintToolchainEnv(oxlintPath, env),
+  });
+  process.exitCode = status;
 }
 
 if (import.meta.main) {

@@ -152,6 +152,88 @@ describe("runSetupModelAuthStep", () => {
     });
   });
 
+  it("stages provider auth on the pending named agent without nesting its workspace", async () => {
+    const workspaceDir = "/tmp/robby-workspace";
+    const config: OpenClawConfig = { agents: { defaults: { workspace: workspaceDir } } };
+    promptAuthChoiceGrouped.mockResolvedValueOnce("anthropic-cli");
+    applyAuthChoice.mockResolvedValueOnce({
+      config,
+      authProfiles: [],
+      persistAuthProfiles: async () => {},
+    });
+
+    await runSetupModelAuthStep({
+      config,
+      opts: {},
+      pendingAgent: { name: "Robby!", workspaceDir },
+      prompter: createPrompter(),
+      runtime: createRuntime(),
+    });
+
+    const agentDir = expect.stringMatching(/[/\\]agents[/\\]robby[/\\]agent$/);
+    expect(ensureAuthProfileStore).toHaveBeenCalledWith(agentDir, {
+      allowKeychainPrompt: false,
+      readOnly: true,
+    });
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(expect.objectContaining({ workspaceDir }));
+    expect(applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "robby", agentDir, workspaceDir }),
+    );
+    expect(promptDefaultModel).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "robby", agentDir, workspaceDir }),
+    );
+    expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ agentId: "robby", agentDir }),
+    );
+  });
+
+  it("targets the system agent when an explicit fleet selects Claude CLI", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: {
+          main: { agentDir: "/tmp/main-agent", workspace: "/tmp/main-workspace" },
+          ops: { agentDir: "/tmp/ops-agent", workspace: "/tmp/ops-workspace" },
+        },
+      },
+    };
+    promptAuthChoiceGrouped.mockResolvedValueOnce("anthropic-cli");
+    applyAuthChoice.mockResolvedValueOnce({
+      config,
+      authProfiles: [],
+      persistAuthProfiles: async () => {},
+    });
+
+    await runSetupModelAuthStep({
+      config,
+      opts: {},
+      prompter: createPrompter(),
+      runtime: createRuntime(),
+    });
+
+    expect(ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/main-agent", {
+      allowKeychainPrompt: false,
+      readOnly: true,
+    });
+    expect(applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authChoice: "anthropic-cli",
+        agentId: "main",
+        agentDir: "/tmp/main-agent",
+      }),
+    );
+    expect(promptDefaultModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        agentDir: "/tmp/main-agent",
+        workspaceDir: "/tmp/main-workspace",
+      }),
+    );
+  });
+
   it("validates an interactive skip against the configured default agent", async () => {
     const config = createDefaultAgentConfig();
     promptAuthChoiceGrouped.mockResolvedValueOnce("skip");

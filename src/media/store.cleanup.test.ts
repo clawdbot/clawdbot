@@ -1,4 +1,5 @@
-// cleanOldMedia must stay out of the SQLite-managed outgoing tree.
+// Media cleanup must respect ownership boundaries between transient staging,
+// replayable inbound media, playback cache, and SQLite-managed outgoing media.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -8,8 +9,14 @@ import {
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
 } from "../gateway/managed-image-record-store.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
+import { markTrustedGeneratedHtmlPath } from "./web-media.js";
 
 describe("cleanOldMedia managed-subtree retention", () => {
   let store: typeof import("./store.js");
@@ -91,5 +98,61 @@ describe("cleanOldMedia managed-subtree retention", () => {
 
     expect(cleanup.deletedFileCount).toBe(0);
     await expect(fs.stat(legacyOrphanPath)).resolves.toMatchObject({ size: 15 });
+  });
+
+  it("retires only stale outbound staging and its trusted HTML provenance", async () => {
+    const staleInbound = await store.saveMediaBuffer(Buffer.from("inbound"), "image/png");
+    const staleOutbound = await store.saveMediaBuffer(
+      Buffer.from("<!doctype html><h1>stale</h1>"),
+      "text/html",
+      "outbound",
+      undefined,
+      "stale.html",
+    );
+    const freshOutbound = await store.saveMediaBuffer(
+      Buffer.from("fresh outbound"),
+      "text/plain",
+      "outbound",
+    );
+    const stalePlayback = await store.saveMediaBuffer(
+      Buffer.from("playback"),
+      "audio/mpeg",
+      store.PLAYBACK_TRANSCODE_SUBDIR,
+    );
+    const staleManagedOutgoing = await store.saveMediaBuffer(
+      Buffer.from("managed outgoing"),
+      "image/png",
+      MANAGED_OUTGOING_ORIGINALS_SUBDIR,
+    );
+    await markTrustedGeneratedHtmlPath(
+      staleOutbound.path,
+      Buffer.from("<!doctype html><h1>stale</h1>"),
+    );
+    const stale = Date.now() - 25 * 60 * 60_000;
+    await Promise.all(
+      [staleInbound.path, staleOutbound.path, stalePlayback.path, staleManagedOutgoing.path].map(
+        (filePath) => fs.utimes(filePath, stale / 1000, stale / 1000),
+      ),
+    );
+
+    await store.pruneOutboundMedia();
+
+    await expect(fs.stat(staleOutbound.path)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(staleInbound.path)).resolves.toMatchObject({ size: staleInbound.size });
+    await expect(fs.stat(freshOutbound.path)).resolves.toMatchObject({ size: freshOutbound.size });
+    await expect(fs.stat(stalePlayback.path)).resolves.toMatchObject({ size: stalePlayback.size });
+    await expect(fs.stat(staleManagedOutgoing.path)).resolves.toMatchObject({
+      size: staleManagedOutgoing.size,
+    });
+
+    const { db } = openOpenClawStateDatabase();
+    const marker = executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "outbound_media_provenance">>(db)
+        .selectFrom("outbound_media_provenance")
+        .select("realpath")
+        .where("realpath", "=", staleOutbound.path),
+    );
+    expect(marker).toBeUndefined();
   });
 });

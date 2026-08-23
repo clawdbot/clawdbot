@@ -92,7 +92,12 @@ async function buildDirectDmContext(
     timestamp: params.timestamp,
     from: params.senderAddress,
     sender: { id: params.senderId, name: params.conversationLabel },
-    conversation: { kind: "direct", id: params.peer.id, label: params.conversationLabel },
+    conversation: {
+      kind: "direct",
+      id: params.peer.id,
+      routePeer: params.peer,
+      label: params.conversationLabel,
+    },
     route: {
       agentId: route.agentId,
       accountId: route.accountId,
@@ -101,7 +106,7 @@ async function buildDirectDmContext(
     },
     reply: {
       to: params.recipientAddress,
-      originatingTo: params.originatingTo ?? params.recipientAddress,
+      originatingTo: params.originatingTo ?? params.senderAddress,
     },
     message: {
       body,
@@ -231,8 +236,12 @@ export async function dispatchInboundDirectDmWithRuntime(
     Timestamp: params.timestamp,
     CommandAuthorized: params.commandAuthorized,
     ...(params.inboundAccessAuthorized === true ? { InboundAccessAuthorized: true } : {}),
+    ...(params.inboundAccessAuthorized === true
+      ? { ConversationRouteContextObserved: true as const }
+      : {}),
+    ConversationRoutePeerId: params.peer.id,
     OriginatingChannel: params.originatingChannel ?? params.channel,
-    OriginatingTo: params.originatingTo ?? params.recipientAddress,
+    OriginatingTo: params.originatingTo ?? params.senderAddress,
     NativeDirectUserId: params.peer.id,
     ...params.extraContext,
   });

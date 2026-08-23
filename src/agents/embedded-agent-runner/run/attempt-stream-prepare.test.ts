@@ -73,6 +73,7 @@ function prepareCatalogExecutor(
     hookRunner: undefined as never,
     hookAgentId: "main",
     diagnosticTrace: {} as never,
+    diagnosticOwner: {} as never,
     clientToolCallSlots: [],
     toolSearchTargetTranscriptProjections: projections,
     isReplaySafeTool: () => false,
@@ -102,7 +103,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     vi.clearAllMocks();
     mocks.subscribe.mockReturnValue({
       toolMetas: [],
-      runToolLifecycle: vi.fn(async ({ execute }) => await execute()),
+      runToolLifecycle: vi.fn(async ({ execute }) => await execute(() => undefined)),
       isCompacting: vi.fn(() => false),
     });
     mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });
@@ -159,6 +160,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
       hookAgentId: "main",
       diagnosticTrace: {} as never,
+      diagnosticOwner: {} as never,
       clientToolCallSlots: [],
       toolSearchTargetTranscriptProjections: [],
       isReplaySafeTool: () => false,
@@ -237,6 +239,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
       hookAgentId: "main",
       diagnosticTrace: {} as never,
+      diagnosticOwner: {} as never,
       clientToolCallSlots: [],
       toolSearchTargetTranscriptProjections: [],
       isReplaySafeTool: () => false,

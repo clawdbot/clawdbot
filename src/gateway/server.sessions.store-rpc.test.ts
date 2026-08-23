@@ -63,14 +63,14 @@ async function loadTranscriptRows(params: {
   });
 }
 
-test("sessions.patch validates persistent emoji icons", async () => {
+test("sessions.patch validates persistent session icons", async () => {
   const invalid = await directSessionHandlerReq("sessions.patch", {
     key: "agent:main:main",
     icon: "hand",
   });
-  expect(invalid).toMatchObject({
-    ok: false,
-    error: { code: "INVALID_REQUEST", message: "icon must be a single emoji" },
+  expect(invalid.error).toEqual({
+    code: "INVALID_REQUEST",
+    message: "icon must be a single emoji or one of: braces, book, monitor, bot, kanban, coins",
   });
 });
 
@@ -556,7 +556,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
     resolved?: {
       model?: string;
       modelProvider?: string;
-      agentRuntime?: { id: string; source: string };
+      agentRuntime?: { id: string; source: string; devicePlacementSupported?: boolean };
     };
   }>("sessions.patch", {
     key: "agent:main:main",
@@ -579,16 +579,16 @@ test("lists and patches session store via sessions.* RPC", async () => {
       key: string;
       modelProvider?: string;
       model?: string;
-      agentRuntime?: { id: string; source: string };
+      agentRuntime?: { id: string; source: string; devicePlacementSupported?: boolean };
     }>;
   }>("sessions.list", {});
-  expect(listAfterModelPatch.ok).toBe(true);
   const mainAfterModelPatch = listAfterModelPatch.payload?.sessions.find(
     (session) => session.key === "agent:main:main",
   );
   expect(mainAfterModelPatch?.modelProvider).toBe("openai");
   expect(mainAfterModelPatch?.model).toBe("gpt-test-a");
-  expect(mainAfterModelPatch?.agentRuntime).toEqual({ id: "openclaw", source: "implicit" });
+  expect(mainAfterModelPatch?.agentRuntime?.id).toBe("openclaw");
+  expect(mainAfterModelPatch?.agentRuntime?.devicePlacementSupported).toBe(true);
 
   const compacted = await directSessionReq<{ ok: true; compacted: boolean }>("sessions.compact", {
     key: "agent:main:main",

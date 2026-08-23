@@ -29,6 +29,10 @@ import {
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 import { actionRequiresTarget } from "./message-action-spec.js";
 import { enforceCrossContextPolicy } from "./outbound-policy.js";
+import {
+  invalidMessageActionTargetError,
+  missingMessageActionTargetError,
+} from "./target-errors.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 
@@ -161,6 +165,7 @@ async function resolveActionTarget(params: {
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
   accountId?: string | null;
+  plugin?: ChannelPlugin;
 }): Promise<ResolvedMessagingTarget | undefined> {
   let resolvedTarget: ResolvedMessagingTarget | undefined;
   const toRaw = normalizeOptionalString(params.args.to) ?? "";
@@ -170,6 +175,7 @@ async function resolveActionTarget(params: {
       channel: params.channel,
       input: toRaw,
       accountId: params.accountId ?? undefined,
+      plugin: params.plugin,
     });
     params.args.to = resolved.to;
     resolvedTarget = resolved;
@@ -181,6 +187,7 @@ async function resolveActionTarget(params: {
       channel: params.channel,
       input: channelIdRaw,
       accountId: params.accountId ?? undefined,
+      plugin: params.plugin,
       preferredKind: "group",
       validateResolvedTarget: (target) =>
         target.kind === "user"
@@ -201,6 +208,7 @@ async function resolveResolvedTargetOrThrow(params: {
   channel: ChannelId;
   input: string;
   accountId?: string;
+  plugin?: ChannelPlugin;
   preferredKind?: "group" | "user" | "channel";
   validateResolvedTarget?: (target: ResolvedMessagingTarget) => string | undefined;
 }): Promise<ResolvedMessagingTarget> {
@@ -210,13 +218,14 @@ async function resolveResolvedTargetOrThrow(params: {
     input: params.input,
     accountId: params.accountId,
     preferredKind: params.preferredKind,
+    plugin: params.plugin,
   });
   if (!resolved.ok) {
     throw resolved.error;
   }
   const validationError = params.validateResolvedTarget?.(resolved.target);
   if (validationError) {
-    throw new Error(validationError);
+    throw invalidMessageActionTargetError(validationError);
   }
   return resolved.target;
 }
@@ -348,7 +357,7 @@ export async function prepareMessageRoute(params: {
   // Missing targets must fail before channel discovery, which can bootstrap or
   // probe configured plugins. Non-standard params may still be owner aliases.
   if (actionRequiresTarget(action) && !hasPotentialActionTargetInput(input, actionParams)) {
-    throw new Error(`Action ${action} requires a target.`);
+    throw missingMessageActionTargetError(action);
   }
 
   const selection = await resolveChannel(cfg, actionParams, input.toolContext, action, agentId);
@@ -453,6 +462,7 @@ export async function resolveMessageTarget(params: {
   toolContext?: ChannelThreadingToolContext;
   agentId?: string | null;
   deferExternalTargetResolution?: boolean;
+  plugin?: ChannelPlugin;
 }): Promise<ResolvedMessagingTarget | undefined> {
   const resolvedTarget = params.deferExternalTargetResolution
     ? undefined
@@ -462,6 +472,7 @@ export async function resolveMessageTarget(params: {
         action: params.action,
         args: params.args,
         accountId: params.accountId,
+        plugin: params.plugin,
       });
 
   enforceCrossContextPolicy({

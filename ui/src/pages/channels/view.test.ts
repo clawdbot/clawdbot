@@ -87,6 +87,33 @@ function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
   };
 }
 
+describe("channels setup access", () => {
+  it("replaces setup actions with an admin-required notice for non-admin viewers", () => {
+    const onStartSetup = vi.fn();
+    const props = createProps({
+      ts: Date.now(),
+      channelOrder: ["telegram"],
+      channelLabels: { telegram: "Telegram" },
+      channels: { telegram: { configured: false } },
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    });
+    props.canAdmin = false;
+    props.onStartSetup = onStartSetup;
+    const container = document.createElement("div");
+    render(renderChannels(props), container);
+
+    expect(container.textContent).toContain(
+      "Browsing only. Channel setup requires operator.admin access.",
+    );
+    expect(
+      [...container.querySelectorAll("button")].map((button) => button.textContent?.trim()),
+    ).not.toContain("Set up");
+    expect(container.textContent).not.toContain("More channels…");
+    expect(onStartSetup).not.toHaveBeenCalled();
+  });
+});
+
 function createWhatsAppStatus(overrides: Partial<WhatsAppStatus> = {}): WhatsAppStatus {
   return {
     configured: true,
@@ -130,7 +157,11 @@ function renderWhatsAppButtons(params: {
 function renderChannelDetailFixture(
   channelId: string,
   data: ChannelsChannelData,
-  options: { label?: string; onRefresh?: ChannelsProps["onRefresh"] } = {},
+  options: {
+    label?: string;
+    loading?: boolean;
+    onRefresh?: ChannelsProps["onRefresh"];
+  } = {},
 ) {
   const status = Object.entries(data).find(([key]) => key === channelId)?.[1] ?? {};
   const channelAccounts = data.channelAccounts ?? {};
@@ -143,6 +174,7 @@ function renderChannelDetailFixture(
     channelAccounts,
     channelDefaultAccountId: accounts?.length ? { [channelId]: accounts[0]!.accountId } : {},
   });
+  props.loading = options.loading ?? false;
   if (options.onRefresh) {
     props.onRefresh = options.onRefresh;
   }
@@ -345,6 +377,22 @@ describe("channel detail", () => {
       expect(onRefresh).toHaveBeenCalledWith(true);
     },
   );
+
+  it("projects an in-flight channel read onto the detail Probe action", () => {
+    const onRefresh = vi.fn();
+    const container = renderChannelDetailFixture(
+      "telegram",
+      { telegram: { configured: true, running: true }, channelAccounts: {} },
+      { loading: true, onRefresh },
+    );
+    const probe = container.querySelector<HTMLButtonElement>(".settings-row--actions button");
+
+    expect(probe?.disabled).toBe(true);
+    expect(probe?.getAttribute("aria-busy")).toBe("true");
+    expect(probe?.textContent?.trim()).toBe("Refreshing…");
+    probe?.click();
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
 
   it("keeps missing Google Chat status unknown while other known channels are stopped", () => {
     const google = renderChannelDetailFixture("googlechat", { googlechat: null });

@@ -3,6 +3,7 @@
 import { render, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
 import "./app-host.ts";
@@ -10,9 +11,17 @@ import "./app-host.ts";
 type PairingShell = HTMLElement & {
   runtime?: ApplicationRuntime;
   render: () => TemplateResult;
+  routeState: {
+    routeId?: string;
+    location?: { pathname: string; search: string; hash: string };
+  };
   devicePairSetupRenderer: unknown;
   devicePairSetupLoadFailed: boolean;
   loadDevicePairSetupRenderer: () => void;
+  settingsSidebarRenderer: unknown;
+  settingsSidebarLoadFailed: boolean;
+  loadSettingsSidebarRenderer: () => void;
+  retrySettingsSidebarRenderer: () => void;
 };
 
 type PairingSidebar = HTMLElement & {
@@ -45,7 +54,6 @@ function createPairingShell(params: {
   const overlaySnapshot = {
     approvalQueue: [],
     approvalErrors: new Map(),
-    approvalNowMs: 0,
     approvalBusy: false,
     devicePairSetupOpen: Boolean(params.setupCode),
     devicePairSetupLifecycle: params.setupCode
@@ -67,6 +75,7 @@ function createPairingShell(params: {
     updateAvailable: null,
     updateRunning: false,
     updateStatusBanner: null,
+    recordedUpdateAttempt: null,
     controlUiRefreshRequired: false,
   };
   const context = {
@@ -93,6 +102,10 @@ function createPairingShell(params: {
   } as unknown as ApplicationContext;
   const shell = document.createElement("openclaw-app-shell") as PairingShell;
   shell.runtime = { context, router: {} } as ApplicationRuntime;
+  shell.routeState = {
+    routeId: "chat",
+    location: { pathname: "/chat", search: "", hash: "" },
+  };
   const container = document.createElement("div");
 
   const renderSidebar = () => {
@@ -108,7 +121,7 @@ function createPairingShell(params: {
   // replaces the eager loading shell with the full dialog.
   const renderPairingDialog = async () => {
     renderSidebar();
-    return await vi.waitFor(() => {
+    return await waitForFast(() => {
       render(shell.render(), container);
       const dialog = container.querySelector<HTMLElement>(
         '.device-pair-setup:not([aria-busy="true"])',
@@ -231,6 +244,48 @@ describe("application shell pairing access", () => {
     expect(loadRenderer).toHaveBeenCalledOnce();
   });
 
+  it("keeps settings navigation visibly loading while its renderer downloads", () => {
+    const { shell, container } = createPairingShell({ auth: { role: "operator" } });
+    const loadRenderer = vi.fn();
+    shell.routeState = {
+      routeId: "profile",
+      location: { pathname: "/settings/profile", search: "", hash: "" },
+    };
+    shell.settingsSidebarRenderer = null;
+    shell.settingsSidebarLoadFailed = false;
+    shell.loadSettingsSidebarRenderer = loadRenderer;
+
+    render(shell.render(), container);
+
+    const sidebar = container.querySelector<HTMLElement>(".settings-sidebar");
+    expect(sidebar?.getAttribute("aria-busy")).toBe("true");
+    expect(sidebar?.textContent).toContain("Loading…");
+    expect(loadRenderer).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a failed settings navigation load visible and retryable", () => {
+    const { shell, container } = createPairingShell({ auth: { role: "operator" } });
+    const retryRenderer = vi.fn();
+    shell.routeState = {
+      routeId: "profile",
+      location: { pathname: "/settings/profile", search: "", hash: "" },
+    };
+    shell.settingsSidebarRenderer = null;
+    shell.settingsSidebarLoadFailed = true;
+    shell.retrySettingsSidebarRenderer = retryRenderer;
+
+    render(shell.render(), container);
+
+    const sidebar = container.querySelector<HTMLElement>(".settings-sidebar");
+    expect(sidebar?.getAttribute("aria-busy")).toBeNull();
+    expect(sidebar?.textContent).toContain("Settings navigation could not load.");
+    const retry = [...(sidebar?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(
+      (button) => button.textContent?.trim() === "Retry",
+    );
+    retry?.click();
+    expect(retryRenderer).toHaveBeenCalledOnce();
+  });
+
   it("shows a visible accessible error when a mobile setup code cannot be copied", async () => {
     const writeText = vi.fn().mockRejectedValue(new DOMException("Clipboard access denied"));
     const execCommand = vi.fn(() => false);
@@ -247,7 +302,7 @@ describe("application shell pairing access", () => {
 
     button?.click();
 
-    await vi.waitFor(() => expect(button?.textContent?.trim()).toBe("Copy failed"));
+    await waitForFast(() => expect(button?.textContent?.trim()).toBe("Copy failed"));
     expect(button?.getAttribute("aria-label")).toBe("Copy failed");
     expect(button?.querySelector("svg")).not.toBeNull();
     expect(writeText).toHaveBeenCalledWith("pair-mobile-secret");
@@ -273,7 +328,7 @@ describe("application shell pairing access", () => {
     });
 
     renderSidebar();
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       render(shell.render(), container);
       expect(container.querySelector('[role="timer"]')?.textContent).toContain("0:01");
     });

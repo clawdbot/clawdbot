@@ -212,6 +212,51 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     expect(await loginGateMounted()).toBe(false);
   });
 
+  it("does not load the discarded workspace before a first-run setup redirect", async () => {
+    const page = await createPage();
+    const workspaceModules = new Set([
+      "/src/components/app-sidebar.ts",
+      "/src/components/browser/browser-panel.ts",
+      "/src/components/custodian/custodian-panel.ts",
+      "/src/components/desktop/desktop-panel.ts",
+      "/src/components/terminal/terminal-panel-registration.ts",
+      "/src/pages/chat/chat-page.ts",
+    ]);
+    const requestedWorkspaceModules = new Set<string>();
+    page.on("request", (request) => {
+      const pathname = new URL(request.url()).pathname;
+      if (workspaceModules.has(pathname)) {
+        requestedWorkspaceModules.add(pathname);
+      }
+    });
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["openclaw.setup.detect"],
+      featureMethods: [
+        "browser.request",
+        "desktop.observe",
+        "openclaw.chat",
+        "openclaw.setup.detect",
+        "terminal.open",
+      ],
+      terminalEnabled: true,
+    });
+
+    await page.goto(server.baseUrl);
+    await gateway.waitForRequest("openclaw.setup.detect");
+    await page.locator(".connect-splash").waitFor();
+    expect([...requestedWorkspaceModules]).toEqual([]);
+
+    await gateway.resolveDeferred("openclaw.setup.detect", {
+      candidates: [],
+      manualProviders: [],
+      setupComplete: false,
+      workspace: "/tmp/openclaw-e2e",
+    });
+    await page.getByRole("heading", { name: "Connect a verified AI model" }).waitFor();
+    expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
+    expect([...requestedWorkspaceModules]).toEqual([]);
+  });
+
   it("falls back to the login gate when stored credentials are rejected", async () => {
     const page = await createPage();
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
@@ -227,6 +272,38 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     });
     await page.locator("openclaw-login-gate").waitFor();
     expect(await page.locator(".connect-splash").count()).toBe(0);
+  });
+
+  it("keeps retryable Gateway startup on the progress splash", async () => {
+    const page = await createPage();
+    const loginGateMounted = await traceLoginGateMounts(page);
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+    await page.goto(`${server.baseUrl}#token=e2e-shared-token`);
+    await gateway.waitForRequest("connect");
+    const initialConnectCount = (await gateway.getRequests("connect")).length;
+    await gateway.deferNext("connect");
+    await gateway.rejectDeferred("connect", {
+      code: "UNAVAILABLE",
+      message: "gateway starting; retry shortly",
+      details: { reason: "startup-sidecars" },
+      retryable: true,
+    });
+
+    const splash = page.locator(".connect-splash");
+    await splash.getByText("Gateway starting…", { exact: true }).waitFor();
+    expect(await page.locator("openclaw-login-gate").count()).toBe(0);
+    expect(await loginGateMounted()).toBe(false);
+    await expect
+      .poll(async () => await splash.evaluate((element) => getComputedStyle(element).opacity))
+      .toBe("1");
+    await captureProof(page, "06-gateway-starting-progress");
+
+    await expect
+      .poll(async () => (await gateway.getRequests("connect")).length)
+      .toBeGreaterThan(initialConnectCount);
+    await gateway.resolveDeferred("connect");
+    await page.locator("openclaw-app-shell").waitFor();
   });
 
   it("uses the splash for a stored device token on reload", async () => {

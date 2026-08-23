@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
@@ -146,6 +147,7 @@ export async function initializeAcpSpawnRuntime(params: {
   sessionKey: string;
   targetAgentId: string;
   runtimeMode: AcpRuntimeSessionMode;
+  backendId?: string;
   resumeSessionId?: string;
   runtimeOptions?: AcpSpawnRuntimeOptions;
   modelExplicit?: boolean;
@@ -180,7 +182,7 @@ export async function initializeAcpSpawnRuntime(params: {
     runtimeOptions: params.runtimeOptions,
     modelExplicit: params.modelExplicit,
     cwd: params.cwd,
-    backendId: params.cfg.acp?.backend,
+    backendId: params.backendId,
   });
 
   return {
@@ -273,4 +275,3 @@ export async function bindPreparedAcpThread(params: {
 
   return { binding, sessionEntry };
 }
-import fs from "node:fs/promises";

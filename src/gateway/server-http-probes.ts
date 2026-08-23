@@ -1,9 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { authorizeHttpGatewayConnect, isLocalDirectRequest } from "./auth.js";
+import type { AuthRateLimiter } from "./auth-rate-limit.js";
+import { authorizeHttpGatewayConnect } from "./auth.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { classifyGatewayProbePath } from "./gateway-http-route-contracts.js";
+import { readPreparedGatewayIngressAttribution } from "./ingress-attribution.js";
+import { isLocalDirectRequest } from "./net.js";
 import type { ReadinessChecker, StartupChecker, StartupResult } from "./server/readiness.js";
 
 const getHttpAuthUtilsModule = createLazyRuntimeModule(() => import("./http-auth-utils.js"));
@@ -13,8 +16,13 @@ async function shouldIncludeGatewayProbeDetails(params: {
   resolvedAuth: ResolvedGatewayAuth;
   trustedProxies: string[];
   allowRealIpFallback: boolean;
+  rateLimiter?: AuthRateLimiter;
 }): Promise<boolean> {
-  if (isLocalDirectRequest(params.req, params.trustedProxies, params.allowRealIpFallback)) {
+  if (
+    readPreparedGatewayIngressAttribution(params.req)?.kind === "direct-local" ||
+    (!readPreparedGatewayIngressAttribution(params.req) &&
+      isLocalDirectRequest(params.req, params.trustedProxies, params.allowRealIpFallback))
+  ) {
     return true;
   }
   if (params.resolvedAuth.mode === "none") {
@@ -29,6 +37,7 @@ async function shouldIncludeGatewayProbeDetails(params: {
       req: params.req,
       trustedProxies: params.trustedProxies,
       allowRealIpFallback: params.allowRealIpFallback,
+      rateLimiter: params.rateLimiter,
       browserOriginPolicy: resolveHttpBrowserOriginPolicy(params.req),
     })
   ).ok;
@@ -55,6 +64,7 @@ export async function handleGatewayProbeRequest(
   resolvedAuth: ResolvedGatewayAuth,
   trustedProxies: string[],
   allowRealIpFallback: boolean,
+  rateLimiter?: AuthRateLimiter,
   getReadiness?: ReadinessChecker,
   getStartup?: StartupChecker,
 ): Promise<boolean> {
@@ -85,6 +95,7 @@ export async function handleGatewayProbeRequest(
       resolvedAuth,
       trustedProxies,
       allowRealIpFallback,
+      rateLimiter,
     });
     try {
       const result = getReadiness();
@@ -102,6 +113,7 @@ export async function handleGatewayProbeRequest(
       resolvedAuth,
       trustedProxies,
       allowRealIpFallback,
+      rateLimiter,
     });
     try {
       const result = getStartup?.() ?? { ok: true, status: "started", uptimeMs: 0 };

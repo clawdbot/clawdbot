@@ -7,9 +7,11 @@ import {
   type ExecutionIdentityAdmissionFacts,
   type ExecutionIdentityAdmissionToken,
 } from "../audit/execution-identity-admission.js";
+import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spawn-admission.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
+  getAgentRunLifecycleGeneration,
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
@@ -41,17 +43,16 @@ export type PreparedAgentRunAdmission = Readonly<{
 type DelegatedAuthorityLease = {
   authority: AgentRunDelegatedAuthority;
   foregroundClosed: boolean;
-  retained: boolean;
 };
 
 const delegatedAuthorityLeases = new WeakMap<AdmittedRunContext, DelegatedAuthorityLease>();
+const activeNativeHookRecoveryLeases = new Map<string, DelegatedAuthorityLease>();
 
-function bindAdmittedRunDelegatedAuthority(
-  context: AdmittedRunContext,
-): AgentRunDelegatedAuthority {
+function bindAdmittedRunDelegatedAuthority(context: AdmittedRunContext): void {
+  activeNativeHookRecoveryLeases.delete(context.operationalRunInstance.runId);
   const authority = claimAgentRunDelegatedAuthority(context.operationalRunInstance);
-  delegatedAuthorityLeases.set(context, { authority, foregroundClosed: false, retained: false });
-  return authority;
+  const lease = { authority, foregroundClosed: false };
+  delegatedAuthorityLeases.set(context, lease);
 }
 
 /** Reads the immutable outer-run authority without reviving a closed claim. */
@@ -64,6 +65,27 @@ export function getAdmittedRunDelegatedAuthority(
     : undefined;
 }
 
+/** Captures an exact admitted-run assertion for work that may cross an await boundary. */
+export function resolveAdmittedRunActiveAssertion(
+  context: AdmittedRunContext,
+  signal?: AbortSignal,
+): (() => void) | undefined {
+  const operationalRunInstance = context.operationalRunInstance;
+  const authority = getAdmittedRunDelegatedAuthority(context);
+  if (!authority) {
+    return undefined;
+  }
+  return () => {
+    if (
+      signal?.aborted ||
+      context.operationalRunInstance !== operationalRunInstance ||
+      getAdmittedRunDelegatedAuthority(context) !== authority
+    ) {
+      throw new Error("admitted run authority is no longer active");
+    }
+  };
+}
+
 /** Idempotently compare-releases the authority captured by this admission. */
 export function closeAdmittedRunDelegatedAuthority(context: AdmittedRunContext): boolean {
   const lease = delegatedAuthorityLeases.get(context);
@@ -71,39 +93,46 @@ export function closeAdmittedRunDelegatedAuthority(context: AdmittedRunContext):
     return false;
   }
   lease.foregroundClosed = true;
-  if (!lease.retained) {
-    releaseAgentRunDelegatedAuthority(lease.authority);
-  }
+  releaseAgentRunDelegatedAuthority(lease.authority);
   return true;
 }
 
-/** Internal relay claim; it never revives the ordinary foreground lookup. */
-export function retainAdmittedRunDelegatedAuthority(
+type AdmittedRunBeforeToolCallRecovery = Readonly<{
+  assertActive: () => void;
+  release: () => void;
+}>;
+
+/** Recovery-only lease for the already-created native pre-tool policy callback. */
+export function retainAdmittedRunBeforeToolCallRecovery(
   context: AdmittedRunContext,
-): (() => void) | undefined {
+): AdmittedRunBeforeToolCallRecovery | undefined {
   const lease = delegatedAuthorityLeases.get(context);
-  if (!lease || lease.retained || !validateAgentRunDelegatedAuthority(lease.authority)) {
+  const runId = context.operationalRunInstance.runId;
+  if (
+    !lease ||
+    lease.foregroundClosed ||
+    activeNativeHookRecoveryLeases.has(runId) ||
+    !validateAgentRunDelegatedAuthority(lease.authority)
+  ) {
     return undefined;
   }
-  lease.retained = true;
-  let released = false;
-  return () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    lease.retained = false;
-    if (lease.foregroundClosed) {
-      releaseAgentRunDelegatedAuthority(lease.authority);
+  activeNativeHookRecoveryLeases.set(runId, lease);
+  const assertActive = () => {
+    if (
+      getAgentRunLifecycleGeneration() !== lease.authority.lifecycleGeneration ||
+      activeNativeHookRecoveryLeases.get(runId) !== lease
+    ) {
+      throw new Error("admitted run native hook recovery is no longer active");
     }
   };
-}
-
-export function isRetainedAdmittedRunDelegatedAuthorityActive(
-  context: AdmittedRunContext,
-): boolean {
-  const lease = delegatedAuthorityLeases.get(context);
-  return Boolean(lease?.retained && validateAgentRunDelegatedAuthority(lease.authority));
+  return Object.freeze({
+    assertActive,
+    release: () => {
+      if (activeNativeHookRecoveryLeases.get(runId) === lease) {
+        activeNativeHookRecoveryLeases.delete(runId);
+      }
+    },
+  });
 }
 
 type ExecutionIdentityRecoveryAdmission = Readonly<{
@@ -119,6 +148,7 @@ type ExecutionIdentityRecoveryAdmission = Readonly<{
 export function createExecutionIdentityRecoveryAdmission(params: {
   retryOnly: boolean;
   token?: ExecutionIdentityAdmissionToken;
+  expectedOperationalRunId?: string;
 }): ExecutionIdentityRecoveryAdmission {
   let consumed = false;
   return Object.freeze({
@@ -128,7 +158,18 @@ export function createExecutionIdentityRecoveryAdmission(params: {
         return Object.freeze({ accepted: false });
       }
       consumed = true;
-      const token = params.token?.runId === runId ? params.token : undefined;
+      if (
+        params.expectedOperationalRunId !== undefined &&
+        params.expectedOperationalRunId !== runId
+      ) {
+        return Object.freeze({ accepted: false });
+      }
+      // The trusted recovery resolver binds the current operational owner separately.
+      // Without that explicit binding, only the token's original run may redeem it.
+      const token =
+        params.expectedOperationalRunId !== undefined || params.token?.runId === runId
+          ? params.token
+          : undefined;
       return Object.freeze({ accepted: true, ...(token ? { token } : {}) });
     },
   });
@@ -195,9 +236,14 @@ export function prepareAgentRunAdmission(params: {
       const fixedRuntimeKind = (admittedRuntimeKind ??= runtimeKind);
       admittedRuntimeInstanceId ??= runtimeInstanceId?.trim() || undefined;
       admitted ??= (async () => {
+        const facts = executionIdentitySpawnAdmission({
+          operation: "attach",
+          value: { ...params.facts, runtime: { kind: fixedRuntimeKind } },
+          extra: executionIdentitySpawnAdmission({ operation: "read", value: params.facts }),
+        });
         const context = admitPreparedAgentRun({
           cfg: params.cfg,
-          facts: { ...params.facts, runtime: { kind: fixedRuntimeKind } },
+          facts,
           operationalRunInstance,
           runtimeInstanceId: admittedRuntimeInstanceId,
           ...(params.recovery ? { recovery: params.recovery } : {}),

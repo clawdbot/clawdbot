@@ -1,11 +1,18 @@
-import { createServer, type Server } from "node:net";
-import type { AddressInfo } from "node:net";
+import { createServer, type Server, type AddressInfo } from "node:net";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { FailoverError } from "../agents/failover-error.js";
+import {
+  createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
+  createAgentRunSupersededAbortError,
+} from "../agents/run-termination.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   loadRunCronIsolatedAgentTurn,
+  dispatchCronDeliveryMock,
   mockRunCronFallbackPassthrough,
   resetRunCronIsolatedAgentTurnHarness,
   resolveAllowedModelRefMock,
@@ -128,7 +135,11 @@ async function runPersistedDiagnosticCase(params: {
         }).entries[0];
         expect(finished).toBeDefined();
         expect(history).toBeDefined();
-        return { finished: finished!, history: history! };
+        return {
+          finished: finished!,
+          history: history!,
+          lastError: cron.getJob(job.id)?.state.lastError,
+        };
       } finally {
         cron.stop();
         resetTaskRegistryForTests({ persist: false });
@@ -215,6 +226,69 @@ describe.sequential("cron execution diagnostics", () => {
     }
   });
 
+  it("persists provider failures without internal class names", async () => {
+    const message =
+      "The selected model was not found by the provider. Check the model id or choose a different model.";
+    const modelRef = { provider: "openai", model: "not-a-real-model" };
+    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
+    resolveAllowedModelRefMock.mockReturnValue({ ref: modelRef });
+    runWithModelFallbackMock.mockRejectedValueOnce(
+      new FailoverError(message, {
+        reason: "model_not_found",
+        provider: modelRef.provider,
+        model: modelRef.model,
+        code: "MODEL_NOT_FOUND",
+      }),
+    );
+
+    const { finished, history, lastError } = await runPersistedDiagnosticCase({
+      cfg: configFor(modelRef),
+      modelRef,
+      name: "missing provider model",
+    });
+
+    for (const outcome of [finished, history]) {
+      expect(outcome).toMatchObject({
+        status: "error",
+        provider: modelRef.provider,
+        model: modelRef.model,
+        error: `${message} | MODEL_NOT_FOUND`,
+        diagnostics: { summary: message },
+      });
+      expect(outcome.error).not.toContain("FailoverError");
+    }
+    expect(lastError).toBe(`${message} | MODEL_NOT_FOUND`);
+    expect(history.errorReason).toBe("model_not_found");
+  });
+
+  it.each([
+    ["direct abort", createAgentRunDirectAbortError],
+    ["gateway restart", createAgentRunRestartAbortError],
+    ["superseded run", createAgentRunSupersededAbortError],
+    ["stale gateway lifecycle", createAgentRunStaleLifecycleError],
+  ])("persists the coded %s reason instead of reporting a timeout", async (name, createError) => {
+    const modelRef = { provider: "openai", model: "gpt-5.4" };
+    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
+    const rejection = createError() as Error & { code: string };
+    runWithModelFallbackMock.mockRejectedValueOnce(rejection);
+
+    const { finished, history, lastError } = await runPersistedDiagnosticCase({
+      cfg: configFor(modelRef),
+      modelRef,
+      name,
+    });
+    const expected = `${rejection.message} | ${rejection.code}`;
+
+    for (const outcome of [finished, history]) {
+      expect(outcome).toMatchObject({
+        status: "error",
+        error: expected,
+      });
+      expect(outcome.error).not.toContain("timed out");
+    }
+    expect(lastError).toBe(expected);
+  });
+
   it("persists and emits a fatal execution-denial diagnostic", async () => {
     const modelRef = { provider: "openai", model: "gpt-5.4" };
     resolveConfiguredModelRefMock.mockReturnValue(modelRef);
@@ -253,6 +327,57 @@ describe.sequential("cron execution diagnostics", () => {
               source: "tool",
               severity: "error",
               message: "SYSTEM_RUN_DENIED: approval required",
+            }),
+          ]),
+        },
+      });
+    }
+  });
+
+  it("persists and emits terminal tool detail while keeping the payload generic", async () => {
+    const modelRef = { provider: "openai", model: "gpt-5.4" };
+    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
+    mockRunCronFallbackPassthrough();
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "⚠️ Exec failed", isError: true, toolName: "exec" }],
+      meta: {
+        agentMeta: {},
+        terminalToolFailure: {
+          source: "tool",
+          toolName: "exec",
+          code: "UNKNOWN_TOOL_ID",
+        },
+      },
+    });
+
+    const { finished, history } = await runPersistedDiagnosticCase({
+      cfg: configFor(modelRef),
+      modelRef,
+      name: "unknown tool id",
+    });
+
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryPayloads: [{ text: "cron isolated run returned an error payload", isError: true }],
+        outputText: "cron isolated run returned an error payload",
+        summary: "Code Mode could not resolve a configured MCP tool.",
+      }),
+    );
+
+    for (const outcome of [finished, history]) {
+      expect(outcome).toMatchObject({
+        status: "error",
+        provider: "openai",
+        model: "gpt-5.4",
+        summary: "Code Mode could not resolve a configured MCP tool.",
+        diagnostics: {
+          summary: "Code Mode could not resolve a configured MCP tool.",
+          entries: expect.arrayContaining([
+            expect.objectContaining({
+              source: "tool",
+              severity: "error",
+              message: "Code Mode could not resolve a configured MCP tool.",
+              toolName: "exec",
             }),
           ]),
         },

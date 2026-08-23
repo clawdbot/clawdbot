@@ -51,7 +51,6 @@ describe("command explainer tree-sitter runtime", () => {
     const source = "echo café😀 && echo 雪";
     const explanation = await explainShellCommand(source);
 
-    expect(explanation.topLevelCommands).toHaveLength(2);
     expect(explanation.topLevelCommands.map((command) => command.argv)).toEqual([
       ["echo", "café😀"],
       ["echo", "雪"],

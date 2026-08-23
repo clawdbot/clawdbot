@@ -1,7 +1,7 @@
 import {
   listAgentIds,
-  resolveDefaultAgentId,
-  resolveSystemAgentTargetAgentId,
+  resolveAmbientOwnerAgentId,
+  tryResolveAmbientOwnerAgentId,
 } from "../../agents/agent-scope-config.js";
 // Main-session keys normalize configured agents and legacy aliases into store keys.
 import {
@@ -9,7 +9,6 @@ import {
   normalizeMainKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
-import { tryResolveLegacyCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveCanonicalMainSessionKey } from "./main-session-key.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "./session-store-owner.js";
@@ -26,12 +25,10 @@ function buildMainSessionKey(agentId: string, mainKey?: string): string {
 /** Resolves the configured main session key, honoring global session scope. */
 export function resolveMainSessionKey(cfg: OpenClawConfig): string {
   return resolveCanonicalMainSessionKey({
-    agentId:
-      tryResolveLegacyCompatibilityAgentId(cfg) ??
-      resolveDefaultAgentId(cfg, {
-        surface: "main-session routing",
-        hint: "Pass an explicit agent/session key instead of the unscoped main alias.",
-      }),
+    agentId: resolveAmbientOwnerAgentId(cfg, undefined, {
+      surface: "main-session routing",
+      hint: "Pass an explicit agent/session key instead of the unscoped main alias.",
+    }),
     mainKey: cfg.session?.mainKey,
     sessionScope: cfg.session?.scope,
   });
@@ -42,7 +39,7 @@ export function resolveSystemMainSessionTarget(cfg: OpenClawConfig): {
   agentId: string;
   sessionKey: string;
 } {
-  const agentId = resolveSystemAgentTargetAgentId(cfg);
+  const agentId = resolveAmbientOwnerAgentId(cfg);
   return {
     agentId,
     sessionKey: resolveCanonicalMainSessionKey({
@@ -72,7 +69,7 @@ export function resolveSessionRoutingContract(cfg: OpenClawConfig): string {
       ? persistedOwner.agentId
       : persistedOwner.kind === "retired"
         ? `retired:${persistedOwner.agentId}`
-        : (tryResolveLegacyCompatibilityAgentId(cfg) ??
+        : (tryResolveAmbientOwnerAgentId(cfg) ??
           (cfg.agents?.ownership === "explicit" ? "unowned" : (listAgentIds(cfg)[0] ?? "main")));
   return [scope, normalizeMainKey(cfg?.session?.mainKey), routingOwner].join("|");
 }

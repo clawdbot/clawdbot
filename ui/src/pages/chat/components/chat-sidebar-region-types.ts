@@ -3,6 +3,20 @@ import type { SidebarDock, SidebarSlotId } from "../sidebar-layout.ts";
 
 export type SidebarPanelTemplates = Partial<Record<SidebarSlotId, TemplateResult | typeof nothing>>;
 
+export type SidebarPanelDefinition = {
+  slot: SidebarSlotId;
+  label: string;
+  icon: TemplateResult;
+  shortcut?: string;
+  available: boolean;
+  content: TemplateResult | typeof nothing | null;
+  headerAction?: TemplateResult;
+  empty: {
+    description: string;
+    action?: TemplateResult;
+  };
+};
+
 export type SidebarRegionCallbacks = {
   activatePanel: (panelId: string) => void;
   closeSlot: (slot: SidebarSlotId) => void;

@@ -63,7 +63,11 @@ suite.define(() => {
         expect(response?.status()).toBe(200);
         const row = page.locator(`[data-test-id="cron-row-${job.id}"]`);
         await row.waitFor({ state: "visible", timeout: 10_000 });
-        await row.locator(".cron-table__name-text").click();
+        expect(await page.locator(".cron-table__head").getAttribute("role")).toBeNull();
+        expect(await row.getAttribute("role")).toBeNull();
+        const openTask = row.getByRole("button", { name: /Nightly digest/ });
+        await openTask.focus();
+        await page.keyboard.press("Enter");
         const detail = page.locator('.cron-page[data-panel-mode="job"]');
         await detail.waitFor({ state: "visible" });
 

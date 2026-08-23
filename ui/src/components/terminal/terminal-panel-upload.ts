@@ -1,6 +1,7 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { renderDockDestinations } from "../dock-destination-controls.ts";
 import { icons } from "../icons.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
@@ -192,7 +193,7 @@ export class TerminalPanelUploadController {
       return;
     }
     batch.state = "failed";
-    batch.error = error instanceof Error ? error.message : String(error);
+    batch.error = formatUiError(error);
     batch.retryable = retryable;
     this.host.requestUpdate();
   }
@@ -380,8 +381,9 @@ export function renderTerminalPanelActions(params: {
               <button
                 class="rail-header__action tp-icon tp-open-fullscreen"
                 type="button"
-                title=${t("terminal.openFullscreen")}
-                aria-label=${t("terminal.openFullscreen")}
+                data-new-tab-action
+                title=${t("terminal.openWindow")}
+                aria-label=${t("terminal.openWindow")}
                 @click=${params.onOpenFullscreen}
               >
                 ${icons.maximize}
