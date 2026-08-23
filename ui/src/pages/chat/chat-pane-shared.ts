@@ -213,10 +213,12 @@ export function nativeHistoryMessageIdentity(message: unknown): string | null {
   if (!sourceIdentity) {
     return null;
   }
+  const { recordTimestampMs: _recordTimestampMs, ...projectionMetadata } = metadata ?? {};
+  const projection = metadata ? { ...record, __openclaw: projectionMetadata } : record;
   try {
-    // One transcript record can project to multiple visible siblings. Include
-    // the projection bytes so partial page overlap removes the matching sibling.
-    return `${sourceIdentity}:${JSON.stringify(message)}`;
+    // History alone adds recordTimestampMs; delivery metadata is not projection identity.
+    // Keep every other projection byte so siblings from one transcript row stay distinct.
+    return `${sourceIdentity}:${JSON.stringify(projection)}`;
   } catch {
     return sourceIdentity;
   }

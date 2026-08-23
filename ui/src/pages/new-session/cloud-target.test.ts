@@ -3,7 +3,6 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderCloudMachineMenuItems, renderCloudProfileMenuItems } from "./cloud-target.ts";
-import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 
 describe("cloud target menu", () => {
   it.each([
@@ -42,38 +41,6 @@ describe("cloud target menu", () => {
     expect(container.querySelector(".session-menu__sub")?.textContent).toBe(expected);
   });
 
-  it.each([
-    {
-      name: "keeps an advertised supported runtime enabled",
-      runtime: { id: "codex", cloudPlacementSupported: true, source: "model" as const },
-      expected: undefined,
-    },
-    {
-      name: "leaves an unadvertised runtime to the Gateway dispatch gate",
-      runtime: { id: "codex", source: "model" as const },
-      expected: undefined,
-    },
-    {
-      name: "explains an advertised unsupported runtime",
-      runtime: { id: "acpx", cloudPlacementSupported: false, source: "model" as const },
-      expected: "The acpx runtime does not support cloud workers.",
-    },
-  ])("$name", ({ runtime, expected }) => {
-    const flow = new DraftSubmissionFlow(
-      {} as never,
-      {
-        modelControl: { resolveAgentRuntime: () => runtime },
-        repository: { kind: "git", repoRoot: "/repo", branches: [] },
-        selectedAgent: () => undefined,
-        worktreeAvailable: () => true,
-      } as never,
-      () => ({ context: undefined, data: undefined, isConnected: true }),
-      { requestUpdate: vi.fn(), closeTransientUi: vi.fn() },
-    );
-
-    expect(flow.cloudDisabledReason()).toBe(expected);
-  });
-
   it("disables cloud profiles with the runtime preflight reason", () => {
     const container = document.createElement("div");
     render(
@@ -91,5 +58,31 @@ describe("cloud target menu", () => {
     const button = container.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]');
     expect(button?.disabled).toBe(true);
     expect(button?.title).toBe("The acpx runtime does not support cloud workers.");
+  });
+
+  it("disables only the cloud profile with a profile-specific reason", () => {
+    const reason =
+      "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.";
+    const container = document.createElement("div");
+    render(
+      renderCloudProfileMenuItems({
+        profiles: [
+          { id: "aws", providerId: "crabbox" },
+          { id: "ssh", providerId: "static-ssh" },
+        ],
+        selectedId: "",
+        submitting: false,
+        profileDisabledReason: (profile) => (profile.id === "aws" ? reason : undefined),
+        onSelect: vi.fn(),
+      }),
+      container,
+    );
+
+    const disabled = container.querySelector<HTMLButtonElement>('[data-value="cloud:aws"]');
+    const enabled = container.querySelector<HTMLButtonElement>('[data-value="cloud:ssh"]');
+    expect(disabled?.disabled).toBe(true);
+    expect(disabled?.title).toBe(reason);
+    expect(enabled?.disabled).toBe(false);
+    expect(enabled?.title).toBe("Cloud worker provider: static-ssh");
   });
 });

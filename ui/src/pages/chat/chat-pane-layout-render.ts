@@ -24,7 +24,6 @@ import {
   renderSessionWorkspaceRail,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
-import type { SidebarFullMessageLoader } from "./components/chat-sidebar.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   isSidebarSlotVisible,
@@ -43,7 +42,6 @@ type ChatPaneLayoutRenderParams = {
   sessionWorkspace: SessionWorkspaceProps;
   backgroundTasks: BackgroundTasksProps;
   chatProps: ChatProps;
-  fullMessageLoader: SidebarFullMessageLoader | null;
   observerDigest: SessionObserverDigest | null;
   observerRunId: string | null;
   catalog: boolean;
@@ -66,7 +64,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       sessionWorkspace,
       backgroundTasks,
       chatProps,
-      fullMessageLoader,
       observerDigest,
       observerRunId,
       catalog,
@@ -82,6 +79,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       catalog,
       agentWorkspace,
       workspaceGit,
+      sidebarLayout,
     );
     const chat = renderChat({
       ...chatProps,
@@ -102,6 +100,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const desktopRefreshOnPresentation = !this.pendingPanelToggleRequests.has("desktop");
     const panelDefinitions = sidebarPanelDefinitions({
       state,
+      themeMode: this.context.theme.resolvedMode,
       agentId: currentAgentId,
       browserPresented,
       desktopPresented,
@@ -117,7 +116,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           backgroundTasks,
           chat: chatProps,
           content,
-          fullMessageLoader,
           host: state,
           layout: sidebarLayout,
           transcript: this.taskSidebarTranscript,
@@ -155,7 +153,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         forgetDiscussionUrl: () => this.sessionDiscussionOpenUrls.delete(state.sessionKey.trim()),
         resizePanel: (columnId, size) =>
           this.commitSidebarPanelResize(sidebarLayout, columnId, size),
-        setPanelOpen: (open) => this.setChatSidePanelOpen(open),
+        setPanelOpen: (open) => this.setChatSidePanelOpen(open, sidebarLayout),
       }),
       layout: sidebarLayout,
       panelDefinitions,

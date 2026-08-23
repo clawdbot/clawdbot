@@ -663,9 +663,9 @@ function buildScenarioToolCallEvents(
       `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
       `const targetName = ${JSON.stringify(name)};`,
       `const targetArgs = ${JSON.stringify(args)};`,
-      "const target = ALL_TOOLS.find((entry) => entry.name === targetName);",
+      "const target = (await catalog.search(targetName)).find((entry) => entry.toolName === targetName);",
       "if (!target) throw new Error(`QA mock target tool unavailable: ${targetName}`);",
-      "const value = await tools.callValue(target.id, targetArgs);",
+      "const value = await target(targetArgs);",
       'if (targetName === "read" && value?.kind === "text" && typeof value.content === "string") {',
       "  return { ...value, content: value.content.slice(0, 2048) };",
       "}",
@@ -960,9 +960,9 @@ async function buildResponsesPayload(
           restartSafe: true,
           code: [
             `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
-            'const target = ALL_TOOLS.find((tool) => tool.name === "qa_restart_wait");',
+            'const target = (await catalog.search("qa_restart_wait")).find((tool) => tool.toolName === "qa_restart_wait");',
             'if (!target) throw new Error("qa_restart_wait unavailable");',
-            "await tools.call(target.id, {});",
+            "await target({});",
             `return "CHECKPOINT-${nextCheckpoint}";`,
           ].join("\n"),
         });
@@ -1155,17 +1155,24 @@ async function buildResponsesPayload(
         language: "javascript",
         code: useApiFiles
           ? [
-              'const files = await API.list("mcp");',
-              'const root = await API.read("mcp/index.d.ts");',
-              'const api = await API.read("mcp/fixture.d.ts");',
-              'const result = await MCP.fixture.lookupNote({ id: "alpha" });',
+              "const [files, root, api, result, failure, resources, resource, prompts, prompt] = await Promise.all([",
+              '  API.list("mcp"), API.read("mcp/index.d.ts"), API.read("mcp/fixture.d.ts"),',
+              '  MCP.fixture.lookupNote({ id: "alpha" }), MCP.fixture.lookupNote({ id: "missing" }),',
+              '  MCP.fixture.resources.list(), MCP.fixture.resources.read({ uri: "memo://fixture/alpha" }),',
+              '  MCP.fixture.prompts.list(), MCP.fixture.prompts.get({ name: "fixture_brief", arguments: { id: "alpha" } }),',
+              "]);",
+              'if (result.structuredContent?.note !== "fixture-note-alpha" || result.isError !== false) throw new Error("MCP success lost its top-level result shape");',
+              'if (failure.structuredContent?.note !== "missing-note" || failure.isError !== true) throw new Error("MCP resolved failure lost its top-level result shape");',
+              'if (result._meta !== undefined || result.content?.[0]?._meta?.proof !== "fixture-content-metadata") throw new Error("MCP result metadata crossed the wrong boundary");',
+              'if (!resources.resources?.some((entry) => entry.uri === "memo://fixture/alpha") || resource.contents?.[0]?.text !== "fixture-note-alpha") throw new Error("MCP resources lost their native result shape");',
+              'if (!prompts.prompts?.some((entry) => entry.name === "fixture_brief") || prompt.messages?.[0]?.content?.text !== "fixture-note-alpha") throw new Error("MCP prompts lost their native result shape");',
               "return {",
               '  marker: "MCP_CODE_MODE_FILE_TOOL_RESULT",',
               "  files: files.files.map((file) => file.path),",
               "  rootHasFixture: root.content.includes('fixture'),",
               "  headerHasLookup: api.content.includes('function lookupNote'),",
               "  resultText: result.content?.[0]?.text,",
-              "  allHasMcp: ALL_TOOLS.some((tool) => tool.source === 'mcp'),",
+              "  allHasMcp: catalog.all().some((tool) => tool.source === 'mcp'),",
               "};",
             ].join("\n")
           : [
@@ -1178,7 +1185,7 @@ async function buildResponsesPayload(
               "  headerHasLookup: api.header.includes('function lookupNote'),",
               "  schemaKeys: Object.keys(api.schemas),",
               "  resultText: result.content?.[0]?.text,",
-              "  allHasMcp: ALL_TOOLS.some((tool) => tool.source === 'mcp'),",
+              "  allHasMcp: catalog.all().some((tool) => tool.source === 'mcp'),",
               "};",
             ].join("\n"),
       });
@@ -1367,7 +1374,7 @@ async function buildResponsesPayload(
   }
   if (isActiveFailedToolTerminalRecovery) {
     if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
-      if (!allInputText.includes("state that failure plainly and do not claim it succeeded")) {
+      if (!allInputText.includes("If a tool failed, say so; never claim completion or success.")) {
         return buildAssistantEvents("FAILED-TOOL-HONESTY-INSTRUCTION-MISSING");
       }
       const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-FAILED-TOOL-FINALIZED-OK";

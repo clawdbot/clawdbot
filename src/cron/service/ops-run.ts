@@ -44,8 +44,8 @@ import type {
 import { emit, isImmediateCronRunMode } from "./state.js";
 import { ensureLoaded, publishCronRuntimeRows, runPostPersistCronNotifications } from "./store.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
+import { recordCronOutcomeForJob } from "./timer-outcome-events.js";
 import {
-  recordCronOutcomeForJob,
   resolveCronRunScheduleOwnership,
   resolveCronRunTriggerOwnership,
 } from "./timer-outcomes.js";
@@ -229,6 +229,9 @@ async function finishPreparedManualRun(
         taskRunId,
         {
           errorClassification: triggerSkipped ? undefined : coreResult.errorClassification,
+          failureNotificationDetail: triggerSkipped
+            ? undefined
+            : coreResult.failureNotificationDetail,
         },
       );
     };
@@ -387,8 +390,12 @@ async function finishPreparedManualRun(
             taskRunId,
             {
               triggerEval: coreResult.triggerEval,
-              scriptResult: coreResult,
+              scriptResult: {
+                scriptStateChanged: coreResult.scriptStateChanged,
+                scriptState: coreResult.scriptState,
+              },
               errorClassification: coreResult.errorClassification,
+              failureNotificationDetail: coreResult.failureNotificationDetail,
             },
           );
         }

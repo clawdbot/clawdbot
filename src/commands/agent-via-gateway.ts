@@ -1235,6 +1235,9 @@ export async function agentCliCommand(
   runtime: RuntimeEnv,
   deps?: AgentCliDeps,
 ) {
+  if (opts.agent !== undefined && !opts.agent.trim()) {
+    throw new Error("--agent must not be blank");
+  }
   protectJsonStdout(opts);
   const messageOpts = await resolveAgentMessageOpts(opts);
   // `/compact` cannot run as a plain CLI agent turn: the slash-command handler

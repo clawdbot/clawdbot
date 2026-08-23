@@ -8,7 +8,8 @@ import {
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
 import { asBoolean, asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveLlamaServerEndpoint } from "./endpoint.js";
+import { LLAMA_SERVER_DEFAULT_ORIGIN } from "./defaults.js";
+import { normalizeLlamaServerProviderConfig } from "./endpoint.js";
 
 type LlamaServerModelStatus =
   | "unloaded"
@@ -18,25 +19,19 @@ type LlamaServerModelStatus =
   | "downloading"
   | "unknown";
 
-export type LlamaServerModelWire = {
+type LlamaServerModelWire = Record<string, unknown> & {
   id?: unknown;
   object?: unknown;
-  owned_by?: unknown;
   status?: {
     value?: unknown;
     failed?: unknown;
-    exit_code?: unknown;
   };
   architecture?: {
     input_modalities?: unknown;
-    output_modalities?: unknown;
   };
-  meta?: {
-    n_ctx_train?: unknown;
-  } | null;
 };
 
-export type LlamaServerPropsWire = {
+type LlamaServerPropsWire = Record<string, unknown> & {
   n_ctx?: unknown;
   default_generation_settings?: {
     n_ctx?: unknown;
@@ -45,20 +40,14 @@ export type LlamaServerPropsWire = {
       n_predict?: unknown;
     };
   };
-  total_slots?: unknown;
   chat_template_caps?: Record<string, unknown>;
   modalities?: Record<string, unknown>;
-  build_info?: unknown;
-  is_sleeping?: unknown;
 };
 
 export type LlamaServerDiscoveredModel = {
   config: ModelDefinitionConfig;
   status: LlamaServerModelStatus;
   failed: boolean;
-  exitCode?: number;
-  buildInfo?: string;
-  totalSlots?: number;
 };
 
 function normalizeStatus(value: unknown): LlamaServerModelStatus {
@@ -131,8 +120,6 @@ export function mapLlamaServerModel(
     return null;
   }
   const contextWindow = resolveContextWindow(props);
-  const buildInfo = typeof props?.build_info === "string" ? props.build_info.trim() : "";
-  const exitCode = asPositiveSafeInteger(row.status?.exit_code);
   return {
     config: {
       id,
@@ -147,11 +134,6 @@ export function mapLlamaServerModel(
     },
     status: normalizeStatus(row.status?.value),
     failed: row.status?.failed === true,
-    ...(exitCode !== undefined ? { exitCode } : {}),
-    ...(buildInfo ? { buildInfo } : {}),
-    ...(asPositiveSafeInteger(props?.total_slots) !== undefined
-      ? { totalSlots: asPositiveSafeInteger(props?.total_slots) }
-      : {}),
   };
 }
 
@@ -177,19 +159,12 @@ export function buildLlamaServerProviderConfig(params: {
   configured?: ModelProviderConfig;
   discoveredModels: readonly LlamaServerDiscoveredModel[];
 }): ModelProviderConfig {
-  const endpoint = resolveLlamaServerEndpoint(params.configured?.baseUrl);
-  const request = params.configured?.request ?? {};
-  return {
+  return normalizeLlamaServerProviderConfig({
     ...params.configured,
-    baseUrl: endpoint.inferenceBaseUrl,
-    api: "openai-completions",
-    request:
-      typeof request.allowPrivateNetwork === "boolean"
-        ? request
-        : { ...request, allowPrivateNetwork: true },
+    baseUrl: params.configured?.baseUrl ?? LLAMA_SERVER_DEFAULT_ORIGIN,
     models: mergeLlamaServerModels({
       explicitModels: params.configured?.models,
       discoveredModels: params.discoveredModels,
     }),
-  };
+  });
 }

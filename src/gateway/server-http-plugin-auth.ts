@@ -1,5 +1,6 @@
 import { resolveBundledChannelGatewayAuthBypassPaths } from "../channels/plugins/gateway-auth-bypass.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import type { PluginNodeCapabilitySurface } from "./plugin-node-capability.js";
 import {
@@ -18,10 +19,15 @@ export type ResolvePluginNodeCapabilityRoute = (
   pathContext: PluginRoutePathContext,
 ) => PluginNodeCapabilitySurface | undefined;
 
-const pluginGatewayAuthBypassPathsCache = new WeakMap<
-  OpenClawConfig,
-  Promise<ReadonlySet<string>>
->();
+// Bypass paths come from plugin-declared artifacts, not config bytes alone. A
+// metadata lifecycle reset can replace that contract while the config object
+// identity stays stable, so the cache must roll to a fresh generation on reset
+// or a replaced channel plugin keeps its predecessor's HTTP auth exceptions.
+let pluginGatewayAuthBypassPathsCache = new WeakMap<OpenClawConfig, Promise<ReadonlySet<string>>>();
+
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  pluginGatewayAuthBypassPathsCache = new WeakMap();
+});
 
 async function resolvePluginGatewayAuthBypassPaths(
   configSnapshot: OpenClawConfig,
@@ -45,15 +51,18 @@ async function resolvePluginGatewayAuthBypassPaths(
 export function getCachedPluginGatewayAuthBypassPaths(
   configSnapshot: OpenClawConfig,
 ): Promise<ReadonlySet<string>> {
-  const cached = pluginGatewayAuthBypassPathsCache.get(configSnapshot);
+  const cache = pluginGatewayAuthBypassPathsCache;
+  const cached = cache.get(configSnapshot);
   if (cached) {
     return cached;
   }
   const resolved = resolvePluginGatewayAuthBypassPaths(configSnapshot).catch((error: unknown) => {
-    pluginGatewayAuthBypassPathsCache.delete(configSnapshot);
+    // Evict from the owning generation only; a stale failure settling after a
+    // lifecycle reset must not drop a freshly cached entry.
+    cache.delete(configSnapshot);
     throw error;
   });
-  pluginGatewayAuthBypassPathsCache.set(configSnapshot, resolved);
+  cache.set(configSnapshot, resolved);
   return resolved;
 }
 

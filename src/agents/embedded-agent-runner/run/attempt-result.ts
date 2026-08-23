@@ -73,6 +73,7 @@ type EmbeddedAttemptResultState = Pick<
   | "lastAssistant"
   | "currentAttemptAssistant"
   | "currentAttemptCompletedAssistant"
+  | "codeModeReconciliationCandidate"
   | "successfulNestedToolNames"
   | "attemptUsage"
   | "promptCache"
@@ -110,17 +111,8 @@ function normalizeEmbeddedAttemptToolMetas(
 ): EmbeddedRunAttemptResult["toolMetas"] {
   return entries
     .filter(
-      (
-        entry,
-      ): entry is {
-        toolName: string;
-        meta?: string;
-        replaySafe?: boolean;
-        isError?: boolean;
-        asyncStarted?: boolean;
-        asyncTaskRunId?: string;
-        asyncTaskId?: string;
-      } => typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
+      (entry): entry is EmbeddedAttemptSubscription["toolMetas"][number] & { toolName: string } =>
+        typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
     )
     .map((entry) => {
       const normalized: EmbeddedRunAttemptResult["toolMetas"][number] = {
@@ -128,8 +120,14 @@ function normalizeEmbeddedAttemptToolMetas(
         meta: entry.meta,
         replaySafe: entry.replaySafe === true,
       };
+      if (entry.toolCallId) {
+        normalized.toolCallId = entry.toolCallId;
+      }
       if (typeof entry.isError === "boolean") {
         normalized.isError = entry.isError;
+      }
+      if (entry.terminate === true) {
+        normalized.terminate = true;
       }
       if (entry.asyncStarted === true) {
         normalized.asyncStarted = true;
@@ -179,7 +177,6 @@ export function completeEmbeddedAttemptResult(
     getLastAssistantTextMessageIndex,
     getLastCompactionTokensAfter,
     getLastToolError,
-    getLastToolRecovery,
     getLatestMcpAppChannelView,
     getLatestMcpConnectAction,
     getMessagingToolSentMediaUrls,
@@ -325,7 +322,6 @@ export function completeEmbeddedAttemptResult(
     completedClientToolCalls.length > 0 ? completedClientToolCalls : undefined;
   const didSendDeterministicApprovalPromptNow = didSendDeterministicApprovalPrompt();
   const lastToolError = getLastToolError();
-  const lastToolRecovery = getLastToolRecovery();
   const heartbeatToolResponse = getHeartbeatToolResponse();
   const messagingToolSourceReplyPayloads = getMessagingToolSourceReplyPayloads();
   const hasToolMediaBlockReplyNow = hasToolMediaBlockReply();
@@ -335,7 +331,6 @@ export function completeEmbeddedAttemptResult(
     didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
     heartbeatToolResponse,
     lastToolError,
-    lastToolRecovery,
     toolMediaUrls: pendingToolMediaReply?.mediaUrls,
     toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
     toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
@@ -402,6 +397,7 @@ export function completeEmbeddedAttemptResult(
     ...state,
     replayMetadata,
     currentAttemptReplayMetadata,
+    codeModeReconciliationCandidate: state.codeModeReconciliationCandidate,
     itemLifecycle: getItemLifecycle(),
     assistantTurns: getAssistantTurnCount(),
     setTerminalLifecycleMeta,
@@ -415,7 +411,6 @@ export function completeEmbeddedAttemptResult(
     successfulNestedToolNames: state.successfulNestedToolNames,
     acceptedSessionSpawns,
     lastToolError,
-    lastToolRecovery,
     didSendViaMessagingTool: didSendViaMessagingTool(),
     didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
     messagingToolSentTexts: getMessagingToolSentTexts(),

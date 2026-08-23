@@ -21,7 +21,7 @@ import type { WorkerTunnelManager } from "./tunnel.js";
 export type WorkerProviderLifecycleInputOptions = {
   store: WorkerEnvironmentStore;
   getConfig: () => OpenClawConfig;
-  resolveProvider: (providerId: string) => WorkerProvider | undefined;
+  resolveProvider: (providerId: string) => WorkerProvider<"internal"> | undefined;
   prepareInstallation: (
     install: WorkerInstallationArtifact["install"],
   ) => Promise<WorkerInstallationArtifact>;
@@ -33,7 +33,7 @@ export type WorkerProviderLifecycleInputOptions = {
     signal: AbortSignal;
   }) => Promise<WorkerAdmissionHandshake>;
   resolveSshIdentity?: (params: {
-    provider: WorkerProvider;
+    provider: WorkerProvider<"internal">;
     leaseId: string;
     profile: WorkerProfile;
     keyRef: SecretRef;

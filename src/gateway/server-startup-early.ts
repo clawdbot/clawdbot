@@ -71,6 +71,7 @@ export async function startGatewayEarlyRuntime(params: {
     warn: (msg: string) => void;
   };
   nodeRegistry: Parameters<typeof import("../skills/runtime/remote.js").setSkillsRemoteRegistry>[0];
+  swapBonjourStop: (next: (() => Promise<void>) | null) => (() => Promise<void>) | null;
   pluginRegistry?: PluginRegistry;
   broadcast: GatewayMaintenanceParams["broadcast"];
   nodeSendToAllSubscribed: Parameters<StartGatewayMaintenanceTimers>[0]["nodeSendToAllSubscribed"];
@@ -102,8 +103,11 @@ export async function startGatewayEarlyRuntime(params: {
       ensureTaskRuntimeStateReady();
     });
   }
-  const bonjourStop = await measureStartup(params.startupTrace, "runtime.early.discovery", () =>
-    startGatewayPluginDiscovery(params),
+  // Startup failure can occur immediately after discovery; publish its owner first.
+  params.swapBonjourStop(
+    await measureStartup(params.startupTrace, "runtime.early.discovery", () =>
+      startGatewayPluginDiscovery(params),
+    ),
   );
   let getActiveTaskCount = () => 0;
 
@@ -205,7 +209,6 @@ export async function startGatewayEarlyRuntime(params: {
   };
 
   return {
-    bonjourStop,
     getActiveTaskCount,
     skillsChangeUnsub,
     startMaintenance,

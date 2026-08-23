@@ -5,7 +5,7 @@ import { normalizeMediaReferenceForComparison } from "../../media/media-referenc
  * Extracts visible delivery evidence from embedded-agent run results.
  */
 import { collectMediaUrlsFromRecord, hasVisibleAgentPayload } from "./message-visibility.js";
-export { hasVisibleAgentPayload } from "./message-visibility.js";
+export { hasExplicitlyVisibleAgentPayload, hasVisibleAgentPayload } from "./message-visibility.js";
 
 /**
  * Helpers for deciding whether an embedded run produced user-visible or outbound effects.

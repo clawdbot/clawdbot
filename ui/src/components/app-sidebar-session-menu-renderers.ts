@@ -294,6 +294,7 @@ export function renderSidebarSessionSortMenu(params: {
   }
   const groupingOptions = [
     { grouping: "category", label: t("sessionsView.groupByCategory") },
+    { grouping: "person", label: t("sessionsView.groupByPerson") },
     { grouping: "none", label: t("sessionsView.groupByNone") },
   ] as const satisfies ReadonlyArray<{ grouping: SidebarSessionsGrouping; label: string }>;
   return keyed(
@@ -336,13 +337,15 @@ export function renderSidebarSessionSortMenu(params: {
         >
           ${renderSidebarMenuTrigger(position, t("chat.sidebar.sortSessions"))}
           <div class="sidebar-session-sort-menu__title">${t("sessionsView.groupBy")}</div>
-          ${groupingOptions.map((option) =>
-            renderSidebarMenuRadioItem({
-              value: `grouping:${option.grouping}`,
-              checked: params.grouping === option.grouping,
-              label: option.label,
-            }),
-          )}
+          ${groupingOptions
+            .filter((option) => option.grouping !== "person" || params.peopleSortAvailable)
+            .map((option) =>
+              renderSidebarMenuRadioItem({
+                value: `grouping:${option.grouping}`,
+                checked: params.grouping === option.grouping,
+                label: option.label,
+              }),
+            )}
           <div class="session-menu__separator" role="separator"></div>
           <div class="sidebar-session-sort-menu__title">${t("chat.sidebar.sortBy")}</div>
           ${SIDEBAR_SESSION_SORT_OPTIONS.filter(

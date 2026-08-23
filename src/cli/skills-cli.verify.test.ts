@@ -58,6 +58,7 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
+  resolveConfiguredAgentId: (_config: unknown, agentId: string) => agentId,
   resolveAgentIdByWorkspacePath: (config: unknown, workspacePath: string) =>
     mocks.resolveAgentIdByWorkspacePathMock(config, workspacePath),
   resolveDefaultAgentId: (config: unknown) => mocks.resolveDefaultAgentIdMock(config),
@@ -320,7 +321,7 @@ describe("skills verify CLI", () => {
     ).rejects.toThrow("__exit__:1");
 
     const message =
-      'Skill "nonexistent-skill-xyz" not found. Run `openclaw skills list` to see available skills.';
+      'Skill "nonexistent-skill-xyz" not found on ClawHub. Run `openclaw skills search nonexistent-skill-xyz` to find the right skill reference.';
     if (human) {
       expect(mocks.runtimeStdout).toStrictEqual([]);
       expect(mocks.runtimeErrors).toStrictEqual([message]);

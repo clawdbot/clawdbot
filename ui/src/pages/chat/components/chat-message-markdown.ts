@@ -1,3 +1,4 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
@@ -82,7 +83,7 @@ export type MessageActionDetails = {
   shouldFetchFullMessage: boolean;
 };
 
-export function resolveNormalizedMessageMarkdown(normalizedMessage: NormalizedMessage): string {
+function resolveNormalizedMessageMarkdown(normalizedMessage: NormalizedMessage): string {
   return normalizedMessage.content
     .reduce<string[]>((lines, item) => {
       if (item.type === "text" && typeof item.text === "string") {
@@ -94,14 +95,24 @@ export function resolveNormalizedMessageMarkdown(normalizedMessage: NormalizedMe
     .trim();
 }
 
+/** Keep internal oversized-history markers out of every user-visible text surface. */
+export function resolveMessageDisplayMarkdown(
+  message: unknown,
+  normalizedMessage: NormalizedMessage,
+): string {
+  const metadata = asNullableRecord(asNullableRecord(message)?.["__openclaw"]);
+  if (metadata?.truncated === true && metadata.reason === "oversized") {
+    return t("chat.messages.tooLargeToDisplay");
+  }
+  const markdown = resolveNormalizedMessageMarkdown(normalizedMessage);
+  return normalizeRoleForGrouping(normalizedMessage.role) === "assistant"
+    ? stripThinkingTags(markdown).trim()
+    : markdown.trim();
+}
+
 export function resolveMessageReplyText(message: unknown): string {
   const normalizedMessage = normalizeMessage(message);
-  const markdown = resolveNormalizedMessageMarkdown(normalizedMessage);
-  const visibleMarkdown =
-    normalizeRoleForGrouping(normalizedMessage.role) === "assistant"
-      ? stripThinkingTags(markdown).trim()
-      : markdown.trim();
-  return visibleMarkdown;
+  return resolveMessageDisplayMarkdown(message, normalizedMessage);
 }
 
 export function resolveMessageActionDetails(params: {
@@ -129,13 +140,16 @@ export function resolveMessageActionDetails(params: {
   const normalizedMessage = normalizeMessage(message);
   const role = normalizeRoleForGrouping(normalizedMessage.role);
   const previewMarkdown = resolveMessageReplyText(message);
-  // Loaded text must not erase the preview's truncation fact or collapse its disclosure.
+  // The Gateway records every display-cap truncation as __openclaw.truncated, so
+  // that marker is the whole contract: sniffing the in-band sentinel would fetch
+  // for any reply that merely contains the text. Assistant-only because the
+  // expander renders loaded content for assistant rows alone.
   const shouldFetchFullMessage = Boolean(
+    role === "assistant" &&
     canFetchFullMessage &&
     messageId &&
     !record.openclawMessageToolMirror &&
-    (transcriptMeta?.truncated === true ||
-      (role === "assistant" && previewMarkdown.includes("\n...(truncated)..."))),
+    transcriptMeta?.truncated === true,
   );
   const expansion =
     role === "assistant" && shouldFetchFullMessage && messageId
@@ -198,8 +212,9 @@ export function renderReplyButton(
   `;
 }
 
-const USER_MESSAGE_COLLAPSED_LINE_LIMIT = 5;
-const USER_MESSAGE_COLLAPSED_CHAR_LIMIT = 700;
+// Character length owns normal disclosure; this high line cap only bounds newline-heavy prompts.
+const USER_MESSAGE_COLLAPSED_CHAR_LIMIT = 1_200;
+const USER_MESSAGE_COLLAPSED_LINE_LIMIT = 40;
 
 function shouldCollapseUserMessage(markdown: string): boolean {
   return (
@@ -250,28 +265,21 @@ export function renderUserMessageMarkdown(
   markdownRenderOptions: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
 ) {
-  if (!opts.onToggleUserMessageExpanded) {
+  if (!opts.onToggleUserMessageExpanded || !shouldCollapseUserMessage(markdown)) {
     return renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions, duplicateSuffix);
   }
 
   const disclosureId = `user-message:${messageKey}`;
   const expanded = opts.isUserMessageExpanded?.(disclosureId) ?? false;
-  const likelyOverflow = shouldCollapseUserMessage(markdown);
   return html`
-    <div
-      class="chat-message-disclosure ${expanded
-        ? "is-expanded has-overflow"
-        : likelyOverflow
-          ? "has-overflow"
-          : ""}"
-    >
+    <div class="chat-message-disclosure ${expanded ? "is-expanded has-overflow" : ""}">
       <div class="chat-message-disclosure__content" ${ref(userMessageOverflowRef(expanded))}>
         ${renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions, duplicateSuffix)}
       </div>
       <button
         class="chat-message-disclosure__toggle"
         type="button"
-        ?hidden=${!expanded && !likelyOverflow}
+        ?hidden=${!expanded}
         aria-label=${t(expanded ? "chat.messages.showLess" : "chat.messages.showMore")}
         aria-expanded=${String(expanded)}
         @click=${() => opts.onToggleUserMessageExpanded?.(disclosureId)}
@@ -295,6 +303,7 @@ export function renderAssistantMessageMarkdown(
   disclosure: AssistantMessageDisclosure | undefined,
   markdownRenderOptions: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
+  streamKey?: string,
 ) {
   const markdown = disclosure?.expanded
     ? (disclosure.markdown ?? previewMarkdown)
@@ -302,7 +311,7 @@ export function renderAssistantMessageMarkdown(
   const renderOptions = disclosure?.expanded
     ? { ...markdownRenderOptions, mode: "document" as const }
     : markdownRenderOptions;
-  const text = renderMarkdownText(markdown, isStreaming, renderOptions, duplicateSuffix);
+  const text = renderMarkdownText(markdown, isStreaming, renderOptions, duplicateSuffix, streamKey);
   if (!disclosure?.onRetryFullMessage) {
     return text;
   }
@@ -328,9 +337,10 @@ export function renderMarkdownText(
   isStreaming: boolean,
   markdownRenderOptions?: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
+  streamKey?: string,
 ) {
   const rendered = isStreaming
-    ? toStreamingMarkdownHtml(markdown, markdownRenderOptions)
+    ? toStreamingMarkdownHtml(markdown, markdownRenderOptions, streamKey)
     : toSanitizedMarkdownHtml(markdown, markdownRenderOptions);
   const content = duplicateSuffix ? appendDuplicateSuffix(rendered, duplicateSuffix) : rendered;
   return html`

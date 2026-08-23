@@ -93,7 +93,12 @@ install_trufflehog() {
   url="https://github.com/trufflesecurity/trufflehog/releases/download/v${trufflehog_version}/${archive}"
   tmp_dir="$(mktemp -d)"
 
-  if ! curl -fsSL --retry 3 --output "$tmp_dir/$archive" "$url" ||
+  # Bound individual transfers and the retry window. curl resets --max-time for
+  # each retry, while a started retry can outlive --retry-max-time.
+  if ! curl -fsSL \
+    --connect-timeout 30 --max-time 300 \
+    --retry 3 --retry-max-time 300 \
+    --output "$tmp_dir/$archive" "$url" ||
     ! (
       cd "$tmp_dir"
       printf '%s  %s\n' "$checksum" "$archive" | sha256sum -c -

@@ -201,7 +201,7 @@ function entryWarnStatuses(
       </span>`,
     );
   }
-  if (isApprovedNode && !entry.connected && isWindowsPlatform(entry.platform)) {
+  if (isApprovedNode && entry.node?.connected === false && isWindowsPlatform(entry.platform)) {
     statuses.push(
       html`<span title=${t("devices.inventory.manualWakeTitle")}>
         ${renderSettingsStatus({ kind: "warn", label: t("devices.inventory.manualWake") })}
@@ -314,9 +314,10 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
     entry.node?.approvalState === "pending-reapproval"
       ? entry.node.pendingRequestId
       : undefined;
-  const connectionStatus = entry.connected
-    ? nothing
-    : renderSettingsStatus({ kind: "muted", label: t("devices.inventory.offline") });
+  const connectionStatus =
+    (entry.node?.connected ?? entry.connected)
+      ? nothing
+      : renderSettingsStatus({ kind: "muted", label: t("devices.inventory.offline") });
   return html`
     <div class="settings-row device-entry">
       ${renderDeviceTile(deviceIcon(entry))}

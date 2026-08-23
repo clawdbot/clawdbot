@@ -70,13 +70,14 @@ import {
   isOpenAICodexResponsesModel,
   resolveCodeModeResponsesVisibleToolNames,
 } from "./openai-transport-params.js";
-import { createOpenAIResponseHook, log } from "./openai-transport-shared.js";
+import { createOpenAIProviderAcceptanceHook, log } from "./openai-transport-shared.js";
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 import {
   createWritableTransportEventStream,
   failTransportStream,
   finalizeTransportStream,
   mergeTransportMetadata,
+  notifyProviderStreamOpened,
   transportAbortError,
   withProviderResponseHook,
 } from "./transport-stream-shared.js";
@@ -448,7 +449,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             stream: observeResponsesStream(rawResponseStream, model, requestStartedAt),
             signal: firstEvent.signal,
             abort: firstEvent.abort,
-            hook: createOpenAIResponseHook(options?.onResponse, response, model),
+            hook: createOpenAIProviderAcceptanceHook(options, response, model),
             onReady: () => {
               emitModelTransportDebug(
                 log,
@@ -503,8 +504,16 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             );
             responseStream = {
               async *[Symbol.asyncIterator]() {
+                let providerAccepted = false;
                 try {
                   for await (const event of websocket.stream) {
+                    if (!providerAccepted) {
+                      providerAccepted = true;
+                      await notifyProviderStreamOpened({
+                        options,
+                        cancelStream: () => websocket.finish({ keep: false }),
+                      });
+                    }
                     startStream();
                     yield event;
                   }
