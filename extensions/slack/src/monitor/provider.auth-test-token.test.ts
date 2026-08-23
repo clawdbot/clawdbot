@@ -52,6 +52,44 @@ async function runTrackedSlackMessageOnce(
   }
 }
 
+function useSlackReplyDeliveryOnce(
+  onContext?: (ctxPayload: Record<string, unknown>) => void,
+): Promise<void> {
+  const settled = createDeferred<void>();
+  useSlackChannelInboundDispatchOnce(async (params) => {
+    try {
+      onContext?.(params.ctxPayload);
+      const deliver = params.delivery?.deliver;
+      if (!deliver) {
+        throw new Error("expected Slack reply delivery callback");
+      }
+      const reply = await params.replyResolver?.(
+        params.ctxPayload,
+        params.replyOptions,
+        params.cfg,
+      );
+      for (const payload of Array.isArray(reply) ? reply : reply ? [reply] : []) {
+        await deliver(payload, { kind: "final" });
+      }
+      settled.resolve();
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: params.ctxPayload,
+        routeSessionKey: params.route.sessionKey,
+        dispatchResult: {
+          queuedFinal: Boolean(reply),
+          counts: { tool: 0, block: 0, final: reply ? 1 : 0 },
+        },
+      };
+    } catch (error) {
+      settled.reject(error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }
+  });
+  return settled.promise;
+}
+
 const PROXY_ENV_KEYS = [
   "ALL_PROXY",
   "HTTPS_PROXY",
@@ -509,7 +547,12 @@ describe("presence polling transport", () => {
         ...options,
         env: options.env ?? process.env,
       });
-    getSlackTestState().replyMock.mockResolvedValue({ text: "ok" });
+    const { replyMock, sendMock } = getSlackTestState();
+    replyMock.mockResolvedValue({ text: "ok" });
+    let dispatchedContext: Record<string, unknown> | undefined;
+    const deliverySettled = useSlackReplyDeliveryOnce((ctxPayload) => {
+      dispatchedContext = ctxPayload;
+    });
 
     const nativeSetInterval = globalThis.setInterval;
     let triggerPresencePoll: (() => void) | undefined;
@@ -540,6 +583,15 @@ describe("presence polling transport", () => {
         context: { botUserId: "bot-user" },
         body: {},
       });
+      await deliverySettled;
+      expect(dispatchedContext).toMatchObject({
+        Body: expect.stringMatching(
+          /Ada: hello\n\[slack message id: 100\.000 channel: D_STALLED\]$/u,
+        ),
+        ChatType: "direct",
+        WasMentioned: false,
+      });
+      expect(sendMock).toHaveBeenCalledWith("channel:D_STALLED", "ok", expect.any(Object));
       expect(triggerPresencePoll).toBeTypeOf("function");
       triggerPresencePoll?.();
       await vi.waitFor(() => expect(server.requestCount).toBe(1), { timeout: 1_000 });
@@ -650,6 +702,10 @@ describe("user identity provider transport", () => {
     });
     const { replyMock, sendMock } = getSlackTestState();
     replyMock.mockResolvedValue({ text: "acknowledged" });
+    let dispatchedContext: Record<string, unknown> | undefined;
+    const deliverySettled = useSlackReplyDeliveryOnce((ctxPayload) => {
+      dispatchedContext = ctxPayload;
+    });
     const monitor = await startWithoutBotToken(config);
     const handler = await getSlackHandlerOrThrow("message");
 
@@ -666,7 +722,13 @@ describe("user identity provider transport", () => {
       body: {},
     });
 
-    await vi.waitFor(() => expect(sendMock).toHaveBeenCalledTimes(1));
+    await deliverySettled;
+    expect(dispatchedContext).toMatchObject({
+      Body: expect.stringMatching(/<@U_SELF>.*status/u),
+      ChatType: "channel",
+      WasMentioned: true,
+    });
+    expect(sendMock).toHaveBeenCalledWith("channel:C1", "acknowledged", expect.any(Object));
     await stopSlackMonitor(monitor);
   });
 
@@ -681,6 +743,10 @@ describe("user identity provider transport", () => {
     });
     const { replyMock, sendMock } = getSlackTestState();
     replyMock.mockResolvedValue({ text: "hello back" });
+    let dispatchedContext: Record<string, unknown> | undefined;
+    const deliverySettled = useSlackReplyDeliveryOnce((ctxPayload) => {
+      dispatchedContext = ctxPayload;
+    });
     const monitor = await startWithoutBotToken(config);
     const handler = await getSlackHandlerOrThrow("message");
     const baseEvent = {
@@ -695,7 +761,13 @@ describe("user identity provider transport", () => {
       context: { botUserId: "U_SELF" },
       body: {},
     });
-    await vi.waitFor(() => expect(sendMock).toHaveBeenCalledTimes(1));
+    await deliverySettled;
+    expect(dispatchedContext).toMatchObject({
+      Body: expect.stringMatching(/Ada: hello\n\[slack message id: 100\.000 channel: D1\]$/u),
+      ChatType: "direct",
+      WasMentioned: false,
+    });
+    expect(sendMock).toHaveBeenCalledWith("channel:D1", "hello back", expect.any(Object));
 
     await handler({
       event: { ...baseEvent, user: "U_SELF", ts: "101.000" },
