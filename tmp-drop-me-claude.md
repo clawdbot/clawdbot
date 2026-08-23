@@ -1371,3 +1371,55 @@ journal. Earlier entries remain unchanged.
 Next operation: freeze upstream again immediately before motion, recompute if
 it moved, inventory the prospective merge, then back-merge that one full SHA
 with verbose history and semantic per-file conflict resolution.
+
+## 2026-08-23T09:14:22Z - Phase 3 upstream freeze and prospective merge
+
+The Phase 0 through Phase 2 substrate and complete pre-motion inventories were
+committed and remotely verified at
+`3c97e98ccb2785ef49acc2bc86f7acffc02f4a44`. The copied Gate 2.7 text removes
+only terminal whitespace inherited from truncated upstream commit subjects so
+the candidate remains `git diff --check` clean; classifier fields and counts
+are unchanged.
+
+### Frozen upstream
+
+- Phase 1 measured:
+  `bfad1bf454138d57b51106376b5d7cffd9b948f0`.
+- The mandatory immediate pre-motion fetch advanced upstream to:
+  `3cb52f4bb869959dcd06cb6d4d33e34db3b6a665`.
+- The frozen SHA contains three additional upstream commits:
+  - `87665fab10162bb87430d3c1106d3c6c3fa6110b`
+    `fix(talk): preserve accepted work on relay detach (#121894)`;
+  - `69ae91878397f21c7ff79d9aecb6d7b449a68288`
+    `perf(state): avoid duplicate ownership reads in cached transactions (#128161)`;
+  - `3cb52f4bb869959dcd06cb6d4d33e34db3b6a665`
+    `fix(macos): preserve externally owned attach-only gateway (#128134)`.
+- Because upstream moved before freeze, every geometry input was recomputed.
+  The old merge base remains
+  `23854c39fc7d87b659d5ae1ab86a97880f2fd210`; upstream distance is now 78;
+  accepted feature-side paths remain 929; upstream-drift paths are now 499;
+  shared paths remain 34.
+- The source Gate 2.7 classifier was rerun against frozen
+  `3cb52f4bb869959dcd06cb6d4d33e34db3b6a665`: 289 `SAFE-NEW`, 312
+  `GENUINE`, 328 `MIXED-CLOBBER`, zero `FROZEN-STALE`, exit 0. No width
+  threshold pause is required.
+
+### Prospective merge shape
+
+`git merge-tree --write-tree --name-only
+3c97e98ccb2785ef49acc2bc86f7acffc02f4a44
+3cb52f4bb869959dcd06cb6d4d33e34db3b6a665` returned the expected conflict exit
+and named exactly four textual conflicts:
+
+1. `src/agents/embedded-agent-runner/run/attempt-client-tools.ts`;
+2. `src/agents/embedded-agent-subscribe.handlers.ts`;
+3. `src/infra/heartbeat-runner-scheduler.ts`;
+4. `src/infra/heartbeat-wake.ts`.
+
+The applicable root, `src/agents`, and
+`src/agents/embedded-agent-runner/run` guides are read. Resolution will inspect
+the merge-base, accepted source, frozen upstream, and staged merge candidate
+for every conflict, then trace each owner to its callers and tests. No
+whole-file ours/theirs routing is permitted. All 34 shared paths remain in the
+broader silent-overlap and Gate 2.7 disposition walk even when Git reports no
+textual conflict.

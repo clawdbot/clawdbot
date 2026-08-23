@@ -1,0 +1,930 @@
+class	dropped_lines	file	detail
+GENUINE	0	apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json	-
+MIXED-CLOBBER	10	config/assertion-safety-baseline.txt	5ddf381eed7 fix(channels): preserve gateway context for in
+GENUINE	0	config/knip.config.ts	-
+SAFE-NEW	0	docs/assets/continuation-tools/continue-delegate.svg	-
+SAFE-NEW	0	docs/assets/continuation-tools/continue-work.svg	-
+SAFE-NEW	0	docs/assets/continuation-tools/request-compaction.svg	-
+SAFE-NEW	0	docs/design/continuation-tools-infographics.md	-
+SAFE-NEW	0	docs/design/continue-work-signal-v2.md	-
+MIXED-CLOBBER	3	docs/tools/subagents.md	?
+GENUINE	0	extensions/acpx/src/pi-session-catalog.test.ts	-
+GENUINE	0	extensions/anthropic/session-catalog.test.ts	-
+MIXED-CLOBBER	1	extensions/clawrouter/stream.ts	?
+MIXED-CLOBBER	2	extensions/clickclack/src/accounts.test.ts	ef447abdeed fix(channels): degrade unavailable credential
+GENUINE	0	extensions/clickclack/src/setup-surface.test.ts	-
+GENUINE	0	extensions/codex/src/app-server/approval-requester.real-binary.live.test.ts	-
+MIXED-CLOBBER	5	extensions/codex/src/app-server/auth-bridge.test.ts	20af8688ddc fix(codex): refresh stale isolated Computer Us
+MIXED-CLOBBER	2	extensions/codex/src/app-server/computer-use.test.ts	?
+MIXED-CLOBBER	1	extensions/codex/src/app-server/computer-use.ts	?
+GENUINE	0	extensions/codex/src/app-server/config.test.ts	-
+MIXED-CLOBBER	2	extensions/codex/src/app-server/dynamic-tool-build.test.ts	59492c51a5f feat(agents): rename spawn_task tool to sugges
+MIXED-CLOBBER	1	extensions/codex/src/app-server/dynamic-tool-build.ts	a345ede6851 fix(codex): preserve configured MCP tools in s
+MIXED-CLOBBER	1	extensions/codex/src/app-server/dynamic-tool-execution.ts	?
+MIXED-CLOBBER	5	extensions/codex/src/app-server/dynamic-tools.test.ts	?
+MIXED-CLOBBER	6	extensions/codex/src/app-server/dynamic-tools.ts	?
+GENUINE	0	extensions/codex/src/app-server/native-subagent-monitor.live.test.ts	-
+MIXED-CLOBBER	4	extensions/codex/src/app-server/native-subagent-task-mirror.test.ts	?
+GENUINE	0	extensions/codex/src/app-server/run-attempt-tool-setup.ts	-
+GENUINE	0	extensions/codex/src/app-server/run-attempt-types.ts	-
+MIXED-CLOBBER	2	extensions/codex/src/app-server/run-attempt.dynamic-tools.test.ts	?
+GENUINE	0	extensions/codex/src/app-server/run-attempt.turn-watches.test.ts	-
+MIXED-CLOBBER	1	extensions/codex/src/app-server/runtime-artifact.test.ts	e689231e428 fix: make Codex onboarding survive inherited N
+GENUINE	0	extensions/codex/src/app-server/shared-client.test.ts	-
+MIXED-CLOBBER	1	extensions/codex/src/app-server/side-question.test.ts	?
+GENUINE	0	extensions/codex/src/app-server/side-question.ts	-
+GENUINE	0	extensions/codex/src/native-thread-coexistence.live.test.ts	-
+GENUINE	0	extensions/codex/src/native-thread-tool.test.ts	-
+MIXED-CLOBBER	5	extensions/copilot/src/native-subagent-task-mirror.test.ts	?
+MIXED-CLOBBER	3	extensions/copilot/src/tool-bridge.test.ts	409fb7abcac fix(telegram): enforce direct-message tool pol
+GENUINE	0	extensions/diagnostics-otel/api.ts	-
+SAFE-NEW	0	extensions/diagnostics-otel/src/continuation-tracer-adapter.integration.test.ts	-
+SAFE-NEW	0	extensions/diagnostics-otel/src/continuation-tracer-adapter.test.ts	-
+SAFE-NEW	0	extensions/diagnostics-otel/src/continuation-tracer-adapter.ts	-
+SAFE-NEW	0	extensions/diagnostics-otel/src/continuation-tracer-ownership.ts	-
+GENUINE	0	extensions/diagnostics-otel/src/service-events.ts	-
+GENUINE	0	extensions/diagnostics-otel/src/service-trace-context.ts	-
+MIXED-CLOBBER	2	extensions/diagnostics-otel/src/service-traces.ts	?
+MIXED-CLOBBER	2	extensions/diagnostics-otel/src/service.test.ts	3bc188efe55 fix(diagnostics-otel): keep telemetry exportin
+MIXED-CLOBBER	6	extensions/diagnostics-otel/src/service.ts	880dde979b5 fix(diagnostics): preserve telemetry during se
+MIXED-CLOBBER	1	extensions/discord/src/internal/rest.ts	?
+MIXED-CLOBBER	4	extensions/feishu/src/delivery-trace.test.ts	?
+GENUINE	0	extensions/feishu/src/media.test.ts	-
+GENUINE	0	extensions/file-transfer/src/shared/audit.test.ts	-
+GENUINE	0	extensions/google-meet/src/cli.ts	-
+GENUINE	0	extensions/google-meet/src/oauth.test.ts	-
+MIXED-CLOBBER	1	extensions/google-meet/src/oauth.ts	?
+MIXED-CLOBBER	3	extensions/google/cli-backend-auth.test.ts	ce67ffb70e8 feat(agents): add tool-free isolated completio
+MIXED-CLOBBER	3	extensions/google/cli-backend-isolated.test.ts	ce67ffb70e8 feat(agents): add tool-free isolated completio
+MIXED-CLOBBER	2	extensions/google/transport-stream.test.ts	?
+GENUINE	0	extensions/imessage/src/install-imsg.test.ts	-
+GENUINE	0	extensions/matrix/src/actions.test.ts	-
+MIXED-CLOBBER	2	extensions/matrix/src/matrix/client/storage.test.ts	?
+MIXED-CLOBBER	12	extensions/matrix/src/test-runtime.ts	ef478c14b1e test(matrix): isolate runtime state (#118892)
+MIXED-CLOBBER	3	extensions/msteams/src/channel.test.ts	ef447abdeed fix(channels): degrade unavailable credential
+MIXED-CLOBBER	7	extensions/mxc/test/binary-resolver.test.ts	?
+MIXED-CLOBBER	3	extensions/ollama/provider-discovery.test.ts	?
+MIXED-CLOBBER	3	extensions/qa-lab/src/crabline-transport-message-id.test.ts	85fd4c9a026 fix(qa): preserve scoped native message and co
+MIXED-CLOBBER	2	extensions/qa-lab/src/crabline-transport-native-command.test.ts	85fd4c9a026 fix(qa): preserve scoped native message and co
+MIXED-CLOBBER	2	extensions/qa-lab/src/crabline-transport-readiness.test.ts	bf1bdb429ec fix(qa): require ready transport accounts (#11
+GENUINE	0	extensions/qa-lab/src/crabline-transport.test.ts	-
+MIXED-CLOBBER	1	extensions/qa-lab/src/lab-server-ui.ts	?
+GENUINE	0	extensions/qa-lab/src/live-transports/matrix/substrate/harness.runtime.test.ts	-
+GENUINE	0	extensions/qa-lab/src/matrix-channel-driver.lifecycle.live.test.ts	-
+MIXED-CLOBBER	2	extensions/senseaudio/media-understanding-provider.live.test.ts	80ea12b48d7 test(extensions): move live audio checks out o
+MIXED-CLOBBER	1	extensions/signal/src/monitor.tool-result.test-harness.ts	?
+MIXED-CLOBBER	32	extensions/signal/src/monitor/event-handler.ingress-lifecycle.test.ts	?
+GENUINE	0	extensions/signal/src/monitor/event-handler.reply-session-conflict.test.ts	-
+MIXED-CLOBBER	7	extensions/signal/src/monitor/event-handler.ts	5ddf381eed7 fix(channels): preserve gateway context for in
+GENUINE	0	extensions/telegram/src/bot-message-dispatch.context-recovery.test.ts	-
+MIXED-CLOBBER	1	extensions/telegram/src/bot.create-telegram-bot.test.ts	?
+MIXED-CLOBBER	2	extensions/tts-local-cli/speech-provider.live.test.ts	80ea12b48d7 test(extensions): move live audio checks out o
+GENUINE	0	extensions/whatsapp/src/auto-reply/web-auto-reply-utils.test.ts	-
+GENUINE	0	packages/agent-core/src/agent-loop.test.ts	-
+MIXED-CLOBBER	1	packages/agent-core/src/agent-loop.ts	964c8c84c18 refactor: consolidate coercion ownership (#122
+SAFE-NEW	0	packages/gateway-protocol/src/protocol-boundary.guard.test.ts	-
+SAFE-NEW	0	packages/gateway-protocol/src/schema/agent.schema.test.ts	-
+MIXED-CLOBBER	1	packages/gateway-protocol/src/schema/agent.ts	?
+SAFE-NEW	0	packages/gateway-protocol/src/schema/internal-fields.ts	-
+GENUINE	0	scripts/bench-agent-concurrency-worker.ts	-
+GENUINE	0	scripts/lib/ci-node-test-plan.mts	-
+GENUINE	0	scripts/lib/codex-app-server-protocol-source.ts	-
+MIXED-CLOBBER	9	scripts/plugin-sdk-surface-report.mts	5ebfbbf8d78 fix(plugins): honor per-agent runtime config (
+MIXED-CLOBBER	1	scripts/prepare-extension-package-boundary-artifacts.mts	ee4bd4aa473 fix(scripts): give the artifact mtime repair a
+MIXED-CLOBBER	1	scripts/protocol-gen-swift.ts	?
+MIXED-CLOBBER	1	scripts/protocol-gen.ts	?
+GENUINE	0	scripts/stage-bundled-plugin-runtime.mts	-
+MIXED-CLOBBER	2	scripts/testbox-lease-freshness.mts	c70aee247e8 refactor(scripts): migrate JavaScript tools to
+GENUINE	0	src/acp/runtime/session-meta.ts	-
+GENUINE	0	src/agents/agent-command.live-model-switch.test.ts	-
+MIXED-CLOBBER	2	src/agents/agent-hooks/compaction-safeguard.ts	?
+GENUINE	0	src/agents/agent-tools.policy.ts	-
+MIXED-CLOBBER	4	src/agents/agent-tools.session-permissions.test.ts	4b0d573437b feat: session permission modes with worktree-s
+GENUINE	0	src/agents/agent-tools.ts	-
+GENUINE	0	src/agents/agent-tools.workspace-paths.test.ts	-
+GENUINE	0	src/agents/apply-patch-context-bytes.test.ts	-
+MIXED-CLOBBER	2	src/agents/apply-patch.symlink-alias.test.ts	58025dd33ce fix(fs): adopt fs-safe 0.5.2 untrusted filenam
+GENUINE	0	src/agents/apply-patch.test.ts	-
+MIXED-CLOBBER	5	src/agents/bash-tools.exec-live-state-sqlite-guard.test.ts	204416747e8 fix: prevent sqlite commands from opening live
+MIXED-CLOBBER	1	src/agents/bash-tools.exec-runtime-output.test.ts	a4eabd57446 fix(agents): settle exec preparation failures
+GENUINE	0	src/agents/bash-tools.exec-runtime.test.ts	-
+GENUINE	0	src/agents/bash-tools.exec-runtime.ts	-
+MIXED-CLOBBER	4	src/agents/bash-tools.exec-workdir.test.ts	435f53f3007 fix(exec): resolve sandbox skill workdir mount
+MIXED-CLOBBER	1	src/agents/bash-tools.exec.script-preflight.test.ts	ab5611f0be6 fix(security): prevent approved scripts from c
+MIXED-CLOBBER	2	src/agents/bash-tools.notify-on-exit-ack.test.ts	c71c29ecaec fix: preserve exec completion identity across
+GENUINE	0	src/agents/bash-tools.test.ts	-
+GENUINE	0	src/agents/cli-runner/execute-deps.ts	-
+GENUINE	0	src/agents/cli-runner/execute.test-support.ts	-
+GENUINE	0	src/agents/cli-runner/helpers.ts	-
+MIXED-CLOBBER	2	src/agents/command/attempt-execution.cli.test.ts	?
+SAFE-NEW	0	src/agents/command/attempt-execution.continue-work-opts.test.ts	-
+SAFE-NEW	0	src/agents/command/attempt-execution.continue-work-token.test.ts	-
+SAFE-NEW	0	src/agents/command/attempt-execution.request-compaction-opts.test.ts	-
+MIXED-CLOBBER	136	src/agents/command/attempt-execution.ts	?
+MIXED-CLOBBER	1	src/agents/command/cli-compaction.ts	fa0fcef9f62 fix(sessions): require provenance for fresh co
+GENUINE	0	src/agents/command/types.ts	-
+SAFE-NEW	0	src/agents/compaction-attribution.test.ts	-
+SAFE-NEW	0	src/agents/compaction-attribution.ts	-
+GENUINE	0	src/agents/core-tool-factory-descriptors.ts	-
+SAFE-NEW	0	src/agents/delegate-artifact-delivery.ts	-
+SAFE-NEW	0	src/agents/delegate-artifact-lifecycle.ts	-
+SAFE-NEW	0	src/agents/delegate-artifact-policy-store.ts	-
+SAFE-NEW	0	src/agents/delegate-artifact-policy.integration.test.ts	-
+SAFE-NEW	0	src/agents/delegate-artifact-policy.ts	-
+SAFE-NEW	0	src/agents/delegate-artifact-recipient.ts	-
+SAFE-NEW	0	src/agents/delegate-artifact-store.ts	-
+SAFE-NEW	0	src/agents/delegate-artifacts.delivery.test.ts	-
+SAFE-NEW	0	src/agents/delegate-artifacts.projection.test.ts	-
+SAFE-NEW	0	src/agents/delegate-artifacts.retention.test.ts	-
+SAFE-NEW	0	src/agents/delegate-artifacts.test-helpers.ts	-
+SAFE-NEW	0	src/agents/delegate-artifacts.test.ts	-
+SAFE-NEW	0	src/agents/delegate-artifacts.ts	-
+SAFE-NEW	0	src/agents/embedded-agent-runner/cli-backend-dispatch-transcript.persistence.test.ts	-
+GENUINE	0	src/agents/embedded-agent-runner/cli-backend-dispatch-transcript.test.ts	-
+MIXED-CLOBBER	2	src/agents/embedded-agent-runner/cli-backend-dispatch-transcript.ts	?
+GENUINE	0	src/agents/embedded-agent-runner/compact-reasons.test.ts	-
+MIXED-CLOBBER	3	src/agents/embedded-agent-runner/compact-reasons.ts	?
+GENUINE	0	src/agents/embedded-agent-runner/compact.abort-signal.test.ts	-
+GENUINE	0	src/agents/embedded-agent-runner/compact.hooks.harness.ts	-
+MIXED-CLOBBER	11	src/agents/embedded-agent-runner/compact.hooks.test.ts	?
+MIXED-CLOBBER	1	src/agents/embedded-agent-runner/compact.types.ts	?
+MIXED-CLOBBER	1	src/agents/embedded-agent-runner/compaction-checkpoint.ts	?
+GENUINE	0	src/agents/embedded-agent-runner/prepared-compaction-runtime.ts	-
+GENUINE	0	src/agents/embedded-agent-runner/result-fallback-classifier.ts	-
+MIXED-CLOBBER	18	src/agents/embedded-agent-runner/run-orchestrator.ts	967696b7436 fix(agents): restore system-agent delegation i
+SAFE-NEW	0	src/agents/embedded-agent-runner/run.continuation-auth-overlay.test-support.ts	-
+SAFE-NEW	0	src/agents/embedded-agent-runner/run.continuation-codex-auth-bootstrap.test-support.ts	-
+SAFE-NEW	0	src/agents/embedded-agent-runner/run.continuation-codex-auth-forwarding.test-support.ts	-
+SAFE-NEW	0	src/agents/embedded-agent-runner/run.continuation-codex-auth-rotation.test-support.ts	-
+SAFE-NEW	0	src/agents/embedded-agent-runner/run.continuation-codex-auth-selection.test-support.ts	-
+SAFE-NEW	0	src/agents/embedded-agent-runner/run.continuation-deferred-maintenance.test-support.ts	-
+SAFE-NEW	0	src/agents/embedded-agent-runner/run.continuation-fixture.test-support.ts	-
+SAFE-NEW	0	src/agents/embedded-agent-runner/run.continuation-integration.test.ts	-
+SAFE-NEW	0	src/agents/embedded-agent-runner/run.continuation-lifecycle-admission.test-support.ts	-
+SAFE-NEW	0	src/agents/embedded-agent-runner/run.continuation-model-routing.test-support.ts	-
+SAFE-NEW	0	src/agents/embedded-agent-runner/run.continuation-opts-forward.test.ts	-
+SAFE-NEW	0	src/agents/embedded-agent-runner/run.continuation-overflow-recovery.test-support.ts	-
+SAFE-NEW	0	src/agents/embedded-agent-runner/run.continuation-retry-fallback.test-support.ts	-
+MIXED-CLOBBER	21	src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts	967696b7436 fix(agents): restore system-agent delegation i
+GENUINE	0	src/agents/embedded-agent-runner/run/assistant-failover.ts	-
+MIXED-CLOBBER	11	src/agents/embedded-agent-runner/run/attempt-client-tools.ts	?
+MIXED-CLOBBER	6	src/agents/embedded-agent-runner/run/attempt-execution-phase.ts	e082acd0776 refactor(agents): collapse stream relay layers
+MIXED-CLOBBER	3	src/agents/embedded-agent-runner/run/attempt-stream-prepare.test.ts	?
+MIXED-CLOBBER	31	src/agents/embedded-agent-runner/run/attempt-stream-prepare.ts	c3ec166cbcd fix: repair code mode preflight failures
+GENUINE	0	src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts	-
+MIXED-CLOBBER	17	src/agents/embedded-agent-runner/run/attempt-tool-prepare.ts	32bb08dbbf1 fix: continue code mode with read-only recover
+GENUINE	0	src/agents/embedded-agent-runner/run/attempt.cwd-split.test.ts	-
+MIXED-CLOBBER	1	src/agents/embedded-agent-runner/run/failover-policy.ts	?
+GENUINE	0	src/agents/embedded-agent-runner/run/overflow-context-recovery.ts	-
+MIXED-CLOBBER	2	src/agents/embedded-agent-runner/run/params.ts	32bb08dbbf1 fix: continue code mode with read-only recover
+SAFE-NEW	0	src/agents/embedded-agent-runner/run/payloads.continuation.test.ts	-
+GENUINE	0	src/agents/embedded-agent-runner/run/payloads.test.ts	-
+MIXED-CLOBBER	22	src/agents/embedded-agent-runner/run/payloads.ts	?
+MIXED-CLOBBER	1	src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts	32bb08dbbf1 fix: continue code mode with read-only recover
+GENUINE	0	src/agents/embedded-agent-runner/run/source-reply-payloads.ts	-
+GENUINE	0	src/agents/embedded-agent-runner/run/timeout-context-recovery.ts	-
+GENUINE	0	src/agents/embedded-agent-runner/runs.force-clear-terminal.test.ts	-
+MIXED-CLOBBER	1	src/agents/embedded-agent-runner/server-endpoint-compaction.ts	c3887db7c17 feat: compact xAI sessions server-side (AI-ass
+GENUINE	0	src/agents/embedded-agent-runner/system-prompt.ts	-
+GENUINE	0	src/agents/embedded-agent-subscribe.before-terminal-delivery.test.ts	-
+GENUINE	0	src/agents/embedded-agent-subscribe.block-reply-rejections.test.ts	-
+SAFE-NEW	0	src/agents/embedded-agent-subscribe.compaction-retry.ts	-
+GENUINE	0	src/agents/embedded-agent-subscribe.e2e-harness.ts	-
+MIXED-CLOBBER	1	src/agents/embedded-agent-subscribe.handlers.compaction.runtime.ts	?
+MIXED-CLOBBER	1	src/agents/embedded-agent-subscribe.handlers.compaction.test.ts	?
+MIXED-CLOBBER	11	src/agents/embedded-agent-subscribe.handlers.compaction.ts	?
+MIXED-CLOBBER	6	src/agents/embedded-agent-subscribe.handlers.lifecycle.test.ts	?
+MIXED-CLOBBER	13	src/agents/embedded-agent-subscribe.handlers.lifecycle.ts	?
+SAFE-NEW	0	src/agents/embedded-agent-subscribe.handlers.messages.continuation.ts	-
+SAFE-NEW	0	src/agents/embedded-agent-subscribe.handlers.messages.lifecycle-state.ts	-
+MIXED-CLOBBER	17	src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.test.ts	87b3c0e5df7 refactor(agents): split subscribe leaf ownersh
+MIXED-CLOBBER	152	src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	87b3c0e5df7 refactor(agents): split subscribe leaf ownersh
+MIXED-CLOBBER	1	src/agents/embedded-agent-subscribe.handlers.messages.replies.ts	87b3c0e5df7 refactor(agents): split subscribe leaf ownersh
+MIXED-CLOBBER	2	src/agents/embedded-agent-subscribe.handlers.messages.stream.ts	87b3c0e5df7 refactor(agents): split subscribe leaf ownersh
+MIXED-CLOBBER	1	src/agents/embedded-agent-subscribe.handlers.messages.test-helpers.ts	87b3c0e5df7 refactor(agents): split subscribe leaf ownersh
+GENUINE	0	src/agents/embedded-agent-subscribe.handlers.messages.update-commentary.test.ts	-
+MIXED-CLOBBER	1	src/agents/embedded-agent-subscribe.handlers.messages.update-stream-items.test.ts	87b3c0e5df7 refactor(agents): split subscribe leaf ownersh
+MIXED-CLOBBER	3	src/agents/embedded-agent-subscribe.handlers.messages.update-stream-phases.test.ts	87b3c0e5df7 refactor(agents): split subscribe leaf ownersh
+MIXED-CLOBBER	53	src/agents/embedded-agent-subscribe.handlers.messages.update.ts	78b8f8cf664 fix(ai): preserve final phase across resumed r
+MIXED-CLOBBER	1	src/agents/embedded-agent-subscribe.handlers.tools.completion.ts	c3ec166cbcd fix: repair code mode preflight failures
+GENUINE	0	src/agents/embedded-agent-subscribe.handlers.tools.progress.ts	-
+MIXED-CLOBBER	3	src/agents/embedded-agent-subscribe.handlers.tools.results.ts	a4c7b1b7b58 refactor(agents): split embedded-agent subscri
+MIXED-CLOBBER	2	src/agents/embedded-agent-subscribe.handlers.tools.start.ts	a4c7b1b7b58 refactor(agents): split embedded-agent subscri
+GENUINE	0	src/agents/embedded-agent-subscribe.handlers.tools.test.ts	-
+MIXED-CLOBBER	17	src/agents/embedded-agent-subscribe.handlers.ts	c3ec166cbcd fix: repair code mode preflight failures
+MIXED-CLOBBER	5	src/agents/embedded-agent-subscribe.handlers.types.ts	?
+SAFE-NEW	0	src/agents/embedded-agent-subscribe.logger.ts	-
+MIXED-CLOBBER	15	src/agents/embedded-agent-subscribe.reply-delivery.ts	22b3c2530f1 refactor: split agent and chat orchestration o
+MIXED-CLOBBER	1	src/agents/embedded-agent-subscribe.reply-tags.test.ts	?
+GENUINE	0	src/agents/embedded-agent-subscribe.run-state.ts	-
+MIXED-CLOBBER	8	src/agents/embedded-agent-subscribe.stream-rendering.ts	22b3c2530f1 refactor: split agent and chat orchestration o
+SAFE-NEW	0	src/agents/embedded-agent-subscribe.subscribe-embedded-agent-session.continuation-provider-filtering.test.ts	-
+SAFE-NEW	0	src/agents/embedded-agent-subscribe.subscribe-embedded-agent-session.continuation-reconciliation.test.ts	-
+SAFE-NEW	0	src/agents/embedded-agent-subscribe.subscribe-embedded-agent-session.continuation-responses.test.ts	-
+GENUINE	0	src/agents/embedded-agent-subscribe.subscribe-embedded-agent-session.text-end-reconciliation.test.ts	-
+MIXED-CLOBBER	18	src/agents/embedded-agent-subscribe.ts	?
+MIXED-CLOBBER	1	src/agents/embedded-agent-tool-media.ts	87b3c0e5df7 refactor(agents): split subscribe leaf ownersh
+MIXED-CLOBBER	2	src/agents/embedded-agent-utils.ts	?
+SAFE-NEW	0	src/agents/internal-events.delegate-artifacts.test.ts	-
+GENUINE	0	src/agents/internal-events.ts	-
+GENUINE	0	src/agents/openclaw-owned-tool-runtime-contract.test.ts	-
+SAFE-NEW	0	src/agents/openclaw-tools.continuation-forwarding.test.ts	-
+SAFE-NEW	0	src/agents/openclaw-tools.continuation-misconfig-warn.test.ts	-
+SAFE-NEW	0	src/agents/openclaw-tools.continuation-registration.test.ts	-
+SAFE-NEW	0	src/agents/openclaw-tools.continuation.session-key.test.ts	-
+SAFE-NEW	0	src/agents/openclaw-tools.continuation.ts	-
+GENUINE	0	src/agents/openclaw-tools.session-status.test.ts	-
+GENUINE	0	src/agents/openclaw-tools.sessions.test.ts	-
+GENUINE	0	src/agents/openclaw-tools.subagents.sessions-spawn.lifecycle.test.ts	-
+GENUINE	0	src/agents/openclaw-tools.subagents.sessions-spawn.test-harness.ts	-
+MIXED-CLOBBER	1	src/agents/openclaw-tools.ts	8668aeb9698 fix(discord): bind transcript capture to sourc
+GENUINE	0	src/agents/openclaw-tools.types.ts	-
+GENUINE	0	src/agents/outcome-fallback-runtime-contract.test.ts	-
+GENUINE	0	src/agents/sandbox/fs-bridge.anchored-ops.test.ts	-
+MIXED-CLOBBER	1	src/agents/sandbox/fs-bridge.boundary.test.ts	5295f2578e1 fix(agents): make file reads safe and explicit
+GENUINE	0	src/agents/sandbox/fs-bridge.shell.test.ts	-
+GENUINE	0	src/agents/sandbox/fs-bridge.test-helpers.ts	-
+MIXED-CLOBBER	1	src/agents/sandbox/remote-fs-bridge.test.ts	7a5f1082937 fix: unblock macOS release validation (#119110
+GENUINE	0	src/agents/sandbox/workspace-skills-bridge-readonly.test.ts	-
+GENUINE	0	src/agents/session-tool-result-guard.test.ts	-
+GENUINE	0	src/agents/session-transcript-repair.attachments.test.ts	-
+MIXED-CLOBBER	22	src/agents/session-transcript-repair.ts	?
+GENUINE	0	src/agents/sessions/agent-session-compaction.test.ts	-
+GENUINE	0	src/agents/sessions/package-manager.test.ts	-
+MIXED-CLOBBER	2	src/agents/shell-snapshot.ts	?
+SAFE-NEW	0	src/agents/spawn-error.ts	-
+MIXED-CLOBBER	2	src/agents/spawn-pipeline.ts	?
+SAFE-NEW	0	src/agents/subagent-announce-descendant-wake.test.ts	-
+SAFE-NEW	0	src/agents/subagent-announce-message.ts	-
+SAFE-NEW	0	src/agents/subagent-announce-reply.ts	-
+SAFE-NEW	0	src/agents/subagent-announce.chain-guard.test.ts	-
+SAFE-NEW	0	src/agents/subagent-announce.continuation-drain.bracket-hedge.test.ts	-
+SAFE-NEW	0	src/agents/subagent-announce.continuation-drain.chain-cost.test.ts	-
+SAFE-NEW	0	src/agents/subagent-announce.continuation-drain.test.ts	-
+SAFE-NEW	0	src/agents/subagent-announce.continuation-drain.tool-hop-order.test.ts	-
+SAFE-NEW	0	src/agents/subagent-announce.continuation-parity-gate.test.ts	-
+SAFE-NEW	0	src/agents/subagent-announce.continuation-return.delegate-artifacts.test.ts	-
+SAFE-NEW	0	src/agents/subagent-announce.continuation-return.ts	-
+SAFE-NEW	0	src/agents/subagent-announce.continuation-tool-delegate-commit.test.ts	-
+SAFE-NEW	0	src/agents/subagent-announce.continuation.accounting.ts	-
+SAFE-NEW	0	src/agents/subagent-announce.continuation.runtime.test.ts	-
+SAFE-NEW	0	src/agents/subagent-announce.continuation.runtime.ts	-
+SAFE-NEW	0	src/agents/subagent-announce.continuation.test.ts	-
+SAFE-NEW	0	src/agents/subagent-announce.crosssession-gate.test.ts	-
+SAFE-NEW	0	src/agents/subagent-announce.live-tree-chain-proof.test.ts	-
+SAFE-NEW	0	src/agents/subagent-announce.postcompaction-route.test.ts	-
+SAFE-NEW	0	src/agents/subagent-announce.self-continuation.test.ts	-
+SAFE-NEW	0	src/agents/subagent-announce.silent-wake.test.ts	-
+SAFE-NEW	0	src/agents/subagent-announce.spawn-reject-obs.test.ts	-
+SAFE-NEW	0	src/agents/subagent-announce.targeted-return.integration.test.ts	-
+SAFE-NEW	0	src/agents/subagent-continuation-ids.ts	-
+SAFE-NEW	0	src/agents/subagent-registry-registration-rollback.test.ts	-
+SAFE-NEW	0	src/agents/subagent-registry-restart-recovery-accepted.ts	-
+SAFE-NEW	0	src/agents/subagent-registry-restart-recovery-types.ts	-
+SAFE-NEW	0	src/agents/subagent-registry-sweeper-session.ts	-
+SAFE-NEW	0	src/agents/subagent-registry.archive.continuation.e2e.test.ts	-
+SAFE-NEW	0	src/agents/subagent-registry.persistence.restore-recovery.test.ts	-
+SAFE-NEW	0	src/agents/subagent-registry.persistence.timing.test.ts	-
+SAFE-NEW	0	src/agents/subagent-session-cleanup.test.ts	-
+SAFE-NEW	0	src/agents/subagent-traceparent-handoff.ts	-
+GENUINE	0	src/agents/subagents/announce/subagent-announce-delivery.test.ts	-
+GENUINE	0	src/agents/subagents/announce/subagent-announce-delivery.ts	-
+SAFE-NEW	0	src/agents/subagents/announce/subagent-announce-deps.ts	-
+MIXED-CLOBBER	42	src/agents/subagents/announce/subagent-announce-descendant-wake.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+GENUINE	0	src/agents/subagents/announce/subagent-announce-direct-delivery.ts	-
+MIXED-CLOBBER	4	src/agents/subagents/announce/subagent-announce-output.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+MIXED-CLOBBER	7	src/agents/subagents/announce/subagent-announce.format.e2e.test.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+GENUINE	0	src/agents/subagents/announce/subagent-announce.requester-settle-wake.test.ts	-
+MIXED-CLOBBER	1	src/agents/subagents/announce/subagent-announce.requester-settle-wake.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+GENUINE	0	src/agents/subagents/announce/subagent-announce.runtime.ts	-
+GENUINE	0	src/agents/subagents/announce/subagent-announce.test-support.ts	-
+MIXED-CLOBBER	2	src/agents/subagents/announce/subagent-announce.test.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+MIXED-CLOBBER	1	src/agents/subagents/announce/subagent-announce.timeout.test.ts	ebb2770000d refactor: eliminate export name collisions (#1
+MIXED-CLOBBER	176	src/agents/subagents/announce/subagent-announce.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+SAFE-NEW	0	src/agents/subagents/announce/subagent-run-outcome.ts	-
+MIXED-CLOBBER	1	src/agents/subagents/completion/subagent-completion-admission.store.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+MIXED-CLOBBER	11	src/agents/subagents/registry/subagent-control-messaging.ts	f3f203f31d4 refactor(agents): split subagent-control.ts in
+GENUINE	0	src/agents/subagents/registry/subagent-control.test.ts	-
+GENUINE	0	src/agents/subagents/registry/subagent-delivery-state.test.ts	-
+GENUINE	0	src/agents/subagents/registry/subagent-delivery-state.ts	-
+MIXED-CLOBBER	1	src/agents/subagents/registry/subagent-registry-completion.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+GENUINE	0	src/agents/subagents/registry/subagent-registry-helpers.test.ts	-
+GENUINE	0	src/agents/subagents/registry/subagent-registry-helpers.ts	-
+MIXED-CLOBBER	1	src/agents/subagents/registry/subagent-registry-lifecycle-announce-cleanup.ts	f104ce8b092 refactor(agents): fold subagent lifecycle into
+MIXED-CLOBBER	3	src/agents/subagents/registry/subagent-registry-lifecycle-completion.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+MIXED-CLOBBER	1	src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+GENUINE	0	src/agents/subagents/registry/subagent-registry-lifecycle.test.ts	-
+MIXED-CLOBBER	3	src/agents/subagents/registry/subagent-registry-maintenance.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+MIXED-CLOBBER	1	src/agents/subagents/registry/subagent-registry-queries.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+GENUINE	0	src/agents/subagents/registry/subagent-registry-read.ts	-
+MIXED-CLOBBER	63	src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts	ac65c91baa1 fix(subagents): interrupted tasks lose real us
+MIXED-CLOBBER	125	src/agents/subagents/registry/subagent-registry-restart-recovery.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+MIXED-CLOBBER	5	src/agents/subagents/registry/subagent-registry-restore.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+MIXED-CLOBBER	4	src/agents/subagents/registry/subagent-registry-run-launch.ts	5e9575fb415 fix(gateway): show one entry per subagent run
+MIXED-CLOBBER	2	src/agents/subagents/registry/subagent-registry-run-recovery.ts	307021eca4a refactor(agents): split subagent-registry-run-
+MIXED-CLOBBER	3	src/agents/subagents/registry/subagent-registry-run-wait.ts	307021eca4a refactor(agents): split subagent-registry-run-
+GENUINE	0	src/agents/subagents/registry/subagent-registry-runtime.ts	-
+MIXED-CLOBBER	1	src/agents/subagents/registry/subagent-registry-sweep-kill.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+MIXED-CLOBBER	3	src/agents/subagents/registry/subagent-registry-sweeper-recovery.test.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+MIXED-CLOBBER	53	src/agents/subagents/registry/subagent-registry-sweeper.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+GENUINE	0	src/agents/subagents/registry/subagent-registry.archive.e2e.test.ts	-
+MIXED-CLOBBER	55	src/agents/subagents/registry/subagent-registry.lifecycle-retry-grace.e2e.test.ts	91fb03223af fix(agents): resume yielded requesters after v
+GENUINE	0	src/agents/subagents/registry/subagent-registry.persistence.resume.test.ts	-
+MIXED-CLOBBER	104	src/agents/subagents/registry/subagent-registry.persistence.test.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+MIXED-CLOBBER	4	src/agents/subagents/registry/subagent-registry.test.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+MIXED-CLOBBER	3	src/agents/subagents/registry/subagent-registry.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+MIXED-CLOBBER	1	src/agents/subagents/registry/subagent-registry.types.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+GENUINE	0	src/agents/subagents/registry/subagent-run-liveness.test.ts	-
+MIXED-CLOBBER	5	src/agents/subagents/registry/subagent-run-liveness.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+MIXED-CLOBBER	2	src/agents/subagents/registry/subagent-session-cleanup.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+MIXED-CLOBBER	1	src/agents/subagents/registry/subagent-session-reconciliation.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+MIXED-CLOBBER	2	src/agents/subagents/spawn/acp-spawn-parent-stream.test.ts	8430fc0e3b8 refactor(agents): move spawn family into subag
+MIXED-CLOBBER	2	src/agents/subagents/spawn/acp-spawn-parent-stream.ts	8430fc0e3b8 refactor(agents): move spawn family into subag
+MIXED-CLOBBER	1	src/agents/subagents/spawn/acp-spawn.test.ts	8430fc0e3b8 refactor(agents): move spawn family into subag
+MIXED-CLOBBER	95	src/agents/subagents/spawn/subagent-attachments.ts	1ced7441eb6 refactor(agents): move announce, completion, r
+MIXED-CLOBBER	17	src/agents/subagents/spawn/subagent-spawn-cleanup.test.ts	8430fc0e3b8 refactor(agents): move spawn family into subag
+MIXED-CLOBBER	19	src/agents/subagents/spawn/subagent-spawn-cleanup.ts	8430fc0e3b8 refactor(agents): move spawn family into subag
+SAFE-NEW	0	src/agents/subagents/spawn/subagent-spawn-collector.ts	-
+MIXED-CLOBBER	13	src/agents/subagents/spawn/subagent-spawn-session-patch.ts	3d762467928 refactor: eliminate final export name collisio
+MIXED-CLOBBER	4	src/agents/subagents/spawn/subagent-spawn.attachments.test.ts	97522830601 fix: spawned child prompt omits staged attachm
+MIXED-CLOBBER	5	src/agents/subagents/spawn/subagent-spawn.in-process-gateway.test.ts	8430fc0e3b8 refactor(agents): move spawn family into subag
+MIXED-CLOBBER	8	src/agents/subagents/spawn/subagent-spawn.model-session.test.ts	8430fc0e3b8 refactor(agents): move spawn family into subag
+MIXED-CLOBBER	1	src/agents/subagents/spawn/subagent-spawn.runtime.ts	8430fc0e3b8 refactor(agents): move spawn family into subag
+MIXED-CLOBBER	3	src/agents/subagents/spawn/subagent-spawn.test-helpers.ts	8430fc0e3b8 refactor(agents): move spawn family into subag
+MIXED-CLOBBER	1	src/agents/subagents/spawn/subagent-spawn.test.ts	8430fc0e3b8 refactor(agents): move spawn family into subag
+MIXED-CLOBBER	91	src/agents/subagents/spawn/subagent-spawn.ts	8430fc0e3b8 refactor(agents): move spawn family into subag
+GENUINE	0	src/agents/subagents/spawn/subagent-system-prompt.ts	-
+SAFE-NEW	0	src/agents/system-prompt.continuation.test.ts	-
+GENUINE	0	src/agents/system-prompt.test.ts	-
+GENUINE	0	src/agents/system-prompt.ts	-
+GENUINE	0	src/agents/tool-call-shared.ts	-
+MIXED-CLOBBER	95	src/agents/tool-display-config.ts	?
+SAFE-NEW	0	src/agents/tool-display-config.types.ts	-
+SAFE-NEW	0	src/agents/tool-display-continuation-config.ts	-
+MIXED-CLOBBER	89	src/agents/tool-display-message-config.ts	6176c0a79d9 feat(macos): control motorized camera pan, til
+SAFE-NEW	0	src/agents/tool-display-session-config.ts	-
+SAFE-NEW	0	src/agents/tool-display-truncation.test.ts	-
+GENUINE	0	src/agents/tool-display.test.ts	-
+GENUINE	0	src/agents/tool-error-summary.test.ts	-
+MIXED-CLOBBER	1	src/agents/tool-error-summary.ts	?
+GENUINE	0	src/agents/tool-result-error.test.ts	-
+MIXED-CLOBBER	36	src/agents/tool-result-error.ts	c3ec166cbcd fix: repair code mode preflight failures
+SAFE-NEW	0	src/agents/tools-effective-inventory.runtime-and-policy.test.ts	-
+MIXED-CLOBBER	110	src/agents/tools-effective-inventory.test.ts	?
+GENUINE	0	src/agents/tools-effective-inventory.ts	-
+SAFE-NEW	0	src/agents/tools/continuation-inventory-opts.test.ts	-
+SAFE-NEW	0	src/agents/tools/continuation-inventory-opts.ts	-
+SAFE-NEW	0	src/agents/tools/continuation-tools-registration.test.ts	-
+SAFE-NEW	0	src/agents/tools/continue-delegate-attachment-validation.test.ts	-
+SAFE-NEW	0	src/agents/tools/continue-delegate-tool.crosssession-gate.test.ts	-
+SAFE-NEW	0	src/agents/tools/continue-delegate-tool.test.ts	-
+SAFE-NEW	0	src/agents/tools/continue-delegate-tool.ts	-
+SAFE-NEW	0	src/agents/tools/continue-work-tool.boundary.test.ts	-
+SAFE-NEW	0	src/agents/tools/continue-work-tool.test.ts	-
+SAFE-NEW	0	src/agents/tools/continue-work-tool.ts	-
+SAFE-NEW	0	src/agents/tools/delegate-artifacts-tool.test.ts	-
+SAFE-NEW	0	src/agents/tools/delegate-artifacts-tool.ts	-
+GENUINE	0	src/agents/tools/goal-tools.test.ts	-
+SAFE-NEW	0	src/agents/tools/media-generate-background-completion.ts	-
+GENUINE	0	src/agents/tools/media-generate-background-shared.test.ts	-
+MIXED-CLOBBER	10	src/agents/tools/media-generate-background-shared.ts	d9393bd3cbe fix: make subagent completion delivery durable
+SAFE-NEW	0	src/agents/tools/request-compaction-tool.callsite-threading.test.ts	-
+SAFE-NEW	0	src/agents/tools/request-compaction-tool.classifier-emission.test.ts	-
+SAFE-NEW	0	src/agents/tools/request-compaction-tool.test.ts	-
+SAFE-NEW	0	src/agents/tools/request-compaction-tool.ts	-
+SAFE-NEW	0	src/agents/tools/request-compaction-tool.volitional-threading.test.ts	-
+MIXED-CLOBBER	3	src/agents/tools/sessions-spawn-tool.test.ts	?
+MIXED-CLOBBER	8	src/agents/tools/sessions-spawn-tool.ts	?
+GENUINE	0	src/agents/transcript-redact.test.ts	-
+MIXED-CLOBBER	2	src/agents/transcript-redact.ts	?
+SAFE-NEW	0	src/auto-reply/continuation/config.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/config.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/context-pressure.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/context-pressure.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/continuation-return-delivery-dedupe-ack.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/cross-session-targeting.nonexistent-target.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/cross-session-targeting.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-dispatch-accepted-children.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-dispatch-chain-state.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-dispatch-contract.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-dispatch-hedge.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-dispatch-managed-gates.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-dispatch-post-compaction.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-dispatch-recovery.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-dispatch.chain-depth-exhaustion.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-dispatch.contract.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-dispatch.cost-cap-exhaustion.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-dispatch.fanout-error-isolation.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-dispatch.hedge-cleanup.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-dispatch.post-compaction-recovery.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-dispatch.recovery-1.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-dispatch.recovery-2.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-dispatch.spawn-failure-and-missing-target.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-dispatch.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-dispatch.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-flow-diagnostics.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-flow-store.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-store-consumption.test-harness.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-store-post-compaction.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-store-post-compaction.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-store.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-store.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-taskflow-registry.test-harness.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/delegate-turn-admission.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/lazy.runtime.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/leaf-key-orphan-empirical.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/nonexistent-target-session-delivery.race.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/post-compaction-chain-charge.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/post-compaction-chain-charge.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/post-compaction-durable-handoff.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/post-compaction-staged-dispatch.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/post-compaction-staleness.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/post-compaction-taskflow-rejection.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/post-compaction-taskflow-rejection.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/project84-owned-topology.contract.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/rfc-contract.scenario.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/scheduler.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/scheduler.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/signal-parser.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/signal.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/signal.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/state.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/state.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/targeting-pure.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/targeting.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/trace-context-propagation.integration.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/types.mode-shape.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/types.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/volatile-map-allowlist.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/work-dispatch-execution.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/work-dispatch.classification-and-cap.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/work-dispatch.durable-2.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/work-dispatch.durable-3.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/work-dispatch.durable-4.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/work-dispatch.durable-5.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/work-dispatch.durable-6.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/work-dispatch.durable-7.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/work-dispatch.finalization-1.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/work-dispatch.finalization-2.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/work-dispatch.parent-lineage-and-restart.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/work-dispatch.retry-exhaustion.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/work-dispatch.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/work-dispatch.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/work-flow-state.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/work-store.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/work-terminal-notice.durability.test.ts	-
+SAFE-NEW	0	src/auto-reply/continuation/work-terminal-notice.ts	-
+GENUINE	0	src/auto-reply/get-reply-options.types.ts	-
+GENUINE	0	src/auto-reply/heartbeat-reply-payload.ts	-
+MIXED-CLOBBER	1	src/auto-reply/reply/abort.test.ts	36fbd869eda refactor(agents): eliminate export name collis
+MIXED-CLOBBER	1	src/auto-reply/reply/agent-runner-cli-candidate.ts	?
+SAFE-NEW	0	src/auto-reply/reply/agent-runner-continuation-diag.ts	-
+SAFE-NEW	0	src/auto-reply/reply/agent-runner-continuation-schedule.ts	-
+SAFE-NEW	0	src/auto-reply/reply/agent-runner-continuation-signal.ts	-
+SAFE-NEW	0	src/auto-reply/reply/agent-runner-continuation.ts	-
+GENUINE	0	src/auto-reply/reply/agent-runner-core.ts	-
+SAFE-NEW	0	src/auto-reply/reply/agent-runner-embedded-candidate.continuation.test.ts	-
+MIXED-CLOBBER	4	src/auto-reply/reply/agent-runner-embedded-candidate.ts	?
+GENUINE	0	src/auto-reply/reply/agent-runner-execute.ts	-
+GENUINE	0	src/auto-reply/reply/agent-runner-execution-results.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/agent-runner-execution.context-usage.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/agent-runner-execution.release-queued-compaction.test.ts	-
+GENUINE	0	src/auto-reply/reply/agent-runner-execution.test-support.ts	-
+MIXED-CLOBBER	42	src/auto-reply/reply/agent-runner-execution.ts	2f98eeabfd8 feat(auto-reply): record message-tool mute out
+GENUINE	0	src/auto-reply/reply/agent-runner-execution.types.ts	-
+SAFE-NEW	0	src/auto-reply/reply/agent-runner-fallback-candidate.continuation.test.ts	-
+MIXED-CLOBBER	4	src/auto-reply/reply/agent-runner-fallback-candidate.ts	d0700b3bc26 fix(agents): heartbeat runs no longer block vi
+GENUINE	0	src/auto-reply/reply/agent-runner-fallback-cycle.types.ts	-
+MIXED-CLOBBER	1	src/auto-reply/reply/agent-runner-fallback-settlement.ts	?
+SAFE-NEW	0	src/auto-reply/reply/agent-runner-message-tool-outcome.ts	-
+SAFE-NEW	0	src/auto-reply/reply/agent-runner-post-compaction-release.ts	-
+MIXED-CLOBBER	51	src/auto-reply/reply/agent-runner-result-accounting.test.ts	5621979a469 fix(models): preserve session selection across
+MIXED-CLOBBER	1	src/auto-reply/reply/agent-runner-result-accounting.ts	?
+MIXED-CLOBBER	115	src/auto-reply/reply/agent-runner-result-complete.ts	210aca6de38 fix(gateway): prevent restart replay after fin
+MIXED-CLOBBER	14	src/auto-reply/reply/agent-runner-result-payloads.ts	?
+GENUINE	0	src/auto-reply/reply/agent-runner-result.types.ts	-
+GENUINE	0	src/auto-reply/reply/agent-runner-run.ts	-
+GENUINE	0	src/auto-reply/reply/agent-runner-session-reset.ts	-
+GENUINE	0	src/auto-reply/reply/agent-runner-trace.ts	-
+SAFE-NEW	0	src/auto-reply/reply/agent-runner.continuation-chain-break-reset.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/agent-runner.continuation-delegate-fire-span.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/agent-runner.continuation-delegate-reject-obs.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/agent-runner.continuation-postcompaction-autocompaction.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/agent-runner.continuation-postcompaction-staging.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/agent-runner.continuation-span-uniformity.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/agent-runner.continuation-work-span.reservation.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/agent-runner.continuation-work-span.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/agent-runner.finally-drain-hardening.test.ts	-
+MIXED-CLOBBER	2	src/auto-reply/reply/agent-runner.misc.runreplyagent.test.ts	efdfb69adc4 fix(agents): keep queued followups from missin
+GENUINE	0	src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts	-
+MIXED-CLOBBER	1	src/auto-reply/reply/commands-compact.runtime.ts	44fe1b15a3e test: trim compact command leftovers (#123810)
+MIXED-CLOBBER	9	src/auto-reply/reply/commands-compact.ts	?
+GENUINE	0	src/auto-reply/reply/commands-context-report.ts	-
+GENUINE	0	src/auto-reply/reply/commands-goal.test.ts	-
+GENUINE	0	src/auto-reply/reply/commands-status.test.ts	-
+GENUINE	0	src/auto-reply/reply/commands-system-prompt.test.ts	-
+GENUINE	0	src/auto-reply/reply/commands-system-prompt.ts	-
+SAFE-NEW	0	src/auto-reply/reply/context-pressure.integration.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/context-pressure.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/cot-frame.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/cot-frame.ts	-
+GENUINE	0	src/auto-reply/reply/directive-handling.impl.ts	-
+MIXED-CLOBBER	1	src/auto-reply/reply/directive-handling.mixed-inline.test.ts	2e9d4de131c fix(auto-reply): apply mixed chat directives i
+GENUINE	0	src/auto-reply/reply/directive-handling.model.test.ts	-
+MIXED-CLOBBER	1	src/auto-reply/reply/followup-turn-admission.ts	?
+GENUINE	0	src/auto-reply/reply/get-reply-directives-apply.test.ts	-
+GENUINE	0	src/auto-reply/reply/get-reply-directives-apply.ts	-
+GENUINE	0	src/auto-reply/reply/get-reply-fast-path.test-support.ts	-
+MIXED-CLOBBER	7	src/auto-reply/reply/get-reply-run-admission.ts	?
+GENUINE	0	src/auto-reply/reply/get-reply-run-context.ts	-
+MIXED-CLOBBER	3	src/auto-reply/reply/get-reply-run-execute.ts	bb873c8806d fix(cron): preserve Codex app authority
+MIXED-CLOBBER	2	src/auto-reply/reply/get-reply-run.media-only.test.ts	?
+MIXED-CLOBBER	1	src/auto-reply/reply/get-reply.fast-path.test.ts	589a9143289 fix(session): preserve reset message payloads
+MIXED-CLOBBER	2	src/auto-reply/reply/get-reply.ts	?
+SAFE-NEW	0	src/auto-reply/reply/no-op-rearm-guard.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/no-op-rearm-guard.ts	-
+SAFE-NEW	0	src/auto-reply/reply/normalize-reply.cot-frame.test.ts	-
+GENUINE	0	src/auto-reply/reply/normalize-reply.ts	-
+SAFE-NEW	0	src/auto-reply/reply/post-compaction-context-failure.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/post-compaction-delegate-delivery.ts	-
+SAFE-NEW	0	src/auto-reply/reply/post-compaction-delegate-dispatch.delivery-guards.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/post-compaction-delegate-dispatch.lifecycle.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/post-compaction-delegate-dispatch.queueing-policy.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/post-compaction-delegate-dispatch.recovery.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/post-compaction-delegate-dispatch.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/post-compaction-delegate-dispatch.ts	-
+GENUINE	0	src/auto-reply/reply/queue.collect.test.ts	-
+GENUINE	0	src/auto-reply/reply/queue.test-helpers.ts	-
+MIXED-CLOBBER	8	src/auto-reply/reply/queue/drain.ts	98378259480 fix(agents): preserve admitted runtime generat
+GENUINE	0	src/auto-reply/reply/queue/types.ts	-
+MIXED-CLOBBER	1	src/auto-reply/reply/reply-state.test.ts	f8057eeccea refactor(tests): consolidate inbound reply fix
+GENUINE	0	src/auto-reply/reply/reply-utils.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/run-compaction-count.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/run-compaction-count.ts	-
+SAFE-NEW	0	src/auto-reply/reply/run-provenance.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/run-provenance.ts	-
+MIXED-CLOBBER	11	src/auto-reply/reply/session-init-conflict-retry.ts	?
+GENUINE	0	src/auto-reply/reply/session-reset-cleanup.test.ts	-
+SAFE-NEW	0	src/auto-reply/reply/session-system-events.test.ts	-
+MIXED-CLOBBER	20	src/auto-reply/reply/session-system-events.ts	?
+SAFE-NEW	0	src/auto-reply/reply/session-updates.compaction.test.ts	-
+MIXED-CLOBBER	4	src/auto-reply/reply/session-updates.ts	?
+GENUINE	0	src/auto-reply/reply/session.init-conflict-retry.test.ts	-
+MIXED-CLOBBER	1	src/auto-reply/reply/session.test.ts	?
+GENUINE	0	src/auto-reply/reply/streaming-directives.ts	-
+GENUINE	0	src/auto-reply/status.test.ts	-
+MIXED-CLOBBER	8	src/auto-reply/tokens.test.ts	?
+GENUINE	0	src/auto-reply/types.ts	-
+GENUINE	0	src/boards/board-notices.ts	-
+SAFE-NEW	0	src/chat/tool-argument-redaction.ts	-
+GENUINE	0	src/cli/config-cli.test.ts	-
+GENUINE	0	src/cli/daemon-cli/install.integration.test.ts	-
+GENUINE	0	src/cli/daemon-cli/install.test.ts	-
+GENUINE	0	src/cli/daemon-cli/lifecycle-core.config-guard.test.ts	-
+MIXED-CLOBBER	4	src/cli/gateway-cli/run.option-collisions.test.ts	?
+GENUINE	0	src/cli/nodes-camera.test.ts	-
+GENUINE	0	src/cli/update-cli.test.ts	-
+GENUINE	0	src/cli/update-cli/update-command-post-core.test.ts	-
+MIXED-CLOBBER	1	src/commands/agent/session.test.ts	3d762467928 refactor: eliminate final export name collisio
+MIXED-CLOBBER	3	src/commands/doctor-config-preflight.legacy-copy.test.ts	a23d19218c5 fix(doctor): surface legacy-config copy failur
+MIXED-CLOBBER	1	src/commands/doctor-device-pairing.test.ts	b1b06d12125 fix(doctor): keep lint off writable state (#12
+GENUINE	0	src/commands/doctor-session-sqlite.test.ts	-
+GENUINE	0	src/commands/doctor/shared/active-tool-schema-warnings.ts	-
+MIXED-CLOBBER	2	src/commands/export-trajectory.test.ts	46dcc57c549 fix(cli): reject an unconfigured --agent acros
+MIXED-CLOBBER	1	src/commands/flows.test.ts	?
+GENUINE	0	src/commands/onboard-non-interactive.gateway-health-auth.test.ts	-
+MIXED-CLOBBER	1	src/commands/sandbox-explain.test.ts	038142d9705 fix(sandbox): expose Podman posture and mounts
+GENUINE	0	src/commands/status-overview-rows.ts	-
+GENUINE	0	src/commands/status.command-report-data.ts	-
+SAFE-NEW	0	src/commands/status.continuation-banner.test.ts	-
+MIXED-CLOBBER	5	src/commands/status.test.ts	fa0fcef9f62 fix(sessions): require provenance for fresh co
+SAFE-NEW	0	src/config/cache-utils.ts	-
+GENUINE	0	src/config/config.agent-concurrency-defaults.test.ts	-
+MIXED-CLOBBER	2	src/config/io.compat.test.ts	cd42bc8cda3 test(config): trim IO compatibility suite impo
+MIXED-CLOBBER	2	src/config/io.scalar-root.test.ts	6575733bc03 fix(config): reject scalar config roots instea
+GENUINE	0	src/config/sessions.ts	-
+MIXED-CLOBBER	1	src/config/sessions/artifacts.ts	?
+GENUINE	0	src/config/sessions/cache-fields.test.ts	-
+GENUINE	0	src/config/sessions/conversation-delivery-store.test.ts	-
+MIXED-CLOBBER	1	src/config/sessions/conversation-registry.test.ts	0b859660720 fix gateway conversation route ownership (#126
+GENUINE	0	src/config/sessions/entry-freshness.test.ts	-
+GENUINE	0	src/config/sessions/goals.test.ts	-
+GENUINE	0	src/config/sessions/goals.ts	-
+GENUINE	0	src/config/sessions/lifecycle.ts	-
+GENUINE	0	src/config/sessions/paths.test.ts	-
+MIXED-CLOBBER	1	src/config/sessions/session-accessor.conformance.test.ts	3d762467928 refactor: eliminate final export name collisio
+GENUINE	0	src/config/sessions/session-accessor.sqlite-entry.ts	-
+MIXED-CLOBBER	1	src/config/sessions/session-accessor.sqlite-parent-fork.ts	fa0fcef9f62 fix(sessions): require provenance for fresh co
+GENUINE	0	src/config/sessions/session-accessor.sqlite-parent-session.ts	-
+GENUINE	0	src/config/sessions/session-accessor.sqlite-transcript-write.ts	-
+GENUINE	0	src/config/sessions/session-accessor.ts	-
+SAFE-NEW	0	src/config/sessions/session-entry-runtime.ts	-
+GENUINE	0	src/config/sessions/session-snapshot-merge.test.ts	-
+SAFE-NEW	0	src/config/sessions/store.continuation-merge.test.ts	-
+MIXED-CLOBBER	14	src/config/sessions/types.ts	fa0fcef9f62 fix(sessions): require provenance for fresh co
+GENUINE	0	src/config/types.agent-defaults.ts	-
+MIXED-CLOBBER	2	src/config/zod-schema.agent-defaults.ts	?
+SAFE-NEW	0	src/config/zod-schema.continuation.test.ts	-
+GENUINE	0	src/context-engine/context-engine.test.ts	-
+MIXED-CLOBBER	50	src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts	0774c20d50e fix(cron): persist outbound route only after s
+GENUINE	0	src/cron/isolated-agent/delivery-outbound.runtime.ts	-
+GENUINE	0	src/cron/isolated-agent/run-executor.ts	-
+SAFE-NEW	0	src/cron/isolated-agent/run.continuation-tool-policy.test.ts	-
+GENUINE	0	src/cron/isolated-agent/run.runtime.ts	-
+GENUINE	0	src/cron/service.runs-one-shot-main-job-disables-it.test.ts	-
+GENUINE	0	src/cron/service/state.ts	-
+GENUINE	0	src/cron/service/timer-execution.ts	-
+MIXED-CLOBBER	1	src/cron/service/timer.regression.test.ts	7fcddedaaf6 fix(heartbeat): prevent replies disappearing d
+GENUINE	0	src/entry.respawn.test.ts	-
+GENUINE	0	src/flows/doctor-core-checks.runtime.ts	-
+GENUINE	0	src/gateway/agent-turn/agent-run-execution-phase.ts	-
+MIXED-CLOBBER	2	src/gateway/agent-turn/agent-session-persist.ts	063acb92681 refactor(gateway): relocate agent turn modules
+GENUINE	0	src/gateway/agent-turn/agent-turn-service.ts	-
+GENUINE	0	src/gateway/chat-abort.ts	-
+MIXED-CLOBBER	2	src/gateway/chat-display-projection.core.ts	?
+GENUINE	0	src/gateway/config-reload.test.ts	-
+GENUINE	0	src/gateway/mcp-http.runtime.test.ts	-
+MIXED-CLOBBER	1	src/gateway/mcp-http.runtime.ts	?
+GENUINE	0	src/gateway/mcp-http.test.ts	-
+MIXED-CLOBBER	2	src/gateway/portals/portal-http-proxy.ts	cc2fc55f9b4 feat: portals — expose agent-run dev servers
+MIXED-CLOBBER	6	src/gateway/probe.device-auth-scope.test.ts	d40c21b0360 fix(gateway): isolate remote probe device auth
+MIXED-CLOBBER	17	src/gateway/server-chat.agent-events.test.ts	?
+MIXED-CLOBBER	26	src/gateway/server-chat.ts	?
+MIXED-CLOBBER	4	src/gateway/server-close.test.ts	?
+GENUINE	0	src/gateway/server-close.ts	-
+GENUINE	0	src/gateway/server-cron.test.ts	-
+GENUINE	0	src/gateway/server-cron.ts	-
+GENUINE	0	src/gateway/server-lifecycle.ts	-
+SAFE-NEW	0	src/gateway/server-maintenance.delegate-artifacts.test.ts	-
+GENUINE	0	src/gateway/server-maintenance.test.ts	-
+MIXED-CLOBBER	2	src/gateway/server-maintenance.ts	?
+GENUINE	0	src/gateway/server-methods/agent-request-types.ts	-
+MIXED-CLOBBER	1	src/gateway/server-methods/agent.events-and-subagents.test-utils.ts	?
+SAFE-NEW	0	src/gateway/server-methods/artifacts.delegate-claims.test.ts	-
+GENUINE	0	src/gateway/server-methods/artifacts.test.ts	-
+GENUINE	0	src/gateway/server-methods/chat-broadcast.ts	-
+MIXED-CLOBBER	28	src/gateway/server-methods/chat-send-agent-dispatch.ts	b8ff4fe3d7d fix: show sessions waiting for concurrency slo
+SAFE-NEW	0	src/gateway/server-methods/chat-send-agent-outcome.ts	-
+GENUINE	0	src/gateway/server-methods/chat-send-dispatch-errors.test.ts	-
+GENUINE	0	src/gateway/server-methods/chat-send-dispatch-errors.ts	-
+GENUINE	0	src/gateway/server-methods/chat-send-handler.ts	-
+GENUINE	0	src/gateway/server-methods/chat-send-nonagent-finalization.ts	-
+GENUINE	0	src/gateway/server-methods/chat-send-source-finalization.ts	-
+GENUINE	0	src/gateway/server-methods/chat.directive-tags.test.ts	-
+MIXED-CLOBBER	11	src/gateway/server-methods/server-methods.test.ts	2fd1fad4137 test(gateway): consolidate server method fixtu
+GENUINE	0	src/gateway/server-methods/sessions-compact.ts	-
+GENUINE	0	src/gateway/server-methods/system-event-routing.test.ts	-
+GENUINE	0	src/gateway/server-methods/system.ts	-
+MIXED-CLOBBER	2	src/gateway/server-node-events.ts	6a824314948 refactor: replace runtime mock seams with inje
+GENUINE	0	src/gateway/server-restart-sentinel-agent-delivery.ts	-
+SAFE-NEW	0	src/gateway/server-restart-sentinel-delivery.ts	-
+MIXED-CLOBBER	1	src/gateway/server-restart-sentinel.test.ts	ba3cb317773 fix(gateway): prevent targetless events from w
+MIXED-CLOBBER	167	src/gateway/server-restart-sentinel.ts	0d14434d0e8 feat(secrets): add explicit protected and agen
+GENUINE	0	src/gateway/server-runtime-handles.ts	-
+SAFE-NEW	0	src/gateway/server-runtime-services.test-support.ts	-
+MIXED-CLOBBER	4	src/gateway/server-runtime-services.test.ts	371c03c0b31 fix(delivery): renew stable producer leases (#
+MIXED-CLOBBER	1	src/gateway/server-runtime-services.ts	cd709e4a3a1 fix(media): keep the ttl sweep out of the mana
+SAFE-NEW	0	src/gateway/server-runtime-subscriptions.task-terminals.test-harness.ts	-
+MIXED-CLOBBER	91	src/gateway/server-runtime-subscriptions.test.ts	4589d8514ce fix(gateway): stop agent terminal processes af
+MIXED-CLOBBER	21	src/gateway/server-runtime-subscriptions.ts	40a6b50cc1c feat(audit): explain plugin and remote actions
+GENUINE	0	src/gateway/server-startup-bootstrap.ts	-
+SAFE-NEW	0	src/gateway/server.agent.continuation-trust.test.ts	-
+MIXED-CLOBBER	6	src/gateway/server.chat.gateway-server-chat-b.test.ts	736b0c424b7 fix(gateway): record display-cap truncation st
+GENUINE	0	src/gateway/server.sessions.compaction.test.ts	-
+GENUINE	0	src/gateway/server.sessions.reset-cleanup.test.ts	-
+GENUINE	0	src/gateway/server/hooks.agent-trust.test.ts	-
+MIXED-CLOBBER	2	src/gateway/server/hooks.early-failure.test.ts	3f4614addac fix(gateway): preserve hook target on early fa
+MIXED-CLOBBER	2	src/gateway/server/hooks.terminal-target.test.ts	42500d13b17 fix(hooks): target hook-triggered heartbeat wa
+GENUINE	0	src/gateway/server/hooks.ts	-
+MIXED-CLOBBER	2	src/gateway/session-compaction-checkpoints.ts	?
+MIXED-CLOBBER	1	src/gateway/session-recovery-entry.ts	bb5ef9872a7 fix: resume sessions interrupted by gateway re
+MIXED-CLOBBER	1	src/gateway/session-utils-contracts.ts	cd8a96491e2 fix: repair canonical session keys with doctor
+GENUINE	0	src/gateway/session-utils-store-lookup.ts	-
+SAFE-NEW	0	src/gateway/session-utils-store-target.ts	-
+SAFE-NEW	0	src/gateway/test/server-sessions.internal-hook-event-test-helpers.ts	-
+MIXED-CLOBBER	12	src/gateway/test/server-sessions.test-helpers.ts	?
+GENUINE	0	src/gateway/tool-resolution.test.ts	-
+GENUINE	0	src/gateway/tool-resolution.ts	-
+GENUINE	0	src/hooks/llm-slug-generator.ts	-
+GENUINE	0	src/index.ts	-
+SAFE-NEW	0	src/infra/continuation-tracer.emit-and-fire.test.ts	-
+SAFE-NEW	0	src/infra/continuation-tracer.queue-and-compaction.test.ts	-
+SAFE-NEW	0	src/infra/continuation-tracer.test.ts	-
+SAFE-NEW	0	src/infra/continuation-tracer.ts	-
+MIXED-CLOBBER	3	src/infra/delivery-queue-sqlite-bound.ts	35cc9b7c9b9 fix: satisfy completion delivery changed gates
+SAFE-NEW	0	src/infra/delivery-queue-sqlite-codec.ts	-
+MIXED-CLOBBER	25	src/infra/delivery-queue-sqlite.ts	ad6bc6d3ae8 fix(delivery): keep failed queue rows payload-
+MIXED-CLOBBER	4	src/infra/device-auth-store.test.ts	47fd629c8d6 feat(gateway): persist per-origin device auth
+MIXED-CLOBBER	2	src/infra/device-identity-coordinator.contract.test.ts	21a9428a8a5 fix(identity): prevent cross-runtime device id
+MIXED-CLOBBER	2	src/infra/device-identity.state-dir.test.ts	70abd88e03e fix(gateway): derive lock and coordinator path
+MIXED-CLOBBER	4	src/infra/device-identity.test.ts	ab9b40daa33 fix(cli): prevent node/device RPCs from corrup
+GENUINE	0	src/infra/diagnostic-events.ts	-
+SAFE-NEW	0	src/infra/diagnostic-trace-context-pure.ts	-
+GENUINE	0	src/infra/diagnostic-trace-context.test.ts	-
+MIXED-CLOBBER	53	src/infra/diagnostic-trace-context.ts	?
+MIXED-CLOBBER	1	src/infra/exec-authorization-render.ts	?
+GENUINE	0	src/infra/fs-safe-advanced.ts	-
+MIXED-CLOBBER	3	src/infra/gateway-lock.state-dir.test.ts	b8344775658 fix(cli): refuse live state reset and uninstal
+GENUINE	0	src/infra/heartbeat-cooldown.ts	-
+GENUINE	0	src/infra/heartbeat-outcome-store.ts	-
+MIXED-CLOBBER	1	src/infra/heartbeat-reason.test.ts	?
+MIXED-CLOBBER	1	src/infra/heartbeat-reason.ts	541f373bc0c refactor(validation): type producers and drop
+GENUINE	0	src/infra/heartbeat-runner-config.ts	-
+GENUINE	0	src/infra/heartbeat-runner-delivery.ts	-
+MIXED-CLOBBER	14	src/infra/heartbeat-runner-execution.ts	b45ddf2754f fix(heartbeat): keep failed work pending after
+SAFE-NEW	0	src/infra/heartbeat-runner-invoke.ts	-
+MIXED-CLOBBER	4	src/infra/heartbeat-runner-prompt.ts	?
+MIXED-CLOBBER	4	src/infra/heartbeat-runner-run.ts	?
+MIXED-CLOBBER	2	src/infra/heartbeat-runner-scheduler.ts	7afbb7072ad fix(heartbeat): deliver exec completions with
+MIXED-CLOBBER	1	src/infra/heartbeat-runner.ack-token-heartbeat-acks.test.ts	fb9a62e9956 fix(heartbeat): suppress silent exec acknowled
+GENUINE	0	src/infra/heartbeat-runner.active-hours-schedule.e2e.test.ts	-
+SAFE-NEW	0	src/infra/heartbeat-runner.delegate-return.test.ts	-
+MIXED-CLOBBER	2	src/infra/heartbeat-runner.ghost-reminder.test.ts	2f76ec387a8 fix: process poll leaves notify-on-exit comple
+MIXED-CLOBBER	1	src/infra/heartbeat-runner.identity.test.ts	42500d13b17 fix(hooks): target hook-triggered heartbeat wa
+GENUINE	0	src/infra/heartbeat-runner.isolated-key-stability.test.ts	-
+MIXED-CLOBBER	7	src/infra/heartbeat-runner.returns-default-unset.test.ts	7afbb7072ad fix(heartbeat): deliver exec completions with
+MIXED-CLOBBER	2	src/infra/heartbeat-runner.scheduler-owner-resolution.test.ts	cb5c061cb36 fix(gateway): resolve ambient heartbeat owner
+SAFE-NEW	0	src/infra/heartbeat-runner.scheduler.targeted-wake.test.ts	-
+SAFE-NEW	0	src/infra/heartbeat-runner.scheduler.test-support.ts	-
+GENUINE	0	src/infra/heartbeat-runner.scheduler.test.ts	-
+GENUINE	0	src/infra/heartbeat-runner.skips-busy-session-lane.test.ts	-
+MIXED-CLOBBER	2	src/infra/heartbeat-runner.stale-exec.test.ts	2f76ec387a8 fix: process poll leaves notify-on-exit comple
+GENUINE	0	src/infra/heartbeat-runner.subagent-session-guard.test.ts	-
+MIXED-CLOBBER	8	src/infra/heartbeat-runner.targeted-unscheduled-wake.test.ts	7afbb7072ad fix(heartbeat): deliver exec completions with
+GENUINE	0	src/infra/heartbeat-runner.tool-response.test.ts	-
+MIXED-CLOBBER	2	src/infra/heartbeat-runner.ts	?
+SAFE-NEW	0	src/infra/heartbeat-wake-coalescing.ts	-
+GENUINE	0	src/infra/heartbeat-wake-concurrency.test.ts	-
+GENUINE	0	src/infra/heartbeat-wake-contracts.ts	-
+MIXED-CLOBBER	1	src/infra/heartbeat-wake-lifecycle.ts	7dd75d0716f fix(heartbeat): serialize wake lifecycle state
+MIXED-CLOBBER	12	src/infra/heartbeat-wake-policy.ts	7afbb7072ad fix(heartbeat): deliver exec completions with
+MIXED-CLOBBER	1	src/infra/heartbeat-wake-target.ts	7dd75d0716f fix(heartbeat): serialize wake lifecycle state
+SAFE-NEW	0	src/infra/heartbeat-wake.lifecycle.test.ts	-
+MIXED-CLOBBER	1	src/infra/heartbeat-wake.preemption.test.ts	7fcddedaaf6 fix(heartbeat): prevent replies disappearing d
+MIXED-CLOBBER	3	src/infra/heartbeat-wake.test.ts	7dd75d0716f fix(heartbeat): serialize wake lifecycle state
+MIXED-CLOBBER	87	src/infra/heartbeat-wake.ts	7dd75d0716f fix(heartbeat): serialize wake lifecycle state
+GENUINE	0	src/infra/infra-store.test.ts	-
+MIXED-CLOBBER	2	src/infra/openclaw-cli-invocation.test.ts	bfcce12e6b3 fix(tui): restore provider auth in installed l
+MIXED-CLOBBER	3	src/infra/openclaw-cli-shim.test.ts	55d7f8a4182 fix(agents): pin agent openclaw invocations to
+MIXED-CLOBBER	1	src/infra/outbound/outbound-session.test.ts	3d762467928 refactor: eliminate final export name collisio
+GENUINE	0	src/infra/restart-sentinel-store.ts	-
+SAFE-NEW	0	src/infra/secure-random-chain-id.test.ts	-
+GENUINE	0	src/infra/secure-random.ts	-
+GENUINE	0	src/infra/session-cost-usage-reporting.ts	-
+SAFE-NEW	0	src/infra/session-cost-usage.discoverAllSessions.test.ts	-
+MIXED-CLOBBER	1	src/infra/session-cost-usage.test.ts	?
+MIXED-CLOBBER	1	src/infra/session-cost-usage.ts	?
+SAFE-NEW	0	src/infra/session-delivery-queue-attachment-metadata.ts	-
+SAFE-NEW	0	src/infra/session-delivery-queue-codec.ts	-
+GENUINE	0	src/infra/session-delivery-queue-recovery.ts	-
+GENUINE	0	src/infra/session-delivery-queue-runtime.test.ts	-
+MIXED-CLOBBER	74	src/infra/session-delivery-queue-storage.ts	?
+SAFE-NEW	0	src/infra/session-delivery-queue.managed-artifact.test.ts	-
+SAFE-NEW	0	src/infra/session-delivery-queue.recovery-exhaustion.test.ts	-
+GENUINE	0	src/infra/session-delivery-queue.recovery.test.ts	-
+SAFE-NEW	0	src/infra/session-delivery-queue.storage-lifecycle.test.ts	-
+SAFE-NEW	0	src/infra/session-delivery-queue.storage.test-support.ts	-
+GENUINE	0	src/infra/session-delivery-queue.storage.test.ts	-
+SAFE-NEW	0	src/infra/session-keys.ts	-
+GENUINE	0	src/infra/session-maintenance-warning.test.ts	-
+GENUINE	0	src/infra/session-maintenance-warning.ts	-
+GENUINE	0	src/infra/state-migrations.legacy-session-store.ts	-
+MIXED-CLOBBER	4	src/infra/system-events.test.ts	0e56fce87b2 fix(plugin-sdk): preserve system event snapsho
+MIXED-CLOBBER	5	src/infra/system-events.ts	42500d13b17 fix(hooks): target hook-triggered heartbeat wa
+GENUINE	0	src/infra/voicewake.test.ts	-
+MIXED-CLOBBER	1	src/library.ts	3d762467928 refactor: eliminate final export name collisio
+SAFE-NEW	0	src/logging/diagnostic-continuation-queues.ts	-
+GENUINE	0	src/logging/diagnostic-stability.ts	-
+MIXED-CLOBBER	3	src/logging/diagnostic.test.ts	?
+MIXED-CLOBBER	8	src/logging/diagnostic.ts	?
+MIXED-CLOBBER	1	src/media/web-media.test.ts	554a6f3bbf6 feat(sms): add Twilio MMS support (#118664)
+GENUINE	0	src/model-picker/apply-session-model-selection.test.ts	-
+GENUINE	0	src/model-picker/apply-session-model-selection.ts	-
+MIXED-CLOBBER	3	src/node-host/node-worker-transfer-client.test.ts	3c5cecee06c refactor: compact recovery ownership and model
+GENUINE	0	src/plugin-sdk/diagnostic-runtime.ts	-
+MIXED-CLOBBER	1	src/plugin-sdk/heartbeat-runtime.ts	?
+MIXED-CLOBBER	3	src/plugin-sdk/infra-runtime.ts	c71c29ecaec fix: preserve exec completion identity across
+SAFE-NEW	0	src/plugin-sdk/provider-catalog-live-runtime.config.test.ts	-
+SAFE-NEW	0	src/plugin-sdk/provider-catalog-live-runtime.test-support.ts	-
+MIXED-CLOBBER	1	src/plugin-sdk/provider-catalog-live-runtime.test.ts	715c379fd94 refactor(config): consolidate context budget t
+MIXED-CLOBBER	5	src/plugin-sdk/provider-catalog-live-runtime.ts	?
+MIXED-CLOBBER	9	src/plugin-sdk/system-event-runtime.ts	?
+GENUINE	0	src/plugin-sdk/test-env.ts	-
+GENUINE	0	src/plugin-sdk/test-helpers/provider-auth-contract.ts	-
+GENUINE	0	src/plugins/bundled-plugin-naming.test.ts	-
+GENUINE	0	src/plugins/git-install.test.ts	-
+MIXED-CLOBBER	1	src/plugins/git-install.ts	3d762467928 refactor: eliminate final export name collisio
+MIXED-CLOBBER	2	src/plugins/install.test.ts	?
+MIXED-CLOBBER	1	src/plugins/marketplace.test.ts	87be38ea735 fix(plugins): resolve marketplace aliases with
+MIXED-CLOBBER	1	src/plugins/npm-install-security-scan.release.test.ts	45ed68e6ea6 fix(release): accept trusted Codex scan layout
+MIXED-CLOBBER	2	src/plugins/runtime/index.test.ts	?
+MIXED-CLOBBER	3	src/plugins/runtime/runtime-system.ts	?
+MIXED-CLOBBER	1	src/plugins/runtime/runtime-taskflow.test.ts	?
+MIXED-CLOBBER	24	src/plugins/runtime/runtime-taskflow.ts	?
+GENUINE	0	src/plugins/runtime/types-core.ts	-
+GENUINE	0	src/plugins/session-entry-slot-keys.ts	-
+MIXED-CLOBBER	2	src/plugins/wired-hooks-compaction.test.ts	?
+SAFE-NEW	0	src/process/command-queue-waiters.ts	-
+GENUINE	0	src/process/command-queue.test-support.ts	-
+GENUINE	0	src/process/command-queue.test.ts	-
+GENUINE	0	src/process/command-queue.ts	-
+GENUINE	0	src/process/exec.windows.test.ts	-
+GENUINE	0	src/process/windows-command.test.ts	-
+GENUINE	0	src/scripts/prepare-codex-ci-auth.test.ts	-
+GENUINE	0	src/scripts/prepare-codex-ci-config.test.ts	-
+GENUINE	0	src/sessions/session-state-events.test.ts	-
+MIXED-CLOBBER	3	src/sessions/session-state-notices.test.ts	7f0a87de1d1 feat(agents): eager delegation default in the
+GENUINE	0	src/sessions/session-state-notices.ts	-
+SAFE-NEW	0	src/sessions/user-turn-transcript-late-media.ts	-
+GENUINE	0	src/sessions/user-turn-transcript.media-normalize.ts	-
+GENUINE	0	src/sessions/user-turn-transcript.metadata.ts	-
+SAFE-NEW	0	src/sessions/user-turn-transcript.recorder.test.ts	-
+MIXED-CLOBBER	71	src/sessions/user-turn-transcript.test.ts	dfbc95e4ea2 fix: replies fail after transcript projection
+MIXED-CLOBBER	15	src/sessions/user-turn-transcript.ts	17df3f61025 refactor(types): remove chained type assertion
+GENUINE	0	src/sessions/user-turn-transcript.types.ts	-
+MIXED-CLOBBER	11	src/shared/chat-message-content.ts	?
+SAFE-NEW	0	src/shared/inline-attachments.test.ts	-
+SAFE-NEW	0	src/shared/inline-attachments.ts	-
+GENUINE	0	src/skills/runtime/tool-dispatch.ts	-
+MIXED-CLOBBER	2	src/snapshot/git-backup.test.ts	37b4fc8621d feat(backup): recorded runs, scheduled backups
+SAFE-NEW	0	src/state/delegate-artifacts-schema.ts	-
+GENUINE	0	src/state/openclaw-state-db-contract.ts	-
+GENUINE	0	src/state/openclaw-state-db-operator-approval-migration.test.ts	-
+GENUINE	0	src/state/openclaw-state-db-schema-additive.ts	-
+GENUINE	0	src/state/openclaw-state-db.generated.d.ts	-
+MIXED-CLOBBER	29	src/state/openclaw-state-db.test.ts	587377aaf62 perf(state): skip redundant schema probes on c
+GENUINE	0	src/state/openclaw-state-schema.sql	-
+SAFE-NEW	0	src/status/status-codex-auth-profile.ts	-
+SAFE-NEW	0	src/status/status-continuation-line.ts	-
+MIXED-CLOBBER	1	src/status/status-message.ts	5e477aff2ad feat(status): render /status as a native rich
+MIXED-CLOBBER	1	src/status/status-text.test.ts	?
+MIXED-CLOBBER	15	src/status/status-text.ts	?
+MIXED-CLOBBER	2	src/status/summary.ts	?
+GENUINE	0	src/talk/client-voice-session.ts	-
+GENUINE	0	src/tasks/task-executor.ts	-
+SAFE-NEW	0	src/tasks/task-flow-continuation-state.ts	-
+MIXED-CLOBBER	3	src/tasks/task-flow-registry.audit.test.ts	?
+GENUINE	0	src/tasks/task-flow-registry.maintenance.test.ts	-
+GENUINE	0	src/tasks/task-flow-registry.maintenance.ts	-
+GENUINE	0	src/tasks/task-flow-registry.store.sqlite.ts	-
+GENUINE	0	src/tasks/task-flow-registry.test.ts	-
+GENUINE	0	src/tasks/task-flow-registry.ts	-
+GENUINE	0	src/tasks/task-flow-registry.types.ts	-
+GENUINE	0	src/tasks/task-flow-runtime-internal.ts	-
+GENUINE	0	src/tasks/task-registry-delivery.ts	-
+GENUINE	0	src/tasks/task-registry.maintenance.issue-60299.test.ts	-
+MIXED-CLOBBER	2	src/tasks/task-registry.maintenance.ts	3d762467928 refactor: eliminate final export name collisio
+GENUINE	0	src/tasks/task-registry.test.ts	-
+MIXED-CLOBBER	3	src/test-utils/repo-files.test.ts	53d442eb511 fix(test): bound shared git inventory lookup (
+GENUINE	0	src/test-utils/temp-dir.ts	-
+GENUINE	0	src/tui/components/chat-log.test.ts	-
+MIXED-CLOBBER	1	src/tui/components/tool-execution.ts	?
+GENUINE	0	src/tui/embedded-backend.test.ts	-
+GENUINE	0	src/tui/embedded-backend.ts	-
+GENUINE	0	src/tui/tui-event-handlers.test.ts	-
+MIXED-CLOBBER	1	src/tui/tui-event-handlers.ts	?
+GENUINE	0	test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.ts	-
+MIXED-CLOBBER	2	test/e2e/qa-lab/runtime/telegram-command-menu-gateway.e2e.test.ts	c1217886119 fix(telegram): prioritize configured commands
+MIXED-CLOBBER	2	test/e2e/qa-lab/runtime/telegram-model-picker-prepared-gateway.e2e.test.ts	b668a21f070 fix(models): classify catalog timeouts by iden
+GENUINE	0	test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.discord-group.json	-
+GENUINE	0	test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/codex-dynamic-tools.telegram-direct.json	-
+MIXED-CLOBBER	4	test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/discord-group-codex-message-tool.md	133d5fff6c9 fix(cron): deliver current-session completions
+MIXED-CLOBBER	4	test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-direct-codex-message-tool.md	133d5fff6c9 fix(cron): deliver current-session completions
+MIXED-CLOBBER	4	test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/telegram-heartbeat-codex-tool.md	133d5fff6c9 fix(cron): deliver current-session completions
+MIXED-CLOBBER	1	test/helpers/agents/prompt-composition-scenarios.ts	?
+MIXED-CLOBBER	2	test/scripts/audit-seams.test.ts	8430fc0e3b8 refactor(agents): move spawn family into subag
+MIXED-CLOBBER	2	test/scripts/check-export-name-collisions.test.ts	64695e50246 chore: detect export name collisions (#121300)
+MIXED-CLOBBER	2	test/scripts/check-wrapper-shadowing.test.ts	560d172ae7e chore(scripts): prevent new wrapper shadowing
+MIXED-CLOBBER	4	test/scripts/ensure-playwright-chromium.test.ts	221df8cdc6b fix(testing): resolve Playwright browser cache
+MIXED-CLOBBER	3	test/scripts/full-release-validation-at-sha.test.ts	18dd70cec02 fix(release): dispatch validation through a cl
+GENUINE	0	test/scripts/install-sh.test.ts	-
+MIXED-CLOBBER	3	test/scripts/kitchen-sink-rpc-walk.test.ts	?
+GENUINE	0	test/scripts/lint-suppressions.test.ts	-
+MIXED-CLOBBER	1	test/scripts/plugin-sdk-surface-report.test.ts	?
+GENUINE	0	test/scripts/stage-bundled-plugin-runtime.test.ts	-
+GENUINE	0	test/scripts/testbox-lease-freshness.test.ts	-
+GENUINE	0	test/setup-openclaw-runtime.ts	-
+SAFE-NEW	0	test/setup.extension-active-memory.ts	-
+MIXED-CLOBBER	1	test/vitest-scoped-config.test.ts	?
+GENUINE	0	test/vitest-unit-fast-config.test.ts	-
+SAFE-NEW	0	test/vitest/hermetic-openclaw-env.ts	-
+MIXED-CLOBBER	1	test/vitest/vitest.extension-active-memory.config.ts	0a1d1031899 refactor(test): consolidate extension vitest c
+GENUINE	0	test/vitest/vitest.extension-config.ts	-
+MIXED-CLOBBER	1	test/vitest/vitest.test-shards.mjs	?
+GENUINE	0	test/vitest/vitest.unit-fast-fake-timers.config.ts	-
+GENUINE	0	test/vitest/vitest.unit-fast-isolated.config.ts	-
+MIXED-CLOBBER	1	test/vitest/vitest.unit-fast-paths.mjs	a29d8c88033 test(unit-fast): isolate computer-tool.test-he
+GENUINE	0	test/vitest/vitest.unit-fast.config.ts	-
+SAFE-NEW	0	tmp-drop-me-claude.md	-
+GENUINE	0	tsdown.config.ts	-
+GENUINE	0	ui/src/components/form-controls.browser.test.ts	-
+MIXED-CLOBBER	2	ui/src/e2e/session-management.groups.e2e.test.ts	4a70af553c2 improve(ui): simplify Sessions visual hierarch
+GENUINE	0	ui/src/lib/chat/tool-cards.ts	-
+MIXED-CLOBBER	3	ui/src/pages/chat/components/chat-task-suggestions.ts	47399310a08 improve(ui): redesign suggested task cards (#1
+GENUINE	0	ui/src/pages/chat/components/chat-tool-cards.node.test.ts	-
+MIXED-CLOBBER	22	ui/src/pages/sessions/view.browser.test.ts	4a70af553c2 improve(ui): simplify Sessions visual hierarch
+MIXED-CLOBBER	15	ui/src/styles/chat-file-link-presentation.browser.test.ts	f38a2f51b34 fix(ui): keep chat file links whole when a lin
+MIXED-CLOBBER	13	ui/src/styles/chat-github-link-presentation.browser.test.ts	9837ad59fa8 fix(ui): keep the GitHub mark on its label's l
+MIXED-CLOBBER	17	ui/src/styles/corner-shape.browser.test.ts	292506566bc improve(control-ui): continuous corner curvatu
+MIXED-CLOBBER	5	ui/src/styles/cursor-policy.browser.test.ts	32ced3053df fix(ui): scope the Control UI cursor conventio
+SAFE-NEW	0	ui/src/test-helpers/playwright-chromium.ts	-
