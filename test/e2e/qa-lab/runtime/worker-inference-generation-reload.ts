@@ -6,7 +6,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import {
+  createQaBusState,
+  createQaChannelTransport,
   QA_EVIDENCE_FILENAME,
+  startQaBusServer,
   startQaGatewayChild,
   startQaMockOpenAiServer,
   type QaEvidenceSummaryJson,
@@ -43,7 +46,7 @@ const GENERATION_B_REPLY = "WORKER-GENERATION-B-OK";
 const GENERATION_C_REPLY = "WORKER-GENERATION-C-OK";
 const OWNERSHIP_STAGES = ["factory", "policy", "wrapper", "execution"] as const;
 
-type Generation = "A" | "B" | "C";
+type Generation = "A" | "B" | "C" | "D";
 type ProducerOptions = { artifactBase: string; repoRoot: string };
 type TraceEvent = {
   event: string;
@@ -81,7 +84,7 @@ async function readTrace(tracePath: string): Promise<TraceEvent[]> {
 
 function classifyAuthorization(value: string | undefined): Generation | "unknown" {
   const credential = value?.replace(/^Bearer\s+/iu, "");
-  for (const generation of ["A", "B", "C"] as const) {
+  for (const generation of ["A", "B", "C", "D"] as const) {
     if (credential === `qa-worker-runtime-${generation}`) {
       return generation;
     }
@@ -210,6 +213,7 @@ function buildGenerationConfig(params: {
       ...config.agents,
       defaults: {
         ...config.agents?.defaults,
+        maxConcurrent: 1,
         model: { primary: MODEL_REF, fallbacks: [] },
         models: {
           ...config.agents?.defaults?.models,
@@ -398,6 +402,8 @@ async function runProof(options: ProducerOptions) {
     options.repoRoot,
     "test/e2e/qa-lab/runtime/fixtures/worker-inference-generation-provider",
   );
+  const channelState = createQaBusState();
+  const channelBus = await startQaBusServer({ state: channelState });
   const mock = await startQaMockOpenAiServer({ modelRefs: [MODEL_REF] });
   const authProxy = await startAuthInspectingProxy(mock.baseUrl);
   let gateway: WireGateway | undefined;
@@ -418,10 +424,11 @@ async function runProof(options: ProducerOptions) {
       providerMode: "mock-openai",
       primaryModel: MODEL_REF,
       alternateModel: DEFAULT_MOCK_MODEL_REF,
-      transportBaseUrl: "http://127.0.0.1",
+      transport: createQaChannelTransport(channelState),
+      transportBaseUrl: channelBus.baseUrl,
       controlUiEnabled: false,
-      mutateConfig: (config) =>
-        buildGenerationConfig({
+      mutateConfig: (config) => ({
+        ...buildGenerationConfig({
           config,
           generation: "A",
           pluginDir,
@@ -429,6 +436,8 @@ async function runProof(options: ProducerOptions) {
           barrierPath,
           mockProviderBaseUrl: `${authProxy.baseUrl}/v1`,
         }),
+        session: { ...config.session, dmScope: "per-peer" },
+      }),
     });
     await waitFor("generation A provider registration", async () => {
       const registrations = (await readTrace(tracePath)).filter(
@@ -528,16 +537,86 @@ async function runProof(options: ProducerOptions) {
       throw new Error(`worker history reply counts were not exact: ${JSON.stringify(replyCounts)}`);
     }
 
+    const channelTraceCursor = (await readTrace(tracePath)).length;
+    const channelReplies = {
+      blocker: "CHANNEL-GENERATION-C-BLOCKER-OK",
+      admitted: "CHANNEL-GENERATION-C-ADMITTED-OK",
+      current: "CHANNEL-GENERATION-D-CURRENT-OK",
+    };
+    const sendChannelTurn = (conversationId: string, reply: string) =>
+      channelState.addInboundMessage({
+        conversation: { id: conversationId, kind: "direct" },
+        senderId: conversationId,
+        text: `Reply exactly: ${reply}`,
+      });
+    const waitForChannelReply = async (conversationId: string, reply: string) =>
+      await waitFor(`${reply} channel delivery`, () =>
+        channelState
+          .getSnapshot()
+          .messages.find(
+            (message) =>
+              message.direction === "outbound" &&
+              message.conversation.id === conversationId &&
+              message.text.includes(reply),
+          ),
+      );
+
+    await fs.writeFile(barrierPath, "armed\n", "utf8");
+    sendChannelTurn("generation-blocker", channelReplies.blocker);
+    await waitFor("generation C channel blocker auth barrier", async () =>
+      (await readTrace(tracePath))
+        .slice(channelTraceCursor)
+        .find(
+          (event) =>
+            event.event === "auth-prepare" && event.generation === "C" && event.waited === true,
+        ),
+    );
+    sendChannelTurn("generation-admitted", channelReplies.admitted);
+    const activeGateway = gateway;
+    const queuedMainLane = await waitFor(
+      "admitted generation C turn waiting for the global lane",
+      async () => {
+        const diagnostics = (await activeGateway.call("diagnostics.lanes", {})) as {
+          lanes?: Array<{ lane?: string; activeCount?: number; queuedCount?: number }>;
+        };
+        return diagnostics.lanes?.find(
+          (lane) => lane.lane === "main" && lane.activeCount === 1 && (lane.queuedCount ?? 0) >= 1,
+        );
+      },
+    );
+    const hotPublishD = await hotPublishGeneration({ gateway, tracePath, generation: "D" });
+    await fs.writeFile(barrierPath, "released\n", "utf8");
+    await waitForChannelReply("generation-blocker", channelReplies.blocker);
+    await waitForChannelReply("generation-admitted", channelReplies.admitted);
+    sendChannelTurn("generation-current", channelReplies.current);
+    await waitForChannelReply("generation-current", channelReplies.current);
+
+    const channelAuthGenerations = authProxy.authGenerations.slice(3);
+    if (JSON.stringify(channelAuthGenerations) !== JSON.stringify(["C", "C", "D"])) {
+      throw new Error(
+        `admitted channel turn replaced the committed runtime owner: ${JSON.stringify(channelAuthGenerations)}`,
+      );
+    }
+
     verdict = {
       status: "pass",
       providerMode: "mock-openai",
       sessionKey: SESSION_KEY,
       placement: dispatched.placement,
-      hotPublishes: { generationB: hotPublishB, generationC: hotPublishC },
+      hotPublishes: {
+        generationB: hotPublishB,
+        generationC: hotPublishC,
+        generationD: hotPublishD,
+      },
       generationA: { reply: GENERATION_A_REPLY, stages: stagesA },
       generationB: { reply: GENERATION_B_REPLY, stages: stagesB },
       generationC: { reply: GENERATION_C_REPLY, stages: stagesC },
       runtimeCredentialGenerations: authProxy.authGenerations,
+      channelGenerationOwnership: {
+        replies: channelReplies,
+        queuedMainLane,
+        channelAuthGenerations,
+      },
       replyCounts,
       requestFacts,
       tracePath,
@@ -558,6 +637,7 @@ async function runProof(options: ProducerOptions) {
     published ? closeWireServer(published.server) : Promise.resolve(),
     authProxy.stop(),
     mock.stop(),
+    channelBus.stop(),
     fs.rm(root, { recursive: true, force: true }),
   ]);
   const cleanupFailures = cleanup.flatMap((result) =>

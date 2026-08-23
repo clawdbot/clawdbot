@@ -103,9 +103,10 @@ describe("runPreparedReply prepared metadata", () => {
         config,
         agentId: "main",
         agentDir: "/tmp/openclaw-reply-agent",
+        allowGatewaySubagentBinding: true,
         workspaceDir,
       },
-      { pluginGeneration },
+      { catalogMode: "static", pluginGeneration },
     );
     expect(admissionSnapshot).toBe(metadataSnapshot);
     expect(executionSnapshot).toBe(metadataSnapshot);

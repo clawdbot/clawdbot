@@ -148,6 +148,14 @@ export function hasConfiguredOwnerMatching(
   return findConfiguredOwnerCandidates(owners, rawInput).length > 0;
 }
 
+export function resolveConfiguredOwner(
+  owners: Map<string, PreparedModelRuntimeOwner>,
+  rawInput: PreparedModelRuntimeInput,
+): PreparedModelRuntimeOwner | undefined {
+  const candidates = findConfiguredOwnerCandidates(owners, rawInput);
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
 function resolveCommittedConfiguredOwner(
   owners: Map<string, PreparedModelRuntimeOwner>,
   rawInput: PreparedModelRuntimeInput,

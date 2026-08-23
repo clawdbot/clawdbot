@@ -15,7 +15,7 @@ function requireConfig(pluginConfig) {
   const barrierPath = pluginConfig?.barrierPath;
   const mockProviderBaseUrl = pluginConfig?.mockProviderBaseUrl;
   if (
-    (generation !== "A" && generation !== "B" && generation !== "C") ||
+    (generation !== "A" && generation !== "B" && generation !== "C" && generation !== "D") ||
     typeof tracePath !== "string" ||
     !tracePath ||
     typeof barrierPath !== "string" ||
