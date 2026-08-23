@@ -2,6 +2,11 @@
 export {
   isCloudWorkerPlacementState,
   ConnectParamsSchema,
+  GatewayRestoreStatusHeldResultSchema,
+  GatewayRestoreStatusNotRestoredResultSchema,
+  GatewayRestoreStatusParamsSchema,
+  GatewayRestoreStatusReadyResultSchema,
+  GatewayRestoreStatusResultSchema,
   GatewaySuspendTaskBlockerSchema,
   GatewaySuspendBlockerSchema,
   GatewaySuspendPrepareBusyResultSchema,

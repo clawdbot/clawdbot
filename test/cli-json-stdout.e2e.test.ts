@@ -5,7 +5,12 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 
-function runBuiltCli(tempHome: string, args: string[], envOverrides: NodeJS.ProcessEnv = {}) {
+function runBuiltCli(
+  tempHome: string,
+  args: string[],
+  envOverrides: NodeJS.ProcessEnv = {},
+  input?: string,
+) {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     HOME: tempHome,
@@ -23,6 +28,7 @@ function runBuiltCli(tempHome: string, args: string[], envOverrides: NodeJS.Proc
     cwd: process.cwd(),
     env,
     encoding: "utf8",
+    input,
     maxBuffer: 10 * 1024 * 1024,
     timeout: 60_000,
   });
@@ -1155,6 +1161,33 @@ describe("cli json stdout contract", () => {
         });
       },
       { prefix: "openclaw-doctor-packaged-json-e2e-" },
+    );
+  });
+
+  it("keeps hidden final recovery capture stdout to one JSON document", async () => {
+    await withTempHome(
+      async (tempHome) => {
+        const result = runBuiltCli(
+          tempHome,
+          ["backup", "capture-final"],
+          { OPENCLAW_LOG_LEVEL: "debug" },
+          "x".repeat(1024 * 1024 + 1),
+        );
+
+        expect(result.status).toBe(1);
+        const stdout = result.stdout.trim();
+        const parsed = JSON.parse(stdout);
+        expect(parsed).toEqual({
+          version: "openclaw-final-recovery-point-result/v1",
+          ok: false,
+          code: "final-capture.request-invalid",
+          disposition: "quarantine",
+        });
+        expect(stdout).toBe(JSON.stringify(parsed, null, 2));
+        expect(stdout).not.toContain("OpenClaw");
+        expect(stdout).not.toContain("Loading OpenClaw CLI");
+      },
+      { prefix: "openclaw-final-capture-json-e2e-" },
     );
   });
 });

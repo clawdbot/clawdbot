@@ -488,6 +488,7 @@ describe("gateway run option collisions", () => {
       ambientEnvTriggers?: "allow" | "suppress";
       startupConfigSnapshotRead?: { snapshot?: Record<string, unknown> };
       startupStartedAt?: number;
+      restoredAdmissionDescriptorPath?: string;
     };
   }
 

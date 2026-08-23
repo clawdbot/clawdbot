@@ -1890,6 +1890,154 @@ public struct ProjectCloneErrorDetails: Codable, Sendable {
     }
 }
 
+public struct GatewayRestoreStatusParams: Codable, Sendable {
+    public let restoreoperationid: String
+
+    public init(
+        restoreoperationid: String)
+    {
+        self.restoreoperationid = restoreoperationid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case restoreoperationid = "restoreOperationId"
+    }
+}
+
+public struct GatewayRestoreStatusNotRestoredResult: Codable, Sendable {
+    public let status: String
+
+    public init(
+        status: String)
+    {
+        self.status = status
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+    }
+}
+
+public struct GatewayRestoreStatusHeldResult: Codable, Sendable {
+    public let status: String
+    public let reason: AnyCodable
+    public let retryafterms: Int
+    public let runtimelineage: String
+    public let lifecycleownergeneration: String
+    public let destinationruntimegeneration: String
+    public let restoreoperationid: String
+    public let destinationowner: String
+    public let admissionidentity: String
+    public let recoverypointid: String
+    public let acceptancesetid: String
+    public let restorereceiptidentity: String
+
+    public init(
+        status: String,
+        reason: AnyCodable,
+        retryafterms: Int,
+        runtimelineage: String,
+        lifecycleownergeneration: String,
+        destinationruntimegeneration: String,
+        restoreoperationid: String,
+        destinationowner: String,
+        admissionidentity: String,
+        recoverypointid: String,
+        acceptancesetid: String,
+        restorereceiptidentity: String)
+    {
+        self.status = status
+        self.reason = reason
+        self.retryafterms = retryafterms
+        self.runtimelineage = runtimelineage
+        self.lifecycleownergeneration = lifecycleownergeneration
+        self.destinationruntimegeneration = destinationruntimegeneration
+        self.restoreoperationid = restoreoperationid
+        self.destinationowner = destinationowner
+        self.admissionidentity = admissionidentity
+        self.recoverypointid = recoverypointid
+        self.acceptancesetid = acceptancesetid
+        self.restorereceiptidentity = restorereceiptidentity
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case reason
+        case retryafterms = "retryAfterMs"
+        case runtimelineage = "runtimeLineage"
+        case lifecycleownergeneration = "lifecycleOwnerGeneration"
+        case destinationruntimegeneration = "destinationRuntimeGeneration"
+        case restoreoperationid = "restoreOperationId"
+        case destinationowner = "destinationOwner"
+        case admissionidentity = "admissionIdentity"
+        case recoverypointid = "recoveryPointId"
+        case acceptancesetid = "acceptanceSetId"
+        case restorereceiptidentity = "restoreReceiptIdentity"
+    }
+}
+
+public struct GatewayRestoreStatusReadyResult: Codable, Sendable {
+    public let status: String
+    public let runtimelineage: String
+    public let lifecycleownergeneration: String
+    public let destinationruntimegeneration: String
+    public let restoreoperationid: String
+    public let destinationowner: String
+    public let admissionidentity: String
+    public let recoverypointid: String
+    public let acceptancesetid: String
+    public let restorereceiptidentity: String
+    public let scheduleridentity: String
+    public let ownerreadinessidentity: String
+    public let readinessidentity: String
+
+    public init(
+        status: String,
+        runtimelineage: String,
+        lifecycleownergeneration: String,
+        destinationruntimegeneration: String,
+        restoreoperationid: String,
+        destinationowner: String,
+        admissionidentity: String,
+        recoverypointid: String,
+        acceptancesetid: String,
+        restorereceiptidentity: String,
+        scheduleridentity: String,
+        ownerreadinessidentity: String,
+        readinessidentity: String)
+    {
+        self.status = status
+        self.runtimelineage = runtimelineage
+        self.lifecycleownergeneration = lifecycleownergeneration
+        self.destinationruntimegeneration = destinationruntimegeneration
+        self.restoreoperationid = restoreoperationid
+        self.destinationowner = destinationowner
+        self.admissionidentity = admissionidentity
+        self.recoverypointid = recoverypointid
+        self.acceptancesetid = acceptancesetid
+        self.restorereceiptidentity = restorereceiptidentity
+        self.scheduleridentity = scheduleridentity
+        self.ownerreadinessidentity = ownerreadinessidentity
+        self.readinessidentity = readinessidentity
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case runtimelineage = "runtimeLineage"
+        case lifecycleownergeneration = "lifecycleOwnerGeneration"
+        case destinationruntimegeneration = "destinationRuntimeGeneration"
+        case restoreoperationid = "restoreOperationId"
+        case destinationowner = "destinationOwner"
+        case admissionidentity = "admissionIdentity"
+        case recoverypointid = "recoveryPointId"
+        case acceptancesetid = "acceptanceSetId"
+        case restorereceiptidentity = "restoreReceiptIdentity"
+        case scheduleridentity = "schedulerIdentity"
+        case ownerreadinessidentity = "ownerReadinessIdentity"
+        case readinessidentity = "readinessIdentity"
+    }
+}
+
 public struct GatewaySuspendTaskBlocker: Codable, Sendable {
     public let taskid: String
     public let status: String
@@ -21636,6 +21784,40 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case .projectCloneFailed(let value): try value.encode(to: encoder)
         case .unknownAgentId(let value): try value.encode(to: encoder)
         case .wizardNotFound(let value): try value.encode(to: encoder)
+        }
+    }
+}
+
+public enum GatewayRestoreStatusResult: Codable, Sendable {
+    case notRestored(GatewayRestoreStatusNotRestoredResult)
+    case held(GatewayRestoreStatusHeldResult)
+    case ready(GatewayRestoreStatusReadyResult)
+
+    private enum CodingKeys: String, CodingKey {
+        case discriminator = "status"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let discriminator = try container.decode(String.self, forKey: .discriminator)
+        switch discriminator {
+        case "not-restored": self = try .notRestored(GatewayRestoreStatusNotRestoredResult(from: decoder))
+        case "held": self = try .held(GatewayRestoreStatusHeldResult(from: decoder))
+        case "ready": self = try .ready(GatewayRestoreStatusReadyResult(from: decoder))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .discriminator,
+                in: container,
+                debugDescription: "Unknown GatewayRestoreStatusResult discriminator value"
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .notRestored(let value): try value.encode(to: encoder)
+        case .held(let value): try value.encode(to: encoder)
+        case .ready(let value): try value.encode(to: encoder)
         }
     }
 }

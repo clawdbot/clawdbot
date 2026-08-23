@@ -139,6 +139,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./server-methods/migrations.js").then((module) => module.migrationsHandlers),
   push: () => import("./server-methods/push.js").then((module) => module.pushHandlers),
   restart: () => import("./server-methods/restart.js").then((module) => module.restartHandlers),
+  restore: () => import("./server-methods/restore.js").then((module) => module.restoreHandlers),
   suspend: () => import("./server-methods/suspend.js").then((module) => module.suspendHandlers),
   send: () => import("./server-methods/send.js").then((module) => module.sendHandlers),
   "sessions-files": () =>
@@ -289,8 +290,20 @@ const SUSPEND_CONTROL_METHODS = new Set([
   "gateway.suspend.resume",
 ]);
 
-function isGatewayMethodAllowedDuringSuspension(method: string): boolean {
-  return SUSPEND_CONTROL_METHODS.has(method);
+function isGatewayMethodAllowedDuringSuspension(
+  method: string,
+  context: GatewayRequestContext,
+): boolean {
+  if (SUSPEND_CONTROL_METHODS.has(method)) {
+    return true;
+  }
+  if (method !== "gateway.restore.status") {
+    return false;
+  }
+  if (isGatewayRestartDraining()) {
+    return false;
+  }
+  return context.getRestoredAdmissionStatus().status === "held";
 }
 
 async function authorizeAuthenticatedProfileForMethod(params: {
@@ -508,7 +521,7 @@ export async function runWithGatewayRequestEnvelope<T>(
       }),
     );
   }
-  if (!rootWorkAdmission && !isGatewayMethodAllowedDuringSuspension(method)) {
+  if (!rootWorkAdmission && !isGatewayMethodAllowedDuringSuspension(method, options.context)) {
     const restartDraining = isGatewayRestartDraining();
     return await options.reject(
       errorShape(

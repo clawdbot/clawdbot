@@ -1,5 +1,6 @@
 import * as errorCodes from "./error-codes.js";
 import * as frames from "./frames.js";
+import * as gatewayRestore from "./gateway-restore.js";
 import * as gatewaySuspend from "./gateway-suspend.js";
 import * as snapshot from "./snapshot.js";
 import * as workerAdmission from "./worker-admission.js";
@@ -26,6 +27,11 @@ export const TransportProtocolSchemas = {
   WizardNotFoundErrorDetails: errorCodes.WizardNotFoundErrorDetailsSchema,
   GatewayErrorDetails: errorCodes.GatewayErrorDetailsSchema,
   ProjectCloneErrorDetails: errorCodes.ProjectCloneErrorDetailsSchema,
+  GatewayRestoreStatusParams: gatewayRestore.GatewayRestoreStatusParamsSchema,
+  GatewayRestoreStatusNotRestoredResult: gatewayRestore.GatewayRestoreStatusNotRestoredResultSchema,
+  GatewayRestoreStatusHeldResult: gatewayRestore.GatewayRestoreStatusHeldResultSchema,
+  GatewayRestoreStatusReadyResult: gatewayRestore.GatewayRestoreStatusReadyResultSchema,
+  GatewayRestoreStatusResult: gatewayRestore.GatewayRestoreStatusResultSchema,
   GatewaySuspendTaskBlocker: gatewaySuspend.GatewaySuspendTaskBlockerSchema,
   GatewaySuspendBlocker: gatewaySuspend.GatewaySuspendBlockerSchema,
   GatewaySuspendPrepareParams: gatewaySuspend.GatewaySuspendPrepareParamsSchema,

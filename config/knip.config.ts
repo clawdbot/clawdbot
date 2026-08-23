@@ -383,6 +383,9 @@ const config = {
     // Declaration companions describe executable JavaScript modules; they are not standalone roots.
     "scripts/**/*.d.{mts,ts}",
     "**/live-*.ts",
+    // PR 112385 proves this private RFC slice before its hidden production
+    // caller lands in the next stacked PR.
+    "src/snapshot/recovery-point.ts",
     "src/shared/text/assistant-visible-text.ts",
     bundledPluginFile("telegram", "src/bot/reply-threading.ts"),
     bundledPluginFile("telegram", "src/draft-chunking.ts"),
@@ -435,6 +438,15 @@ const config = {
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
+    // The recovery-point composer is now reached by the hidden final-capture
+    // command; these remaining named exports are retained contract entrypoints.
+    "src/snapshot/recovery-point.ts": ["exports"],
+    // The hidden final-capture request contract is imported directly by its
+    // focused tests before a production host adapter exists.
+    "src/snapshot/final-recovery-point.ts": ["exports", "types"],
+    // Focused restore tests import request and receipt contracts directly;
+    // production reaches them through the accepted-restore command and startup loader.
+    "src/snapshot/restored-recovery-point.ts": ["exports", "types"],
   },
   workspaces: {
     ".": {

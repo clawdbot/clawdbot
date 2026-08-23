@@ -72,4 +72,9 @@ export type GatewayServerOptions = {
   startupConfigSnapshotRead?: import("../config/io.js").ReadConfigFileSnapshotWithPluginMetadataResult;
   /** Restart request override; direct servers fail closed on restart-required reloads. */
   hotReloadRecovery?: GatewayRestartEmitter;
+  /**
+   * Internal lifecycle handoff for a freshly restored recovery point.
+   * The descriptor is validated before normal Gateway admission opens.
+   */
+  restoredAdmissionDescriptorPath?: string;
 };

@@ -91,6 +91,7 @@ function createLocalGatewayRequestContext(
   return {
     deps: params.deps,
     configRevisionProjector: loadGatewayConfigRevisionProjector({ env: process.env }),
+    getRestoredAdmissionStatus: () => ({ status: "not-restored" }),
     cron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,

@@ -30,11 +30,13 @@ import {
   isGatewayRestartDraining,
   runWithGatewayIndependentRootWorkAdmission,
   tryBeginGatewayRestartStartupRootWorkAdmission,
+  tryBeginGatewaySuspendedHandshakeAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { isWebchatClient } from "../../../utils/message-channel.js";
 import { isLocalishHost, isLoopbackAddress } from "../../net.js";
 import { resolveNodePairingClientIpSource } from "../../node-pairing-auto-approve.js";
+import { READ_SCOPE } from "../../operator-scopes.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
@@ -356,6 +358,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           authRateLimiter,
           clientLabel,
           clientMeta,
+          allowStartupPendingConnect: isHeldRestoredAdmissionProbeConnect(data),
           markHandshakeFailure,
           sendHandshakeErrorResponse,
           sendFrame,
@@ -423,12 +426,30 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     return parsed ? isStartupNodeConnect(parsed.params) : false;
   };
 
+  const isHeldRestoredAdmissionProbeConnect = (data: RawData): boolean => {
+    const parsed = parsePreauthConnectFrame(data);
+    if (!parsed || !isLocalClient || hasBrowserOriginHeader) {
+      return false;
+    }
+    const connectParams = parsed.params;
+    if (
+      (connectParams.role !== undefined && connectParams.role !== "operator") ||
+      connectParams.client.id !== GATEWAY_CLIENT_IDS.GATEWAY_CLIENT ||
+      connectParams.client.mode !== GATEWAY_CLIENT_MODES.BACKEND ||
+      connectParams.device !== undefined ||
+      connectParams.scopes?.length !== 1 ||
+      connectParams.scopes[0] !== READ_SCOPE
+    ) {
+      return false;
+    }
+    return buildRequestContext().getRestoredAdmissionStatus().status === "held";
+  };
+
   const rejectConnectForClosedAdmission = async (data: RawData): Promise<boolean> => {
     const parsed = parsePreauthConnectFrame(data);
     if (!parsed) {
       return false;
     }
-
     const restartDraining = isGatewayRestartDraining();
     const reason = restartDraining ? "gateway-restarting" : "gateway-suspending";
     const operation = restartDraining ? "restart" : "suspension";
@@ -482,16 +503,22 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           return;
         }
       }
-      if (
+      const suspendedControlAdmission =
         !isGatewayRestartDraining() &&
         getGatewaySuspendAdmissionPhase() === "prepared" &&
         isPreparedControlConnect(data)
-      ) {
+          ? tryBeginGatewaySuspendedHandshakeAdmission()
+          : null;
+      if (suspendedControlAdmission) {
         // Refuse-only suspension fences work, not control-plane visibility. Only
         // operator connects are admitted while prepared, and they can only reach
         // suspend-control methods after handshake; node and worker connects would
         // attach presence/registry state, so they stay refused.
-        await handleMessage(data);
+        try {
+          await suspendedControlAdmission.run(() => handleMessage(data));
+        } finally {
+          suspendedControlAdmission.release();
+        }
         return;
       }
       if (await rejectConnectForClosedAdmission(data)) {

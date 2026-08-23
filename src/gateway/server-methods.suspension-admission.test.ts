@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resumeGatewaySuspend } from "../infra/gateway-suspend-coordinator.js";
 import {
   getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   retainGatewayRootWorkAdmissionContinuation,
   tryBeginGatewayRootWorkAdmission,
@@ -444,6 +445,69 @@ describe("gateway request suspension admission", () => {
 
     expect(handler).toHaveBeenCalledOnce();
     expect(status.respond).toHaveBeenCalledWith(true, { ok: true });
+    suspension?.release();
+  });
+
+  it("keeps restore status reachable only for a restored admission hold", async () => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
+      respond(true, { status: "held" });
+    });
+    const context = {
+      logGateway: { warn: vi.fn() },
+      getRestoredAdmissionStatus: () => ({
+        status: "held" as const,
+        restoreOperationId: "restore-8",
+      }),
+    } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
+
+    const status = dispatch({
+      method: "gateway.restore.status",
+      scope: "operator.read",
+      handler,
+      context,
+    });
+    await status.request;
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(status.respond).toHaveBeenCalledWith(true, { status: "held" });
+    suspension?.release();
+  });
+
+  it("rejects restore status from an existing probe during restart drain", async () => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    markGatewayRestartDraining();
+    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
+      respond(true, { status: "held" });
+    });
+    const context = {
+      logGateway: { warn: vi.fn() },
+      getRestoredAdmissionStatus: () => ({
+        status: "held" as const,
+        restoreOperationId: "restore-8",
+      }),
+    } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
+
+    const status = dispatch({
+      method: "gateway.restore.status",
+      scope: "operator.read",
+      handler,
+      context,
+    });
+    await status.request;
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(status.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        retryable: true,
+        details: expect.objectContaining({ reason: "gateway-restarting" }),
+      }),
+    );
     suspension?.release();
   });
 

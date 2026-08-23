@@ -226,6 +226,7 @@ type GatewaySystemAgentSession = {
 type GatewayKernelContext = {
   deps: CliDeps;
   configRevisionProjector: GatewayConfigRevisionProjector;
+  getRestoredAdmissionStatus: () => import("../../../packages/gateway-protocol/src/index.js").GatewayRestoreStatusResult;
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;

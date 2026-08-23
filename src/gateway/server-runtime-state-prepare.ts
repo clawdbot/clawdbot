@@ -10,6 +10,7 @@ import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { runtimeForLogger } from "../logging/subsystem.js";
 import { isGatewayDraining } from "../process/command-queue.js";
+import { isGatewayRestartDraining } from "../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
@@ -18,6 +19,7 @@ import { resolveGatewayAuth } from "./auth.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
+import type { RestoredAdmissionStartup } from "./restored-admission.js";
 import { resolveGatewayPluginConfig } from "./runtime-plugin-config.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createGatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
@@ -80,6 +82,7 @@ export async function prepareGatewayKernelState(params: {
   loadWorkerPlacementStartupModule: () => Promise<
     typeof import("./server-worker-placement-startup.js")
   >;
+  restoredStartup: RestoredAdmissionStartup | null;
 }) {
   const {
     bootstrap,
@@ -93,6 +96,7 @@ export async function prepareGatewayKernelState(params: {
     resolveChannelRuntime: getChannelRuntime,
     loadWorkerEnvironmentStartupModule,
     loadWorkerPlacementStartupModule,
+    restoredStartup,
   } = params;
   const {
     pluginBootstrap,
@@ -403,6 +407,7 @@ export async function prepareGatewayKernelState(params: {
     sidecarsReady: minimalTestGateway,
     pendingReason: "startup-sidecars",
     dispatchReady: false,
+    restoredAdmissionReady: restoredStartup === null,
   };
   const lifecycle = { closePreludeStarted: false };
   let releaseStartupAccountStarts = () => {};
@@ -436,19 +441,32 @@ export async function prepareGatewayKernelState(params: {
       : {}),
   });
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
-  const sidecarStartup = opts.sidecarStartup ?? "start";
+  const sidecarStartup = restoredStartup ? "start" : (opts.sidecarStartup ?? "start");
   const isGatewayStartupPending = () =>
-    !startupState.sidecarsReady && !lifecycle.closePreludeStarted;
+    !lifecycle.closePreludeStarted &&
+    (!startupState.restoredAdmissionReady || !startupState.sidecarsReady);
   const startupCheckerDeps = {
     startedAt: serverStartedAt,
     getStartupPending: isGatewayStartupPending,
-    getStartupPendingReason: () => startupState.pendingReason,
+    getStartupPendingReason: () =>
+      startupState.restoredAdmissionReady ? startupState.pendingReason : "restored-admission",
     getGatewayDraining: () => lifecycle.closePreludeStarted || isGatewayDraining(),
   };
   const getStartup = createStartupChecker(startupCheckerDeps);
   const getReadiness = createReadinessChecker({
     channelManager,
     ...startupCheckerDeps,
+    getEventLoopHealth: readinessEventLoopHealth.snapshot,
+    shouldSkipChannelReadiness: () =>
+      isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
+      isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
+  });
+  const getRestoredOwnerReadiness = createReadinessChecker({
+    channelManager,
+    startedAt: serverStartedAt,
+    // The restored-start fence intentionally closes public work admission.
+    // Only a one-way restart drain blocks internal owner reconciliation.
+    getGatewayDraining: isGatewayRestartDraining,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
     shouldSkipChannelReadiness: () =>
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
@@ -593,6 +611,8 @@ export async function prepareGatewayKernelState(params: {
     channelManager,
     sidecarStartup,
     isGatewayStartupPending,
+    restoredStartup,
+    getRestoredOwnerReadiness,
     pluginGatewayContext,
     watchNodeRequestHandler,
     createHttpTransportOptions,

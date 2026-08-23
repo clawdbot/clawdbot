@@ -57,7 +57,14 @@ function createLogger() {
   };
 }
 
-function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boolean } = {}) {
+function attachHarness(
+  params: {
+    deferSocketSend?: boolean;
+    requestOrigin?: string;
+    restoredHeld?: boolean;
+    startupPending?: boolean;
+  } = {},
+) {
   let onMessage: ((data: string) => void) | undefined;
   let finishSocketSend: (() => void) | undefined;
   let client: unknown = null;
@@ -104,13 +111,18 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
     remoteAddr: "127.0.0.1",
     localAddr: "127.0.0.1",
     requestHost: "127.0.0.1:19001",
+    requestOrigin: params.requestOrigin,
     connectNonce: "suspension-connect-nonce",
     getResolvedAuth: () => ({ mode: "none", allowTailscale: false }),
     isStartupPending: () => params.startupPending === true,
     gatewayMethods: [],
     events: [],
     extraHandlers: {},
-    buildRequestContext: () => ({}) as GatewayRequestContext,
+    buildRequestContext: () =>
+      ({
+        getRestoredAdmissionStatus: () =>
+          params.restoredHeld ? ({ status: "held" } as never) : { status: "not-restored" },
+      }) as GatewayRequestContext,
     nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
     refreshHealthSnapshot: vi.fn(async () => ({}) as never),
     send,
@@ -138,7 +150,13 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
     get client() {
       return client;
     },
-    sendConnect: () =>
+    sendConnect: (
+      overrides: {
+        clientId?: "cli" | "gateway-client" | "openclaw-control-ui";
+        clientMode?: "backend" | "cli" | "ui";
+        scopes?: string[];
+      } = {},
+    ) =>
       onMessage?.(
         JSON.stringify({
           type: "req",
@@ -148,13 +166,13 @@ function attachHarness(params: { deferSocketSend?: boolean; startupPending?: boo
             minProtocol: PROTOCOL_VERSION,
             maxProtocol: PROTOCOL_VERSION,
             client: {
-              id: "gateway-client",
+              id: overrides.clientId ?? "gateway-client",
               version: "dev",
               platform: "test",
-              mode: "backend",
+              mode: overrides.clientMode ?? "backend",
             },
             role: "operator",
-            scopes: [],
+            scopes: overrides.scopes ?? [],
             caps: [],
           },
         }),
@@ -284,6 +302,114 @@ describe("WebSocket connect suspension admission", () => {
     });
     expect(harness.client).not.toBeNull();
     expect(harness.close).not.toHaveBeenCalled();
+    suspension?.release();
+  });
+
+  it("rejects an ordinary operator while restored admission is held at startup", async () => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const harness = attachHarness({ restoredHeld: true, startupPending: true });
+
+    harness.sendConnect({ clientId: "cli", clientMode: "cli", scopes: ["operator.read"] });
+
+    await vi.waitFor(() => {
+      expect(harness.socketSend).toHaveBeenCalledOnce();
+    });
+    const response = JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}") as {
+      error?: { details?: Record<string, unknown> };
+    };
+    expect(response.error?.details).toEqual({ reason: "startup-sidecars" });
+    expect(harness.setClient).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(harness.close).toHaveBeenCalledWith(1013, "gateway starting");
+    });
+    suspension?.release();
+  });
+
+  it("admits the local device-less backend probe for a held restored admission", async () => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const harness = attachHarness({ restoredHeld: true, startupPending: true });
+
+    harness.sendConnect({ scopes: ["operator.read"] });
+
+    await vi.waitFor(() => {
+      expect(harness.setClient).toHaveBeenCalledOnce();
+      expect(harness.socketSend).toHaveBeenCalledOnce();
+    });
+    const response = JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}") as { ok?: boolean };
+    expect(response).toMatchObject({ ok: true });
+    expect(harness.close).not.toHaveBeenCalled();
+    expect(harness.client).not.toBeNull();
+    suspension?.release();
+  });
+
+  it("rejects a browser-shaped backend probe while restored admission is held", async () => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const harness = attachHarness({
+      requestOrigin: "http://127.0.0.1:19001",
+      restoredHeld: true,
+      startupPending: true,
+    });
+
+    harness.sendConnect({ scopes: ["operator.read"] });
+
+    await vi.waitFor(() => {
+      expect(harness.socketSend).toHaveBeenCalledOnce();
+    });
+    const response = JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}") as {
+      error?: { details?: Record<string, unknown> };
+    };
+    expect(response.error?.details).toEqual({ reason: "startup-sidecars" });
+    expect(harness.setClient).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(harness.close).toHaveBeenCalledWith(1013, "gateway starting");
+    });
+    suspension?.release();
+  });
+
+  it("rejects a backend probe when no restored admission is held", async () => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const harness = attachHarness({ startupPending: true });
+
+    harness.sendConnect({ scopes: ["operator.read"] });
+
+    await vi.waitFor(() => {
+      expect(harness.socketSend).toHaveBeenCalledOnce();
+    });
+    const response = JSON.parse(harness.socketSend.mock.calls[0]?.[0] ?? "{}") as {
+      error?: { details?: Record<string, unknown> };
+    };
+    expect(response.error?.details).toEqual({ reason: "startup-sidecars" });
+    expect(harness.setClient).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(harness.close).toHaveBeenCalledWith(1013, "gateway starting");
+    });
+    suspension?.release();
+  });
+
+  it("tracks a prepared control handshake across a concurrent restart", async () => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    const harness = attachHarness({ deferSocketSend: true });
+
+    harness.sendConnect();
+
+    await vi.waitFor(() => {
+      expect(harness.socketSend).toHaveBeenCalledOnce();
+    });
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    markGatewayRestartDraining();
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+    harness.finishSocketSend();
+    await vi.waitFor(() => {
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    });
+    expect(harness.setClient).toHaveBeenCalledOnce();
+    expect(harness.client).not.toBeNull();
     suspension?.release();
   });
 

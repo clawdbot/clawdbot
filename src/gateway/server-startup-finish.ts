@@ -14,6 +14,7 @@ import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { collectGatewayProcessMemoryUsageMb, finishGatewayRestartTrace } from "./restart-trace.js";
 import type { GatewayKernelRuntime } from "./server-kernel-request-runtime.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
+import { createRestoredAdmissionBeforeReady } from "./server-restored-admission-startup.js";
 import { getRequiredSharedGatewaySessionGeneration } from "./server-shared-auth-generation.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 import type { GatewayHttpTransport } from "./server-transport-bridge.js";
@@ -319,6 +320,7 @@ export async function finishGatewayStartup(params: {
         stopRegisteredPostReadySidecars,
         stopRegisteredGatewayLifetimeSidecars,
         unregisterGatewayLifetimeSidecar,
+        ...createRestoredAdmissionBeforeReady({ runtime, log }),
         ...(workerPlacementRuntime
           ? {
               startWorkerEnvironmentRuntime: async () => {

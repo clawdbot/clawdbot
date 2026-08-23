@@ -23,6 +23,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   const { coreRuntime: runtime, log, logHealth } = params;
   const {
     minimalTestGateway,
+    restoredStartup,
     deps,
     runtimeState,
     unavailableGatewayMethods,
@@ -120,6 +121,8 @@ export async function prepareGatewayKernelRequestRuntime(params: {
     return createGatewayRequestContext({
       deps,
       configRevisionProjector,
+      getRestoredAdmissionStatus:
+        restoredStartup?.status.get ?? (() => ({ status: "not-restored" as const })),
       runtimeState,
       sessionCompanion,
       getRuntimeConfig,
