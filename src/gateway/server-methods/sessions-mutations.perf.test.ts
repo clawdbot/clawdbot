@@ -143,7 +143,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
           now: 1,
         },
       );
-      const tail = await appendTranscriptMessage(
+      await appendTranscriptMessage(
         { agentId: "main", sessionId, sessionKey: target.key },
         {
           message: {
