@@ -9,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
-import { neutralizeCodexExplicitMentionSigils } from "./context-engine-projection.js";
 import type {
   CodexSandboxPolicy,
   CodexTurnEnvironmentParams,
@@ -20,7 +19,6 @@ import {
   readCodexSupportedReasoningEfforts,
   resolveCodexAppServerReasoningEffort,
 } from "./reasoning-effort.js";
-import { isCodexRuntimeOnlyTurn } from "./run-attempt-state.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerRequestModelSelection,
@@ -101,9 +99,6 @@ export function buildTurnStartParams(
   const useThreadPermissionProfile = options.appServer.networkProxy && !options.sandboxPolicy;
   const currentSenderContext =
     params.trigger === "user" ? buildCodexCurrentSenderContextValue(params) : undefined;
-  const currentInboundContext = isCodexRuntimeOnlyTurn(params)
-    ? params.currentInboundContext?.text.trim()
-    : undefined;
   // Codex emits only changed values and cannot retract omitted fragments from model history.
   // Always send configured-or-host context so warm threads see rollover and removed overrides.
   let additionalContext = buildCodexTemporalAdditionalContext(params, {
@@ -126,21 +121,10 @@ export function buildTurnStartParams(
     },
   };
   // Untrusted context exposes authenticated attribution without promoting human-controlled labels.
-  // Codex additionalContext is model-visible but not emitted as a user-message item, so
-  // runtime-only inbound context rides here instead of the Codex user-message item.
   if (currentSenderContext) {
     additionalContext = {
       ...additionalContext,
       openclaw_current_sender: { kind: "untrusted", value: currentSenderContext },
-    };
-  }
-  if (currentInboundContext) {
-    additionalContext = {
-      ...additionalContext,
-      openclaw_current_inbound_context: {
-        kind: "untrusted",
-        value: neutralizeCodexExplicitMentionSigils(currentInboundContext),
-      },
     };
   }
   if (params.permissionChange?.notice) {

@@ -275,35 +275,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(true);
   });
 
-  it("carries runtime-only inbound context outside the Codex user-message item", async () => {
-    const sessionFile = path.join(tempDir, "runtime-only-inbound-context.jsonl");
-    const workspaceDir = path.join(tempDir, "runtime-only-inbound-context-workspace");
-    const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
-    params.prompt = "System: background command finished.";
-    params.transcriptPrompt = "";
-    params.currentInboundContext = {
-      text: "quoted channel history with $not-a-current-skill",
-    };
-
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-
-    expect(getRequestInputText(harness)).not.toContain("quoted channel history");
-    const turnStartParams = requireRequestParams(harness, "turn/start");
-    const additionalContext = requireRecord(
-      turnStartParams.additionalContext,
-      "turn/start additionalContext",
-    );
-    expect(additionalContext.openclaw_current_inbound_context).toEqual({
-      kind: "untrusted",
-      value: "quoted channel history with ＄not-a-current-skill",
-    });
-
-    await harness.completeTurn();
-    await run;
-  });
-
   it.each(["compaction", "branch"] as const)(
     "bootstraps and assembles non-legacy context before the Codex turn starts (%s summary)",
     async (boundary) => {

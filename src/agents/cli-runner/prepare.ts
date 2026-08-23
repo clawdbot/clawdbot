@@ -2085,15 +2085,8 @@ async function prepareCliRunContextWithinReadFence(
     }
     let historyPromptCurrentTurn = preparedPrompt;
     if (!skipsTurnPreparation) {
-      // An explicitly empty transcript plus a non-empty model prompt is a runtime-only
-      // turn. Generic CLIs have no hidden untrusted-context channel, so do not attach
-      // stale channel metadata to that synthetic turn as user-authored prompt text.
-      const isRuntimeOnlyTurn =
-        finalizedTranscriptPrompt !== undefined &&
-        !finalizedTranscriptPrompt.trim() &&
-        Boolean(params.prompt.trim());
       const currentInboundContext = prependCliSessionDriftUserContext(
-        isRuntimeOnlyTurn ? undefined : params.currentInboundContext,
+        params.currentInboundContext,
         reusableCliSession,
       );
       const renderCurrentPrompt = (prompt: string, preferResumableText = false) =>

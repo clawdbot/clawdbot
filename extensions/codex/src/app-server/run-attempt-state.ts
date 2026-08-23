@@ -82,16 +82,6 @@ export function joinPresentSections(...sections: Array<string | undefined>): str
   return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }
 
-export function isCodexRuntimeOnlyTurn(
-  params: Pick<EmbeddedRunAttemptParams, "prompt" | "transcriptPrompt">,
-): boolean {
-  return (
-    params.transcriptPrompt !== undefined &&
-    !params.transcriptPrompt.trim() &&
-    Boolean(params.prompt.trim())
-  );
-}
-
 export function prependCurrentInboundContext(
   prompt: string,
   context: EmbeddedRunAttemptParams["currentInboundContext"],

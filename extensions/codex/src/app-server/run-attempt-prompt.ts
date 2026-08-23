@@ -25,7 +25,6 @@ import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import type { CodexAttemptContext } from "./run-attempt-context.js";
 import { estimateCodexAppServerProjectedTurnTokens } from "./run-attempt-lifecycle.js";
 import {
-  isCodexRuntimeOnlyTurn,
   isNonEmptyString,
   joinPresentSections,
   prependCurrentInboundContext,
@@ -240,12 +239,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     }
   }
   const codexModelInputHistoryMessages: typeof historyState.messages = [];
-  const currentInboundContext = isCodexRuntimeOnlyTurn(params)
-    ? undefined
-    : params.currentInboundContext;
   const buildPromptFromCurrentInputs = async () => {
     const result = await resolveAgentHarnessBeforePromptBuildResult({
-      prompt: prependCurrentInboundContext(promptState.promptText, currentInboundContext),
+      prompt: prependCurrentInboundContext(promptState.promptText, params.currentInboundContext),
       developerInstructions: {
         build: ({ toolsAllow }) => {
           if (isRestrictivePromptToolsAllow(toolsAllow)) {

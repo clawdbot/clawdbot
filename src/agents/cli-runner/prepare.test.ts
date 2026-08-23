@@ -2414,37 +2414,6 @@ describe("prepareCliRunContext", () => {
     },
   );
 
-  it("keeps channel context out of runtime-only CLI prompts", async () => {
-    const context = await fixture.prepare({
-      sessionKey: "agent:main:test",
-      agentId: "main",
-      trigger: "user",
-      prompt: "System: background command finished.",
-      transcriptPrompt: "",
-      currentInboundContext: {
-        text: "quoted channel history must stay out of the runtime-only user prompt",
-      },
-    });
-
-    expect(context.params.prompt).toBe("System: background command finished.");
-    expect(context.params.transcriptPrompt).toBe("");
-    expect(context.openClawHistoryPrompt ?? "").not.toContain("quoted channel history");
-  });
-
-  it("retains channel context for bodyless interactive CLI turns", async () => {
-    const context = await fixture.prepare({
-      sessionKey: "agent:main:test",
-      agentId: "main",
-      trigger: "user",
-      prompt: "",
-      transcriptPrompt: "",
-      currentInboundContext: { text: "quoted interactive context" },
-    });
-
-    expect(context.params.prompt).toBe("quoted interactive context");
-    expect(context.params.transcriptPrompt).toBe("");
-  });
-
   it("uses compact current-turn context when a room event resumes a CLI session", async () => {
     await withAuthenticatedHistory("test-cli", async (prepare) => {
       fixture.appendTranscript({
