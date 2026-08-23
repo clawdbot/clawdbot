@@ -17,6 +17,7 @@ import {
   type GatewayBootLifecycleCompletion,
 } from "../../infra/gateway-boot-lifecycle.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import type { GatewayRestartEmitter } from "../../infra/restart.js";
 import { flushLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -43,16 +44,11 @@ const HARD_EXIT_WATCHDOG_GRACE_MS = 2_000;
 
 type GatewayRunSignalAction = "stop" | "restart";
 type RestartDrainTimeoutMs = number | undefined;
-type RestartIntentOptions = {
-  reason?: string;
-  force?: boolean;
-  waitMs?: number;
-};
 type GatewayRunSignalRequest = {
   action: GatewayRunSignalAction;
   signal: string;
   restartReason?: string;
-  restartIntent?: RestartIntentOptions;
+  restartIntent?: GatewayRestartIntent;
 };
 
 type GatewayLifecycleRuntimeModule = typeof import("./lifecycle.runtime.js");
@@ -141,6 +137,10 @@ export async function runGatewayLoop(params: {
   // here pulls the lifecycle re-export graph into memory, immune to later disk
   // rotation.
   const eagerLifecycleRuntime = await loadGatewayLifecycleRuntimeModule();
+  const supervisorMode = eagerLifecycleRuntime.detectGatewayRespawnSupervisor(
+    process.env,
+    process.platform,
+  );
   let lock = await acquireGatewayLock({ port: params.lockPort });
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
@@ -213,6 +213,23 @@ export async function runGatewayLoop(params: {
       return false;
     }
   };
+  const resumeInProcessRestart = () => {
+    activeRestartRequest = null;
+    shuttingDown = false;
+    restartResolver?.();
+  };
+  const reacquireAndResumeInProcessRestart = async () => {
+    if (await reacquireLockForInProcessRestart()) {
+      resumeInProcessRestart();
+    }
+  };
+  const markRestartHandoffUnavailable = async () => {
+    await eagerLifecycleRuntime
+      .markUpdateRestartSentinelFailure("restart-handoff-unavailable")
+      .catch((err: unknown) => {
+        gatewayLog.warn(`failed to mark update restart handoff unavailable: ${String(err)}`);
+      });
+  };
   const confirmLaunchdHandoff = async (respawn: {
     handoffSpawned?: Promise<boolean>;
   }): Promise<boolean> => {
@@ -226,10 +243,11 @@ export async function runGatewayLoop(params: {
     await delay;
     return spawned;
   };
-  const handleRestartAfterServerClose = async () => {
+  const handleRestartAfterServerClose = async (
+    managedUpdateSuccessorParked: boolean | null = null,
+  ) => {
     await releaseLockIfHeld();
     const {
-      detectGatewayRespawnSupervisor,
       markUpdateRestartSentinelFailure,
       respawnGatewayProcessForUpdate,
       restartGatewayProcessWithFreshPid,
@@ -244,7 +262,22 @@ export async function runGatewayLoop(params: {
     });
     const isUpdateRestart = isUpdateProcessRestartReason(restartReason);
 
-    if (isUpdateRestart) {
+    if (activeRestartRequest?.restartIntent?.successorOwner === "managed-update-handoff") {
+      if (managedUpdateSuccessorParked !== true) {
+        if (managedUpdateSuccessorParked === null) {
+          gatewayLog.error("managed update handoff arrived after successor parking closed");
+          await markRestartHandoffUnavailable();
+        }
+        await reacquireAndResumeInProcessRestart();
+        return;
+      }
+      activeRestartRequest = null;
+      gatewayLog.info("restart mode: managed update handoff owns successor");
+      await exitProcessAfterLogFlush(0);
+      return;
+    }
+
+    if (isUpdateRestart && !supervisorMode) {
       const restartTraceHandoff = captureGatewayRestartTraceHandoff();
       const respawn = respawnGatewayProcessForUpdate({
         env: createGatewayRestartTraceHandoffEnv(restartTraceHandoff),
@@ -274,64 +307,7 @@ export async function runGatewayLoop(params: {
         await markUpdateRestartSentinelFailure("restart-unhealthy").catch((err: unknown) => {
           gatewayLog.warn(`failed to mark update restart sentinel unhealthy: ${String(err)}`);
         });
-        if (!(await reacquireLockForInProcessRestart())) {
-          return;
-        }
-        shuttingDown = false;
-        restartResolver?.();
-        return;
-      }
-      if (respawn.mode === "supervised") {
-        const supervisorMode = detectGatewayRespawnSupervisor(process.env, process.platform);
-        markGatewayRestartTrace("restart.full-process-handoff", [
-          ["kind", "update-process"],
-          ["mode", respawn.mode],
-          ["supervisorMode", supervisorMode ?? "external"],
-        ]);
-        const handoff = writeGatewayRestartHandoffSync({
-          restartKind: "update-process",
-          reason: restartReason,
-          processInstanceId,
-          supervisorMode: supervisorMode ?? "external",
-          restartTrace: captureGatewayRestartTraceHandoff(),
-        });
-        if (supervisorMode === "external" && !handoff) {
-          gatewayLog.warn(
-            "external supervisor restart handoff could not be persisted; falling back to in-process restart",
-          );
-          await markUpdateRestartSentinelFailure("restart-handoff-unavailable").catch(
-            (err: unknown) => {
-              gatewayLog.warn(`failed to mark update restart handoff unavailable: ${String(err)}`);
-            },
-          );
-          if (!(await reacquireLockForInProcessRestart())) {
-            return;
-          }
-          activeRestartRequest = null;
-          shuttingDown = false;
-          restartResolver?.();
-          return;
-        }
-        gatewayLog.info("restart mode: update process respawn (supervisor restart)");
-        if (supervisorMode === "launchd" && !(await confirmLaunchdHandoff(respawn))) {
-          gatewayLog.warn(
-            "launchd restart handoff failed to spawn; falling back to in-process restart",
-          );
-          await markUpdateRestartSentinelFailure("restart-handoff-unavailable").catch(
-            (err: unknown) => {
-              gatewayLog.warn(`failed to mark update restart handoff unavailable: ${String(err)}`);
-            },
-          );
-          if (!(await reacquireLockForInProcessRestart())) {
-            return;
-          }
-          activeRestartRequest = null;
-          shuttingDown = false;
-          restartResolver?.();
-          return;
-        }
-        activeRestartRequest = null;
-        await exitProcessAfterLogFlush(0);
+        await reacquireAndResumeInProcessRestart();
         return;
       }
       if (respawn.mode === "failed") {
@@ -346,12 +322,7 @@ export async function runGatewayLoop(params: {
           `restart mode: in-process restart (${respawn.detail ?? "OPENCLAW_NO_RESPAWN"})`,
         );
       }
-      if (!(await reacquireLockForInProcessRestart())) {
-        return;
-      }
-      activeRestartRequest = null;
-      shuttingDown = false;
-      restartResolver?.();
+      await reacquireAndResumeInProcessRestart();
       return;
     }
 
@@ -361,53 +332,47 @@ export async function runGatewayLoop(params: {
       env: createGatewayRestartTraceHandoffEnv(restartTraceHandoff),
     });
     if (respawn.mode === "spawned" || respawn.mode === "supervised") {
-      const supervisorMode =
-        respawn.mode === "supervised"
-          ? detectGatewayRespawnSupervisor(process.env, process.platform)
-          : null;
+      const respawnSupervisorMode = respawn.mode === "supervised" ? supervisorMode : null;
+      const restartKind = isUpdateRestart ? "update-process" : "full-process";
       const modeLabel =
         respawn.mode === "spawned"
           ? `spawned pid ${respawn.pid ?? "unknown"}`
           : "supervisor restart";
       markGatewayRestartTrace("restart.full-process-handoff", [
-        ["kind", "full-process"],
+        ["kind", restartKind],
         ["mode", respawn.mode],
         ["pid", respawn.mode === "spawned" ? (respawn.pid ?? "unknown") : "none"],
-        ["supervisorMode", supervisorMode ?? "none"],
+        ["supervisorMode", respawnSupervisorMode ?? "none"],
       ]);
       if (respawn.mode === "supervised") {
         const handoff = writeGatewayRestartHandoffSync({
-          restartKind: "full-process",
+          restartKind,
           reason: restartReason,
           processInstanceId,
-          supervisorMode: supervisorMode ?? "external",
+          supervisorMode: respawnSupervisorMode ?? "external",
           restartTrace: captureGatewayRestartTraceHandoff(),
         });
-        if (supervisorMode === "external" && !handoff) {
+        if (respawnSupervisorMode === "external" && !handoff) {
           gatewayLog.warn(
             "external supervisor restart handoff could not be persisted; falling back to in-process restart",
           );
-          if (!(await reacquireLockForInProcessRestart())) {
-            return;
+          if (isUpdateRestart) {
+            await markRestartHandoffUnavailable();
           }
-          activeRestartRequest = null;
-          shuttingDown = false;
-          restartResolver?.();
+          await reacquireAndResumeInProcessRestart();
           return;
         }
       }
       gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
-      if (supervisorMode === "launchd" && !(await confirmLaunchdHandoff(respawn))) {
+      if (respawnSupervisorMode === "launchd" && !(await confirmLaunchdHandoff(respawn))) {
         await writeStabilityBundle("gateway.restart_handoff_spawn_failed");
         gatewayLog.warn(
           "launchd restart handoff failed to spawn; falling back to in-process restart",
         );
-        if (!(await reacquireLockForInProcessRestart())) {
-          return;
+        if (isUpdateRestart) {
+          await markRestartHandoffUnavailable();
         }
-        activeRestartRequest = null;
-        shuttingDown = false;
-        restartResolver?.();
+        await reacquireAndResumeInProcessRestart();
         return;
       }
       activeRestartRequest = null;
@@ -419,25 +384,28 @@ export async function runGatewayLoop(params: {
       gatewayLog.warn(
         `full process restart failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
       );
+      if (isUpdateRestart) {
+        await markUpdateRestartSentinelFailure("restart-unhealthy").catch((err: unknown) => {
+          gatewayLog.warn(`failed to mark update restart sentinel unhealthy: ${String(err)}`);
+        });
+      }
     } else {
       gatewayLog.info(
         `restart mode: in-process restart (${respawn.detail ?? "OPENCLAW_NO_RESPAWN"})`,
       );
     }
-    if (isUpdateProcessRestartReason(activeRestartRequest?.restartReason)) {
+    if (!isUpdateRestart && isUpdateProcessRestartReason(activeRestartRequest?.restartReason)) {
       await handleRestartAfterServerClose();
       return;
     }
     if (!(await reacquireLockForInProcessRestart())) {
       return;
     }
-    if (isUpdateProcessRestartReason(activeRestartRequest?.restartReason)) {
+    if (!isUpdateRestart && isUpdateProcessRestartReason(activeRestartRequest?.restartReason)) {
       await handleRestartAfterServerClose();
       return;
     }
-    activeRestartRequest = null;
-    shuttingDown = false;
-    restartResolver?.();
+    resumeInProcessRestart();
   };
   const handleStopAfterServerClose = async () => {
     params.completeBoot?.({ outcome: "clean_stop", reason: "gateway.stop" });
@@ -475,7 +443,7 @@ export async function runGatewayLoop(params: {
     pendingStartupForceExitTimer.unref?.();
   };
   const resolveRestartDrainTimeoutMs = async (
-    restartIntent?: RestartIntentOptions,
+    restartIntent?: GatewayRestartIntent,
   ): Promise<RestartDrainTimeoutMs> => {
     if (restartIntent?.force) {
       return 0;
@@ -558,6 +526,7 @@ export async function runGatewayLoop(params: {
     }
 
     void (async () => {
+      let managedUpdateSuccessorParked: boolean | null = null;
       const restartDrainTimeoutMs = isRestart
         ? await resolveRestartDrainTimeoutMs(restartIntent)
         : 0;
@@ -746,6 +715,22 @@ export async function runGatewayLoop(params: {
           }
         }
 
+        if (
+          isRestart &&
+          activeRestartRequest?.restartIntent?.successorOwner === "managed-update-handoff"
+        ) {
+          try {
+            await eagerLifecycleRuntime.parkManagedUpdateSuccessor(supervisorMode);
+            managedUpdateSuccessorParked = true;
+          } catch (err) {
+            managedUpdateSuccessorParked = false;
+            gatewayLog.error(
+              `managed update handoff could not park ${supervisorMode}: ${String(err)}`,
+            );
+            await markRestartHandoffUnavailable();
+          }
+        }
+
         armCloseForceExitTimerForIndefiniteRestart();
         const closeDrainTimeoutMs = resolveRestartCloseDrainTimeoutMs();
         await server?.close({
@@ -759,7 +744,7 @@ export async function runGatewayLoop(params: {
         server = null;
         if (isRestart) {
           try {
-            await handleRestartAfterServerClose();
+            await handleRestartAfterServerClose(managedUpdateSuccessorParked);
           } finally {
             clearForceExitTimer();
             forceActiveRestartExit = null;
@@ -788,7 +773,7 @@ export async function runGatewayLoop(params: {
     action: GatewayRunSignalAction,
     signal: string,
     restartReason?: string,
-    restartIntent?: RestartIntentOptions,
+    restartIntent?: GatewayRestartIntent,
   ) => {
     const acceptedRequest = { action, signal, restartReason, restartIntent };
     if (shuttingDown) {

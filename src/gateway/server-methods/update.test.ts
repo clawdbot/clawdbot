@@ -550,8 +550,17 @@ describe("update.run restart scheduling", () => {
     const [restartParams] = firstMockCall(
       scheduleGatewaySigusr1RestartMock,
       "gateway restart schedule",
-    ) as [{ delayMs?: number; reason?: string; skipCooldown?: boolean; skipDeferral?: boolean }];
+    ) as [
+      {
+        delayMs?: number;
+        reason?: string;
+        successorOwner?: string;
+        skipCooldown?: boolean;
+        skipDeferral?: boolean;
+      },
+    ];
     expect(restartParams?.reason).toBe("update.run");
+    expect(restartParams?.successorOwner).toBe("managed-update-handoff");
     expect(restartParams?.skipCooldown).toBe(true);
     expect(restartParams?.skipDeferral).toBe(true);
     expect(payload?.ok).toBe(true);
@@ -680,6 +689,7 @@ describe("update.run restart scheduling", () => {
       expect.objectContaining({
         delayMs: 2000,
         reason: "update.run",
+        successorOwner: "managed-update-handoff",
         skipCooldown: true,
         skipDeferral: true,
       }),
@@ -961,11 +971,16 @@ describe("update.run restart scheduling", () => {
     expect(payload?.result?.mode).toBe("npm");
   });
 
-  it("delegates update.run without mutating or restarting under external supervision", async () => {
+  it("keeps external update supervision authoritative even with native systemd markers", async () => {
     mockGlobalInstallSurface();
+    detectRespawnSupervisorMock.mockReturnValue("systemd");
 
-    const payload = await withProcessEnv({ OPENCLAW_SUPERVISOR_MODE: "external" }, () =>
-      captureUpdateRunPayload(),
+    const payload = await withProcessEnv(
+      {
+        OPENCLAW_SUPERVISOR_MODE: "external",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
+      },
+      () => captureUpdateRunPayload(),
     );
 
     expect(runGatewayUpdateMock).not.toHaveBeenCalled();

@@ -11,6 +11,7 @@ import {
 type RestartModule = typeof import("./restart.js");
 
 let consumeGatewaySigusr1RestartAuthorization: RestartModule["consumeGatewaySigusr1RestartAuthorization"];
+let consumeGatewaySigusr1RestartIntent: RestartModule["consumeGatewaySigusr1RestartIntent"];
 let deferGatewayRestartUntilIdle: RestartModule["deferGatewayRestartUntilIdle"];
 let isGatewaySigusr1RestartExternallyAllowed: RestartModule["isGatewaySigusr1RestartExternallyAllowed"];
 let markGatewaySigusr1RestartHandled: RestartModule["markGatewaySigusr1RestartHandled"];
@@ -114,6 +115,7 @@ describe("infra runtime", () => {
       );
       ({
         consumeGatewaySigusr1RestartAuthorization,
+        consumeGatewaySigusr1RestartIntent,
         deferGatewayRestartUntilIdle,
         isGatewaySigusr1RestartExternallyAllowed,
         markGatewaySigusr1RestartHandled,
@@ -464,6 +466,7 @@ describe("infra runtime", () => {
         const update = scheduleGatewaySigusr1Restart({
           delayMs: 0,
           reason: "update.auto",
+          successorOwner: "managed-update-handoff",
           skipDeferral: true,
         });
         expect(update.coalesced).toBe(true);
@@ -472,6 +475,33 @@ describe("infra runtime", () => {
         await signalEmitted;
 
         expect(peekGatewaySigusr1RestartReason()).toBe("update.auto");
+        expect(consumeGatewaySigusr1RestartIntent()).toEqual({
+          reason: "update.auto",
+          successorOwner: "managed-update-handoff",
+        });
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("retains managed successor ownership when an ordinary restart pulls the timer earlier", async () => {
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "update.auto",
+          successorOwner: "managed-update-handoff",
+        });
+        scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "config.patch" });
+
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(peekGatewaySigusr1RestartReason()).toBe("update.auto");
+        expect(consumeGatewaySigusr1RestartIntent()).toEqual({
+          reason: "update.auto",
+          successorOwner: "managed-update-handoff",
+        });
       } finally {
         process.removeListener("SIGUSR1", handler);
       }

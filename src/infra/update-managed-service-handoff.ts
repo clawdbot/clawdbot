@@ -1091,6 +1091,11 @@ type ManagedServiceUpdateHandoffResult = Omit<StartedManagedServiceUpdateHandoff
   status: "started" | "joined";
 };
 
+const activeManagedServiceUpdateHandoffs = new Map<
+  string,
+  Promise<ManagedServiceUpdateHandoffResult>
+>();
+
 function isNodeLikeRuntime(execPath: string | undefined): boolean {
   if (!execPath?.trim()) {
     return false;
@@ -1389,6 +1394,7 @@ async function resolveHandoffSpawn(params: {
 async function spawnManagedServiceUpdateHandoff(
   params: ManagedServiceUpdateHandoffParams,
   rootIdentity: string,
+  onExit: () => void,
 ): Promise<ManagedServiceUpdateHandoffResult> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX));
   const scriptPath = path.join(dir, "handoff.cjs");
@@ -1478,11 +1484,13 @@ async function spawnManagedServiceUpdateHandoff(
       detached: true,
       stdio: ["ignore", "pipe", "ignore"],
     });
+    child.once("exit", onExit);
     // systemd-run --scope remains synchronous until the helper exits, so this
     // child's exit owns the full handoff lifetime. The ready marker means the
     // helper owns the cross-process update lease before callers terminate the Gateway.
     readiness = await waitForHandoffReady(child);
   } catch (err) {
+    child?.removeListener("exit", onExit);
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
     throw err;
   }
@@ -1507,8 +1515,12 @@ export async function startManagedServiceUpdateHandoff(
   params: ManagedServiceUpdateHandoffParams,
 ): Promise<ManagedServiceUpdateHandoffResult> {
   const root = resolveUpdateInstallRoot(params.root);
+  const active = activeManagedServiceUpdateHandoffs.get(root);
+  if (active) {
+    return { ...(await active), status: "joined" };
+  }
   const handoffId = params.handoffId ?? randomUUID();
-  return await spawnManagedServiceUpdateHandoff(
+  const flight = spawnManagedServiceUpdateHandoff(
     {
       ...params,
       handoffId,
@@ -1518,7 +1530,21 @@ export async function startManagedServiceUpdateHandoff(
       },
     },
     root,
+    () => {
+      if (activeManagedServiceUpdateHandoffs.get(root) === flight) {
+        activeManagedServiceUpdateHandoffs.delete(root);
+      }
+    },
   );
+  activeManagedServiceUpdateHandoffs.set(root, flight);
+  try {
+    return await flight;
+  } catch (err) {
+    if (activeManagedServiceUpdateHandoffs.get(root) === flight) {
+      activeManagedServiceUpdateHandoffs.delete(root);
+    }
+    throw err;
+  }
 }
 
 export function buildManagedServiceHandoffUnavailableMessage(command: string): string {

@@ -106,6 +106,33 @@ export async function stopSystemdService({
   });
 }
 
+export async function parkCurrentSystemdServiceForMaintenance(
+  env: GatewayServiceEnv = process.env,
+): Promise<void> {
+  const currentUnit = env.OPENCLAW_SYSTEMD_UNIT?.trim();
+  if (!currentUnit) {
+    throw new Error("current systemd unit is unavailable");
+  }
+  const unitName = currentUnit.endsWith(".service") ? currentUnit : `${currentUnit}.service`;
+  const timeoutMs = 5_000;
+  const ownership = await execSystemctlUser(
+    env,
+    ["show", unitName, "--property=MainPID", "--value"],
+    timeoutMs,
+  );
+  if (ownership.code !== 0) {
+    throw new Error(`systemctl show failed: ${ownership.stderr || ownership.stdout}`.trim());
+  }
+  if (ownership.stdout.trim() !== String(process.pid)) {
+    throw new Error("current systemd unit is not owned by this process");
+  }
+  // An explicit asynchronous stop suppresses Restart=always without waiting on this process.
+  const result = await execSystemctlUser(env, ["--no-block", "stop", unitName], timeoutMs);
+  if (result.code !== 0) {
+    throw new Error(`systemctl stop failed: ${result.stderr || result.stdout}`.trim());
+  }
+}
+
 export async function restartSystemdService({
   stdout,
   env,

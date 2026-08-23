@@ -1911,9 +1911,11 @@ describe("update-startup", () => {
     expect(log.info).not.toHaveBeenCalled();
   });
 
-  it("delegates configured auto-updates to an external supervisor", async () => {
+  it("keeps external auto-update supervision authoritative over native systemd markers", async () => {
     mockPackageUpdateStatus("beta", "2.0.0-beta.1");
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
+    detectRespawnSupervisorMock.mockReturnValue("systemd");
     const log = { info: vi.fn() };
     const runAutoUpdate = createAutoUpdateSuccessMock();
 
@@ -2036,6 +2038,7 @@ describe("update-startup", () => {
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith({
       delayMs: 0,
       reason: "update.auto",
+      successorOwner: "managed-update-handoff",
       skipCooldown: true,
       skipDeferral: true,
     });
@@ -2139,6 +2142,7 @@ describe("update-startup", () => {
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith({
       delayMs: 2000,
       reason: "update.auto",
+      successorOwner: "managed-update-handoff",
       skipCooldown: true,
       skipDeferral: true,
     });

@@ -472,6 +472,7 @@ async function startManagedServiceAutoUpdateHandoff(
       scheduleGatewaySigusr1Restart({
         delayMs: restartDelayMs,
         reason: "update.auto",
+        successorOwner: "managed-update-handoff",
         skipCooldown: true,
         skipDeferral: true,
       });

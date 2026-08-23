@@ -45,6 +45,7 @@ let lastRestartEmittedAt = 0;
 let pendingRestartTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingRestartDueAt = 0;
 let pendingRestartReason: string | undefined;
+let pendingRestartSuccessorOwner: GatewayRestartIntent["successorOwner"];
 let pendingRestartEmitHooks: RestartEmitHooks | undefined;
 let pendingRestartSessionKey: string | undefined;
 let pendingRestartSkipDeferral = false;
@@ -69,6 +70,7 @@ function clearPendingScheduledRestart(): void {
   pendingRestartTimer = null;
   pendingRestartDueAt = 0;
   pendingRestartReason = undefined;
+  pendingRestartSuccessorOwner = undefined;
   pendingRestartEmitHooks = undefined;
   pendingRestartSessionKey = undefined;
   pendingRestartSkipDeferral = false;
@@ -96,6 +98,7 @@ function armPendingRestartTimer(requestedDueAt: number, nowMs: number): void {
   pendingRestartTimer = setTimeout(
     () => {
       const scheduledReason = pendingRestartReason;
+      const scheduledSuccessorOwner = pendingRestartSuccessorOwner;
       const scheduledSkipDeferral = pendingRestartSkipDeferral;
       pendingRestartTimer = null;
       pendingRestartDueAt = 0;
@@ -104,7 +107,10 @@ function armPendingRestartTimer(requestedDueAt: number, nowMs: number): void {
       pendingRestartPreparing = true;
       const pendingCheck = preRestartCheck;
       if (scheduledSkipDeferral || !pendingCheck) {
-        void emitPreparedGatewayRestart(undefined, scheduledReason);
+        const intent = scheduledSuccessorOwner
+          ? { reason: scheduledReason, successorOwner: scheduledSuccessorOwner }
+          : undefined;
+        void emitPreparedGatewayRestart(undefined, scheduledReason, intent);
         return;
       }
       const deferralTimeoutMs = resolveGatewayRestartDeferralTimeoutMs();
@@ -586,8 +592,15 @@ async function emitPreparedGatewayRestartUnderAdmission(
     ? pendingRestartReason
     : undefined;
   const resolvedReason = preferredReason ?? reasonOverride;
+  const successorOwner = pendingRestartSuccessorOwner ?? intent?.successorOwner;
   const resolvedIntent =
-    preferredReason && intent ? { ...intent, reason: preferredReason } : intent;
+    preferredReason || successorOwner
+      ? {
+          ...intent,
+          ...(preferredReason ? { reason: preferredReason } : {}),
+          ...(successorOwner ? { successorOwner } : {}),
+        }
+      : intent;
   const emitResult = emitOwner?.emitRestart
     ? emitOwner.emitRestart(resolvedReason, resolvedIntent)
     : requestGatewayRestartWithSignalAdmission(resolvedReason, resolvedIntent);
@@ -1018,6 +1031,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   sessionKey?: string;
   skipDeferral?: boolean;
   skipCooldown?: boolean;
+  successorOwner?: GatewayRestartIntent["successorOwner"];
 }): ScheduledRestart {
   const delayMsRaw =
     typeof opts?.delayMs === "number" && Number.isFinite(opts.delayMs)
@@ -1036,6 +1050,8 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   const skipDeferral = opts?.skipDeferral === true;
   let nextPendingEmitHooks = opts?.emitHooks;
   let nextPendingSessionKey = opts?.sessionKey;
+  let nextPendingReason = reason;
+  let nextPendingSuccessorOwner = opts?.successorOwner;
 
   if (hasUnconsumedRestartSignal()) {
     if (shouldPreferRestartReason(reason, emittedRestartReason)) {
@@ -1044,6 +1060,13 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         // Preserve the already-authorized force bit; only the display/recovery reason is upgraded.
         emittedRestartIntent = { ...emittedRestartIntent, reason };
       }
+    }
+    if (opts?.successorOwner) {
+      emittedRestartIntent = {
+        ...emittedRestartIntent,
+        ...(emittedRestartReason ? { reason: emittedRestartReason } : {}),
+        successorOwner: opts.successorOwner,
+      };
     }
     restartLog.warn(
       `restart request coalesced (already in-flight) reason=${reason ?? "unspecified"} ${formatRestartAudit(opts?.audit)}`,
@@ -1070,6 +1093,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       );
       clearActiveDeferralPolls();
       pendingRestartReason = reason;
+      pendingRestartSuccessorOwner = opts?.successorOwner ?? pendingRestartSuccessorOwner;
       // Hookless forced restarts that own no sentinel may preserve an accepted
       // pending hook; update/handoff callers rely on the default clear path.
       const preservePendingHooks =
@@ -1080,7 +1104,10 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         pendingRestartEmitHooks = opts?.emitHooks;
         pendingRestartSessionKey = opts?.sessionKey;
       }
-      void emitPreparedGatewayRestart(undefined, reason);
+      const intent = pendingRestartSuccessorOwner
+        ? { reason, successorOwner: pendingRestartSuccessorOwner }
+        : undefined;
+      void emitPreparedGatewayRestart(undefined, reason, intent);
       return {
         ok: true,
         pid: process.pid,
@@ -1098,6 +1125,10 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       !pendingRestartPreparing &&
       (requestedDueAt < pendingRestartDueAt || shouldUpgradeToSkipDeferral);
     if (shouldPullEarlier) {
+      if (shouldPreferRestartReason(pendingRestartReason, reason)) {
+        nextPendingReason = pendingRestartReason;
+      }
+      nextPendingSuccessorOwner ??= pendingRestartSuccessorOwner;
       const preservePendingHooks =
         opts?.preservePendingEmitHooksOnDeferralBypass === true &&
         opts?.emitHooks === undefined &&
@@ -1114,7 +1145,8 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         }
         pendingRestartTimer = null;
         pendingRestartDueAt = requestedDueAt;
-        pendingRestartReason = reason;
+        pendingRestartReason = nextPendingReason;
+        pendingRestartSuccessorOwner = nextPendingSuccessorOwner;
         pendingRestartSkipDeferral = pendingRestartSkipDeferral || skipDeferral;
         armPendingRestartTimer(requestedDueAt, nowMs);
         return {
@@ -1143,6 +1175,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       if (shouldPreferRestartReason(reason, pendingRestartReason)) {
         pendingRestartReason = reason;
       }
+      pendingRestartSuccessorOwner ??= opts?.successorOwner;
       pendingRestartSkipDeferral = pendingRestartSkipDeferral || skipDeferral;
       restartLog.warn(
         `restart request coalesced (already scheduled) reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} delayMs=${remainingMs} ${formatRestartAudit(opts?.audit)}`,
@@ -1168,7 +1201,8 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   }
 
   pendingRestartDueAt = requestedDueAt;
-  pendingRestartReason = reason;
+  pendingRestartReason = nextPendingReason;
+  pendingRestartSuccessorOwner = nextPendingSuccessorOwner;
   pendingRestartEmitHooks = nextPendingEmitHooks;
   pendingRestartSessionKey = nextPendingSessionKey;
   pendingRestartSkipDeferral = skipDeferral;

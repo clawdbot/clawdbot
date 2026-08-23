@@ -85,6 +85,7 @@ vi.mock("./exec-file.js", () => {
 });
 
 import { splitArgsPreservingQuotes } from "./arg-split.js";
+import { parkCurrentSystemdServiceForMaintenance } from "./systemd-lifecycle.js";
 import { parseSystemdEnvAssignments, parseSystemdExecStart } from "./systemd-unit.js";
 import {
   findInstalledSystemdGatewayScope,
@@ -3255,6 +3256,108 @@ describe("systemd service control", () => {
         "write.mock.invocationCallOrder[0] test invariant",
       ),
     );
+  });
+
+  it("parks the exact current user unit without waiting for its own exit", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(
+          args,
+          "show",
+          "custom-gateway.service",
+          "--property=MainPID",
+          "--value",
+        );
+        cb(null, `${process.pid}\n`, "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "--no-block", "stop", "custom-gateway.service");
+        cb(null, "", "");
+      });
+
+    await parkCurrentSystemdServiceForMaintenance({
+      OPENCLAW_PROFILE: "work",
+      OPENCLAW_SYSTEMD_UNIT: "  custom-gateway  ",
+    });
+
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+    for (const call of execFileMock.mock.calls) {
+      expect(call[2]).toEqual(expect.objectContaining({ timeout: 5_000, killSignal: "SIGKILL" }));
+    }
+  });
+
+  it.each([{}, { OPENCLAW_SYSTEMD_UNIT: "   ", OPENCLAW_PROFILE: "work" }])(
+    "rejects managed successor parking without an explicit current unit",
+    async (env) => {
+      await expect(parkCurrentSystemdServiceForMaintenance(env)).rejects.toThrow(
+        "current systemd unit is unavailable",
+      );
+      expect(execFileMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["", "0", "not-a-pid", `${process.pid + 1}`])(
+    "rejects managed successor parking when MainPID is %j",
+    async (mainPid) => {
+      execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(
+          args,
+          "show",
+          "custom-gateway.service",
+          "--property=MainPID",
+          "--value",
+        );
+        cb(null, mainPid, "");
+      });
+
+      await expect(
+        parkCurrentSystemdServiceForMaintenance({
+          OPENCLAW_SYSTEMD_UNIT: "custom-gateway.service",
+        }),
+      ).rejects.toThrow("current systemd unit is not owned by this process");
+      expect(execFileMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("fails managed successor parking when exact-unit ownership cannot be queried", async () => {
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      assertUserSystemctlArgs(
+        args,
+        "show",
+        "custom-gateway.service",
+        "--property=MainPID",
+        "--value",
+      );
+      cb(createExecFileError("user manager unavailable"), "", "user manager unavailable");
+    });
+
+    await expect(
+      parkCurrentSystemdServiceForMaintenance({ OPENCLAW_SYSTEMD_UNIT: "custom-gateway.service" }),
+    ).rejects.toThrow("systemctl show failed: user manager unavailable");
+    expect(execFileMock).toHaveBeenCalledOnce();
+  });
+
+  it("fails managed successor parking when the exact current unit cannot be stopped", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(
+          args,
+          "show",
+          "custom-gateway.service",
+          "--property=MainPID",
+          "--value",
+        );
+        cb(null, `${process.pid}\n`, "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "--no-block", "stop", "custom-gateway.service");
+        cb(createExecFileError("access denied"), "", "access denied");
+      });
+
+    await expect(
+      parkCurrentSystemdServiceForMaintenance({ OPENCLAW_SYSTEMD_UNIT: "custom-gateway.service" }),
+    ).rejects.toThrow("systemctl stop failed: access denied");
+    expect(execFileMock).toHaveBeenCalledTimes(2);
   });
 
   it("audits a successful stop before a later output failure", async () => {

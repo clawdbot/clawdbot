@@ -122,33 +122,12 @@ export function restartGatewayProcessWithFreshPid(
  * Update restarts must replace the OS process so the new code runs from a
  * fresh module graph after package files have changed on disk.
  *
- * Unlike the generic restart path, update mode allows detached respawn on
- * unmanaged Windows installs because there is no safe in-process fallback once
- * the installed package contents have been replaced.
+ * The caller resolves supervisor ownership first; this path is only for an
+ * unmanaged process whose installed package contents have been replaced.
  */
 export function respawnGatewayProcessForUpdate(
   opts: GatewayRespawnOptions = {},
 ): GatewayUpdateRespawnResult {
-  const supervisor = detectGatewayRespawnSupervisor(process.env, process.platform, {
-    includeLinuxOpenClawGatewayServiceMarker: true,
-  });
-  if (supervisor) {
-    // Managed update handoffs require the original PID to exit before the
-    // detached helper can mutate the install, even when respawn is disabled.
-    if (supervisor === "launchd") {
-      return scheduleLaunchdRestartAfterExit();
-    }
-    if (supervisor === "schtasks") {
-      const restart = triggerOpenClawRestart();
-      if (!restart.ok) {
-        return {
-          mode: "failed",
-          detail: restart.detail ?? `${restart.method} restart failed`,
-        };
-      }
-    }
-    return { mode: "supervised" };
-  }
   if (isTruthyEnvValue(process.env.OPENCLAW_NO_RESPAWN)) {
     return { mode: "disabled", detail: "OPENCLAW_NO_RESPAWN" };
   }
