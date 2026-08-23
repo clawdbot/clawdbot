@@ -31,6 +31,10 @@ const BURST_DELTA_COUNT = 240;
 // Sanity floor: the burst must invalidate the chat page host at least twice,
 // proving the probe observed the streaming path at all.
 const MIN_BURST_HOST_UPDATES = 2;
+// Valid frame-queued runs commit 115-144 host updates for this burst. A direct
+// update per delta produces 241, so this ceiling catches lost coalescing while
+// retaining headroom for runner cadence.
+const MAX_BURST_HOST_UPDATES = 180;
 // Minimum share of host invalidations that must execute inside an animation
 // frame callback. The queue guarantees this for every stream-driven update;
 // only rare timer-driven strays (poll controllers) fall outside frames.
@@ -38,11 +42,12 @@ const FRAME_SCHEDULED_MIN_RATIO = 0.9;
 
 // Shipped live-tool ceiling: ui/src/pages/chat/tool-stream.ts TOOL_STREAM_LIMIT.
 const TOOL_STREAM_LIMIT_CONTRACT = 50;
-// Realistic agent cadence: narration deltas separate tool calls, so each pair
-// (assistant delta, tool result) lands on its own timer tick. Pairs stay above
-// the shipped limit to prove eviction under sustained load.
+// Realistic agent cadence: narration deltas separate complete tool lifecycles.
+// Calls stay above the shipped limit to prove eviction under sustained load.
 const TOOL_FLOOD_PAIR_COUNT = 60;
-const TOOL_FLOOD_PAIR_INTERVAL_MS = 60;
+// The lifecycle spans the 80ms projection throttle so start/update/input_delta
+// exercise its deferred flush before result forces the final projection.
+const TOOL_FLOOD_PHASE_INTERVAL_MS = 30;
 // Gateway activity fencing drops any event whose seq is at or below the
 // newest seq already accepted, so flood events seed above every sequence the
 // mocked startup handshake has already delivered.
@@ -253,16 +258,16 @@ async function openStreamingTurn(
   return runId;
 }
 
-async function emitToolResultFlood(
+async function emitToolLifecycleFlood(
   page: ChatFlowPage,
   runId: string,
   pairCount: number,
 ): Promise<void> {
-  // Real agent turns alternate narration deltas and tool results, and Gateway
-  // frames arrive as separate socket messages; deliver each pair on its own
-  // timer tick so the live stream sees production-shaped input.
+  // Gateway frames arrive as separate socket messages. Space each lifecycle
+  // phase across timer ticks so the live stream exercises deferred projection,
+  // not only the result path's forced flush.
   await page.evaluate(
-    ({ runId: targetRunId, pairCount: targetPairCount, intervalMs, seqSeed }) => {
+    ({ runId: targetRunId, pairCount: targetPairCount, phaseIntervalMs, seqSeed }) => {
       const scope = window as ScopedWindow;
       const gateway = scope.openclawControlUiE2eGateway;
       if (!gateway) {
@@ -270,7 +275,23 @@ async function emitToolResultFlood(
       }
       scope.ocBurstDone = false;
       let emitted = 0;
-      const emitPair = () => {
+      let seq = seqSeed;
+      const emitToolPhase = (phase: string, data: Record<string, unknown>) => {
+        gateway.emit("agent", {
+          data: {
+            name: "edit",
+            phase,
+            toolCallId: `call-${emitted}`,
+            ...data,
+          },
+          runId: targetRunId,
+          seq: ++seq,
+          sessionKey: "main",
+          stream: "tool",
+          ts: Date.now(),
+        });
+      };
+      const emitCall = () => {
         emitted += 1;
         const chunk = ` working on step ${emitted}`;
         gateway.emit("chat", {
@@ -284,28 +305,30 @@ async function emitToolResultFlood(
           sessionKey: "main",
           state: "delta",
         });
-        gateway.emit("agent", {
-          data: {
-            name: "exec",
-            phase: "result",
-            result: `tool output ${emitted}`,
-            toolCallId: `call-${emitted}`,
-          },
-          runId: targetRunId,
-          seq: seqSeed + emitted,
-          sessionKey: "main",
-          stream: "tool",
-          ts: Date.now(),
-        });
-        if (emitted < targetPairCount) {
-          setTimeout(emitPair, intervalMs);
-        } else {
-          scope.ocBurstDone = true;
-        }
+        emitToolPhase("start", { args: { path: `src/file-${emitted}.ts` } });
+        setTimeout(() => {
+          emitToolPhase("update", { partialResult: `partial output ${emitted}` });
+          setTimeout(() => {
+            emitToolPhase("input_delta", { diff: { added: emitted, removed: 1 } });
+            setTimeout(() => {
+              emitToolPhase("result", { result: `tool output ${emitted}` });
+              if (emitted < targetPairCount) {
+                setTimeout(emitCall, phaseIntervalMs);
+              } else {
+                scope.ocBurstDone = true;
+              }
+            }, phaseIntervalMs);
+          }, phaseIntervalMs);
+        }, phaseIntervalMs);
       };
-      setTimeout(emitPair, 0);
+      setTimeout(emitCall, 0);
     },
-    { runId, pairCount, intervalMs: TOOL_FLOOD_PAIR_INTERVAL_MS, seqSeed: TOOL_FLOOD_SEQ_SEED },
+    {
+      runId,
+      pairCount,
+      phaseIntervalMs: TOOL_FLOOD_PHASE_INTERVAL_MS,
+      seqSeed: TOOL_FLOOD_SEQ_SEED,
+    },
   );
   await page.waitForFunction(() => (window as ScopedWindow).ocBurstDone === true, undefined, {
     timeout: 60_000,
@@ -380,6 +403,7 @@ suite.define(() => {
         });
 
         expect(probe.hostUpdates).toBeGreaterThanOrEqual(MIN_BURST_HOST_UPDATES);
+        expect(probe.hostUpdates).toBeLessThanOrEqual(MAX_BURST_HOST_UPDATES);
         expect(probe.hostUpdatesInsideFrame / probe.hostUpdates).toBeGreaterThanOrEqual(
           FRAME_SCHEDULED_MIN_RATIO,
         );
@@ -387,7 +411,7 @@ suite.define(() => {
     );
   });
 
-  it("keeps the live tool stream bounded under a tool result flood", async () => {
+  it("keeps the live tool stream bounded under complete tool lifecycles", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -400,7 +424,7 @@ suite.define(() => {
         await gateway.waitForRequest("chat.startup");
         const runId = await openStreamingTurn(page, gateway, "tool flood probe");
 
-        await emitToolResultFlood(page, runId, TOOL_FLOOD_PAIR_COUNT);
+        await emitToolLifecycleFlood(page, runId, TOOL_FLOOD_PAIR_COUNT);
         const floodCards = page.locator('[data-message-id^="tool:assistant:call-"]');
         // Eviction drops the oldest entries and keeps the freshest ones.
         await expect
