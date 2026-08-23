@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import {
@@ -8,14 +9,31 @@ import {
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
 import { paneDomId, scrollActiveMenuOptionIntoView } from "./chat-composer-dom.ts";
+import { syncComposerMenuScroll } from "./chat-composer-slash-menu.ts";
 
 const SKILL_MENTION_CHAR = /[-a-zA-Z0-9_:]/u;
+
+function renderSkillName(name: string, query: string): TemplateResult {
+  const matchLength = name.toLowerCase().startsWith(query.toLowerCase()) ? query.length : 0;
+  return matchLength === 0
+    ? html`${name}`
+    : html`<mark>${name.slice(0, matchLength)}</mark>${name.slice(matchLength)}`;
+}
 
 type SkillMentionTarget = {
   start: number;
   end: number;
   query: string;
 };
+
+type SkillDraftToken = {
+  command: SlashCommandDef;
+  end: number;
+  raw: string;
+  start: number;
+};
+
+type SkillDraftRange = { start: number; end: number; navigationEnd: number };
 
 export type SkillMenuState = {
   skillMenuOpen: boolean;
@@ -194,6 +212,177 @@ export function getActiveSkillMenuOptionLabel(state: SkillMenuState): string {
   return command ? `${getSkillDisplayName(command)} ${getSlashCommandDescription(command)}` : "";
 }
 
+function parseSkillDraftTokens(value: string): SkillDraftToken[] {
+  const tokens: SkillDraftToken[] = [];
+  const referencePattern = /\$([-a-zA-Z0-9_:]+)/gu;
+  for (const match of value.matchAll(referencePattern)) {
+    const start = match.index;
+    const matchedName = match[1] ?? "";
+    const name = matchedName.replace(/:+$/u, "");
+    if (start === undefined || isEscapedReference(value, start)) {
+      continue;
+    }
+    const command = getSkillCommandCompletions(name).find((candidate) => candidate.name === name);
+    if (!command) {
+      continue;
+    }
+    const raw = `$${name}`;
+    tokens.push({ command, end: start + raw.length, raw, start });
+  }
+  return tokens;
+}
+
+function skillDraftRanges(value: string): SkillDraftRange[] {
+  const ranges: SkillDraftRange[] = [];
+  for (const match of value.matchAll(/\$([-a-zA-Z0-9_:]+)/gu)) {
+    const start = match.index;
+    const name = (match[1] ?? "").replace(/:+$/u, "");
+    if (start === undefined || isEscapedReference(value, start)) {
+      continue;
+    }
+    if (getSkillCommandCompletions(name).some((candidate) => candidate.name === name)) {
+      const end = start + name.length + 1;
+      ranges.push({ start, end, navigationEnd: /\s/u.test(value[end] ?? "") ? end + 1 : end });
+    }
+  }
+  return ranges;
+}
+
+export function normalizeSkillTokenSelection(target: HTMLTextAreaElement): boolean {
+  const { selectionStart, selectionEnd } = target;
+  let nextStart = selectionStart;
+  let nextEnd = selectionEnd;
+  for (const range of skillDraftRanges(target.value)) {
+    if (
+      selectionStart === selectionEnd &&
+      selectionStart > range.start &&
+      selectionStart < range.navigationEnd
+    ) {
+      const fromStart = selectionStart - range.start;
+      const fromEnd = range.navigationEnd - selectionStart;
+      nextStart = fromStart < fromEnd ? range.start : range.navigationEnd;
+      nextEnd = nextStart;
+      break;
+    }
+    if (selectionStart > range.start && selectionStart < range.end) {
+      nextStart = range.start;
+    }
+    if (selectionEnd > range.start && selectionEnd < range.end) {
+      nextEnd = range.end;
+    }
+  }
+  if (nextStart === selectionStart && nextEnd === selectionEnd) {
+    return false;
+  }
+  target.setSelectionRange(nextStart, nextEnd, target.selectionDirection);
+  return true;
+}
+
+export function handleSkillTokenKeydown(event: KeyboardEvent): boolean {
+  if (
+    !["ArrowLeft", "ArrowRight", "Backspace", "Delete"].includes(event.key) ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey
+  ) {
+    return false;
+  }
+  const target = event.target;
+  if (!(target instanceof HTMLTextAreaElement)) {
+    return false;
+  }
+  if (event.shiftKey) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+      return false;
+    }
+    const direction = target.selectionDirection;
+    const caret = direction === "backward" ? target.selectionStart : target.selectionEnd;
+    const anchor = direction === "backward" ? target.selectionEnd : target.selectionStart;
+    for (const range of skillDraftRanges(target.value)) {
+      const nextCaret =
+        event.key === "ArrowLeft" && caret > range.start && caret <= range.end
+          ? range.start
+          : event.key === "ArrowRight" && caret >= range.start && caret < range.end
+            ? range.end
+            : null;
+      if (nextCaret === null) {
+        continue;
+      }
+      event.preventDefault();
+      target.setSelectionRange(
+        Math.min(anchor, nextCaret),
+        Math.max(anchor, nextCaret),
+        nextCaret < anchor ? "backward" : "forward",
+      );
+      return true;
+    }
+    return false;
+  }
+  if (target.selectionStart !== target.selectionEnd) {
+    return false;
+  }
+  const caret = target.selectionStart;
+  for (const range of skillDraftRanges(target.value)) {
+    const deletesBackward = event.key === "Backspace" && caret === range.end;
+    const deletesForward = event.key === "Delete" && caret === range.start;
+    if (deletesBackward || deletesForward) {
+      event.preventDefault();
+      target.setRangeText("", range.start, range.end, "end");
+      // Reuse the composer's input owner so the controlled draft, picker, and
+      // token overlay observe the atomic replacement together.
+      target.dispatchEvent(
+        new InputEvent("input", {
+          bubbles: true,
+          inputType: deletesBackward ? "deleteContentBackward" : "deleteContentForward",
+        }),
+      );
+      return true;
+    }
+    const movesLeft =
+      event.key === "ArrowLeft" && caret > range.start && caret <= range.navigationEnd;
+    const movesRight =
+      event.key === "ArrowRight" && caret >= range.start && caret < range.navigationEnd;
+    if (movesLeft || movesRight) {
+      event.preventDefault();
+      const nextCaret = movesLeft ? range.start : range.navigationEnd;
+      target.setSelectionRange(nextCaret, nextCaret);
+      return true;
+    }
+  }
+  return false;
+}
+
+export function renderSkillDraftOverlay(
+  value: string,
+  direction: "ltr" | "rtl",
+): TemplateResult | typeof nothing {
+  const tokens = parseSkillDraftTokens(value);
+  if (tokens.length === 0) {
+    return nothing;
+  }
+  const content: Array<string | TemplateResult> = [];
+  let cursor = 0;
+  for (const token of tokens) {
+    content.push(
+      value.slice(cursor, token.start),
+      html`<span class="agent-chat__skill-token" data-raw=${token.raw}
+        ><span class="agent-chat__skill-token-icon">${icons.pencilSparkles}</span
+        >${getSkillDisplayName(token.command)}</span
+      >`,
+    );
+    cursor = token.end;
+  }
+  content.push(value.slice(cursor));
+  // Template whitespace changes the mirrored draft's line breaks. Keep text
+  // segments adjacent to inline tokens so only presented content drives layout.
+  // oxfmt-ignore
+  return html`<div
+    class="agent-chat__composer-draft-overlay"
+    aria-hidden="true"
+    dir=${direction}
+  >${content}</div>`;
+}
+
 function selectSkillMention(
   command: SlashCommandDef,
   state: SkillMenuState,
@@ -288,7 +477,14 @@ export function renderSkillMenu(
       role="listbox"
       aria-label=${t("chat.skills.menu")}
     >
-      <div class="slash-menu__scroll">
+      <div
+        class="slash-menu__scroll"
+        ${ref(syncComposerMenuScroll)}
+        @scroll=${(event: Event) =>
+          syncComposerMenuScroll(
+            event.currentTarget instanceof Element ? event.currentTarget : undefined,
+          )}
+      >
         ${state.skillCommandRefreshPending || state.skillMenuItems.length === 0
           ? html`<div class="slash-menu-group">
               <div class="slash-menu-group__label">${t("chat.skills.loading")}</div>
@@ -311,11 +507,14 @@ export function renderSkillMenu(
                       requestUpdate();
                     }}
                   >
-                    <span class="slash-menu-leading">
-                      <span class="slash-menu-icon">${icons.zap}</span>
-                      <span class="slash-menu-name">${getSkillDisplayName(command)}</span>
-                    </span>
-                    <span class="slash-menu-trailing">
+                    <span class="slash-menu-icon">${icons.pencilSparkles}</span>
+                    <span class="slash-menu-copy">
+                      <span class="slash-menu-name"
+                        >${renderSkillName(
+                          getSkillDisplayName(command),
+                          state.skillMenuTarget?.query ?? "",
+                        )}</span
+                      >
                       <span class="slash-menu-desc">${getSlashCommandDescription(command)}</span>
                     </span>
                   </div>

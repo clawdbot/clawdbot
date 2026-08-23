@@ -3857,6 +3857,153 @@ describe("chat slash menu accessibility", () => {
     expect(onSlashIntent).toHaveBeenCalledOnce();
   });
 
+  it("shows skills after commands in the slash picker and highlights typed prefixes", () => {
+    replaceSkillCommands({
+      key: "status_report",
+      skillDisplayName: "Status Report",
+      description: "Prepare a detailed status report.",
+    });
+    const { container } = createReactiveDraftHarness();
+
+    inputDraftAtEnd(container, "/sta");
+
+    const options = Array.from(container.querySelectorAll<HTMLElement>("[role='option']"));
+    const skillHeader = container.querySelector(
+      ".slash-menu-group--skills .slash-menu-group__label",
+    );
+    expect(options.length).toBeGreaterThan(1);
+    expect(options[0]?.textContent).toContain("/status");
+    expect(options.at(-1)?.textContent).toContain("/status_report");
+    expect(skillHeader?.textContent).toBe("Skills");
+    expect(options[0]?.querySelector("mark")?.textContent).toBe("sta");
+    expect(options.at(-1)?.querySelector("mark")?.textContent).toBe("sta");
+  });
+
+  it("uses the grouped slash menu order for keyboard selection", () => {
+    replaceSlashCommands([
+      {
+        key: "status-report",
+        name: "status-report",
+        description: "Prepare a status report.",
+        source: "skill",
+        skillModelVisible: true,
+      },
+      {
+        key: "status-check",
+        name: "status-check",
+        description: "Check current status.",
+        source: "plugin",
+      },
+    ]);
+    const harness = createSlashRerenderHarness();
+    let container = harness.inputAndRender(harness.container, "/status");
+
+    const optionNames = () =>
+      Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
+        (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
+      );
+    expect(optionNames()).toEqual(["/status-check", "/status-report"]);
+
+    keydownComposer(container, "Enter");
+    container = harness.renderCurrent();
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/status-check ");
+  });
+
+  it("dismisses invocation sheets on an outside pointer press", () => {
+    const { container } = createReactiveDraftHarness();
+    document.body.append(container);
+    inputDraftAtEnd(container, "/sta");
+    expect(container.querySelector(".slash-menu")).not.toBeNull();
+
+    document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+
+    expect(container.querySelector(".slash-menu")).toBeNull();
+    container.remove();
+  });
+
+  it("renders confirmed skills as atomic tokens for pointer and arrow navigation", () => {
+    replaceSkillCommands({
+      key: "prose_writer",
+      skillDisplayName: "Prose Writer",
+      description: "Draft polished prose.",
+    });
+    const { container } = createReactiveDraftHarness();
+    inputDraftAtEnd(container, "Use $prose_writer: next");
+
+    const textarea = getComposerTextarea(container);
+    const token = container.querySelector(".agent-chat__skill-token");
+    expect(token?.textContent).toContain("Prose Writer");
+    expect(token?.getAttribute("data-raw")).toBe("$prose_writer");
+    expect(
+      container
+        .querySelector(".agent-chat__composer-draft-overlay")
+        ?.textContent?.replace(/\s+/gu, " ")
+        .includes("Use Prose Writer: next"),
+    ).toBe(true);
+    expect(textarea.classList.contains("agent-chat__composer-textarea--rich")).toBe(true);
+
+    textarea.setSelectionRange(8, 8);
+    textarea.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    expect(textarea.selectionStart).toBe(4);
+
+    textarea.setSelectionRange("Use $prose_writer".length, "Use $prose_writer".length);
+    keydownComposer(container, "ArrowLeft");
+    expect(textarea.selectionStart).toBe(4);
+    textarea.setSelectionRange(4, 4);
+    keydownComposer(container, "ArrowRight");
+    expect(textarea.selectionStart).toBe("Use $prose_writer".length);
+
+    const tokenStart = 4;
+    const tokenEnd = "Use $prose_writer".length;
+    textarea.setSelectionRange(tokenEnd, tokenEnd);
+    const selectBackward = keydownComposer(container, "ArrowLeft", { shiftKey: true });
+    expect(selectBackward.defaultPrevented).toBe(true);
+    expect([textarea.selectionStart, textarea.selectionEnd, textarea.selectionDirection]).toEqual([
+      tokenStart,
+      tokenEnd,
+      "backward",
+    ]);
+
+    const contractForward = keydownComposer(container, "ArrowRight", { shiftKey: true });
+    expect(contractForward.defaultPrevented).toBe(true);
+    expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([tokenEnd, tokenEnd]);
+
+    textarea.setSelectionRange(tokenStart, tokenStart);
+    const selectForward = keydownComposer(container, "ArrowRight", { shiftKey: true });
+    expect(selectForward.defaultPrevented).toBe(true);
+    expect([textarea.selectionStart, textarea.selectionEnd, textarea.selectionDirection]).toEqual([
+      tokenStart,
+      tokenEnd,
+      "forward",
+    ]);
+  });
+
+  it.each([
+    { key: "Backspace", boundary: "end" },
+    { key: "Delete", boundary: "start" },
+  ] as const)("handles $key as an atomic skill-token deletion", ({ key, boundary }) => {
+    replaceSkillCommands({
+      key: "prose_writer",
+      skillDisplayName: "Prose Writer",
+      description: "Draft polished prose.",
+    });
+    const { container } = createReactiveDraftHarness();
+    const draft = "Use $prose_writer: next";
+    inputDraftAtEnd(container, draft);
+
+    const textarea = getComposerTextarea(container);
+    const tokenStart = draft.indexOf("$prose_writer");
+    const tokenEnd = tokenStart + "$prose_writer".length;
+    const caret = boundary === "start" ? tokenStart : tokenEnd;
+    textarea.setSelectionRange(caret, caret);
+    const event = keydownComposer(container, key);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(textarea.value).toBe("Use : next");
+    expect(textarea.selectionStart).toBe(tokenStart);
+    expect(container.querySelector(".agent-chat__skill-token")).toBeNull();
+  });
+
   it("fills a selected $ skill without submitting the surrounding prompt", async () => {
     replaceSkillCommands({
       key: "prose_writer",
@@ -4325,7 +4472,7 @@ describe("chat slash menu accessibility", () => {
     expect(listbox?.querySelector(`#${activeId}`)?.getAttribute("role")).toBe("option");
   });
 
-  it("removes instant implementation badges without hiding option counts", () => {
+  it("removes secondary implementation and option-count badges", () => {
     const harness = createSlashRerenderHarness();
     const container = harness.inputAndRender(harness.container, "/");
     const stopOption = Array.from(
@@ -4334,7 +4481,7 @@ describe("chat slash menu accessibility", () => {
 
     expect(stopOption).toBeDefined();
     expect(stopOption?.querySelector(".slash-menu-badge")).toBeNull();
-    expect(container.querySelector(".slash-menu-badge")).not.toBeNull();
+    expect(container.querySelector(".slash-menu-badge")).toBeNull();
   });
 
   it("shows every command directly without an expander or keyboard footer", () => {

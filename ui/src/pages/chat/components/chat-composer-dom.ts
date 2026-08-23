@@ -124,6 +124,18 @@ export function replaceComposerPopoverAnchor(
   return next;
 }
 
+function syncTextareaOverlay(el: HTMLTextAreaElement): HTMLElement | null {
+  const overlay = el.parentElement?.querySelector<HTMLElement>(
+    ".agent-chat__composer-draft-overlay",
+  );
+  if (!overlay) {
+    return null;
+  }
+  overlay.scrollTop = el.scrollTop;
+  overlay.scrollLeft = el.scrollLeft;
+  return overlay;
+}
+
 function updateTextareaOverflow(el: HTMLTextAreaElement) {
   const scrollable = el.scrollHeight > el.clientHeight + 1;
   // Two 16px fades need enough vertical runway not to overlap into a narrow
@@ -134,9 +146,26 @@ function updateTextareaOverflow(el: HTMLTextAreaElement) {
   el.style.overflowY = scrollable ? "auto" : "hidden";
   el.toggleAttribute("data-scroll-fade-top", fadeTop);
   el.toggleAttribute("data-scroll-fade-bottom", fadeBottom);
+  const overlay = syncTextareaOverlay(el);
+  overlay?.toggleAttribute("data-scroll-fade-top", fadeTop);
+  overlay?.toggleAttribute("data-scroll-fade-bottom", fadeBottom);
 }
 
 export function adjustTextareaHeight(el: HTMLTextAreaElement) {
+  // A surface that declares the compact shape is a fixed CSS box: it holds one
+  // line whatever the draft is, so an inline height left by an earlier measured
+  // pass would silently outrank the stylesheet. Which shape a composer is in is
+  // declared in its markup, never inferred here from how much text it holds.
+  if (el.closest('[data-composer-layout="single-line"]')) {
+    el.style.height = "";
+    el.style.overflowY = "";
+    el.removeAttribute("data-scroll-fade-top");
+    el.removeAttribute("data-scroll-fade-bottom");
+    const overlay = syncTextareaOverlay(el);
+    overlay?.removeAttribute("data-scroll-fade-top");
+    overlay?.removeAttribute("data-scroll-fade-bottom");
+    return;
+  }
   const thread = el.closest(".chat")?.querySelector<HTMLElement>(".chat-thread") ?? null;
   const preserveBottomAnchor = thread
     ? captureChatSessionScrollPosition(thread).anchorToEnd
@@ -150,7 +179,10 @@ export function adjustTextareaHeight(el: HTMLTextAreaElement) {
   const computedMaxHeight = getComputedStyle(el).maxHeight.trim();
   const pixelMaxHeight = /^(\d+(?:\.\d+)?)px$/u.exec(computedMaxHeight);
   const maxHeight = pixelMaxHeight ? Number(pixelMaxHeight[1]) : 150;
-  el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`;
+  const overlay = el.parentElement?.querySelector<HTMLElement>(
+    ".agent-chat__composer-draft-overlay",
+  );
+  el.style.height = `${Math.min(Math.max(el.scrollHeight, overlay?.scrollHeight ?? 0), maxHeight)}px`;
   updateTextareaOverflow(el);
   // Once capped, the textarea can perturb the sibling transcript without
   // resizing its viewport, so ResizeObserver has no correction to apply.

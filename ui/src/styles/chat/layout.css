@@ -3420,6 +3420,73 @@ button.chat-pr__diff {
   min-width: 0;
 }
 
+/* The compact variant, for a composer whose markup declares it: the footer stops
+   being a row of its own and its three groups join the editor on one baseline,
+   so the whole surface is one pill. `order` puts the leading group ahead of the
+   editor without moving it in the DOM, where it has to stay after the editor for
+   the multiline grid. The transcript composer deliberately does not use this —
+   it declares "multiline", because a writing surface should not change kind
+   between an empty draft and a wrapped one — so this shape belongs to narrow
+   embedded composers that have no room for a second row.
+   No gap here on purpose: the groups carry their own inline spacing, so an empty
+   lede reserves nothing. */
+.agent-chat__input[data-composer-layout="single-line"] {
+  flex-direction: row;
+  align-items: center;
+  min-height: 0;
+  padding: 4px;
+}
+
+/* Pills are excluded from the shared superellipse on purpose: the shape
+   flattens a fully rounded end. Doubling the class outranks the shared
+   opt-in rule in base.css without reaching for !important. */
+.agent-chat__input.agent-chat__input[data-composer-layout="single-line"] {
+  border-radius: var(--radius-full);
+  corner-shape: round;
+}
+
+/* The editor is the one thing on this row that may not be squeezed away: the
+   middle group shrinks first, and below this floor the layout owner has already
+   switched the whole surface to the vertical shape. */
+.agent-chat__input[data-composer-layout="single-line"] .agent-chat__composer-input-row {
+  flex: 1 1 auto;
+  order: 1;
+  align-items: center;
+  min-width: 6ch;
+  padding: 0 4px;
+}
+
+.agent-chat__input[data-composer-layout="single-line"] .agent-chat__composer-footer {
+  display: contents;
+}
+
+.agent-chat__input[data-composer-layout="single-line"] .agent-chat__composer-lead {
+  order: 0;
+}
+
+.agent-chat__input[data-composer-layout="single-line"] .agent-chat__composer-mid {
+  order: 2;
+  flex: 0 1 auto;
+  padding-inline-start: 4px;
+}
+
+.agent-chat__input[data-composer-layout="single-line"] .agent-chat__composer-trail {
+  order: 3;
+  flex: 0 0 auto;
+  padding-inline-start: 4px;
+}
+
+.agent-chat__input[data-composer-layout="single-line"]
+  .agent-chat__composer-combobox
+  > :is(textarea, input, .agent-chat__composer-draft-overlay) {
+  height: var(--chat-composer-control-height);
+  min-height: var(--chat-composer-control-height);
+  max-height: var(--chat-composer-control-height);
+  padding-block: calc((var(--chat-composer-control-height) - var(--chat-composer-editor-line)) / 2);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
 .agent-chat__composer-combobox {
   position: relative;
   isolation: isolate;
@@ -3455,7 +3522,64 @@ button.chat-pr__diff {
   box-sizing: border-box;
 }
 
-.agent-chat__composer-combobox > textarea:is([data-scroll-fade-top], [data-scroll-fade-bottom]) {
+.agent-chat__composer-draft-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  box-sizing: border-box;
+  padding-block: var(--chat-composer-editor-inset-block);
+  overflow: hidden;
+  color: var(--text-strong);
+  font-family: inherit;
+  font-size: var(--chat-composer-editor-size);
+  line-height: var(--chat-composer-editor-line);
+  overflow-wrap: break-word;
+  pointer-events: none;
+  white-space: pre-wrap;
+}
+
+.agent-chat__composer-combobox > textarea.agent-chat__composer-textarea--rich {
+  position: relative;
+  z-index: 1;
+  caret-color: var(--text-strong);
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+.agent-chat__composer-combobox > textarea.agent-chat__composer-textarea--rich::selection {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+.agent-chat__skill-token {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.22em;
+  background: var(--chat-composer-surface);
+  color: var(--info);
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+
+.agent-chat__skill-token-icon {
+  display: inline-flex;
+  width: 1em;
+  height: 1em;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+}
+
+.agent-chat__skill-token-icon svg {
+  width: 1em;
+  height: 1em;
+}
+
+.agent-chat__composer-combobox
+  > :is(textarea, .agent-chat__composer-draft-overlay):is(
+    [data-scroll-fade-top],
+    [data-scroll-fade-bottom]
+  ) {
   --chat-composer-scroll-mask-top: currentColor;
   --chat-composer-scroll-mask-bottom: currentColor;
 
@@ -3475,11 +3599,13 @@ button.chat-pr__diff {
   );
 }
 
-.agent-chat__composer-combobox > textarea[data-scroll-fade-top] {
+.agent-chat__composer-combobox
+  > :is(textarea, .agent-chat__composer-draft-overlay)[data-scroll-fade-top] {
   --chat-composer-scroll-mask-top: transparent;
 }
 
-.agent-chat__composer-combobox > textarea[data-scroll-fade-bottom] {
+.agent-chat__composer-combobox
+  > :is(textarea, .agent-chat__composer-draft-overlay)[data-scroll-fade-bottom] {
   --chat-composer-scroll-mask-bottom: transparent;
 }
 
@@ -4079,6 +4205,10 @@ button.chat-pr__diff {
 
 .agent-chat__capability-menu-switch {
   pointer-events: none;
+}
+
+.agent-chat__capability-menu-toggle[type="checkbox"]::part(checkmark) {
+  display: none;
 }
 
 .agent-chat__capability-menu-subrow::part(base) {
@@ -5364,25 +5494,70 @@ button.chat-pr__diff {
 }
 
 .slash-menu {
+  --slash-menu-max-height: min(42vh, 336px);
+
   position: absolute;
-  bottom: 100%;
+  bottom: calc(100% + 10px);
   left: 0;
   right: 0;
-  max-height: 288px;
+  max-height: var(--slash-menu-max-height);
   overflow: hidden;
-  background: var(--bg-elevated);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
-  box-shadow: var(--overlay-shadow);
+  font-family: var(--font-body);
+  background: var(--chat-composer-surface);
+  border: 1px solid var(--chat-composer-hairline);
   z-index: 30;
-  margin-bottom: 4px;
+}
+
+.agent-chat__input > .slash-menu {
+  border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+  corner-shape: superellipse(1.5);
+}
+
+.agent-chat__input:has(> .slash-menu) {
+  z-index: 5;
 }
 
 .slash-menu__scroll {
   box-sizing: border-box;
-  max-height: inherit;
+  max-height: calc(var(--slash-menu-max-height) - 12px);
+  margin: 6px;
   overflow-y: auto;
-  padding: var(--menu-padding);
+  padding-right: 2px;
+  scrollbar-color: color-mix(in srgb, var(--text-strong) 24%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+.slash-menu__scroll[data-scrollable="true"] {
+  padding-right: 6px;
+}
+
+.slash-menu__scroll[data-scrollable="true"][data-at-start="true"][data-at-end="false"] {
+  mask-image: linear-gradient(to bottom, black 0, black calc(100% - 10px), transparent);
+}
+
+.slash-menu__scroll[data-scrollable="true"][data-at-start="false"][data-at-end="false"] {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    black 10px,
+    black calc(100% - 10px),
+    transparent
+  );
+}
+
+.slash-menu__scroll[data-scrollable="true"][data-at-start="false"][data-at-end="true"] {
+  mask-image: linear-gradient(to bottom, transparent, black 10px, black 100%);
+}
+
+.slash-menu__scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.slash-menu__scroll::-webkit-scrollbar-thumb {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-strong) 24%, transparent);
+  background-clip: padding-box;
 }
 
 .slash-menu-group + .slash-menu-group {
@@ -5399,51 +5574,53 @@ button.chat-pr__diff {
   color: var(--muted);
 }
 
-.slash-menu-item {
+.slash-menu .slash-menu-item {
   display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  grid-template-columns: 15px minmax(0, 1fr);
   align-items: center;
-  column-gap: 16px;
-  min-height: var(--menu-item-height);
+  column-gap: 10px;
+  min-height: 34px;
   padding: 0 8px;
-  border-radius: var(--menu-item-radius);
+  border-radius: calc(11px * var(--openclaw-corner-radius-scale));
+  corner-shape: superellipse(1.5);
   transition: background var(--duration-fast) ease;
 }
 
 .slash-menu-item:hover,
 .slash-menu-item--active {
-  background: color-mix(in srgb, var(--bg-hover) 52%, transparent);
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
 
 .slash-menu-leading,
-.slash-menu-trailing {
+.slash-menu-trailing,
+.slash-menu-copy {
   display: flex;
   align-items: center;
   min-width: 0;
+  gap: 7px;
 }
 
-.slash-menu-leading {
-  gap: 8px;
-}
-
-.slash-menu-trailing {
-  justify-content: flex-end;
-  gap: 8px;
+.slash-menu-copy {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+  font-family: var(--font-body);
 }
 
 .slash-menu-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
   flex-shrink: 0;
-  color: var(--muted);
+  color: var(--chat-composer-secondary);
 }
 
 .slash-menu-icon svg {
-  width: 13px;
-  height: 13px;
+  width: 12px;
+  height: 12px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.5px;
@@ -5453,13 +5630,19 @@ button.chat-pr__diff {
 
 .slash-menu-name {
   flex-shrink: 0;
-  max-width: calc(100% - 24px);
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: var(--control-ui-text-sm);
-  font-weight: 500;
-  color: var(--text);
+  font-family: var(--font-body);
+  font-weight: 550;
+  color: var(--text-strong);
   white-space: nowrap;
+}
+
+.slash-menu-name mark {
+  color: inherit;
+  background: transparent;
 }
 
 .slash-menu-args {
@@ -5467,27 +5650,27 @@ button.chat-pr__diff {
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: var(--control-ui-text-xs);
-  /* Full-opacity --muted keeps slash-arg hints at WCAG AA on dark surfaces. */
-  color: var(--muted);
+  color: var(--chat-composer-tertiary);
+  font-weight: 400;
   white-space: nowrap;
 }
 
 .slash-menu-desc {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: right;
   font-size: var(--control-ui-text-sm);
+  font-family: var(--font-body);
   color: var(--muted);
 }
 
-.slash-menu-badge {
-  font-size: var(--control-ui-text-xs);
-  font-weight: 500;
-  color: var(--muted);
-  white-space: nowrap;
-  flex-shrink: 0;
+@media (max-width: 640px) {
+  .slash-menu-copy {
+    gap: 8px;
+  }
 }
 
 .chat-attachments-preview {
