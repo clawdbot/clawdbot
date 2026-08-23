@@ -2428,7 +2428,7 @@ describe("prepareCliRunContext", () => {
 
     expect(context.params.prompt).toBe("System: background command finished.");
     expect(context.params.transcriptPrompt).toBe("");
-    expect(context.openClawHistoryPrompt).not.toContain("quoted channel history");
+    expect(context.openClawHistoryPrompt ?? "").not.toContain("quoted channel history");
   });
 
   it("retains channel context for bodyless interactive CLI turns", async () => {
