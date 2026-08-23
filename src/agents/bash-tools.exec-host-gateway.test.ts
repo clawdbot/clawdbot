@@ -1735,35 +1735,41 @@ describe("processGatewayAllowlist", () => {
     expect(result.pendingResult?.details.status).toBe("approval-pending");
   });
 
-  it("requests human approval when auto-review cannot bind a single parsed command", async () => {
-    requiresExecApprovalMock.mockReturnValue(true);
-    evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
-      allowlistMatches: [],
-      analysisOk: true,
-      allowlistSatisfied: false,
-      segments: [
-        { raw: "echo ok", resolution: null, argv: ["echo", "ok"] },
-        { raw: "pwd", resolution: null, argv: ["pwd"] },
-      ],
-      segmentAllowlistEntries: [],
-    });
-    resolveExecHostApprovalContextMock.mockReturnValue({
-      approvals: { allowlist: [], file: { version: 1, agents: {} } },
-      hostSecurity: "allowlist",
-      hostAsk: "on-miss",
-      askFallback: "deny",
-    });
+  it.runIf(process.platform !== "win32")(
+    "auto-reviews an enforceable multi-command plan without prompting",
+    async () => {
+      const command = "node --version && node --version";
+      const { authorizationPlan } = await configurePlanBackedCommand({ command });
+      const candidates = authorizationPlan.groups.flatMap((group) => group.candidates);
+      const executionPlan = candidates.map((candidate) => ({
+        argv: candidate.sourceSegment.argv,
+        resolvedPath:
+          candidate.sourceSegment.resolution?.execution.resolvedRealPath ??
+          candidate.sourceSegment.resolution?.execution.resolvedPath,
+      }));
+      const enforced = buildAuthorizedShellCommandFromPlan({
+        plan: authorizationPlan,
+        mode: "enforced",
+        segmentSatisfiedBy: candidates.map(() => null),
+      });
+      expect(enforced.ok).toBe(true);
+      if (!enforced.ok) {
+        throw new Error(enforced.reason);
+      }
 
-    const result = await runGatewayAllowlist({
-      command: "echo ok; pwd",
-      ask: "on-miss",
-      autoReview: true,
-    });
+      const result = await runGatewayAllowlist({
+        command,
+        ask: "on-miss",
+        autoReview: true,
+      });
 
-    expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
-    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
-    expect(result.pendingResult?.details.status).toBe("approval-pending");
-  });
+      expect(defaultExecAutoReviewerMock).toHaveBeenCalledWith(
+        expect.objectContaining({ command, executionPlan }),
+      );
+      expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+      expect(result).toEqual({ execCommandOverride: enforced.command });
+    },
+  );
 
   it("fails closed before approval when the executable cannot be resolved", async () => {
     const command = "openclaw-definitely-missing-executable --version";

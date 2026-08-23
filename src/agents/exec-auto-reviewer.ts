@@ -55,6 +55,7 @@ function stringifyInput(input: ExecAutoReviewInput): string {
       command: input.command,
       argv: input.argv,
       resolvedPath: input.resolvedPath,
+      executionPlan: input.executionPlan,
       cwd: input.cwd,
       envKeys: input.envKeys,
       host: input.host,
@@ -105,6 +106,7 @@ function hasReviewerDirective(input: ExecAutoReviewInput): boolean {
     input.command,
     ...(input.argv ?? []),
     input.resolvedPath ?? "",
+    ...(input.executionPlan ?? []).flatMap((step) => [step.resolvedPath].concat(step.argv)),
     input.cwd ?? "",
     ...(input.envKeys ?? []),
   ];

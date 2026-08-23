@@ -37,6 +37,7 @@ import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization
 import {
   defaultExecAutoReviewer,
   resolveExecAutoReviewDecision,
+  type ExecAutoReviewPlanStep,
   type ExecAutoReviewer,
   type ExecAutoReviewInput,
 } from "../infra/exec-auto-review.js";
@@ -223,6 +224,33 @@ function resolveGatewayEnforcedCommand(params: {
           segmentSatisfiedBy: params.segmentSatisfiedBy,
         })
       : { ok: false, reason: "authorization plan unavailable" };
+}
+
+function resolveGatewayAutoReviewPlan(params: {
+  authorizationPlan?: ExecAuthorizationPlan;
+  segmentSatisfiedBy: readonly ExecSegmentSatisfiedBy[];
+  workdir: string;
+}): ExecAutoReviewPlanStep[] | undefined {
+  if (!params.authorizationPlan?.ok) {
+    return undefined;
+  }
+  const executionPlan: ExecAutoReviewPlanStep[] = [];
+  const candidates = params.authorizationPlan.groups.flatMap((group) => group.candidates);
+  for (const [index, candidate] of candidates.entries()) {
+    const segment = candidate.sourceSegment;
+    if (params.segmentSatisfiedBy[index] === "safeBuiltins") {
+      continue;
+    }
+    if (segment.resolution?.policyBlocked === true || isBlockedShellWrapperCommand(segment.argv)) {
+      return undefined;
+    }
+    const resolvedPath = resolveExecutionTargetTrustPath(segment.resolution, params.workdir);
+    if (!resolvedPath) {
+      return undefined;
+    }
+    executionPlan.push({ argv: segment.argv, resolvedPath });
+  }
+  return executionPlan.length > 0 ? executionPlan : undefined;
 }
 
 function formatOutcomeExitLabel(outcome: { exitCode: number | null; timedOut: boolean }): string {
@@ -846,29 +874,21 @@ export async function processGatewayAllowlist(
               cwd: params.workdir,
             })
         : undefined;
-    const [autoReviewSegment] = allowlistEval.segments;
-    const autoReviewArgv =
-      allowlistEval.segments.length === 1 &&
-      autoReviewSegment !== undefined &&
-      autoReviewSegment.resolution?.policyBlocked !== true &&
-      // Shell startup can execute unreviewed profile code before its bound payload.
-      !isBlockedShellWrapperCommand(autoReviewSegment.argv) &&
-      (autoReviewSegment.raw === undefined ||
-        autoReviewSegment.raw.trim() === params.command.trim())
-        ? autoReviewSegment.argv
-        : undefined;
-    const autoReviewHasBoundCommand = analysisOk && autoReviewArgv !== undefined;
+    const autoReviewExecutionPlan = analysisOk
+      ? resolveGatewayAutoReviewPlan({
+          authorizationPlan: allowlistEval.authorizationPlan,
+          segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
+          workdir: params.workdir,
+        })
+      : undefined;
+    const autoReviewSingleStep =
+      autoReviewExecutionPlan?.length === 1 ? autoReviewExecutionPlan[0] : undefined;
     // A model approval is valid only for the executable resolved during review;
-    // otherwise a later PATH lookup could run different code.
+    // compound plans bind every executable into the enforced command too.
     const autoReviewEnforcedCommand =
       gatewayEnforcedCommand?.ok === true ? gatewayEnforcedCommand.command : undefined;
-    const autoReviewResolvedPath = autoReviewHasBoundCommand
-      ? resolveExecutionTargetTrustPath(autoReviewSegment?.resolution ?? null, params.workdir)
-      : undefined;
     const autoReviewHasExecutableBinding =
-      autoReviewHasBoundCommand &&
-      autoReviewEnforcedCommand !== undefined &&
-      autoReviewResolvedPath !== undefined;
+      autoReviewExecutionPlan !== undefined && autoReviewEnforcedCommand !== undefined;
     const canAutoReviewApprovalMiss =
       params.autoReview === true &&
       hostAsk !== "always" &&
@@ -883,8 +903,9 @@ export async function processGatewayAllowlist(
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
       const pendingDecision = resolveExecAutoReviewDecision(reviewer, {
         command: params.command,
-        argv: autoReviewArgv,
-        resolvedPath: autoReviewResolvedPath,
+        argv: autoReviewSingleStep?.argv,
+        resolvedPath: autoReviewSingleStep?.resolvedPath,
+        executionPlan: autoReviewSingleStep ? undefined : autoReviewExecutionPlan,
         cwd: params.workdir,
         envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
         host: "gateway",
@@ -949,10 +970,7 @@ export async function processGatewayAllowlist(
         });
         await commitExecutionAuthorization({
           source: "auto-review",
-          resolvedPath: resolveApprovalAuditTrustPath(
-            allowlistEval.segments[0]?.resolution ?? null,
-            params.workdir,
-          ),
+          resolvedPath: autoReviewSingleStep?.resolvedPath,
         });
         return {
           execCommandOverride: autoReviewEnforcedCommand,

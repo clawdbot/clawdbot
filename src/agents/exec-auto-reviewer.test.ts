@@ -301,7 +301,18 @@ describe("createModelExecAutoReviewer", () => {
       },
     });
 
-    await expect(reviewer(input)).resolves.toEqual({
+    await expect(
+      reviewer({
+        ...input,
+        command: "git status && git diff --stat",
+        argv: undefined,
+        resolvedPath: undefined,
+        executionPlan: [
+          { argv: ["git", "status"], resolvedPath: "/usr/bin/git" },
+          { argv: ["git", "diff", "--stat"], resolvedPath: "/usr/bin/git" },
+        ],
+      }),
+    ).resolves.toEqual({
       decision: "ask",
       risk: "high",
       rationale: "network side effect",
@@ -327,6 +338,7 @@ describe("createModelExecAutoReviewer", () => {
         }),
       }),
     );
+    expect(capturedPrompt).toContain('"executionPlan"');
     expect(capturedPrompt).toContain('"resolvedPath": "/usr/bin/git"');
     expect(capturedPrompt).not.toContain("sessionKey");
   });

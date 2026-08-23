@@ -22,11 +22,18 @@ export type ExecAutoReviewDecision =
 /** Execution host whose command policy context is being reviewed. */
 export type ExecAutoReviewHost = "gateway" | "node" | "codex-app-server";
 
+/** One executable bound into a gateway-enforced compound command. */
+export type ExecAutoReviewPlanStep = {
+  argv: readonly string[];
+  resolvedPath: string;
+};
+
 /** Command and policy facts supplied to an exec auto-reviewer. */
 export type ExecAutoReviewInput = {
   command: string;
   argv?: readonly string[];
   resolvedPath?: string | null;
+  executionPlan?: readonly ExecAutoReviewPlanStep[];
   cwd?: string | null;
   envKeys?: readonly string[];
   host: ExecAutoReviewHost;
