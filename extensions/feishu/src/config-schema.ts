@@ -6,6 +6,7 @@ import {
   buildChannelConfigSchema,
   buildGroupEntrySchema,
   buildMultiAccountChannelSchema,
+  requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
@@ -316,49 +317,55 @@ export const FeishuConfigSchema = buildMultiAccountChannelSchema(FeishuConfigSch
     }
   }
 
+  const dmPolicy = value.dmPolicy ?? "pairing";
+  requireOpenAllowFrom({
+    policy: dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message: 'channels.feishu.dmPolicy="open" requires channels.feishu.allowFrom to include "*"',
+  });
+
   for (const [accountId, account] of Object.entries(value.accounts ?? {})) {
     if (!account) {
       continue;
     }
     const accountConnectionMode = account.connectionMode ?? defaultConnectionMode;
-    if (accountConnectionMode !== "webhook") {
-      continue;
+    if (accountConnectionMode === "webhook") {
+      const accountVerificationTokenConfigured =
+        hasConfiguredSecretInput(account.verificationToken) || defaultVerificationTokenConfigured;
+      const accountEncryptKeyConfigured =
+        hasConfiguredSecretInput(account.encryptKey) || defaultEncryptKeyConfigured;
+      if (!accountVerificationTokenConfigured) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["accounts", accountId, "verificationToken"],
+          message:
+            `channels.feishu.accounts.${accountId}.connectionMode="webhook" requires ` +
+            "a verificationToken (account-level or top-level)",
+        });
+      }
+      if (!accountEncryptKeyConfigured) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["accounts", accountId, "encryptKey"],
+          message:
+            `channels.feishu.accounts.${accountId}.connectionMode="webhook" requires ` +
+            "an encryptKey (account-level or top-level)",
+        });
+      }
     }
-    const accountVerificationTokenConfigured =
-      hasConfiguredSecretInput(account.verificationToken) || defaultVerificationTokenConfigured;
-    const accountEncryptKeyConfigured =
-      hasConfiguredSecretInput(account.encryptKey) || defaultEncryptKeyConfigured;
-    if (!accountVerificationTokenConfigured) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["accounts", accountId, "verificationToken"],
-        message:
-          `channels.feishu.accounts.${accountId}.connectionMode="webhook" requires ` +
-          "a verificationToken (account-level or top-level)",
-      });
-    }
-    if (!accountEncryptKeyConfigured) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["accounts", accountId, "encryptKey"],
-        message:
-          `channels.feishu.accounts.${accountId}.connectionMode="webhook" requires ` +
-          "an encryptKey (account-level or top-level)",
-      });
-    }
-  }
 
-  if (value.dmPolicy === "open") {
-    const allowFrom = value.allowFrom ?? [];
-    const hasWildcard = allowFrom.some((entry) => String(entry).trim() === "*");
-    if (!hasWildcard) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["allowFrom"],
-        message:
-          'channels.feishu.dmPolicy="open" requires channels.feishu.allowFrom to include "*"',
-      });
-    }
+    const effectiveDmPolicy = account.dmPolicy ?? dmPolicy;
+    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
+    requireOpenAllowFrom({
+      policy: effectiveDmPolicy,
+      allowFrom: effectiveAllowFrom,
+      ctx,
+      path: ["accounts", accountId, "allowFrom"],
+      message:
+        'channels.feishu.accounts.*.dmPolicy="open" requires channels.feishu.accounts.*.allowFrom (or channels.feishu.allowFrom) to include "*"',
+    });
   }
 });
 
