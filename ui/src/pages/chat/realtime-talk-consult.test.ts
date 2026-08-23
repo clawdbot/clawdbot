@@ -14,6 +14,14 @@ function requireFirstMockCall(calls: readonly unknown[][], label: string): unkno
   return call;
 }
 
+function currentGatewayToolCallResult(runId = "run-1") {
+  return {
+    runId,
+    agentId: "main",
+    agentSessionKey: "agent:main:main",
+  };
+}
+
 describe("RealtimeTalkSession consult handoff", () => {
   it("submits realtime consults through the Gateway tool-call endpoint", async () => {
     const order: string[] = [];
@@ -31,7 +39,7 @@ describe("RealtimeTalkSession consult handoff", () => {
             },
           });
         });
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       throw new Error(`unexpected request: ${method}`);
     });
@@ -113,8 +121,12 @@ describe("RealtimeTalkSession consult handoff", () => {
   });
 
   it("keeps the consult acknowledgement alive and aborts the returned run after cancellation", async () => {
-    let acknowledge!: (value: { runId: string }) => void;
-    const pendingAcknowledgement = new Promise<{ runId: string }>((resolve) => {
+    let acknowledge!: (value: { runId: string; agentId: string; agentSessionKey: string }) => void;
+    const pendingAcknowledgement = new Promise<{
+      runId: string;
+      agentId: string;
+      agentSessionKey: string;
+    }>((resolve) => {
       acknowledge = resolve;
     });
     const request = vi.fn(
@@ -135,7 +147,7 @@ describe("RealtimeTalkSession consult handoff", () => {
     const consult = submitRealtimeTalkConsult({
       ctx: {
         client: { request },
-        sessionKey: "agent:main:main",
+        sessionKey: "main",
         callbacks: {},
       } as never,
       callId: "call-1",
@@ -146,14 +158,48 @@ describe("RealtimeTalkSession consult handoff", () => {
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
 
     controller.abort();
-    acknowledge({ runId: "run-1" });
+    acknowledge({
+      runId: "run-1",
+      agentId: "device",
+      agentSessionKey: "agent:device:main",
+    });
     await consult;
 
     expect(request).toHaveBeenCalledWith("chat.abort", {
-      sessionKey: "agent:main:main",
+      sessionKey: "agent:device:main",
+      agentId: "device",
       runId: "run-1",
     });
     expect(submit).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["both fields", { runId: "run-incomplete" }],
+    ["agentId", { runId: "run-incomplete", agentSessionKey: "agent:main:main" }],
+    ["agentSessionKey", { runId: "run-incomplete", agentId: "main" }],
+  ])("rejects current-Gateway acknowledgements missing %s", async (_label, acknowledgement) => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.client.toolCall") {
+        return acknowledgement;
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const submit = vi.fn();
+
+    await submitRealtimeTalkConsult({
+      ctx: {
+        client: { request },
+        sessionKey: "main",
+        callbacks: {},
+      } as never,
+      callId: "call-incomplete",
+      args: { question: "Check status" },
+      submit,
+    });
+
+    expect(submit).toHaveBeenCalledWith("call-incomplete", {
+      error: "OpenClaw realtime tool call did not return a complete agent identity",
+    });
   });
 
   it("prefers source-reply final text over an earlier empty Talk consult final", async () => {
@@ -183,7 +229,7 @@ describe("RealtimeTalkSession consult handoff", () => {
             },
           });
         });
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       if (method === "agent.wait") {
         return { runId: "run-1", status: "ok" };
@@ -245,7 +291,7 @@ describe("RealtimeTalkSession consult handoff", () => {
               });
             }, 300);
           }, 0);
-          return { runId: "run-1" };
+          return currentGatewayToolCallResult();
         }
         if (method === "agent.wait") {
           return new Promise(() => {});
@@ -317,7 +363,7 @@ describe("RealtimeTalkSession consult handoff", () => {
             });
           });
         });
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       if (method === "agent.wait") {
         return await waitResult;
@@ -386,7 +432,7 @@ describe("RealtimeTalkSession consult handoff", () => {
               });
             }, 300);
           }, 0);
-          return { runId: "run-1" };
+          return currentGatewayToolCallResult();
         }
         if (method === "agent.wait") {
           return { runId: "run-1", status: "ok" };
@@ -438,7 +484,7 @@ describe("RealtimeTalkSession consult handoff", () => {
             },
           });
         });
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       if (method === "agent.wait") {
         return { runId: "run-1", status: "ok" };
@@ -528,7 +574,7 @@ describe("RealtimeTalkSession consult handoff", () => {
             },
           });
         });
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       if (method === "agent.wait") {
         return waitResult;
@@ -579,7 +625,7 @@ describe("RealtimeTalkSession consult handoff", () => {
             },
           });
         });
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       throw new Error(`unexpected request: ${method}`);
     });
@@ -624,7 +670,7 @@ describe("RealtimeTalkSession consult handoff", () => {
             },
           });
         });
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       throw new Error(`unexpected request: ${method}`);
     });

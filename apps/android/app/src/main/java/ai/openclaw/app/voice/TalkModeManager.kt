@@ -880,12 +880,7 @@ class TalkModeManager internal constructor(
     val runId = obj["runId"].asStringOrNull() ?: return
     val state = obj["state"].asStringOrNull() ?: return
 
-    // Only speak events for the active session — prevents TTS from other
-    // sessions/channels leaking into voice mode (privacy + correctness).
     val eventSession = obj["sessionKey"]?.asStringOrNull()
-    val activeSession = mainSessionKey.ifBlank { "main" }
-    if (eventSession != null && eventSession != activeSession) return
-
     if (
       realtimeAgentCoordinator.handleChatEvent(
         sessionKey = eventSession,

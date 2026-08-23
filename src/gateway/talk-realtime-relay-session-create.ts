@@ -54,10 +54,7 @@ import {
   RelayToolCallLedger,
 } from "./talk-realtime-relay-tool-call-ledger.js";
 import { enqueueRelayVoiceTranscript } from "./talk-realtime-relay-voice.js";
-import {
-  forgetUnifiedTalkSession,
-  registerTalkConnectionCleanup,
-} from "./talk-session-registry.js";
+import { registerTalkConnectionCleanup } from "./talk-session-registry.js";
 import { resolveTalkSessionTarget } from "./talk-session-target.js";
 
 // The relay contract is 20 ms of 24 kHz mono PCM16 per browser event.

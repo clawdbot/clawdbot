@@ -1,5 +1,6 @@
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { buildAgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ReplyDispatcherOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import { readSessionTranscriptWatermark } from "../../config/sessions/session-accessor.js";
@@ -135,6 +136,18 @@ export function createChatSendReplyDispatch(params: {
     channel: INTERNAL_MESSAGE_CHANNEL,
   });
   const deliveredReplies: DeliveredChatSendReply[] = [];
+  const buildTerminalReplySnapshot = () => {
+    const terminalPayloads = deliveredReplies
+      .filter((entry) => entry.kind === "final" && entry.payload.isError !== true)
+      .map((entry) => entry.payload);
+    return buildAgentRunTerminalReplySnapshot({
+      visibleText: buildTranscriptReplyText(terminalPayloads),
+      rawText: terminalPayloads
+        .map((payload) => payload.text)
+        .filter((text): text is string => typeof text === "string")
+        .join("\n"),
+    });
+  };
   const finalizedAgentMediaTranscriptKeys = new Set<string>();
   let appendedWebchatAgentMedia = false;
   const agentMediaTranscriptKey = (payload: ReplyPayload): string => {
@@ -401,6 +414,7 @@ export function createChatSendReplyDispatch(params: {
     });
   };
   return {
+    buildTerminalReplySnapshot,
     captureAgentTranscriptStart,
     deliveredReplies,
     dispatcherOptions,

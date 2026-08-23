@@ -640,6 +640,8 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       {
         runId: result.runId,
         idempotencyKey: result.idempotencyKey,
+        agentId,
+        agentSessionKey,
       },
       undefined,
     );

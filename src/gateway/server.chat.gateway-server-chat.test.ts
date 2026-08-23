@@ -6,6 +6,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -2423,6 +2424,45 @@ describe("gateway server chat", () => {
       const runId = "idem-wait-chat-1";
       await sendChatAndExpectStarted(runId);
       await waitForAgentRunOk(runId);
+    });
+  });
+
+  test("agent.wait exposes the authoritative terminal reply owned by chat.send", async () => {
+    await withMainSessionStore(async () => {
+      const runId = "idem-wait-chat-terminal-reply";
+      const runtimeFinal = setReplyPayloadMetadata(
+        { text: "Runtime-owned final" },
+        {
+          assistantTranscriptOwned: true,
+          assistantTranscriptIdempotencyKey: `runtime-finalizer:${runId}`,
+        },
+      );
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendFinalReply: (payload: { text: string }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+            replyOptions?: { onAgentRunStart?: (runId: string) => void };
+          },
+        ];
+        params.replyOptions?.onAgentRunStart?.(runId);
+        params.dispatcher.sendFinalReply(runtimeFinal);
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return { queuedFinal: true, counts: params.dispatcher.getQueuedCounts() };
+      });
+
+      await sendChatAndExpectStarted(runId, "return an authoritative final");
+      const wait = await waitForAgentRunOk(runId);
+
+      expect(wait.payload?.terminalReply).toEqual({
+        disposition: "visible",
+        text: "Runtime-owned final",
+      });
     });
   });
 

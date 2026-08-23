@@ -452,6 +452,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             });
           }
           const shouldBroadcastAgentError = hasReturnedAgentError && !broadcastedSourceReplyFinal;
+          const terminalReply = replyDispatch.buildTerminalReplySnapshot();
           if (shouldBroadcastAgentError) {
             broadcastChatError({
               context,
@@ -480,7 +481,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                       status: "error" as const,
                       summary: returnedAgentErrorMessage ?? "agent returned an error payload",
                     }
-                  : { runId: clientRunId, status: "ok" as const },
+                  : { runId: clientRunId, status: "ok" as const, terminalReply },
                 ...(returnedAgentError ? { error: returnedAgentError } : {}),
               },
             });

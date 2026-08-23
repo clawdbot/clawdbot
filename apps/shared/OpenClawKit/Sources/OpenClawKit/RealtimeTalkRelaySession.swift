@@ -122,6 +122,68 @@ public enum RealtimeTalkRelayTermination: Equatable, Sendable {
     case outputPlaybackOverflow
 }
 
+struct RealtimeTalkToolCallStartResponse: Decodable {
+    let runId: String?
+    let idempotencyKey: String?
+    let agentId: String?
+    let agentSessionKey: String?
+
+    func resolvedRunIdentity(fallbackSessionKey: String) -> RealtimeTalkRunIdentity? {
+        guard let runId = Self.nonEmpty(self.runId) ?? Self.nonEmpty(self.idempotencyKey) else {
+            return nil
+        }
+        let returnedAgentId = Self.nonEmpty(self.agentId)
+        let returnedSessionKey = Self.nonEmpty(self.agentSessionKey)
+        guard (returnedAgentId == nil) == (returnedSessionKey == nil) else { return nil }
+        let usesLegacyTarget = returnedAgentId == nil
+        guard let agentSessionKey = returnedSessionKey ?? Self.nonEmpty(fallbackSessionKey) else {
+            return nil
+        }
+        return RealtimeTalkRunIdentity(
+            runId: runId,
+            agentSessionKey: agentSessionKey,
+            agentId: returnedAgentId,
+            acceptsLegacyMainAlias: usesLegacyTarget)
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+struct RealtimeTalkRunIdentity: Hashable, Sendable {
+    let runId: String
+    let agentSessionKey: String
+    let agentId: String?
+    private let acceptsLegacyMainAlias: Bool
+
+    init(
+        runId: String,
+        agentSessionKey: String,
+        agentId: String?,
+        acceptsLegacyMainAlias: Bool)
+    {
+        self.runId = runId
+        self.agentSessionKey = agentSessionKey
+        self.agentId = agentId
+        self.acceptsLegacyMainAlias = acceptsLegacyMainAlias
+    }
+
+    func matches(sessionKey: String?) -> Bool {
+        guard let incoming = sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !incoming.isEmpty
+        else { return true }
+        let expected = self.agentSessionKey
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if incoming == expected { return true }
+        guard self.acceptsLegacyMainAlias else { return false }
+        return (incoming == "agent:main:main" && expected == "main") ||
+            (incoming == "main" && expected == "agent:main:main")
+    }
+}
+
 private enum RealtimeAudioSendOutcome {
     case sent, inactive, saturated, failed(String)
 }
@@ -187,11 +249,6 @@ public final class RealtimeTalkRelaySession {
         }
     }
 
-    private struct ToolCallStartResponse: Decodable {
-        let runId: String?
-        let idempotencyKey: String?
-    }
-
     private struct ChatCompletionResult {
         let text: String?
         let failed: Bool
@@ -199,6 +256,7 @@ public final class RealtimeTalkRelaySession {
 
     private struct RelayChatEvent: Decodable {
         let runId: String?
+        let sessionKey: String?
         let state: String?
         let message: AnyCodable?
     }
@@ -810,17 +868,19 @@ extension RealtimeTalkRelaySession {
             let startResponse = try await self.requestJSON(
                 method: "talk.client.toolCall",
                 payload: startPayload,
-                decodeAs: ToolCallStartResponse.self,
+                decodeAs: RealtimeTalkToolCallStartResponse.self,
                 timeoutSeconds: 30,
                 lifecycleGeneration: lifecycleGeneration)
-            guard let runId = startResponse.runId ?? startResponse.idempotencyKey else {
+            guard let run = startResponse.resolvedRunIdentity(
+                fallbackSessionKey: self.options.sessionKey)
+            else {
                 throw NSError(domain: "RealtimeTalkRelay", code: 3, userInfo: [
                     NSLocalizedDescriptionKey: String(
-                        localized: "Realtime tool call did not return a run id"),
+                        localized: "Realtime tool call did not return a complete run identity"),
                 ])
             }
             let completion = await self.waitForChatCompletion(
-                runId: runId,
+                run: run,
                 stream: completionStream,
                 timeoutSeconds: 120)
             try await self.ensureCurrentLifecycle(lifecycleGeneration)
@@ -913,7 +973,7 @@ extension RealtimeTalkRelaySession {
     }
 
     private func waitForChatCompletion(
-        runId: String,
+        run: RealtimeTalkRunIdentity,
         stream: AsyncStream<EventFrame>,
         timeoutSeconds: Int) async -> ChatCompletionResult
     {
@@ -926,7 +986,8 @@ extension RealtimeTalkRelaySession {
                     guard event.event == "chat",
                           let payload = event.payload,
                           let chatEvent = try? GatewayPayloadDecoding.decode(payload, as: RelayChatEvent.self),
-                          chatEvent.runId == runId
+                          chatEvent.runId == run.runId,
+                          run.matches(sessionKey: chatEvent.sessionKey)
                     else { continue }
                     if chatEvent.state == "final" {
                         return ChatCompletionResult(

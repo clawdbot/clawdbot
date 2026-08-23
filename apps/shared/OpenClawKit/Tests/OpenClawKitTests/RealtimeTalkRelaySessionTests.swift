@@ -538,6 +538,32 @@ struct RealtimeTalkRelaySessionTests {
         return session
     }
 
+    @Test func `tool acknowledgement resolves current and legacy identities`() throws {
+        let current = try JSONDecoder().decode(
+            RealtimeTalkToolCallStartResponse.self,
+            from: Data(
+                #"{"runId":"run-1","agentId":"device","agentSessionKey":"agent:device:main"}"#.utf8))
+        let currentIdentity = try #require(current.resolvedRunIdentity(fallbackSessionKey: "main"))
+        #expect(currentIdentity.agentId == "device")
+        #expect(currentIdentity.agentSessionKey == "agent:device:main")
+        #expect(!currentIdentity.matches(sessionKey: "main"))
+
+        let legacy = try JSONDecoder().decode(
+            RealtimeTalkToolCallStartResponse.self,
+            from: Data(#"{"runId":"run-legacy"}"#.utf8))
+        let legacyIdentity = try #require(legacy.resolvedRunIdentity(fallbackSessionKey: "main"))
+        #expect(legacyIdentity.agentId == nil)
+        #expect(legacyIdentity.matches(sessionKey: "agent:main:main"))
+    }
+
+    @Test func `tool acknowledgement rejects partial agent identity`() throws {
+        let partial = try JSONDecoder().decode(
+            RealtimeTalkToolCallStartResponse.self,
+            from: Data(#"{"runId":"run-1","agentId":"device"}"#.utf8))
+
+        #expect(partial.resolvedRunIdentity(fallbackSessionKey: "main") == nil)
+    }
+
     @Test func `transcript callback carries typed partial and final values`() async {
         var transcripts: [RealtimeTalkTranscript] = []
         let session = RealtimeTalkRelaySession(

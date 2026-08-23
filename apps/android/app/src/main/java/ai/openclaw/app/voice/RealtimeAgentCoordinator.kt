@@ -23,6 +23,30 @@ internal data class RealtimeAgentSession(
 private data class RealtimeAgentRun(
   val callId: String,
   val session: RealtimeAgentSession,
+  val target: RealtimeAgentTarget,
+)
+
+private sealed interface RealtimeAgentTarget {
+  val sessionKey: String
+
+  fun matches(incomingSessionKey: String?): Boolean {
+    val incoming = incomingSessionKey?.trim()?.takeIf(String::isNotEmpty) ?: return true
+    return incoming == sessionKey
+  }
+
+  data class Canonical(
+    val agentId: String,
+    override val sessionKey: String,
+  ) : RealtimeAgentTarget
+
+  data class Legacy(
+    override val sessionKey: String,
+  ) : RealtimeAgentTarget
+}
+
+private data class RealtimeAgentRunIdentity(
+  val runId: String,
+  val target: RealtimeAgentTarget,
 )
 
 private data class RealtimeAgentCompletion(
@@ -207,7 +231,7 @@ internal class RealtimeAgentCoordinator(
       synchronized(lock) {
         if (runId in retiredRunIds) return@synchronized true
         val run = runs[runId]
-        if (run != null && (sessionKey == null || sessionKey == run.session.sessionKey)) {
+        if (run != null && run.target.matches(sessionKey)) {
           runs.remove(runId)
           retireRunLocked(runId)
           if (run.session == activeSession) {
@@ -216,7 +240,7 @@ internal class RealtimeAgentCoordinator(
           true
         } else if (run != null) {
           false
-        } else if (hasPendingCallForSessionLocked(sessionKey)) {
+        } else if (hasPendingCallForCompletionLocked(sessionKey)) {
           overflow = cacheEarlyCompletionLocked(runId, completion)
           true
         } else {
@@ -250,13 +274,14 @@ internal class RealtimeAgentCoordinator(
           if (args != null) put("args", args)
         }
       val response = requestGateway("talk.client.toolCall", params.toString(), TOOL_CALL_TIMEOUT_MILLIS)
-      val runId = parseRunId(response)
-      if (runId.isNullOrBlank()) {
+      val identity = parseRunIdentity(response, fallbackSessionKey = session.sessionKey)
+      if (identity == null) {
         val finish = finishPending(pendingCall)
         finish.unhandled.forEach(onUnhandledCompletion)
-        if (finish.canSubmitError) submitError(session, callId, "tool call returned no run id")
+        if (finish.canSubmitError) submitError(session, callId, "tool call returned incomplete run identity")
         return
       }
+      val runId = identity.runId
       if (!isPending(pendingCall)) {
         synchronized(lock) { retireRunLocked(runId) }
         return
@@ -274,30 +299,35 @@ internal class RealtimeAgentCoordinator(
           val cached = earlyCompletions.remove(runId)
           pendingCalls.remove(pendingCall)
           var errorMessage: String? = null
+          var completion: RealtimeAgentCompletion? = null
+          val unhandled = mutableListOf<RealtimeAgentUnhandledCompletion>()
           if (activeSession == session) {
-            if (cached == null) {
-              if (runId in retiredRunIds || runId in runs) {
-                errorMessage = "tool call returned a duplicate run id"
-              } else {
-                runs[runId] = RealtimeAgentRun(callId = callId, session = session)
-              }
-            } else {
+            if (runId in retiredRunIds || runId in runs) {
+              errorMessage = "tool call returned a duplicate run id"
+            } else if (cached != null && identity.target.matches(cached.sessionKey)) {
+              completion = cached
               retireRunLocked(runId)
+            } else {
+              runs[runId] = RealtimeAgentRun(callId = callId, session = session, target = identity.target)
+              if (cached != null) unhandled += cached.toUnhandled(runId)
             }
           } else {
             retireRunLocked(runId)
           }
           RealtimeAgentRunRegistration(
-            completion = cached.takeIf { activeSession == session },
+            completion = completion,
             errorMessage = errorMessage,
-            unhandled = drainEarlyCompletionsIfIdleLocked(),
+            unhandled = unhandled + drainEarlyCompletionsIfIdleLocked(),
           )
         }
       registration.unhandled.forEach(onUnhandledCompletion)
       if (registration.errorMessage != null) {
         submitError(session, callId, registration.errorMessage)
       } else if (registration.completion != null) {
-        dispatchCompletion(RealtimeAgentRun(callId = callId, session = session), registration.completion)
+        dispatchCompletion(
+          RealtimeAgentRun(callId = callId, session = session, target = identity.target),
+          registration.completion,
+        )
       }
     } catch (err: TimeoutCancellationException) {
       val finish = finishPending(pendingCall)
@@ -447,11 +477,27 @@ internal class RealtimeAgentCoordinator(
     }
   }
 
-  private fun parseRunId(payloadJson: String): String? =
+  private fun parseRunIdentity(
+    payloadJson: String,
+    fallbackSessionKey: String,
+  ): RealtimeAgentRunIdentity? =
     runCatching {
-      (json.parseToJsonElement(payloadJson) as? JsonObject)
-        ?.get("runId")
-        .asStringOrNull()
+      val result = json.parseToJsonElement(payloadJson) as? JsonObject ?: return@runCatching null
+      val runId =
+        result["runId"].asNonEmptyString()
+          ?: result["idempotencyKey"].asNonEmptyString()
+          ?: return@runCatching null
+      val agentId = result["agentId"].asNonEmptyString()
+      val agentSessionKey = result["agentSessionKey"].asNonEmptyString()
+      if ((agentId == null) != (agentSessionKey == null)) return@runCatching null
+      val target =
+        if (agentId != null && agentSessionKey != null) {
+          RealtimeAgentTarget.Canonical(agentId = agentId, sessionKey = agentSessionKey)
+        } else {
+          val legacySessionKey = fallbackSessionKey.trim().takeIf(String::isNotEmpty) ?: return@runCatching null
+          RealtimeAgentTarget.Legacy(sessionKey = legacySessionKey)
+        }
+      RealtimeAgentRunIdentity(runId = runId, target = target)
     }.getOrNull()
 
   private fun isActive(session: RealtimeAgentSession): Boolean = synchronized(lock) { activeSession == session }
@@ -485,9 +531,11 @@ internal class RealtimeAgentCoordinator(
       .also { earlyCompletions.clear() }
   }
 
-  private fun hasPendingCallForSessionLocked(
-    sessionKey: String?,
-  ): Boolean = pendingCalls.any { !it.failed && (sessionKey == null || it.session.sessionKey == sessionKey) }
+  private fun hasPendingCallForCompletionLocked(sessionKey: String?): Boolean =
+    pendingCalls.any { call ->
+      !call.failed &&
+        (call.session == activeSession || sessionKey == null || call.session.sessionKey == sessionKey)
+    }
 
   private fun cacheEarlyCompletionLocked(
     runId: String,
@@ -528,3 +576,5 @@ private fun RealtimeAgentCompletion.toUnhandled(runId: String) =
   )
 
 private fun JsonElement?.asStringOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content
+
+private fun JsonElement?.asNonEmptyString(): String? = asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)

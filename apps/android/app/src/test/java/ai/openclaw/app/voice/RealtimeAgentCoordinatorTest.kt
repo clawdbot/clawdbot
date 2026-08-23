@@ -20,23 +20,29 @@ class RealtimeAgentCoordinatorTest {
   private lateinit var calls: MutableList<GatewayCall>
 
   @Test
-  fun `consult correlates the active run and submits its final text`() =
+  fun `consult correlates the returned canonical target and submits its final text`() =
     runTest {
       val working = mutableListOf<RealtimeAgentSession>()
       val coordinator =
         coordinator(
-          responses = { method -> if (method == "talk.client.toolCall") """{"runId":"run-1"}""" else "{}" },
+          responses = { method ->
+            if (method == "talk.client.toolCall") {
+              """{"runId":"run-1","idempotencyKey":"call-1","agentId":"main","agentSessionKey":"agent:main:main"}"""
+            } else {
+              "{}"
+            }
+          },
           onWorking = working::add,
         )
-      val session = RealtimeAgentSession("relay-1", "session-1")
+      val session = RealtimeAgentSession("relay-1", "main")
       coordinator.beginSession(session)
 
       assertTrue(coordinator.consult("call-1"))
       runCurrent()
 
       assertEquals(listOf(session), working)
-      assertFalse(coordinator.complete("other-session", "run-1", "wrong"))
-      assertTrue(coordinator.complete("session-1", "run-1", "done"))
+      assertFalse(coordinator.complete("main", "run-1", "wrong target"))
+      assertTrue(coordinator.complete("agent:main:main", "run-1", "done"))
       runCurrent()
 
       val consult = calls.single { it.method == "talk.client.toolCall" }
@@ -49,19 +55,44 @@ class RealtimeAgentCoordinatorTest {
     }
 
   @Test
-  fun `early completion waits for run metadata`() =
+  fun `legacy acknowledgement keeps exact initiating session behavior`() =
+    runTest {
+      val coordinator =
+        coordinator(
+          responses = { method -> if (method == "talk.client.toolCall") """{"runId":"run-legacy"}""" else "{}" },
+        )
+      coordinator.beginSession(RealtimeAgentSession("relay-1", "main"))
+
+      coordinator.consult("call-legacy")
+      runCurrent()
+
+      assertTrue(coordinator.complete("main", "run-legacy", "legacy"))
+      runCurrent()
+
+      assertTrue(
+        calls
+          .single { it.method == "talk.session.submitToolResult" }
+          .params
+          .contains("\"text\":\"legacy\""),
+      )
+    }
+
+  @Test
+  fun `canonical early completion waits for returned run identity`() =
     runTest {
       val response = CompletableDeferred<String>()
       val coordinator =
         coordinator(
           responses = { method -> if (method == "talk.client.toolCall") response.await() else "{}" },
         )
-      coordinator.beginSession(RealtimeAgentSession("relay-1", "session-1"))
+      coordinator.beginSession(RealtimeAgentSession("relay-1", "main"))
       coordinator.consult("call-1")
       runCurrent()
 
-      assertTrue(coordinator.complete("session-1", "run-early", "early"))
-      response.complete("""{"runId":"run-early"}""")
+      assertTrue(coordinator.complete("agent:device:main", "run-early", "early"))
+      response.complete(
+        """{"runId":"run-early","idempotencyKey":"call-1","agentId":"device","agentSessionKey":"agent:device:main"}""",
+      )
       runCurrent()
 
       assertTrue(
@@ -70,6 +101,35 @@ class RealtimeAgentCoordinatorTest {
           .params
           .contains("\"text\":\"early\""),
       )
+    }
+
+  @Test
+  fun `partial canonical identity pairs are rejected`() =
+    runTest {
+      val responses =
+        listOf(
+          """{"runId":"run-agent-only","agentId":"main"}""",
+          """{"runId":"run-session-only","agentSessionKey":"agent:main:main"}""",
+        )
+      var responseIndex = 0
+      val coordinator =
+        coordinator(
+          responses = { method ->
+            if (method == "talk.client.toolCall") responses[responseIndex++] else "{}"
+          },
+        )
+      coordinator.beginSession(RealtimeAgentSession("relay-1", "main"))
+
+      coordinator.consult("call-agent-only")
+      runCurrent()
+      coordinator.consult("call-session-only")
+      runCurrent()
+
+      val results = calls.filter { it.method == "talk.session.submitToolResult" }
+      assertEquals(2, results.size)
+      assertTrue(results.all { it.params.contains("tool call returned incomplete run identity") })
+      assertFalse(coordinator.complete("main", "run-agent-only", "wrong"))
+      assertFalse(coordinator.complete("agent:main:main", "run-session-only", "wrong"))
     }
 
   @Test

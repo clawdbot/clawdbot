@@ -2586,7 +2586,11 @@ describe("talk.client.toolCall handler", () => {
       agentSessionKey: "agent:main:main",
       voiceSessionId: "voice-test",
     });
-    expectRespondOk(respond, { runId: "run-voice-1" });
+    expectRespondOk(respond, {
+      runId: "run-voice-1",
+      agentId: "main",
+      agentSessionKey: "agent:main:main",
+    });
   });
 
   it("requires relay connection ownership for relay-origin voice records", async () => {
@@ -2621,7 +2625,7 @@ describe("talk.client.toolCall handler", () => {
         ownership: "explicit",
         entries: { main: {}, device: {} },
       },
-      talk: { agentId: "main" },
+      talk: { agentId: "device" },
     };
 
     await callTalkHandler("talk.client.toolCall", {
@@ -2645,20 +2649,20 @@ describe("talk.client.toolCall handler", () => {
     };
     expectRecordFields(chatInput.req, { method: "chat.send" });
     expectRecordFields(chatInput.params, {
-      sessionKey: "agent:main:main",
-      agentId: "main",
+      sessionKey: "agent:device:main",
+      agentId: "device",
     });
     expect(mocks.assertClientVoiceSessionOpen).toHaveBeenCalledWith({
-      agentId: "main",
+      agentId: "device",
       sessionKey: "main",
-      agentSessionKey: "agent:main:main",
+      agentSessionKey: "agent:device:main",
       voiceSessionId: "voice-test",
     });
     expect(mocks.registerClientVoiceConsultRun).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentId: "main",
+        agentId: "device",
         sessionKey: "main",
-        agentSessionKey: "agent:main:main",
+        agentSessionKey: "agent:device:main",
         voiceSessionId: "voice-test",
         runId: "run-voice-1",
       }),
@@ -2675,6 +2679,10 @@ describe("talk.client.toolCall handler", () => {
     ]);
     const response = expectRespondOk(respond, { runId: "run-voice-1" }) as Record<string, unknown>;
     expect(response.idempotencyKey).toMatch(/^talk-call-1-/);
+    expect(response).toMatchObject({
+      agentId: "device",
+      agentSessionKey: "agent:device:main",
+    });
   });
 
   it("aborts the canonical chat run when voice registration fails after acknowledgement", async () => {
