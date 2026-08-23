@@ -1615,6 +1615,25 @@ openclaw-chat-video-player {
   font-weight: 600;
 }
 
+@media (hover: hover) and (pointer: fine) {
+  .chat-assistant-attachment-card__download--secondary {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .chat-assistant-attachment-card:is(:hover, :focus-within)
+    .chat-assistant-attachment-card__download--secondary {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .chat-assistant-attachment-card__download--secondary {
+    transition: opacity 120ms ease;
+  }
+}
+
 .chat-audio-player {
   display: flex;
   align-items: center;

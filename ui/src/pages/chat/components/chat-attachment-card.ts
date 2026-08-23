@@ -239,6 +239,7 @@ export function renderAttachmentCardHeader(
         >${options.label}</span
       >`;
   const downloadTitle = t("chat.mediaPlayer.download", { filename: options.label });
+  const hasOpenAction = options.showExpandAction === true && options.onExpand !== undefined;
   return html`
     <div class="chat-assistant-attachment-card__header">
       <div class="chat-assistant-attachment-card__identity">
@@ -256,7 +257,9 @@ export function renderAttachmentCardHeader(
           : null}
         ${options.downloadHref
           ? html`<a
-              class="chat-assistant-attachment-card__action chat-assistant-attachment-card__download chat-assistant-attachment-card__download--ghost"
+              class="chat-assistant-attachment-card__action chat-assistant-attachment-card__download chat-assistant-attachment-card__download--ghost ${hasOpenAction
+                ? "chat-assistant-attachment-card__download--secondary"
+                : ""}"
               href=${options.downloadHref}
               download=${options.label}
               aria-label=${downloadTitle}
@@ -264,7 +267,7 @@ export function renderAttachmentCardHeader(
               >${icons.download}</a
             >`
           : null}
-        ${options.showExpandAction && options.onExpand
+        ${hasOpenAction
           ? html`<button
               type="button"
               class="chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled chat-assistant-attachment-card__expand"
