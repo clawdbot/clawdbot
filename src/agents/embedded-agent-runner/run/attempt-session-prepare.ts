@@ -234,7 +234,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   if (input.clientToolPreparation.codeModeControlsEnabledForRun) {
     installCodeModeRepairHook({
       agent: activeSession.agent,
-      ...(clientToolRuntime.coreBuiltinToolNames.has("read")
+      ...(clientToolRuntime.coreReadAuthorized
         ? {
             onReconciliationCandidate: () => {
               codeModeReconciliationCandidate = true;

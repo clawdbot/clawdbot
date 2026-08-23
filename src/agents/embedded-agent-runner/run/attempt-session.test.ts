@@ -119,6 +119,7 @@ function createInput(options?: {
   const clientToolRuntime = {
     builtinToolNames: new Set(["read"]),
     coreBuiltinToolNames: new Set(options?.coreReadAllowed === false ? [] : ["read"]),
+    coreReadAuthorized: options?.coreReadAllowed !== false,
     clientToolCallSlots: [],
     clientToolDefs: [],
     clientToolLoopDetection: { enabled: true },
