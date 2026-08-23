@@ -370,7 +370,10 @@ describe("persistent chat session snapshots", () => {
         IDBObjectStore.prototype,
         "getAll",
       ) as IDBObjectStore["getAll"];
-      vi.spyOn(IDBObjectStore.prototype, "getAll").mockImplementationOnce(function (...args) {
+      vi.spyOn(IDBObjectStore.prototype, "getAll").mockImplementationOnce(function (
+        this: IDBObjectStore,
+        ...args
+      ) {
         const request = originalGetAll.apply(this, args);
         request.addEventListener("success", () => {
           deletion = writer.delete(sessionKey);
