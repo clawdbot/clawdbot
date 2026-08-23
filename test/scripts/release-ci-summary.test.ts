@@ -167,7 +167,7 @@ process.stdout.write(readFileSync(process.env.ARCHIVE));
     chmodSync(plainGh, 0o755);
 
     try {
-      const env = {
+      const env: NodeJS.ProcessEnv = {
         ...process.env,
         ARCHIVE: archivePath,
         FIXTURES: fixturesPath,

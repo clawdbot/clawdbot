@@ -881,7 +881,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       "needs.evidence_reuse.outputs.reuse != 'true'",
     );
     expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.if).toBe(
-      "${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && needs.evidence_reuse.outputs.reuse != 'true' }}",
+      "${{ always() && inputs.continuation_plan_json == '' && github.run_attempt == 1 && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && needs.evidence_reuse.outputs.reuse != 'true' }}",
     );
     expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight["timeout-minutes"]).toBe(20);
     const dockerPreflightStep = fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.find(

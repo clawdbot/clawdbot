@@ -127,7 +127,7 @@ const RELEASE_CANDIDATE_KEYS = Object.freeze(
     "prepublishPluginRegistryManifestSha256",
   ].toSorted(),
 );
-export const RELEASE_VALIDATION_INPUT_KEYS = Object.freeze(
+const RELEASE_VALIDATION_INPUT_KEYS = Object.freeze(
   [
     "allowUnreleasedChangelog",
     "codexPluginSpec",
@@ -603,7 +603,7 @@ function verifyHistoricalCandidateArtifacts(evidence, source) {
   }
 }
 
-export function verifyHistoricalReleaseContinuationEvidence(evidence, continuation) {
+function verifyHistoricalReleaseContinuationEvidence(evidence, continuation) {
   const source = normalizedContinuation(continuation);
   if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
     throw new Error("historical continuation source evidence is missing");

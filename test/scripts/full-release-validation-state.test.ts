@@ -1738,8 +1738,8 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
     await waitForFile(ghReady, 5_000);
     const exitPromise = waitForChildClose(childProcess);
     const started = Date.now();
-    childProcess.kill("SIGTERM");
-    await exitPromise;
+    expect(childProcess.kill("SIGTERM")).toBe(true);
+    await expect(exitPromise).resolves.toEqual({ code: 1, signal: null });
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({
       errors: [expect.objectContaining({ kind: "collector_cancelled" })],
@@ -1828,9 +1828,11 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
       gh,
       `#!/bin/sh
 printf ready > "$FRV_GH_READY"
-if [ "$1" = "api" ] && echo "$2" | grep -q '/jobs'; then
-  exit 0
-fi
+case "$*" in
+  "api --paginate repos/openclaw/openclaw/actions/runs/101/attempts/1/jobs?per_page=100 --jq .jobs[] | @json")
+    exit 0
+    ;;
+esac
 printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/ci.yml@refs/heads/release-ci/tooling","display_title":"CI full-release-validation-77-1-ci","head_branch":"release-ci/tooling","head_sha":"${SHA}","run_attempt":1,"status":"in_progress","conclusion":null,"created_at":"2026-08-21T00:00:00Z","updated_at":"2026-08-21T00:01:00Z","html_url":"https://example.invalid/runs/101","actor":{"login":"github-actions[bot]"},"triggering_actor":{"login":"github-actions[bot]"},"repository":{"full_name":"openclaw/openclaw"}}'
 `,
     );
@@ -1857,8 +1859,8 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
     });
     await waitForFile(ghReady, 5_000);
     const exitPromise = waitForChildClose(childProcess);
-    childProcess.kill("SIGTERM");
-    await exitPromise;
+    expect(childProcess.kill("SIGTERM")).toBe(true);
+    await expect(exitPromise).resolves.toEqual({ code: 1, signal: null });
     expect(JSON.parse(readFileSync(output, "utf8"))).toMatchObject({
       activeRunIds: ["101"],
       cancellation: { requested: true },
