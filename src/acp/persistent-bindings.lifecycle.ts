@@ -106,7 +106,13 @@ export async function ensureConfiguredAcpBindingSession(params: {
       sessionKey,
       agent: params.spec.acpAgentId ?? params.spec.agentId,
       mode: params.spec.mode,
-      runtimeOptions: params.spec.model ? { model: params.spec.model } : undefined,
+      runtimeOptions:
+        params.spec.model || params.spec.thinking
+          ? {
+              ...(params.spec.model ? { model: params.spec.model } : {}),
+              ...(params.spec.thinking ? { thinking: params.spec.thinking } : {}),
+            }
+          : undefined,
       cwd: params.spec.cwd,
       backendId: params.spec.backend,
     });

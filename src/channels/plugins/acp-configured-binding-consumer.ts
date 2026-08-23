@@ -18,6 +18,8 @@ import {
   resolveAgentExplicitModelPrimary,
   resolveAgentWorkspaceDir,
 } from "../../agents/agent-scope.js";
+import { parseModelRef } from "../../agents/model-selection-normalize.js";
+import { resolveThinkingDefault } from "../../agents/model-thinking-default.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   ConfiguredBindingRuleConfig,
@@ -72,6 +74,7 @@ function buildConfiguredAcpSpec(params: {
   acpAgentId?: string;
   mode: "persistent" | "oneshot";
   model?: string;
+  thinking?: string;
   cwd?: string;
   backend?: string;
   label?: string;
@@ -85,6 +88,7 @@ function buildConfiguredAcpSpec(params: {
     acpAgentId: params.acpAgentId,
     mode: params.mode,
     model: params.model,
+    thinking: params.thinking,
     cwd: params.cwd,
     backend: params.backend,
     label: params.label,
@@ -110,6 +114,22 @@ function buildAcpTargetFactory(params: {
   const mode = normalizeMode(bindingOverrides.mode ?? runtimeDefaults.mode);
   // Every ACP binding uses its owner's explicit model, regardless of the owner's runtime type.
   const model = resolveAgentExplicitModelPrimary(params.cfg, params.agentId);
+  // Resolve the owner agent's thinking policy alongside its model so ACP sessions honor the
+  // agent's thinkingDefault instead of falling back to the runtime's `adaptive` default, which
+  // breaks models that do not support adaptive thinking. Mirrors gateway session resolution:
+  // an explicit per-agent thinkingDefault wins, otherwise the model-family default applies
+  // (which still yields `adaptive` for models that support it).
+  const agentThinkingDefault = resolveAgentConfig(params.cfg, params.agentId)?.thinkingDefault;
+  const modelRef = model ? parseModelRef(model, "") : null;
+  const thinking =
+    agentThinkingDefault ??
+    (modelRef
+      ? resolveThinkingDefault({
+          cfg: params.cfg,
+          provider: modelRef.provider,
+          model: modelRef.model,
+        })
+      : undefined);
   const cwd =
     bindingOverrides.cwd ??
     runtimeDefaults.cwd ??
@@ -134,6 +154,7 @@ function buildAcpTargetFactory(params: {
         acpAgentId,
         mode,
         model,
+        thinking,
         cwd,
         backend,
         label,

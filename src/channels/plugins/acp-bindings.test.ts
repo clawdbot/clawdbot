@@ -226,6 +226,39 @@ describe("configured binding registry", () => {
     expect(getLoadedChannelPluginMock).not.toHaveBeenCalled();
   });
 
+  it("carries the owner agent thinkingDefault into the ACP binding record", () => {
+    // Regression for #128145: an owner agent's thinkingDefault must reach the ACP session so
+    // models that do not support `adaptive` (e.g. ollama-cloud) are not forced into it.
+    resolveAgentConfigMock.mockReturnValue({ thinkingDefault: "off" });
+    const plugin = createDiscordAcpPlugin();
+    getLoadedChannelPluginMock.mockReturnValue(plugin);
+
+    const resolved = bindingRegistry.resolveConfiguredBindingRecord({
+      cfg: createConfig() as never,
+      channel: "discord",
+      accountId: "default",
+      conversationId: "1479098716916023408",
+    });
+
+    expect(resolved?.record.metadata?.thinking).toBe("off");
+  });
+
+  it("omits thinking from the ACP binding record when no thinking policy applies", () => {
+    // Owner has no thinkingDefault and no explicit model, so the record preserves prior behavior
+    // (no forced thinking level) instead of injecting a default.
+    const plugin = createDiscordAcpPlugin();
+    getLoadedChannelPluginMock.mockReturnValue(plugin);
+
+    const resolved = bindingRegistry.resolveConfiguredBindingRecord({
+      cfg: createConfig() as never,
+      channel: "discord",
+      accountId: "default",
+      conversationId: "1479098716916023408",
+    });
+
+    expect(resolved?.record.metadata?.thinking).toBeUndefined();
+  });
+
   it("uses the current loaded channel plugin on each resolve", () => {
     const firstPlugin = createDiscordAcpPlugin();
     const secondPlugin = createDiscordAcpPlugin();
