@@ -514,24 +514,6 @@
   color: var(--session-progress-neutral);
 }
 
-.session-progress-card__current-marker[data-status="in_progress"],
-.session-progress-card__step-marker[data-status="in_progress"] {
-  position: relative;
-}
-
-.session-progress-card__current-marker[data-status="in_progress"]::after,
-.session-progress-card__step-marker[data-status="in_progress"]::after {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 4px;
-  height: 4px;
-  border-radius: var(--radius-full);
-  background: var(--session-progress-neutral);
-  content: "";
-  transform: translate(-50%, -50%);
-}
-
 .session-progress-card__current {
   min-width: 0;
   overflow: hidden;

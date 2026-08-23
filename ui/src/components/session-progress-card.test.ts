@@ -43,7 +43,7 @@ describe("renderSessionProgressCard", () => {
       },
       {
         label: "Wire the checklist, in progress",
-        marker: expect.stringContaining("<circle"),
+        marker: expect.stringContaining("session-run-spinner"),
         status: "session-progress-card__step--in_progress",
       },
       {
@@ -59,7 +59,7 @@ describe("renderSessionProgressCard", () => {
     ).not.toBeNull();
     expect(
       card?.querySelector(
-        ".session-progress-card__step--in_progress .session-progress-card__step-marker circle",
+        ".session-progress-card__step--in_progress .session-progress-card__step-marker .session-run-spinner",
       ),
     ).not.toBeNull();
     expect(
@@ -71,7 +71,7 @@ describe("renderSessionProgressCard", () => {
 
   it.each([
     ["completed", "path"],
-    ["in_progress", "circle"],
+    ["in_progress", ".session-run-spinner"],
     ["pending", "polyline"],
   ] as const)("uses the %s marker in the composer summary", (status, markerSelector) => {
     const container = document.createElement("div");

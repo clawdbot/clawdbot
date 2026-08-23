@@ -37,7 +37,7 @@ function progressStepMarker(status: ProgressCardStep["status"]) {
     case "completed":
       return icons.check;
     case "in_progress":
-      return icons.circle;
+      return html`<span class="session-run-spinner"></span>`;
     case "pending":
       return icons.clock;
   }
