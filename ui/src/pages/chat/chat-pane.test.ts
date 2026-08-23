@@ -25,6 +25,7 @@ import {
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
+import { prepareInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 import {
   cacheChatSessionSnapshot,
   observeChatCache,
@@ -674,6 +675,68 @@ describe("chat pane initialization", () => {
       store.disconnect();
       await store.whenIdle();
       await clearStoredChatSnapshots();
+    }
+  });
+
+  it("keeps an admitted first-turn prompt visible when stored hydration resolves late", async () => {
+    const targetSessionKey = "agent:main:first-turn-retry";
+    const client = {
+      addEventListener: vi.fn(() => vi.fn()),
+      request: vi.fn(),
+    } as unknown as GatewayBrowserClient;
+    const context = createInitializationContext();
+    context.gateway.snapshot.client = client;
+    const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
+    vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
+    vi.spyOn(pane, "performUpdate").mockImplementation(() => undefined);
+    pane.sessionKey = targetSessionKey;
+    pane.chatMessagesBySession = new Map();
+    let deliverStoredSnapshot: ((snapshot: unknown) => void) | undefined;
+    pane.sessionSnapshotStore = {
+      read: () =>
+        new Promise((resolve) => {
+          deliverStoredSnapshot = resolve;
+        }),
+    } as never;
+    pane.context = context;
+    prepareInitialUserMessageHandoff(
+      context.initialUserMessage,
+      targetSessionKey,
+      { attachments: [], createdAt: 1, text: "retry the rejected prompt" },
+      client,
+      { runId: "initial-run" },
+    );
+    const stopAfterAttach = new Error("stop after attach");
+    let attachedState: ChatPageHost | undefined;
+    vi.spyOn(pane.chatState, "attach").mockImplementation((state) => {
+      attachedState = state;
+      throw stopAfterAttach;
+    });
+
+    try {
+      expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);
+      expect(attachedState?.chatMessages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: [expect.objectContaining({ type: "text", text: "retry the rejected prompt" })],
+        }),
+      ]);
+      deliverStoredSnapshot?.({
+        messages: [nativeHistoryMessage(1, "stale stored transcript")],
+        pagination: { hasMore: false, completeSnapshot: true },
+        sessionId: "stored-session",
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(deliverStoredSnapshot).toBeDefined();
+      expect(attachedState?.chatMessages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: [expect.objectContaining({ type: "text", text: "retry the rejected prompt" })],
+        }),
+      ]);
+    } finally {
+      pane.disconnectedCallback();
     }
   });
 

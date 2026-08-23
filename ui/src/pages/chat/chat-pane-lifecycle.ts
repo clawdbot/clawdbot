@@ -105,12 +105,14 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         !snapshot ||
         this.state !== state ||
         !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
-        readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey })
+        readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey }) ||
+        state.chatMessages.length > 0
       ) {
         return;
       }
-      // The memory miss is the ordering fence: any network replacement or live
-      // append that landed while IndexedDB was pending remains authoritative.
+      // The memory miss plus empty visible rows is the ordering fence: any
+      // network replacement, live append, or optimistic handoff that landed
+      // while IndexedDB was pending remains authoritative.
       cacheChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey }, snapshot);
       applyChatCacheSnapshot(state, snapshot);
       state.requestUpdate?.();
