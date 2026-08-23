@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import "../test-helpers/load-styles.ts";
 import "../styles/sidebar-issues.css";
 import "./web-awesome-tabs.ts";
 
@@ -41,6 +42,9 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     const group = fixture.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
       ".sidebar-issues-panel__tabs",
     );
+    const header = document.createElement("header");
+    header.className = "sidebar-issues-panel__header";
+    fixture.prepend(header);
     const tab = fixture.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
       ".sidebar-issues-panel__tab",
     );
@@ -58,6 +62,11 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
 
     expect(group?.scrollWidth).toBe(group?.clientWidth);
     expect(getComputedStyle(group!).overflowX).toBe("hidden");
+    expect(getComputedStyle(group!).backgroundColor).toBe(getComputedStyle(header).backgroundColor);
+    expect(getComputedStyle(group!).backgroundColor).not.toBe(
+      getComputedStyle(list!).backgroundColor,
+    );
+    expect(getComputedStyle(group!).borderBottomWidth).toBe("1px");
     expect(getComputedStyle(base!).padding).toBe("4px 8px");
     expect(
       count!.getBoundingClientRect().left - label!.getBoundingClientRect().right,

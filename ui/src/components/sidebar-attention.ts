@@ -319,7 +319,9 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   private hasUpdateSurface(): boolean {
     const snapshot = this.context?.overlays.snapshot;
     return Boolean(
-      snapshot?.updateRunning || snapshot?.updateStatusBanner || snapshot?.updateSchedule?.campaign,
+      snapshot?.updateRunning ||
+      snapshot?.updateStatusBanner ||
+      (snapshot?.updateCampaignStatusHydrated && snapshot.updateSchedule?.campaign),
     );
   }
 

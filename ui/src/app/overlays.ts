@@ -68,6 +68,23 @@ function isGatewayEvent(value: unknown): value is GatewayEventFrame {
   return Boolean(value && typeof value === "object" && "event" in value);
 }
 
+// A schedule arrives before its authoritative status poll. A changed campaign
+// must stay unhydrated so consumers never repaint a generic row as a failure.
+function retainCampaignStatusHydration(
+  current: UpdateScheduleState | null,
+  next: UpdateScheduleState | null | undefined,
+  hydrated: boolean,
+): boolean {
+  const currentCampaign = current?.campaign;
+  const nextCampaign = next?.campaign;
+  return (
+    !nextCampaign ||
+    (hydrated &&
+      currentCampaign?.id === nextCampaign.id &&
+      currentCampaign.updatedAtMs === nextCampaign.updatedAtMs)
+  );
+}
+
 export function createApplicationOverlays(
   gateway: ApplicationGateway,
   hooks: {
@@ -82,6 +99,7 @@ export function createApplicationOverlays(
     heldUpdateCampaignId: null,
     updateRunning: false,
     updateStatusRefreshing: false,
+    updateCampaignStatusHydrated: true,
     updateReconciliationPending: false,
     updateStatusBanner: null,
     recordedUpdateAttempt: null,
@@ -214,6 +232,7 @@ export function createApplicationOverlays(
         recordedUpdateAttempt: snapshot.recordedUpdateAttempt,
         heldUpdateCampaignId: snapshot.heldUpdateCampaignId,
       }),
+      updateCampaignStatusHydrated: true,
     };
     publish();
   };
@@ -327,6 +346,7 @@ export function createApplicationOverlays(
         updateSchedule: null,
         updateRunning: false,
         updateStatusRefreshing: false,
+        updateCampaignStatusHydrated: true,
       };
       updateCampaignPoller.stop();
       if (next.phase === "reload-required") {
@@ -343,6 +363,11 @@ export function createApplicationOverlays(
     }
     const updateSchedule =
       connectedSourceChanged || helloChanged ? readUpdateSchedule(next.hello) : undefined;
+    const campaignStatusHydrated = retainCampaignStatusHydration(
+      snapshot.updateSchedule,
+      updateSchedule,
+      snapshot.updateCampaignStatusHydrated,
+    );
     const serverBuildIdentity = {
       version: next.hello?.server?.version,
       buildId: next.hello?.server?.buildId,
@@ -356,6 +381,7 @@ export function createApplicationOverlays(
             updateAvailable: readUpdateAvailable(next.hello),
             updateSchedule: updateSchedule ?? null,
             heldUpdateCampaignId: heldCampaignId(updateSchedule ?? null),
+            updateCampaignStatusHydrated: campaignStatusHydrated,
           }
         : {}),
       controlUiRefreshRequired: connectedSourceChanged
@@ -412,6 +438,11 @@ export function createApplicationOverlays(
         payload && Object.hasOwn(payload, "schedule")
           ? readUpdateScheduleValue(payload.schedule)
           : undefined;
+      const campaignStatusHydrated = retainCampaignStatusHydration(
+        snapshot.updateSchedule,
+        updateSchedule,
+        snapshot.updateCampaignStatusHydrated,
+      );
       snapshot = {
         ...snapshot,
         updateAvailable: readUpdateAvailableValue(payload?.updateAvailable),
@@ -419,6 +450,7 @@ export function createApplicationOverlays(
           ? {
               updateSchedule,
               heldUpdateCampaignId: heldCampaignId(updateSchedule),
+              updateCampaignStatusHydrated: campaignStatusHydrated,
             }
           : {}),
       };

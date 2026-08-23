@@ -82,6 +82,7 @@
   justify-content: space-between;
   gap: 8px;
   padding: 8px 12px;
+  background: var(--secondary);
 }
 
 .sidebar-issues-panel__heading {
@@ -150,7 +151,8 @@
   display: block;
   flex: none;
   overflow: hidden;
-  border-block-end: 1px solid var(--border-strong);
+  border-block-end: 1px solid var(--border);
+  background: var(--secondary);
   --indicator-color: transparent;
   --track-color: transparent;
   --track-width: 0;

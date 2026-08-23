@@ -9,6 +9,7 @@ export type ApplicationOverlaySnapshot = {
   heldUpdateCampaignId: string | null;
   updateRunning: boolean;
   updateStatusRefreshing: boolean;
+  updateCampaignStatusHydrated: boolean;
   updateReconciliationPending: boolean;
   updateStatusBanner: ApplicationStatusBanner | null;
   recordedUpdateAttempt: RecordedUpdateAttempt | null;
