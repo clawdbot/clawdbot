@@ -701,7 +701,7 @@ export function runOpenClawStateWriteTransaction<T>(
           database: database.db,
           databasePath: database.path,
           env: options.env ?? process.env,
-          schemaReady: true,
+          schemaReady: !options.database && database === getOpenClawStateDatabaseIfOpen(options),
         });
         return operation(database);
       },
