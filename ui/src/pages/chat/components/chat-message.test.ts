@@ -5903,5 +5903,85 @@ describe("grouped chat rendering", () => {
 
     expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
   });
+
+  it("projects oversized history rows through regular and grouped tool bubbles", () => {
+    const rawMarker = "[chat.history omitted: message too large]";
+    const notice = "This message is too large to display here.";
+    const regularContainer = document.createElement("div");
+    renderGroupedMessage(
+      regularContainer,
+      {
+        role: "user",
+        content: [{ type: "text", text: rawMarker }],
+        __openclaw: { id: "oversized-user", truncated: true, reason: "oversized" },
+      },
+      "user",
+    );
+
+    const regularBubble = expectElement(regularContainer, ".chat-bubble", HTMLElement);
+    expect(regularBubble.textContent).toContain(notice);
+    expect(regularBubble.textContent).not.toContain(rawMarker);
+    expect(regularBubble.dataset.messageText).toBe(notice);
+
+    const groupedContainer = document.createElement("div");
+    const group = createToolGroup("oversized-tool-group", [
+      createMessageEntry(
+        "oversized-tool-1",
+        createToolResultMessage("call-1", "read_file", rawMarker, {
+          __openclaw: { id: "oversized-tool-1", truncated: true, reason: "oversized" },
+        }),
+      ),
+      createMessageEntry(
+        "oversized-tool-2",
+        createToolResultMessage("call-2", "run_command", rawMarker, {
+          __openclaw: { id: "oversized-tool-2", truncated: true, reason: "oversized" },
+        }),
+      ),
+    ]);
+    renderMessageGroups(groupedContainer, [group], {
+      isToolMessageExpanded: (id) => id === "activity:oversized-tool-group",
+    });
+
+    const groupedBubbles = [
+      ...groupedContainer.querySelectorAll<HTMLElement>(
+        ".chat-activity-group__body > .chat-bubble",
+      ),
+    ];
+    expect(groupedBubbles).toHaveLength(2);
+    expect(groupedBubbles.map((bubble) => bubble.dataset.messageText)).toEqual([notice, notice]);
+    expect(groupedContainer.textContent).not.toContain(rawMarker);
+  });
+
+  it("keeps the oversized notice visible when assistant recovery exhausts", () => {
+    const container = document.createElement("div");
+    const onToggleAssistantMessageExpanded = vi.fn();
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "[chat.history omitted: message too large]" }],
+        __openclaw: {
+          id: "oversized-assistant-error",
+          truncated: true,
+          reason: "oversized",
+        },
+      },
+      {
+        sessionKey: "global",
+        loadFullAssistantMessage: async () => null,
+        getAssistantMessageExpansion: () => ({ status: "error", revision: 6 }),
+        onToggleAssistantMessageExpanded,
+      },
+    );
+
+    expect(container.querySelector(".chat-text")?.textContent).toContain(
+      "This message is too large to display here.",
+    );
+    expect(container.textContent).not.toContain("[chat.history omitted");
+    expect(container.querySelector(".chat-message-load-error")?.textContent).toContain(
+      "Could not load the full message.",
+    );
+    expect(onToggleAssistantMessageExpanded).not.toHaveBeenCalled();
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -205,8 +205,9 @@ stated honestly (revision 1 undersold this):
   `{ profileId } | { deviceId }`; the device → environment mapping resolves
   server-side. Devices are not smuggled through synthesized
   `cloudWorkers.profiles` entries.
-- **Concurrency slots.** The node supervisor admits two physical worker
-  processes by default. Durable `pending` and `running` launches consume those
+- **Concurrency slots.** The node supervisor defaults to one physical worker
+  process per available CPU core; `nodeHost.workerRuns.capacity` overrides the
+  slot count. Durable `pending` and `running` launches consume those
   slots atomically; same-launch replay consumes no additional slot. The node
   publishes exact bounded `{ total, available }` capacity after restart
   reconciliation and every occupancy transition. New launches require
@@ -235,7 +236,7 @@ makes clients refetch without exposing hashes, paths, or receipt details. Status
 and cancellation reacquire the current supervisor proof and use the durable
 launch identity so an upgrade cannot strand an existing worker. Node-local
 opt-in advertises capacity; default nodes remain non-hosts. The supervisor owns
-two atomic durable capacity slots, bounded 10-second admission, restart
+configurable atomic durable capacity slots, bounded 10-second admission, restart
 reconciliation, and exact occupancy publication.
 Device dormancy expiry and terminal launch/environment retention bound durable
 rows. Node workspace cleanup waits for a full reconnect-scoped Gateway retain

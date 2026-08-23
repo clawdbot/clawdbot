@@ -1,6 +1,7 @@
 // Register setup tests cover setup command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerOnboardCommand } from "./register.onboard.js";
 import { registerSetupCommand, resolveSetupCommandRoute } from "./register.setup.js";
 
 const mocks = vi.hoisted(() => ({
@@ -97,6 +98,45 @@ describe("registerSetupCommand", () => {
       path: "/tmp/openclaw.json",
       sourceConfig: {},
     });
+  });
+
+  it("keeps shared onboarding flags aligned while preserving command-specific help", () => {
+    const program = new Command();
+    registerOnboardCommand(program);
+    registerSetupCommand(program);
+    const onboard = program.commands.find((command) => command.name() === "onboard")!;
+    const setup = program.commands.find((command) => command.name() === "setup")!;
+    const setupOptions = new Map(setup.options.map((option) => [option.flags, option]));
+    const distinctHelp = new Set([
+      "workspace",
+      "reset",
+      "nonInteractive",
+      "skipUi",
+      "skipHooks",
+      "json",
+    ]);
+
+    for (const option of onboard.options) {
+      const sibling = setupOptions.get(option.flags);
+      if (!sibling) {
+        continue;
+      }
+      expect([sibling.flags, sibling.defaultValue, sibling.hidden]).toEqual([
+        option.flags,
+        option.defaultValue,
+        option.hidden,
+      ]);
+      if (!distinctHelp.has(option.attributeName())) {
+        expect(sibling.description).toBe(option.description);
+      }
+    }
+
+    const optionIndex = (command: Command, name: string) =>
+      command.options.findIndex((option) => option.attributeName() === name);
+    expect(optionIndex(onboard, "remoteUrl")).toBeLessThan(optionIndex(onboard, "tailscale"));
+    expect(optionIndex(setup, "remoteUrl")).toBeGreaterThan(optionIndex(setup, "importSecrets"));
+    expect(setupOptions.get("--tailscale-reset-on-exit")?.hidden).toBe(true);
+    expect(setupOptions.get("--no-tailscale-reset-on-exit")?.hidden).toBe(true);
   });
 
   it("keeps routing precedence explicit", () => {

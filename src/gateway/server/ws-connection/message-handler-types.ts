@@ -37,6 +37,7 @@ export type GatewayWsMessageHandlerParams = {
   upgradeReq: IncomingMessage;
   ingressAttribution: GatewayAttributedIngress;
   connId: string;
+  bootId: string;
   remoteAddr?: string;
   remotePort?: number;
   localAddr?: string;

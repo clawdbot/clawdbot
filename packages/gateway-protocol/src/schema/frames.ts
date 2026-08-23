@@ -90,6 +90,7 @@ export const HelloOkSchema = closedObject({
   server: closedObject({
     version: NonEmptyString,
     buildId: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })),
+    bootId: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })),
     controlUiBuildSource: Type.Optional(
       Type.Union([Type.Literal("bundled"), Type.Literal("configured")]),
     ),

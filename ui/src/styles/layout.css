@@ -3295,6 +3295,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   display: flex;
   height: 32px;
   align-items: center;
+  gap: 8px;
   transform: translateY(-50%);
 }
 
@@ -3973,7 +3974,9 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 /* Host elements are display:contents, so the anchor itself is the flex item;
    min-width 0 lets it yield to the footer icons and ellipsize. */
 .sidebar-footer-build {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
   overflow: hidden;
   color: var(--muted);

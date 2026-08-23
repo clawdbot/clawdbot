@@ -51,6 +51,42 @@ describe("resolveMessageActionDetails full-message fetch flag", () => {
     });
     expect(details?.shouldFetchFullMessage).toBe(false);
   });
+
+  it("projects an oversized assistant marker to a notice without disabling recovery", () => {
+    const message = {
+      role: "assistant",
+      content: "[chat.history omitted: message too large]",
+      __openclaw: { id: "msg-oversized", truncated: true, reason: "oversized" },
+    };
+    const details = resolveMessageActionDetails({
+      message,
+      messageId: "msg-oversized",
+      canFetchFullMessage: true,
+      onReply: () => {},
+      senderLabel: "assistant",
+    });
+
+    expect(details?.shouldFetchFullMessage).toBe(true);
+    expect(details?.markdown).toBe("This message is too large to display here.");
+    expect(details?.replyTarget?.text).toBe("This message is too large to display here.");
+
+    const loaded = resolveMessageActionDetails({
+      message,
+      messageId: "msg-oversized",
+      canFetchFullMessage: true,
+      getAssistantMessageExpansion: () => ({
+        status: "loaded",
+        markdown: "Recovered full assistant content.",
+        revision: 1,
+      }),
+      onReply: () => {},
+      senderLabel: "assistant",
+    });
+
+    expect(loaded?.shouldFetchFullMessage).toBe(true);
+    expect(loaded?.markdown).toBe("Recovered full assistant content.");
+    expect(loaded?.replyTarget?.text).toBe("Recovered full assistant content.");
+  });
 });
 
 describe("user message disclosure", () => {
