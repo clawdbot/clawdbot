@@ -463,9 +463,7 @@ extension RealtimeTalkRelaySession {
         case "audioDone":
             self.finishOutputPlaybackStream()
         case "clear":
-            let marks = self.takePendingPlaybackMarks()
-            self.stopOutputPlayback()
-            self.acknowledgePlaybackMarks(marks)
+            self.handleOutputClear(payload)
         case "mark":
             self.handlePlaybackMark(payload)
         case "transcript":
@@ -506,6 +504,14 @@ extension RealtimeTalkRelaySession {
         default:
             return
         }
+    }
+
+    private func handleOutputClear(_ payload: [String: AnyCodable]) {
+        let turnId = self.nonEmpty(payload["talkEvent"]?.dictionaryValue?["turnId"]?.stringValue)
+        guard turnId == nil || turnId == self.activeOutputTurnId else { return }
+        let marks = self.takePendingPlaybackMarks()
+        self.stopOutputPlayback()
+        self.acknowledgePlaybackMarks(marks)
     }
 
     private func waitForStartupResult(

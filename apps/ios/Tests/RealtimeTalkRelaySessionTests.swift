@@ -209,11 +209,17 @@ struct RealtimeTalkRelayCancellationResultTests {
         await fixture.output("turn-b")
         await barrier.release()
         await waitForRealtimeRelayMainActorCheckpoint()
+        await fixture.session._test_handleGatewayEvent(
+            RealtimeTalkRelaySessionTests.clearEvent(turnId: "turn-a"))
 
         #expect(fixture.session._test_isOutputPlaying())
         #expect(fixture.observations.issues.isEmpty)
         #expect(fixture.observations.statuses.isEmpty)
         #expect(await fixture.requests.snapshot().map(\.method) == ["talk.session.cancelOutput"])
+
+        await fixture.session._test_handleGatewayEvent(
+            RealtimeTalkRelaySessionTests.clearEvent(turnId: "turn-b"))
+        #expect(!fixture.session._test_isOutputPlaying())
     }
 
     @Test func `cancellation failure after stop cannot close the retired lifecycle`() async throws {
@@ -610,6 +616,19 @@ struct RealtimeTalkRelaySessionTests {
             type: "event",
             event: "talk.event",
             payload: AnyCodable(payload),
+            seq: nil,
+            stateversion: nil)
+    }
+
+    fileprivate static func clearEvent(turnId: String) -> EventFrame {
+        EventFrame(
+            type: "event",
+            event: "talk.event",
+            payload: AnyCodable([
+                "relaySessionId": "relay-1",
+                "type": "clear",
+                "talkEvent": ["turnId": turnId],
+            ]),
             seq: nil,
             stateversion: nil)
     }
