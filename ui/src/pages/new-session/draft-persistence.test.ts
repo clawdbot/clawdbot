@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { NewSessionCapabilityController } from "./capability-controller.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import { DraftSubmissionFlow } from "./draft-submission-flow.ts";
@@ -70,6 +71,7 @@ function createFlow() {
   return new DraftSubmissionFlow(
     {} as DraftGatewayState,
     {} as DraftPlaceState,
+    new NewSessionCapabilityController(vi.fn()),
     () => ({ context: undefined, data: undefined, isConnected: false }),
     { requestUpdate: vi.fn(), closeTransientUi: vi.fn() },
   );

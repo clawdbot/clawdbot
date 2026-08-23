@@ -20,6 +20,7 @@ import "../../styles/chat.css";
 import "../../styles/new-session.css";
 import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
+import { NewSessionCapabilityController } from "./capability-controller.ts";
 import * as catalog from "./catalog-target.ts";
 import { renderDraftError, renderNewSessionDraftComposer } from "./composer.ts";
 import { renderConnectMachineDialog } from "./connect-machine-dialog.ts";
@@ -73,6 +74,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
   private readonly browser: DraftPlaceBrowser;
   private readonly place: DraftPlaceState;
   private readonly submission: DraftSubmissionFlow;
+  private readonly capabilities: NewSessionCapabilityController;
   private readonly subscriptions: SubscriptionsController;
   private readonly flushDraft = () => this.submission.draftPersistence.persistNow();
 
@@ -147,15 +149,18 @@ export class NewSessionPage extends OpenClawLightDomElement {
         onClearError: (error) => this.submission.clearErrorIf(error),
       },
     );
+    this.capabilities = new NewSessionCapabilityController(() => this.requestUpdate());
     this.submission = new DraftSubmissionFlow(
       this.gateway,
       this.place,
+      this.capabilities,
       () => ({ context: this.context, data: this.data, isConnected: this.isConnected }),
       {
         requestUpdate: () => this.requestUpdate(),
         closeTransientUi: () => closeSessionMenus(this),
       },
     );
+    this.capabilities.setMutationCallback(this.submission.retireStartedSession);
     this.subscriptions = new SubscriptionsController(this)
       .watch(
         () => this.context?.gateway,
@@ -603,6 +608,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
           message: this.submission.message,
           visibility: this.submission.visibility,
           draftAvailable: this.submission.canStartAsDraft(),
+          ...this.capabilities.composerProps(this.context, this.gateway, this.place.agentId),
           modelControl: this.place.modelControl,
           requiresModifier: loadSettings().chatSendShortcut === "modifier-enter",
           requestUpdate: () => this.requestUpdate(),

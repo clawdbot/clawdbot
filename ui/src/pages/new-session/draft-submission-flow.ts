@@ -19,6 +19,7 @@ import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "../chat/composer-persistence.ts";
 import { prepareInitialUserMessageHandoff } from "../chat/initial-turn-handoff.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
+import type { NewSessionCapabilityController } from "./capability-controller.ts";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionComposerTextareaController } from "./composer.ts";
 import {
@@ -69,6 +70,7 @@ export class DraftSubmissionFlow {
   constructor(
     private readonly gateway: DraftGatewayState,
     private readonly place: DraftPlaceState,
+    private readonly capabilities: NewSessionCapabilityController,
     private readonly read: () => DraftSubmissionSnapshot,
     private readonly callbacks: DraftSubmissionCallbacks,
   ) {
@@ -140,10 +142,12 @@ export class DraftSubmissionFlow {
     message: string;
     attachments: ChatAttachment[];
     visibility: NewSessionVisibility;
+    toolOverrides?: NewSessionCapabilityController["toolOverrides"];
   }) {
     this.draftPersistence.noteDraftReplaced();
     this.messageValue = state.message;
     this.visibilityValue = state.visibility;
+    this.capabilities.restoreToolOverrides(state.toolOverrides);
     this.attachmentDraft.restore(state.attachments);
   }
 
@@ -154,6 +158,8 @@ export class DraftSubmissionFlow {
     this.visibilityValue = visibility;
     this.draftPersistence.transitionIncognito(wasIncognito, visibility === "incognito", publish);
   }
+
+  retireStartedSession = () => (this.startedSession.current = null);
 
   setError(error: string | null) {
     if (error === null && this.error === t("newSession.cloudRecoveryUnavailable")) {
@@ -234,6 +240,7 @@ export class DraftSubmissionFlow {
       model: this.place.modelControl.selected,
       contextWindow: this.place.modelControl.contextWindow,
       thinkingLevel: this.place.modelControl.thinkingLevel,
+      toolOverrides: this.capabilities.toolOverrides,
       visibility: options.visibility ?? this.visibilityValue,
       attachments: options.attachments,
       projectId: this.place.browser.remoteProject?.projectId ?? this.place.browser.projectId,
@@ -389,6 +396,7 @@ export class DraftSubmissionFlow {
       ? (this.submissionOutcomeUnknownValue ?? "placement-interrupted")
       : null;
     this.visibilityValue = "normal";
+    this.capabilities.reset();
     this.attachmentDraft.reset({ release: true });
     if (preservePendingPlacement) {
       if (!this.pendingPlacement.restored) {

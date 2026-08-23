@@ -7,13 +7,14 @@ import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
+import { countSessionToolOverrides } from "../../lib/sessions/tool-overrides.ts";
 import { refreshSlashCommands } from "../chat/chat-commands.ts";
 import {
   createChatAttachmentDropHandlers,
   handleChatAttachmentPaste,
   renderAttachmentPreview,
   renderChatAttachmentInputs,
-  renderChatAttachmentMenu,
 } from "../chat/components/chat-attachments.ts";
 import {
   adjustTextareaHeight,
@@ -22,6 +23,10 @@ import {
   paneDomId,
   scheduleTextareaHeightAdjustment,
 } from "../chat/components/chat-composer-dom.ts";
+import {
+  renderChatComposerPlusMenu,
+  type ChatComposerPlusMenuView,
+} from "../chat/components/chat-composer-plus-menu.ts";
 import {
   createSkillMenuState,
   getActiveSkillMenuOptionId,
@@ -33,6 +38,7 @@ import {
   updateSkillMenu,
   type SkillMenuHost,
 } from "../chat/components/chat-composer-skill-menu.ts";
+import type { CapabilityMenuProps } from "../chat/components/chat-composer-types.ts";
 import type { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
@@ -61,6 +67,8 @@ type NewSessionComposerOptions = {
   messageLocked?: boolean;
   visibility?: NewSessionVisibility;
   draftAvailable?: boolean;
+  capabilityMenu?: CapabilityMenuProps;
+  toolOverrides?: SessionToolOverrides | null;
   onAttachmentsChange: (attachments: ChatAttachment[]) => void;
   onPendingReadsChange: (delta: 1 | -1) => void;
   onInput: (message: string) => void;
@@ -141,6 +149,8 @@ function renderStartControl(options: NewSessionComposerOptions) {
 export class NewSessionComposerTextareaController {
   private textarea: HTMLTextAreaElement | null = null;
   readonly skillMenuState = createSkillMenuState();
+  capabilityMenuOpen = false;
+  capabilityMenuView: ChatComposerPlusMenuView = "root";
 
   readonly ref = (element?: Element) => {
     const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
@@ -166,36 +176,13 @@ export class NewSessionComposerTextareaController {
 
   disconnect() {
     resetSkillMenuState(this.skillMenuState);
+    this.capabilityMenuOpen = false;
+    this.capabilityMenuView = "root";
     if (this.textarea) {
       disconnectTextareaOverflowObserver(this.textarea);
       this.textarea = null;
     }
   }
-}
-
-/** Draft visibility pill: selecting it clears incognito, re-click returns to normal. */
-function renderVisibilityPill(params: {
-  mode: Exclude<NewSessionVisibility, "normal">;
-  icon: unknown;
-  label: string;
-  description: string;
-  options: NewSessionComposerOptions;
-}) {
-  const active = params.options.visibility === params.mode;
-  const disabled = params.options.submitting || params.options.messageLocked;
-  return html`
-    <button
-      type="button"
-      class="new-session-page__visibility ${active ? "new-session-page__visibility--active" : ""}"
-      role="switch"
-      aria-checked=${String(active)}
-      ?disabled=${disabled}
-      title=${params.description}
-      @click=${() => params.options.onVisibilityChange?.(active ? "normal" : params.mode)}
-    >
-      <span aria-hidden="true">${params.icon}</span>${params.label}
-    </button>
-  `;
 }
 
 export function renderDraftError(message: string) {
@@ -240,6 +227,95 @@ function handleComposerKeydown(
     event.preventDefault();
     submitNewSession(options, options.textareaController.skillMenuState);
   }
+}
+
+function renderNewSessionPlusMenu(
+  options: NewSessionComposerOptions,
+  attachments: Parameters<typeof renderChatComposerPlusMenu>[0]["attachments"],
+) {
+  const capabilityMenu = options.capabilityMenu;
+  const draftEnabled = options.visibility === "draft";
+  const overrideCount = countSessionToolOverrides(options.toolOverrides);
+  const selectedCount = overrideCount + (draftEnabled ? 1 : 0);
+  const disabled = options.submitting || options.messageLocked === true;
+  const controller = options.textareaController;
+  return renderChatComposerPlusMenu({
+    attachments,
+    capabilityMenu,
+    disabled,
+    open: controller.capabilityMenuOpen,
+    view: controller.capabilityMenuView,
+    toolOverrides: options.toolOverrides,
+    rootToggles: options.draftAvailable
+      ? [
+          {
+            value: "new-session-draft",
+            label: t("newSession.draft"),
+            icon: icons.pencil,
+            checked: draftEnabled,
+            disabled,
+            title: t("newSession.draftDescription"),
+            onChange: (checked) => options.onVisibilityChange?.(checked ? "draft" : "normal"),
+          },
+        ]
+      : undefined,
+    selectedLabel:
+      selectedCount > 0
+        ? t("newSession.composerOptionsSelected", { count: String(selectedCount) })
+        : undefined,
+    onOpenChange: (open) => {
+      controller.capabilityMenuOpen = open;
+      if (!open) {
+        controller.capabilityMenuView = "root";
+      }
+      options.requestUpdate();
+    },
+    onViewChange: (view) => {
+      controller.capabilityMenuView = view;
+      options.requestUpdate();
+    },
+  });
+}
+
+function renderNewSessionSelectionStatus(options: NewSessionComposerOptions) {
+  const draftEnabled = options.visibility === "draft";
+  const overrideCount = countSessionToolOverrides(options.toolOverrides);
+  if (!draftEnabled && overrideCount === 0) {
+    return nothing;
+  }
+  const disabled = options.submitting || options.messageLocked === true;
+  const openMenu = () => {
+    options.textareaController.capabilityMenuView = "root";
+    options.textareaController.capabilityMenuOpen = true;
+    options.requestUpdate();
+  };
+  return html`
+    ${draftEnabled
+      ? html`<button
+          type="button"
+          class="new-session-page__selection-status"
+          ?disabled=${disabled}
+          @click=${openMenu}
+        >
+          ${icons.pencil}${t("newSession.draft")}
+        </button>`
+      : nothing}
+    ${overrideCount > 0
+      ? html`<button
+          type="button"
+          class="new-session-page__selection-status"
+          ?disabled=${disabled}
+          @click=${openMenu}
+        >
+          ${t(
+            overrideCount === 1
+              ? "chat.composer.overrides.countOne"
+              : "chat.composer.overrides.count",
+            { count: String(overrideCount) },
+          )}
+        </button>`
+      : nothing}
+  `;
 }
 
 /** Draft message box styled as the chat composer shell so both pickers match. */
@@ -345,19 +421,11 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
         </div>
         <div class="agent-chat__composer-footer">
           <div class="agent-chat__composer-controls">
-            ${renderChatAttachmentMenu(attachmentProps)}
+            ${renderNewSessionPlusMenu(options, attachmentProps)}
             ${options.modelControl && options.modelControl !== nothing
               ? html`<div class="chat-composer-model-control">${options.modelControl}</div>`
               : nothing}
-            ${options.draftAvailable
-              ? renderVisibilityPill({
-                  mode: "draft",
-                  icon: icons.pencil,
-                  label: t("newSession.draft"),
-                  description: t("newSession.draftDescription"),
-                  options,
-                })
-              : nothing}
+            ${renderNewSessionSelectionStatus(options)}
           </div>
         </div>
         ${options.blockedSubmitNotice
@@ -383,6 +451,8 @@ export function renderNewSessionDraftComposer(options: {
   message: string;
   visibility?: NewSessionVisibility;
   draftAvailable?: boolean;
+  capabilityMenu?: CapabilityMenuProps;
+  toolOverrides?: SessionToolOverrides | null;
   modelControl: NewSessionModelControl;
   textareaController: NewSessionComposerTextareaController;
   requiresModifier: boolean;
@@ -411,6 +481,8 @@ export function renderNewSessionDraftComposer(options: {
     message: options.message,
     visibility: options.visibility,
     draftAvailable: options.draftAvailable,
+    capabilityMenu: options.capabilityMenu,
+    toolOverrides: options.toolOverrides,
     modelControl: options.isCatalogTarget
       ? nothing
       : options.modelControl.render({

@@ -948,6 +948,7 @@ export const en: TranslationMap = {
     incognitoDescription: "Keep this session only until the Gateway restarts",
     draft: "Draft",
     draftDescription: "Keep this session to yourself until you publish it",
+    composerOptionsSelected: "Add attachments or session options ({count} selected)",
     messagePlaceholder: "What should this session work on?",
     readingAttachment: "Reading attachment",
     start: "Start session",
