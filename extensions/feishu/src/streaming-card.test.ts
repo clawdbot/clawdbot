@@ -286,6 +286,52 @@ describe("FeishuStreamingSession", () => {
     return { authTokens, client, deps };
   }
 
+  it("reuses one uuid when retrying the initial streaming message send", async () => {
+    const { client, deps } = mockStreamingTokenStart(() => ({
+      code: 0,
+      msg: "ok",
+      tenant_access_token: "token",
+      expire: 7200,
+    }));
+    const create = client.im.message.create as ReturnType<typeof vi.fn>;
+    create
+      .mockRejectedValueOnce(Object.assign(new Error("network error"), { code: "ERR_NETWORK" }))
+      .mockResolvedValueOnce({ code: 0, msg: "ok", data: { message_id: "om_1" } });
+
+    await new FeishuStreamingSession(
+      client,
+      { appId: "app_streaming_retry", appSecret: "secret" },
+      undefined,
+      deps,
+    ).start("chat_id", "open_id");
+
+    expect(create).toHaveBeenCalledTimes(2);
+    const firstUuid = create.mock.calls[0]?.[0]?.data?.uuid;
+    const secondUuid = create.mock.calls[1]?.[0]?.data?.uuid;
+    expect(firstUuid).toMatch(/^[0-9a-f-]{36}$/);
+    expect(secondUuid).toBe(firstUuid);
+  });
+
+  it("preserves root_id on the initial streaming message create", async () => {
+    const { client, deps } = mockStreamingTokenStart(() => ({
+      code: 0,
+      msg: "ok",
+      tenant_access_token: "token",
+      expire: 7200,
+    }));
+
+    await new FeishuStreamingSession(
+      client,
+      { appId: "app_streaming_root", appSecret: "secret" },
+      undefined,
+      deps,
+    ).start("chat_id", "open_id", { rootId: "om_topic_root" });
+
+    expect(client.im.message.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ root_id: "om_topic_root" }) }),
+    );
+  });
+
   it("rejects oversized streaming tenant-token JSON before buffering the full body", async () => {
     let streamState:
       | {

@@ -37,6 +37,16 @@ function http429Error() {
   });
 }
 
+function transientHttpError(status: number) {
+  return Object.assign(new Error(`Request failed with status code ${status}`), {
+    response: { status, data: { msg: "transient failure" } },
+  });
+}
+
+function transientCodeError(code: string) {
+  return Object.assign(new Error(`Request failed with ${code}`), { code });
+}
+
 // Use retryDelayMs: 0 throughout to keep tests fast with no real delays.
 const NO_DELAY = { retryDelayMs: 0 };
 
@@ -135,6 +145,96 @@ describe("requestFeishuApi — no retry for non-rate-limit errors", () => {
     const request = vi.fn().mockRejectedValue(new Error("network failure"));
 
     await expect(requestFeishuApi(request, "prefix", NO_DELAY)).rejects.toThrow(/network failure/);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("requestFeishuApi — opt-in transient retries", () => {
+  it("retries Feishu's in-progress response for idempotent sends", async () => {
+    const request = vi.fn().mockRejectedValueOnce(axiosError(230049)).mockResolvedValueOnce("ok");
+
+    await expect(
+      requestFeishuApi(request, "prefix", { ...NO_DELAY, retryTransient: true }),
+    ).resolves.toBe("ok");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry Feishu's in-progress response unless explicitly enabled", async () => {
+    const request = vi.fn().mockRejectedValue(axiosError(230049));
+
+    await expect(requestFeishuApi(request, "prefix", NO_DELAY)).rejects.toThrow(/230049/);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    "EAI_AGAIN",
+    "ECONNABORTED",
+    "ECONNREFUSED",
+    "ECONNRESET",
+    "EHOSTUNREACH",
+    "ENETDOWN",
+    "ENETUNREACH",
+    "ENOTFOUND",
+    "EPIPE",
+    "EPROTO",
+    "ERR_NETWORK",
+    "ERR_SSL_WRONG_VERSION_NUMBER",
+    "ETIMEDOUT",
+    "UND_ERR_BODY_TIMEOUT",
+    "UND_ERR_HEADERS_TIMEOUT",
+    "UND_ERR_SOCKET",
+  ])("retries transient network code %s", async (code) => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(transientCodeError(code))
+      .mockResolvedValueOnce("ok");
+
+    await expect(
+      requestFeishuApi(request, "prefix", { ...NO_DELAY, retryTransient: true }),
+    ).resolves.toBe("ok");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([408, 425, 500, 502, 503, 504, 599])(
+    "retries transient HTTP status %i",
+    async (status) => {
+      const request = vi
+        .fn()
+        .mockRejectedValueOnce(transientHttpError(status))
+        .mockResolvedValueOnce("ok");
+
+      await expect(
+        requestFeishuApi(request, "prefix", { ...NO_DELAY, retryTransient: true }),
+      ).resolves.toBe("ok");
+      expect(request).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("recognizes transient failures in nested causes", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("wrapped", { cause: transientCodeError("ECONNRESET") }))
+      .mockResolvedValueOnce("ok");
+
+    await expect(
+      requestFeishuApi(request, "prefix", { ...NO_DELAY, retryTransient: true }),
+    ).resolves.toBe("ok");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry transient failures unless explicitly enabled", async () => {
+    const request = vi.fn().mockRejectedValue(transientCodeError("ECONNRESET"));
+
+    await expect(requestFeishuApi(request, "prefix", NO_DELAY)).rejects.toThrow(/ECONNRESET/);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry non-transient HTTP failures when enabled", async () => {
+    const request = vi.fn().mockRejectedValue(transientHttpError(404));
+
+    await expect(
+      requestFeishuApi(request, "prefix", { ...NO_DELAY, retryTransient: true }),
+    ).rejects.toThrow(/404/);
     expect(request).toHaveBeenCalledTimes(1);
   });
 });
@@ -276,6 +376,29 @@ describe("requestFeishuApi — retry on fulfilled rate-limit body (no throw)", (
     const result = await requestFeishuApi(request, "prefix", NO_DELAY);
     expect((result as { data: { message_id: string } }).data.message_id).toBe("om_ok2");
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries when an idempotent send fulfills with code 230049", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ code: 230049, msg: "message is being processed" })
+      .mockResolvedValueOnce({ code: 0, data: { message_id: "om_processed" } });
+
+    const result = await requestFeishuApi(request, "prefix", {
+      ...NO_DELAY,
+      retryTransient: true,
+    });
+    expect((result as { data: { message_id: string } }).data.message_id).toBe("om_processed");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry fulfilled code 230049 without transient retry opt-in", async () => {
+    const fulfilled = { code: 230049, msg: "message is being processed" };
+    const request = vi.fn().mockResolvedValue(fulfilled);
+
+    const result = await requestFeishuApi(request, "prefix", NO_DELAY);
+    expect(result).toBe(fulfilled);
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("exhausts retries when SDK keeps fulfilling 11232 and throws wrapped error", async () => {

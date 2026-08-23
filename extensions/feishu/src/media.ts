@@ -29,11 +29,6 @@ import { requestFeishuApi } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { saveMediaStreamWithIdleTimeout } from "./media-chunk-idle.js";
 import { getFeishuRuntime } from "./runtime.js";
-import {
-  assertFeishuMessageApiSuccess,
-  resolveFeishuReceiptKind,
-  toFeishuSendResult,
-} from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 import { sendReplyOrFallbackDirect } from "./send.js";
 
@@ -541,13 +536,11 @@ async function uploadFileFeishu(params: {
   };
 }
 
-/**
- * Send an image message using an image_key
- */
-async function sendImageFeishu(params: {
+async function sendUploadedMediaFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
-  imageKey: string;
+  content: string;
+  msgType: "image" | "file" | "audio" | "media";
   replyToMessageId?: string;
   replyInThread?: boolean;
   allowTopLevelReplyFallback?: boolean;
@@ -556,7 +549,8 @@ async function sendImageFeishu(params: {
   const {
     cfg,
     to,
-    imageKey,
+    content,
+    msgType,
     replyToMessageId,
     replyInThread,
     allowTopLevelReplyFallback,
@@ -567,112 +561,22 @@ async function sendImageFeishu(params: {
     to,
     accountId,
   });
-  const content = JSON.stringify({ image_key: imageKey });
-
-  if (replyToMessageId) {
-    return sendReplyOrFallbackDirect(client, {
-      replyToMessageId,
-      replyInThread,
-      allowTopLevelReplyFallback,
-      content,
-      msgType: "image",
-      directParams: {
-        receiveId,
-        receiveIdType,
-        content,
-        msgType: "image",
-      },
-      directErrorPrefix: "Feishu image send failed",
-      replyErrorPrefix: "Feishu image reply failed",
-    });
-  }
-
-  const response = await requestFeishuApi(
-    () =>
-      client.im.message.create({
-        params: { receive_id_type: receiveIdType },
-        data: {
-          receive_id: receiveId,
-          content,
-          msg_type: "image",
-        },
-      }),
-    "Feishu image send failed",
-    { includeNestedErrorLogId: true },
-  );
-  assertFeishuMessageApiSuccess(response, "Feishu image send failed");
-  return toFeishuSendResult(response, receiveId, "media", "Feishu image send failed");
-}
-
-/**
- * Send a file message using a file_key
- */
-async function sendFileFeishu(params: {
-  cfg: ClawdbotConfig;
-  to: string;
-  fileKey: string;
-  /** Use "audio" for audio, "media" for video (mp4), "file" for documents */
-  msgType?: "file" | "audio" | "media";
-  replyToMessageId?: string;
-  replyInThread?: boolean;
-  allowTopLevelReplyFallback?: boolean;
-  accountId?: string;
-}): Promise<SendMediaResult> {
-  const {
-    cfg,
-    to,
-    fileKey,
+  const subject = msgType === "image" ? "image" : "file";
+  return sendReplyOrFallbackDirect(client, {
     replyToMessageId,
     replyInThread,
     allowTopLevelReplyFallback,
-    accountId,
-  } = params;
-  const msgType = params.msgType ?? "file";
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
-    cfg,
-    to,
-    accountId,
-  });
-  const content = JSON.stringify({ file_key: fileKey });
-
-  if (replyToMessageId) {
-    return sendReplyOrFallbackDirect(client, {
-      replyToMessageId,
-      replyInThread,
-      allowTopLevelReplyFallback,
+    content,
+    msgType,
+    directParams: {
+      receiveId,
+      receiveIdType,
       content,
       msgType,
-      directParams: {
-        receiveId,
-        receiveIdType,
-        content,
-        msgType,
-      },
-      directErrorPrefix: "Feishu file send failed",
-      replyErrorPrefix: "Feishu file reply failed",
-    });
-  }
-
-  const response = await requestFeishuApi(
-    () =>
-      client.im.message.create({
-        params: { receive_id_type: receiveIdType },
-        data: {
-          receive_id: receiveId,
-          content,
-          msg_type: msgType,
-        },
-      }),
-    "Feishu file send failed",
-    { includeNestedErrorLogId: true },
-  );
-  assertFeishuMessageApiSuccess(response, "Feishu file send failed");
-  return toFeishuSendResult(
-    response,
-    receiveId,
-    resolveFeishuReceiptKind(msgType),
-    "Feishu file send failed",
-  );
+    },
+    directErrorPrefix: `Feishu ${subject} send failed`,
+    replyErrorPrefix: `Feishu ${subject} reply failed`,
+  });
 }
 
 /**
@@ -1067,10 +971,11 @@ export async function sendMediaFeishu(params: {
     const { imageKey } = await runBeforeFeishuMessageDispatch(() =>
       uploadImageFeishu({ cfg, image: buffer, accountId }),
     );
-    const result = await sendImageFeishu({
+    const result = await sendUploadedMediaFeishu({
       cfg,
       to,
-      imageKey,
+      content: JSON.stringify({ image_key: imageKey }),
+      msgType: "image",
       replyToMessageId,
       replyInThread,
       allowTopLevelReplyFallback,
@@ -1097,10 +1002,10 @@ export async function sendMediaFeishu(params: {
       accountId,
     }),
   );
-  const result = await sendFileFeishu({
+  const result = await sendUploadedMediaFeishu({
     cfg,
     to,
-    fileKey,
+    content: JSON.stringify({ file_key: fileKey }),
     msgType: routing.msgType,
     replyToMessageId,
     replyInThread,

@@ -261,6 +261,7 @@ describe("getMessageFeishu", () => {
       data: {
         receive_id: "oc_send",
         msg_type: "post",
+        uuid: expect.any(String),
         content: JSON.stringify({
           zh_cn: {
             content: [
@@ -273,7 +274,6 @@ describe("getMessageFeishu", () => {
         }),
       },
     });
-    expect(typeof result.receipt.sentAt).toBe("number");
     expect(result).toEqual({
       messageId: "om_mentions",
       chatId: "oc_send",

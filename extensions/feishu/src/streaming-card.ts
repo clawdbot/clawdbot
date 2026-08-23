@@ -12,8 +12,8 @@ import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runt
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { FEISHU_HTTP_TIMEOUT_MS } from "./client-timeout.js";
 import { getFeishuUserAgent } from "./client.js";
-import { requestFeishuApi } from "./comment-shared.js";
 import { readFeishuJsonResponse } from "./json-response.js";
+import { sendIdempotentFeishuMessage } from "./message-send.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
 import { resolveStreamingCardSendMode } from "./streaming-card-send-mode.js";
 import type { FeishuDomain } from "./types.js";
@@ -356,49 +356,21 @@ export class FeishuStreamingSession {
     // reliably routes streaming cards into Feishu topics, whereas
     // message.create with root_id may silently ignore root_id for card
     // references (card_id format).
-    let sendRes;
     const sendOptions = options ?? {};
     const sendMode = resolveStreamingCardSendMode(sendOptions);
-    if (sendMode === "reply") {
-      sendRes = await requestFeishuApi(
-        () =>
-          this.client.im.message.reply({
-            path: { message_id: sendOptions.replyToMessageId! },
-            data: {
-              msg_type: "interactive",
-              content: cardContent,
-              ...(sendOptions.replyInThread ? { reply_in_thread: true } : {}),
-            },
-          }),
-        "Send card failed",
-      );
-    } else if (sendMode === "root_create") {
-      // root_id is undeclared in the SDK types but accepted at runtime
-      sendRes = await requestFeishuApi(
-        () =>
-          this.client.im.message.create({
-            params: { receive_id_type: receiveIdType },
-            data: Object.assign(
-              { receive_id: receiveId, msg_type: "interactive", content: cardContent },
-              { root_id: sendOptions.rootId },
-            ),
-          }),
-        "Send card failed",
-      );
-    } else {
-      sendRes = await requestFeishuApi(
-        () =>
-          this.client.im.message.create({
-            params: { receive_id_type: receiveIdType },
-            data: {
-              receive_id: receiveId,
-              msg_type: "interactive",
-              content: cardContent,
-            },
-          }),
-        "Send card failed",
-      );
-    }
+    const replyToMessageId = sendMode === "reply" ? sendOptions.replyToMessageId : undefined;
+    const rootId = sendMode === "root_create" ? sendOptions.rootId : undefined;
+    const sendRes = await sendIdempotentFeishuMessage({
+      client: this.client,
+      receiveId,
+      receiveIdType,
+      content: cardContent,
+      msgType: "interactive",
+      errorPrefix: "Send card failed",
+      replyToMessageId,
+      replyInThread: sendOptions.replyInThread,
+      rootId,
+    });
     if (sendRes.code !== 0 || !sendRes.data?.message_id) {
       throw new Error(`Send card failed: ${sendRes.msg}`);
     }

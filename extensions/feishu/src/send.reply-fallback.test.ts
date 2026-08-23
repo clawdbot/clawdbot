@@ -25,6 +25,12 @@ vi.mock("./runtime.js", () => ({
 let sendCardFeishu: typeof import("./send.js").sendCardFeishu;
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 
+function transientHttpError(status: number) {
+  return Object.assign(new Error(`Request failed with status code ${status}`), {
+    response: { status, data: { msg: "transient failure" } },
+  });
+}
+
 describe("Feishu reply fallback for withdrawn/deleted targets", () => {
   const replyMock = vi.fn();
   const createMock = vi.fn();
@@ -91,6 +97,49 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     ).rejects.toThrow(
       /Feishu send failed: .*"http_status":400.*"feishu_code":9499.*"feishu_msg":"Bad Request".*"feishu_log_id":"202604291247104BEF4C42D2420A9AD569".*"feishu_troubleshooter":"https:\/\/open\.feishu\.cn\/search\?log_id=202604291247104BEF4C42D2420A9AD569"/,
     );
+  });
+
+  it("reuses one uuid when retrying a transient direct-send failure", async () => {
+    createMock
+      .mockReset()
+      .mockRejectedValueOnce(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }))
+      .mockResolvedValueOnce({ code: 0, data: { message_id: "om_created" } });
+
+    await expect(
+      sendMessageFeishu({
+        cfg: {} as never,
+        to: "user:ou_target",
+        text: "hello",
+      }),
+    ).resolves.toMatchObject({ messageId: "om_created" });
+
+    expect(createMock).toHaveBeenCalledTimes(2);
+    const firstUuid = createMock.mock.calls[0]?.[0]?.data?.uuid;
+    const secondUuid = createMock.mock.calls[1]?.[0]?.data?.uuid;
+    expect(firstUuid).toMatch(/^[0-9a-f-]{36}$/);
+    expect(secondUuid).toBe(firstUuid);
+  });
+
+  it("reuses one uuid when retrying a transient reply failure", async () => {
+    replyMock
+      .mockReset()
+      .mockRejectedValueOnce(transientHttpError(503))
+      .mockResolvedValueOnce({ code: 0, data: { message_id: "om_reply" } });
+
+    await expect(
+      sendMessageFeishu({
+        cfg: {} as never,
+        to: "user:ou_target",
+        text: "hello",
+        replyToMessageId: "om_parent",
+      }),
+    ).resolves.toMatchObject({ messageId: "om_reply" });
+
+    expect(replyMock).toHaveBeenCalledTimes(2);
+    const firstUuid = replyMock.mock.calls[0]?.[0]?.data?.uuid;
+    const secondUuid = replyMock.mock.calls[1]?.[0]?.data?.uuid;
+    expect(firstUuid).toMatch(/^[0-9a-f-]{36}$/);
+    expect(secondUuid).toBe(firstUuid);
   });
 
   it("falls back to create for withdrawn post replies", async () => {
@@ -300,6 +349,7 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
         content: '{"zh_cn":{"content":[[{"tag":"md","text":"hello"}]]}}',
         msg_type: "post",
         reply_in_thread: true,
+        uuid: expect.any(String),
       },
     });
     expect(createMock).toHaveBeenCalledWith({
@@ -308,6 +358,7 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
         content: '{"zh_cn":{"content":[[{"tag":"md","text":"hello"}]]}}',
         receive_id: "oc_group_1",
         msg_type: "post",
+        uuid: expect.any(String),
       },
     });
   });
