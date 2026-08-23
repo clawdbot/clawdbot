@@ -3,7 +3,7 @@ import { mutateConfigFileWithRetry } from "../../config/config.js";
 import { REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-
+// function
 function patchSkillConfigEntry(
   cfg: OpenClawConfig,
   skillKey: string,
