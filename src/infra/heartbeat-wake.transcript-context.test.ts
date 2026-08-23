@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import {
   getOwnedSessionTranscriptWriterFence,
   withOwnedSessionTranscriptWrites,
@@ -7,25 +7,21 @@ import { requestHeartbeat, setHeartbeatWakeHandler } from "./heartbeat-wake.js";
 
 let dispose = () => {};
 
-afterEach(async () => {
+afterEach(() => {
   dispose();
-  const disposeDrainHandler = setHeartbeatWakeHandler(async () => ({
-    status: "skipped",
-    reason: "disabled",
-  }));
-  await vi.runAllTimersAsync();
-  disposeDrainHandler();
-  vi.useRealTimers();
 });
 
+// Real timers on purpose: fake timers fire callbacks from the test's own async
+// context, so they cannot observe the AsyncLocalStorage inheritance under test.
 it("dispatches outside the requesting attempt transcript context", async () => {
-  vi.useFakeTimers();
-  let observedFence: ReturnType<typeof getOwnedSessionTranscriptWriterFence> | "not-called" =
-    "not-called";
-  dispose = setHeartbeatWakeHandler(async () => {
-    observedFence = getOwnedSessionTranscriptWriterFence();
-    return { status: "ran", durationMs: 1 };
-  });
+  const observedFence = new Promise<ReturnType<typeof getOwnedSessionTranscriptWriterFence>>(
+    (resolve) => {
+      dispose = setHeartbeatWakeHandler(async () => {
+        resolve(getOwnedSessionTranscriptWriterFence());
+        return { status: "ran", durationMs: 1 };
+      });
+    },
+  );
   await withOwnedSessionTranscriptWrites(
     {
       sessionTarget: { expectedWriterRunId: "disposed-requesting-run" },
@@ -39,6 +35,5 @@ it("dispatches outside the requesting attempt transcript context", async () => {
         coalesceMs: 0,
       }),
   );
-  await vi.advanceTimersByTimeAsync(1);
-  expect(observedFence).toBeUndefined();
+  expect(await observedFence).toBeUndefined();
 });
