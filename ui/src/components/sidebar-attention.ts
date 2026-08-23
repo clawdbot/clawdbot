@@ -318,11 +318,15 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
 
   private hasUpdateSurface(): boolean {
     const snapshot = this.context?.overlays.snapshot;
+    if (!snapshot) {
+      return false;
+    }
+    const campaign = snapshot.updateSchedule?.campaign;
+    if (campaign && !snapshot.updateCampaignStatusHydrated) {
+      return Boolean(snapshot.updateRunning || snapshot.updateStatusBanner);
+    }
     return Boolean(
-      snapshot?.updateRunning ||
-      snapshot?.updateStatusBanner ||
-      snapshot?.updateAvailable ||
-      (snapshot?.updateCampaignStatusHydrated && snapshot.updateSchedule?.campaign),
+      snapshot.updateRunning || snapshot.updateStatusBanner || snapshot.updateAvailable || campaign,
     );
   }
 
