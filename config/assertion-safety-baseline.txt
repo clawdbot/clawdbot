@@ -364,7 +364,7 @@ extensions/discord/src/internal/entity-cache.ts	3
 extensions/discord/src/internal/gateway-dispatch.ts	7
 extensions/discord/src/internal/gateway-payload.ts	1
 extensions/discord/src/internal/gateway-voice-state-cache.ts	4
-extensions/discord/src/internal/gateway.ts	9
+extensions/discord/src/internal/gateway.ts	8
 extensions/discord/src/internal/interaction-dispatch.ts	12
 extensions/discord/src/internal/interaction-options.ts	2
 extensions/discord/src/internal/interaction-response.ts	2
