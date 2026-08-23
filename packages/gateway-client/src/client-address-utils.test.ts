@@ -67,6 +67,9 @@ describe("redactSensitiveKeyValuePairs", () => {
     );
     expect(redactSensitiveKeyValuePairs("status=ok retries=2")).toBe("status=ok retries=2");
 
+  });
+});
+
 const CANONICAL_FINGERPRINT = "ab".repeat(32);
 const COLON_FINGERPRINT = CANONICAL_FINGERPRINT.match(/.{2}/gu)?.join(":") ?? "";
 
