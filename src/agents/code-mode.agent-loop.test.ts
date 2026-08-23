@@ -11,9 +11,10 @@ import {
   pluginToolWithExecute,
   resetCodeModeTestState,
 } from "./code-mode.test-support.js";
+import { installCodeModeOutcomeHook } from "./embedded-agent-runner/run/code-mode-outcome.js";
 import { Agent } from "./runtime/index.js";
 import { isToolResultError } from "./tool-result-error.js";
-import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+import { jsonResult, ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
 const model: Model = {
   id: "test-model",
@@ -59,6 +60,7 @@ async function runCodeModeAgent(params: { programs: string[]; hiddenTools: AnyAg
     catalogRef,
   });
   const providerContexts: Context[] = [];
+  let reconciliationCandidates = 0;
   const agent = new Agent({
     initialState: { model, tools },
     afterToolCall: async ({ result, isError }) => ({
@@ -85,31 +87,34 @@ async function runCodeModeAgent(params: { programs: string[]; hiddenTools: AnyAg
       return stream;
     },
   });
+  installCodeModeOutcomeHook({
+    agent,
+    onReconciliationCandidate: () => {
+      reconciliationCandidates += 1;
+    },
+  });
   await agent.prompt("finish the task despite tool errors");
 
-  return { agent, providerContexts };
+  return { agent, providerContexts, reconciliationCandidates };
 }
 
 describe("Code Mode agent-loop error recovery", () => {
   afterEach(() => resetCodeModeTestState());
 
-  it("returns a failed nested tool to the model without replaying an earlier side effect", async () => {
-    const recordEffect = pluginToolWithExecute("record_effect", "Record an effect", async () =>
-      jsonResult({ recorded: true }),
+  it("returns a trusted no-start tool failure to the model for ordinary recovery", async () => {
+    const terminal = pluginToolWithExecute("terminal", "Open a terminal", async () =>
+      jsonResult({ unexpected: true }),
     );
-    const terminal = pluginToolWithExecute("terminal", "Open a terminal", async () => {
-      throw new Error("terminal unavailable");
-    });
+    terminal.prepareBeforeToolCallParams = () => {
+      throw new ToolInputError("terminal unavailable before execution");
+    };
     const recover = pluginToolWithExecute("recover_task", "Recover the task", async () =>
       jsonResult({ recovered: true }),
     );
 
-    const { agent, providerContexts } = await runCodeModeAgent({
-      hiddenTools: [recordEffect, terminal, recover],
-      programs: [
-        "await record_effect({}); return await terminal({});",
-        "return await recover_task({});",
-      ],
+    const { agent, providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+      hiddenTools: [terminal, recover],
+      programs: ["return await terminal({});", "return await recover_task({});"],
     });
 
     expect(providerContexts).toHaveLength(3);
@@ -126,9 +131,9 @@ describe("Code Mode agent-loop error recovery", () => {
         }),
       }),
     );
-    expect(recordEffect.execute).toHaveBeenCalledOnce();
-    expect(terminal.execute).toHaveBeenCalledOnce();
+    expect(terminal.execute).not.toHaveBeenCalled();
     expect(recover.execute).toHaveBeenCalledOnce();
+    expect(reconciliationCandidates).toBe(0);
     expect(agent.state.messages.at(-1)).toMatchObject({
       role: "assistant",
       content: [{ type: "text", text: "recovered" }],
@@ -166,33 +171,56 @@ describe("Code Mode agent-loop error recovery", () => {
     });
   });
 
-  it("inspects a partially applied mutation without replaying the mutation", async () => {
+  it("blocks another action after an earlier side effect and a later tool failure", async () => {
+    const recordEffect = pluginToolWithExecute("record_effect", "Record an effect", async () =>
+      jsonResult({ recorded: true }),
+    );
+    const terminal = pluginToolWithExecute("terminal", "Open a terminal", async () => {
+      throw new Error("terminal unavailable");
+    });
+    const write = pluginToolWithExecute("write", "Repeat a mutation", async () =>
+      jsonResult({ repeated: true }),
+    );
+
+    const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+      hiddenTools: [recordEffect, terminal, write],
+      programs: ["await record_effect({}); return await terminal({});", "return await write({});"],
+    });
+
+    expect(providerContexts).toHaveLength(1);
+    expect(recordEffect.execute).toHaveBeenCalledOnce();
+    expect(terminal.execute).toHaveBeenCalledOnce();
+    expect(write.execute).not.toHaveBeenCalled();
+    expect(reconciliationCandidates).toBe(1);
+  });
+
+  it("routes a partially applied mutation to restricted reconciliation without replay", async () => {
     const appliedChanges: string[] = [];
     const applyPatch = pluginToolWithExecute("apply_patch", "Apply a patch", async () => {
       appliedChanges.push("first hunk applied");
       throw new Error("second hunk is ambiguous");
     });
-    const read = pluginToolWithExecute("read", "Read the resulting state", async () =>
-      jsonResult({ appliedChanges }),
+    const write = pluginToolWithExecute("write", "Repeat a mutation", async () =>
+      jsonResult({ repeated: true }),
+    );
+    const send = pluginToolWithExecute("message", "Send a message", async () =>
+      jsonResult({ delivered: true }),
+    );
+    const shell = pluginToolWithExecute("shell_command", "Run a shell command", async () =>
+      jsonResult({ executed: true }),
     );
 
-    const { providerContexts } = await runCodeModeAgent({
-      hiddenTools: [applyPatch, read],
-      programs: ["return await apply_patch({});", "return await read({});"],
+    const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+      hiddenTools: [applyPatch, write, send, shell],
+      programs: ["return await apply_patch({});", "return await write({});"],
     });
 
-    expect(providerContexts).toHaveLength(3);
-    expect(providerContexts[1]?.messages).toContainEqual(
-      expect.objectContaining({
-        role: "toolResult",
-        isError: true,
-        details: expect.objectContaining({
-          error: expect.stringContaining("second hunk is ambiguous"),
-        }),
-      }),
-    );
+    expect(providerContexts).toHaveLength(1);
     expect(applyPatch.execute).toHaveBeenCalledOnce();
-    expect(read.execute).toHaveBeenCalledOnce();
+    expect(write.execute).not.toHaveBeenCalled();
+    expect(send.execute).not.toHaveBeenCalled();
+    expect(shell.execute).not.toHaveBeenCalled();
+    expect(reconciliationCandidates).toBe(1);
     expect(appliedChanges).toEqual(["first hunk applied"]);
   });
 

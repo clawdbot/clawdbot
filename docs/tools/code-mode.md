@@ -184,16 +184,18 @@ try {
 }
 ```
 
-An uncaught tool error, JavaScript syntax error, or TypeScript transform error
-becomes a failed `exec` or `wait` result. The model can read that error and
-continue the same turn with corrected code, another enabled tool, or a response
-to the user; a failed tool call does not automatically end the agent run.
+JavaScript syntax errors, TypeScript transform errors, and tool failures proven
+to occur before execution become failed `exec` results that the model can read
+and correct across successive turns. A failed tool call does not automatically
+end the agent run when OpenClaw can prove that no nested action started.
 
 OpenClaw does not automatically replay a failed program. If earlier calls
-already ran, their side effects remain: inspect what happened and continue from
-the current state instead of repeating writes, sends, shell commands, or other
-actions. Cancellation, explicitly terminal tool outcomes, sandbox restrictions,
-approval requirements, and tool-policy denials retain their existing behavior.
+already ran or a failed call may have partially applied, OpenClaw first limits
+recovery to an authorized read-only inspection of the current state. It does
+not expose writes, sends, shell commands, or other mutations during that
+reconciliation. Cancellation, explicitly terminal tool outcomes, sandbox
+restrictions, approval requirements, and tool-policy denials retain their
+existing behavior.
 
 ### Verify the active surface
 
@@ -972,8 +974,10 @@ code-mode tool call and the nested tool id.
 
 Nested tool failures cross into the guest as catchable JavaScript errors. If
 guest code does not catch an error, `exec` or `wait` returns a failed tool
-result so the model can decide how to proceed. Network-controlled tool output
-and errors retain their existing untrusted-content wrapping and sanitization;
+result. Proven no-start failures and guest-only errors allow ordinary model
+recovery; possible nested side effects require authorized read-only
+reconciliation before any further action. Network-controlled tool output and
+errors retain their existing untrusted-content wrapping and sanitization;
 recovering from a failure does not grant new permissions or replay completed
 side effects.
 

@@ -347,6 +347,7 @@ export type EmbeddedRunAttemptResult = {
    */
   codeModeEngaged?: boolean;
   /** Host-authenticated request for one bounded post-mutation inspection attempt. */
+  codeModeReconciliationCandidate?: boolean;
   /** Completed assistant round trips observed during this attempt. */
   assistantTurns?: number;
   /** Inner bridge call counts from this attempt's tool-search/code-mode catalog. */

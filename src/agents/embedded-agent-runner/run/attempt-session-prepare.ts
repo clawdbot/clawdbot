@@ -49,6 +49,7 @@ import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
 import { resolveExistingAttemptTranscriptState } from "./attempt-transcript-helpers.js";
 import type { EmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
+import { installCodeModeOutcomeHook } from "./code-mode-outcome.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import { reconcilePrePersistedCurrentUserTurn } from "./pre-persisted-user-turn.js";
 import { resolveSessionBoundaryPromptCacheKey } from "./session-boundary-prompt-cache-key.js";
@@ -221,6 +222,8 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   };
   setActiveSessionSystemPrompt(input.initialSystemPrompt);
   let didDeliverSourceReplyViaMessageTool = false;
+  let codeModeReconciliationCandidate = false;
+  let codeModeReconciliationReadAuthorized = false;
   const markSourceReplyDelivered = () => {
     didDeliverSourceReplyViaMessageTool = true;
   };
@@ -229,15 +232,29 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     onDeliveredSourceReply: markSourceReplyDelivered,
   });
+  if (input.clientToolPreparation.codeModeControlsEnabledForRun) {
+    installCodeModeOutcomeHook({
+      agent: activeSession.agent,
+      onReconciliationCandidate: () => {
+        if (codeModeReconciliationReadAuthorized) {
+          codeModeReconciliationCandidate = true;
+        }
+      },
+    });
+  }
   input.markStage("agent-session");
 
   return {
     activeSession,
     allCustomTools,
     ...clientToolRuntime,
+    getCodeModeReconciliationCandidate: () => codeModeReconciliationCandidate,
     hasDeliveredSourceReply: () => didDeliverSourceReplyViaMessageTool,
     hookRunner,
     markSourceReplyDelivered,
+    setCodeModeReconciliationReadAuthorized: (value: boolean) => {
+      codeModeReconciliationReadAuthorized = clientToolRuntime.coreReadAuthorized && value;
+    },
     setActiveSessionSystemPrompt,
     settingsManager,
   };

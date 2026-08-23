@@ -38,6 +38,10 @@ import { buildToolLifecycleErrorResult } from "./embedded-agent-tool-results.js"
 import { stripDowngradedToolCallText } from "./embedded-agent-utils.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
+import {
+  consumeTrustedToolNoStartError,
+  registerTrustedToolNoStartError,
+} from "./tool-result-error.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const embeddedLog = createSubsystemLogger("agent/embedded");
@@ -634,7 +638,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         } as never);
         return result;
       } catch (error) {
-        await handleToolExecutionEnd(ctx, {
+        const trustedNoStart = consumeTrustedToolNoStartError(error);
+        const terminal = await handleToolExecutionEnd(ctx, {
           type: "tool_execution_end",
           toolName: toolParams.toolName,
           toolCallId: toolParams.toolCallId,
@@ -643,6 +648,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
           result: buildToolLifecycleErrorResult(error),
           hideFromChannelProgress: toolParams.hideFromChannelProgress,
         } as never);
+        if (trustedNoStart && !terminal.executionStarted) {
+          registerTrustedToolNoStartError(error);
+        }
         throw error;
       }
     },

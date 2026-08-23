@@ -10,6 +10,7 @@ import {
   createCodeModeNamespaceRuntime,
   type CodeModeNamespaceRuntime,
 } from "./code-mode-namespaces.js";
+import { registerRepairableCodeModeFailure } from "./code-mode-repair-provenance.js";
 import {
   CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
   codeModeFailureCode,
@@ -34,6 +35,7 @@ import {
   createCodeModeBridgeDispatchState,
   createPendingBridgeStates,
   disposeCodeModeRun,
+  isCodeModeBridgeRepairEligible,
   pendingBridgeRequestsReplaySafe,
   pendingBridgeStatesForSettlement,
   pendingToolCalls,
@@ -529,7 +531,7 @@ async function settleCodeModeResult(params: {
     ...(result.status === "completed" ? { value: result.value } : {}),
     maxOutputBytes: params.config.maxOutputBytes,
   });
-  return {
+  const finalized = {
     ...result,
     ...(result.status === "completed" ? { value: bounded.value } : {}),
     ...(result.status === "failed"
@@ -542,6 +544,10 @@ async function settleCodeModeResult(params: {
     replaySafe: params.replaySafe,
     telemetry: telemetry(params.runtime),
   };
+  if (finalized.status === "failed" && isCodeModeBridgeRepairEligible(params.bridgeDispatch)) {
+    registerRepairableCodeModeFailure(finalized);
+  }
+  return finalized;
 }
 
 export async function runWait(params: {
