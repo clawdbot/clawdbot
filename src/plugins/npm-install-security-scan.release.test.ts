@@ -184,10 +184,13 @@ function requiredReviewedFindingsForPackage(
   return [...commonFindings, ...sourceLayout];
 }
 
-function isReviewedPublishableCriticalFinding(key: string): boolean {
+function isReviewedPublishableCriticalFinding(key: string, evidence: string): boolean {
+  const sourceContract = OPTIONAL_REVIEWED_PUBLISHABLE_SOURCE_CRITICAL_FINDING_CONTRACTS.get(key);
+  if (sourceContract) {
+    return evidence === sourceContract.evidence;
+  }
   return (
     REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS.has(key) ||
-    OPTIONAL_REVIEWED_PUBLISHABLE_SOURCE_CRITICAL_FINDING_CONTRACTS.has(key) ||
     REVIEWED_CODEX_SOURCE_CRITICAL_FINDING_COUNTS.has(key) ||
     OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDING_COUNTS.has(key)
   );
@@ -369,7 +372,7 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
     }
     const packedPath = normalizePackedFindingPath(toRepoPath(relative(stageDir, finding.file)));
     const key = `${plugin.packageName}:${finding.ruleId}:${packedPath}`;
-    if (isReviewedPublishableCriticalFinding(key)) {
+    if (isReviewedPublishableCriticalFinding(key, finding.evidence)) {
       reviewedCriticalFindings.push(key);
       continue;
     }
@@ -479,12 +482,30 @@ describe("publishable plugin npm package install security scan", () => {
       count: 1,
       evidence: "const child = spawn(invocation.command, invocation.argv, {",
     });
-    expect(isReviewedPublishableCriticalFinding(`${openCodeFinding}.relocated`)).toBe(false);
+    expect(
+      isReviewedPublishableCriticalFinding(
+        openCodeFinding,
+        "const child = spawn(invocation.command, invocation.argv, {",
+      ),
+    ).toBe(true);
+    expect(
+      isReviewedPublishableCriticalFinding(
+        openCodeFinding,
+        "const child = spawn(other.command, other.argv, {",
+      ),
+    ).toBe(false);
+    expect(
+      isReviewedPublishableCriticalFinding(
+        `${openCodeFinding}.relocated`,
+        "const child = spawn(invocation.command, invocation.argv, {",
+      ),
+    ).toBe(false);
   });
 
-  it("accepts only one occurrence of an optional reviewed source boundary", () => {
+  it("rejects a decoy contract string paired with a different dangerous spawn", () => {
     const packageDir = mkdtempSync(join(tmpdir(), "openclaw-reviewed-source-"));
     const packedPath = "session-catalog.ts";
+    const finding = "@openclaw/opencode-provider:dangerous-exec:session-catalog.ts";
     const evidence = "const child = spawn(invocation.command, invocation.argv, {";
     try {
       fs.writeFileSync(join(packageDir, packedPath), "export {};\n");
@@ -496,14 +517,24 @@ describe("publishable plugin npm package install security scan", () => {
         ),
       ).toEqual([]);
 
-      fs.writeFileSync(join(packageDir, packedPath), `${evidence}\n`);
+      fs.writeFileSync(
+        join(packageDir, packedPath),
+        `const reviewedBoundaryDecoy = ${JSON.stringify(evidence)};\n` +
+          "const child = spawn(other.command, other.argv, {\n",
+      );
       expect(
         expectedReviewedSourceFindingsForPackedPath(
           packageDir,
           "@openclaw/opencode-provider",
           packedPath,
         ),
-      ).toEqual(["@openclaw/opencode-provider:dangerous-exec:session-catalog.ts"]);
+      ).toEqual([finding]);
+      expect(
+        isReviewedPublishableCriticalFinding(
+          finding,
+          "const child = spawn(other.command, other.argv, {",
+        ),
+      ).toBe(false);
 
       fs.writeFileSync(join(packageDir, packedPath), `${evidence}\n${evidence}\n`);
       expect(() =>
