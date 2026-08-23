@@ -295,11 +295,18 @@ export async function handleTelegramModelCallback(params: {
       runtimeReset: applied.runtimeChange?.kind === "clear",
       defaultAuthProfileNotice,
     });
-    await editMessageWithButtons(
-      confirmation.html,
-      [],
-      { parse_mode: "HTML" },
-      { blocks: confirmation.richBlocks },
+    // Runs after applySessionModelSelection has already taken effect, so a transient
+    // failure here must not be misreported as a permanent "Failed to change model"
+    // edit -- retryModelAction wraps it into TelegramRetryableCallbackError, which the
+    // outer catch below rethrows into the router's retry path instead of swallowing it
+    // (ClawSweeper follow-up finding on #124222).
+    await retryModelAction(() =>
+      editMessageWithButtons(
+        confirmation.html,
+        [],
+        { parse_mode: "HTML" },
+        { blocks: confirmation.richBlocks },
+      ),
     );
   } catch (err) {
     if (err instanceof TelegramRetryableCallbackError) {
