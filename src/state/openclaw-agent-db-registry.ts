@@ -12,6 +12,7 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "./openclaw-agent-db-registry-listing.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
+import { resolveOpenClawAgentDatabaseStoredPath } from "./openclaw-state-db.paths.js";
 
 export {
   listOpenClawRegisteredAgentDatabases,
@@ -620,6 +621,7 @@ export function registerOpenClawAgentDatabase(params: {
   runOpenClawStateWriteTransaction(
     (database) => {
       assertAgentDeletionPathFence(database.db, deletionFence);
+      const storedPath = resolveOpenClawAgentDatabaseStoredPath(database.path, params.path);
       const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
       executeSqliteQuerySync(
         database.db,
@@ -627,7 +629,7 @@ export function registerOpenClawAgentDatabase(params: {
           .insertInto("agent_databases")
           .values({
             agent_id: params.agentId,
-            path: params.path,
+            path: storedPath,
             schema_version: params.schemaVersion ?? OPENCLAW_AGENT_SCHEMA_VERSION,
             last_seen_at: lastSeenAt,
             size_bytes: sizeBytes,
@@ -686,13 +688,15 @@ export function unregisterOpenClawAgentDatabase(params: {
 }): void {
   runOpenClawStateWriteTransaction(
     (database) => {
+      const storedPath = resolveOpenClawAgentDatabaseStoredPath(database.path, params.path);
+      const matchingPaths = [...new Set([storedPath, params.path, path.resolve(params.path)])];
       const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
       executeSqliteQuerySync(
         database.db,
         db
           .deleteFrom("agent_databases")
           .where("agent_id", "=", params.agentId)
-          .where("path", "=", params.path),
+          .where("path", "in", matchingPaths),
       );
     },
     { env: params.env },

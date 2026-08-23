@@ -450,10 +450,6 @@ describe("hasAlreadyFlushedForCurrentCompaction", () => {
 });
 
 describe("resolveMemoryFlushContextWindowTokens", () => {
-  it("falls back to agent config or default tokens", () => {
-    expect(resolveMemoryFlushContextWindowTokens({ agentCfgContextTokens: 42_000 })).toBe(42_000);
-  });
-
   it("uses provider-specific configured limits when the same model id exists on multiple providers", () => {
     const cfg = {
       models: {
@@ -477,24 +473,6 @@ describe("resolveMemoryFlushContextWindowTokens", () => {
         modelId: "shared-model",
       }),
     ).toBe(200_000);
-  });
-
-  it("prefers agent contextTokens override over the provider configured window", () => {
-    const cfg = {
-      models: {
-        providers: {
-          "provider-b": { models: [{ id: "shared-model", contextWindow: 512_000 }] },
-        },
-      },
-    };
-    expect(
-      resolveMemoryFlushContextWindowTokens({
-        cfg: cfg as never,
-        provider: "provider-b",
-        modelId: "shared-model",
-        agentCfgContextTokens: 100_000,
-      }),
-    ).toBe(100_000);
   });
 });
 

@@ -13,8 +13,8 @@ import {
 } from "../../config/sessions/inbound.runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { RoutePeer } from "../../routing/resolve-route.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveAgentRoute, type RoutePeer } from "../../routing/resolve-route.js";
+import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { buildOutboundBaseSessionKey } from "./base-session-key.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
@@ -49,6 +49,23 @@ export type ResolveOutboundSessionRouteParams = {
 
 function resolveOutboundChannelPlugin(channel: ChannelId) {
   return getChannelPlugin(channel);
+}
+
+function rebaseOutboundSessionRoute(
+  route: OutboundSessionRoute,
+  baseSessionKey: string,
+): OutboundSessionRoute | null {
+  if (
+    route.sessionKey !== route.baseSessionKey &&
+    !route.sessionKey.startsWith(`${route.baseSessionKey}:`)
+  ) {
+    return null;
+  }
+  return {
+    ...route,
+    sessionKey: `${baseSessionKey}${route.sessionKey.slice(route.baseSessionKey.length)}`,
+    baseSessionKey,
+  };
 }
 
 function stripProviderPrefix(raw: string, channel: string): string {
@@ -206,11 +223,26 @@ export async function resolveOutboundSessionRoute(
   const nextParams = { ...params, target };
   const plugin = params.plugin ?? resolveOutboundChannelPlugin(params.channel);
   const resolver = plugin?.messaging?.resolveOutboundSessionRoute;
-  if (resolver) {
-    // Channel plugins can provide richer route semantics than the generic target parser.
-    return await resolver(nextParams);
+  const route = resolver ? await resolver(nextParams) : resolveFallbackSession(nextParams);
+  if (!route || route.recipientSessionExact !== true) {
+    return route;
   }
-  return resolveFallbackSession(nextParams);
+  const bindingRoute = resolveAgentRoute({
+    cfg: params.cfg,
+    channel: params.channel,
+    defaultAgentId: params.agentId,
+    accountId: params.accountId,
+    peer: route.peer,
+  });
+  const isDirect = route.peer.kind === "direct";
+  const globalScope = isDirect
+    ? (params.cfg.session?.dmScope ?? "main")
+    : (params.cfg.session?.groupScope ?? "per-group");
+  const bindingScope = isDirect ? bindingRoute.dmScope : bindingRoute.groupScope;
+  return bindingScope !== globalScope &&
+    normalizeAgentId(bindingRoute.agentId) === normalizeAgentId(params.agentId)
+    ? rebaseOutboundSessionRoute(route, bindingRoute.sessionKey)
+    : route;
 }
 
 type OutboundSessionEntryParams = {
@@ -218,6 +250,8 @@ type OutboundSessionEntryParams = {
   channel: ChannelId;
   accountId?: string | null;
   route: OutboundSessionRoute;
+  /** Revalidates caller-owned route authority at the final persistence boundary. */
+  assertCommitAllowed?: () => void;
 };
 
 async function persistOutboundSessionEntry(
@@ -253,6 +287,7 @@ async function persistOutboundSessionEntry(
     accountId: params.accountId ?? undefined,
     threadId: params.route.threadId,
     ctx,
+    ...(params.assertCommitAllowed ? { assertCommitAllowed: params.assertCommitAllowed } : {}),
   });
 }
 

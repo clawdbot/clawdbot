@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 // Codex tests cover config plugin behavior.
@@ -367,10 +368,43 @@ describe("Codex app-server config", () => {
     ).toStrictEqual({});
   });
 
-  it("parses the native session discovery toggle", () => {
-    expect(readCodexPluginConfig({ sessionCatalog: { enabled: false } }).sessionCatalog).toEqual({
+  it("parses named native session discovery homes and rejects empty labels", () => {
+    expect(
+      readCodexPluginConfig({
+        sessionCatalog: {
+          enabled: false,
+          homes: [
+            " /srv/codex-string ",
+            { path: " /srv/codex-named ", label: " Named store " },
+            { path: " /srv/codex-default " },
+          ],
+        },
+      }).sessionCatalog,
+    ).toEqual({
       enabled: false,
+      homes: [
+        "/srv/codex-string",
+        { path: "/srv/codex-named", label: "Named store" },
+        { path: "/srv/codex-default" },
+      ],
     });
+    expect(
+      readCodexPluginConfig({ sessionCatalog: { homes: [{ path: "/srv/codex", label: " " }] } }),
+    ).toStrictEqual({});
+  });
+
+  it.each([
+    { transport: "unix", homeScope: "user" },
+    { transport: "websocket", url: "ws://127.0.0.1:39175" },
+  ] as const)("rejects additional session homes for $transport app servers", (appServer) => {
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: { appServer, sessionCatalog: { homes: ["/srv/codex-extra"] } },
+        env: {},
+      }),
+    ).toThrow(
+      "plugins.entries.codex.config.sessionCatalog.homes requires appServer.transport=stdio",
+    );
   });
 
   it("rejects unknown app-server fields", () => {
@@ -2445,6 +2479,21 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
   });
 
+  it("enforces canonical per-agent exec deny before starting Codex app-server", () => {
+    const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
+      config: {
+        tools: { exec: { mode: "full" } },
+        agents: { entries: { reviewer: { tools: { exec: { mode: "deny" } } } } },
+      },
+      agentId: "reviewer",
+    });
+
+    expect(execPolicy.mode).toBe("deny");
+    expect(() => resolveRuntimeForTest({ execPolicy })).toThrow(
+      "Codex app-server local execution is unavailable because effective tools.exec.mode=deny",
+    );
+  });
+
   it("keeps auto mode prompting when requirements use the on-failure alias", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: {},
@@ -2579,7 +2628,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
             ask,
           },
         },
-      };
+      } satisfies OpenClawConfig;
       const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({ config });
 
       expectRuntimePolicy(
@@ -2611,7 +2660,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           ask: "on-miss",
         },
       },
-    };
+    } satisfies OpenClawConfig;
     const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({ config });
 
     expectRuntimePolicy(resolveRuntimeForTest({ execPolicy }), {
@@ -2629,7 +2678,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           ask: "always",
         },
       },
-    };
+    } satisfies OpenClawConfig;
 
     expect(() =>
       resolveRuntimeForTest({
@@ -2647,7 +2696,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           ask: "always",
         },
       },
-    };
+    } satisfies OpenClawConfig;
 
     expectRuntimePolicy(
       resolveRuntimeForTest({
@@ -2744,6 +2793,28 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
         approvalsReviewer: "user",
       },
     );
+  });
+
+  it("does not apply host exec approval floors to an explicit full session", () => {
+    const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
+      permissionMode: "full",
+      config: {
+        tools: {
+          exec: {
+            mode: "ask",
+          },
+        },
+      },
+      approvals: {
+        version: 1,
+        defaults: {
+          ask: "always",
+        },
+        agents: {},
+      },
+    });
+
+    expect(execPolicy).toMatchObject({ mode: "full", security: "full", ask: "off" });
   });
 
   it("preserves explicit read-only sandbox for host exec approval ask floors", () => {

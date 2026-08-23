@@ -11,6 +11,10 @@ import {
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import {
+  closeDiagnosticEmbeddedRunOwner,
+  type DiagnosticEmbeddedRunOwner,
+} from "../../../logging/diagnostic-run-activity.js";
+import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../../../plugins/hook-agent-context.js";
@@ -26,6 +30,7 @@ import {
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import {
@@ -90,8 +95,10 @@ export function prepareEmbeddedAttemptStream(input: {
   onBlockReplyFlush: EmbeddedRunAttemptParams["onBlockReplyFlush"];
   sandboxSessionKey: string;
   builtinToolNames: ReadonlySet<string>;
+  coreBuiltinToolNames?: ReadonlySet<string>;
   replaySafeToolNames: ReadonlySet<string>;
   sideEffectToolOwners?: ReadonlyMap<string, string>;
+  diagnosticOwner: DiagnosticEmbeddedRunOwner;
 }) {
   const attempt = input.attempt;
   const hookRunner = input.hookRunner;
@@ -312,6 +319,7 @@ export function prepareEmbeddedAttemptStream(input: {
     sessionKey: attempt.sessionKey,
     currentChannelId: attempt.currentChannelId,
     currentMessagingTarget: attempt.currentMessagingTarget,
+    currentAccountId: attempt.agentAccountId,
     currentThreadId: attempt.currentThreadTs,
     currentMessageId: attempt.currentMessageId,
     replyToMode: attempt.replyToMode,
@@ -319,6 +327,7 @@ export function prepareEmbeddedAttemptStream(input: {
     sessionId: attempt.sessionId,
     agentId: input.hookAgentId,
     builtinToolNames: input.builtinToolNames,
+    coreBuiltinToolNames: input.coreBuiltinToolNames,
     replaySafeToolNames: input.replaySafeToolNames,
     ...(input.sideEffectToolOwners ? { sideEffectToolOwners: input.sideEffectToolOwners } : {}),
     internalEvents: attempt.internalEvents,
@@ -342,14 +351,37 @@ export function prepareEmbeddedAttemptStream(input: {
         hideFromChannelProgress:
           "hideFromChannelProgress" in toolParams.tool &&
           toolParams.tool.hideFromChannelProgress === true,
-        execute: async () =>
-          await toolParams.tool.execute(
-            toolParams.toolCallId,
-            toolParams.input,
-            toolParams.signal ?? input.runAbortController.signal,
-            toolParams.onUpdate,
-            undefined as never,
-          ),
+        execute: async (onImplementationStart) => {
+          const signal = toolParams.signal ?? input.runAbortController.signal;
+          const preparer = getInternalToolExecutionPreparer(toolParams.tool);
+          if (!preparer) {
+            onImplementationStart();
+            return await toolParams.tool.execute(
+              toolParams.toolCallId,
+              toolParams.input,
+              signal,
+              toolParams.onUpdate,
+              undefined as never,
+            );
+          }
+          const prepared = await preparer({
+            toolCallId: toolParams.toolCallId,
+            args: toolParams.input,
+            signal,
+            onUpdate: toolParams.onUpdate,
+          });
+          try {
+            if (prepared.kind === "immediate") {
+              if (prepared.outcome.kind === "error") {
+                throw prepared.outcome.error;
+              }
+              return prepared.outcome.result;
+            }
+            return await prepared.execute(onImplementationStart);
+          } finally {
+            prepared.dispose();
+          }
+        },
       });
       // Settlement persists every queued projection. Validate the final result
       // first so a rejected hidden-tool value never enters session history.
@@ -434,6 +466,8 @@ export function prepareEmbeddedAttemptStream(input: {
   const queueHandle: AttemptStreamQueueHandle = {
     kind: "embedded",
     runId: attempt.runId,
+    diagnosticOwner: input.diagnosticOwner,
+    closeDiagnostics: () => closeDiagnosticEmbeddedRunOwner(input.diagnosticOwner),
     ...(attempt.toolAuthorityFingerprint
       ? { toolAuthorityFingerprint: attempt.toolAuthorityFingerprint }
       : {}),

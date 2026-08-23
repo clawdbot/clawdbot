@@ -8,11 +8,8 @@ import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  getAgentScopedMediaLocalRoots,
-  saveMediaBuffer,
-  saveMediaSource,
-} from "openclaw/plugin-sdk/media-runtime";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
+import { saveMediaBuffer, saveMediaSource } from "openclaw/plugin-sdk/media-store";
 import {
   sanitizeQaBusToolCallArguments,
   type QaBusToolCall,
@@ -25,6 +22,7 @@ import {
   type QaBusMessage,
 } from "./bus-client.js";
 import { sendQaChannelMediaBatch } from "./outbound.js";
+import type { PluginRuntime } from "./runtime-api.js";
 import { getQaChannelRuntime } from "./runtime.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
 
@@ -269,8 +267,9 @@ export async function handleQaInbound(params: {
   config: CoreConfig;
   message: QaBusMessage;
   buildContext?: typeof buildChannelInboundEventContext;
+  channelRuntime?: PluginRuntime["channel"];
 }) {
-  const runtime = getQaChannelRuntime();
+  const channelRuntime = params.channelRuntime ?? getQaChannelRuntime().channel;
   const inbound = params.message;
   const target = buildQaTarget({
     chatType: inbound.conversation.kind,
@@ -300,12 +299,9 @@ export async function handleQaInbound(params: {
   });
   const isGroup = inbound.conversation.kind !== "direct";
   const wasMentioned = isGroup
-    ? runtime.channel.mentions.matchesMentionPatterns(
+    ? channelRuntime.mentions.matchesMentionPatterns(
         inbound.text,
-        runtime.channel.mentions.buildMentionRegexes(
-          params.config as OpenClawConfig,
-          route.agentId,
-        ),
+        channelRuntime.mentions.buildMentionRegexes(params.config as OpenClawConfig, route.agentId),
       )
     : undefined;
   const groupConfig = isGroup
@@ -425,7 +421,7 @@ export async function handleQaInbound(params: {
     },
   });
 
-  await runtime.channel.inbound.dispatch({
+  await channelRuntime.inbound.dispatch({
     cfg: params.config as OpenClawConfig,
     channel: params.channelId,
     accountId: params.account.accountId,

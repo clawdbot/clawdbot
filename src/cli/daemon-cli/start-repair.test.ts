@@ -155,7 +155,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     };
     const state: GatewayServiceState = {
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       running: false,
       env: {},
       command: {
@@ -214,7 +214,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
       } as unknown as GatewayService;
       const state: GatewayServiceState = {
         installed: true,
-        loaded: true,
+        loadState: { status: "loaded" },
         running: false,
         env: {},
         command: {
@@ -282,7 +282,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     } as unknown as GatewayService;
     const state: GatewayServiceState = {
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       running: false,
       env: {},
       command: {
@@ -313,7 +313,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     } as unknown as GatewayService;
     const state: GatewayServiceState = {
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       running: false,
       env: {},
       command: {
@@ -348,7 +348,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     } as unknown as GatewayService;
     const state: GatewayServiceState = {
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       running: false,
       env: {},
       command: {

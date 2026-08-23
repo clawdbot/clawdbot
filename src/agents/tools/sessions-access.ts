@@ -4,6 +4,7 @@
  * Adds OpenClaw session-key alias normalization and sandbox requester scoping over SDK visibility contracts.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveCanonicalMainSessionKey } from "../../config/sessions/main-session-key.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   logSessionOwnershipLookupFailure,
@@ -18,7 +19,8 @@ import {
   type SessionAccessResult,
   type SessionToolsVisibility,
 } from "../../plugin-sdk/session-visibility.js";
-import { isSubagentSessionKey } from "../../routing/session-key.js";
+import { isSubagentSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import {
   lookupRequesterSessionOwnership,
@@ -34,11 +36,11 @@ export {
 
 /** Check one prepared target without re-listing the requester's spawned sessions. */
 export async function resolveSessionToolAccess(params: {
-  action: SessionAccessAction;
+  action: Exclude<SessionAccessAction, "list">;
   displayAction?: SessionAccessAction | "search";
-  defaultAgentId?: string;
   requesterAgentId: string;
   requesterSessionKey: string;
+  mainSessionKey?: string;
   authorizationTargetSessionKey?: string;
   targetAgentId: string;
   targetSessionKey: string;
@@ -49,23 +51,22 @@ export async function resolveSessionToolAccess(params: {
 }): Promise<SessionAccessResult> {
   const authorizationTargetSessionKey =
     params.authorizationTargetSessionKey ?? params.targetSessionKey;
-  if (params.action !== "list") {
-    const scoped = createSessionVisibilityChecker.resolveScopedAccess({
-      action: params.action,
-      requesterSessionKey: params.requesterSessionKey,
-      // A bare key is not globally unique under explicit ownership. Callers
-      // qualify cross-agent targets so a grant cannot cross store owners.
-      targetSessionKey: authorizationTargetSessionKey,
-    });
-    if (scoped) {
-      return { allowed: true, expectedSessionId: scoped.expectedSessionId };
-    }
+  const scoped = createSessionVisibilityChecker.resolveScopedAccess({
+    action: params.action,
+    requesterSessionKey: params.requesterSessionKey,
+    // A bare key is not globally unique under explicit ownership. Callers
+    // qualify cross-agent targets so a grant cannot cross store owners.
+    targetSessionKey: authorizationTargetSessionKey,
+  });
+  if (scoped) {
+    return { allowed: true, expectedSessionId: scoped.expectedSessionId };
   }
   const rowChecker = createSessionVisibilityRowChecker({
     action: params.action,
-    defaultAgentId: params.targetAgentId ?? params.defaultAgentId,
+    defaultAgentId: params.targetAgentId,
     requesterAgentId: params.requesterAgentId,
     requesterSessionKey: params.requesterSessionKey,
+    mainSessionKey: params.mainSessionKey,
     visibility: params.visibility,
     a2aPolicy: params.a2aPolicy,
   });
@@ -76,7 +77,7 @@ export async function resolveSessionToolAccess(params: {
       ...(requesterOwned ? { spawnedBy: params.requesterSessionKey } : {}),
     });
   const initial = check(false);
-  if (initial.allowed || params.action === "list") {
+  if (initial.allowed) {
     return initial;
   }
   const requesterOwnedAccess = check(true);
@@ -113,16 +114,10 @@ export async function resolveSessionToolAccess(params: {
 export function resolveSandboxedSessionToolContext(params: {
   cfg: OpenClawConfig;
   agentSessionKey?: string;
+  requesterAgentId?: string;
   sandboxed?: boolean;
-}): {
-  mainKey: string;
-  alias: string;
-  visibility: "spawned" | "all";
-  requesterInternalKey: string | undefined;
-  effectiveRequesterKey: string;
-  restrictToSpawned: boolean;
-} {
-  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
+}) {
+  const { mainKey, alias, scope } = resolveMainSessionAlias(params.cfg);
   const visibility = resolveSandboxSessionToolsVisibility(params.cfg);
   const requesterSessionKey = normalizeOptionalString(params.agentSessionKey);
   const requesterInternalKey = requesterSessionKey
@@ -138,12 +133,29 @@ export function resolveSandboxedSessionToolContext(params: {
     visibility === "spawned" &&
     Boolean(requesterInternalKey) &&
     !isSubagentSessionKey(requesterInternalKey);
-  // Main sessions can see all sessions; sandboxed non-subagent callers stay scoped to spawned rows.
+  const requesterAgentId =
+    parseAgentSessionKey(requesterInternalKey)?.agentId ??
+    (!restrictToSpawned && requesterInternalKey === alias
+      ? resolveSessionAgentId({
+          config: params.cfg,
+          sessionKey: requesterInternalKey,
+          agentId: params.requesterAgentId,
+        })
+      : undefined);
+  const mainSessionKey =
+    !restrictToSpawned && requesterAgentId
+      ? resolveCanonicalMainSessionKey({
+          agentId: requesterAgentId,
+          mainKey,
+          sessionScope: scope,
+        })
+      : undefined;
   return {
     mainKey,
     alias,
     visibility,
     requesterInternalKey,
+    mainSessionKey,
     effectiveRequesterKey,
     restrictToSpawned,
   };

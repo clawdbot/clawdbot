@@ -408,6 +408,21 @@ suite.define(() => {
         .locator(".workboard-toolbar__filters .workboard-select")
         .nth(1);
       const priorityCombobox = prioritySelect.getByRole("combobox");
+      const directRoutePickerStyles = await prioritySelect.evaluate((select) => {
+        const label = select.querySelector(".picker-select__label");
+        const copy = select.querySelector(".picker-select__copy");
+        if (!label || !copy) {
+          throw new Error("Workboard picker style probe did not render");
+        }
+        return {
+          copyDisplay: getComputedStyle(copy).display,
+          labelFontWeight: getComputedStyle(label).fontWeight,
+        };
+      });
+      expect(directRoutePickerStyles).toEqual({
+        copyDisplay: "grid",
+        labelFontWeight: "650",
+      });
       await priorityCombobox.focus();
       await writable.page.keyboard.press("ArrowDown");
       await expect.poll(() => priorityCombobox.getAttribute("aria-expanded")).toBe("true");
@@ -505,13 +520,15 @@ suite.define(() => {
         "workboard.cards.update",
         updateBeforeEdit,
       );
-      expect(requestParams(editRequest)).toMatchObject({ id: createdCard.id });
-      expect(requireRecord(requestParams(editRequest).patch)).toMatchObject({
-        labels: ["ui", "proof", "e2e"],
-        notes: editedCard.notes,
-        priority: "high",
-        sessionKey: linkedSessionKey,
-        title: editedCard.title,
+      expect(requestParams(editRequest)).toEqual({
+        id: createdCard.id,
+        expectedUpdatedAt: createdCard.updatedAt,
+        patch: {
+          labels: ["ui", "proof", "e2e"],
+          notes: editedCard.notes,
+          priority: "high",
+          title: editedCard.title,
+        },
       });
       await writableGateway.resolveDeferred("workboard.cards.update", { card: editedCard });
       await cardInColumn(writable.page, "Todo", editedCard.title).waitFor({ state: "visible" });
@@ -567,8 +584,8 @@ suite.define(() => {
       });
       await captureScreenshot(writable.page, artifacts, "07-moved-running");
 
-      await writableGateway.deferNext("workboard.cards.update");
-      const syncBefore = (await writableGateway.getRequests("workboard.cards.update")).length;
+      const updateBeforeLifecycle = (await writableGateway.getRequests("workboard.cards.update"))
+        .length;
       const sessionListBeforeSync = (await writableGateway.getRequests("sessions.list")).length;
       await writableGateway.deferNext("sessions.list");
       await writableGateway.emitGatewayEvent("sessions.changed", {
@@ -588,17 +605,23 @@ suite.define(() => {
           sessionRow({ hasActiveRun: false, status: "done", updatedAt: baseTime + 4 }),
         ]),
       );
-      const syncRequest = await waitForNextRequest(
-        writableGateway,
-        "workboard.cards.update",
-        syncBefore,
+      await writable.page.waitForTimeout(250);
+      expect(await writableGateway.getRequests("workboard.cards.update")).toHaveLength(
+        updateBeforeLifecycle,
       );
-      expect(requestParams(syncRequest)).toMatchObject({ id: runningCard.id });
-      expect(requireRecord(requestParams(syncRequest).patch)).toMatchObject({
-        metadata: { lifecycleStatusSourceUpdatedAt: baseTime + 4 },
-        status: "review",
+
+      const listBeforeLifecycle = (await writableGateway.getRequests("workboard.cards.list"))
+        .length;
+      await writableGateway.deferNext("workboard.cards.list");
+      await writableGateway.emitGatewayEvent(WORKBOARD_CHANGED_EVENT, {
+        epoch: "workboard-e2e",
+        revision: 1,
       });
-      await writableGateway.resolveDeferred("workboard.cards.update", { card: reviewedCard });
+      await waitForNextRequest(writableGateway, "workboard.cards.list", listBeforeLifecycle);
+      await writableGateway.resolveDeferred(
+        "workboard.cards.list",
+        cardsListResponse([reviewedCard]),
+      );
       const reviewedCardSurface = cardInColumn(writable.page, "Review", editedCard.title);
       await reviewedCardSurface.waitFor({ state: "visible" });
       await reviewedCardSurface.getByRole("button", { name: "View details", exact: true }).click();
@@ -618,7 +641,7 @@ suite.define(() => {
       await writableGateway.deferNext("workboard.cards.list");
       await writableGateway.emitGatewayEvent(WORKBOARD_CHANGED_EVENT, {
         epoch: "workboard-e2e",
-        revision: 1,
+        revision: 2,
       });
       await writable.page.waitForTimeout(250);
       expect(await writableGateway.getRequests("workboard.cards.list")).toHaveLength(

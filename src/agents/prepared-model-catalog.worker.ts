@@ -61,7 +61,6 @@ function refreshAuthStore(params: {
       config: params.config,
       metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
       pluginRegistry: params.pluginGeneration.pluginRegistry,
-      workspaceDir: params.pluginGeneration.pluginMetadataSnapshot.workspaceDir,
     },
     () =>
       overlayExternalAuthProfiles(prepared, {
@@ -122,8 +121,8 @@ export async function runPreparedModelCatalogWorkerRequest(
         ),
       };
     }
-    const { prepareAgentCatalogSource, prepareFullCatalogFacts } =
-      await import("./prepared-model-runtime.facts.js");
+    const { prepareAgentCatalogSource } = await import("./prepared-model-runtime.facts.js");
+    const { prepareFullCatalogFacts } = await import("./prepared-model-runtime.full-catalog.js");
     // Full discovery is one point-in-time operation: refresh first, then let every provider hook
     // and the returned availability projection consume the same exact store.
     const authStore = refreshAuthStore({
@@ -141,7 +140,6 @@ export async function runPreparedModelCatalogWorkerRequest(
         config: value.input.config,
         metadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
         pluginRegistry: prepared.pluginGeneration.pluginRegistry,
-        workspaceDir: value.input.workspaceDir,
       },
       () =>
         resolveAmbientAgentCredentialsForDiscovery({

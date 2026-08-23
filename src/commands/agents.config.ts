@@ -19,7 +19,7 @@ import { pinSurvivorWorkspaceForRosterCollapse } from "../config/agent-workspace
 import { listRouteBindings } from "../config/bindings.js";
 import type { IdentityConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 
 export type AgentSummary = {
   id: string;
@@ -35,6 +35,9 @@ export type AgentSummary = {
   bindingDetails?: string[];
   routes?: string[];
   providers?: string[];
+  createdVia?: "operator" | "agent" | "claw";
+  creatorAgentId?: string | null;
+  createdAt?: number;
   isDefault: boolean;
 };
 
@@ -204,6 +207,10 @@ export function pruneAgentConfig(
 } {
   const id = normalizeAgentId(agentId);
   const clearedOwnerRefs: string[] = [];
+  const targetsDeletedAgent = (candidate: string) => {
+    const normalized = normalizeAgentIdStrict(candidate);
+    return normalized.ok && normalized.value === id;
+  };
   const clearOwnerRef = <T extends { agentId?: string }>(value: T | undefined, path: string) => {
     const owner = normalizeOptionalString(value?.agentId);
     if (!value || !owner || normalizeAgentId(owner) !== id) {
@@ -217,7 +224,7 @@ export function pruneAgentConfig(
   const pruneAllowAgents = (allowAgents: string[] | undefined) =>
     allowAgents?.filter((entry) => {
       const trimmed = entry.trim();
-      return !trimmed || trimmed === "*" || normalizeAgentId(trimmed) !== id;
+      return !trimmed || !targetsDeletedAgent(trimmed);
     });
   const nextAgentsList = [];
   for (const entry of agents) {
@@ -274,6 +281,23 @@ export function pruneAgentConfig(
       }
     : undefined;
   const nextTalk = clearOwnerRef(cfg.talk, "talk.agentId");
+  const nextBroadcast = cfg.broadcast
+    ? Object.fromEntries(
+        Object.entries(cfg.broadcast).map(([peerId, value]) => [
+          peerId,
+          Array.isArray(value) ? value.filter((entry) => !targetsDeletedAgent(entry)) : value,
+        ]),
+      )
+    : undefined;
+  const nextHooks = cfg.hooks
+    ? {
+        ...cfg.hooks,
+        allowedAgentIds: cfg.hooks.allowedAgentIds?.filter((entry) => !targetsDeletedAgent(entry)),
+        mappings: cfg.hooks.mappings?.filter(
+          (mapping) => !mapping.agentId || !targetsDeletedAgent(mapping.agentId),
+        ),
+      }
+    : undefined;
   const { list: _legacyList, ownership: _ownership, ...agentsConfig } = cfg.agents ?? {};
   const nextAgentsConfig = cfg.agents
     ? {
@@ -302,6 +326,8 @@ export function pruneAgentConfig(
     ...cfg,
     agents: nextAgentsConfig,
     bindings: filteredBindings.length > 0 ? filteredBindings : undefined,
+    broadcast: nextBroadcast,
+    hooks: nextHooks,
     talk: nextTalk,
     tools: nextTools,
   };

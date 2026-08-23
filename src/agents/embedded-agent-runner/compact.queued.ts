@@ -541,6 +541,7 @@ async function compactResolvedContextEngine(
         const resolved = await resolveModelAsync(ceRuntimeProvider, ceModelId, agentDir, config, {
           authStorage,
           modelRegistry,
+          preparedModelRuntime,
           skipAgentDiscovery: true,
           allowBundledStaticCatalogFallback: true,
           preferBundledStaticCatalogTransport: true,
@@ -605,20 +606,47 @@ async function compactResolvedContextEngine(
     promptTokenBudget: contextTokenBudget,
   });
   const contextEngineOwnsCompaction = contextEngine.info.ownsCompaction === true;
+  let requiredPreflightNativeCapabilityUsed = false;
   const harnessResult =
     attemptNativeHarnessCompaction && (!contextEngineOwnsCompaction || lockedNativeHarness)
-      ? await maybeCompactAgentHarnessSession({
-          ...preparedParams,
-          runtimeModel: effectiveRuntimeModel,
-          contextEngine,
-          contextTokenBudget,
-          contextEngineRuntimeContext,
-        })
+      ? await maybeCompactAgentHarnessSession(
+          {
+            ...preparedParams,
+            runtimeModel: effectiveRuntimeModel,
+            contextEngine,
+            contextTokenBudget,
+            contextEngineRuntimeContext,
+          },
+          {
+            preparedModelRuntime,
+            ...(preparedParams.preflightRequired === true
+              ? {
+                  nativeCompactionRequest: "required_preflight",
+                  onNativeCompactionCapabilityUsed: () => {
+                    requiredPreflightNativeCapabilityUsed = true;
+                  },
+                }
+              : {}),
+          },
+        )
       : undefined;
-  if (lockedNativeHarness) {
-    return harnessResult
-      ? { ...harnessResult, compactionKind: "native-harness" }
-      : lockedCompactionRuntimeFailure(selectedHarnessRuntime);
+  // A model lock normally makes the native harness result terminal: the
+  // persisted runtime is authoritative and must not be swapped for
+  // context-engine compaction. Required preflight permits a harness-declared
+  // exception: missing or stale thread bindings can be recoverable and would
+  // otherwise drop the user's turn, so they fall through to the shared
+  // context-engine fallback below while `preparedHarnessRuntime` keeps the
+  // lock intact. Authorization comes from the private native capability that
+  // core actually dispatched; public result fields cannot escape the lock.
+  if (
+    lockedNativeHarness &&
+    !(
+      preparedParams.preflightRequired === true &&
+      requiredPreflightNativeCapabilityUsed &&
+      shouldFallbackAfterHarnessCompaction(harnessResult)
+    )
+  ) {
+    return harnessResult ?? lockedCompactionRuntimeFailure(selectedHarnessRuntime);
   }
   if (harnessResult) {
     if (!shouldFallbackAfterHarnessCompaction(harnessResult)) {
@@ -859,7 +887,7 @@ async function compactResolvedContextEngine(
                 contextTokenBudget,
                 contextEngineRuntimeContext,
               },
-              { nativeCompactionRequest: "after_context_engine" },
+              { nativeCompactionRequest: "after_context_engine", preparedModelRuntime },
             );
             if (secondaryNativeHarnessCompaction && !secondaryNativeHarnessCompaction.ok) {
               log.warn(

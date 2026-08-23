@@ -49,6 +49,11 @@ function requireExecTool(tools: ReturnType<typeof createOpenClawCodingTools>) {
   return execTool;
 }
 
+function schemaPropertyNames(tool: ReturnType<typeof requireExecTool>): string[] {
+  const schema = tool.parameters as { properties?: Record<string, unknown> };
+  return Object.keys(schema.properties ?? {});
+}
+
 const tempDirs = createTempDirTracker();
 
 function createTempAgentDirs(prefix: string) {
@@ -138,6 +143,41 @@ describe("Agent-specific exec tool defaults", () => {
 
     const resultDetails = result?.details as { status?: string } | undefined;
     expect(resultDetails?.status).toBe("completed");
+  });
+
+  it("makes exec completion-only when the final runtime allowlist removes process", async () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          exec: {
+            host: "gateway",
+            mode: "full",
+          },
+        },
+      },
+      runtimeToolAllowlist: ["exec"],
+      inheritRuntimeToolAllowlist: true,
+      sessionKey: "agent:main:main",
+      ...createTempAgentDirs("test-main-runtime-exec-only"),
+    });
+    const execTool = requireExecTool(tools);
+
+    expect.soft(tools.map((tool) => tool.name)).not.toContain("process");
+    expect.soft(execTool.description).not.toMatch(/background|yieldMs|process/);
+    expect.soft(schemaPropertyNames(execTool)).not.toContain("background");
+    expect.soft(schemaPropertyNames(execTool)).not.toContain("yieldMs");
+
+    const result = await execTool.execute("call-runtime-exec-only", {
+      command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => {}, 250)"`,
+      background: true,
+      yieldMs: 10,
+      timeoutSeconds: 0.05,
+    });
+
+    expect.soft(result.details).toMatchObject({ status: "failed", timedOut: true });
+    const text = (result.content[0] as { text?: string } | undefined)?.text ?? "";
+    expect.soft(text).toContain("Verify the resulting state before retrying");
+    expect.soft(text).not.toMatch(/process|background|yieldMs|poll|trailing &/i);
   });
 
   it("routes implicit auto exec to gateway without a sandbox runtime", async () => {

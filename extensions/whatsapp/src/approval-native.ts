@@ -1,7 +1,10 @@
 // Whatsapp plugin module implements approval native behavior.
 import { createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import type {
+  ChannelApprovalKind,
+  ChannelApprovalNativeRuntimeAdapter,
+} from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildApprovalReactionPromptPayloadForRequest } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import { buildTypedApprovalPresentation } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type {
@@ -79,7 +82,7 @@ const whatsappApproval = createApproverRestrictedNativeApprovalCapabilityFromFor
 
 function buildWhatsAppPendingPayload(
   params: { request: ExecApprovalRequest | PluginApprovalRequest; nowMs: number },
-  approvalKind: "exec" | "plugin",
+  approvalKind: ChannelApprovalKind,
 ) {
   const payload = buildApprovalReactionPromptPayloadForRequest(params);
   return {

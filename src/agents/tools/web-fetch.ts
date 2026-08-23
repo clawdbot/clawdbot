@@ -13,12 +13,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import {
-  mergeSsrFPolicies,
-  SsrFBlockedError,
-  type LookupFn,
-  type SsrFPolicy,
-} from "../../infra/net/ssrf.js";
+import { SsrFBlockedError, type LookupFn, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug, logWarn } from "../../logger.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
@@ -688,10 +683,7 @@ async function maybeFetchProviderWebFetchPayload(
 }
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
-  const ssrfPolicy = mergeSsrFPolicies(params.ssrfPolicy);
-  const dangerouslyAllowPrivateNetwork = ssrfPolicy?.dangerouslyAllowPrivateNetwork === true;
-  const allowRfc2544BenchmarkRange = ssrfPolicy?.allowRfc2544BenchmarkRange === true;
-  const allowIpv6UniqueLocalRange = ssrfPolicy?.allowIpv6UniqueLocalRange === true;
+  const ssrfPolicy = params.ssrfPolicy;
   const useTrustedEnvProxy = params.useTrustedEnvProxy;
   let parsedUrl: URL;
   try {
@@ -708,12 +700,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   const cacheDiscriminators = [
     `user-agent:${sha256Hex(params.userAgent)}`,
     params.providerCacheKey ? `provider:${params.providerCacheKey}` : "",
-    dangerouslyAllowPrivateNetwork ? "allow-private-network" : "",
-    allowRfc2544BenchmarkRange ? "allow-rfc2544" : "",
-    allowIpv6UniqueLocalRange ? "allow-ipv6-ula" : "",
-    ssrfPolicy?.allowedHostnames?.length
-      ? `allowed-hostnames:${sha256Hex(ssrfPolicy.allowedHostnames.join("\n"))}`
-      : "",
+    ssrfPolicy ? `ssrf-policy:${sha256Hex(JSON.stringify(ssrfPolicy))}` : "",
     useTrustedEnvProxy ? "trusted-env-proxy" : "",
     headersCacheKey ? `headers:${headersCacheKey}` : "",
   ].filter(Boolean);
@@ -826,7 +813,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       if (params.extractMode === "text") {
         text = markdownToText(body);
       }
-    } else if (normalizedContentType === "text/html") {
+    } else if (["text/html", "application/xhtml+xml"].includes(normalizedContentType)) {
       if (params.readabilityEnabled) {
         const readable = await extractReadableContent({
           html: body,
@@ -944,6 +931,7 @@ export function createWebFetchTool(options?: {
   runtimeWebFetch?: RuntimeWebFetchMetadata;
   lateBindRuntimeConfig?: boolean;
   lookupFn?: LookupFn;
+  hostnameAllowlistRef?: { value?: string[] };
 }): AnyAgentTool | null {
   const fetch = resolveFetchConfig(options?.config);
   if (!resolveFetchEnabled({ fetch, sandboxed: options?.sandboxed })) {
@@ -1010,6 +998,7 @@ export function createWebFetchTool(options?: {
         readToolStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readPositiveIntegerParam(params, "maxChars");
       const maxCharsCap = resolveFetchMaxCharsCap(executionFetch);
+      const hostnameAllowlist = options?.hostnameAllowlistRef?.value;
       // The progress line is emitted only if the fetch is still pending after
       // the threshold; fast cache/network hits clear the timer before it fires.
       const clearProgressTimer = scheduleToolProgress(
@@ -1042,7 +1031,9 @@ export function createWebFetchTool(options?: {
           readabilityEnabled,
           config,
           useTrustedEnvProxy: resolveFetchUseTrustedEnvProxy(executionFetch),
-          ssrfPolicy: executionFetch?.ssrfPolicy,
+          ssrfPolicy: hostnameAllowlist
+            ? { ...executionFetch?.ssrfPolicy, hostnameAllowlist }
+            : executionFetch?.ssrfPolicy,
           ...(providerCacheKey ? { providerCacheKey } : {}),
           lookupFn: options?.lookupFn,
           signal,

@@ -125,35 +125,34 @@ async function prepareEmbeddingServer(
     provider.models.find((model) => model.id === primaryId) ??
     provider.models.find((model) => model.id !== DEFAULT_LLAMA_CPP_MODEL_ID) ??
     provider.models[0];
-  if (!chatModel) {
-    throw new Error("Managed llama.cpp provider has no chat model preset.");
-  }
   const cacheDir = resolveLlamaCppModelCacheDir(provider);
-  const key = JSON.stringify([provider.baseUrl, chatModel.id, embeddingSource, cacheDir]);
+  const key = JSON.stringify([provider.baseUrl, chatModel?.id ?? null, embeddingSource, cacheDir]);
   const pending =
     preparedEmbeddingServers.get(key) ??
     (async () => {
       const [chatModelPath, embeddingModelPath] = await Promise.all([
-        ensureLlamaCppModel({
-          source: resolveLlamaCppModelSource(chatModel),
-          cacheDir,
-          download: false,
-        }),
+        chatModel
+          ? ensureLlamaCppModel({
+              source: resolveLlamaCppModelSource(chatModel),
+              cacheDir,
+              download: false,
+            })
+          : Promise.resolve(undefined),
         ensureLlamaCppModel({
           source: embeddingSource,
           cacheDir,
           download: true,
         }),
       ]);
-      const configuredContext = chatModel.params?.contextSize;
+      const configuredContext = chatModel?.params?.contextSize;
       await prepareManagedLlamaServer({
-        chatModelId: chatModel.id,
+        ...(chatModel ? { chatModelId: chatModel.id } : {}),
         chatModelPath,
         contextSize:
           typeof configuredContext === "number" && configuredContext > 0
             ? Math.floor(configuredContext)
-            : chatModel.contextTokens,
-        maxTokens: chatModel.maxTokens,
+            : chatModel?.contextTokens,
+        maxTokens: chatModel?.maxTokens,
         embeddingModelPath,
         port: resolveProviderPort(provider),
       });

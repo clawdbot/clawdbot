@@ -12,6 +12,7 @@ import {
   failPanelRefresh,
 } from "../../components/panel-refresh-status.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -108,7 +109,7 @@ class LogsPage extends OpenClawLightDomElement {
             formatMissingOperatorReadScopeMessage("logs"),
           );
         } else {
-          this.logsStatus = failPanelRefresh(this.logsStatus, String(result.error));
+          this.logsStatus = failPanelRefresh(this.logsStatus, formatUiError(result.error));
         }
         return;
       }

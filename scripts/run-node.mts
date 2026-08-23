@@ -148,7 +148,10 @@ const bundledPluginAssetBuildArgs = [
 const RUN_NODE_SIGNAL_FORCE_KILL_AFTER_MS = 5_000;
 
 const runtimePostBuildWatchedPaths = [
+  "scripts/check-built-plugin-control-plane-modules.mts",
   "scripts/copy-bundled-plugin-metadata.mjs",
+  "scripts/copy-bundled-plugin-metadata.mts",
+  "scripts/copy-hook-metadata.ts",
   "scripts/lib",
   "scripts/lib/local-build-metadata.mts",
   "scripts/lib/local-build-metadata-paths.mts",
@@ -156,9 +159,12 @@ const runtimePostBuildWatchedPaths = [
   "scripts/runtime-postbuild-stamp.mts",
   "scripts/runtime-postbuild-shared.mjs",
   "scripts/runtime-postbuild.mjs",
+  "scripts/runtime-postbuild.mts",
   "scripts/stage-bundled-plugin-runtime.mjs",
+  "scripts/stage-bundled-plugin-runtime.mts",
   "scripts/windows-cmd-helpers.mjs",
   "scripts/write-official-channel-catalog.mjs",
+  "scripts/write-official-channel-catalog.mts",
   BUNDLED_PLUGIN_ROOT_DIR,
 ];
 const runtimePostBuildScriptPaths = new Set(
@@ -326,6 +332,23 @@ const readBuildStamp = (deps: RunNodeRequirementDeps) => readJsonStamp(deps.buil
 
 const readRuntimePostBuildStamp = (deps: RunNodeRuntimeRequirementDeps) => {
   return readJsonStamp(deps.runtimePostBuildStampPath, deps);
+};
+
+const isImmutableGitDeployment = (deps: RunNodeRequirementDeps) => {
+  try {
+    const deployment = JSON.parse(
+      deps.fs.readFileSync(path.join(deps.cwd, "deployment.json"), "utf8"),
+    );
+    // Deployment ownership outranks source-checkout freshness. A mismatched
+    // checkout must fail closed instead of repairing manager-owned artifacts.
+    return (
+      deployment?.kind === "git" &&
+      typeof deployment.sourceHead === "string" &&
+      deployment.sourceHead.trim().length > 0
+    );
+  } catch {
+    return false;
+  }
 };
 
 const hasSourceMtimeChanged = (stampMtime: number, deps: RunNodeRequirementDeps) => {
@@ -770,6 +793,19 @@ const RUNTIME_POSTBUILD_REASON_LABELS = {
 const formatBuildReason = (reason: BuildRequirement["reason"]) => BUILD_REASON_LABELS[reason];
 const formatRuntimePostBuildReason = (reason: RuntimePostBuildRequirement["reason"]) =>
   RUNTIME_POSTBUILD_REASON_LABELS[reason];
+
+const refuseImmutableDeploymentMutation = async (
+  deps: RunNodeDeps,
+  artifactKind: "build" | "runtime",
+  reason: string,
+) => {
+  const message =
+    `[openclaw] Cannot regenerate ${artifactKind} artifacts in an immutable deployment (${reason}). ` +
+    "Replace this deployment with a complete release, then use its installed `openclaw` command or run `node openclaw.mjs ...` from that release.\n";
+  deps.stderr.write(message);
+  deps.outputTee?.write(message);
+  return await closeRunNodeOutputTee(deps, 1);
+};
 
 const SIGNAL_EXIT_CODES = {
   SIGINT: 130,
@@ -1597,6 +1633,14 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<numbe
       return await closeRunNodeOutputTee(deps, exitCode);
     }
     const buildRequirement = resolveBuildRequirement(deps);
+    const immutableDeployment = isImmutableGitDeployment(deps);
+    if (immutableDeployment && buildRequirement.shouldBuild) {
+      return await refuseImmutableDeploymentMutation(
+        deps,
+        "build",
+        formatBuildReason(buildRequirement.reason),
+      );
+    }
     const qaReportScript = resolveQaReportSourceScript(deps, buildRequirement);
     if (qaReportScript) {
       const reportName = qaReportScript === "qa-parity-report.ts" ? "parity" : "coverage";
@@ -1609,6 +1653,13 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<numbe
     }
     if (!buildRequirement.shouldBuild) {
       const runtimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
+      if (immutableDeployment && runtimePostBuildRequirement.shouldSync) {
+        return await refuseImmutableDeploymentMutation(
+          deps,
+          "runtime",
+          formatRuntimePostBuildReason(runtimePostBuildRequirement.reason),
+        );
+      }
       if (
         runtimePostBuildRequirement.shouldSync &&
         !shouldSkipWatchRuntimeSync(deps, runtimePostBuildRequirement)

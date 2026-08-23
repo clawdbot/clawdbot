@@ -1,12 +1,7 @@
-/** Narrows untrusted protocol values to non-array records. */
-export function isProtocolRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-/** Converts untrusted protocol values to records without accepting arrays. */
-export function asProtocolRecord(value: unknown): Record<string, unknown> | null {
-  return isProtocolRecord(value) ? value : null;
-}
+export {
+  asNullableRecord as asProtocolRecord,
+  isRecord as isProtocolRecord,
+} from "@openclaw/normalization-core/record-coerce";
 
 /** Checks string presence without changing wire-significant whitespace. */
 export function isNonEmptyProtocolString(value: unknown): value is string {

@@ -31,9 +31,11 @@ scenario:
   codeRefs:
     - extensions/qa-lab/src/suite-runtime-agent-session.ts
     - extensions/qa-lab/src/suite-runtime-gateway.ts
+    - extensions/qa-channel/src/inbound.ts
     - src/agents/main-session-recovery/main-session-restart-recovery.ts
   execution:
     kind: flow
+    retryCount: 0
     summary: Run a fixture-backed audit with GPT-5.4 while replacing the Gateway child three times at durable wait checkpoints.
     suiteIsolation: isolated
     isolationReason: Replaces the Gateway child three times and inspects one persistent in-flight session.
@@ -46,9 +48,23 @@ scenario:
       prompt: |-
         Perform a restart-resilience release audit. This is one task; do not ask me to follow up.
 
-        First, use OpenClaw Code Mode to create three sequential restart checkpoints. Count prior assistant `exec` calls in this transcript whose code contains `qa_restart_wait`. If the count is below three, make exactly the next checkpoint with an `exec` call whose `restartSafe` flag is true. Its JavaScript must search for `qa_restart_wait`, call the single match with `{}`, and return `CHECKPOINT-N`, where N is the next count. If `exec` reports waiting, call `wait` with its run id. A gateway restart will interrupt each checkpoint. On the recovery turn, count the transcript again and continue with the next checkpoint; do not repeat a completed checkpoint.
+        Complete this checkpoint protocol before any audit work:
+        - Inspect prior assistant `exec` calls and count only calls whose JavaScript contains both `qa_restart_wait` and a `CHECKPOINT-N` literal.
+        - If fewer than three matching calls exist, your only work in this turn is the next checkpoint. Make exactly one `exec` call with `restartSafe: true`. Its JavaScript must search for `qa_restart_wait`, call the single match with `{}`, and return the next literal (`CHECKPOINT-1`, `CHECKPOINT-2`, or `CHECKPOINT-3`).
+        - If that `exec` reports waiting, call `wait` with its run id. Do not read audit files, search for the unsafe probe, or write the final report in the same turn.
+        - A Gateway restart will interrupt the wait. A failed, unavailable, expired, or aborted `wait` result after restart is expected checkpoint evidence, not an audit failure. Do not retry that old wait.
+        - `CHECKPOINT-N` is internal tool output, never a user-facing answer. Do not echo a checkpoint marker or end the turn after an interrupted checkpoint.
+        - On the recovery turn, inspect the transcript again and immediately perform only the next missing checkpoint. Never repeat a completed checkpoint.
+        - Begin the audit immediately after the transcript contains all three distinct checkpoint `exec` calls, even when the third interrupted `wait` ended with an expected restart error. Do not send any assistant text before the final audit report.
 
-        After three checkpoint calls are visible, use restart-safe Code Mode to search for `qa_restart_unsafe_probe` and record whether it is visible. Do not call it. Then read all five files under `restart-audit/` and calculate:
+        After three checkpoint calls are visible, use restart-safe Code Mode to search for `qa_restart_unsafe_probe` and record whether it is visible. Do not call it. Do not read the `restart-audit/` directory path itself. Read these exact files:
+        - `restart-audit/components.md`
+        - `restart-audit/risks.md`
+        - `restart-audit/deployments.md`
+        - `restart-audit/controls.md`
+        - `restart-audit/recommendation.md`
+
+        Then calculate:
         - component total from services, workers, and jobs
         - risk total from low, medium, and high
         - deployment total across all regions
@@ -134,20 +150,19 @@ flow:
             expr: "`restart-multi-live-${randomUUID().slice(0, 8)}`"
         - set: sessionKey
           value:
-            expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', accountId: transport.accountId, peer: { kind: 'direct', id: conversationId }, dmScope: 'per-channel-peer', identityLinks: env.cfg.session?.identityLinks })"
-        - call: startAgentRun
-          saveAs: started
-          args:
-            - ref: env
-            - sessionKey:
-                ref: sessionKey
-              message:
-                expr: config.prompt
-              to:
-                expr: "`dm:${conversationId}`"
-              taskTracking: false
-              timeoutMs:
-                expr: liveTurnTimeoutMs(env, 180000)
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', accountId: transport.accountId, peer: { kind: 'direct', id: `dm:${conversationId}` }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+        - sendInbound:
+            accountId: default
+            conversation:
+              id:
+                ref: conversationId
+              kind: direct
+            senderId:
+              ref: conversationId
+            senderName: QA Restart Operator
+            text:
+              expr: config.prompt
+          saveAs: inbound
         - forEach:
             items:
               - 1
@@ -160,9 +175,20 @@ flow:
                 args:
                   - lambda:
                       async: true
-                      expr: "readSessionTranscriptSummary(env, sessionKey).then((summary) => (summary.assistantToolCallCounts.exec ?? 0) >= checkpoint && (summary.assistantToolCallCounts.wait ?? 0) >= checkpoint ? summary : undefined).catch(() => undefined)"
+                      expr: "readSessionTranscriptSummary(env, sessionKey, { probeText: config.finalMarker }).then((summary) => (summary.assistantToolCallCounts.exec ?? 0) >= checkpoint && (summary.assistantToolCallCounts.wait ?? 0) >= checkpoint && (summary.completedToolCallCounts.wait ?? 0) < checkpoint ? summary : undefined).catch(() => undefined)"
                   - expr: liveTurnTimeoutMs(env, 180000)
                   - 50
+              - call: readRawQaSessionStore
+                saveAs: checkpointStore
+                args:
+                  - ref: env
+              - set: checkpointEntry
+                value:
+                  expr: checkpointStore[sessionKey]
+              - assert:
+                  expr: "Boolean(checkpointEntry) && checkpointTranscript.userMessageCount >= 1 && checkpointTranscript.eventCursor > 0 && (checkpointTranscript.probeTextEndLine ?? 0) > 0 && checkpointEntry.restartRecoveryDeliveryContext?.channel === 'qa-channel' && checkpointEntry.restartRecoveryDeliveryContext.to === `dm:${conversationId}`"
+                  message:
+                    expr: "`checkpoint ${checkpoint} did not persist the canonical session, original user turn, transcript cursor, and restart delivery claim: entry=${JSON.stringify(checkpointEntry ?? null)} transcript=${JSON.stringify(checkpointTranscript)}`"
               - call: restartGatewayWithConfigPatch
                 args:
                   - env:
@@ -196,9 +222,13 @@ flow:
             - expr: liveTurnTimeoutMs(env, 300000)
             - sinceIndex:
                 ref: startIndex
-        - call: sleep
-          args:
-            - 3000
+        - set: outboundCountAfterDelivery
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - waitForNoOutbound:
+            quietMs: 3000
+            sinceIndex:
+              ref: outboundCountAfterDelivery
         - call: readSessionTranscriptSummary
           saveAs: finalTranscript
           args:
@@ -253,4 +283,4 @@ flow:
           args:
             - sinceIndex:
                 ref: gatewayLogCursor
-      detailsExpr: "`runId=${started.runId} session=${sessionKey} restarts=3 execs=${finalTranscript.assistantToolCallCounts.exec ?? 0} waits=${finalTranscript.assistantToolCallCounts.wait ?? 0} recoveryDispatches=${recoveryDispatches} retainedPolicies=${retainedPolicies} finalDeliveries=${finalMatches.length} resendNotices=${restartNotices.length}\n${outbound.text}`"
+      detailsExpr: "`inboundMessageId=${inbound.id} session=${sessionKey} restarts=3 execs=${finalTranscript.assistantToolCallCounts.exec ?? 0} waits=${finalTranscript.assistantToolCallCounts.wait ?? 0} recoveryDispatches=${recoveryDispatches} retainedPolicies=${retainedPolicies} finalDeliveries=${finalMatches.length} resendNotices=${restartNotices.length}\n${outbound.text}`"

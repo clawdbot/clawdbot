@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
+import { formatUiError } from "../../format-error.ts";
 import { isActiveWorkboardCard, nextWorkboardCardPosition } from "../../workboard/card-state.ts";
 import { moveWorkboardCard } from "../../workboard/mutations.ts";
 import { normalizeCardsPayload } from "../../workboard/normalization.ts";
@@ -164,7 +165,7 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
       }
     },
     onError: (error) => {
-      this.error = error instanceof Error ? error.message : String(error);
+      this.error = formatUiError(error);
       this.requestRender();
     },
   });
@@ -174,6 +175,12 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
     this.allCards = snapshot.cards;
     this.cards = snapshot.cards.filter(isActiveWorkboardCard);
     this.statuses = snapshot.statuses;
+    const state = getWorkboardState(this.workboardHost);
+    state.cards = [...snapshot.cards];
+    state.statuses = snapshot.statuses;
+    state.loaded = true;
+    state.loadAttempted = true;
+    state.mutationReadiness = "ready";
     this.loaded = true;
     this.error = "";
     this.requestRender();
@@ -252,6 +259,14 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
 
   protected get loading(): boolean {
     return this.refreshTask.status === TaskStatus.PENDING;
+  }
+
+  protected get workboardClient(): GatewayBrowserClient | null {
+    return this.client;
+  }
+
+  protected get workboardStateHost(): WorkboardHost {
+    return this.workboardHost;
   }
 
   protected async moveCard(card: WorkboardCard, status: WorkboardStatus): Promise<void> {
@@ -335,7 +350,7 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
     await this.refreshTask.run([client, sharedRuntime, force, refreshAfterInflight]);
   }
 
-  private syncFromHost(): void {
+  protected syncFromHost(): void {
     const state = getWorkboardState(this.workboardHost);
     this.allCards = [...state.cards];
     this.cards = this.allCards.filter(isActiveWorkboardCard);

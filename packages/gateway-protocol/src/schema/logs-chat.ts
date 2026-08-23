@@ -26,12 +26,38 @@ export const LogsTailResultSchema = closedObject({
 export const ChatHistoryParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  cursor: Type.Optional(Type.String()),
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: CHAT_HISTORY_MAX_ENTRIES })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
   messageId: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),
   maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
 });
+
+/**
+ * Bounded forward catch-up response. Clients replay `messages` as `session.message`
+ * payloads. There is no continuation loop: more than 200 raw events or the byte
+ * budget returns `reset`, and the client fetches a fresh tail page.
+ */
+export const ChatHistoryDeltaResultSchema = closedObject({
+  kind: Type.Literal("delta"),
+  messages: Type.Array(Type.Unknown()),
+  deltaCursor: Type.String(),
+  sessionInfo: Type.Unknown(),
+  agentsList: Type.Optional(Type.Unknown()),
+  metadata: Type.Optional(Type.Unknown()),
+});
+
+/** Normal cursor discontinuity; clients recover with a fresh tail request. */
+export const ChatHistoryResetResultSchema = closedObject({
+  kind: Type.Literal("reset"),
+});
+
+/** Closed cursor outcome union. */
+export const ChatHistoryCursorResultSchema = Type.Union([
+  ChatHistoryDeltaResultSchema,
+  ChatHistoryResetResultSchema,
+]);
 
 /** Lightweight chat metadata request; optional agent scope keeps selector state explicit. */
 export const ChatMetadataParamsSchema = closedObject({
@@ -138,12 +164,10 @@ export const ChatSendParamsSchema = closedObject({
   systemInputProvenance: Type.Optional(InputProvenanceSchema),
   systemProvenanceReceipt: Type.Optional(Type.String()),
   suppressCommandInterpretation: Type.Optional(Type.Boolean()),
-  // Client's believed active-branch leaf entry id. Legacy targetless steering
-  // requires this immutable fence and may reject; null means an authoritative empty transcript.
+  // Transcript-branch CAS for non-steer interactive sends: the client's displayed
+  // branch leaf (null = authoritative empty transcript). Steer sends ignore it;
+  // the Gateway steers the session's direct run or starts a turn when idle.
   expectedLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  // Optional for wire compatibility. Modern/durable steer clients should always
-  // send this exact run precondition so a retry cannot move to a successor run.
-  expectedRunId: Type.Optional(NonEmptyString),
   expectedSessionRoutingContract: Type.Optional(NonEmptyString),
   idempotencyKey: NonEmptyString,
 });
@@ -248,6 +272,10 @@ export const ChatEventSchema = Type.Union([
 
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
+export type ChatHistoryParams = Static<typeof ChatHistoryParamsSchema>;
+export type ChatHistoryDeltaResult = Static<typeof ChatHistoryDeltaResultSchema>;
+export type ChatHistoryResetResult = Static<typeof ChatHistoryResetResultSchema>;
+export type ChatHistoryCursorResult = Static<typeof ChatHistoryCursorResultSchema>;
 export type ChatMetadataParams = Static<typeof ChatMetadataParamsSchema>;
 export type ChatToolTitlesParams = Static<typeof ChatToolTitlesParamsSchema>;
 export type LogsTailParams = Static<typeof LogsTailParamsSchema>;

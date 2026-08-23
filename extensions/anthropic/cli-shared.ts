@@ -1,3 +1,4 @@
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 /**
  * Shared Claude CLI backend normalization for args, thinking, and isolated runs.
  */
@@ -7,6 +8,7 @@ import type {
   CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
 import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { requiresClaudeMandatoryAdaptiveThinking } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 export {
@@ -34,6 +36,12 @@ export const CLAUDE_CLI_CLEAR_ENV = [
   "CLAUDE_CONFIG_DIR",
   // Re-injected per run from OpenClaw's canonical context budget.
   "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+  // Re-injected only for 200K runs. Claude's user settings `env` block has
+  // higher precedence than the spawned process environment by design.
+  "CLAUDE_CODE_DISABLE_1M_CONTEXT",
+  "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING",
+  // Re-injected per run from OpenClaw's effective thinking level.
+  "MAX_THINKING_TOKENS",
   "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
   "CLAUDE_CODE_ENTRYPOINT",
   "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
@@ -136,6 +144,44 @@ export function resolveClaudeCliAutoCompactEnv(
   };
 }
 
+/**
+ * Map OpenClaw's fixed thinking levels to Claude Code's per-process budget.
+ *
+ * Claude Code 2.x reads MAX_THINKING_TOKENS for print-mode runs and a positive
+ * integer requests that fixed token budget. Mandatory-adaptive models ignore
+ * that projection, so they retain adaptive thinking and use --effort instead.
+ * These fixed budgets match OpenClaw's canonical provider defaults in
+ * packages/ai/src/providers/simple-options.ts.
+ */
+export function resolveClaudeCliThinkingEnv(
+  thinkingLevel: CliBackendResolveExecutionArgsContext["thinkingLevel"],
+  modelId?: string,
+): Record<string, string> | undefined {
+  if (requiresClaudeMandatoryAdaptiveThinking({ id: modelId })) {
+    return undefined;
+  }
+  switch (thinkingLevel) {
+    case "off":
+      return { MAX_THINKING_TOKENS: "0" };
+    case "minimal":
+      return { CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: "1", MAX_THINKING_TOKENS: "1024" };
+    case "low":
+      return { CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: "1", MAX_THINKING_TOKENS: "2048" };
+    case "medium":
+      return { CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: "1", MAX_THINKING_TOKENS: "8192" };
+    case "high":
+    case "xhigh":
+      return { CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: "1", MAX_THINKING_TOKENS: "16384" };
+    case "max":
+      return { CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: "1", MAX_THINKING_TOKENS: "32768" };
+    case "adaptive":
+    case undefined:
+      return undefined;
+    default:
+      return thinkingLevel satisfies never;
+  }
+}
+
 /** Return whether the startup-probed Claude Code build supports the cache-control flag. */
 export function supportsClaudeDynamicSystemPromptSections(
   versionOutput: string | undefined,
@@ -163,7 +209,7 @@ export function supportsClaudeDynamicSystemPromptSections(
 
 function isOpenClawRequestedYolo(context?: CliBackendNormalizeConfigContext): boolean {
   const agentExec = context?.agentId
-    ? context.config?.agents?.list?.find((agent) => agent.id === context.agentId)?.tools?.exec
+    ? resolveAgentConfig(context.config ?? {}, context.agentId)?.tools?.exec
     : undefined;
   const exec = agentExec ?? context?.config?.tools?.exec;
   return (
@@ -278,8 +324,15 @@ function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | undefine
 }
 
 /** Resolve whether a run preserves, removes, or sets a Claude CLI effort override. */
-function resolveClaudeCliEffortArgAction(thinkingLevel?: string | null): ClaudeCliEffortArgAction {
+function resolveClaudeCliEffortArgAction(
+  thinkingLevel?: string | null,
+  modelId?: string,
+): ClaudeCliEffortArgAction {
   switch (normalizeOptionalLowercaseString(thinkingLevel)) {
+    case "off":
+      return requiresClaudeMandatoryAdaptiveThinking({ id: modelId })
+        ? { mode: "set", effort: "low" }
+        : { mode: "preserve" };
     case "minimal":
     case "low":
       return { mode: "set", effort: "low" };
@@ -498,7 +551,7 @@ export function resolveClaudeCliExecutionArgs(
     if (context.executionMode === "side-question") {
       return resolveClaudeCliSideQuestionExecutionArgs(context.baseArgs);
     }
-    const action = resolveClaudeCliEffortArgAction(context.thinkingLevel);
+    const action = resolveClaudeCliEffortArgAction(context.thinkingLevel, context.modelId);
     switch (action.mode) {
       case "preserve":
         return [...context.baseArgs];

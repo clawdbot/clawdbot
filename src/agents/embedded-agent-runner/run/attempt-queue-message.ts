@@ -318,9 +318,11 @@ async function steerAndWaitForTranscriptCommit(
     );
     function onAbort() {
       abortRequested = true;
-      if (accepted) {
-        rejectAfterCancellation("queued steering message was cancelled before delivery");
+      if (!accepted) {
+        rejectBeforeAcceptance("queued steering message was cancelled before acceptance");
+        return;
       }
+      rejectAfterCancellation("queued steering message was cancelled before delivery");
     }
     abortSignal?.addEventListener("abort", onAbort, { once: true });
   });

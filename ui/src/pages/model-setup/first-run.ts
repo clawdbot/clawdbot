@@ -2,10 +2,9 @@ import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
 import { sessionRouteNamespaceFromPath } from "../../app-route-paths.ts";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { readSessionDefaults } from "../../app/gateway-store.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { cacheModelSetupDetection, type ModelSetupDetectionConnection } from "./detect-cache.ts";
-import { detectModelSetup } from "./rpc.ts";
 
 export function isDefaultChatLanding(
   location: RouteLocation,
@@ -39,6 +38,8 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
   initialLocationReady: Promise<RouteLocation>;
   installLocation?: (location: RouteLocation) => void | Promise<void>;
   shouldInstallLocation?: () => boolean;
+  redirect?: () => void;
+  onInitialDecision?: () => void;
 }): Promise<() => void> {
   const initialLocation = await params.initialLocationReady;
   if (
@@ -52,70 +53,65 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
     }
   }
   if (!params.enabled) {
+    params.onInitialDecision?.();
     return () => undefined;
   }
   return startModelSetupFirstRunRedirect({
     context: params.context,
     isStillDefaultLanding: () => locationsMatch(params.history.location(), initialLocation),
+    redirect:
+      params.redirect ?? (() => params.context.replace("model-setup", { search: "?firstRun=1" })),
+    onInitialDecision: params.onInitialDecision ?? (() => undefined),
   });
 }
 
 function startModelSetupFirstRunRedirect(params: {
   context: ApplicationContext<RouteId>;
   isStillDefaultLanding: () => boolean;
+  redirect: () => void;
+  onInitialDecision: () => void;
 }): () => void {
-  let attemptedConnection: ModelSetupDetectionConnection | null = null;
-  let redirected = false;
+  let initialDecisionSettled = false;
+  const settleInitialDecision = () => {
+    if (!initialDecisionSettled) {
+      initialDecisionSettled = true;
+      params.onInitialDecision();
+    }
+  };
   const handleSnapshot: Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0] = (
     snapshot,
   ) => {
-    if (
-      redirected ||
-      snapshot.phase !== "connected" ||
-      !snapshot.client ||
-      !hasOperatorAdminAccess(snapshot.hello?.auth ?? null) ||
-      isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") !== true
-    ) {
+    if (initialDecisionSettled) {
       return;
     }
-    const agentId = params.context.agentSelection.state.selectedId;
-    const connection = { client: snapshot.client, hello: snapshot.hello, agentId };
-    if (
-      connection.client === attemptedConnection?.client &&
-      connection.hello === attemptedConnection?.hello &&
-      connection.agentId === attemptedConnection?.agentId
-    ) {
+    if (snapshot.phase !== "connected") {
+      // A build fence can move a previously authenticated client straight into
+      // reconnecting or reload-required, while a terminal first attempt returns
+      // to stopped. Do not hold the router when the shell needs to present recovery.
+      if (snapshot.hello || snapshot.phase === "reload-required" || snapshot.phase === "stopped") {
+        settleInitialDecision();
+      }
       return;
     }
-    attemptedConnection = connection;
-    void detectModelSetup(snapshot.client, agentId ?? undefined)
-      .then((result) => {
-        const current = params.context.gateway.snapshot;
-        if (
-          current.phase !== "connected" ||
-          current.client !== connection.client ||
-          current.hello !== connection.hello ||
-          params.context.agentSelection.state.selectedId !== connection.agentId
-        ) {
-          return;
-        }
-        cacheModelSetupDetection(connection, result);
-        if (!result.setupComplete && !redirected && params.isStillDefaultLanding()) {
-          redirected = true;
-          params.context.replace("model-setup", { search: "?firstRun=1" });
-        }
-      })
-      .catch(() => {
-        // First-run guidance is best effort. The page offers an explicit retry.
-      });
+    const defaults = snapshot.hello ? readSessionDefaults(snapshot.hello) : undefined;
+    const selectedAgentId = params.context.agentSelection.state.selectedId?.trim() || null;
+    const defaultAgentId = defaults?.defaultAgentId?.trim() || null;
+    const usesDefaultAgent = selectedAgentId === null || selectedAgentId === defaultAgentId;
+    if (
+      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
+      isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") === true &&
+      defaults?.modelConfigured === false &&
+      usesDefaultAgent &&
+      params.isStillDefaultLanding()
+    ) {
+      params.redirect();
+    }
+    settleInitialDecision();
   };
   const unsubscribe = params.context.gateway.subscribe(handleSnapshot);
-  const unsubscribeSelection = params.context.agentSelection.subscribe(() =>
-    handleSnapshot(params.context.gateway.snapshot),
-  );
   handleSnapshot(params.context.gateway.snapshot);
   return () => {
     unsubscribe();
-    unsubscribeSelection();
+    settleInitialDecision();
   };
 }

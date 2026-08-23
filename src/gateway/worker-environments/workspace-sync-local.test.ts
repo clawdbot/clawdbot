@@ -268,19 +268,26 @@ describe("runLocalCommandToFile", () => {
     const root = tempDirs.make("openclaw-workspace-candidates-");
     const bin = path.join(root, "bin");
     const mockGit = path.join(bin, "git");
+    const countFile = path.join(bin, "git-entry-count");
     const firstTransfer = `${root}-transfer-accepted`;
     const secondTransfer = `${root}-transfer-rejected`;
+    // Rewriting an executed script between spawns races exec against a forked
+    // child still holding the write fd (ETXTBSY). Write the script once and
+    // vary only a data file it reads.
     const writeMockGit = async (count: number) => {
-      await fs.writeFile(
-        mockGit,
-        `#!/usr/bin/env node
-process.stdout.write("eligible.txt\\0".repeat(${count}));
-`,
-        { mode: 0o755 },
-      );
+      await fs.writeFile(countFile, String(count));
     };
     try {
       await fs.mkdir(bin);
+      await fs.writeFile(
+        mockGit,
+        `#!/usr/bin/env node
+const fs = require("node:fs");
+const count = Number(fs.readFileSync(${JSON.stringify(countFile)}, "utf8"));
+process.stdout.write("eligible.txt\\0".repeat(count));
+`,
+        { mode: 0o755 },
+      );
       await fs.writeFile(path.join(root, "eligible.txt"), "eligible\n");
       vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH ?? ""}`);
       await writeMockGit(MAX_WORKSPACE_INVENTORY_ENTRIES + 1);

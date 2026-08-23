@@ -3,6 +3,7 @@ import path from "node:path";
 import { onAgentEvent, type AgentEventPayload } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   emitTrustedDiagnosticEvent,
+  hasPendingInternalDiagnosticEvent,
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
@@ -10,6 +11,7 @@ import {
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import { resolveCodexAppServerHookChannelId } from "./dynamic-tool-build.js";
 import {
   emitDynamicToolStartedDiagnostic,
@@ -19,10 +21,13 @@ import { hasPendingDynamicToolTerminalDiagnostic } from "./dynamic-tool-executio
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import type { CodexDynamicToolCallParams } from "./protocol.js";
 import {
+  bindProductionHarnessHostCapabilitiesForTest,
   createParams,
+  createCodexRuntimePlanFixture,
   createRuntimeDynamicTool,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
+  setCodexTestModelSupportsTools,
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
@@ -58,6 +63,81 @@ function activeDiagnosticToolKeys(events: DiagnosticEventPayload[]): Set<string>
 setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt dynamic tools", () => {
+  it("emits one eager audit lifecycle when runtime normalization clones a wrapped tool", async () => {
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    let startPresentAtImplementation = false;
+    const tool = createRuntimeDynamicTool("echo");
+    const execute = vi.fn(async () => {
+      startPresentAtImplementation =
+        diagnosticEvents.some(
+          (event) =>
+            event.type === "tool.execution.started" && event.toolCallId === "call-echo-audit",
+        ) ||
+        hasPendingInternalDiagnosticEvent(
+          (event) =>
+            event.type === "tool.execution.started" && event.toolCallId === "call-echo-audit",
+        );
+      return {
+        content: [{ type: "text" as const, text: "echo done" }],
+        details: {},
+      };
+    });
+    tool.execute = execute;
+    dynamicToolBuildState.openClawCodingToolsFactory = () => [tool];
+    const harness = createStartedThreadHarness();
+    let closeHostCapabilities: (() => void) | undefined;
+    const unsubscribeDiagnostics = onInternalDiagnosticEvent((event) => {
+      if ("toolCallId" in event && event.toolCallId === "call-echo-audit") {
+        diagnosticEvents.push(event);
+      }
+    });
+    try {
+      const params = createParams(
+        path.join(tempDir, "session.jsonl"),
+        path.join(tempDir, "workspace"),
+      );
+      setCodexTestModelSupportsTools(params, true);
+      closeHostCapabilities = await bindProductionHarnessHostCapabilitiesForTest(params);
+      const runtimePlan = createCodexRuntimePlanFixture();
+      params.runtimePlan = {
+        ...runtimePlan,
+        tools: {
+          ...runtimePlan.tools,
+          normalize: (tools) => tools.map((entry) => ({ ...entry })),
+        },
+      };
+
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      const toolResult = (await harness.handleServerRequest({
+        id: "request-echo-audit",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-echo-audit",
+          namespace: null,
+          tool: "echo",
+          arguments: {},
+        },
+      })) as { success?: boolean };
+      expect(toolResult.success).toBe(true);
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+      await flushDiagnosticEvents();
+    } finally {
+      closeHostCapabilities?.();
+      unsubscribeDiagnostics();
+    }
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(startPresentAtImplementation).toBe(true);
+    expect(diagnosticEvents.map((event) => event.type)).toEqual([
+      "tool.execution.started",
+      "tool.execution.completed",
+    ]);
+  });
+
   it.each(["cancelled", "timed_out"] as const)(
     "preserves the %s terminal reason in trusted tool diagnostics",
     async (terminalReason) => {

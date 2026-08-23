@@ -25,15 +25,13 @@ import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
 } from "../../infra/session-cost-usage-totals.js";
-import type {
-  CostUsageSummary,
-  CostUsageTotals,
-  SessionCostSummary,
-  SessionDailyModelUsage,
-  SessionMessageCounts,
-  SessionModelUsage,
-} from "../../infra/session-cost-usage.js";
 import {
+  type CostUsageSummary,
+  type CostUsageTotals,
+  type SessionCostSummary,
+  type SessionDailyModelUsage,
+  type SessionMessageCounts,
+  type SessionModelUsage,
   loadCostUsageSummaryFromCache,
   loadSessionLogs,
   loadSessionCostSummariesFromCache,

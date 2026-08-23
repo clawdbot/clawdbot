@@ -424,7 +424,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       token: "gateway-token",
       allowTailscale: true,
     },
-    tailscale: { mode: "serve", resetOnExit: false },
+    tailscale: { mode: "serve" },
     remote: { url: "ws://gateway-host.ts.net:18789", token: "remote-token" },
     reload: { mode: "hybrid" },
   },

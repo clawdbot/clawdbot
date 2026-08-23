@@ -1,10 +1,11 @@
 // Telegram plugin module implements button types behavior.
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
-import { reduceLegacyInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
 import {
+  reduceLegacyInteractiveReply,
   isMessagePresentationInteractiveBlock,
   normalizeMessagePresentation,
   normalizeLegacyInteractiveReply,
+  renderMessagePresentationFallbackText,
   resolveMessagePresentationButtonAction,
   type LegacyInteractiveReply,
   type MessagePresentation,
@@ -56,6 +57,26 @@ export type TelegramButtonBuildOptions = {
   onDroppedControl?: (control: TelegramDroppedControl) => void;
   questionOptionIndices?: TelegramQuestionOptionIndices;
 };
+
+export function appendTelegramDroppedControlFallback(
+  text: string,
+  controls: readonly TelegramDroppedControl[],
+): string {
+  const fallback = renderMessagePresentationFallbackText({
+    presentation: {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: controls.map((control) => ({ label: control.label, value: "unavailable" })),
+        },
+      ],
+    },
+  });
+  if (!fallback || text === fallback || text.endsWith(`\n\n${fallback}`)) {
+    return text;
+  }
+  return [text, fallback].filter(Boolean).join("\n\n");
+}
 
 const TELEGRAM_INTERACTIVE_ROW_SIZE = 3;
 

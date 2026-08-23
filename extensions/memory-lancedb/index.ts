@@ -16,6 +16,7 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Type } from "typebox";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
+import { createAutoRecallHook } from "./auto-recall.js";
 import {
   MEMORY_CATEGORIES,
   type MemoryConfig,
@@ -30,17 +31,15 @@ import {
   runWithTimeout,
 } from "./embeddings.js";
 import { MemoryDB, type MemoryEntry, type MemorySearchResult } from "./lancedb-store.js";
-import { dropMediaNoteLines, sanitizeForMemoryCapture } from "./memory-capture-sanitization.js";
+import { sanitizeForMemoryCapture } from "./memory-capture-sanitization.js";
 import { registerMemoryCli } from "./memory-cli.js";
 import {
   type AutoCaptureCursor,
   cleanMemorySearchResults,
   detectCategory,
-  escapeMemoryForPrompt,
-  extractLatestUserText,
   extractUserTextContent,
   findCleanDuplicateMemory,
-  formatRelevantMemoriesContext,
+  formatRecalledMemoryForModel,
   looksLikePromptInjection,
   messageFingerprint,
   normalizeRecallQuery,
@@ -52,20 +51,9 @@ const loadMemoryHostCoreModule = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/memory-host-core"),
 );
 
-const DEFAULT_AUTO_RECALL_TIMEOUT_MS = 15_000;
 const DEFAULT_TOOL_RECALL_TIMEOUT_MS = 15_000;
 const DEFAULT_RECALL_COOLDOWN_MS = 60_000;
 const DEFAULT_TOOL_RECALL_OVERFETCH_EXTRA = 10;
-
-// Auto-recall over-fetches from the vector store, then filters envelope sludge
-// (contaminated memories that slipped past capture gating), then caps the
-// surviving results before prompt injection. The over-fetch limit must stay a
-// few multiples above the cap so a small number of contaminated top-K hits
-// still leave enough clean memories to surface; the cap mirrors prior
-// behavior of "at most 3 injected memories" so prompt budget impact stays
-// bounded.
-const DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT = 10;
-const DEFAULT_AUTO_RECALL_RESULT_CAP = 3;
 
 export { normalizeEmbeddingVector, testing } from "./embeddings.js";
 export { parseMemoryCliFilter } from "./memory-cli.js";
@@ -87,6 +75,14 @@ function memoryDeleteFailureResult(id: string) {
   return {
     content: [{ type: "text" as const, text: error }],
     details: { action: "not_found", status: "error", error, id },
+  };
+}
+
+function memoryStoreTooLongResult(maxChars: number) {
+  const text = `Memory was not stored because it exceeds the configured ${maxChars}-character limit. Shorten it and retry.`;
+  return {
+    content: [{ type: "text" as const, text }],
+    details: { action: "rejected", maxChars, reason: "text_too_long", status: "blocked" },
   };
 }
 
@@ -118,7 +114,6 @@ export default definePluginEntry({
 
     const vectorDim = dimensions ?? vectorDimsForModel(model);
     const db = new MemoryDB(resolvedDbPath, vectorDim, cfg.storageOptions);
-    const embeddings = createEmbeddings(api, cfg);
     const autoCaptureCursors = new Map<string, AutoCaptureCursor>();
     const memoryRecallCooldowns = new Map<string, { until: number; error: string }>();
     const resolveRuntimeConfig = (): OpenClawConfig =>
@@ -135,6 +130,20 @@ export default definePluginEntry({
       const overrides = resolveAgentConfig(runtimeConfig, agentId)?.memory?.search;
       const enabled = overrides?.enabled ?? runtimeConfig.memory?.search?.enabled ?? true;
       return enabled ? agentId : undefined;
+    };
+    const assertRetainedToolEnabled = (
+      agentId: string,
+      getRuntimeConfig: (() => OpenClawConfig | undefined) | undefined,
+    ): void => {
+      if (!getRuntimeConfig) {
+        return;
+      }
+      const runtimeConfig = getRuntimeConfig();
+      if (!runtimeConfig || !resolveEnabledAgentId(agentId, runtimeConfig)) {
+        throw new Error(
+          "Memory is disabled for this agent. Enable memory search for this agent, then retry.",
+        );
+      }
     };
     const resolveCliAgentId = (rawAgentId: unknown): string => {
       if (typeof rawAgentId === "string" && rawAgentId.trim()) {
@@ -153,7 +162,7 @@ export default definePluginEntry({
       if (!runtimePluginConfig) {
         return disabledHookCfg;
       }
-      return memoryConfigSchema.parse({
+      const currentCfg = memoryConfigSchema.parse({
         embedding: {
           provider: cfg.embedding.provider,
           apiKey: cfg.embedding.apiKey,
@@ -173,7 +182,12 @@ export default definePluginEntry({
         ...(cfg.storageOptions ? { storageOptions: cfg.storageOptions } : {}),
         ...asOptionalRecord(runtimePluginConfig),
       });
+      const { apiKey, baseUrl } = currentCfg.embedding;
+      // LanceDB's fixed-size persisted vectors keep semantic identity startup-stable;
+      // changing provider/model/dimensions without re-embedding corrupts search compatibility.
+      return { ...currentCfg, embedding: { ...cfg.embedding, apiKey, baseUrl } };
     };
+    const embeddings = createEmbeddings(api);
     const readMemoryRecallCooldown = (agentId: string): { error: string } | undefined => {
       const memoryRecallCooldown = memoryRecallCooldowns.get(agentId);
       if (!memoryRecallCooldown) {
@@ -221,11 +235,14 @@ export default definePluginEntry({
             limit: optionalPositiveIntegerSchema({ description: "Max results (default: 5)" }),
           }),
           async execute(_toolCallId, params) {
+            // Tool definitions outlive hot config reloads; revalidate before memory I/O.
+            assertRetainedToolEnabled(agentId, ctx.getRuntimeConfig);
             const rawParams = params as Record<string, unknown>;
             const query = rawParams.query as string;
             const limit = readPositiveIntegerParam(rawParams, "limit") ?? 5;
 
             const currentCfg = resolveCurrentHookConfig();
+            const recallMaxChars = currentCfg.recallMaxChars;
             const cooldown = readMemoryRecallCooldown(agentId);
             if (cooldown) {
               return buildMemoryRecallUnavailableResult(cooldown.error);
@@ -240,8 +257,9 @@ export default definePluginEntry({
                   try {
                     vector = await embeddings.embed(
                       agentId,
-                      normalizeRecallQuery(query, currentCfg.recallMaxChars),
-                      { timeoutMs: Math.max(1, deadlineAtMs - Date.now()) },
+                      normalizeRecallQuery(query, recallMaxChars),
+                      currentCfg.embedding,
+                      Math.max(1, deadlineAtMs - Date.now()),
                     );
                   } catch (error) {
                     throw new MemoryRecallEmbeddingError(error);
@@ -290,8 +308,8 @@ export default definePluginEntry({
 
             const text = results
               .map(({ result, text: memoryText }, i) => {
-                const escapedText = escapeMemoryForPrompt(memoryText);
-                return `${i + 1}. [${result.entry.category}] ${escapedText} (${(result.score * 100).toFixed(0)}%)`;
+                const visibleText = formatRecalledMemoryForModel(memoryText, recallMaxChars);
+                return `${i + 1}. [${result.entry.category}] ${visibleText} (${(result.score * 100).toFixed(0)}%)`;
               })
               .join("\n");
 
@@ -332,7 +350,7 @@ export default definePluginEntry({
           name: "memory_store",
           label: "Memory Store",
           description:
-            "Save important information in long-term memory. Success means the exact text already exists or the database commit completed; it does not guarantee semantic recall.",
+            "Save important information in long-term memory. Text over the configured capture limit is rejected. Success means the exact text already exists or the database commit completed; it does not guarantee semantic recall.",
           parameters: Type.Object({
             text: Type.String({ description: "Information to remember" }),
             importance: optionalFiniteNumberSchema({
@@ -343,6 +361,8 @@ export default definePluginEntry({
             category: Type.Optional(Type.Enum(MEMORY_CATEGORIES, { type: "string" })),
           }),
           async execute(_toolCallId, params) {
+            assertRetainedToolEnabled(agentId, ctx.getRuntimeConfig);
+            const currentCfg = resolveCurrentHookConfig();
             if (isIncognitoSessionKey(ctx.sessionKey)) {
               return {
                 content: [
@@ -368,6 +388,11 @@ export default definePluginEntry({
                 max: 1,
               }) ?? 0.7;
 
+            const captureMaxChars = currentCfg.captureMaxChars;
+            if (text.length > captureMaxChars) {
+              return memoryStoreTooLongResult(captureMaxChars);
+            }
+
             if (looksLikePromptInjection(text)) {
               return {
                 content: [
@@ -384,7 +409,7 @@ export default definePluginEntry({
               };
             }
 
-            const vector = await embeddings.embed(agentId, text);
+            const vector = await embeddings.embed(agentId, text, currentCfg.embedding);
 
             const existing = await findCleanDuplicateMemory(db, agentId, vector, text);
             if (existing) {
@@ -438,6 +463,7 @@ export default definePluginEntry({
             memoryId: Type.Optional(Type.String({ description: "Specific memory ID" })),
           }),
           async execute(_toolCallId, params) {
+            assertRetainedToolEnabled(agentId, ctx.getRuntimeConfig);
             const { query, memoryId } = params as { query?: string; memoryId?: string };
 
             if (memoryId) {
@@ -453,9 +479,11 @@ export default definePluginEntry({
 
             if (query) {
               const currentCfg = resolveCurrentHookConfig();
+              const recallMaxChars = currentCfg.recallMaxChars;
               const vector = await embeddings.embed(
                 agentId,
-                normalizeRecallQuery(query, currentCfg.recallMaxChars),
+                normalizeRecallQuery(query, recallMaxChars),
+                currentCfg.embedding,
               );
               const results = await db.search(agentId, vector, 5, 0.7);
 
@@ -472,8 +500,9 @@ export default definePluginEntry({
                 if (!deleted) {
                   return memoryDeleteFailureResult(singleResult.entry.id);
                 }
+                const text = formatRecalledMemoryForModel(singleResult.entry.text, recallMaxChars);
                 return {
-                  content: [{ type: "text", text: `Forgotten: "${singleResult.entry.text}"` }],
+                  content: [{ type: "text", text: `Forgotten: "${text}"` }],
                   details: { action: "deleted", id: singleResult.entry.id },
                 };
               }
@@ -511,106 +540,21 @@ export default definePluginEntry({
       { name: "memory_forget" },
     );
 
-    registerMemoryCli(api, db, embeddings, resolveCliAgentId, cfg.recallMaxChars);
+    registerMemoryCli(api, db, embeddings, resolveCliAgentId, resolveCurrentHookConfig);
 
-    api.on("before_prompt_build", async (event, ctx) => {
-      const currentCfg = resolveCurrentHookConfig();
-      if (!currentCfg.autoRecall) {
-        return undefined;
-      }
-      const agentId = resolveEnabledAgentId(ctx.agentId);
-      if (!agentId) {
-        return undefined;
-      }
-      if (!event.prompt || event.prompt.length < 5) {
-        return undefined;
-      }
-      // One hung embedding request must not stall both automatic and explicit recall.
-      // Keep the breaker per agent so unrelated memory namespaces still probe.
-      const cooldown = readMemoryRecallCooldown(agentId);
-      if (cooldown) {
-        api.logger.debug?.(
-          `memory-lancedb: auto-recall skipped during recall cooldown: ${cooldown.error}`,
-        );
-        return undefined;
-      }
-
-      try {
-        const recallQuery = normalizeRecallQuery(
-          dropMediaNoteLines(
-            extractLatestUserText(Array.isArray(event.messages) ? event.messages : []) ??
-              event.prompt,
-          ),
-          currentCfg.recallMaxChars,
-        );
-        if (!recallQuery) {
-          return undefined;
-        }
-        let recallPhase: "embedding" | "search" = "embedding";
-        const recall = await runWithTimeout({
-          timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
-          task: async (deadlineAtMs) => {
-            let vector: number[];
-            try {
-              vector = await embeddings.embed(agentId, recallQuery, {
-                timeoutMs: Math.max(1, deadlineAtMs - Date.now()),
-              });
-            } catch (error) {
-              throw new MemoryRecallEmbeddingError(error);
-            }
-            // Keep one end-to-end deadline, but only let embedding timeouts trip
-            // the shared breaker. LanceDB stalls remain retryable next turn.
-            recallPhase = "search";
-            // Overfetch to compensate for sludge filtering: if contaminated
-            // entries occupy the top slots we still surface enough clean ones.
-            return await db.search(agentId, vector, DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT, 0.3, {
-              timeoutMs: Math.max(0, deadlineAtMs - Date.now()),
-            });
-          },
-        });
-        if (recall.status === "timeout") {
-          if (recallPhase === "embedding") {
-            recordMemoryRecallCooldown(
-              agentId,
-              `auto-recall timed out after ${Math.round(DEFAULT_AUTO_RECALL_TIMEOUT_MS / 1000)}s`,
-            );
-          }
-          api.logger.warn?.(
-            `memory-lancedb: auto-recall timed out after ${DEFAULT_AUTO_RECALL_TIMEOUT_MS}ms; skipping memory injection to avoid stalling agent startup`,
-          );
-          return undefined;
-        }
-
-        // Filter contaminated memories, then cap at the prompt-budget bound.
-        const cleanResults = cleanMemorySearchResults(recall.value)
-          .map(({ result, text }) => ({ category: result.entry.category, text }))
-          .slice(0, DEFAULT_AUTO_RECALL_RESULT_CAP);
-
-        if (cleanResults.length === 0) {
-          return undefined;
-        }
-
-        api.logger.info?.(`memory-lancedb: injecting ${cleanResults.length} memories into context`);
-
-        const context = formatRelevantMemoriesContext(cleanResults);
-        if (!context) {
-          return undefined;
-        }
-
-        return {
-          prependContext: context,
-        };
-      } catch (err) {
-        if (
-          err instanceof MemoryRecallEmbeddingError &&
-          isMemoryRecallTimeoutError(err.originalError)
-        ) {
-          recordMemoryRecallCooldown(agentId, formatErrorMessage(err.originalError));
-        }
-        api.logger.warn(`memory-lancedb: recall failed: ${String(err)}`);
-      }
-      return undefined;
-    });
+    api.on(
+      "before_prompt_build",
+      createAutoRecallHook({
+        logger: api.logger,
+        db,
+        embeddings,
+        resolveCurrentConfig: resolveCurrentHookConfig,
+        resolveEnabledAgentId,
+        readCooldown: readMemoryRecallCooldown,
+        recordCooldown: recordMemoryRecallCooldown,
+      }),
+      { requiresToolAuthority: true },
+    );
 
     api.on("agent_end", async (event, ctx) => {
       const currentCfg = resolveCurrentHookConfig();
@@ -657,7 +601,7 @@ export default definePluginEntry({
               }
 
               const category = detectCategory(sanitized);
-              const vector = await embeddings.embed(agentId, sanitized);
+              const vector = await embeddings.embed(agentId, sanitized, currentCfg.embedding);
 
               const existing = await findCleanDuplicateMemory(db, agentId, vector);
               if (existing) {

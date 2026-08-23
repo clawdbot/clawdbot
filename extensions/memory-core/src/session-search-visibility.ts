@@ -1,6 +1,9 @@
 // Memory Core plugin module implements session search visibility behavior.
 import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  resolveCanonicalMainSessionKey,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -14,6 +17,7 @@ import {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
   resolveEffectiveSessionToolsVisibility,
+  resolveSandboxSessionToolsVisibility,
 } from "openclaw/plugin-sdk/session-visibility";
 import {
   readSessionArchiveReasonFromHitPath,
@@ -180,6 +184,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     ? resolveSessionAgentId({
         sessionKey: params.requesterSessionKey,
         config: params.cfg,
+        agentId: params.agentId,
       })
     : undefined;
   const scopedAgentId = params.agentId?.trim() || requesterAgentId;
@@ -187,6 +192,16 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     ? await createSessionVisibilityGuard({
         action: "history",
         requesterSessionKey: params.requesterSessionKey,
+        requesterAgentId,
+        mainSessionKey:
+          requesterAgentId &&
+          (!params.sandboxed || resolveSandboxSessionToolsVisibility(params.cfg) === "all")
+            ? resolveCanonicalMainSessionKey({
+                agentId: requesterAgentId,
+                mainKey: params.cfg.session?.mainKey,
+                sessionScope: params.cfg.session?.scope,
+              })
+            : undefined,
         visibility,
         a2aPolicy,
       })

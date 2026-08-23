@@ -1,4 +1,5 @@
 // Feishu plugin module implements comment handler behavior.
+import { resolveInboundReplyDispatchCounts } from "openclaw/plugin-sdk/channel-inbound";
 import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -316,11 +317,10 @@ export async function handleFeishuCommentEvent(
       },
     });
     const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
-    const queuedFinal = dispatchResult?.queuedFinal ?? false;
-    const counts = dispatchResult?.counts ?? { tool: 0, block: 0, final: 0 };
+    const counts = resolveInboundReplyDispatchCounts(dispatchResult);
     log(
       `feishu[${account.accountId}]: drive comment dispatch complete ` +
-        `(queuedFinal=${queuedFinal}, replies=${counts.final}, session=${commentSessionKey})`,
+        `(replies=${counts.final}, session=${commentSessionKey})`,
     );
   } finally {
     void cleanupTypingReaction();

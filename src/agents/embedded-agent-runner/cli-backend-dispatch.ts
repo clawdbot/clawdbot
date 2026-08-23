@@ -229,6 +229,8 @@ async function runEmbeddedAgentViaCliBackend(
       media: params.media,
       provider: dispatch.provider,
       model: params.model,
+      modelHasVision: params.modelHasVision,
+      contextWindow: params.contextWindow,
       thinkLevel: params.thinkLevel,
       timeoutMs: params.timeoutMs,
       runTimeoutOverrideMs: params.runTimeoutOverrideMs ?? params.timeoutMs,

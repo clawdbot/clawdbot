@@ -4,7 +4,7 @@ title: "Diffs"
 sidebarTitle: "Diffs"
 read_when:
   - You want agents to show code or markdown edits as diffs
-  - You want a canvas-ready viewer URL or a rendered diff file
+  - You want a browser-ready viewer URL or a rendered diff file
   - You need controlled, temporary diff artifacts with secure defaults
 ---
 
@@ -12,7 +12,7 @@ read_when:
 
 Input: `before` + `after` text, or a unified `patch` (mutually exclusive).
 
-Output: a gateway viewer URL for canvas presentation, a rendered PNG/PDF file path for message delivery, or both.
+Output: a gateway viewer URL for browser presentation, a rendered PNG/PDF file path for message delivery, or both.
 
 ## Quick start
 
@@ -38,7 +38,7 @@ Output: a gateway viewer URL for canvas presentation, a rendered PNG/PDF file pa
   <Step title="Pick a mode">
     <Tabs>
       <Tab title="view">
-        Canvas-first flows: agents call `diffs` with `mode: "view"` and open `details.viewerUrl` with `canvas present`.
+        Browser flows: agents call `diffs` with `mode: "view"` and open `details.viewerUrl` in a browser.
       </Tab>
       <Tab title="file">
         Chat file delivery: agents call `diffs` with `mode: "file"` and send `details.filePath` with `message` using `path` or `filePath`.
@@ -384,7 +384,7 @@ Common failure text: `Diff PNG/PDF rendering requires a Chromium-compatible brow
 
 ## Operational guidance
 
-- Prefer `mode: "view"` for local interactive reviews in canvas.
+- Prefer `mode: "view"` for local interactive reviews in a browser.
 - Prefer `mode: "file"` for outbound chat channels that need an attachment.
 - Keep `allowRemoteViewer` disabled unless your deployment requires remote viewer URLs.
 - Set an explicit short `ttlSeconds` for sensitive diffs.

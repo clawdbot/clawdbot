@@ -116,6 +116,103 @@ export function resolveCodexContextEngineProjectionReserveTokens(): number {
   return DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS;
 }
 
+// Continuity projections run without an active context engine, so nothing ever
+// compacts what they render: a projection sized near the whole window leaves the
+// fresh native thread at the rotation threshold, forcing the next turn to rotate
+// and re-project the transcript again. Reserving half the window keeps the
+// thread alive for later delta turns instead.
+const CONTINUITY_PROJECTION_RESERVE_RATIO = 0.5;
+// Codex reports input tokens only after a turn (codex-rs/protocol/src/protocol.rs
+// TokenUsage.input_tokens) and bounds turn input by characters, not tokens
+// (codex-rs/protocol/src/user_input.rs MAX_USER_INPUT_TEXT_CHARS), so a projection cannot
+// be priced in verified tokens before it is sent. The remedy is feedback: each completed
+// turn records the density this session's content actually exhibited (prompt chars sent
+// vs provider-reported input tokens, persisted on the thread binding), and the next
+// continuity cap is sized from that observed ratio. capChars = budgetTokens × ratio means
+// real token cost ≈ budget for ANY density, which is the headroom invariant the fuse
+// needs. Before the first sample exists, the empirical default below applies — measured
+// on a real projection (703,134 chars for 226,146 input tokens = 3.11), where the shared
+// APPROX_RENDERED_CHARS_PER_TOKEN = 4 overshot by ~29%.
+const CONTINUITY_EMPIRICAL_CHARS_PER_TOKEN = 3;
+// Calibration is monotone: an observed sample may only TIGHTEN the cap below the
+// empirical default, never loosen it. A session whose content later shifts denser, a
+// sample poisoned by a non-continuity turn, or a stale sample therefore degrades at
+// worst to the uncalibrated behavior, not past it. The numerator also undercounts the
+// native turn's full input (tools and base instructions are not in the prompt text),
+// which biases the measured ratio low - again the tighter, safe direction.
+const CONTINUITY_MIN_CHARS_PER_TOKEN = 0.5;
+const CONTINUITY_MAX_CHARS_PER_TOKEN = CONTINUITY_EMPIRICAL_CHARS_PER_TOKEN;
+// Only projection-dominated turns give a usable density sample; short prompts are
+// dominated by developer-instruction and tool overhead in the token count.
+const CONTINUITY_CALIBRATION_MIN_PROMPT_CHARS = 50_000;
+
+/** Observed chars-vs-tokens sample from a completed Codex turn. */
+type CodexContinuityCalibration = {
+  promptChars: number;
+  inputTokens: number;
+};
+
+/** Builds a calibration sample from a completed turn, or undefined if unusable. */
+export function buildCodexContinuityCalibration(params: {
+  promptChars: number;
+  inputTokens: number;
+}): CodexContinuityCalibration | undefined {
+  if (
+    !Number.isFinite(params.promptChars) ||
+    !Number.isFinite(params.inputTokens) ||
+    params.promptChars < CONTINUITY_CALIBRATION_MIN_PROMPT_CHARS ||
+    params.inputTokens <= 0
+  ) {
+    return undefined;
+  }
+  return {
+    promptChars: Math.floor(params.promptChars),
+    inputTokens: Math.floor(params.inputTokens),
+  };
+}
+
+function resolveContinuityCharsPerToken(
+  calibration: CodexContinuityCalibration | undefined,
+): number {
+  if (
+    !calibration ||
+    !Number.isFinite(calibration.promptChars) ||
+    !Number.isFinite(calibration.inputTokens) ||
+    calibration.promptChars < CONTINUITY_CALIBRATION_MIN_PROMPT_CHARS ||
+    calibration.inputTokens <= 0
+  ) {
+    return CONTINUITY_EMPIRICAL_CHARS_PER_TOKEN;
+  }
+  return Math.min(
+    CONTINUITY_MAX_CHARS_PER_TOKEN,
+    Math.max(CONTINUITY_MIN_CHARS_PER_TOKEN, calibration.promptChars / calibration.inputTokens),
+  );
+}
+
+/** Resolves rendered context size for no-engine continuity projections. */
+export function resolveCodexContinuityProjectionMaxChars(params: {
+  contextTokenBudget?: number;
+  calibration?: CodexContinuityCalibration;
+}): number {
+  const contextTokenBudget =
+    typeof params.contextTokenBudget === "number" && Number.isFinite(params.contextTokenBudget)
+      ? Math.floor(params.contextTokenBudget)
+      : undefined;
+  if (!contextTokenBudget || contextTokenBudget <= 0) {
+    return DEFAULT_RENDERED_CONTEXT_CHARS;
+  }
+  const continuityBudgetTokens = resolveProjectionPromptBudgetTokens({
+    contextTokenBudget,
+    reserveTokens: Math.max(
+      DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS,
+      Math.floor(contextTokenBudget * CONTINUITY_PROJECTION_RESERVE_RATIO),
+    ),
+  });
+  return normalizeRenderedContextMaxChars(
+    continuityBudgetTokens * resolveContinuityCharsPerToken(params.calibration),
+  );
+}
+
 /** Fits projected context prompts under Codex app-server turn/start text limits. */
 export function fitCodexProjectedContextForTurnStart(params: {
   promptText: string;

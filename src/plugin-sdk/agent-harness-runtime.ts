@@ -27,6 +27,14 @@ import {
   type AbortAndDrainEmbeddedAgentRunResult,
   type EmbeddedAgentQueueMessageOptions,
 } from "../agents/embedded-agent-runner/runs.js";
+import { runStructuredInput } from "../agents/harness/structured-input-execution.js";
+import {
+  compileStructuredInputForm,
+  compileStructuredInputQuestions,
+  compileStructuredInputUrl,
+  isStructuredInputRecord,
+  snapshotStructuredInput,
+} from "../agents/harness/structured-input.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
 import { inferToolMetaFromArgsCore } from "../agents/tool-display.js";
 import {
@@ -78,6 +86,11 @@ export type {
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
   AgentHarnessCompactResult,
+  AgentHarnessNativeCompaction,
+  AgentHarnessNativeCompactionParams,
+  AgentHarnessNativeCompactionRequest,
+  AgentHarnessModelCatalogParams,
+  AgentHarnessRegistrationOptions,
   AgentHarnessDeliveryDefaults,
   AgentHarnessResultClassification,
   AgentHarnessRuntimeArtifactBinding,
@@ -115,10 +128,17 @@ export type { AgentHarnessQuestionGatewayCall } from "../agents/harness/gateway-
 type EmbeddedRunAttemptParamsBase = Omit<
   CoreEmbeddedRunAttemptParams,
   | "admittedRunContext"
+  | "authoredContextTokenCap"
   | "contextEngineLogicalTurnLease"
   | "onContextEngineTurnCandidate"
+  | "pluginHarnessToolPolicySafeDeniedTools"
   | "trajectoryRecorder"
->;
+> & {
+  /** Per-model context cap authored by the operator and forwarded to harness runtimes. */
+  authoredContextTokenCap?: number;
+  /** Audited exact denies that the plugin harness must enforce against native equivalents. */
+  pluginHarnessToolPolicySafeDeniedTools?: readonly string[];
+};
 /**
  * @deprecated Use EmbeddedRunAttemptParamsV2. The optional capability keeps
  * existing harness source compatible through 2026-10-12.
@@ -242,10 +262,24 @@ export {
   claimPendingAgentQuestionAnswer,
   runAgentHarnessGatewayQuestion,
 } from "../agents/harness/gateway-question.js";
+/** Bounded structured-input compilation and execution for native agent harnesses. */
+export const agentHarnessStructuredInput = Object.freeze({
+  compileForm: compileStructuredInputForm,
+  compileQuestions: compileStructuredInputQuestions,
+  compileUrl: compileStructuredInputUrl,
+  isRecord: isStructuredInputRecord,
+  run: runStructuredInput,
+  snapshot: snapshotStructuredInput,
+});
 export {
   buildSkillWorkshopPromptSection,
   SKILL_WORKSHOP_TOOL_NAME,
 } from "../agents/skill-workshop-prompt.js";
+export {
+  buildDelegationGuidanceSection,
+  resolveMainSessionDelegationMode,
+} from "../agents/delegation-guidance.js";
+export { buildHarnessVisibleReplyGuidance } from "../auto-reply/source-reply-delivery-mode.js";
 export { TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT } from "../agents/transcript-credential-safety.js";
 export { resolveAttemptFsWorkspaceOnly } from "../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
 export { resolveAttemptSpawnWorkspaceDir } from "../agents/embedded-agent-runner/run/attempt-thread-helpers.js";

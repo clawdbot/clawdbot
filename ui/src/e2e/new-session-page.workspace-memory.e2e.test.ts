@@ -17,6 +17,7 @@ import {
   pollLocatorText,
   projectProofArtifactDir,
   waitForCommittedChatRoute,
+  waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -269,12 +270,41 @@ suite.define(() => {
         .toBe(true);
       const secondShortcut = secondModel.locator('[data-chat-model-shortcut-number="2"]');
       await expect.poll(() => secondShortcut.count()).toBe(1);
-      const menuBoxBeforeFocus = await page.locator(".chat-controls__model-menu").boundingBox();
-      const actionBoxBeforeFocus = await secondModel
-        .locator(".chat-controls__model-option-action")
-        .boundingBox();
-      expect(menuBoxBeforeFocus).not.toBeNull();
-      expect(actionBoxBeforeFocus).not.toBeNull();
+      // wa-popup updates its anchored position asynchronously. Gate the atomic
+      // baseline on that settlement. After focus, poll the same exact geometry so
+      // transient frames settle before enforcing the opacity-only no-reflow contract.
+      const menuGeometry = () =>
+        page.evaluate(() => {
+          const anchor = document.querySelector('[data-chat-model-select="true"]');
+          const menu = document.querySelector(".chat-controls__model-menu");
+          const action = document.querySelector(
+            '[data-chat-model-option="anthropic/claude-sonnet-4-6"] .chat-controls__model-option-action',
+          );
+          if (!anchor || !menu || !action) {
+            return null;
+          }
+          const anchorBox = anchor.getBoundingClientRect();
+          const menuBox = menu.getBoundingClientRect();
+          const actionBox = action.getBoundingClientRect();
+          return {
+            anchorGap: Math.round(anchorBox.top - menuBox.bottom),
+            menu: {
+              dx: menuBox.x - anchorBox.x,
+              dy: menuBox.y - anchorBox.y,
+              width: menuBox.width,
+              height: menuBox.height,
+            },
+            action: {
+              dx: actionBox.x - menuBox.x,
+              dy: actionBox.y - menuBox.y,
+              width: actionBox.width,
+              height: actionBox.height,
+            },
+          };
+        });
+      await expect.poll(async () => (await menuGeometry())?.anchorGap).toBe(6);
+      const geometryBeforeFocus = await menuGeometry();
+      expect(geometryBeforeFocus).not.toBeNull();
       await expect
         .poll(() => secondShortcut.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
@@ -286,12 +316,7 @@ suite.define(() => {
       await expect
         .poll(() => secondShortcut.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("0");
-      expect(await page.locator(".chat-controls__model-menu").boundingBox()).toEqual(
-        menuBoxBeforeFocus,
-      );
-      expect(
-        await secondModel.locator(".chat-controls__model-option-action").boundingBox(),
-      ).toEqual(actionBoxBeforeFocus);
+      await expect.poll(menuGeometry).toEqual(geometryBeforeFocus);
       await search.press("1");
       await expect.poll(() => search.inputValue()).toBe("1");
       await expect.poll(() => picker.getAttribute("open")).toBe("");
@@ -478,9 +503,8 @@ suite.define(() => {
       }, WORKSPACE);
       await gateway.setMethodResponse("agents.list", mainAgentList(WORKSPACE, false));
       await page.reload();
-      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
-      const storedWorktree = (await readMainPreference(page))?.worktree;
-      expect(storedWorktree).toBe(false);
+      await expect.poll(async () => (await readMainPreference(page))?.worktree).toBe(false);
+      await expect.poll(() => placeTrigger.count()).toBe(0);
     });
   });
 
@@ -542,10 +566,10 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       const trigger = page.locator("#new-session-project-trigger");
       await trigger.click();
-      expect(await page.locator('[data-value="recent::/shared"]').count()).toBe(0);
+      expect(await page.locator('[data-value="recent:/shared"]').count()).toBe(0);
       expect(await page.locator('[data-value="recent-project:registered"]').count()).toBe(0);
       const project = page.locator('[data-value="project:registered"]');
-      const recentFolder = page.locator(`[data-value="recent::${WORKSPACE}/scratch"]`);
+      const recentFolder = page.locator(`[data-value="recent:${WORKSPACE}/scratch"]`);
       await project.waitFor();
       await recentFolder.waitFor();
       await captureProjectUiProof(page, "identity-project-recents-after.png");
@@ -781,11 +805,17 @@ suite.define(() => {
       // A failed lookup disables the worktree toggle, so restoring the stored
       // choice would strand the draft behind a control the user cannot clear.
       // The draft drops it and stays submittable; storage keeps the preference.
-      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
+      await expect.poll(() => placeTrigger.count()).toBe(0);
       await expect.poll(() => start.isDisabled()).toBe(false);
+      await waitForCommittedNewSessionDraft(page, "keep both remembered choices", 0);
 
       await page.reload();
-      await page.locator(".new-session-page__message").fill("keep both remembered choices");
+      // The composer persists drafts across hard reloads; refilling here races
+      // the async restore, which can append the stored draft to the typed text.
+      // Waiting for the restored value asserts the documented persistence.
+      await expect
+        .poll(() => page.locator(".new-session-page__message").inputValue())
+        .toBe("keep both remembered choices");
       await expect
         .poll(() => modelSelect.getAttribute("data-chat-select-value"))
         .toBe("anthropic/claude-sonnet-4-6");

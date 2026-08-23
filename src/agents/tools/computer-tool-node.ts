@@ -14,6 +14,10 @@ import {
   COMPUTER_CONTRACT_MISMATCH,
   parseComputerActResult,
 } from "../../plugins/computer-use-contract.js";
+import {
+  type EligibleNodeMessages,
+  resolveEligibleNodeFromList,
+} from "../../shared/node-resolve.js";
 import { computerActionNeedsFrame, validateCapabilityBoundInput } from "./computer-tool-request.js";
 import type {
   ComputerContextEpoch,
@@ -30,12 +34,7 @@ import {
   SCREEN_SNAPSHOT_COMMAND,
 } from "./computer-tool-shared.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
-import {
-  type EligibleNodeMessages,
-  listNodes,
-  type NodeListNode,
-  resolveEligibleNodeFromList,
-} from "./nodes-utils.js";
+import { listNodes, type NodeListNode } from "./nodes-utils.js";
 
 type ComputerState =
   | { kind: "unbound" }
@@ -65,7 +64,7 @@ function isEligibleComputerNode(node: NodeListNode): boolean {
   );
 }
 
-const COMPUTER_NODE_MESSAGES: EligibleNodeMessages = {
+const COMPUTER_NODE_MESSAGES: EligibleNodeMessages<NodeListNode> = {
   ineligibleExact: (query, eligibleIds) =>
     `node "${query}" is not computer-capable (needs a connected node advertising ${COMPUTER_ACT_COMMAND} and ${SCREEN_SNAPSHOT_COMMAND}; ${NOT_COMPUTER_CAPABLE_HINT}; ` +
     `eligible node ids: ${eligibleIds})`,
@@ -142,6 +141,9 @@ function computerActIdempotencyKey(params: { scope?: string; toolCallId: string 
     .createHash("sha256")
     .update(JSON.stringify([stableScope, stableCallId, COMPUTER_ACT_COMMAND]))
     .digest("hex");
+  // `v1` versions this key's composition (scope + call id + command), not the
+  // `computer.act` wire contract. Changing what goes into the digest needs a
+  // new prefix so in-flight keys from an older node cannot collide.
   return `computer.act:v1:${digest}`;
 }
 

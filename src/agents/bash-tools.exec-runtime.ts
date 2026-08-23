@@ -19,6 +19,11 @@ import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
+import { logWarn } from "../logger.js";
+import { redactToolPayloadText } from "../logging/redact.js";
+import type { ManagedRun } from "../process/supervisor/index.js";
+import { getProcessSupervisor } from "../process/supervisor/index.js";
+import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 /**
  * Bash exec runtime.
@@ -26,21 +31,12 @@ import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
  * approval messaging constants, environment safety, and exit outcome shaping.
  */
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
-import type { ProcessSession } from "./bash-process-registry.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
-import type { BashSandboxConfig } from "./bash-tools.shared.js";
-import type { AgentToolResult } from "./runtime/index.js";
-export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
-import { logWarn } from "../logger.js";
-import { redactToolPayloadText } from "../logging/redact.js";
-import type { ManagedRun } from "../process/supervisor/index.js";
-import { getProcessSupervisor } from "../process/supervisor/index.js";
-import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
 import {
   normalizeDeliveryContext,
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
+import type { ProcessSession } from "./bash-process-registry.js";
 import {
   addSession,
   appendOutput,
@@ -54,6 +50,8 @@ import {
   renderExecExitLabel,
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
+import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import {
   buildDockerExecArgs,
   chunkString,
@@ -61,9 +59,11 @@ import {
   readEnvInt,
 } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
+import type { AgentToolResult } from "./runtime/index.js";
 import { createSessionSlug } from "./session-slug.js";
 import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
 import { createStreamingBinaryOutputSanitizer, getShellConfig } from "./shell-utils.js";
+export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
 
 export { execSchema } from "./bash-tools.schemas.js";
 
@@ -408,6 +408,7 @@ export function buildApprovalPendingMessage(params: {
   cwd: string | undefined;
   host: "gateway" | "node";
   nodeId?: string;
+  processContinuationAvailable?: boolean;
 }) {
   const commandBlock = formatFencedCodeBlock(params.command, "sh");
   const lines: string[] = [];
@@ -426,11 +427,13 @@ export function buildApprovalPendingMessage(params: {
   lines.push("Command:");
   lines.push(commandBlock);
   lines.push("Mode: foreground (interactive approvals available).");
-  lines.push(
-    allowedDecisions.includes("allow-always")
-      ? "Background mode requires pre-approved policy (allow-always or ask=off)."
-      : "Background mode requires an effective policy that allows pre-approval (for example ask=off).",
-  );
+  if (params.processContinuationAvailable !== false) {
+    lines.push(
+      allowedDecisions.includes("allow-always")
+        ? "Background mode requires pre-approved policy (allow-always or ask=off)."
+        : "Background mode requires an effective policy that allows pre-approval (for example ask=off).",
+    );
+  }
   lines.push(`Reply with: /approve ${params.approvalSlug} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
     lines.push("Allow Always is unavailable for this command.");
@@ -480,6 +483,7 @@ function formatExecFailureReason(params: {
   failureKind: ExecExitFailureKind;
   exitSignal: NodeJS.Signals | number | null;
   timeoutSec: number | null | undefined;
+  processContinuationAvailable: boolean;
 }): string {
   switch (params.failureKind) {
     case "shell-command-not-found":
@@ -491,7 +495,10 @@ function formatExecFailureReason(params: {
         typeof params.timeoutSec === "number" && params.timeoutSec > 0
           ? `Command timed out after ${params.timeoutSec} seconds.`
           : "Command timed out.";
-      return `${appendExecTimeoutRetryGuidance(timeoutText, params.failureKind)}\n\nIf it should keep running, start it with exec background=true or yieldMs so OpenClaw can register a pollable process session. Do not rely on shell backgrounding with a trailing &.`;
+      const retryGuidance = appendExecTimeoutRetryGuidance(timeoutText, params.failureKind);
+      return params.processContinuationAvailable
+        ? `${retryGuidance}\n\nIf it should keep running, start it with exec background=true or yieldMs so OpenClaw can register a pollable process session. Do not rely on shell backgrounding with a trailing &.`
+        : retryGuidance;
     }
     case "no-output-timeout":
       return appendExecTimeoutRetryGuidance(
@@ -512,6 +519,7 @@ function buildExecExitOutcome(params: {
   aggregated: string;
   durationMs: number;
   timeoutSec: number | null | undefined;
+  processContinuationAvailable: boolean;
 }): ExecProcessOutcome {
   const exitCode = params.exit.exitCode ?? 0;
   const isNormalExit = params.exit.reason === "exit";
@@ -541,6 +549,7 @@ function buildExecExitOutcome(params: {
     failureKind,
     exitSignal: params.exit.exitSignal,
     timeoutSec: params.timeoutSec,
+    processContinuationAvailable: params.processContinuationAvailable,
   });
   return {
     status: "failed",
@@ -643,6 +652,8 @@ export async function runExecProcess(opts: {
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
+  /** Whether exec may return a supervised session for later continuation. */
+  processContinuationAvailable?: boolean;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
   /** Runs after process finalization and before the exit wake is queued. */
   onSettledBeforeNotify?: (outcome: ExecProcessOutcome) => void;
@@ -984,6 +995,7 @@ export async function runExecProcess(opts: {
         aggregated: session.aggregated.trim(),
         durationMs,
         timeoutSec: opts.timeoutSec,
+        processContinuationAvailable: opts.processContinuationAvailable !== false,
       });
 
       const finalOutcome = await finalizeAndSettleSession(outcome);

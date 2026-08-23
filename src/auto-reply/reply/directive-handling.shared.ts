@@ -8,7 +8,7 @@ import {
   sessionModelOverrideChangesApplied,
   sessionSnapshotChangesApplied,
 } from "../../config/sessions/session-snapshot-merge.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { SYSTEM_MARK, prefixSystemMessage } from "../../infra/system-message.js";
 import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";

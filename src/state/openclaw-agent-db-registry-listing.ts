@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, statSync } from "node:fs";
+import { lstatSync, statSync } from "node:fs";
 import path from "node:path";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
@@ -7,11 +7,14 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   type OpenClawRegisteredAgentDatabase,
 } from "./openclaw-agent-db-contract.js";
-import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import { detectOpenClawStateDatabaseSchemaMigrationsFromDatabase } from "./openclaw-state-db-schema-repair.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import {
+  resolveOpenClawRegisteredAgentDatabasePath,
+  resolveOpenClawStateSqlitePath,
+} from "./openclaw-state-db.paths.js";
 
 type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases">;
 
@@ -114,17 +117,9 @@ export function listOpenClawRegisteredAgentDatabases(
       ? entries
       : entries.filter((entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION);
   }
-  if (!existsSync(pathname)) {
-    if (hasUnavailableMissingSqlitePath(pathname)) {
-      throw new Error(`OpenClaw state database ${pathname} is unavailable.`);
-    }
-    memo.entries = [];
-    return [];
-  }
   // Discovery runs per row in list hot paths, so the legacy-schema gate and the
-  // query share one process-held state handle instead of opening two
-  // connections per call.
-  const entries = withOpenClawStateDatabaseReadOnly(({ db: database }) => {
+  // query share one process-held state handle instead of opening two connections.
+  const entries = withExistingOpenClawStateDatabaseReadOnly(({ db: database }) => {
     if (detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).length > 0) {
       throw new Error(
         `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
@@ -150,12 +145,19 @@ export function listOpenClawRegisteredAgentDatabases(
     ).rows;
     return rows.map((row) => ({
       agentId: normalizeAgentId(row.agent_id),
-      path: row.path,
+      path: resolveOpenClawRegisteredAgentDatabasePath(pathname, row.path),
       schemaVersion: row.schema_version,
       lastSeenAt: row.last_seen_at,
       sizeBytes: row.size_bytes,
     }));
   }, options);
+  if (entries === undefined) {
+    if (hasUnavailableMissingSqlitePath(pathname)) {
+      throw new Error(`OpenClaw state database ${pathname} is unavailable.`);
+    }
+    memo.entries = [];
+    return [];
+  }
   memo.entries = entries;
   const cloned = cloneRegisteredAgentDatabases(entries);
   return options.includeIncompatibleSchemaVersions

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -97,6 +98,111 @@ afterEach(() => {
 });
 
 describe("node worker workspace retention", () => {
+  it("claims only the exact canonical placement workspace identity", () => {
+    const root = fs.realpathSync.native(tempDirs.make("node-worker-workspace-managed-identity-"));
+    const workspace = new NodeWorkerWorkspaceRuntime({ root });
+    const input = testWorkerLaunchInput("/unused", "managed-identity");
+    const ownerEpoch = input.descriptor.admission.ownerEpoch;
+    const workspaceDir = seedGeneration(root, input, ownerEpoch);
+    const request = {
+      workspaceDir,
+      environmentId: input.descriptor.admission.environmentId,
+      sessionId: input.descriptor.admission.sessionId,
+      ownerEpoch,
+      sessionKey: "agent:main:managed",
+    };
+
+    const claim = workspace.acquireManagedWorkspace(request);
+    expect(claim.workspaceDir).toBe(workspaceDir);
+    claim.release();
+    claim.release();
+
+    for (const changed of [
+      { workspaceDir: root },
+      { environmentId: "different-environment" },
+      { sessionId: "different-session" },
+      { ownerEpoch: ownerEpoch + 1 },
+      { sessionKey: "" },
+    ]) {
+      expect(() => workspace.acquireManagedWorkspace({ ...request, ...changed })).toThrow(
+        "does not own the requested workspace",
+      );
+    }
+
+    const linked = path.join(path.dirname(workspaceDir), "linked-workspace");
+    fs.symlinkSync(workspaceDir, linked, process.platform === "win32" ? "junction" : "dir");
+    expect(() => workspace.acquireManagedWorkspace({ ...request, workspaceDir: linked })).toThrow(
+      "does not own the requested workspace",
+    );
+  });
+
+  it("protects a claimed placement workspace until its owner releases it", async () => {
+    const root = fs.realpathSync.native(tempDirs.make("node-worker-workspace-managed-retention-"));
+    const workspace = new NodeWorkerWorkspaceRuntime({ root });
+    const input = testWorkerLaunchInput("/unused", "managed-retention");
+    const ownerEpoch = input.descriptor.admission.ownerEpoch;
+    const workspaceDir = seedGeneration(root, input, ownerEpoch);
+    const claim = workspace.acquireManagedWorkspace({
+      workspaceDir,
+      environmentId: input.descriptor.admission.environmentId,
+      sessionId: input.descriptor.admission.sessionId,
+      ownerEpoch,
+      sessionKey: "agent:main:managed",
+    });
+
+    await workspace.applyRetainSnapshot(retainInput(input, 1, []), () => []);
+    expect(fs.existsSync(workspaceDir)).toBe(true);
+
+    claim.release();
+    claim.release();
+    await workspace.applyRetainSnapshot(retainInput(input, 2, []), () => []);
+    expect(fs.existsSync(workspaceDir)).toBe(false);
+  });
+
+  it("rejects a placement claim once workspace removal is already in flight", async () => {
+    const root = fs.realpathSync.native(tempDirs.make("node-worker-workspace-removal-race-"));
+    const workspace = new NodeWorkerWorkspaceRuntime({ root });
+    const input = testWorkerLaunchInput("/unused", "managed-removal-race");
+    const ownerEpoch = input.descriptor.admission.ownerEpoch;
+    const workspaceDir = seedGeneration(root, input, ownerEpoch);
+    const request = {
+      workspaceDir,
+      environmentId: input.descriptor.admission.environmentId,
+      sessionId: input.descriptor.admission.sessionId,
+      ownerEpoch,
+      sessionKey: "agent:main:managed",
+    };
+    let started!: () => void;
+    let finish!: () => void;
+    const removalStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const finishRemoval = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const remove = fsp.rm.bind(fsp);
+    vi.spyOn(fsp, "rm").mockImplementation(async (target, options) => {
+      if (String(target) === workspaceDir) {
+        started();
+        await finishRemoval;
+      }
+      return await remove(target, options);
+    });
+    const retention = workspace.applyRetainSnapshot(retainInput(input, 1, []), () => []);
+
+    try {
+      await removalStarted;
+      expect(fs.existsSync(workspaceDir)).toBe(true);
+      expect(() => workspace.acquireManagedWorkspace(request)).toThrow(
+        "workspace is being removed",
+      );
+    } finally {
+      finish();
+      await retention;
+    }
+    expect(fs.existsSync(workspaceDir)).toBe(false);
+  });
+
   it("does not delete workspaces before the first Gateway snapshot", async () => {
     const root = tempDirs.make("node-worker-workspace-retention-startup-");
     const { bundleRoot, env, workspaceDir } = writeNodeWorkerFixture(root);

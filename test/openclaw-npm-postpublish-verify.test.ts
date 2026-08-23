@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { generateKeyPairSync, sign } from "node:crypto";
 // OpenClaw npm postpublish tests validate postpublish verification behavior.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -25,6 +25,10 @@ import {
   verifyNpmProvenanceAttestation,
   verifyNpmRegistrySignatures,
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
+import {
+  WORKER_BUNDLE_ENTRY_PATH,
+  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
+} from "../src/shared/worker-bundle-hash.js";
 import { withEnv } from "../src/test-utils/env.js";
 
 const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
@@ -596,6 +600,32 @@ describe("collectInstalledPackageErrors", () => {
     );
   });
 
+  it("rejects an oversized worker before the full verifier reads its contents", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writeFileSync(join(packageRoot, "package.json"), '{"version":"2026.3.23"}\n', "utf8");
+      const workerPath = join(packageRoot, "dist", "worker", WORKER_BUNDLE_ENTRY_PATH);
+      mkdirSync(dirname(workerPath), { recursive: true });
+      writeFileSync(workerPath, "/* Failed to load legacy context engine runtime. */\n", "utf8");
+      truncateSync(workerPath, 80 * 1024 * 1024 + 1);
+
+      const errors = collectInstalledPackageErrors({
+        expectedVersion: "2026.3.23",
+        installedVersion: "2026.3.23",
+        packageRoot,
+      });
+      const sizeError = `installed package root dist file 'worker/${WORKER_BUNDLE_ENTRY_PATH}' is invalid or exceeds 83886080 bytes.`;
+
+      expect(errors.filter((error) => error === sizeError)).toEqual([sizeError]);
+      expect(errors).not.toContain(
+        "installed package includes unresolved legacy context engine runtime loader; rebuild with a bundler-traceable LegacyContextEngine import.",
+      );
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
   it.each(["ollama", "lmstudio"])(
     "rejects a missing installed bundled %s provider directory",
     (providerId) => {
@@ -834,7 +864,6 @@ describe("collectInstalledAlwaysAllowedRuntimeFacadeErrors", () => {
       expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toEqual([
         "installed package is missing required facade activation runtime: dist/facade-activation-check.runtime.js",
         "installed package allows bundled runtime facade image-generation-core/runtime-api.js but is missing required runtime sidecar: dist/extensions/image-generation-core/runtime-api.js.",
-        "installed package allows bundled runtime facade media-understanding-core/runtime-api.js but is missing required runtime sidecar: dist/extensions/media-understanding-core/runtime-api.js.",
       ]);
     });
   });
@@ -843,7 +872,6 @@ describe("collectInstalledAlwaysAllowedRuntimeFacadeErrors", () => {
     withInstalledPackageRoot((packageRoot) => {
       writeInstalledFile(packageRoot, "dist/facade-activation-check.runtime.js");
       writeInstalledFile(packageRoot, "dist/extensions/image-generation-core/runtime-api.js");
-      writeInstalledFile(packageRoot, "dist/extensions/media-understanding-core/runtime-api.js");
 
       expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toStrictEqual([]);
     });
@@ -891,6 +919,31 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
     }
   });
 
+  it("ignores extension-owned JavaScript assets", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      const viewerPath = join(
+        packageRoot,
+        "dist",
+        "extensions",
+        "diffs",
+        "assets",
+        "viewer-runtime.js",
+      );
+      mkdirSync(dirname(viewerPath), { recursive: true });
+      writeFileSync(
+        viewerPath,
+        'throw new Error("Failed to load legacy context engine runtime.");\n',
+        "utf8",
+      );
+
+      expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toStrictEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
   it("refuses unbounded packaged dist scans", () => {
     const packageRoot = makeInstalledPackageRoot();
 
@@ -898,7 +951,7 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
       writeDistJavaScriptFiles(packageRoot, INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT + 1);
 
       expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toEqual([
-        `installed package dist contains more than ${INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT} JavaScript files; refusing to scan unbounded package contents.`,
+        `installed package root dist contains more than ${INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT} JavaScript files; refusing to scan unbounded package contents.`,
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
@@ -1061,7 +1114,7 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     }
   });
 
-  it("flags undeclared imports from mjs and cjs root dist files", () => {
+  it("flags undeclared imports from nested mjs and direct cjs root dist files", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
@@ -1069,9 +1122,9 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         version: "2026.4.22",
         dependencies: {},
       });
-      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      mkdirSync(join(packageRoot, "dist", "runtime"), { recursive: true });
       writeFileSync(
-        join(packageRoot, "dist", "esm-entry.mjs"),
+        join(packageRoot, "dist", "runtime", "esm-entry.mjs"),
         'export { value } from "mjs-only";\n',
         "utf8",
       );
@@ -1083,7 +1136,7 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
 
       expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
         "installed package root is missing declared runtime dependency 'cjs-only' for dist importers: cjs-entry.cjs. Add it to package.json dependencies/optionalDependencies.",
-        "installed package root is missing declared runtime dependency 'mjs-only' for dist importers: esm-entry.mjs. Add it to package.json dependencies/optionalDependencies.",
+        "installed package root is missing declared runtime dependency 'mjs-only' for dist importers: runtime/esm-entry.mjs. Add it to package.json dependencies/optionalDependencies.",
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
@@ -1157,7 +1210,40 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
     }
   });
 
-  it("refuses oversized root dist files", () => {
+  it.each([
+    {
+      expected: [
+        "installed package root dist file 'oversized.js' is invalid or exceeds 6291456 bytes.",
+      ],
+      name: "rejects oversized direct dist files",
+      relativePath: "oversized.js",
+    },
+    {
+      expected: [
+        "installed package root dist file 'runtime/oversized.js' is invalid or exceeds 6291456 bytes.",
+      ],
+      name: "rejects oversized arbitrary nested dist files",
+      relativePath: "runtime/oversized.js",
+    },
+    {
+      expected: [],
+      name: "accepts the oversized worker deploy entrypoint",
+      relativePath: `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
+    },
+    {
+      expected: [],
+      name: "accepts the oversized worker rsync receiver",
+      relativePath: `worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
+    },
+    {
+      expected: [
+        `installed package root dist file 'worker/${WORKER_BUNDLE_ENTRY_PATH}' is invalid or exceeds 83886080 bytes.`,
+      ],
+      name: "rejects the worker deploy entrypoint above its dedicated parser bound",
+      relativePath: `worker/${WORKER_BUNDLE_ENTRY_PATH}`,
+      sparseSize: 80 * 1024 * 1024 + 1,
+    },
+  ])("$name", ({ expected, relativePath, sparseSize }) => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
@@ -1165,22 +1251,22 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         version: "2026.4.22",
         dependencies: {},
       });
-      mkdirSync(join(packageRoot, "dist"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "dist", "oversized.js"),
-        "x".repeat(6 * 1024 * 1024 + 1),
-        "utf8",
-      );
+      const filePath = join(packageRoot, "dist", relativePath);
+      mkdirSync(dirname(filePath), { recursive: true });
+      if (sparseSize) {
+        writeFileSync(filePath, "/*", "utf8");
+        truncateSync(filePath, sparseSize);
+      } else {
+        writeFileSync(filePath, `/* ${"x".repeat(6 * 1024 * 1024)} */\n`, "utf8");
+      }
 
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
-        "installed package root dist file 'oversized.js' is invalid or exceeds 6291456 bytes.",
-      ]);
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual(expected);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
   });
 
-  it("refuses unbounded root dist dependency scans", () => {
+  it("excludes bundled extension modules from root dist dependency scans", () => {
     const packageRoot = makeInstalledPackageRoot();
 
     try {
@@ -1188,10 +1274,16 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         version: "2026.4.22",
         dependencies: {},
       });
-      writeDistJavaScriptFiles(packageRoot, INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT + 1);
+      mkdirSync(join(packageRoot, "dist", "extensions", "telegram"), { recursive: true });
+      writeFileSync(join(packageRoot, "dist", "root-runtime.js"), 'import "root-only";\n', "utf8");
+      writeFileSync(
+        join(packageRoot, "dist", "extensions", "telegram", "runtime-api.js"),
+        'import "extension-only";\n',
+        "utf8",
+      );
 
       expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([
-        `installed package root dist contains more than ${INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT} JavaScript files; refusing to scan unbounded package contents.`,
+        "installed package root is missing declared runtime dependency 'root-only' for dist importers: root-runtime.js. Add it to package.json dependencies/optionalDependencies.",
       ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });

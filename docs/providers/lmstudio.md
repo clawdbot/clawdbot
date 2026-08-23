@@ -189,7 +189,8 @@ loopback on that machine:
 ```
 
 `lmstudio` automatically trusts its configured endpoint for model requests, including loopback,
-LAN, and tailnet hosts (except metadata/link-local origins). Any custom/local OpenAI-compatible
+LAN, and tailnet hosts (except metadata, link-local, and local-use NAT64
+`64:ff9b:1::/48` origins). Any custom/local OpenAI-compatible
 provider entry gets the same exact-origin trust. Requests to a different private host or port still
 require `models.providers.<id>.request.allowPrivateNetwork: true`; set it to `false` to opt out of
 the default trust.

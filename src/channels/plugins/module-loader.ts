@@ -7,6 +7,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { describeRootFileOpenFailure, openRootFileSync } from "../../infra/boundary-file-read.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
 import {
   getCachedPluginModuleLoader,
@@ -15,6 +16,7 @@ import {
 
 const nodeRequire = createRequire(import.meta.url);
 const SOURCE_MODULE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
+const SOURCE_MODULE_RESOLUTION_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"] as const;
 const jitiLoaders: PluginModuleLoaderCache = new Map();
 
 function hasNativeSourceRequireHook(modulePath: string): boolean {
@@ -64,34 +66,35 @@ function loadModule(modulePath: string): unknown {
   }
 }
 
-function resolvePluginModuleCandidates(rootDir: string, specifier: string): string[] {
+function resolveSourceModuleCandidates(rootDir: string, specifier: string): string[] {
   const normalizedSpecifier = specifier.replace(/\\/g, "/");
   const resolvedPath = path.resolve(rootDir, normalizedSpecifier);
-  const ext = path.extname(resolvedPath);
-  if (ext) {
-    return [resolvedPath];
+  if (path.extname(resolvedPath)) {
+    return [];
   }
-  return [
-    resolvedPath,
-    `${resolvedPath}.ts`,
-    `${resolvedPath}.mts`,
-    `${resolvedPath}.js`,
-    `${resolvedPath}.mjs`,
-    `${resolvedPath}.cts`,
-    `${resolvedPath}.cjs`,
-  ];
+  return SOURCE_MODULE_RESOLUTION_EXTENSIONS.map((extension) => `${resolvedPath}${extension}`);
 }
 
 /**
  * Resolves a plugin-relative module specifier to an existing candidate path.
  */
 export function resolveExistingPluginModulePath(rootDir: string, specifier: string): string {
-  for (const candidate of resolvePluginModuleCandidates(rootDir, specifier)) {
+  const resolvedPath = path.resolve(rootDir, specifier.replace(/\\/g, "/"));
+  try {
+    // Match Node package semantics for explicit files, extensionless JavaScript,
+    // package mains, and directory indexes before applying source-only fallbacks.
+    return nodeRequire.resolve(resolvedPath);
+  } catch (error) {
+    if (!hasErrnoCode(error, "MODULE_NOT_FOUND")) {
+      throw error;
+    }
+  }
+  for (const candidate of resolveSourceModuleCandidates(rootDir, specifier)) {
     if (fs.existsSync(candidate)) {
       return candidate;
     }
   }
-  return path.resolve(rootDir, specifier);
+  return resolvedPath;
 }
 
 /**

@@ -316,7 +316,7 @@ export async function createMatrixThreadBindingManager(params: {
     if (existingEntry.storageKey === storageKey) {
       return existingEntry.manager;
     }
-    existingEntry.manager.stop();
+    await existingEntry.manager.stop();
   }
   const pluginLoaded = await loadBindingsFromPluginState({
     accountId: params.accountId,
@@ -482,15 +482,18 @@ export async function createMatrixThreadBindingManager(params: {
         }),
       });
     },
-    stop: () => {
+    stop: async () => {
       if (sweepTimer) {
         clearInterval(sweepTimer);
       }
+      let finalPersist = persistQueue;
       if (persistTimer) {
         clearTimeout(persistTimer);
         persistTimer = null;
-        persistSafely("shutdown-flush");
+        finalPersist = enqueuePersist();
       }
+      // Retire the live generation now, but settle its captured persistence before
+      // shutdown can close the shared Matrix state store.
       unregisterSessionBindingAdapter({
         channel: "matrix",
         accountId: params.accountId,
@@ -503,6 +506,7 @@ export async function createMatrixThreadBindingManager(params: {
           removeBindingRecord(record);
         }
       }
+      await finalPersist;
     },
   };
 

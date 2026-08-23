@@ -153,6 +153,100 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(instruction).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
   });
 
+  it("suppresses continuation for an exactly matched all-terminal current batch", () => {
+    const attempt = makeSettledIdleWriteAttempt();
+    const instruction = resolveSettledToolTerminalContinuationInstruction(
+      makeSettledContinuationParams({
+        ...attempt,
+        toolMetas: [
+          {
+            toolName: "write",
+            toolCallId: "tool_1",
+            replaySafe: false,
+            terminate: true,
+          },
+        ],
+      }),
+    );
+
+    expect(instruction).toBeNull();
+  });
+
+  it("continues when terminal metadata belongs to a stale prior call", () => {
+    const attempt = makeSettledIdleWriteAttempt();
+    const instruction = resolveSettledToolTerminalContinuationInstruction(
+      makeSettledContinuationParams({
+        ...attempt,
+        toolMetas: [
+          {
+            toolName: "write",
+            toolCallId: "tool_stale",
+            replaySafe: false,
+            terminate: true,
+          },
+        ],
+      }),
+    );
+
+    expect(instruction).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+  });
+
+  it.each([
+    {
+      label: "nonterminal",
+      currentMeta: { toolName: "write", toolCallId: "tool_1" },
+      expected: SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
+    },
+    {
+      label: "terminal",
+      currentMeta: { toolName: "write", toolCallId: "tool_1", terminate: true },
+      expected: null,
+    },
+  ])(
+    "uses the $label current occurrence when a provider reuses a tool-call id",
+    ({ currentMeta, expected }) => {
+      const attempt = makeSettledIdleWriteAttempt();
+      const instruction = resolveSettledToolTerminalContinuationInstruction(
+        makeSettledContinuationParams({
+          ...attempt,
+          toolMetas: [{ toolName: "write", toolCallId: "tool_1", terminate: true }, currentMeta],
+        }),
+      );
+
+      expect(instruction).toBe(expected);
+    },
+  );
+
+  it("continues when the current requested batch mixes terminal and nonterminal results", () => {
+    const attempt = makeSettledIdleWriteAttempt();
+    const toolUseAssistant = makeLastAssistant({
+      stopReason: "toolUse",
+      content: [
+        { type: "toolCall", id: "tool_1", name: "write", arguments: {} },
+        { type: "toolCall", id: "tool_2", name: "read", arguments: {} },
+      ],
+    });
+    const instruction = resolveSettledToolTerminalContinuationInstruction(
+      makeSettledContinuationParams({
+        ...attempt,
+        toolMetas: [
+          { toolName: "write", toolCallId: "tool_1", terminate: true },
+          { toolName: "read", toolCallId: "tool_2" },
+        ],
+        itemLifecycle: { startedCount: 2, completedCount: 2, activeCount: 0 },
+        messagesSnapshot: [
+          { role: "user", content: [{ type: "text", text: "current turn" }] },
+          toolUseAssistant,
+          { role: "toolResult", toolCallId: "tool_1", toolName: "write", isError: false },
+          { role: "toolResult", toolCallId: "tool_2", toolName: "read", isError: false },
+          attempt.currentAttemptAssistant!,
+        ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+      }),
+    );
+
+    expect(instruction).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
+  });
+
   it.each([
     {
       label: "provider failure with finalization context",
@@ -254,9 +348,14 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       lastToolError: { toolName: "exec", error: "post-processing error" },
     },
     { label: "no remaining failure summary", lastToolError: undefined },
+    {
+      label: "a terminal-marked failed tool",
+      lastToolError: { toolName: "exec", error: "post-processing error" },
+      failedToolTerminate: true,
+    },
   ])(
     "recognizes successful and failed current-batch tools with $label (#118274)",
-    ({ lastToolError }) => {
+    ({ lastToolError, failedToolTerminate }) => {
       const toolUseAssistant = makeLastAssistant({
         stopReason: "toolUse",
         content: [
@@ -267,7 +366,15 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       const instruction = resolveSettledToolTerminalContinuationInstruction(
         makeSettledContinuationParams({
           assistantTexts: [],
-          toolMetas: [{ toolName: "read" }, { toolName: "exec", isError: true }],
+          toolMetas: [
+            { toolName: "read" },
+            {
+              toolName: "exec",
+              toolCallId: "tool_failed",
+              isError: true,
+              ...(failedToolTerminate ? { terminate: true } : {}),
+            },
+          ],
           itemLifecycle: { startedCount: 2, completedCount: 2, activeCount: 0 },
           messagesSnapshot: [
             toolUseAssistant,
@@ -281,9 +388,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       );
 
       expect(instruction).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
-      expect(instruction).toContain(
-        "If any tool failed, state that failure plainly and do not claim it succeeded.",
-      );
+      expect(instruction).toContain("If a tool failed, say so; never claim completion or success.");
     },
   );
 

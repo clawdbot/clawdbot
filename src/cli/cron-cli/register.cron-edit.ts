@@ -7,6 +7,7 @@ import {
 import type { Command } from "commander";
 import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import type { CronJob } from "../../cron/types.js";
+import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { danger } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
@@ -18,6 +19,7 @@ import {
 } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { isUnknownCronGetMethodError, listCronJobsFromGateway } from "./list-jobs.js";
+import { createCronOutputCommand } from "./output-mode.js";
 import { resolveCronEditPayloadDeliveryPatch } from "./register.cron-edit-options.js";
 import {
   applyExistingCronSchedulePatch,
@@ -55,8 +57,7 @@ async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<Cro
 
 export function registerCronEditCommand(cron: Command) {
   addGatewayClientOptions(
-    cron
-      .command("edit")
+    createCronOutputCommand(cron, "edit")
       .description("Edit an automation (patch fields)")
       .argument("<id>", "Job id")
       .option("--name <name>", "Set name")
@@ -170,6 +171,10 @@ export function registerCronEditCommand(cron: Command) {
           if (opts.clearTools && opts.tools !== undefined) {
             throw new Error("Use --tools or --clear-tools, not both");
           }
+          const commandCwd = normalizeOptionalString(opts.commandCwd);
+          if (typeof opts.commandCwd === "string" && !commandCwd) {
+            throw new Error("--command-cwd must not be blank");
+          }
           let existingJobPromise: Promise<CronJobForEdit> | undefined;
           let expectedConfigRevision: string | undefined;
           const readExistingCronJob = async (): Promise<CronJobForEdit> => {
@@ -221,7 +226,14 @@ export function registerCronEditCommand(cron: Command) {
               "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery.",
             );
           }
-          const hasWebhookDelivery = typeof opts.webhook === "string";
+          const webhookUrl =
+            typeof opts.webhook === "string"
+              ? (normalizeHttpWebhookUrl(opts.webhook) ?? undefined)
+              : undefined;
+          if (typeof opts.webhook === "string" && !webhookUrl) {
+            throw new Error("--webhook must be a valid http(s) URL");
+          }
+          const hasWebhookDelivery = Boolean(webhookUrl);
           const deliveryModeFlagCount = [
             Boolean(opts.announce),
             typeof opts.deliver === "boolean",
@@ -413,7 +425,12 @@ export function registerCronEditCommand(cron: Command) {
 
           Object.assign(
             patch,
-            await resolveCronEditPayloadDeliveryPatch(opts, readExistingCronJob),
+            await resolveCronEditPayloadDeliveryPatch(
+              opts,
+              readExistingCronJob,
+              webhookUrl,
+              commandCwd,
+            ),
           );
 
           const hasFailureAlertAfter = typeof opts.failureAlertAfter === "string";

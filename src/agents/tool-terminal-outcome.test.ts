@@ -8,12 +8,13 @@ import {
   resetAdjustedParamsByToolCallIdForTests,
 } from "./agent-tools.before-tool-call.state.js";
 import { buildPayloads } from "./embedded-agent-runner/run/payloads.test-helpers.js";
+import { inferToolMetaFromArgsCore } from "./tool-display.js";
 import { createToolTerminalObserver } from "./tool-terminal-outcome.js";
 
 describe("tool terminal outcome observer", () => {
   afterEach(() => resetAdjustedParamsByToolCallIdForTests());
 
-  it("keeps distinct mutation failures until their matching actions recover", () => {
+  it("keeps the latest failure when a different tool succeeds", () => {
     const observe = createToolTerminalObserver("run-1");
     const actionA = { action: "send", to: "channel:a", message: "A" };
     const actionB = { action: "send", to: "channel:b", message: "B" };
@@ -30,18 +31,12 @@ describe("tool terminal outcome observer", () => {
       outcome: "failure",
       failure: { error: "B failed" },
     });
-    const afterB = observe({ toolName: "message", arguments: actionB, outcome: "success" });
+    const afterRead = observe({ toolName: "read", arguments: {}, outcome: "success" });
 
-    expect(afterB.lastToolError).toMatchObject({
-      error: "A failed",
-      actionFingerprint: expect.stringContaining("to=channel:a"),
-    });
-    expect(
-      observe({ toolName: "heartbeat_respond", arguments: {}, outcome: "success" }).lastToolError,
-    ).toMatchObject({ error: "A failed" });
-    expect(
-      observe({ toolName: "message", arguments: actionA, outcome: "success" }).lastToolError,
-    ).toBeUndefined();
+    expect(afterRead.lastToolError).toMatchObject({ error: "B failed" });
+    const payloads = buildPayloads({ lastToolError: afterRead.lastToolError });
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({ isError: true });
   });
 
   it("uses host execution and adjusted-argument evidence before fallback facts", () => {
@@ -120,6 +115,57 @@ describe("tool terminal outcome observer", () => {
     });
   });
 
+  it("clears a failed sessions_spawn once a retry with adjusted arguments succeeds", () => {
+    const observe = createToolTerminalObserver("run-spawn-retry");
+    const failedArgs = {
+      task: "Investigate the flaky gateway test",
+      label: "Investigate",
+      cwd: "/outside/workspace",
+    };
+    // The retry the model actually issues: drops the rejected cwd and rewords the task.
+    const retryArgs = { task: "Investigate the flaky gateway test in repo scope" };
+
+    observe({
+      toolName: "sessions_spawn",
+      arguments: failedArgs,
+      meta: inferToolMetaFromArgsCore("sessions_spawn", failedArgs),
+      outcome: "failure",
+      failure: { error: "cwd is outside the workspace" },
+    });
+    const afterRetry = observe({
+      toolName: "sessions_spawn",
+      arguments: retryArgs,
+      meta: inferToolMetaFromArgsCore("sessions_spawn", retryArgs),
+      outcome: "success",
+    });
+
+    expect(afterRetry.lastToolError).toBeUndefined();
+
+    const payloads = buildPayloads({ lastToolError: afterRetry.lastToolError });
+    expect(payloads).toEqual([]);
+  });
+
+  it("keeps the sessions_spawn failure warning when no later spawn succeeds", () => {
+    const observe = createToolTerminalObserver("run-spawn-failed");
+    const failedArgs = { task: "Investigate the flaky gateway test", label: "Investigate" };
+
+    const terminal = observe({
+      toolName: "sessions_spawn",
+      arguments: failedArgs,
+      meta: inferToolMetaFromArgsCore("sessions_spawn", failedArgs),
+      outcome: "failure",
+      failure: { error: "cwd is outside the workspace" },
+    });
+
+    const payloads = buildPayloads({
+      assistantTexts: ["Started Investigate in a new session."],
+      lastToolError: terminal.lastToolError,
+    });
+    expect(payloads.map((payload) => payload.text)).toEqual([
+      "Started Investigate in a new session.",
+    ]);
+  });
+
   it("preserves durable memory recall side-effect evidence", () => {
     const observe = createToolTerminalObserver("run-memory");
 
@@ -139,7 +185,7 @@ describe("tool terminal outcome observer", () => {
     ).toMatchObject({ executionStarted: true, sideEffectEvidence: false });
   });
 
-  it("keeps a failed persistence claim visible, appends a correction, and hides owner metadata", () => {
+  it("treats the assistant reply as authoritative after a failed persistence call", () => {
     const observation = {
       toolName: "memory_store",
       arguments: { text: "The user prefers metric units." },
@@ -159,7 +205,6 @@ describe("tool terminal outcome observer", () => {
 
     expect(payloads).toEqual([
       expect.objectContaining({ text: "I've saved that preference and will remember it." }),
-      expect.objectContaining({ isError: true }),
     ]);
     expect(JSON.stringify(payloads)).not.toContain("memory-lancedb");
   });
@@ -176,7 +221,7 @@ describe("tool terminal outcome observer", () => {
     expect(terminal.lastToolError).toMatchObject({ mutatingAction: false });
   });
 
-  it("clears a failed persistence action only after the same fact succeeds", () => {
+  it("clears a failed persistence action after the same tool succeeds", () => {
     const observe = createToolTerminalObserver("run-memory-store-retry");
     const ownerKey = '["memory-lancedb","memory_store"]';
     const ownerMutation = { ownerKey };
@@ -192,16 +237,6 @@ describe("tool terminal outcome observer", () => {
       observe({
         toolName: "memory_store",
         arguments: { text: "The user prefers imperial units." },
-        outcome: "success",
-        ownerMutation,
-      }).lastToolError,
-    ).toMatchObject({
-      actionFingerprint: expect.stringContaining(`owner=${ownerKey}|args=`),
-    });
-    expect(
-      observe({
-        toolName: "memory_store",
-        arguments: { text: "The user prefers metric units." },
         outcome: "success",
         ownerMutation,
       }).lastToolError,

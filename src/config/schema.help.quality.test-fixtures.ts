@@ -77,6 +77,7 @@ export const TARGET_KEYS = [
   "session",
   "session.scope",
   "session.dmScope",
+  "session.groupScope",
   "session.identityLinks",
   "session.resetTriggers",
   "session.reset",
@@ -111,6 +112,7 @@ export const TARGET_KEYS = [
   "session.maintenance",
   "session.maintenance.mode",
   "session.maintenance.pruneAfter",
+  "session.maintenance.archiveDashboardAfter",
   "session.maintenance.maxEntries",
   "session.maintenance.preserveRecent",
   "session.maintenance.resetArchiveRetention",
@@ -304,8 +306,6 @@ export const TARGET_KEYS = [
   "models.providers.*.baseUrl",
   "models.providers.*.apiKey",
   "models.providers.*.api",
-  "models.providers.*.contextWindow",
-  "models.providers.*.contextTokens",
   "models.providers.*.maxTokens",
   "models.providers.*.region",
   "models.providers.*.headers",
@@ -336,6 +336,8 @@ export const TARGET_KEYS = [
 ] as const;
 
 export const ENUM_EXPECTATIONS: Record<string, string[]> = {
+  "session.groupScope": ['"main"', '"per-group"'],
+  "bindings[].session.groupScope": ['"main"', '"per-group"'],
   "skills.workshop.autonomous.mode": ['"off"', '"propose"', '"auto"'],
   "memory.citations": ['"auto"', '"on"', '"off"'],
   "models.mode": ['"merge"', '"replace"'],
@@ -383,6 +385,7 @@ export const ENUM_EXPECTATIONS: Record<string, string[]> = {
     '"adaptive"',
     '"max"',
     '"ultra"',
+    '"inherit"',
   ],
   "agents.defaults.compaction.identifierPolicy": ['"strict"', '"off"'],
 };

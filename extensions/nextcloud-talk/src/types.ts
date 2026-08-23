@@ -3,7 +3,13 @@ import type {
   ChannelDeliveryStreamingConfig,
   MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
-import type { DmConfig, DmPolicy, GroupPolicy, SecretInput } from "../runtime-api.js";
+import type {
+  DmConfig,
+  DmPolicy,
+  GroupPolicy,
+  OpenClawConfig,
+  SecretInput,
+} from "../runtime-api.js";
 
 export type NextcloudTalkRoomConfig = {
   requireMention?: boolean;
@@ -88,6 +94,7 @@ export type CoreConfig = {
   channels?: {
     "nextcloud-talk"?: NextcloudTalkConfig;
   };
+  gateway?: OpenClawConfig["gateway"];
   [key: string]: unknown;
 };
 
@@ -179,6 +186,8 @@ export type NextcloudTalkWebhookServerOptions = {
   };
   readBody?: (req: import("node:http").IncomingMessage, maxBodyBytes: number) => Promise<string>;
   isBackendAllowed?: (backend: string) => boolean;
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
   onWebhook: (rawBody: string) => Promise<"accepted" | "ignored">;
   onError?: (error: Error) => void;
   abortSignal?: AbortSignal;

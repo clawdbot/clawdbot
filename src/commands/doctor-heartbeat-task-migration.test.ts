@@ -218,7 +218,6 @@ describe("heartbeat scratch task cron migration", () => {
     const jobs = (await loadCronJobsStore(fixture.storePath)).jobs
       .filter(isHeartbeatTaskCronJob)
       .toSorted((a, b) => a.name.localeCompare(b.name));
-    expect(jobs).toHaveLength(2);
     expect(
       jobs.map((job) => ({ name: job.name, schedule: job.schedule, payload: job.payload })),
     ).toEqual([
@@ -432,7 +431,6 @@ tasks:
     const jobs = (await loadCronJobsStore(fixture.storePath)).jobs
       .filter(isHeartbeatTaskCronJob)
       .toSorted((left, right) => left.payload.text.localeCompare(right.payload.text));
-    expect(jobs).toHaveLength(2);
     expect(jobs.map((job) => job.declarationKey)).toEqual([
       heartbeatTaskDeclarationKey("main", "inbox", 0),
       heartbeatTaskDeclarationKey("main", "inbox", 1),
@@ -491,7 +489,6 @@ tasks:
 
     expect(result.warnings).toEqual([]);
     const jobs = (await loadCronJobsStore(fixture.storePath)).jobs.filter(isHeartbeatTaskCronJob);
-    expect(jobs).toHaveLength(3);
     expect(new Set(jobs.map((job) => job.declarationKey)).size).toBe(3);
     expect(
       jobs.map((job) => job.payload.text).toSorted((left, right) => left.localeCompare(right)),

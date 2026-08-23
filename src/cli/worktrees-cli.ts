@@ -90,7 +90,7 @@ export function registerWorktreesCli(program: Command): void {
       const result = await managedWorktrees.remove({
         id,
         reason: "manual-delete",
-        force: opts.force,
+        allowSnapshotLoss: opts.force,
       });
       if (opts.json) {
         printJson(result);

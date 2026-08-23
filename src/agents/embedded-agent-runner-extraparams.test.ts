@@ -655,7 +655,8 @@ describe("applyExtraParamsToAgent", () => {
       | Model<"openai-responses">
       | Model<"openai-chatgpt-responses">
       | Model<"azure-openai-responses">
-      | Model<"anthropic-messages">;
+      | Model<"anthropic-messages">
+      | Model<"google-generative-ai">;
     cfg?: Record<string, unknown>;
     extraParamsOverride?: Record<string, unknown>;
     payload?: Record<string, unknown>;
@@ -1501,6 +1502,20 @@ describe("applyExtraParamsToAgent", () => {
         provider: "anthropic",
         id: "claude-sonnet-4-6",
       } as Model<"anthropic-messages">,
+    },
+    {
+      name: "does not inject parallel_tool_calls for google-generative-ai APIs",
+      applyProvider: "google",
+      applyModelId: "gemini-2.5-pro",
+      cfg: buildModelConfig("google/gemini-2.5-pro", {
+        parallel_tool_calls: false,
+      }),
+      extraParamsOverride: undefined,
+      model: {
+        api: "google-generative-ai",
+        provider: "google",
+        id: "gemini-2.5-pro",
+      } as Model<"google-generative-ai">,
     },
     {
       name: "lets null runtime override suppress inherited parallel_tool_calls injection",

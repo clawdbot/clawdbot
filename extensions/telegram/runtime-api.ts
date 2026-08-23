@@ -1,4 +1,5 @@
 // Telegram API module exposes the plugin public contract.
+import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 export type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 export type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 export type { TelegramApiOverride } from "./src/send.js";
@@ -7,7 +8,6 @@ export type {
   OpenClawPluginServiceContext,
   PluginLogger,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 export type {
   AcpRuntime,

@@ -29,6 +29,7 @@ import {
   restoreDroppedPreUpdateChannels,
 } from "./update-command-config.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
+import { retireStandaloneGitWrapper } from "./update-command-git.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
@@ -87,6 +88,7 @@ function pickUpdateQuip(): string {
 export async function finishUpdate(params: {
   result: UpdateRunResult;
   root: string;
+  previousInstallRoot?: string;
   installKindChanged: boolean;
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   requestedChannel: UpdateChannel | null;
@@ -105,7 +107,7 @@ export async function finishUpdate(params: {
   updateStepTimeoutMs: number;
   invocationCwd?: string;
 }): Promise<void> {
-  if (!params.opts.json || params.result.status !== "ok") {
+  if (params.result.status !== "ok") {
     printResult(params.result, { ...params.opts, hideSteps: params.showProgress });
   }
 
@@ -343,11 +345,7 @@ export async function finishUpdate(params: {
         jsonMode: Boolean(params.opts.json),
       });
     }
-    if (params.opts.json) {
-      defaultRuntime.writeJson(resultWithPostUpdate);
-    } else {
-      defaultRuntime.error(theme.error("Update failed during plugin post-update sync."));
-    }
+    printResult(resultWithPostUpdate, { ...params.opts, hideSteps: params.showProgress });
     defaultRuntime.exit(1);
     return;
   }
@@ -401,11 +399,12 @@ export async function finishUpdate(params: {
       const knownForeignService =
         params.preManagedServiceStop?.serviceMatchesMutationRoot === false &&
         serviceMatchesUpdateRoot !== true;
+      const serviceLoaded = serviceState.loadState.status === "loaded";
       skipLegacyServiceRestart =
         knownForeignService ||
         (resultWithPostUpdate.mode === "git" &&
           serviceState.installed &&
-          serviceState.loaded &&
+          serviceLoaded &&
           params.preManagedServiceStop?.stopped !== true &&
           serviceMatchesUpdateRoot === false);
       if (
@@ -413,7 +412,7 @@ export async function finishUpdate(params: {
         shouldPrepareUpdatedInstallRestart({
           updateMode: resultWithPostUpdate.mode,
           serviceInstalled: serviceState.installed,
-          serviceLoaded: serviceState.loaded,
+          serviceLoaded,
           serviceStoppedForUpdate: params.preManagedServiceStop?.stopped,
           serviceMatchesMutationRoot: serviceOwnershipConfirmed
             ? true
@@ -489,15 +488,36 @@ export async function finishUpdate(params: {
     return;
   }
 
+  if (params.installKindChanged && resultWithPostUpdate.mode !== "git") {
+    const retirement = await retireStandaloneGitWrapper({
+      previousRoot: params.previousInstallRoot ?? params.root,
+    });
+    if (retirement.error) {
+      defaultRuntime.error(retirement.error);
+      await markControlPlaneUpdateRestartSentinelFailureBestEffort({
+        meta: params.controlPlaneUpdateSentinelMeta,
+        reason: "wrapper-retirement-failed",
+        jsonMode: Boolean(params.opts.json),
+      });
+      const failedResult: UpdateRunResult = {
+        ...resultWithPostUpdate,
+        status: "error",
+        reason: "wrapper-retirement-failed",
+      };
+      printResult(failedResult, { ...params.opts, hideSteps: params.showProgress });
+      defaultRuntime.exit(1);
+      return;
+    }
+  }
+
   await writeControlPlaneUpdateRestartSentinelBestEffort({
     meta: params.controlPlaneUpdateSentinelMeta,
     result: resultWithPostUpdate,
     jsonMode: Boolean(params.opts.json),
   });
 
+  printResult(resultWithPostUpdate, { ...params.opts, hideSteps: params.showProgress });
   if (!params.opts.json) {
     defaultRuntime.log(theme.muted(pickUpdateQuip()));
-  } else {
-    defaultRuntime.writeJson(resultWithPostUpdate);
   }
 }

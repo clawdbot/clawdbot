@@ -13,6 +13,7 @@ import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import {
   CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
   installExtractedSkillRoot,
+  resolveWorkspaceSkillInstallDir,
 } from "./archive-install.js";
 
 const tempDirs = createTrackedTempDirs();
@@ -247,6 +248,50 @@ describe("skill archive install", () => {
     expect(handler).toHaveBeenCalledTimes(1);
     const payload = handler.mock.calls[0]?.[0] as { request?: { mode?: string } } | undefined;
     expect(payload?.request?.mode).toBe("install");
+  });
+
+  it("restores a skill when backup validation blocks replacement", async () => {
+    const root = await tempDirs.make("openclaw-skill-archive-install-");
+    const workspaceDir = path.join(root, "workspace");
+    const extractedRoot = path.join(root, "extracted");
+    await fs.mkdir(extractedRoot, { recursive: true });
+    await fs.writeFile(path.join(extractedRoot, "SKILL.md"), skillFileContent("Staged Update"));
+    const targetDir = resolveWorkspaceSkillInstallDir(workspaceDir, "staged-update");
+    await fs.mkdir(targetDir, { recursive: true });
+    await fs.writeFile(path.join(targetDir, "SKILL.md"), skillFileContent("Installed Skill"));
+    const skillsDir = path.dirname(targetDir);
+    let stageDirsAtGuard: string[] = [];
+
+    const result = await installExtractedSkillRoot({
+      workspaceDir,
+      slug: "staged-update",
+      extractedRoot,
+      mode: "update",
+      rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
+      onAfterBackup: async (backupDir) => {
+        stageDirsAtGuard = (await fs.readdir(skillsDir)).filter((entry) =>
+          entry.startsWith(".openclaw-install-stage-"),
+        );
+        await fs.writeFile(path.join(backupDir, "notes.md"), "edited before backup", "utf8");
+        return 'Skill "staged-update" has local file changes.';
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: 'Skill "staged-update" has local file changes.',
+      failureKind: "invalid-request",
+    });
+    expect(stageDirsAtGuard).toHaveLength(1);
+    await expect(fs.readFile(path.join(targetDir, "notes.md"), "utf8")).resolves.toBe(
+      "edited before backup",
+    );
+    await expect(fs.readFile(path.join(targetDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "Installed Skill",
+    );
+    await expect(
+      fs.readdir(path.join(skillsDir, ".openclaw-install-backups")),
+    ).resolves.toHaveLength(0);
   });
 
   it.each([

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { detectGlobalInstallManagerForRoot } from "./update-global.js";
-import { resolveUpdateInstallRoot, updateInstallRootsMatch } from "./update-install-root.js";
+import { updateInstallRootsMatch } from "./update-install-root.js";
 import { buildUpdateCommandRunner, UPDATE_RUNNER_TIMEOUT_MS } from "./update-runner-command.js";
 import type {
   CommandRunner,
@@ -112,33 +112,27 @@ export async function looksLikeGitCheckout(root: string): Promise<boolean> {
   }
 }
 
-export async function resolveUpdateInstallSurface(
-  opts: Pick<UpdateRunnerOptions, "cwd" | "argv1" | "timeoutMs" | "runCommand"> = {},
-): Promise<UpdateInstallSurface> {
-  const { runCommand } = await buildUpdateCommandRunner(opts.runCommand);
-  const timeoutMs = opts.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS;
-  const candidates = buildStartDirs(opts);
-  const packageRoot = await findPackageRoot(candidates);
-
-  const gitRoot = await resolveGitRoot(runCommand, candidates, timeoutMs, packageRoot);
-  if (gitRoot && !packageRoot) {
-    return { kind: "missing", mode: "unknown", root: resolveUpdateInstallRoot(gitRoot) };
-  }
-  if (gitRoot && packageRoot) {
-    return { kind: "git", mode: "git", root: gitRoot, packageRoot };
-  }
-  if (!packageRoot) {
+export async function resolveUpdateInstallSurface(opts: {
+  root: string | null;
+  installKind: "git" | "package" | "unknown";
+  timeoutMs?: number;
+  runCommand?: CommandRunner;
+}): Promise<UpdateInstallSurface> {
+  const root = opts.root;
+  if (!root || opts.installKind === "unknown") {
     return { kind: "missing", mode: "unknown" };
   }
-
-  const globalManager = await detectGlobalInstallManagerForRoot(runCommand, packageRoot, timeoutMs);
-  if (globalManager) {
-    return {
-      kind: "global",
-      mode: globalManager,
-      root: packageRoot,
-      packageRoot,
-    };
+  if (opts.installKind === "git") {
+    return { kind: "git", mode: "git", root, packageRoot: root };
   }
-  return { kind: "package-root", mode: "unknown", root: packageRoot, packageRoot };
+  const { runCommand } = await buildUpdateCommandRunner(opts.runCommand);
+  const globalManager = await detectGlobalInstallManagerForRoot(
+    runCommand,
+    root,
+    opts.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
+  );
+  if (globalManager) {
+    return { kind: "global", mode: globalManager, root, packageRoot: root };
+  }
+  return { kind: "package-root", mode: "unknown", root, packageRoot: root };
 }

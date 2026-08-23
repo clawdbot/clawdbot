@@ -13,30 +13,25 @@ import {
   adjustTextareaHeight,
   disconnectTextareaOverflowObserver,
   observeTextareaOverflow,
+  paneDomId,
   preserveComposerFocusOnPrimaryAction,
   replaceComposerPopoverAnchor,
-  restoreHistoryCaret,
   scheduleTextareaHeightAdjustment,
-  scrollActiveMenuOptionIntoView,
 } from "./chat-composer-dom.ts";
+import { createComposerKeyDownHandler } from "./chat-composer-keydown.ts";
 import {
   getActiveSkillMenuOptionId,
   getActiveSkillMenuOptionLabel,
   isSkillMenuVisible,
   resetSkillMenuState,
-  selectSkillMention,
+  type SkillMenuHost,
   updateSkillMenu,
 } from "./chat-composer-skill-menu.ts";
 import {
-  exportMarkdown,
   getActiveSlashMenuOptionId,
   getActiveSlashMenuOptionLabel,
   isSlashMenuVisible,
-  paneDomId,
   resetSlashMenuState,
-  selectSlashArg,
-  selectSlashCommand,
-  tabCompleteSlashCommand,
   updateSlashMenu,
 } from "./chat-composer-slash-menu.ts";
 import {
@@ -51,68 +46,11 @@ import {
   releaseMicrophoneDeviceWatch,
   suppressStaleSubmittedDraftReplay,
 } from "./chat-composer-state.ts";
-import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
+import type { ChatComposerProps } from "./chat-composer-types.ts";
 import { renderChatComposerView } from "./chat-composer-view.ts";
 import { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
 
 export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.ts";
-
-function handleComposerMenuKeyDown<T>(
-  event: KeyboardEvent,
-  state: ChatComposerState,
-  items: readonly T[],
-  paneId: string,
-  requestUpdate: () => void,
-  onSelect: (item: T, submit: boolean) => void,
-  scrollActive: (state: ChatComposerState, paneId: string) => void,
-  menu: "slash" | "skill" = "slash",
-): boolean {
-  if (event.key === "Escape") {
-    event.preventDefault();
-    if (menu === "skill") {
-      resetSkillMenuState(state);
-    } else {
-      state.slashMenuOpen = false;
-      resetSlashMenuState(state);
-    }
-    requestUpdate();
-    return true;
-  }
-  if (items.length === 0) {
-    if (
-      menu === "skill" &&
-      state.skillCommandRefreshPending &&
-      ["ArrowDown", "ArrowUp", "Enter", "Tab"].includes(event.key)
-    ) {
-      event.preventDefault();
-      return true;
-    }
-    return false;
-  }
-  const indexKey = menu === "skill" ? "skillMenuIndex" : "slashMenuIndex";
-  switch (event.key) {
-    case "ArrowDown":
-    case "ArrowUp": {
-      event.preventDefault();
-      const offset = event.key === "ArrowDown" ? 1 : items.length - 1;
-      state[indexKey] = (state[indexKey] + offset) % items.length;
-      requestUpdate();
-      scrollActive(state, paneId);
-      return true;
-    }
-    case "Tab":
-    case "Enter": {
-      event.preventDefault();
-      const item = items[state[indexKey]];
-      if (item !== undefined) {
-        onSelect(item, event.key === "Enter");
-      }
-      return true;
-    }
-    default:
-      return false;
-  }
-}
 
 export function renderChatComposer(props: ChatComposerProps) {
   const state = getChatComposerState(props.paneId);
@@ -200,7 +138,19 @@ export function renderChatComposer(props: ChatComposerProps) {
           ? t("chat.composer.runDone")
           : t("chat.composer.runInterrupted");
   const requestUpdate = props.onRequestUpdate ?? (() => {});
+  const skillMenuHost: SkillMenuHost = {
+    paneId: props.paneId,
+    getDraft: () => state.composerTextarea?.value ?? props.getDraft?.() ?? props.draft,
+    commitDraft: (next) => commitComposerDraft(props, next),
+    getTextarea: () => state.composerTextarea,
+    refreshCommands: props.onSlashIntent,
+  };
   const sendShortcut = normalizeChatSendShortcut(props.sendShortcut);
+  const steerNowEnabled =
+    props.connected &&
+    sendShortcut === "enter" &&
+    showAbortableUi &&
+    props.followUpMode === "queue";
   const gatewayQuestionPrompts =
     props.gatewayQuestionPrompts?.filter(
       (prompt) =>
@@ -273,12 +223,9 @@ export function renderChatComposer(props: ChatComposerProps) {
   state.questionTakeoverActive = questionTakeoverActive;
   const showComposer = !questionTakeoverActive;
 
-  const placeholder =
-    !canCompose && props.disabledReason
-      ? props.disabledReason
-      : hasVisualAttachments
-        ? t("chat.composer.placeholderWithAttachments")
-        : t("chat.composer.placeholder", { name: props.assistantName || "agent" });
+  const placeholder = hasVisualAttachments
+    ? t("chat.composer.placeholderWithAttachments")
+    : t("chat.composer.placeholder", { name: props.assistantName || "agent" });
 
   // Offline text and attachments may enter the persisted reconnect queue, but
   // slash commands are live controls and must not execute against stale state.
@@ -307,126 +254,24 @@ export function renderChatComposer(props: ChatComposerProps) {
     }
   };
 
-  const handleKeyDown = (event: KeyboardEvent) => {
-    if (state.composerComposing || event.isComposing || event.keyCode === 229) {
-      return;
-    }
-
-    if (props.connected && state.skillMenuOpen) {
-      if (
-        handleComposerMenuKeyDown(
-          event,
-          state,
-          state.skillCommandRefreshPending ? [] : state.skillMenuItems,
-          props.paneId,
-          requestUpdate,
-          (command) => selectSkillMention(command, props, requestUpdate),
-          (menuState, paneId) =>
-            scrollActiveMenuOptionIntoView(getActiveSkillMenuOptionId(menuState, paneId)),
-          "skill",
-        )
-      ) {
-        return;
-      }
-    }
-
-    if (
-      props.connected &&
-      state.slashMenuOpen &&
-      state.slashMenuMode === "args" &&
-      state.slashMenuArgItems.length > 0
-    ) {
-      if (
-        handleComposerMenuKeyDown(
-          event,
-          state,
-          state.slashMenuArgItems,
-          props.paneId,
-          requestUpdate,
-          (arg, submit) => selectSlashArg(arg, props, requestUpdate, submit),
-          (menuState, paneId) =>
-            scrollActiveMenuOptionIntoView(getActiveSlashMenuOptionId(menuState, paneId)),
-        )
-      ) {
-        return;
-      }
-    }
-
-    if (props.connected && state.slashMenuOpen && state.slashMenuItems.length > 0) {
-      if (
-        handleComposerMenuKeyDown(
-          event,
-          state,
-          state.slashMenuItems,
-          props.paneId,
-          requestUpdate,
-          (command, submit) =>
-            submit
-              ? selectSlashCommand(command, props, requestUpdate)
-              : tabCompleteSlashCommand(command, props, requestUpdate),
-          (menuState, paneId) =>
-            scrollActiveMenuOptionIntoView(getActiveSlashMenuOptionId(menuState, paneId)),
-        )
-      ) {
-        return;
-      }
-    }
-
-    if ((event.key === "ArrowUp" || event.key === "ArrowDown") && props.onHistoryKeydown) {
-      const target = event.target as HTMLTextAreaElement;
-      commitComposerDraft(props, target.value);
-      const result = props.onHistoryKeydown({
-        key: event.key,
-        selectionStart: target.selectionStart,
-        selectionEnd: target.selectionEnd,
-        valueLength: target.value.length,
-        altKey: event.altKey,
-        ctrlKey: event.ctrlKey,
-        metaKey: event.metaKey,
-        shiftKey: event.shiftKey,
-        isComposing: event.isComposing,
-        keyCode: event.keyCode,
-      });
-      if (result.handled) {
-        if (result.preventDefault) {
-          event.preventDefault();
-        }
-        // History navigation updates the renderer-owned draft outside a
-        // reactive property; commit it before placing the caret in the DOM.
-        requestUpdate();
-        if (result.restoreCaret) {
-          restoreHistoryCaret(target, result.restoreCaret);
-        }
-        return;
-      }
-    }
-
-    const sendShortcutMatches = sendShortcut === "enter" || event.metaKey || event.ctrlKey;
-    if (event.key === "Enter" && !event.shiftKey && sendShortcutMatches) {
-      if (!canSubmitDraft((event.target as HTMLTextAreaElement).value)) {
-        return;
-      }
-      event.preventDefault();
-      const target = event.target as HTMLTextAreaElement;
-      commitComposerDraft(props, target.value);
-      props.onSend();
-      syncComposerDraftAfterSend(target);
-    }
-  };
+  const handleKeyDown = createComposerKeyDownHandler({
+    state,
+    props,
+    skillMenuHost,
+    requestUpdate,
+    sendShortcut,
+    canSubmitDraft,
+    commitDraft: (draft) => commitComposerDraft(props, draft),
+    syncDraftAfterSend: syncComposerDraftAfterSend,
+    showAbortableUi,
+    steerNowEnabled,
+  });
 
   const syncComposerValue = (target: HTMLTextAreaElement) => {
     adjustTextareaHeight(target);
     commitComposerDraft(props, target.value);
     updateSlashMenu(target.value, requestUpdate, props, {}, () => target.value);
-    updateSkillMenu(
-      target.value,
-      target.selectionStart,
-      requestUpdate,
-      props,
-      {},
-      () => target.value,
-      () => target.selectionStart,
-    );
+    updateSkillMenu(target.value, target.selectionStart, state, skillMenuHost, requestUpdate);
     requestUpdate();
   };
   const handleBeforeInput = (event: InputEvent) => {
@@ -457,19 +302,11 @@ export function renderChatComposer(props: ChatComposerProps) {
       return;
     }
     syncComposerValue(target);
-    props.onTypingChange?.(Boolean(target.value.trim()));
+    props.onTypingChange?.(Boolean(target.value.trim()), target.value);
   };
   const handleSelect = (event: Event) => {
     const target = event.target as HTMLTextAreaElement;
-    updateSkillMenu(
-      target.value,
-      target.selectionStart,
-      requestUpdate,
-      props,
-      {},
-      () => target.value,
-      () => target.selectionStart,
-    );
+    updateSkillMenu(target.value, target.selectionStart, state, skillMenuHost, requestUpdate);
   };
   const handleCompositionEnd = (event: CompositionEvent) => {
     state.composerComposing = false;
@@ -477,7 +314,8 @@ export function renderChatComposer(props: ChatComposerProps) {
       state.composingDraft = null;
     }
     syncComposerValue(event.target as HTMLTextAreaElement);
-    props.onTypingChange?.(Boolean((event.target as HTMLTextAreaElement).value.trim()));
+    const value = (event.target as HTMLTextAreaElement).value;
+    props.onTypingChange?.(Boolean(value.trim()), value);
   };
   const handleBlur = (event: FocusEvent) => {
     const target = event.target as HTMLTextAreaElement;
@@ -491,7 +329,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     commitComposerDraft(props, target.value);
     props.onTypingChange?.(false);
   };
-  const handleSend = () => {
+  const handleSend = (submissionAction?: Event) => {
     const draft = state.composerTextarea?.value ?? props.draft;
     if (!canSubmitDraft(draft)) {
       return;
@@ -500,7 +338,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     state.composingDraft = null;
     commitComposerDraft(props, draft);
     props.onTypingChange?.(false);
-    props.onSend();
+    props.onSend(undefined, submissionAction);
     syncComposerDraftAfterSend(state.composerTextarea);
   };
   const handleVoicePrimaryAction = () => {
@@ -650,9 +488,9 @@ export function renderChatComposer(props: ChatComposerProps) {
     connected: props.connected,
     draft: visibleDraft,
     hasAttachments: !props.suggestionComposer && Boolean(props.attachments?.length),
-    hasMessages: props.messages.length > 0,
     isBusy,
     followUpMode: props.followUpMode,
+    steerNowEnabled,
     suggestionComposer: props.suggestionComposer,
     sending: props.sending,
     voiceActive: props.realtimeTalkActive,
@@ -663,10 +501,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     voiceVideoEnabled: Boolean(props.realtimeTalkVideoStream),
     voiceVideoPending: props.realtimeTalkVideoPending,
     onAbort: props.onAbort,
-    onExport: () => exportMarkdown(props),
-    onNewSession: props.onNewSession,
     onSend: handleSend,
-    onStoreDraft: () => {},
     onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
     onToggleCamera: props.onToggleRealtimeCamera,
     microphonePicker,
@@ -679,6 +514,10 @@ export function renderChatComposer(props: ChatComposerProps) {
     ?.getVideoTracks?.()[0]
     ?.getSettings?.().facingMode;
   const mirrorCameraPreview = cameraFacingMode !== "environment";
+  if (props.modelSwitching && state.slashMenuCommand?.key === "think") {
+    state.slashMenuOpen = false;
+    resetSlashMenuState(state);
+  }
   const slashMenuVisible = props.connected && canCompose && isSlashMenuVisible(state);
   const skillMenuVisible = props.connected && canCompose && isSkillMenuVisible(state);
   if (!skillMenuVisible && state.skillMenuOpen && !state.skillCommandRefreshPending) {
@@ -723,6 +562,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     mirrorCameraPreview,
     slashMenuVisible,
     skillMenuVisible,
+    skillMenuHost,
     activeSlashMenuOptionId,
     activeSlashMenuOptionLabel,
     slashMenuListboxId,

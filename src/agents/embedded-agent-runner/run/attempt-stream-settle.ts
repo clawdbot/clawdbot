@@ -5,6 +5,7 @@
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import type { ProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { resolveProviderTextTransforms } from "../../../plugins/provider-runtime.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
@@ -451,6 +452,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
   session: AgentSession;
   settingsManager: SettingsManager;
   providerThinkingLevel: ProviderThinkLevel | undefined;
+  onCurrentTurnImageFailure?: (count: number) => void;
   sessionAgentId: string;
   workspaceDir: string;
   workspaceOnly: boolean;
@@ -519,6 +521,10 @@ export async function prepareEmbeddedAttemptTransport(input: {
             context,
             workspaceDir: input.workspaceDir,
             workspaceOnly: input.workspaceOnly,
+            localRoots: input.workspaceOnly
+              ? undefined
+              : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.sessionAgentId),
+            onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
             sandbox:
               input.sandbox?.enabled && input.sandbox.fsBridge
                 ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }

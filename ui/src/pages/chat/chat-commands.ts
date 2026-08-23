@@ -3,6 +3,7 @@ import type { CommandsListResult } from "../../../../packages/gateway-protocol/s
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { peekChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   buildFallbackSlashCommands,
@@ -12,6 +13,7 @@ import {
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   scopedAgentIdForSession,
@@ -84,8 +86,9 @@ function setChatCommandError(
   host: { lastError?: string | null; chatError?: string | null },
   error: string | null,
 ) {
-  host.lastError = error;
-  host.chatError = error;
+  const message = error === null ? null : formatUiError(error);
+  host.lastError = message;
+  host.chatError = message;
 }
 
 function currentSessionAccessSnapshot(
@@ -198,17 +201,6 @@ function getRemoteSlashCommandCache(
   return cache;
 }
 
-function storeRemoteSlashCommands(
-  client: GatewayBrowserClient,
-  agentId: string | undefined,
-  commands: SlashCommandDef[],
-) {
-  getRemoteSlashCommandCache(client).set(remoteSlashCommandCacheKey(agentId), {
-    commands,
-    expiresAt: Date.now() + REMOTE_SLASH_COMMAND_CACHE_TTL_MS,
-  });
-}
-
 async function requestRemoteSlashCommands(
   client: GatewayBrowserClient,
   agentId: string | undefined,
@@ -224,7 +216,10 @@ async function requestRemoteSlashCommands(
       return buildFallbackSlashCommands();
     }
     const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(result));
-    storeRemoteSlashCommands(client, agentId, commands);
+    getRemoteSlashCommandCache(client).set(remoteSlashCommandCacheKey(agentId), {
+      commands,
+      expiresAt: Date.now() + REMOTE_SLASH_COMMAND_CACHE_TTL_MS,
+    });
     return commands;
   } catch {
     return fallback ?? buildFallbackSlashCommands();
@@ -235,6 +230,12 @@ function loadRemoteSlashCommands(
   client: GatewayBrowserClient,
   agentId: string | undefined,
 ): Promise<SlashCommandDef[]> {
+  const metadata = peekChatMetadata(client, agentId);
+  // Store-held metadata carries app-level invalidation on config changes and logical reconnects,
+  // so no TTL applies here. The cache below owns only commands.list-derived entries.
+  if (Array.isArray(metadata?.commands)) {
+    return Promise.resolve(buildSlashCommandsFromEntries(getRemoteCommandEntries(metadata)));
+  }
   const cache = getRemoteSlashCommandCache(client);
   const key = remoteSlashCommandCacheKey(agentId);
   const cached = cache.get(key);
@@ -267,11 +268,7 @@ export function applyRemoteSlashCommandsResult(params: {
   if (!Array.isArray(params.result?.commands)) {
     return false;
   }
-  const agentId = params.agentId?.trim();
   const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(params.result));
-  if (params.client) {
-    storeRemoteSlashCommands(params.client, agentId, commands);
-  }
   refreshSeq += 1;
   replaceSlashCommands(commands);
   return true;
@@ -429,7 +426,7 @@ export async function dispatchChatSlashCommand(
     });
   } catch (err) {
     if (targetIsCurrent()) {
-      setChatCommandError(host, String(err));
+      setChatCommandError(host, formatUiError(err));
       injectCommandResult(host, `Command \`/${name}\` failed unexpectedly.`);
       scheduleChatScroll(host, false, false, {
         contentChanged: true,

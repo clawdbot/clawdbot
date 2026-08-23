@@ -29,7 +29,6 @@ type OriginFallbackReason =
   | "not-git-workspace"
   | "not-repository-root"
   | "origin-unavailable"
-  | "origin-unpublished"
   | "workspace-dirty"
   | "workspace-transfer-required";
 
@@ -144,17 +143,7 @@ async function inspectEligibleOrigin(localPath: string): Promise<OriginInspectio
     if (!COMMIT_PATTERN.test(commit) || !origin) {
       return { kind: "fallback", reason: "origin-unavailable" };
     }
-    let refs: string;
-    try {
-      refs = await localGit(root, ["ls-remote", "--heads", "--tags", "--", origin]);
-    } catch {
-      return { kind: "fallback", reason: "origin-unavailable" };
-    }
-    return refs
-      .split("\n")
-      .some((line) => line.slice(0, commit.length) === commit && /\srefs\//u.test(line))
-      ? { kind: "eligible", identity: { commit, origin, root } }
-      : { kind: "fallback", reason: "origin-unpublished" };
+    return { kind: "eligible", identity: { commit, origin, root } };
   } catch {
     return { kind: "fallback", reason: "inspection-failed" };
   }
@@ -183,6 +172,7 @@ export function createNodeWorkerWorkspaceFallback(exec: WorkspaceExec) {
           "-c",
           "init.templateDir=",
           "clone",
+          "--filter=blob:none",
           "--no-checkout",
           "--",
           identity.origin,

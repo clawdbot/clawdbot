@@ -6,17 +6,27 @@ import path from "node:path";
 import OpenAI from "openai";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  buildAgentRunTerminalOutcome,
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+} from "../agents/agent-run-terminal-outcome.js";
 import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
+import { createAgentCommandLifecycle } from "../agents/command/lifecycle.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState } from "../config/config.js";
-import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import {
+  emitAgentEvent,
+  getAgentEventLifecycleGeneration,
+  onAgentEvent,
+} from "../infra/agent-events.js";
+import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
-  waitForActiveGatewayRootWork,
 } from "../process/gateway-work-admission.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
@@ -326,6 +336,28 @@ async function expectInvalidRequest(
 }
 
 describe("OpenResponses HTTP API (e2e)", () => {
+  it("binds the Gateway lifecycle resolver to response runs", async () => {
+    let resolveGatewayContext: ReturnType<typeof getGatewayContextResolver>;
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce(async (opts: unknown) => {
+      const admittedRunContext = {};
+      const onAdmittedRunContext = (
+        opts as { onAdmittedRunContext?: (context: object) => void | Promise<void> }
+      ).onAdmittedRunContext;
+      expect(onAdmittedRunContext).toBeTypeOf("function");
+      await onAdmittedRunContext?.(admittedRunContext);
+      resolveGatewayContext = getGatewayContextResolver(admittedRunContext);
+      return { payloads: [{ text: "hello" }] } as never;
+    });
+
+    const res = await postResponses(enabledPort, { model: "openclaw", input: "hi" });
+
+    expect(res.status).toBe(200);
+    await res.text();
+    const context = resolveGatewayContext?.();
+    expect(context?.resolveGatewayContext).toBe(resolveGatewayContext);
+  });
+
   it("returns a typed selection error unless an ownerless fleet request selects an agent", async () => {
     try {
       testState.agentsConfig = {
@@ -359,12 +391,17 @@ describe("OpenResponses HTTP API (e2e)", () => {
     }
   });
 
-  it.each([false, true])(
-    "accepts the official OpenAI SDK plain-text response format (stream: %s)",
-    async (stream) => {
+  it.each([
+    { stream: false, text: "SDK plain-text response", expected: "SDK plain-text response" },
+    { stream: true, text: "SDK plain-text response", expected: "SDK plain-text response" },
+    { stream: false, text: "", expected: "No response from OpenClaw." },
+    { stream: true, text: "", expected: "No response from OpenClaw." },
+  ])(
+    "returns visible official SDK response text (stream: $stream, text: $text)",
+    async ({ stream, text, expected }) => {
       agentCommandMock.mockClear();
       agentCommandMock.mockResolvedValueOnce({
-        payloads: [{ text: "SDK plain-text response" }],
+        payloads: [{ text }],
       } as never);
 
       const client = new OpenAI({
@@ -389,17 +426,51 @@ describe("OpenResponses HTTP API (e2e)", () => {
             textDeltas.push(event.delta);
           }
         }
-        expect(textDeltas.join("")).toBe("SDK plain-text response");
+        expect(textDeltas.join("")).toBe(expected);
         expect(eventTypes).toContain("response.completed");
       } else {
         const response = await client.responses.create({ ...request, stream: false });
         expect(response.status).toBe("completed");
-        expect(response.output_text).toBe("SDK plain-text response");
+        expect(response.output_text).toBe(expected);
       }
 
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("preserves buffered leading text in official SDK streaming snapshots", async () => {
+    const expected = "<tag>ok</tag>";
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string }).runId;
+      if (!runId) {
+        throw new Error("expected a streaming response run ID");
+      }
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: expected, delta: "tag>ok</tag>" },
+      });
+      return { payloads: [{ text: expected }] };
+    }) as never);
+
+    const client = new OpenAI({
+      apiKey: "test",
+      baseURL: `http://127.0.0.1:${enabledPort}/v1`,
+      defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+      maxRetries: 0,
+    });
+    const stream = client.responses.stream({
+      model: "openclaw",
+      input: "Preserve the complete assistant snapshot.",
+    });
+    const deltas: string[] = [];
+    stream.on("response.output_text.delta", (event) => deltas.push(event.delta));
+
+    const response = await stream.finalResponse();
+    expect(deltas.join("")).toBe(expected);
+    expect(response.output_text).toBe(expected);
+  });
 
   it.each([
     { name: "rewritten", replacementText: "final answer" },
@@ -1680,10 +1751,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     "keeps the $label admitted until its deferred SSE terminal is written",
     async ({ name, failed, providerTerminal, reject }) => {
       const idleRootCount = getActiveGatewayRootWorkCount();
-      const terminalAdmission = createDeferred<{
-        active: number;
-        drained: { drained: boolean; active: number };
-      }>();
+      const terminalAdmission = createDeferred<{ active: number }>();
       const wireResponse = createDeferred<string>();
       const continueAgent = createDeferred();
       const lifecycleTerminals: string[] = [];
@@ -1701,9 +1769,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         // root owner at that boundary instead of observing eventual client delivery.
         queueMicrotask(() => {
           const active = getActiveGatewayRootWorkCount();
-          void waitForActiveGatewayRootWork(0).then((drained) => {
-            terminalAdmission.resolve({ active, drained });
-          });
+          terminalAdmission.resolve({ active });
         });
       });
 
@@ -1764,7 +1830,6 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ]);
 
         expect(admission.active).toBe(idleRootCount + 1);
-        expect(admission.drained).toEqual({ drained: false, active: idleRootCount + 1 });
         expect(response.status).toBe(name);
         expect(terminalEvents).toEqual([`response.${name}`]);
         expect(lifecycleTerminals).toEqual([failed ? "error" : "end"]);
@@ -1837,6 +1902,116 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const res = await postResponses(enabledPort, { model: "openclaw", input: "hi" });
     expect(res.status).toBe(500);
   });
+
+  it.each(
+    [
+      {
+        label: "terminal metadata",
+        meta: { error: { kind: "incomplete_turn" as const, message: "private provider failure" } },
+        expectedPhase: "error" as const,
+      },
+      {
+        label: "an error stop reason",
+        meta: { stopReason: "error" },
+        expectedPhase: "end" as const,
+      },
+    ].flatMap((failure) =>
+      [false, true].map((producerTerminal) => ({
+        meta: failure.meta,
+        expectedPhase: failure.expectedPhase,
+        producerTerminal,
+        label: `${failure.label} ${producerTerminal ? "after" : "without"} a producer terminal`,
+      })),
+    ),
+  )(
+    "fails resolved streaming agent failures from $label",
+    async ({ meta, expectedPhase, producerTerminal }) => {
+      let runId: string | undefined;
+      const terminals: Array<{ phase: "end" | "error"; status: string }> = [];
+      const unsubscribe = onAgentEvent((event) => {
+        if (event.runId === runId && event.stream === "lifecycle") {
+          const phase = event.data?.phase;
+          if (phase === "end" || phase === "error") {
+            terminals.push({
+              phase,
+              status: buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase, data: event.data })
+                .status,
+            });
+          }
+        }
+      });
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (options: unknown) => {
+        runId = (options as { runId?: string }).runId;
+        if (!runId) {
+          throw new Error("expected a streaming response run ID");
+        }
+        const result = {
+          payloads: [{ text: "Command may have changed state", isError: true }],
+          meta: {
+            durationMs: 0,
+            agentMeta: {
+              sessionId: "failed-stream-session",
+              provider: "openai",
+              model: "test-model",
+              usage: { input: 11, output: 7, total: 18 },
+            },
+            ...meta,
+          },
+        };
+        if (producerTerminal) {
+          const lifecycle = createAgentCommandLifecycle({
+            runId,
+            lifecycleGeneration: getAgentEventLifecycleGeneration,
+            startedAt: Date.now(),
+            state: {
+              currentTurnUserMessagePersisted: true,
+              lifecycleFinishing: false,
+              lifecycleEnded: false,
+            },
+          });
+          const terminal = {
+            metadata: {},
+            outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
+          };
+          if (lifecycle.resolveResultError(result, false)) {
+            lifecycle.emitResultError(result, false, terminal);
+          } else {
+            lifecycle.emitEnd(terminal);
+          }
+        }
+        return result;
+      }) as never);
+
+      try {
+        const client = new OpenAI({
+          apiKey: "test",
+          baseURL: `http://127.0.0.1:${enabledPort}/v1`,
+          defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+          maxRetries: 0,
+        });
+        const stream = client.responses.stream({ model: "openclaw", input: "hi" });
+        const terminalEvents: string[] = [];
+        stream.on("response.completed", () => terminalEvents.push("response.completed"));
+        stream.on("response.failed", () => terminalEvents.push("response.failed"));
+
+        const response = await stream.finalResponse();
+        expect(response.status).toBe("failed");
+        expect(response.error).toEqual({ code: "api_error", message: "internal error" });
+        expect(response.usage).toMatchObject({
+          input_tokens: 11,
+          output_tokens: 7,
+          total_tokens: 18,
+        });
+        expect(terminalEvents).toEqual(["response.failed"]);
+        expect(terminals).toEqual([
+          { phase: producerTerminal ? expectedPhase : "error", status: "error" },
+        ]);
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
 
   it.each(
     STREAM_FAILURE_CASES.flatMap((failure) =>
@@ -1961,6 +2136,17 @@ describe("OpenResponses HTTP API (e2e)", () => {
             openResponsesEnabled: true,
           });
 
+          const incognitoSessionKey = "agent:main:dashboard:incognito-openresponses-http";
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: incognitoSessionKey },
+            {
+              sessionId: "session-incognito-openresponses-http",
+              updatedAt: 1,
+              incognito: true,
+              visibility: "shared",
+            },
+          );
+
           for (const stream of [false, true]) {
             for (const { scopes, senderIsOwner } of [
               { scopes: "operator.write", senderIsOwner: false },
@@ -1973,6 +2159,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
                 port,
                 { stream, model: "openclaw", input: "hi" },
                 {
+                  "x-forwarded-for": "198.51.100.42",
                   "x-forwarded-proto": "https",
                   "x-forwarded-user": "operator@example.com",
                   "x-openclaw-scopes": scopes,
@@ -1987,9 +2174,48 @@ describe("OpenResponses HTTP API (e2e)", () => {
             }
           }
 
+          const trustedProxyHeaders = {
+            "x-forwarded-for": "198.51.100.42",
+            "x-forwarded-proto": "https",
+            "x-forwarded-user": "operator@example.com",
+          };
+          for (const requestedSessionKey of [
+            incognitoSessionKey,
+            "dashboard:incognito-openresponses-http",
+          ]) {
+            agentCommandMock.mockClear();
+            const denied = await postResponses(
+              port,
+              { model: "openclaw", input: "hi" },
+              {
+                ...trustedProxyHeaders,
+                "x-openclaw-scopes": "operator.write",
+                "x-openclaw-session-key": requestedSessionKey,
+              },
+            );
+            expect(denied.status).toBe(403);
+            await ensureResponseConsumed(denied);
+            expect(agentCommandMock).not.toHaveBeenCalled();
+          }
+
+          agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+          const allowed = await postResponses(
+            port,
+            { model: "openclaw", input: "hi" },
+            {
+              ...trustedProxyHeaders,
+              "x-openclaw-scopes": "operator.admin, operator.write",
+              "x-openclaw-session-key": "dashboard:incognito-openresponses-http",
+            },
+          );
+          expect(allowed.status).toBe(200);
+          await ensureResponseConsumed(allowed);
+          expect(agentCommandMock).toHaveBeenCalledTimes(1);
+
           agentCommandMock.mockClear();
           agentCommandMock.mockResolvedValue({ payloads: [{ text: "hello" }] } as never);
           const forwardedHeaders = {
+            "x-forwarded-for": "198.51.100.42",
             "x-forwarded-proto": "https",
             authorization: "Bearer forwarded-untrusted",
           };
@@ -2042,6 +2268,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
             port,
             { model: "openclaw", input: "hi" },
             {
+              "x-forwarded-for": "198.51.100.42",
               "x-forwarded-proto": "https",
               "x-openclaw-scopes": "operator.admin, operator.write",
               "x-openclaw-sender-is-owner": "true",
@@ -2604,6 +2831,24 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(res.status).toBe(200);
     const text = await res.text();
     const events = parseSseEvents(text);
+    const commentaryDeltas = events.filter((event) => event.event === "response.output_text.delta");
+    expect(
+      commentaryDeltas.map((event) => (parseSseData(event) as { delta?: string }).delta),
+    ).toEqual(["Let me check that."]);
+    expect(
+      collectSseEventTypes(events).filter((event) =>
+        [
+          "response.output_text.delta",
+          "response.output_text.done",
+          "response.output_item.done",
+        ].includes(event),
+      ),
+    ).toEqual([
+      "response.output_text.delta",
+      "response.output_text.done",
+      "response.output_item.done",
+      "response.output_item.done",
+    ]);
     const outputTextDone = findSseEvent(events, "response.output_text.done");
     expect((parseSseData(outputTextDone) as { text?: string }).text).toBe("Let me check that.");
 
@@ -3175,10 +3420,6 @@ describe("OpenResponses HTTP API (e2e)", () => {
       });
       expect(await cleanupAdmissionClosed.promise).toBe(false);
       expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount + 1);
-      expect(await waitForActiveGatewayRootWork(0)).toEqual({
-        drained: false,
-        active: idleRootCount + 1,
-      });
     } finally {
       finishAgentCleanup.resolve();
     }

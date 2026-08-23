@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import type {
+  PreservedSessionWorktree,
   SessionCatalogPullRequestSummary,
   SessionsCatalogListResult,
   SessionsPatchManyParams,
@@ -30,6 +31,7 @@ import {
 } from "../lib/sessions/index.ts";
 import { reconcileSessionHistory } from "../lib/sessions/reconcile.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
+import { gatewayHelloForMethods, SESSION_MUTATION_TEST_METHODS } from "./gateway-methods.ts";
 import { createStorageMock } from "./storage.ts";
 
 // The attention widget owns independent health RPC tests. Keep those requests
@@ -51,7 +53,7 @@ export type SidebarLifecycleState = HTMLElement & {
   enabledRouteIds?: readonly NavigationRouteId[];
   connected: boolean;
   offline: boolean;
-  outboxCountForSession: (sessionKey: string) => number;
+  outboxAttentionCountForSession: (sessionKey: string) => number;
   hasSessionDraft: (sessionKey: string) => boolean;
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
@@ -75,6 +77,7 @@ export type SidebarLifecycleState = HTMLElement & {
     home: string;
     entries: Array<{ name: string; path: string; type: "directory" | "file" }>;
   }>;
+  inspectSessionGroupRepository(path?: string): Promise<"git" | "not_git" | "unavailable">;
   requestUpdate: () => void;
   updateComplete: Promise<boolean>;
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
@@ -127,7 +130,7 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
     phase: "connected",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: null,
+    hello: gatewayHelloForMethods([...SESSION_MUTATION_TEST_METHODS, "openclaw.chat"]),
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
     lastError: null,
@@ -250,7 +253,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     Promise.resolve({
       deleted: [] as string[],
       errors: [] as string[],
-      preservedWorktrees: [] as Array<{ id: string; branch: string; path: string }>,
+      preservedWorktrees: [] as PreservedSessionWorktree[],
     }),
   );
   const refresh = vi.fn((_options?: Parameters<SessionCapability["refresh"]>[0]) =>
@@ -269,7 +272,8 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       })),
     }),
   );
-  const setCreatorFilter = vi.fn(() => Promise.resolve());
+  const setOwnerFilter = vi.fn(() => Promise.resolve());
+  const setInvolvingMeFilter = vi.fn(() => Promise.resolve());
   const subscribeMessages = vi.fn((key: string, options?: { agentId?: string | null }) =>
     Promise.resolve({ key, agentId: options?.agentId ?? null }),
   );
@@ -291,6 +295,25 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     return true;
   });
   let scopedSessions: SessionCapability | null = null;
+  const assignOwner = vi.fn<SessionCapability["assignOwner"]>(async (key, owner, options) => {
+    const assigned = scopedSessions ? await scopedSessions.assignOwner(key, owner, options) : null;
+    if (!assigned || !state.result) {
+      return assigned;
+    }
+    state = {
+      ...state,
+      result: {
+        ...state.result,
+        sessions: state.result.sessions.map((row) =>
+          row.key === key ? { ...row, owner: assigned } : row,
+        ),
+      },
+    };
+    for (const listener of listeners) {
+      listener(state);
+    }
+    return assigned;
+  });
   const sessions = {
     get state() {
       return state;
@@ -298,6 +321,10 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     get canonicalListRevision() {
       return canonicalListRevision;
     },
+    captureConnectionScope: () => scopedSessions?.captureConnectionScope() ?? null,
+    isConnectionScopeCurrent: (
+      scope: Parameters<SessionCapability["isConnectionScopeCurrent"]>[0],
+    ) => scopedSessions?.isConnectionScopeCurrent(scope) ?? false,
     subscribe(listener: (next: SessionState) => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -324,6 +351,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     groupsDelete,
     create,
     patch,
+    assignOwner,
     patchMany,
     delete: deleteSession,
     deleteMany,
@@ -352,7 +380,8 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       return scopedSessions!.refreshList(options);
     },
     reconcile,
-    setCreatorFilter,
+    setOwnerFilter,
+    setInvolvingMeFilter,
     refresh,
     refreshReplacement,
     subscribeMessages,
@@ -431,7 +460,8 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     deleteMany,
     list,
     reconcile,
-    setCreatorFilter,
+    setOwnerFilter,
+    setInvolvingMeFilter,
     refresh,
     refreshReplacement,
     subscribeMessages,
@@ -600,8 +630,8 @@ export function setupSidebarTest() {
       configurable: true,
       value: createStorageMock(),
     });
-    // The Coding zone defaults to collapsed on first run; most cases assert its
-    // contents, so start expanded. Collapse-specific tests override this value.
+    // Coding defaults to compact; most cases assert expanded contents, so start
+    // expanded. Collapse tests override this value.
     localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", JSON.stringify([]));
   });
 

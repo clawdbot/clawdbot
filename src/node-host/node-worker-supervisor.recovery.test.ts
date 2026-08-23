@@ -226,12 +226,12 @@ describe("node worker supervisor recovery", () => {
       state: "pending",
       supervisor: { pid: 2_147_483_647, startTime: 1 },
     });
-    const availability: boolean[] = [];
+    const capacitySnapshots: Array<{ total: number; available: number }> = [];
     const supervisor = createNodeWorkerSupervisor({
       bundleRoot,
       env,
       capacity: 1,
-      onAvailabilityChanged: (available) => availability.push(available),
+      onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
     });
 
     await supervisor.initialize();
@@ -240,7 +240,10 @@ describe("node worker supervisor recovery", () => {
       state: "interrupted",
       worker: null,
     });
-    expect(availability).toEqual([false, true]);
+    expect(capacitySnapshots).toEqual([
+      { total: 1, available: 0 },
+      { total: 1, available: 1 },
+    ]);
     await supervisor.close();
   });
 
@@ -266,7 +269,7 @@ describe("node worker supervisor recovery", () => {
       spawned.add(workerProcess);
       const worker = requireNodeWorkerProcessIdentity(workerProcess.pid!);
       ownedProcessGroups.push(worker);
-      await vi.waitFor(() => expect(fs.existsSync(marker)).toBe(true));
+      await vi.waitFor(() => expect(fs.readFileSync(marker, "utf8")).toMatch(/^[1-9]\d*$/u));
       const grandchild = requireNodeWorkerProcessIdentity(Number(fs.readFileSync(marker, "utf8")));
       const input = testWorkerLaunchInput(workspaceDir, "stale-running-launch", "wait");
       const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
@@ -348,7 +351,9 @@ describe("node worker supervisor recovery", () => {
       const owned = JSON.parse(await waitForChildLine(owner)) as NodeWorkerLaunchReceipt;
       ownedProcessGroups.push(owned.worker!);
       const grandchildPath = path.join(workspaceDir, "grandchild.pid");
-      await vi.waitFor(() => expect(fs.existsSync(grandchildPath)).toBe(true));
+      await vi.waitFor(() =>
+        expect(fs.readFileSync(grandchildPath, "utf8")).toMatch(/^[1-9]\d*$/u),
+      );
       const grandchild = requireNodeWorkerProcessIdentity(
         Number(fs.readFileSync(grandchildPath, "utf8")),
       );

@@ -18,8 +18,9 @@ import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.j
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
+import { recordAgentProvenance, type AgentCreatedVia } from "../state/agent-provenance.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { resolveUserPath } from "../utils.js";
 import { claimCompletedAgentDeletion } from "./agent-lifecycle-registry.js";
@@ -35,36 +36,37 @@ import { DEFAULT_IDENTITY_FILENAME, ensureAgentWorkspace } from "./workspace.js"
 
 const BOOTSTRAP_AGENT_ID = "main";
 
-type CreateAgentResult =
-  | {
-      status: "created" | "existing";
-      agentId: string;
-      name: string;
-      workspace: string;
-      agentDir: string;
-      model?: string;
-      bootstrapPending: boolean;
-      configHash?: string;
-      bindingResult?: ReturnType<typeof applyAgentBindings>;
-    }
-  | {
-      status: "error";
-      reason:
-        | "invalid-name"
-        | "reserved-id"
-        | "already-exists"
-        | "deletion-pending"
-        | "invalid-bindings"
-        | "legacy-session-migration-required"
-        | "shared-auth-store-owned-by-main"
-        | "unsafe-identity-file";
-      agentId?: string;
-      message: string;
-    };
+type CreateAgentSuccess = {
+  status: "created" | "existing";
+  agentId: string;
+  name: string;
+  workspace: string;
+  agentDir: string;
+  model?: string;
+  bootstrapPending: boolean;
+  configHash?: string;
+  bindingResult?: ReturnType<typeof applyAgentBindings>;
+};
 
-type CreateError = Extract<CreateAgentResult, { status: "error" }>;
+type CreateError = {
+  status: "error";
+  reason:
+    | "invalid-name"
+    | "reserved-id"
+    | "already-exists"
+    | "deletion-pending"
+    | "invalid-bindings"
+    | "legacy-session-migration-required"
+    | "shared-auth-store-owned-by-main"
+    | "unsafe-identity-file";
+  agentId?: string;
+  message: string;
+};
+
+type CreateAgentResult = (CreateAgentSuccess & { config: OpenClawConfig }) | CreateError;
 type AgentEntryConfig = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
 type CreateAgentEntry = AgentEntryConfig & { id: string };
+type ConfigCommitRollback = () => void | Promise<void>;
 
 type CreateAgentParams = {
   name?: string;
@@ -86,6 +88,9 @@ type CreateAgentParams = {
   skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
   bindingSpecs?: string[];
   transformConfig?: typeof transformConfigFileWithRetry;
+  /** Prepare guided staged state at the last reversible edge before config publication. */
+  prepareConfigCommit?: () => Promise<ConfigCommitRollback | void>;
+  provenance?: { createdVia: AgentCreatedVia; creatorAgentId?: string };
 };
 
 class DuplicateAgentError extends Error {}
@@ -99,11 +104,6 @@ function createError(
   return { status: "error", reason, message, ...(agentId ? { agentId } : {}) };
 }
 
-/** True when raw user input contains a character that can survive agent-id normalization. */
-function hasValidRawAgentIdCharacters(value: string): boolean {
-  return /[a-z0-9]/iu.test(value);
-}
-
 export function validateAgentIdInput(
   rawId: string,
   options: { displayName?: string } = {},
@@ -111,14 +111,15 @@ export function validateAgentIdInput(
   | { ok: true; agentId: string }
   | { ok: false; reason: "invalid-name" | "reserved-id"; message: string; agentId?: string } {
   const displayName = options.displayName ?? rawId;
-  if (!hasValidRawAgentIdCharacters(rawId)) {
+  const normalized = normalizeAgentIdStrict(rawId);
+  if (!normalized.ok) {
     return {
       ok: false,
       reason: "invalid-name",
-      message: `agent name "${displayName}" has no valid id characters`,
+      message: `Agent name "${displayName}" has no valid id characters. Use at least one letter a-z or digit.`,
     };
   }
-  const agentId = normalizeAgentId(rawId);
+  const agentId = normalized.value;
   if (isReservedSystemAgentId(agentId)) {
     return { ok: false, reason: "reserved-id", message: `"${agentId}" is reserved`, agentId };
   }
@@ -175,7 +176,10 @@ async function evaluateMainCreationGate(
     legacyAgentId: BOOTSTRAP_AGENT_ID,
     mode: "detect",
   });
-  if (!migration.armed || !migration.ledgerComplete) {
+  // An unarmed scan can proceed only when every candidate store proved collision-free.
+  const provenClean = migration.outcomes.every((outcome) => outcome.kind === "no-legacy-rows");
+  const blocked = migration.armed ? !migration.ledgerComplete : !provenClean;
+  if (blocked) {
     const details = migration.outcomes.map(describeLegacySessionOutcome).join("; ");
     return createError(
       "legacy-session-migration-required",
@@ -257,6 +261,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
     ? resolveUserPath(requestedAgentDir.trim())
     : undefined;
   const transformConfig = params.transformConfig ?? transformConfigFileWithRetry;
+  let configCommitRollback: ConfigCommitRollback | undefined;
 
   try {
     return await withConfigMutationExclusive(async (lockedConfig) => {
@@ -282,7 +287,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
         }
         tombstoneClaimed = true;
       }
-      const committed = await transformConfig<CreateAgentResult>({
+      const committed = await transformConfig<CreateAgentSuccess>({
         afterWrite: { mode: "auto" },
         maxAttempts: 1,
         ...(params.bootstrapFirstAgent
@@ -438,6 +443,10 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           if (!workspace.bootstrapPending) {
             await writeIdentityFile({ workspaceDir: workspace.dir, identity });
           }
+          // The receipt owns compensation until the config transform publishes this result.
+          const preparedRollback = await params.prepareConfigCommit?.();
+          configCommitRollback =
+            typeof preparedRollback === "function" ? preparedRollback : undefined;
 
           return {
             nextConfig,
@@ -454,6 +463,8 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           };
         },
       });
+      // Publication is now irreversible; later tombstone or provenance failures retain staged state.
+      configCommitRollback = undefined;
       if (
         deletion?.cleanupCompleted &&
         !tombstoneClaimed &&
@@ -463,11 +474,28 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
         throw new Error(`agent "${agentId}" deletion tombstone changed during creation`);
       }
       const result = committed.result!;
-      return typeof committed.persistedHash === "string"
-        ? { ...result, configHash: committed.persistedHash }
-        : result;
+      if (result.status === "created") {
+        recordAgentProvenance(agentId, params.provenance ?? { createdVia: "operator" });
+      }
+      return {
+        ...result,
+        config: committed.nextConfig,
+        ...(typeof committed.persistedHash === "string"
+          ? { configHash: committed.persistedHash }
+          : {}),
+      };
     });
   } catch (error) {
+    if (configCommitRollback) {
+      try {
+        await configCommitRollback();
+      } catch (rollbackError) {
+        throw new Error(
+          `${String(error)}\nstaged config rollback failed: ${String(rollbackError)}`,
+          { cause: rollbackError },
+        );
+      }
+    }
     if (error instanceof DuplicateAgentError) {
       return createError("already-exists", `agent "${agentId}" already exists`, agentId);
     }

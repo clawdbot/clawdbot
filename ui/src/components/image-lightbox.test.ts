@@ -3,6 +3,19 @@
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
+
+vi.mock("@panzoom/panzoom", () => ({
+  default: () => ({
+    destroy: vi.fn(),
+    reset: vi.fn(),
+    resetStyle: vi.fn(),
+    zoomIn: vi.fn(),
+    zoomOut: vi.fn(),
+    zoomToPoint: vi.fn(),
+    zoomWithWheel: vi.fn(),
+  }),
+}));
+
 import "./image-lightbox.ts";
 
 let container: HTMLDivElement;
@@ -178,23 +191,48 @@ describe("openclaw-image-lightbox", () => {
     expect(createObjectUrl).not.toHaveBeenCalled();
   });
 
-  it("keeps Tab focus within the lightbox actions", async () => {
-    const { modal } = await renderLightbox();
+  it("gates zoom readiness and keeps Tab focus within the actions", async () => {
+    const { modal, dialogAdapter } = await renderLightbox();
     const root = modal.shadowRoot;
+    const image = root?.querySelector<HTMLImageElement>(".image");
+    const zoomIn = root?.querySelector<HTMLButtonElement>('[aria-label="Zoom in"]');
+    expect(zoomIn?.disabled).toBe(true);
+    const unavailableShortcut = new KeyboardEvent("keydown", {
+      key: "+",
+      bubbles: true,
+      cancelable: true,
+    });
+    dialogAdapter.dispatchEvent(unavailableShortcut);
+    expect(unavailableShortcut.defaultPrevented).toBe(false);
+
+    image?.dispatchEvent(new Event("error"));
+    await modal.updateComplete;
+    expect(zoomIn?.disabled).toBe(true);
+
+    image?.dispatchEvent(new Event("load"));
+    await modal.updateComplete;
+    expect(zoomIn?.disabled).toBe(false);
+    const availableShortcut = new KeyboardEvent("keydown", {
+      key: "+",
+      bubbles: true,
+      cancelable: true,
+    });
+    dialogAdapter.dispatchEvent(availableShortcut);
+    expect(availableShortcut.defaultPrevented).toBe(true);
+
     await vi.waitFor(() =>
       expect(root?.querySelector<HTMLAnchorElement>(".open-original")).toBeTruthy(),
     );
     const openOriginal = root?.querySelector<HTMLAnchorElement>(".open-original");
-    const closeButton = root?.querySelector<HTMLButtonElement>(".close");
-    closeButton?.focus();
+    zoomIn?.focus();
 
-    closeButton?.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    zoomIn?.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
     expect(root?.activeElement).toBe(openOriginal);
 
     openOriginal?.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true }),
     );
-    expect(root?.activeElement).toBe(closeButton);
+    expect(root?.activeElement).toBe(zoomIn);
   });
 
   it("emits one close event for the close button and modal cancellation", async () => {

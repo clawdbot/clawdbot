@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -18,11 +18,23 @@ import {
   backupSqliteVerifyCommand,
 } from "./backup-sqlite.js";
 
+const configMocks = vi.hoisted(() => ({
+  getRuntimeConfig: vi.fn(),
+}));
+
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return { ...actual, getRuntimeConfig: configMocks.getRuntimeConfig };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let previousStateDir: string | undefined;
 
 beforeEach(() => {
   previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  configMocks.getRuntimeConfig.mockReset().mockReturnValue({
+    agents: { list: [{ id: "main" }, { id: "ops-team" }] },
+  });
 });
 
 afterEach(() => {
@@ -151,6 +163,15 @@ describe("SQLite backup commands", () => {
     expect(listed.snapshots).toHaveLength(1);
     expect(listed.snapshots[0]?.manifest.snapshotId).toBe(created.manifest.snapshotId);
 
+    const missingScratchPath = path.join(tempDir, "missing-scratch");
+    await expect(
+      backupSqliteVerifyCommand(runtime, created.snapshotPath, {
+        scratch: missingScratchPath,
+      }),
+    ).rejects.toThrow(
+      `SQLite validation root does not exist: ${missingScratchPath}. Create a private directory there or pass an existing directory with \`--scratch\`.`,
+    );
+
     const verified = await backupSqliteVerifyCommand(runtime, created.snapshotPath, {
       scratch: scratchPath,
       json: true,
@@ -181,6 +202,31 @@ describe("SQLite backup commands", () => {
     } finally {
       restoredDatabase.close();
     }
+  });
+
+  it("reports missing snapshot paths for verify and restore", async () => {
+    const tempDir = tempDirs.make("openclaw-backup-sqlite-missing-");
+    const repositoryPath = path.join(tempDir, "snapshots");
+    const snapshotPath = path.join(repositoryPath, "missing-snapshot");
+    const restorePath = path.join(tempDir, "restored.sqlite");
+    const runtime = createRuntimeCapture();
+    const missingRepositoryMessage = `SQLite snapshot repository does not exist: ${repositoryPath}. Check the snapshot path or create a snapshot with \`openclaw backup sqlite create\`.`;
+
+    await expect(backupSqliteVerifyCommand(runtime, snapshotPath, {})).rejects.toThrow(
+      missingRepositoryMessage,
+    );
+    await expect(
+      backupSqliteRestoreCommand(runtime, snapshotPath, { target: restorePath }),
+    ).rejects.toThrow(missingRepositoryMessage);
+
+    await fs.mkdir(repositoryPath, { mode: 0o700 });
+    const missingSnapshotMessage = `SQLite snapshot does not exist: ${snapshotPath}. Run \`openclaw backup sqlite list --repository ${repositoryPath}\` to inspect available snapshots.`;
+    await expect(backupSqliteVerifyCommand(runtime, snapshotPath, {})).rejects.toThrow(
+      missingSnapshotMessage,
+    );
+    await expect(
+      backupSqliteRestoreCommand(runtime, snapshotPath, { target: restorePath }),
+    ).rejects.toThrow(missingSnapshotMessage);
   });
 
   it("creates a snapshot for a normalized per-agent database", async () => {
@@ -221,6 +267,24 @@ describe("SQLite backup commands", () => {
         repository: "/tmp/snapshots",
       }),
     ).rejects.toThrow("Choose exactly one SQLite snapshot source");
+  });
+
+  it.each([
+    [
+      "unknown",
+      "nope-agent",
+      'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
+    ],
+    ["empty", "", "--agent must not be blank"],
+    ["whitespace-only", "   ", "--agent must not be blank"],
+  ])("rejects an %s SQLite snapshot agent", async (_label, agent, message) => {
+    process.env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-backup-sqlite-agent-rejection-");
+    await expect(
+      backupSqliteCreateCommand(createRuntimeCapture(), {
+        agent,
+        repository: "/tmp/snapshots",
+      }),
+    ).rejects.toThrow(message);
   });
 
   it("does not claim completion when a corrupt database also rejects outcome recording", async () => {

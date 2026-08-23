@@ -25,7 +25,10 @@ import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
 } from "../embedded-agent-runner/run-state.js";
-import { isMainRestartRecoveryCandidate } from "./main-session-recovery-state.js";
+import {
+  isMainRestartRecoveryAggregateTerminalOnly,
+  isMainRestartRecoveryCandidate,
+} from "./main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "./main-session-recovery-store.js";
 import {
   hasRestartRecoveryMessageActionAuthority,
@@ -50,6 +53,7 @@ import {
   mainSessionRecoveryLog,
   MAX_RECOVERY_RETRIES,
   normalizeStringSet,
+  resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
 
 function pendingFinalRecoveryAction(
@@ -109,6 +113,7 @@ async function completePendingFinalRecoveryWithNotice(
         abortedLastRun: false,
         endedAt,
         lifecycleRunId: undefined,
+        lastRunId: resolveRestartRecoveryTerminalClientRunId(current),
         pendingFinalDelivery: undefined,
         ...(pending?.context &&
         pending.intentId &&
@@ -286,7 +291,10 @@ export async function recoverStore(params: {
       return result;
     }
     let entry = loadedEntry;
-    if (!entry || entry.status !== "running" || entry.abortedLastRun !== true) {
+    const hasRecoveryStateToObserve =
+      entry?.abortedLastRun === true ||
+      (entry !== undefined && isMainRestartRecoveryAggregateTerminalOnly(entry));
+    if (!entry || entry.status !== "running" || !hasRecoveryStateToObserve) {
       continue;
     }
     if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {

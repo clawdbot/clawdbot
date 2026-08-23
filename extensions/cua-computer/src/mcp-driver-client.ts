@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { ActionResult } from "@trycua/cua-driver";
+import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ClickButton,
   EscalationReason,
@@ -67,12 +68,6 @@ function driverUnavailable(message: string, cause?: unknown): Error {
 
 function driverProtocolError(message: string, cause?: unknown): Error {
   return new Error(`COMPUTER_DRIVER_ERROR: ${message}`, { cause });
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function mappedEnum(value: unknown, values: readonly string[], label: string): number {

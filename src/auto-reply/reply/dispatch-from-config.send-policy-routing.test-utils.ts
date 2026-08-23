@@ -262,7 +262,8 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       updatedAt: 0,
       sendPolicy: "allow",
     };
-    const dispatcher = createDispatcher();
+    const deliver = vi.fn();
+    const dispatcher = createReplyDispatcher({ deliver });
     const sourceReply = setReplyPayloadMetadata(
       { text: "message tool reply" },
       {
@@ -290,7 +291,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     await settleReplyDispatcher({ dispatcher });
 
     expect(result.queuedFinal).toBe(true);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(sourceReply);
+    expect(deliver).toHaveBeenCalledWith(sourceReply, { kind: "final" });
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
       sessionKey: "agent:main",
       agentId: "main",
@@ -312,7 +313,8 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       updatedAt: 0,
       sendPolicy: "allow",
     };
-    const dispatcher = createDispatcher();
+    const deliver = vi.fn();
+    const dispatcher = createReplyDispatcher({ deliver });
     dispatcher.appendBeforeDeliver?.((payload, info) => {
       if (info.kind !== "final") {
         return payload;
@@ -355,7 +357,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     await settleReplyDispatcher({ dispatcher });
 
     expect(result.queuedFinal).toBe(true);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(sourceReply);
+    expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ text: "redacted hook reply" }), {
+      kind: "final",
+    });
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
       sessionKey: "agent:main",
       agentId: "main",
@@ -464,12 +468,8 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       updatedAt: 0,
       sendPolicy: "allow",
     };
-    const dispatcher = createDispatcher();
-    dispatcher.getCancelledCounts = vi
-      .fn()
-      .mockReturnValueOnce({ tool: 0, block: 0, final: 0 })
-      .mockReturnValue({ tool: 0, block: 0, final: 1 });
-    dispatcher.waitForIdle = vi.fn(async () => {});
+    const deliver = vi.fn();
+    const dispatcher = createReplyDispatcher({ deliver, beforeDeliver: async () => null });
     const sourceReply = setReplyPayloadMetadata(
       { text: "message tool reply" },
       {
@@ -494,11 +494,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         sourceReplyDeliveryMode: "message_tool_only",
       },
     });
-    await settleReplyDispatcher({ dispatcher });
+    const receipt = await settleReplyDispatcher({ dispatcher });
 
     expect(result.queuedFinal).toBe(true);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(sourceReply);
-    expect(dispatcher.waitForIdle).toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(receipt?.counts.final.cancelled).toBe(1);
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
@@ -920,7 +920,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     );
     expect(onError).toHaveBeenCalledWith(deliveryError, expect.objectContaining({ kind: "final" }));
     expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
-    expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 1 });
+    expect((await dispatcher.waitForIdle())?.counts.final.failedAfterSend).toBe(1);
   });
 
   it("honors parent model overrides before Codex direct source delivery defaults", async () => {

@@ -220,6 +220,11 @@ struct ChatSessionSidebar: View {
 
     @ViewBuilder
     private func badges(for node: ChatSessionSidebarModel.Node) -> some View {
+        if node.badges.queuedCount > 0 {
+            Image(systemName: "hourglass")
+                .foregroundStyle(OpenClawChatTheme.warning)
+                .accessibilityLabel(String(localized: "Thread queued"))
+        }
         if node.badges.runningCount > 0 {
             ProgressView()
                 .controlSize(.small)

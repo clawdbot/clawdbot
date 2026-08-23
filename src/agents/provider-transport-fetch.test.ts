@@ -3,12 +3,14 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { Stream } from "openai/streaming";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 type ProviderRequestPolicyConfigMockResult = {
   allowPrivateNetwork: boolean;
-  privateNetworkExplicitlyDenied?: boolean;
+  trustConfiguredBaseUrlOrigin?: boolean;
   policy?: {
     endpointClass?: string;
   };
@@ -93,7 +95,7 @@ vi.mock("./provider-local-service.js", () => ({
 
 vi.mock("./provider-request-config.js", () => ({
   buildProviderRequestDispatcherPolicy: buildProviderRequestDispatcherPolicyMock,
-  getModelProviderMetadataOwners: vi.fn(() => undefined),
+  getModelProviderRequestRouteFacts: vi.fn(() => undefined),
   getModelProviderRequestTransport: vi.fn(() => undefined),
   mergeModelProviderRequestOverrides: mergeModelProviderRequestOverridesMock,
   resolveProviderRequestPolicyConfig: resolveProviderRequestPolicyConfigMock,
@@ -180,12 +182,12 @@ describe("buildGuardedModelFetch", () => {
   });
 
   function sentinelModel(): Model<"openai-responses"> {
-    return {
+    return makeProviderModelFixture<"openai-responses">({
       id: "gpt-5.5",
       provider: "openai",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-    } as unknown as Model<"openai-responses">;
+    });
   }
 
   it("swaps sentinels in Request-form headers", async () => {
@@ -284,12 +286,12 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("pushes provider capture metadata into the shared guarded fetch seam", async () => {
-    const model = {
+    const model = makeProviderModelFixture<"openai-responses">({
       id: "gpt-5.4",
       provider: "openai",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-    } as unknown as Model<"openai-responses">;
+    });
 
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("https://api.openai.com/v1/responses", {
@@ -312,12 +314,12 @@ describe("buildGuardedModelFetch", () => {
 
   it("rejects successful streamed OpenAI-compatible responses with HTML content", async () => {
     const release = vi.fn(async () => undefined);
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "private-model",
       provider: "custom-openai",
       api: "openai-completions",
       baseUrl: "https://proxy.example.com",
-    } as unknown as Model<"openai-completions">;
+    });
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response("<html>not the API</html>", {
         status: 200,
@@ -355,12 +357,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://chatgpt.com/backend-api/codex/responses",
       release: vi.fn(async () => undefined),
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-responses">({
       id: "gpt-5.5",
       provider: "openai",
       api: "openclaw-openai-chatgpt-responses-transport",
       baseUrl: "https://chatgpt.com/backend-api/codex",
-    } as unknown as Model<"openai-responses">;
+    });
 
     const response = await buildGuardedModelFetch(model)(
       "https://chatgpt.com/backend-api/codex/responses",
@@ -385,12 +387,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://chatgpt.com/backend-api/codex/responses",
       release: vi.fn(async () => undefined),
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-responses">({
       id: "gpt-5.5",
       provider: "openai",
       api: "openclaw-openai-chatgpt-responses-transport",
       baseUrl: "https://chatgpt.com/backend-api/codex",
-    } as unknown as Model<"openai-responses">;
+    });
 
     const responsePromise = buildGuardedModelFetch(model)(
       "https://chatgpt.com/backend-api/codex/responses",
@@ -425,12 +427,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://chatgpt.com/backend-api/codex/responses",
       release: vi.fn(async () => undefined),
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-responses">({
       id: "gpt-5.5",
       provider: "openai",
       api: "openclaw-openai-chatgpt-responses-transport",
       baseUrl: "https://chatgpt.com/backend-api/codex",
-    } as unknown as Model<"openai-responses">;
+    });
 
     const response = await buildGuardedModelFetch(model)(
       "https://chatgpt.com/backend-api/codex/responses",
@@ -454,12 +456,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://chatgpt.com/backend-api/codex/responses",
       release: vi.fn(async () => undefined),
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-responses">({
       id: "gpt-5.5",
       provider: "openai",
       api: "openclaw-openai-chatgpt-responses-transport",
       baseUrl: "https://chatgpt.com/backend-api/codex",
-    } as unknown as Model<"openai-responses">;
+    });
 
     const response = await buildGuardedModelFetch(model)(
       "https://chatgpt.com/backend-api/codex/responses",
@@ -480,12 +482,12 @@ describe("buildGuardedModelFetch", () => {
 
   it("rejects missing content-type streamed OpenAI-compatible responses with HTML bodies", async () => {
     const release = vi.fn(async () => undefined);
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "private-model",
       provider: "custom-openai",
       api: "openai-completions",
       baseUrl: "https://proxy.example.com",
-    } as unknown as Model<"openai-completions">;
+    });
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(responseStreamText("<html>not the API</html>")),
       finalUrl: "https://proxy.example.com/chat/completions",
@@ -510,12 +512,12 @@ describe("buildGuardedModelFetch", () => {
   it("ensures configured local services before the model request", async () => {
     const release = vi.fn();
     ensureModelProviderLocalServiceMock.mockResolvedValue({ release });
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "deepseek-v4-flash",
       provider: "ds4",
       api: "openai-completions",
       baseUrl: "http://127.0.0.1:18000/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     const fetcher = buildGuardedModelFetch(model);
     const response = await fetcher("http://127.0.0.1:18000/v1/chat/completions", {
@@ -544,12 +546,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://api.anthropic.com/v1/messages",
       release,
     });
-    const model = {
+    const model = makeProviderModelFixture<"anthropic-messages">({
       id: "claude-sonnet-4-6",
       provider: "anthropic",
       api: "anthropic-messages",
       baseUrl: "https://api.anthropic.com",
-    } as unknown as Model<"anthropic-messages">;
+    });
 
     const fetcher = buildGuardedModelFetch(model, undefined, { sanitizeSse: false });
     const response = await fetcher("https://api.anthropic.com/v1/messages", {
@@ -570,12 +572,12 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("passes model request headers to local service health probes", async () => {
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "deepseek-v4-flash",
       provider: "ds4",
       api: "openai-completions",
       baseUrl: "http://127.0.0.1:18000/v1",
-    } as unknown as Model<"openai-completions">;
+    });
     const headers = {
       Authorization: "Bearer health-secret",
       "X-Tenant": "acme",
@@ -592,12 +594,12 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("passes model request abort signals to local service startup", async () => {
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "deepseek-v4-flash",
       provider: "ds4",
       api: "openai-completions",
       baseUrl: "http://127.0.0.1:18000/v1",
-    } as unknown as Model<"openai-completions">;
+    });
     const controller = new AbortController();
 
     const fetcher = buildGuardedModelFetch(model);
@@ -617,12 +619,12 @@ describe("buildGuardedModelFetch", () => {
   it("passes model request timeouts to local service startup", async () => {
     const timeoutController = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "deepseek-v4-flash",
       provider: "ds4",
       api: "openai-completions",
       baseUrl: "http://127.0.0.1:18000/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     try {
       const fetcher = buildGuardedModelFetch(model, 750);
@@ -649,12 +651,12 @@ describe("buildGuardedModelFetch", () => {
   it("caps oversized model request timeouts before arming abort signals", async () => {
     const timeoutController = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "deepseek-v4-flash",
       provider: "ds4",
       api: "openai-completions",
       baseUrl: "http://127.0.0.1:18000/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     try {
       const fetcher = buildGuardedModelFetch(model, Number.MAX_SAFE_INTEGER);
@@ -677,13 +679,13 @@ describe("buildGuardedModelFetch", () => {
 
   it("ignores non-positive model request timeout metadata", async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "deepseek-v4-flash",
       provider: "ds4",
       api: "openai-completions",
       baseUrl: "http://127.0.0.1:18000/v1",
       requestTimeoutMs: -1,
-    } as unknown as Model<"openai-completions">;
+    });
 
     try {
       const fetcher = buildGuardedModelFetch(model);
@@ -706,12 +708,12 @@ describe("buildGuardedModelFetch", () => {
     const combinedController = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
     const anySpy = vi.spyOn(AbortSignal, "any").mockReturnValue(combinedController.signal);
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "deepseek-v4-flash",
       provider: "ds4",
       api: "openai-completions",
       baseUrl: "http://127.0.0.1:18000/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     try {
       const fetcher = buildGuardedModelFetch(model, 750);
@@ -741,12 +743,12 @@ describe("buildGuardedModelFetch", () => {
     const release = vi.fn();
     ensureModelProviderLocalServiceMock.mockResolvedValue({ release });
     fetchWithSsrFGuardMock.mockRejectedValue(new Error("network down"));
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "deepseek-v4-flash",
       provider: "ds4",
       api: "openai-completions",
       baseUrl: "http://127.0.0.1:18000/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     const fetcher = buildGuardedModelFetch(model);
 
@@ -757,12 +759,12 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("scopes fake-IP DNS exemptions to the configured provider host", async () => {
-    const model = {
+    const model = makeProviderModelFixture<"openai-responses">({
       id: "gpt-5.4",
       provider: "openai",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-    } as unknown as Model<"openai-responses">;
+    });
 
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
@@ -779,12 +781,12 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("does not apply fake-IP exemptions to non-provider hosts", async () => {
-    const model = {
+    const model = makeProviderModelFixture<"openai-responses">({
       id: "gpt-5.4",
       provider: "openai",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-    } as unknown as Model<"openai-responses">;
+    });
 
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("https://uploads.openai.com/v1/files", { method: "POST" });
@@ -796,14 +798,15 @@ describe("buildGuardedModelFetch", () => {
   it("trusts exact configured custom provider hosts without broad private-network opt-in", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
       allowPrivateNetwork: false,
+      trustConfiguredBaseUrlOrigin: true,
       policy: { endpointClass: "custom" },
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "qwen3:32b",
       provider: "lmstudio",
       api: "openai-completions",
       baseUrl: "http://10.0.0.5:1234/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("http://10.0.0.5:1234/v1/chat/completions", { method: "POST" });
@@ -819,14 +822,15 @@ describe("buildGuardedModelFetch", () => {
   it("trusts exact configured HTTPS custom provider origins", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
       allowPrivateNetwork: false,
+      trustConfiguredBaseUrlOrigin: true,
       policy: { endpointClass: "custom" },
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "qwen3:32b",
       provider: "custom-vllm",
       api: "openai-completions",
       baseUrl: "https://10.0.0.5:1234/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("https://10.0.0.5:1234/v1/chat/completions", { method: "POST" });
@@ -840,15 +844,15 @@ describe("buildGuardedModelFetch", () => {
   it("keeps explicit private-network denial ahead of configured custom origin trust", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
       allowPrivateNetwork: false,
-      privateNetworkExplicitlyDenied: true,
+      trustConfiguredBaseUrlOrigin: false,
       policy: { endpointClass: "custom" },
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "qwen3:32b",
       provider: "lmstudio",
       api: "openai-completions",
       baseUrl: "http://10.0.0.5:1234/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("http://10.0.0.5:1234/v1/chat/completions", { method: "POST" });
@@ -860,14 +864,15 @@ describe("buildGuardedModelFetch", () => {
   it("trusts exact configured local provider origins", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
       allowPrivateNetwork: false,
+      trustConfiguredBaseUrlOrigin: true,
       policy: { endpointClass: "local" },
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "qwen3:32b",
       provider: "lmstudio",
       api: "openai-completions",
       baseUrl: "http://127.0.0.1:1234/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("http://127.0.0.1:1234/v1/chat/completions", { method: "POST" });
@@ -878,17 +883,82 @@ describe("buildGuardedModelFetch", () => {
     });
   });
 
+  it("does not add exact-origin trust for local-use NAT64 provider literals", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: false,
+      trustConfiguredBaseUrlOrigin: true,
+      policy: { endpointClass: "custom" },
+    });
+    const model = {
+      id: "qwen3:32b",
+      provider: "nat64-lab",
+      api: "openai-completions",
+      baseUrl: "http://[64:ff9b:1::8.8.8.8]:1234/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("http://[64:ff9b:1::8.8.8.8]:1234/v1/chat/completions", { method: "POST" });
+
+    const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
+    expect(policy).toBeUndefined();
+  });
+
+  it("uses only explicit private-network opt-in for local-use NAT64 provider literals", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: true,
+      trustConfiguredBaseUrlOrigin: true,
+      policy: { endpointClass: "custom" },
+    });
+    const model = {
+      id: "qwen3:32b",
+      provider: "nat64-lab",
+      api: "openai-completions",
+      baseUrl: "http://[64:ff9b:1::8.8.8.8]:1234/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("http://[64:ff9b:1::8.8.8.8]:1234/v1/chat/completions", { method: "POST" });
+
+    const policy = latestGuardedFetchParams().policy;
+    expect(policy).toEqual({ allowPrivateNetwork: true });
+  });
+
+  it("explains the explicit opt-in when a local-use NAT64 provider literal is blocked", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: false,
+      trustConfiguredBaseUrlOrigin: true,
+      policy: { endpointClass: "custom" },
+    });
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(
+      new SsrFBlockedError("Blocked hostname or private/internal/special-use IP address"),
+    );
+    const model = {
+      id: "qwen3:32b",
+      provider: "nat64-lab",
+      api: "openai-completions",
+      baseUrl: "http://[64:ff9b:1::8.8.8.8]:1234/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const fetcher = buildGuardedModelFetch(model);
+
+    await expect(
+      fetcher("http://[64:ff9b:1::8.8.8.8]:1234/v1/chat/completions", { method: "POST" }),
+    ).rejects.toThrow(
+      "models.providers.nat64-lab.request.allowPrivateNetwork=true only for an operator-controlled endpoint",
+    );
+  });
+
   it("does not trust a configured provider host on a different port", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
       allowPrivateNetwork: false,
       policy: { endpointClass: "custom" },
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "qwen3:32b",
       provider: "lmstudio",
       api: "openai-completions",
       baseUrl: "http://10.0.0.5:1234/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("http://10.0.0.5:4321/v1/chat/completions", { method: "POST" });
@@ -902,12 +972,12 @@ describe("buildGuardedModelFetch", () => {
       allowPrivateNetwork: false,
       policy: { endpointClass: "openai-public" },
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "qwen3:32b",
       provider: "openai",
       api: "openai-completions",
       baseUrl: "http://10.0.0.5:1234/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("http://10.0.0.5:1234/v1/chat/completions", { method: "POST" });
@@ -921,12 +991,12 @@ describe("buildGuardedModelFetch", () => {
       allowPrivateNetwork: false,
       policy: { endpointClass: "meta-native" },
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-responses">({
       id: "muse-spark-1.1",
       provider: "meta",
       api: "openai-responses",
       baseUrl: "https://api.meta.ai/v1",
-    } as unknown as Model<"openai-responses">;
+    });
 
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("https://api.meta.ai/v1/responses", { method: "POST" });
@@ -997,12 +1067,12 @@ describe("buildGuardedModelFetch", () => {
       allowPrivateNetwork: false,
       policy: { endpointClass: "custom" },
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "qwen3:32b",
       provider: "custom-metadata",
       api: "openai-completions",
       baseUrl: entry.baseUrl,
-    } as unknown as Model<"openai-completions">;
+    });
 
     const fetcher = buildGuardedModelFetch(model);
     await fetcher(entry.requestUrl, { method: "POST" });
@@ -1014,14 +1084,15 @@ describe("buildGuardedModelFetch", () => {
   it("merges explicit private-network opt-in into the provider-host policies", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
       allowPrivateNetwork: true,
+      trustConfiguredBaseUrlOrigin: true,
       policy: { endpointClass: "custom" },
     });
-    const model = {
+    const model = makeProviderModelFixture<"ollama">({
       id: "qwen3:32b",
       provider: "ollama",
       api: "ollama",
       baseUrl: "http://10.0.0.5:11434",
-    } as unknown as Model<"ollama">;
+    });
 
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("http://10.0.0.5:11434/api/chat", { method: "POST" });
@@ -1035,12 +1106,12 @@ describe("buildGuardedModelFetch", () => {
 
   it("uses trusted env-proxy mode for provider calls when no explicit dispatcher policy is configured", async () => {
     shouldUseEnvHttpProxyForUrlMock.mockReturnValueOnce(true);
-    const model = {
+    const model = makeProviderModelFixture<"openai-responses">({
       id: "gpt-5.4",
       provider: "openai",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-    } as unknown as Model<"openai-responses">;
+    });
 
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
@@ -1065,12 +1136,12 @@ describe("buildGuardedModelFetch", () => {
   it("keeps explicit provider dispatcher policies in strict guarded-fetch mode", async () => {
     shouldUseEnvHttpProxyForUrlMock.mockReturnValueOnce(true);
     buildProviderRequestDispatcherPolicyMock.mockReturnValueOnce({ mode: "direct" });
-    const model = {
+    const model = makeProviderModelFixture<"openai-responses">({
       id: "gpt-5.4",
       provider: "openai",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-    } as unknown as Model<"openai-responses">;
+    });
 
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
@@ -1080,12 +1151,12 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("threads explicit transport timeouts into the shared guarded fetch seam", async () => {
-    const model = {
+    const model = makeProviderModelFixture<"openai-responses">({
       id: "gpt-5.4",
       provider: "openai",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-    } as unknown as Model<"openai-responses">;
+    });
 
     const fetcher = buildGuardedModelFetch(model, 123_456);
     await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
@@ -1094,13 +1165,13 @@ describe("buildGuardedModelFetch", () => {
   });
 
   it("threads resolved provider timeout metadata into the shared guarded fetch seam", async () => {
-    const model = {
+    const model = makeProviderModelFixture<"ollama">({
       id: "qwen3:32b",
       provider: "ollama",
       api: "ollama",
       baseUrl: "http://127.0.0.1:11434",
       requestTimeoutMs: 300_000,
-    } as unknown as Model<"ollama">;
+    });
 
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("http://127.0.0.1:11434/api/chat", { method: "POST" });
@@ -1111,12 +1182,12 @@ describe("buildGuardedModelFetch", () => {
   it("does not force explicit debug proxy overrides onto plain HTTP model transports", async () => {
     process.env.OPENCLAW_DEBUG_PROXY_ENABLED = "1";
     process.env.OPENCLAW_DEBUG_PROXY_URL = "http://127.0.0.1:7799";
-    const model = {
+    const model = makeProviderModelFixture<"ollama-chat">({
       id: "kimi-k2.5:cloud",
       provider: "ollama",
       api: "ollama-chat",
       baseUrl: "http://127.0.0.1:11434/v1",
-    } as unknown as Model<"ollama-chat">;
+    });
 
     const fetcher = buildGuardedModelFetch(model);
     await fetcher("http://127.0.0.1:11434/v1/chat/completions", {
@@ -1146,12 +1217,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://api.openai.com/v1/responses",
       release: vi.fn(async () => undefined),
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-responses">({
       id: "gpt-5.4",
       provider: "openrouter",
       api: "openai-responses",
       baseUrl: "https://openrouter.ai/api/v1",
-    } as unknown as Model<"openai-responses">;
+    });
 
     const response = await buildGuardedModelFetch(model)("https://openrouter.ai/api/v1/responses", {
       method: "POST",
@@ -1172,12 +1243,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://api.openai.com/v1/responses",
       release: vi.fn(async () => undefined),
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-responses">({
       id: "gpt-5.5",
       provider: "openai",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-    } as unknown as Model<"openai-responses">;
+    });
     const body = JSON.stringify({ model: "gpt-5.5", stream: true });
     const parse = vi.spyOn(JSON, "parse");
 
@@ -1202,12 +1273,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://api.openai.com/v1/chat/completions",
       release: vi.fn(async () => undefined),
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "gpt-5.4",
       provider: "openrouter",
       api: "openai-completions",
       baseUrl: "https://openrouter.ai/api/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     const response = await buildGuardedModelFetch(model)(
       "https://openrouter.ai/api/v1/chat/completions",
@@ -1249,12 +1320,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://api.openai.com/v1/responses",
       release: vi.fn(async () => undefined),
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "moonshotai/kimi-k2.6",
       provider: "openrouter",
       api: "openai-completions",
       baseUrl: "https://openrouter.ai/api/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     const response = await buildGuardedModelFetch(model)(
       "https://openrouter.ai/api/v1/chat/completions",
@@ -1280,12 +1351,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://openrouter.ai/api/v1/chat/completions",
       release: vi.fn(async () => undefined),
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "gpt-5.4",
       provider: "openrouter",
       api: "openai-completions",
       baseUrl: "https://openrouter.ai/api/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     const response = await buildGuardedModelFetch(model)(
       "https://openrouter.ai/api/v1/chat/completions",
@@ -1307,12 +1378,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://api.openai.com/v1/chat/completions",
       release: vi.fn(async () => undefined),
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "moonshotai/kimi-k2.6",
       provider: "openrouter",
       api: "openai-completions",
       baseUrl: "https://openrouter.ai/api/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     const response = await buildGuardedModelFetch(model)(
       "https://openrouter.ai/api/v1/chat/completions",
@@ -1361,12 +1432,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://openrouter.ai/api/v1/chat/completions",
       release,
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "gpt-5.4",
       provider: "openrouter",
       api: "openai-completions",
       baseUrl: "https://openrouter.ai/api/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     const response = await buildGuardedModelFetch(model)(
       "https://openrouter.ai/api/v1/chat/completions",
@@ -1398,12 +1469,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://gateway.example/v1/chat/completions",
       release: vi.fn(async () => undefined),
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "MiniMax-M3",
       provider: "hetu",
       api: "openai-completions",
       baseUrl: "https://gateway.example/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     const responsePromise = buildGuardedModelFetch(model)(
       "https://gateway.example/v1/chat/completions",
@@ -1444,12 +1515,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://api.openai.com/v1/responses",
       release: vi.fn(async () => undefined),
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-responses">({
       id: "gpt-5.5",
       provider: "openai",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-    } as unknown as Model<"openai-responses">;
+    });
     const request = new Request("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -1486,12 +1557,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://openrouter.ai/api/v1/chat/completions",
       release: vi.fn(async () => undefined),
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "moonshotai/kimi-k2.6",
       provider: "openrouter",
       api: "openai-completions",
       baseUrl: "https://openrouter.ai/api/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     const response = await buildGuardedModelFetch(model)(
       "https://openrouter.ai/api/v1/chat/completions",
@@ -1518,12 +1589,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://api.openai.com/v1/chat/completions",
       release: vi.fn(async () => undefined),
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "gpt-5.4",
       provider: "openai",
       api: "openai-completions",
       baseUrl: "https://api.openai.com/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     const response = await buildGuardedModelFetch(model)(
       "https://api.openai.com/v1/chat/completions",
@@ -1555,12 +1626,12 @@ describe("buildGuardedModelFetch", () => {
         "https://generativelanguage.googleapis.com/v1beta/models/gemini:streamGenerateContent",
       release: vi.fn(async () => undefined),
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "gemini-3.1-pro-preview",
       provider: "google",
       api: "openai-completions",
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-    } as unknown as Model<"openai-completions">;
+    });
 
     const response = await buildGuardedModelFetch(model)(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini:streamGenerateContent",
@@ -1591,12 +1662,12 @@ describe("buildGuardedModelFetch", () => {
       release: vi.fn(async () => undefined),
       refreshTimeout,
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "gpt-5.4",
       provider: "openrouter",
       api: "openai-completions",
       baseUrl: "https://openrouter.ai/api/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     const response = await buildGuardedModelFetch(model)(
       "https://openrouter.ai/api/v1/chat/completions",
@@ -1628,12 +1699,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://openrouter.ai/api/v1/chat/completions",
       release: vi.fn(async () => undefined),
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "gpt-5.4",
       provider: "openrouter",
       api: "openai-completions",
       baseUrl: "https://openrouter.ai/api/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     const response = await buildGuardedModelFetch(model)(
       "https://openrouter.ai/api/v1/chat/completions",
@@ -1663,12 +1734,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://openrouter.ai/api/v1/chat/completions",
       release: vi.fn(async () => undefined),
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "gpt-5.4",
       provider: "openrouter",
       api: "openai-completions",
       baseUrl: "https://openrouter.ai/api/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     const response = await buildGuardedModelFetch(model)(
       "https://openrouter.ai/api/v1/chat/completions",
@@ -1711,12 +1782,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://openrouter.ai/api/v1/chat/completions",
       release: vi.fn(async () => undefined),
     });
-    const model = {
+    const model = makeProviderModelFixture<"openai-completions">({
       id: "moonshotai/kimi-k2.6",
       provider: "openrouter",
       api: "openai-completions",
       baseUrl: "https://openrouter.ai/api/v1",
-    } as unknown as Model<"openai-completions">;
+    });
 
     const response = await buildGuardedModelFetch(model)(
       "https://openrouter.ai/api/v1/chat/completions",
@@ -1762,12 +1833,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://custom-azure.openai.azure.com/openai/v1/responses",
       release: vi.fn(async () => undefined),
     });
-    const model = {
+    const model = makeProviderModelFixture<"azure-openai-responses">({
       id: "gpt-5.5",
       provider: "azure",
       api: "azure-openai-responses",
       baseUrl: "https://custom-azure.openai.azure.com/openai/v1",
-    } as unknown as Model<"azure-openai-responses">;
+    });
 
     const response = await buildGuardedModelFetch(model)(
       "https://custom-azure.openai.azure.com/openai/v1/responses",
@@ -1797,12 +1868,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://custom-azure.openai.azure.com/openai/v1/responses",
       release,
     });
-    const model = {
+    const model = makeProviderModelFixture<"azure-openai-responses">({
       id: "gpt-5.5",
       provider: "azure",
       api: "azure-openai-responses",
       baseUrl: "https://custom-azure.openai.azure.com/openai/v1",
-    } as unknown as Model<"azure-openai-responses">;
+    });
 
     const response = await buildGuardedModelFetch(model)(
       "https://custom-azure.openai.azure.com/openai/v1/responses",
@@ -1847,12 +1918,12 @@ describe("buildGuardedModelFetch", () => {
       finalUrl: "https://custom-azure.openai.azure.com/openai/v1/responses",
       release: vi.fn(async () => undefined),
     });
-    const model = {
+    const model = makeProviderModelFixture<"azure-openai-responses">({
       id: "gpt-5.5",
       provider: "azure",
       api: "azure-openai-responses",
       baseUrl: "https://custom-azure.openai.azure.com/openai/v1",
-    } as unknown as Model<"azure-openai-responses">;
+    });
 
     const response = await buildGuardedModelFetch(model)(
       "https://custom-azure.openai.azure.com/openai/v1/responses",
@@ -1869,19 +1940,19 @@ describe("buildGuardedModelFetch", () => {
   });
 
   describe("long retry-after handling", () => {
-    const anthropicModel = {
+    const anthropicModel = makeProviderModelFixture<"anthropic-messages">({
       id: "sonnet-4.6",
       provider: "anthropic",
       api: "anthropic-messages",
       baseUrl: "https://api.anthropic.com/v1",
-    } as unknown as Model<"anthropic-messages">;
+    });
 
-    const openaiModel = {
+    const openaiModel = makeProviderModelFixture<"openai-responses">({
       id: "gpt-5.4",
       provider: "openai",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-    } as unknown as Model<"openai-responses">;
+    });
 
     it("injects x-should-retry:false when a retryable response exceeds the default wait cap", async () => {
       fetchWithSsrFGuardMock.mockResolvedValue({

@@ -129,11 +129,37 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { leaf: "read", args: ["--reset", "recommendations"] },
+    { leaf: "acknowledge", args: ["--reset", "recommendations", "acknowledge"] },
+    { leaf: "refresh", args: ["--reset", "recommendations", "refresh"] },
+    { leaf: "acknowledge", args: ["--json", "recommendations", "acknowledge"] },
+    { leaf: "refresh", args: ["--json", "recommendations", "refresh"] },
+    { leaf: "acknowledge", args: ["recommendations", "--json", "acknowledge"] },
+    { leaf: "refresh", args: ["recommendations", "--json", "refresh"] },
+  ])("rejects inapplicable parent options for recommendations $leaf", async ({ args }) => {
+    await runCli(["onboard", ...args]);
+
+    const unsupportedFlag = args.includes("--reset") ? "--reset" : "--json";
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(unsupportedFlag));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.onboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(mocks.acknowledgeOnboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(mocks.refreshOnboardRecommendationsCommand).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps parent --json supported for reading recommendations", async () => {
+    await runCli(["onboard", "--json", "recommendations"]);
+
+    expect(mocks.onboardRecommendationsCommand).toHaveBeenCalledWith({ json: true }, runtime);
+  });
+
   it("defaults installDaemon to undefined when no daemon flags are provided", async () => {
     await runCli(["onboard"]);
 
     expect(setupWizardOptions().installDaemon).toBeUndefined();
-    expect(setupWizardOptions().tailscaleResetOnExit).toBeUndefined();
+    expect(setupWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
   });
 
   it("sets installDaemon from explicit install flags and prioritizes --skip-daemon", async () => {
@@ -182,31 +208,35 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions().agentName).toBe("robby");
   });
 
-  it("forwards explicit --tailscale-reset-on-exit", async () => {
+  it("accepts retired --tailscale-reset-on-exit as a no-op", async () => {
     await runCli(["onboard", "--tailscale-reset-on-exit"]);
-    expect(setupWizardOptions().tailscaleResetOnExit).toBe(true);
+
+    expect(setupWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
   });
 
-  it("forwards explicit --no-tailscale-reset-on-exit", async () => {
+  it("accepts retired --no-tailscale-reset-on-exit as a no-op", async () => {
     await runCli(["onboard", "--no-tailscale-reset-on-exit"]);
-    expect(setupWizardOptions().tailscaleResetOnExit).toBe(false);
+    expect(setupWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
   });
 
-  it("forwards remote seed flags to setup wizard options", async () => {
-    const remoteToken = ["fixture", "value"].join("-");
+  it.each([
+    { flag: "--remote-token", optionKey: "remoteToken" },
+    { flag: "--remote-password", optionKey: "remotePassword" },
+  ])("forwards $flag to remote setup wizard options", async ({ flag, optionKey }) => {
+    const credential = ["fixture", "value"].join("-");
     await runCli([
       "onboard",
       "--mode",
       "remote",
       "--remote-url",
       "wss://gateway.example.com:18789",
-      "--remote-token",
-      remoteToken,
+      flag,
+      credential,
     ]);
 
     const options = setupWizardOptions();
     expect(options.remoteUrl).toBe("wss://gateway.example.com:18789");
-    expect(options.remoteToken).toBe(remoteToken);
+    expect(options[optionKey]).toBe(credential);
   });
 
   it("forwards --tui to guided onboarding", async () => {

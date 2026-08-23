@@ -7,6 +7,7 @@ import {
   createSandboxedEditTool,
   createSandboxedReadTool,
   createSandboxedWriteTool,
+  resolveAdaptiveReadMaxBytes,
   wrapReadToolWithSkillContent,
   wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
@@ -68,13 +69,27 @@ function resolveSkillReadRoots(skillsSnapshot?: SkillSnapshot): string[] | undef
   return roots.size > 0 ? Array.from(roots) : undefined;
 }
 
+function guardHostWorkspaceTool(
+  tool: AnyAgentTool,
+  options: Pick<CoreCodingToolsOptions, "codingRoot" | "containmentRoot">,
+): AnyAgentTool {
+  return path.resolve(options.containmentRoot) === path.resolve(options.codingRoot)
+    ? wrapToolWorkspaceRootGuard(tool, options.codingRoot)
+    : wrapToolWorkspaceRootGuardWithOptions(tool, options.containmentRoot, {
+        resolutionCwd: options.codingRoot,
+      });
+}
+
 type CoreCodingToolsOptions = {
   codingRoot: string;
+  containmentRoot: string;
   includeBaseCodingTools: boolean;
   includeShellTools: boolean;
   workspaceOnly: boolean;
+  readOnly: boolean;
   sandbox?: SandboxContext;
   skillsSnapshot?: SkillSnapshot;
+  skillInstructionPaths?: readonly string[];
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
@@ -97,7 +112,11 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
   const sandboxRoot = sandbox?.workspaceDir;
   const sandboxFsBridge = sandbox?.fsBridge;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
-  if (sandboxRoot && !sandboxFsBridge) {
+  if (
+    sandboxRoot &&
+    !sandboxFsBridge &&
+    (options.includeBaseCodingTools || options.includeShellTools)
+  ) {
     throw new Error("Sandbox filesystem bridge is unavailable.");
   }
 
@@ -128,8 +147,9 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
             createTool: options.baseToolFactories?.createReadTool,
           })
         : createOpenClawReadTool(
-            options.baseToolFactories?.createReadTool(options.codingRoot) ??
-              createReadTool(options.codingRoot),
+            (options.baseToolFactories?.createReadTool ?? createReadTool)(options.codingRoot, {
+              maxBytes: resolveAdaptiveReadMaxBytes(options),
+            }),
             {
               modelContextWindowTokens: options.modelContextWindowTokens,
               imageSanitization: options.imageSanitization,
@@ -138,7 +158,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
       const guarded = options.workspaceOnly
         ? wrapToolWorkspaceRootGuardWithOptions(
             wrapped,
-            sandboxRoot ?? options.codingRoot,
+            sandboxRoot ?? options.containmentRoot,
             sandboxRoot
               ? {
                   additionalContainerMounts: readOnlySandboxReadMounts(
@@ -147,39 +167,40 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
                   ),
                   containerWorkdir: sandbox.containerWorkdir,
                 }
-              : { additionalRoots: skillReadRoots },
+              : { additionalRoots: skillReadRoots, resolutionCwd: options.codingRoot },
           )
         : wrapped;
       base.push(
         wrapReadToolWithSkillContent(guarded, options.skillsSnapshot?.resolvedSkills, {
           modelContextWindowTokens: options.modelContextWindowTokens,
           imageSanitization: options.imageSanitization,
+          cwd: options.codingRoot,
+          containerWorkdir: sandbox?.containerWorkdir,
+          instructionPaths: options.skillInstructionPaths,
         }),
       );
     }
-    if (!sandboxRoot && baseToolNames.has("edit")) {
+    if (!options.readOnly && !sandboxRoot && baseToolNames.has("edit")) {
       const edit = createHostWorkspaceEditTool(options.codingRoot, {
+        containmentRoot: options.containmentRoot,
         workspaceOnly: options.workspaceOnly,
         memoryWriteProvenance: options.memoryWriteProvenance,
         createTool: options.baseToolFactories?.createEditTool,
       });
-      base.push(
-        options.workspaceOnly ? wrapToolWorkspaceRootGuard(edit, options.codingRoot) : edit,
-      );
+      base.push(options.workspaceOnly ? guardHostWorkspaceTool(edit, options) : edit);
     }
-    if (!sandboxRoot && baseToolNames.has("write")) {
+    if (!options.readOnly && !sandboxRoot && baseToolNames.has("write")) {
       const write = createHostWorkspaceWriteTool(options.codingRoot, {
+        containmentRoot: options.containmentRoot,
         workspaceOnly: options.workspaceOnly,
         memoryWriteProvenance: options.memoryWriteProvenance,
         createTool: options.baseToolFactories?.createWriteTool,
       });
-      base.push(
-        options.workspaceOnly ? wrapToolWorkspaceRootGuard(write, options.codingRoot) : write,
-      );
+      base.push(options.workspaceOnly ? guardHostWorkspaceTool(write, options) : write);
     }
   }
 
-  if (options.includeBaseCodingTools && sandboxRoot && allowWorkspaceWrites) {
+  if (options.includeBaseCodingTools && !options.readOnly && sandboxRoot && allowWorkspaceWrites) {
     const toolOptions = {
       root: sandboxRoot,
       bridge: sandboxFsBridge!,
@@ -214,6 +235,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
       shell.push(
         createApplyPatchTool({
           cwd: options.codingRoot,
+          root: options.containmentRoot,
           sandbox:
             sandboxRoot && allowWorkspaceWrites
               ? { root: sandboxRoot, bridge: sandboxFsBridge! }

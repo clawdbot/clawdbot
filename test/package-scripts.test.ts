@@ -26,12 +26,11 @@ function readPackageJson(): RootPackageJson {
   return JSON.parse(fs.readFileSync("package.json", "utf8")) as RootPackageJson;
 }
 
-function readWindowsCiPartScripts(): [string, string, string] {
+function readWindowsCiPartScripts(): [string, string] {
   const scripts = readPackageJson().scripts;
   return [
     expectDefined(scripts["test:windows:ci:1"], "Windows CI part 1 script"),
     expectDefined(scripts["test:windows:ci:2"], "Windows CI part 2 script"),
-    expectDefined(scripts["test:windows:ci:3"], "Windows CI part 3 script"),
   ];
 }
 
@@ -140,7 +139,7 @@ describe("package scripts", () => {
   });
 
   it.each([
-    { scriptName: "build:docker", expectedCount: 3 },
+    { scriptName: "build:docker", expectedCount: 2 },
     { scriptName: "build:plugin-sdk:strict-smoke", expectedCount: 1 },
     { scriptName: "build:strict-smoke", expectedCount: 1 },
   ])("runs TypeScript steps in $scriptName through tsx", ({ scriptName, expectedCount }) => {
@@ -183,6 +182,15 @@ describe("package scripts", () => {
     );
   });
 
+  it("cleans package builds before validating release contents", () => {
+    const scripts = readPackageJson().scripts;
+
+    expect(scripts["build:package"]).toBe("pnpm clean:dist && pnpm build");
+    expect(scripts["release:check"]).toBe(
+      "pnpm build:package && pnpm release:generated:check && node --import tsx scripts/release-check.ts",
+    );
+  });
+
   it("uses the shipped package launcher for npm start", () => {
     expect(readPackageJson().scripts.start).toBe("node openclaw.mjs");
   });
@@ -204,14 +212,15 @@ describe("package scripts", () => {
     expect(scripts["android:test"]).toContain(":wear:testDebugUnitTest");
   });
 
-  it("partitions Windows CI coverage into three disjoint explicit test lists", () => {
+  it("partitions Windows CI coverage into two disjoint explicit test lists", () => {
     const scripts = readPackageJson().scripts;
     const partScripts = readWindowsCiPartScripts();
     const partTargets = partScripts.map(readWindowsCiTargets);
 
-    expect(scripts["test:windows:ci"]).toBe(
-      "pnpm test:windows:ci:1 && pnpm test:windows:ci:2 && pnpm test:windows:ci:3",
-    );
+    // Blacksmith's Windows class admits exactly 2 concurrent jobs, so the split
+    // width is pinned here: a 3rd part queues and a single lane serializes.
+    expect(scripts["test:windows:ci"]).toBe("pnpm test:windows:ci:1 && pnpm test:windows:ci:2");
+    expect(scripts["test:windows:ci:3"]).toBeUndefined();
     for (const [partIndex, targets] of partTargets.entries()) {
       const laterTargets = new Set(partTargets.slice(partIndex + 1).flat());
       expect(

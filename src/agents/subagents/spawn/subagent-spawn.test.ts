@@ -5,6 +5,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
+import { resolveUserPath } from "../../../utils.js";
 import { installAcceptedSubagentGatewayMock } from "../../test-helpers/subagent-gateway.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import {
@@ -21,6 +22,7 @@ const hoisted = vi.hoisted(() => ({
     throw new Error("full model catalog should not materialize");
   }),
   loadPreparedModelCatalogMock: vi.fn(),
+  resolveProviderRefOwnershipMock: vi.fn(),
   updateSessionStoreMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
   startQueuedSubagentRunMock: vi.fn(),
@@ -71,6 +73,13 @@ function gatewayRequest(method: string): Record<string, unknown> {
 
 function firstRegisteredSubagentRun(): Record<string, unknown> {
   return requireRecord(hoisted.registerSubagentRunMock.mock.calls[0]?.[0]);
+}
+
+function expectNoChildSpawnSideEffects(): void {
+  expect(hoisted.updateSessionStoreMock).not.toHaveBeenCalled();
+  expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
+  expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+  expect(hoisted.emitSessionLifecycleEventMock).not.toHaveBeenCalled();
 }
 
 type InheritedSpawnPreferenceCase = {
@@ -164,6 +173,7 @@ describe("spawnSubagentDirect seam flow", () => {
       getRuntimeConfig: () => hoisted.configOverride,
       loadSessionStoreMock: hoisted.loadSessionStoreMock,
       loadPreparedModelCatalogMock: hoisted.loadPreparedModelCatalogMock,
+      resolveProviderRefOwnershipMock: hoisted.resolveProviderRefOwnershipMock,
       updateSessionStoreMock: hoisted.updateSessionStoreMock,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
       startQueuedSubagentRunMock: hoisted.startQueuedSubagentRunMock,
@@ -187,6 +197,10 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.loadSessionStoreMock.mockReset();
     hoisted.loadFullModelCatalogMock.mockClear();
     hoisted.loadPreparedModelCatalogMock.mockReset().mockResolvedValue([]);
+    hoisted.resolveProviderRefOwnershipMock.mockReset().mockReturnValue({
+      status: "owned",
+      pluginIds: ["test-provider"],
+    });
     hoisted.updateSessionStoreMock.mockReset();
     hoisted.registerSubagentRunMock.mockReset();
     hoisted.startQueuedSubagentRunMock.mockReset().mockReturnValue(true);
@@ -513,6 +527,219 @@ describe("spawnSubagentDirect seam flow", () => {
       scopes: ["operator.admin"],
       params: { provider: "openai", model: "gpt-5.4" },
     });
+  });
+
+  it("rejects an explicit non-allowlisted model before creating child state", async () => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          modelPolicy: { allow: ["openai/gpt-5.4"] },
+        },
+        list: [{ id: "main", workspace: "/tmp/workspace-main" }],
+      },
+    });
+    hoisted.loadPreparedModelCatalogMock.mockResolvedValue([
+      { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" },
+      {
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+      },
+    ]);
+
+    const result = await spawnSubagentDirect(
+      { task: "must honor model policy", model: "anthropic/claude-sonnet-4-6" },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("model not allowed: anthropic/claude-sonnet-4-6");
+    expectNoChildSpawnSideEffects();
+  });
+
+  it("rejects an unknown-provider model under unrestricted policy before creating child state", async () => {
+    hoisted.resolveProviderRefOwnershipMock.mockReturnValue({ status: "unowned" });
+    hoisted.loadPreparedModelCatalogMock.mockResolvedValue([
+      { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" },
+    ]);
+
+    const result = await spawnSubagentDirect(
+      { task: "do not substitute an unknown provider", model: "unknown-provider/gpt-5.4" },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain('unknown model provider "unknown-provider"');
+    expectNoChildSpawnSideEffects();
+  });
+
+  it("does not treat ambiguous provider ownership as runnable", async () => {
+    hoisted.resolveProviderRefOwnershipMock.mockReturnValue({
+      status: "ambiguous",
+      pluginIds: ["provider-a", "provider-b"],
+    });
+
+    const result = await spawnSubagentDirect(
+      { task: "do not guess an owner", model: "ambiguous-provider/gpt-5.4" },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain('unknown model provider "ambiguous-provider"');
+    expectNoChildSpawnSideEffects();
+  });
+
+  it("accepts a catalog-missing model from a known provider under unrestricted policy", async () => {
+    hoisted.loadPreparedModelCatalogMock.mockResolvedValue([
+      { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" },
+    ]);
+
+    const result = await spawnSubagentDirect(
+      { task: "use a newly released model", model: "openai/gpt-new" },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+      resolvedModel: "openai/gpt-new",
+      resolvedProvider: "openai",
+    });
+    expect(hoisted.resolveProviderRefOwnershipMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts a catalog-missing model known only through provider ownership", async () => {
+    hoisted.loadPreparedModelCatalogMock.mockResolvedValue([]);
+
+    const result = await spawnSubagentDirect(
+      { task: "use a plugin-owned provider", model: "plugin-provider/new-model" },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      resolvedModel: "plugin-provider/new-model",
+      resolvedProvider: "plugin-provider",
+    });
+    expect(hoisted.resolveProviderRefOwnershipMock).toHaveBeenCalledWith({
+      provider: "plugin-provider",
+      config: hoisted.configOverride,
+      workspaceDir: resolveUserPath("/tmp/workspace-main"),
+    });
+  });
+
+  it("accepts a catalog-missing model from a configured custom provider", async () => {
+    hoisted.configOverride = createConfigOverride({
+      models: {
+        providers: {
+          loopback: {
+            api: "openai-completions",
+            baseUrl: "http://127.0.0.1:43123/v1",
+            models: [],
+          },
+        },
+      },
+    });
+    hoisted.resolveProviderRefOwnershipMock.mockReturnValue({ status: "unowned" });
+
+    const result = await spawnSubagentDirect(
+      { task: "use the configured loopback provider", model: "loopback/new-model" },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+      resolvedModel: "loopback/new-model",
+      resolvedProvider: "loopback",
+    });
+  });
+
+  it.each([
+    { policy: "exact", allow: ["future-provider/new-model"] },
+    { policy: "provider wildcard", allow: ["future-provider/*"] },
+  ])("rejects an unowned catalog-missing ref under a strict $policy policy", async ({ allow }) => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+          modelPolicy: { allow },
+        },
+        list: [{ id: "main", workspace: "/tmp/workspace-main" }],
+      },
+    });
+    hoisted.resolveProviderRefOwnershipMock.mockReturnValue({ status: "unowned" });
+
+    const result = await spawnSubagentDirect(
+      { task: "do not launch an unowned provider", model: "future-provider/new-model" },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain('unknown model provider "future-provider"');
+    expect(hoisted.resolveProviderRefOwnershipMock).toHaveBeenCalledWith({
+      provider: "future-provider",
+      config: hoisted.configOverride,
+      workspaceDir: resolveUserPath("/tmp/workspace-main"),
+    });
+    expectNoChildSpawnSideEffects();
+  });
+
+  it.each([
+    {
+      name: "alias",
+      model: "fast",
+      models: { "openai/gpt-5.4": { alias: "fast" } },
+    },
+    {
+      name: "bare model ref",
+      model: "gpt-5.4",
+      models: { "openai/gpt-5.4": {} },
+    },
+  ])("validates an explicit $name through the target policy", async ({ model, models }) => {
+    hoisted.configOverride = createConfigOverride({
+      agents: {
+        defaults: { workspace: os.tmpdir(), models },
+        list: [{ id: "main", workspace: "/tmp/workspace-main" }],
+      },
+    });
+    hoisted.loadPreparedModelCatalogMock.mockResolvedValue([
+      { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" },
+    ]);
+
+    const result = await spawnSubagentDirect(
+      { task: `use ${model}`, model },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expect(result).toMatchObject({ status: "accepted", modelApplied: true });
+  });
+
+  it("does not load the model catalog for an implicit default", async () => {
+    const result = await spawnSubagentDirect(
+      { task: "inherit the default model" },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.loadPreparedModelCatalogMock).not.toHaveBeenCalled();
+    expect(hoisted.resolveProviderRefOwnershipMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an explicit model when catalog validation fails without creating child state", async () => {
+    hoisted.loadPreparedModelCatalogMock.mockRejectedValue(new Error("catalog unavailable"));
+
+    const result = await spawnSubagentDirect(
+      { task: "validate before launch", model: "openai/gpt-5.4" },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain(
+      "sessions_spawn could not verify the requested model: catalog unavailable",
+    );
+    expectNoChildSpawnSideEffects();
   });
 
   it("aborts a collector cancelled while its gateway launch is in flight", async () => {
@@ -1062,10 +1289,11 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(rejected.status).toBe("error");
     expect(rejected.error).toContain("requires a tool-capable target model");
     expect(hoisted.loadFullModelCatalogMock).not.toHaveBeenCalled();
+    expect(hoisted.loadPreparedModelCatalogMock).toHaveBeenCalledTimes(1);
     expect(hoisted.loadPreparedModelCatalogMock).toHaveBeenCalledWith({
       config: hoisted.configOverride,
       agentDir: expect.any(String),
-      workspaceDir: "/tmp/workspace-main",
+      workspaceDir: resolveUserPath("/tmp/workspace-main"),
       readOnly: true,
       providerDiscoveryProviderIds: ["openai"],
       scopedLiveProviderDiscovery: true,
@@ -1183,7 +1411,7 @@ describe("spawnSubagentDirect seam flow", () => {
       completionOwnerSessionKey: "agent:main:main",
       parentSessionKey: "agent:main:main",
       createdVia: "spawn",
-      createdActor: { type: "agent", id: "agent:main:main" },
+      createdActor: { type: "agent", id: "main" },
       createdAt: expect.any(Number),
     });
     const registerInput = firstRegisteredSubagentRun();
@@ -1710,7 +1938,7 @@ describe("spawnSubagentDirect seam flow", () => {
     const childSessionKey = result.childSessionKey as string;
     const childEntry = persistedStore?.[childSessionKey];
     expect(childEntry?.spawnedWorkspaceDir).toBe("/tmp/requester-workspace");
-    expect(childEntry?.spawnedCwd).toBe("/tmp/task-repo");
+    expect(childEntry?.spawnedCwd).toBe(resolveUserPath("/tmp/task-repo"));
 
     const agentRequest = gatewayRequest("agent");
     const agentParams = requireRecord(agentRequest.params);

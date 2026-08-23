@@ -2,6 +2,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
@@ -904,8 +905,7 @@ function resolveContainedImportPath(root: string, relativePath: string, label: s
   }
   const resolvedRoot = path.resolve(root);
   const resolvedPath = path.resolve(resolvedRoot, relativePath);
-  const relative = path.relative(resolvedRoot, resolvedPath);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+  if (!isPathInside(resolvedRoot, resolvedPath)) {
     throw new Error(`${label} must stay inside ${resolvedRoot}: ${relativePath}`);
   }
   return resolvedPath;

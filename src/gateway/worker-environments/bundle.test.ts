@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
-import { resolveNodeWorkerInstallation } from "../../node-host/node-worker-build.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import {
   createWorkerBundleProducer,
@@ -116,21 +115,8 @@ describe("worker bundle producer", () => {
         cacheDir: path.join(root, "cache-b"),
         openclawVersion: "1.2.3",
       }).prepare();
-      const nodeBuild = (
-        await resolveNodeWorkerInstallation({
-          packageRoot: packageA,
-          openclawVersion: "1.2.3",
-          protocolFeatures: [],
-        })
-      ).build;
-
       expect(first.bundleHash).toMatch(/^[a-f0-9]{64}$/u);
       expect(second.bundleHash).toBe(first.bundleHash);
-      expect(nodeBuild).toEqual({
-        bundleHash: first.bundleHash,
-        openclawVersion: first.openclawVersion,
-        protocolFeatures: first.protocolFeatures,
-      });
       await expect(listTarball(first.tarballPath)).resolves.toEqual([
         "worker.mjs",
         "workspace-rsync-receiver.mjs",

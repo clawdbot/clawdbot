@@ -1,6 +1,7 @@
 import type { ReactiveController } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { AnnotationStroke } from "./browser-annotation.ts";
 import type { BrowserInspectedNode, BrowserPanelTab } from "./browser-client.ts";
 import {
@@ -119,13 +120,15 @@ export class BrowserPanelController implements ReactiveController {
     this.input.resetCaptureState();
     this.setState("inspected", null);
     this.setState("inspectPointer", null);
+    this.urlDraftEditing = false;
+    this.setState("urlDraft", "");
     this.setState("pendingNewTab", false);
     // Re-probe per connection: another gateway may have evaluate enabled.
     this.setState("evaluateUnavailable", false);
   }
 
   reportError(error: unknown): void {
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = formatUiError(error);
     this.setState("errorText", t("browser.errors.requestFailed", { error: detail }));
   }
 
@@ -201,7 +204,7 @@ export class BrowserPanelController implements ReactiveController {
         return;
       }
       const dataUrl = await fetchBrowserScreenshotDataUrl({
-        basePath: this.host.basePath,
+        resourceBasePath: this.host.resourceBasePath,
         authToken: this.host.authToken,
         path: shot.path,
       });

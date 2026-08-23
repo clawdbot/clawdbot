@@ -226,14 +226,12 @@ class OpenClawRouterOutlet<
   private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
 
   override render() {
-    if (!this.router) {
+    const router = this.router;
+    if (!router) {
       return nothing;
     }
     const snapshot = this.outlet.snapshot;
     const renderedMatch = selectRenderedRouteMatch(snapshot.active, snapshot.pending);
-    const rendered = renderRouterOutlet(this.router, snapshot, renderedMatch, {
-      retryContext: this.retryContext,
-    });
     const routeKey = renderedMatch ? `${renderedMatch.routeId}:${renderedMatch.status}` : "empty";
     const routeModule = renderedMatch?.module;
     const declaredOwnerKey =
@@ -245,9 +243,15 @@ class OpenClawRouterOutlet<
       explicitOwnerKey !== undefined &&
       renderedMatch?.status === "pending" &&
       renderedMatch.data === undefined;
-    return this.mcpAppUnmountGate.render(explicitOwnerKey ?? routeKey, rendered, () => [this], {
-      retainRenderedValue: retainCurrent,
-    });
+    return this.mcpAppUnmountGate.render(
+      explicitOwnerKey ?? routeKey,
+      () =>
+        renderRouterOutlet(router, snapshot, renderedMatch, {
+          retryContext: this.retryContext,
+        }),
+      () => [this],
+      { retainRenderedValue: retainCurrent },
+    );
   }
 }
 

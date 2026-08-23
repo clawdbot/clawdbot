@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { resolveRepoToolBinPath } from "./lib/local-heavy-check-runtime.mts";
+import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
@@ -21,6 +21,7 @@ const targets = [
   "test",
   "skills",
   "config",
+  "node-version.mjs",
   "openclaw.mjs",
   "tsdown.ai.config.ts",
   "tsdown.config.ts",

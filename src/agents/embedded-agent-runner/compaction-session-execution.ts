@@ -6,6 +6,12 @@ import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqli
 import type { CapturedCompactionCheckpointSnapshot } from "../../gateway/session-compaction-checkpoints.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  closeDiagnosticEmbeddedRunOwner,
+  createDiagnosticEmbeddedRunOwner,
+  type DiagnosticEmbeddedRunOwner,
+  markDiagnosticEmbeddedRunStarted,
+} from "../../logging/diagnostic-run-activity.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
@@ -220,6 +226,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         attemptedThinking.add(thinkLevel);
         const systemPromptText = buildSystemPromptText(thinkLevel);
         let session: AgentSession | undefined;
+        let diagnosticOwner: DiagnosticEmbeddedRunOwner | undefined;
         try {
           const createdSession = await createAgentSessionForEmbeddedRunner(
             {
@@ -272,6 +279,19 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
           });
+          diagnosticOwner = createDiagnosticEmbeddedRunOwner({
+            sessionId: params.sessionId,
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+            runId: diagnosticCompactionRunId,
+            workKey: diagnosticCompactionRunId,
+          });
+          markDiagnosticEmbeddedRunStarted({
+            sessionId: params.sessionId,
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+            runId: diagnosticCompactionRunId,
+            workKey: diagnosticCompactionRunId,
+            owner: diagnosticOwner,
+          });
           session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
             session.agent.streamFn,
             {
@@ -286,6 +306,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               trace: compactionModelCallTrace,
               contentCapture: resolveDiagnosticModelContentCapturePolicy(params.config),
               nextCallId: nextDiagnosticModelCallId,
+              ownerGeneration: diagnosticOwner.generation,
             },
           );
 
@@ -539,6 +560,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           }
           throw err;
         } finally {
+          // Retire exact recovery authority before asynchronous session cleanup can yield.
+          if (diagnosticOwner) {
+            closeDiagnosticEmbeddedRunOwner(diagnosticOwner);
+          }
           try {
             await flushPendingToolResultsAfterIdle({
               agent: session?.agent,

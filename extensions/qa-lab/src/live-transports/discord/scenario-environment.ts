@@ -92,6 +92,9 @@ export function createDiscordQaScenarioEnvironment(params: {
                       },
                     }
                   : {}),
+                ...(run.kind === "progress-draft-lifecycle"
+                  ? { progressDraftLabel: run.progressLabel }
+                  : {}),
                 statusReactionsToolOnly: run.kind === "status-reactions-tool-only",
               },
             );

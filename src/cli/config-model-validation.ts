@@ -15,7 +15,11 @@ import {
   resolveModelRefFromString,
 } from "../agents/model-selection-shared.js";
 import type { loadPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
-import { containsEnvVarReference, resolveConfigEnvVars } from "../config/env-substitution.js";
+import {
+  containsEnvVarReference,
+  type EnvSubstitutionWarning,
+  resolveConfigEnvVars,
+} from "../config/env-substitution.js";
 import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -286,8 +290,14 @@ function resolveCanonicalFallbackRef(
 function hasUnresolvedInheritedFallbackProvider(
   config: OpenClawConfig,
   ref: TouchedModelRef,
+  unresolvedPaths: ReadonlySet<string>,
 ): boolean {
-  if (!ref.fallback || ref.value.includes("/")) {
+  if (
+    !ref.fallback ||
+    ref.value.includes("/") ||
+    (!unresolvedPaths.has("agents.defaults.model") &&
+      !unresolvedPaths.has("agents.defaults.model.primary"))
+  ) {
     return false;
   }
   const primary = resolveAgentModelPrimaryValue(config.agents?.defaults?.model);
@@ -349,11 +359,21 @@ function expandInheritedDefaultRefs(
   return expanded;
 }
 
-function validateModelRefSyntax(config: OpenClawConfig, ref: TouchedModelRef): string | undefined {
+function modelRefEnvSourcePath(path: string): string {
+  return path
+    .replace(/\.list\.(\d+)/u, ".list[$1]")
+    .replace(/\.fallbacks\.(\d+)$/u, ".fallbacks[$1]");
+}
+
+function validateModelRefSyntax(
+  config: OpenClawConfig,
+  ref: TouchedModelRef,
+  unresolvedPaths: ReadonlySet<string>,
+): string | undefined {
   if (!ref.value) {
     return "Model reference is empty";
   }
-  if (containsEnvVarReference(ref.value)) {
+  if (unresolvedPaths.has(modelRefEnvSourcePath(ref.path))) {
     return "Model reference contains an unresolved environment variable";
   }
   const resolved = ref.fallback
@@ -480,10 +500,11 @@ export async function checkTouchedTextModelRefs(params: {
   );
   let validationConfig: OpenClawConfig;
   let validationPreviousConfig: OpenClawConfig | undefined;
+  const unresolvedPaths = new Set<string>();
   try {
     const env = params.env ?? process.env;
     validationConfig = resolveConfigEnvVars(params.config, env, {
-      onMissing: () => {},
+      onMissing: ({ configPath }: EnvSubstitutionWarning) => unresolvedPaths.add(configPath),
     }) as OpenClawConfig;
     validationPreviousConfig = params.previousConfig
       ? (resolveConfigEnvVars(params.previousConfig, env, {
@@ -555,11 +576,11 @@ export async function checkTouchedTextModelRefs(params: {
   // A bare fallback cannot be accepted while its inherited provider is env-unresolved;
   // leave it unchecked until runtime can determine that provider.
   const refsToValidate = refs.filter(
-    (ref) => !hasUnresolvedInheritedFallbackProvider(validationConfig, ref),
+    (ref) => !hasUnresolvedInheritedFallbackProvider(config, ref, unresolvedPaths),
   );
   const validatedRefs = refsToValidate.map((ref) => ({
     ref,
-    error: validateModelRefSyntax(validationConfig, ref),
+    error: validateModelRefSyntax(validationConfig, ref, unresolvedPaths),
   }));
   const syntaxFailures = validatedRefs.filter(
     (entry): entry is { ref: TouchedModelRef; error: string } => Boolean(entry.error),

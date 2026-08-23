@@ -9,7 +9,9 @@ import {
   type SlashCommandCategory,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
-import { exportChatMarkdown } from "../export.ts";
+import { resolveThinkingCommandArgOptionsForSession } from "../../../lib/chat/thinking.ts";
+import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
+import { paneDomId } from "./chat-composer-dom.ts";
 import { commitComposerDraft, getChatComposerState } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
@@ -37,6 +39,26 @@ function closeSlashMenuIfNeeded(state: ChatComposerState, requestUpdate: () => v
   state.slashMenuOpen = false;
   resetSlashMenuState(state);
   requestUpdate();
+}
+
+function resolveSlashCommandArgOptions(
+  command: SlashCommandDef,
+  props: ChatComposerProps,
+): string[] {
+  if (command.key !== "think") {
+    return command.argOptions ?? [];
+  }
+  if (props.modelSwitching) {
+    return [];
+  }
+  const session = props.sessions?.sessions.find((row) =>
+    areUiSessionKeysEquivalent(row.key, props.sessionKey),
+  );
+  return resolveThinkingCommandArgOptionsForSession(
+    session,
+    props.sessions?.defaults,
+    props.modelCatalog,
+  );
 }
 
 function requestSlashCommandRefresh(
@@ -85,10 +107,11 @@ export function updateSlashMenu(
       return;
     }
     const cmd = SLASH_COMMANDS.find((entry) => entry.name === cmdName);
-    if (cmd?.argOptions?.length) {
+    const argOptions = cmd ? resolveSlashCommandArgOptions(cmd, props) : [];
+    if (cmd && argOptions.length > 0) {
       const filtered = argFilter
-        ? cmd.argOptions.filter((arg) => arg.toLowerCase().startsWith(argFilter))
-        : cmd.argOptions;
+        ? argOptions.filter((arg) => arg.toLowerCase().startsWith(argFilter))
+        : argOptions;
       if (filtered.length > 0) {
         state.slashMenuMode = "args";
         state.slashMenuCommand = cmd;
@@ -129,11 +152,12 @@ export function selectSlashCommand(
   requestUpdate: () => void,
 ) {
   const state = getChatComposerState(props.paneId);
-  if (cmd.argOptions?.length) {
+  const argOptions = resolveSlashCommandArgOptions(cmd, props);
+  if (argOptions.length > 0) {
     commitComposerDraft(props, `/${cmd.name} `);
     state.slashMenuMode = "args";
     state.slashMenuCommand = cmd;
-    state.slashMenuArgItems = cmd.argOptions;
+    state.slashMenuArgItems = argOptions;
     state.slashMenuOpen = true;
     state.slashMenuIndex = 0;
     state.slashMenuItems = [];
@@ -158,11 +182,12 @@ export function tabCompleteSlashCommand(
   requestUpdate: () => void,
 ) {
   const state = getChatComposerState(props.paneId);
-  if (cmd.argOptions?.length) {
+  const argOptions = resolveSlashCommandArgOptions(cmd, props);
+  if (argOptions.length > 0) {
     commitComposerDraft(props, `/${cmd.name} `);
     state.slashMenuMode = "args";
     state.slashMenuCommand = cmd;
-    state.slashMenuArgItems = cmd.argOptions;
+    state.slashMenuArgItems = argOptions;
     state.slashMenuOpen = true;
     state.slashMenuIndex = 0;
     state.slashMenuItems = [];
@@ -199,10 +224,6 @@ function slashOptionIdSegment(value: string): string {
       .replace(/[^a-z0-9_-]+/gu, "-")
       .replace(/^-+|-+$/gu, "") || "item"
   );
-}
-
-export function paneDomId(paneId: string, suffix: string): string {
-  return `chat-${encodeURIComponent(paneId)}-${suffix}`;
 }
 
 function getSlashCommandOptionId(paneId: string, cmd: SlashCommandDef): string {
@@ -261,10 +282,6 @@ export function getActiveSlashMenuOptionLabel(state: ChatComposerState): string 
 
 function renderSlashIcon(name: string) {
   return icons[name as IconName] ?? icons.terminal;
-}
-
-export function exportMarkdown(props: Pick<ChatComposerProps, "messages" | "assistantName">): void {
-  exportChatMarkdown(props.messages, props.assistantName);
 }
 
 export function renderSlashMenu(
@@ -375,10 +392,10 @@ export function renderSlashMenu(
               </span>
               <span class="slash-menu-trailing">
                 <span class="slash-menu-desc">${getSlashCommandDescription(cmd)}</span>
-                ${cmd.argOptions?.length
+                ${resolveSlashCommandArgOptions(cmd, props).length
                   ? html`<span class="slash-menu-badge"
                       >${t("chat.commands.optionCount", {
-                        count: String(cmd.argOptions.length),
+                        count: String(resolveSlashCommandArgOptions(cmd, props).length),
                       })}</span
                     >`
                   : nothing}

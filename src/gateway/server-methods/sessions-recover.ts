@@ -11,11 +11,25 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionRecoverHandlers: GatewayRequestHandlers = {
-  "sessions.recover": async ({ req, params, respond, client, context }) => {
+  "sessions.recover": async ({
+    req,
+    params,
+    respond,
+    client,
+    context,
+    sessionMutationAuthorization,
+  }) => {
     if (!assertValidParams(params, validateSessionsRecoverParams, "sessions.recover", respond)) {
       return;
     }
     const authority = createAgentRuntimeAuthorityGuard(client, context, respond);
+    const commitGuard =
+      authority.commitGuard || sessionMutationAuthorization
+        ? () => {
+            authority.commitGuard?.();
+            sessionMutationAuthorization?.assertCurrent();
+          }
+        : undefined;
     const creation = resolveOperatorSessionCreation(client);
     const recovered = await recoverGatewaySession({
       cfg: context.getRuntimeConfig(),
@@ -23,12 +37,12 @@ export const sessionRecoverHandlers: GatewayRequestHandlers = {
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(creation.actor ? { actor: creation.actor } : {}),
       authorizedPluginId: client?.internal?.pluginRuntimeOwnerId,
-      ...(authority.commitGuard ? { commitGuard: authority.commitGuard } : {}),
+      ...(commitGuard ? { commitGuard } : {}),
       launchContinuation: async (continuation) =>
         await launchSessionRecoveryContinuation({
           ...continuation,
           client,
-          ...(authority.commitGuard ? { commitGuard: authority.commitGuard } : {}),
+          ...(commitGuard ? { commitGuard } : {}),
           context,
           req,
         }),

@@ -523,8 +523,9 @@ describe("gateway agent handler", () => {
         resetAgentTaskRegistryForTests();
         resetSubagentRegistryForTests({ persist: false });
         const persistSubagentRunsToDiskOrThrow = vi.fn();
+        const persistenceError = Object.assign(new Error("disk full"), { code: "SQLITE_FULL" });
         persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
-          throw new Error("disk full");
+          throw persistenceError;
         });
         applyGatewaySubagentRegistryTestDeps({
           persistSubagentRunsToDiskOrThrow,
@@ -586,8 +587,11 @@ describe("gateway agent handler", () => {
         expect(persistSubagentRunsToDiskOrThrow).toHaveBeenCalledTimes(1);
         expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
         expect(findTaskByRunId(runId)).toBeUndefined();
-        const error = expectRespondError(respond, { code: ErrorCodes.UNAVAILABLE });
-        expectStringFieldContains(error, "message", "run was not started");
+        expectRespondError(respond, {
+          code: ErrorCodes.UNAVAILABLE,
+          message:
+            "plugin subagent registry persistence failed; run was not started | disk full | SQLITE_FULL",
+        });
         expect(context.logGateway.warn).toHaveBeenCalledWith(
           expect.stringContaining("rejecting untracked dispatch"),
         );
@@ -636,8 +640,11 @@ describe("gateway agent handler", () => {
           pauseReason: "sessions_yield",
         });
         expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).not.toBe(adoptionRunId);
-        const adoptionError = expectRespondError(adoptionRespond, { code: ErrorCodes.UNAVAILABLE });
-        expectStringFieldContains(adoptionError, "message", "run was not started");
+        expectRespondError(adoptionRespond, {
+          code: ErrorCodes.UNAVAILABLE,
+          message:
+            "plugin subagent registry persistence failed; run was not started | disk full during paused-run adoption",
+        });
 
         resetSubagentRegistryForTests({ persist: false });
         const retryRunId = "plugin-subagent-registry-retry";
@@ -2546,7 +2553,7 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("preserves selected-global agent id on cached accepted responses", async () => {
+  it("preserves accepted session and runtime metadata on cached responses", async () => {
     const context = makeContext();
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.loadConfigReturn = {
@@ -2562,6 +2569,11 @@ describe("gateway agent handler", () => {
         sessionKey: "global",
         agentId: "work",
         status: "accepted",
+        runtime: {
+          harness: "claude-cli",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        },
       },
     });
     const respond = vi.fn();
@@ -2581,6 +2593,11 @@ describe("gateway agent handler", () => {
       sessionKey: "global",
       agentId: "work",
       status: "in_flight",
+      runtime: {
+        harness: "claude-cli",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
     });
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });

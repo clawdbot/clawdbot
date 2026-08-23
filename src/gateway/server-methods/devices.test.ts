@@ -51,15 +51,30 @@ vi.mock("../../infra/device-pairing.js", async () => {
   );
   return {
     ...actual,
-    approveDevicePairing: approveDevicePairingMock,
     getPairedDevice: getPairedDeviceMock,
     getPendingDevicePairing: getPendingDevicePairingMock,
     listDevicePairing: listDevicePairingMock,
     removePairedDevice: removePairedDeviceMock,
     rejectDevicePairing: rejectDevicePairingMock,
+    updatePairedDeviceMetadata: updatePairedDeviceMetadataMock,
+  };
+});
+
+vi.mock("../../infra/device-pairing-approval.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/device-pairing-approval.js")>(
+    "../../infra/device-pairing-approval.js",
+  );
+  return { ...actual, approveDevicePairing: approveDevicePairingMock };
+});
+
+vi.mock("../../infra/device-pairing-tokens.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/device-pairing-tokens.js")>(
+    "../../infra/device-pairing-tokens.js",
+  );
+  return {
+    ...actual,
     revokeDeviceToken: revokeDeviceTokenMock,
     rotateDeviceToken: rotateDeviceTokenMock,
-    updatePairedDeviceMetadata: updatePairedDeviceMetadataMock,
   };
 });
 
@@ -1642,6 +1657,11 @@ describe("deviceHandlers", () => {
     expect(opts.context.logGateway.info).toHaveBeenCalledWith(
       "device pairing renamed device=device-1 label=Kitchen Mac",
     );
+    expect(opts.context.broadcast).toHaveBeenCalledWith(
+      "device.pair.changed",
+      {},
+      { dropIfSlow: true },
+    );
   });
 
   it("rejects renaming another device from a non-admin device session", async () => {
@@ -1675,6 +1695,7 @@ describe("deviceHandlers", () => {
     expect(updatePairedDeviceMetadataMock).toHaveBeenCalledWith("missing-device", {
       operatorLabel: "Ghost",
     });
+    expect(opts.context.broadcast).not.toHaveBeenCalled();
     expectRespondedErrorMessage(opts, "unknown deviceId");
   });
 

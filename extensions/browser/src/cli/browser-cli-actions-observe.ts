@@ -13,6 +13,18 @@ import {
 } from "./browser-cli-shared.js";
 import { defaultRuntime, shortenHomePath } from "./core-api.js";
 
+const BROWSER_CONSOLE_LEVELS = ["error", "warn", "info"] as const;
+
+function parseBrowserConsoleLevel(value: string): (typeof BROWSER_CONSOLE_LEVELS)[number] {
+  const level = BROWSER_CONSOLE_LEVELS.find((candidate) => candidate === value);
+  if (!level) {
+    throw new Error(
+      `--level must be ${BROWSER_CONSOLE_LEVELS.slice(0, -1).join(", ")}, or ${BROWSER_CONSOLE_LEVELS.at(-1)}.`,
+    );
+  }
+  return level;
+}
+
 /** Registers Browser commands that observe current page state without direct input. */
 export function registerBrowserActionObserveCommands(
   browser: Command,
@@ -21,7 +33,11 @@ export function registerBrowserActionObserveCommands(
   browser
     .command("console")
     .description("Get recent console messages")
-    .option("--level <level>", "Filter by level (error, warn, info)")
+    .option(
+      "--level <level>",
+      `Filter by level (${BROWSER_CONSOLE_LEVELS.join(", ")})`,
+      parseBrowserConsoleLevel,
+    )
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);

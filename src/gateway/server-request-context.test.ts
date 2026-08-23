@@ -49,6 +49,7 @@ function makeContextParams(
     deps: {} as never,
     runtimeState,
     getRuntimeConfig: vi.fn(() => config),
+    getGatewayMethodRegistry: vi.fn(() => ({}) as never),
     sessionCompanion: {} as never,
     sessionObserver: {} as never,
     resolveTerminalLaunchPolicy: vi.fn(() => ({
@@ -86,6 +87,7 @@ function makeContextParams(
     nodeUnsubscribeAll: vi.fn(),
     hasConnectedTalkNode: vi.fn(async () => false),
     clients: new Set(),
+    isConnectionActive: vi.fn(() => false),
     enforceSharedGatewayAuthGenerationForConfigWrite: vi.fn(),
     nodeRegistry: { invalidateConnectionForPairingChange: vi.fn() } as never,
     agentRunSeq: new Map(),
@@ -118,6 +120,10 @@ function makeContextParams(
     getConfigReloaderHotReloadStatus: vi.fn(() => undefined),
     unavailableGatewayMethods: new Set(),
     ...overrides,
+    configRevisionProjector: overrides.configRevisionProjector ?? {
+      projectRawHash: (hash) => hash,
+      projectResolvedHash: (hash) => hash,
+    },
   };
 }
 
@@ -151,6 +157,16 @@ function makeGatewayClient(params: {
 }
 
 describe("createGatewayRequestContext", () => {
+  it("reuses the canonical connection liveness predicate", () => {
+    const isConnectionActive = vi.fn(() => true);
+    const params = makeContextParams();
+    Object.assign(params, { isConnectionActive });
+
+    const context = createGatewayRequestContext(params);
+
+    expect(context.isConnectionActive).toBe(isConnectionActive);
+  });
+
   it("cleans connection-scoped replace-sets with the other session subscriptions", () => {
     const unsubscribeAllSessionEvents = vi.fn();
     const unsubscribePullRequests = vi.fn();

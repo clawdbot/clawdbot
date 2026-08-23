@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import * as support from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
 
@@ -65,6 +66,35 @@ describe("worker environment service", () => {
     });
     expect(support.testState.prepareInstallation).toHaveBeenCalledWith("bundle");
     expect(support.testState.bootstrapWorker).toHaveBeenCalledTimes(1);
+  });
+
+  it("destroys a persisted SSH lease after its provider becomes worker-turn-only", async () => {
+    const environmentId = "worker-stale-ssh-transport";
+    support.seedBootstrapping(environmentId);
+    const inspect = vi.fn(async () => ({ status: "active" as const }));
+    const destroy = vi.fn(async () => {});
+    const workerService = support.createService(
+      support.createProvider({
+        supportedExecutionModes: ["worker-turn"],
+        inspect,
+        destroy,
+      }),
+    );
+
+    await workerService.reconcileOnce();
+
+    expect(inspect).not.toHaveBeenCalled();
+    expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
+    expect(destroy).toHaveBeenCalledWith({
+      leaseId: `lease:${environmentId}`,
+      profile: { region: "test" },
+    });
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      sshEndpoint: null,
+      lastError: "worker-turn providers must return a node lease",
+    });
   });
 
   it("reconciles one exact environment without sweeping its siblings", async () => {
@@ -164,16 +194,17 @@ describe("worker environment service", () => {
       profile: { region: "test" },
     });
     expect(support.testState.store.get(environmentId)).toMatchObject({
-      state: "destroyed",
-      leaseId: `lease:${environmentId}`,
+      state: "failed",
+      leaseId: null,
       attachedSessionIds: [],
-      lastError: null,
+      lastError: STALE_WORKER_BUILD_REASON,
     });
   });
 
   it("retires a node environment whose installed Gateway bundle is stale", async () => {
     const destroy = vi.fn(async () => {});
     const provider = support.createProvider({
+      supportedExecutionModes: ["worker-turn"],
       provisionBeforeInstallation: true,
       provision: async () => ({
         leaseId: "device-lease-stale",
@@ -187,6 +218,11 @@ describe("worker environment service", () => {
       ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
     });
     const environment = await workerService.create("development", "request-stale-node-bundle");
+    await workerService.attachSession({
+      environmentId: environment.environmentId,
+      ownerEpoch: environment.ownerEpoch,
+      sessionId: "session-stale-node-bundle",
+    });
     support.testState.stateDb.db
       .prepare(
         "UPDATE worker_environments SET bootstrap_bundle_hash = ?, bootstrap_install_kind = 'local' WHERE environment_id = ?",
@@ -197,8 +233,10 @@ describe("worker environment service", () => {
 
     expect(destroy).toHaveBeenCalledOnce();
     expect(support.testState.store.get(environment.environmentId)).toMatchObject({
-      state: "destroyed",
+      state: "failed",
+      leaseId: null,
       attachedSessionIds: [],
+      lastError: STALE_WORKER_BUILD_REASON,
     });
   });
 

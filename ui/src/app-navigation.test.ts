@@ -2,7 +2,6 @@
 // Control UI tests cover navigation behavior.
 import { describe, expect, it } from "vitest";
 import {
-  SETTINGS_NAVIGATION_GROUPS,
   SIDEBAR_NAV_ROUTES,
   formatDocumentTitle,
   isPluginsHubRoute,
@@ -10,6 +9,7 @@ import {
   settingsSearchTextMatches,
   subtitleForRoute,
   titleForRoute,
+  visibleSettingsNavigationGroups,
 } from "./app-navigation.ts";
 import {
   inferBasePathFromPathname,
@@ -24,14 +24,15 @@ import { sessionNavigationTarget } from "./lib/sessions/route-navigation.ts";
 import { pluginTabKey, pluginTabRefFromSearch, pluginTabSearch } from "./pages/plugin/route.ts";
 
 /**
- * All route identifiers derived from sidebar nav routes plus routed settings
- * slices and the Plugins hub tabs, which route without their own sidebar item.
+ * All route identifiers derived from core sidebar routes, plugin-owned native
+ * routes, routed settings slices, and hub tabs without their own sidebar item.
  */
 const ALL_ROUTES: RouteId[] = Array.from(
   new Set<RouteId>([
     "chat",
     "custodian",
     ...SIDEBAR_NAV_ROUTES,
+    "workboard",
     "skills",
     "skill-workshop",
     // Hub tabs and settings subpages route without their own nav entry.
@@ -40,7 +41,7 @@ const ALL_ROUTES: RouteId[] = Array.from(
     "ai-agents",
     "model-setup",
     "lobsterdex",
-    ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
+    ...visibleSettingsNavigationGroups(true).flatMap((group) => group.routes),
   ]),
 );
 
@@ -110,6 +111,7 @@ describe("navigationIconForRoute", () => {
       plugins: "puzzle",
       "skill-workshop": "wrench",
       devices: "monitorSmartphone",
+      "cloud-workers": "server",
       profile: "circleUser",
       communications: "send",
       appearance: "palette",
@@ -233,6 +235,7 @@ describe("titleForRoute", () => {
       plugins: "Plugins",
       "skill-workshop": "Skill Workshop",
       devices: "Devices",
+      "cloud-workers": "Cloud workers",
       profile: "Profile",
       communications: "Communications",
       appearance: "Appearance",
@@ -266,7 +269,7 @@ describe("subtitleForRoute", () => {
     ).toEqual({
       chat: "Gateway chat for quick interventions.",
       custodian: "System setup and care.",
-      activity: "Browser-local tool activity summaries.",
+      activity: "Recent sessions across people using this gateway.",
       apps: "Companion apps for phone, watch, desktop, and browser.",
       portals: "Live previews from agent-run applications.",
       approvals: "Recent exec, plugin, and system-agent approvals.",
@@ -284,6 +287,7 @@ describe("subtitleForRoute", () => {
       plugins: "Install and manage optional capabilities.",
       "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
       devices: "Paired devices, pairing approvals, and exec bindings.",
+      "cloud-workers": "Profiles and machine sizes for cloud sessions.",
       profile: "Your display name, avatar, and identity on this gateway.",
       communications: "Messages and text-to-speech settings.",
       appearance: "Theme, UI, and setup wizard settings.",
@@ -302,7 +306,8 @@ describe("subtitleForRoute", () => {
       "memory-import": "Bring Codex and Claude Code memory into an agent workspace.",
       notifications: "Browser push notifications from your gateway.",
       security: "Gateway auth, exec policy, tool profile, and approvals.",
-      secrets: "Secret values are hidden after saving. Env var values stay visible here.",
+      secrets:
+        "Choose protected, write-only secrets or intentionally agent-readable Gateway environment values.",
       advanced: "Every remaining config section, plus the raw file editor.",
       debug: "Snapshots, events, RPC.",
       logs: "Live gateway logs.",
@@ -322,6 +327,7 @@ describe("pathForRoute", () => {
     expect(pathForRoute("plugins")).toBe("/settings/plugins");
     expect(pathForRoute("approvals")).toBe("/settings/approvals");
     expect(pathForRoute("labs")).toBe("/settings/labs");
+    expect(pathForRoute("cloud-workers")).toBe("/settings/cloud-workers");
   });
 
   it("prepends base path", () => {
@@ -488,6 +494,9 @@ describe("inferBasePathFromPathname", () => {
     // Real mount directories that merely contain a route-suffix keep working.
     expect(inferBasePathFromPathname("/ui/config")).toBe("/ui");
     expect(inferBasePathFromPathname("/ui/settings/appearance")).toBe("/ui");
+    expect(inferBasePathFromPathname("/focus/terminal")).toBe("");
+    expect(inferBasePathFromPathname("/openclaw/focus/dashboard/main")).toBe("/openclaw");
+    expect(inferBasePathFromPathname("/company/focus/focus/terminal")).toBe("/company/focus");
   });
 });
 
@@ -511,7 +520,6 @@ describe("plugin tabs route", () => {
 describe("SIDEBAR_NAV_ROUTES", () => {
   it("keeps the canonical sidebar route order", () => {
     expect(SIDEBAR_NAV_ROUTES).toEqual([
-      "workboard",
       "dashboards",
       "usage",
       "cron",
@@ -532,7 +540,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
   });
 
   it("keeps the canonical settings navigation order", () => {
-    const settingsRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
+    const settingsRoutes = visibleSettingsNavigationGroups(true).flatMap((group) => group.routes);
     expect(settingsRoutes).toEqual([
       "custodian",
       "profile",
@@ -543,6 +551,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "communications",
       "talk",
       "devices",
+      "cloud-workers",
       "agents",
       "labs",
       "model-providers",
@@ -562,10 +571,11 @@ describe("SIDEBAR_NAV_ROUTES", () => {
   });
 
   it("keeps personal settings first and labels remaining groups", () => {
-    const [firstGroup] = SETTINGS_NAVIGATION_GROUPS;
+    const settingsGroups = visibleSettingsNavigationGroups(true);
+    const [firstGroup] = settingsGroups;
     expect(firstGroup?.labelKey).toBeNull();
     expect(firstGroup?.routes).toEqual(["custodian", "profile", "appearance", "notifications"]);
-    for (const group of SETTINGS_NAVIGATION_GROUPS.slice(1)) {
+    for (const group of settingsGroups.slice(1)) {
       expect(group.labelKey).toBeTruthy();
     }
   });

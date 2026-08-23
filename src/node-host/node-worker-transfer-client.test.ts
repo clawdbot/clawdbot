@@ -198,9 +198,10 @@ describe("node worker transfer client", () => {
     const rawManifest = serializeWorkerWorkspaceManifest({
       version: 1,
       baseCommit: null,
+      directories: ["nested"],
       entries: [
         {
-          path: "result.txt",
+          path: "nested/result.txt",
           type: "file",
           mode: 0o644,
           size: body.byteLength,
@@ -272,6 +273,9 @@ describe("node worker transfer client", () => {
           transfer: { direction: "download", token: "test-token", manifestRef },
         }),
       ).resolves.toBe(manifestRef);
+      await expect(
+        fs.readFile(path.join(workspaceDir, "nested", "result.txt"), "utf8"),
+      ).resolves.toBe("pinned transfer\n");
       expect(requestCount).toBe(2);
       expect(connectionCount).toBe(1);
       expect(hidPeerCertificate).toBe(true);
@@ -392,7 +396,7 @@ describe("node worker transfer client", () => {
       },
     );
     const gatewayUrl = (await listen(target)).replace(/^ws/u, "wss");
-    const proxySockets = new Set<Duplex>();
+    const proxyTunnels = new Set<{ client: Duplex; upstream: Duplex }>();
     let connectCount = 0;
     const proxy = createHttpServer();
     proxy.on("connect", (req, clientSocket, head) => {
@@ -406,10 +410,19 @@ describe("node worker transfer client", () => {
         upstream.pipe(clientSocket);
         clientSocket.pipe(upstream);
       });
-      proxySockets.add(clientSocket);
-      proxySockets.add(upstream);
-      clientSocket.once("close", () => proxySockets.delete(clientSocket));
-      upstream.once("close", () => proxySockets.delete(upstream));
+      const tunnel = { client: clientSocket, upstream };
+      proxyTunnels.add(tunnel);
+      // A CONNECT tunnel owns both socket halves. Once either half closes or
+      // errors, retire the pair so teardown cannot reset an unowned peer.
+      const closeTunnel = () => {
+        proxyTunnels.delete(tunnel);
+        clientSocket.destroy();
+        upstream.destroy();
+      };
+      clientSocket.once("close", closeTunnel);
+      clientSocket.once("error", closeTunnel);
+      upstream.once("close", closeTunnel);
+      upstream.once("error", closeTunnel);
     });
     const proxyUrl = (await listen(proxy)).replace(/^ws/u, "http");
     const proxyHandle = installGlobalProxy({ mode: "managed", proxyUrl });
@@ -427,10 +440,24 @@ describe("node worker transfer client", () => {
       ).resolves.toBe(manifestRef);
       expect(connectCount).toBe(1);
     } finally {
+      const tunnelClosures = [...proxyTunnels].flatMap((tunnel) =>
+        [tunnel.client, tunnel.upstream].map(
+          (socket) =>
+            new Promise<void>((resolve) => {
+              if (socket.destroyed) {
+                resolve();
+                return;
+              }
+              socket.once("close", resolve);
+            }),
+        ),
+      );
       proxyHandle.stop();
-      for (const socket of proxySockets) {
-        socket.destroy();
+      for (const tunnel of proxyTunnels) {
+        tunnel.client.destroy();
+        tunnel.upstream.destroy();
       }
+      await Promise.all(tunnelClosures);
       proxy.closeAllConnections();
       target.closeAllConnections();
       await Promise.all([
@@ -598,7 +625,23 @@ describe("node worker transfer client", () => {
     }
   });
 
-  it("materializes a Git workspace with argv-only commands", async () => {
+  it.each([
+    {
+      description: "reuses Git-base tracked files without requesting unavailable blobs",
+      changed: false,
+      replaceSymlinkAncestor: false,
+    },
+    {
+      description: "downloads changed and nested files without restoring deleted Git-base paths",
+      changed: true,
+      replaceSymlinkAncestor: false,
+    },
+    {
+      description: "replaces a Git-base symlink ancestor without changing files outside staging",
+      changed: false,
+      replaceSymlinkAncestor: true,
+    },
+  ])("$description", async ({ changed, replaceSymlinkAncestor }) => {
     transferDebug.mockClear();
     const root = tempDirs.make("node-worker-transfer-git-");
     const source = path.join(root, "source");
@@ -606,9 +649,32 @@ describe("node worker transfer client", () => {
     await fs.mkdir(source);
     await git(source, ["init", "--quiet", "--object-format=sha1"]);
     await fs.writeFile(path.join(source, "tracked.txt"), "tracked from gateway\n");
-    await git(source, ["add", "tracked.txt"]);
+    await fs.writeFile(path.join(source, "script.sh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    await fs.writeFile(path.join(source, "deleted.txt"), "deleted after commit\n");
+    await fs.symlink("tracked.txt", path.join(source, "tracked-link"));
+    const outsideSentinel = path.join(root, "outside", "file.txt");
+    if (replaceSymlinkAncestor) {
+      await fs.mkdir(path.dirname(outsideSentinel));
+      await fs.writeFile(outsideSentinel, "outside must stay unchanged\n");
+      await fs.symlink("../outside", path.join(source, "nested"));
+    }
+    await git(source, ["add", "."]);
     await git(source, ["commit", "--quiet", "-m", "base"]);
     const commit = await git(source, ["rev-parse", "HEAD"]);
+    if (changed) {
+      await fs.writeFile(path.join(source, "tracked.txt"), "changed on gateway\n");
+      await fs.chmod(path.join(source, "tracked.txt"), 0o755);
+      await fs.unlink(path.join(source, "tracked-link"));
+      await fs.symlink("script.sh", path.join(source, "tracked-link"));
+      await fs.unlink(path.join(source, "deleted.txt"));
+      await fs.mkdir(path.join(source, "nested"));
+      await fs.writeFile(path.join(source, "nested", "file.txt"), "new nested content\n");
+    }
+    if (replaceSymlinkAncestor) {
+      await fs.unlink(path.join(source, "nested"));
+      await fs.mkdir(path.join(source, "nested"));
+      await fs.writeFile(path.join(source, "nested", "file.txt"), "safe nested content\n");
+    }
     const snapshot = await readActualWorkspaceManifest({ root: source, baseCommit: commit });
     const rawManifest = serializeWorkerWorkspaceManifest(snapshot.manifest);
     const packed = await runCommandBuffered(
@@ -617,11 +683,24 @@ describe("node worker transfer client", () => {
     );
     expect(packed.termination, packed.stderr.toString("utf8")).toBe("exit");
     expect(packed.code).toBe(0);
+    const tracked = snapshot.manifest.entries.find(
+      (entry) => entry.type === "file" && entry.path === "tracked.txt",
+    );
+    if (tracked?.type !== "file") {
+      throw new Error("test Git workspace has no tracked file");
+    }
+    const downloadablePaths = new Set([
+      ...(changed ? ["nested/file.txt", "tracked.txt"] : []),
+      ...(replaceSymlinkAncestor ? ["nested/file.txt"] : []),
+    ]);
     const filesByHash = new Map(
       snapshot.manifest.entries.flatMap((entry) =>
-        entry.type === "file" ? [[entry.sha256, path.join(source, entry.path)] as const] : [],
+        entry.type === "file" && downloadablePaths.has(entry.path)
+          ? [[entry.sha256, path.join(source, entry.path)] as const]
+          : [],
       ),
     );
+    const requestedBlobs: string[] = [];
     const server = createHttpServer((req, res) => {
       void (async () => {
         if (req.url?.endsWith("/manifest")) {
@@ -635,12 +714,15 @@ describe("node worker transfer client", () => {
           return;
         }
         const sha256 = req.url?.match(/\/blobs\/([a-f0-9]{64})$/u)?.[1];
-        const file = sha256 ? filesByHash.get(sha256) : undefined;
-        if (file) {
-          const body = await fs.readFile(file);
-          res.writeHead(200, { "content-length": String(body.byteLength) });
-          res.end(body);
-          return;
+        if (sha256) {
+          requestedBlobs.push(sha256);
+          const file = filesByHash.get(sha256);
+          if (file) {
+            const body = await fs.readFile(file);
+            res.writeHead(200, { "content-length": String(body.byteLength) });
+            res.end(body);
+            return;
+          }
         }
         res.writeHead(404).end();
       })().catch((error: unknown) => {
@@ -663,10 +745,33 @@ describe("node worker transfer client", () => {
         }),
       ).resolves.toBe(snapshot.manifestRef);
       await expect(fs.readFile(path.join(workspaceDir, "tracked.txt"), "utf8")).resolves.toBe(
-        "tracked from gateway\n",
+        changed ? "changed on gateway\n" : "tracked from gateway\n",
       );
+      if (process.platform !== "win32") {
+        expect((await fs.stat(path.join(workspaceDir, "tracked.txt"))).mode & 0o777).toBe(
+          changed ? 0o755 : 0o644,
+        );
+        expect((await fs.stat(path.join(workspaceDir, "script.sh"))).mode & 0o777).toBe(0o755);
+      }
+      await expect(fs.readlink(path.join(workspaceDir, "tracked-link"))).resolves.toBe(
+        changed ? "script.sh" : "tracked.txt",
+      );
+      expect(requestedBlobs).toEqual([...filesByHash.keys()]);
       await expect(git(workspaceDir, ["rev-parse", "HEAD"])).resolves.toBe(commit);
-      await expect(git(workspaceDir, ["status", "--porcelain=v1"])).resolves.toBe("");
+      if (changed) {
+        await expect(fs.access(path.join(workspaceDir, "deleted.txt"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }
+      if (changed || replaceSymlinkAncestor) {
+        expect((await fs.lstat(path.join(workspaceDir, "nested"))).isDirectory()).toBe(true);
+        await expect(
+          fs.readFile(path.join(workspaceDir, "nested", "file.txt"), "utf8"),
+        ).resolves.toBe(changed ? "new nested content\n" : "safe nested content\n");
+      }
+      if (!changed && !replaceSymlinkAncestor) {
+        await expect(git(workspaceDir, ["status", "--porcelain=v1"])).resolves.toBe("");
+      }
       expect(transferDebug).toHaveBeenCalledWith(
         "node worker workspace transfer completed",
         expect.objectContaining({
@@ -683,6 +788,11 @@ describe("node worker transfer client", () => {
       await new Promise<void>((resolve) => {
         server.close(() => resolve());
       });
+      if (replaceSymlinkAncestor) {
+        await expect(fs.readFile(outsideSentinel, "utf8")).resolves.toBe(
+          "outside must stay unchanged\n",
+        );
+      }
     }
   });
 });

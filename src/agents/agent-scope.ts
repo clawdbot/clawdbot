@@ -1,17 +1,16 @@
 /** Higher-level agent scope helpers for model selection, fallbacks, skills, and workspaces. */
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentModelFallbackValues } from "../config/model-input.js";
-import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
-import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
-import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
-export { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import {
   lowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentModelFallbackValues } from "../config/model-input.js";
+import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
+import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
@@ -35,10 +34,12 @@ import {
   resolveDefaultAgentId,
   tryResolveLegacyCompatibilityAgentId,
 } from "./agent-scope-config.js";
+export { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 export {
   listAgentEntries,
   listAgentEntriesWithSource,
   listAgentIds,
+  resolveConfiguredAgentId,
   resolveMutableAgentEntry,
   toAgentEntriesRecord,
   resolveAgentConfig,
@@ -48,9 +49,10 @@ export {
   resolveAgentWorkspaceDir,
   tryResolveConfiguredAgentWorkspaceDir,
   resolveDefaultAgentId,
+  resolveAmbientOwnerAgentId,
   resolveSoleAgentId,
+  tryResolveAmbientOwnerAgentId,
   tryResolveLegacyCompatibilityAgentId,
-  tryResolveSystemAgentTargetAgentId,
   tryResolveSoleAgentId,
   tryResolveDefaultAgentId,
   AgentSelectionRequiredError,
