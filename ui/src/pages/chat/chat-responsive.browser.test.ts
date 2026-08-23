@@ -324,6 +324,17 @@ function runBlockSpacingHtml() {
           </div>
           <div class="chat-group-footer"><span class="chat-sender-name">You</span></div>
         </div>
+        <div class="chat-group user chat-group--with-footer" data-persistent-turn>
+          <div class="chat-group-messages">
+            <div class="chat-bubble"><div class="chat-text">Persistent identity turn</div></div>
+          </div>
+          <div class="chat-group-footer chat-group-footer--persistent-identity">
+            <span class="chat-sender-name">You</span>
+            <div class="chat-group-footer-actions">
+              <button class="chat-copy-btn" type="button" aria-label="Copy">${iconSvg()}</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -1372,6 +1383,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             ".chat-work-group__separator",
           ),
           turn: gap('[data-run-block="work"]', "[data-next-turn] .chat-bubble"),
+          persistentTurn: gap(
+            "[data-next-turn] .chat-bubble",
+            "[data-persistent-turn] .chat-bubble",
+          ),
         };
       });
 
@@ -1383,6 +1398,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expandedTextToTool: 6,
         workedForSeparator: 0,
         turn: 50,
+        persistentTurn: 50,
       });
     } finally {
       await closeBrowserPage(page);

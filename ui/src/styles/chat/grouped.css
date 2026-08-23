@@ -773,7 +773,9 @@ img.chat-avatar.chat-avatar--logo {
     margin-bottom: var(--chat-touch-row-margin);
   }
 
-  .chat-group.chat-group--with-footer:has(.chat-group-footer-actions) {
+  .chat-group.chat-group--with-footer:has(
+    .chat-group-footer:not(.chat-group-footer--persistent-identity) .chat-group-footer-actions
+  ) {
     padding-bottom: 0;
     margin-bottom: 0;
   }
