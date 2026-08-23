@@ -1148,7 +1148,7 @@ jobs:
             --scenario-label telegram-desktop-proof
           trusted_manifest="${manifest}.trusted"
           sudo jq --slurpfile judgment "$judgment" '
-            .summary = $judgment[0].summary |
+            .summary = (if .comparison.outcome == "pass" then $judgment[0].summary else .summary end) |
             .comparison.baseline.expected = $judgment[0].baselineExpected |
             .comparison.candidate.expected = $judgment[0].candidateExpected
           ' "$manifest" | sudo tee "$trusted_manifest" >/dev/null

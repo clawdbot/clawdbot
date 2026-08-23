@@ -779,7 +779,7 @@ describe("terminal resolution", () => {
     expect(resolved.result.payloads).toEqual([{ text: "Chart attached" }]);
   });
 
-  it("still reports an incomplete turn when the output budget ends with no text", async () => {
+  it("still reports an incomplete turn when auth failure bookkeeping rejects", async () => {
     const assistant = emptyAssistant({ stopReason: "length" });
     const attempt = makeEmbeddedRunnerAttempt({
       assistantTexts: [],
@@ -787,8 +787,17 @@ describe("terminal resolution", () => {
       currentAttemptAssistant: assistant,
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
+    const maybeMarkAuthProfileFailure = vi.fn(async () => {
+      throw new Error("injected auth store write failure");
+    });
     const resolved = await resolveEmbeddedRunTerminal(
-      makeTerminalInput({ attempt, attemptAssistant: assistant }),
+      makeTerminalInput({
+        attempt,
+        attemptAssistant: assistant,
+        authProfileId: "openai:default",
+        assistantProfileFailureReason: "unknown",
+        maybeMarkAuthProfileFailure,
+      }),
     );
 
     expect(resolved.action).toBe("complete");
@@ -798,5 +807,10 @@ describe("terminal resolution", () => {
     expect(resolved.result.payloads?.[0]).toMatchObject({ isError: true });
     expect(resolved.result.meta.error?.kind).toBe("incomplete_turn");
     expect(resolved.result.meta.livenessState).toBe("abandoned");
+    expect(maybeMarkAuthProfileFailure).toHaveBeenCalledWith({
+      profileId: "openai:default",
+      reason: "unknown",
+      modelId: "gpt-5.6-luna",
+    });
   });
 });

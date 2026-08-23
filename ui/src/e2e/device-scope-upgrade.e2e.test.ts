@@ -384,6 +384,7 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       .toBe(true);
     const browse = page.getByRole("button", { name: "Browse folders" });
     await expect.poll(() => browse.isDisabled()).toBe(true);
+    await page.keyboard.press("Tab");
     await browse.focus();
     await expect
       .poll(() => browse.evaluate((element) => element === document.activeElement))
