@@ -248,6 +248,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     fixture.onDeliveredSourceReply();
     expect(result.hasDeliveredSourceReply()).toBe(true);
     expect(result.getCodeModeReconciliationCandidate()).toBe(false);
+    result.setCodeModeReconciliationReadAuthorized(true);
     fixture.markCodeModeReconciliationCandidate();
     expect(result.getCodeModeReconciliationCandidate()).toBe(true);
   });
@@ -261,14 +262,19 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(fixture.events).not.toContain("install-code-mode-repair");
   });
 
-  it("withholds reconciliation when the effective core tools exclude read", async () => {
-    const fixture = createInput({ coreReadAllowed: false });
+  it.each([
+    ["the effective core tools exclude read", false, true],
+    ["the final prompt policy removes read", true, false],
+  ])("withholds reconciliation when %s", async (_label, coreReadAllowed, finalReadAllowed) => {
+    const fixture = createInput({ coreReadAllowed });
 
     const result = await prepareEmbeddedAttemptAgentSession(fixture.input);
 
     expect(hoisted.installCodeModeRepairHook).toHaveBeenCalledWith({
       agent: fixture.activeSession.agent,
+      onReconciliationCandidate: expect.any(Function),
     });
+    result.setCodeModeReconciliationReadAuthorized(finalReadAllowed);
     fixture.markCodeModeReconciliationCandidate();
     expect(result.getCodeModeReconciliationCandidate()).toBe(false);
   });
