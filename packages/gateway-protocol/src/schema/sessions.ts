@@ -12,6 +12,17 @@ import { SessionOwnerSchema } from "./sessions-row.js";
 
 export { SessionsCreateParamsSchema };
 export { SessionsRecoverParamsSchema, SessionsRecoverResultSchema };
+export {
+  PreservedSessionWorktreeSchema,
+  SessionsDeleteParamsSchema,
+  SessionsDeleteResultSchema,
+  WorktreePreservationReasonSchema,
+  WORKTREE_PRESERVATION_REASONS,
+  type PreservedSessionWorktree,
+  type SessionsDeleteParams,
+  type SessionsDeleteResult,
+  type WorktreePreservationReason,
+} from "./sessions-delete.js";
 export { SessionsResolveParamsSchema, type SessionsResolveParams } from "./sessions-resolve.js";
 export {
   SESSIONS_PATCH_MANY_MAX_TARGETS,
@@ -550,25 +561,6 @@ export const SessionsResetParamsSchema = closedObject({
   reason: Type.Optional(Type.Union([Type.Literal("new"), Type.Literal("reset")])),
 });
 
-/** Deletes a session record and optionally its transcript. */
-export const SessionsDeleteParamsSchema = closedObject({
-  key: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
-  deleteTranscript: Type.Optional(Type.Boolean()),
-  // Internal compare-and-delete guard for lifecycle-owned cleanup.
-  expectedSessionId: Type.Optional(NonEmptyString),
-  expectedLifecycleRevision: Type.Optional(NonEmptyString),
-  expectedSessionUpdatedAt: Type.Optional(Type.Number({ minimum: 0 })),
-  // Internal control: when false, still unbind thread bindings but skip hook emission.
-  emitLifecycleHooks: Type.Optional(Type.Boolean()),
-  /**
-   * Restricts the delete to already-archived sessions (archive-then-delete).
-   * operator.write callers must set this; deletes without it require
-   * operator.admin.
-   */
-  archivedOnly: Type.Optional(Type.Boolean()),
-});
-
 /** Reassigns mutable session responsibility without changing provenance or sharing authority. */
 export const SessionsAssignOwnerParamsSchema = closedObject({
   key: NonEmptyString,
@@ -882,7 +874,6 @@ export type SessionsAbortParams = Static<typeof SessionsAbortParamsSchema>;
 export type SessionsPluginPatchParams = Static<typeof SessionsPluginPatchParamsSchema>;
 export type SessionsPluginPatchResult = Static<typeof SessionsPluginPatchResultSchema>;
 export type SessionsResetParams = Static<typeof SessionsResetParamsSchema>;
-export type SessionsDeleteParams = Static<typeof SessionsDeleteParamsSchema>;
 export type SessionsAssignOwnerParams = Static<typeof SessionsAssignOwnerParamsSchema>;
 export type SessionsAssignOwnerResult = Static<typeof SessionsAssignOwnerResultSchema>;
 export type SessionGroup = Static<typeof SessionGroupSchema>;

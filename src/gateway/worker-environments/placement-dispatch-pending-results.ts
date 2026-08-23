@@ -54,6 +54,8 @@ export type PlacementRecoveryDeps = {
     agentId: string;
   }) => Promise<WorkerWorkspaceResultConflict | undefined>;
   recoverPlacementMoves?: () => Promise<Set<string>>;
+  prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
+  publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 };
 
 function pendingWorkerLossError(
@@ -79,6 +81,15 @@ type WorkerOwnedPendingPlacement = Extract<
   WorkerDispatchPlacement,
   { state: "active" | "draining" }
 >;
+
+async function prepareAcceptedPublication(
+  deps: PlacementRecoveryDeps,
+  claim: WorkerSessionTurnClaim,
+): Promise<void> {
+  if (deps.prepareAcceptedWorkspacePublication) {
+    await deps.prepareAcceptedWorkspacePublication(claim).catch(() => undefined);
+  }
+}
 
 function completeRecoveredWorkspaceTeardown(params: {
   placements: WorkerDispatchPlacementStore;
@@ -244,6 +255,8 @@ export async function recoverPendingWorkspaceResults(
         ) {
           await environments.destroy(active.environmentId);
         }
+        await prepareAcceptedPublication(deps, turnClaim);
+        await deps.publishAcceptedWorkspace?.(turnClaim);
         completeRecoveredWorkspaceTeardown({ placements, placement: active, turnClaim });
         await environments
           .stopTunnel(active.environmentId, active.activeOwnerEpoch)
@@ -288,6 +301,7 @@ export async function recoverPendingWorkspaceResults(
           await reconciliation.verifyLocalStable();
           const conflictPaths = reconciliation.conflictPaths;
           if (pending.workspaceAcceptedAtMs === null) {
+            await prepareAcceptedPublication(deps, turnClaim);
             placements.acceptWorkspaceResult(turnClaim);
           }
           if (conflictPaths.length > 0 && isWorkerWorkspaceResultCleanupRef(ownedStagedResultRef)) {
@@ -313,6 +327,7 @@ export async function recoverPendingWorkspaceResults(
                 ...report,
               }),
           });
+          await deps.publishAcceptedWorkspace?.(turnClaim);
           await settleStagedWorkspaceResult({
             placements,
             turnClaim,
@@ -345,6 +360,8 @@ export async function recoverPendingWorkspaceResults(
           continue;
         }
         if (pending.workspaceAcceptedAtMs !== null && environment?.state === "destroyed") {
+          await prepareAcceptedPublication(deps, turnClaim);
+          await deps.publishAcceptedWorkspace?.(turnClaim);
           completeRecoveredWorkspaceTeardown({ placements, placement: active, turnClaim });
           continue;
         }
@@ -395,6 +412,7 @@ export async function recoverPendingWorkspaceResults(
             },
           });
           const applied = await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
+          await prepareAcceptedPublication(deps, turnClaim);
           placements.acceptWorkspaceResult(turnClaim);
           const recordedStagedResultRef = placements
             .listPendingWorkspaceResults()
@@ -423,6 +441,7 @@ export async function recoverPendingWorkspaceResults(
                 ...report,
               }),
           });
+          await deps.publishAcceptedWorkspace?.(turnClaim);
           await settleStagedWorkspaceResult({
             placements,
             turnClaim,

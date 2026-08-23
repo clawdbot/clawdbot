@@ -89,7 +89,7 @@ function compileSecretTargetRegistryState(registry: SecretTargetRegistryEntry[])
     (entry) => entry.configFile === "openclaw.json",
   );
   const authProfilesCompiledSecretTargets = compiledSecretTargetRegistry.filter(
-    (entry) => entry.configFile === "auth-profiles.json",
+    (entry) => entry.configFile === "auth-profile-store",
   );
   return {
     authProfilesCompiledSecretTargets,
@@ -144,7 +144,7 @@ function getCompiledCoreAuthProfileTargetState() {
     return compiledCoreAuthProfileTargetState;
   }
   const entries = getCoreSecretTargetRegistry()
-    .filter((entry) => entry.configFile === "auth-profiles.json")
+    .filter((entry) => entry.configFile === "auth-profile-store")
     .map(compileTargetRegistryEntry);
   compiledCoreAuthProfileTargetState = {
     entries,
@@ -582,7 +582,7 @@ export function discoverAuthProfileSecretTargets(
  */
 export function listAuthProfileSecretTargetEntries(): SecretTargetRegistryEntry[] {
   return getCoreSecretTargetRegistry().filter(
-    (entry) => entry.configFile === "auth-profiles.json" && entry.includeInAudit,
+    (entry) => entry.configFile === "auth-profile-store" && entry.includeInAudit,
   );
 }
 

@@ -120,7 +120,6 @@ function getContextNoticeViewModel(
   input: number | null;
   output: number | null;
   cost: number | null;
-  provider: string | null;
   detail: string;
   color: string;
   bg: string;
@@ -154,7 +153,6 @@ function getContextNoticeViewModel(
     input,
     output,
     cost,
-    provider: session?.modelProvider?.trim() || null,
   };
   if (!warning) {
     return {
@@ -350,7 +348,7 @@ export function renderContextNotice(
         )
       : undefined;
   };
-  const currentGroup = findQuotaGroup(model?.provider) ?? findQuotaGroup(providerCosts?.provider);
+  const currentGroup = findQuotaGroup(session?.modelProvider?.trim() || providerCosts?.provider);
   const planGroups = currentGroup
     ? [currentGroup, ...quotaGroups.filter((group) => group !== currentGroup)]
     : quotaGroups;

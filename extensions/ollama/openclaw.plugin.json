@@ -8,10 +8,7 @@
     "onStartup": true
   },
   "enabledByDefault": true,
-  "providers": [
-    "ollama",
-    "ollama-cloud"
-  ],
+  "providers": ["ollama", "ollama-cloud"],
   "providerCatalogEntry": "./provider-discovery.ts",
   "providerRequest": {
     "providers": {
@@ -33,25 +30,17 @@
       }
     }
   },
-  "syntheticAuthRefs": [
-    "ollama"
-  ],
-  "nonSecretAuthMarkers": [
-    "ollama-local"
-  ],
+  "syntheticAuthRefs": ["ollama"],
+  "nonSecretAuthMarkers": ["ollama-local"],
   "setup": {
     "providers": [
       {
         "id": "ollama",
-        "envVars": [
-          "OLLAMA_API_KEY"
-        ]
+        "envVars": ["OLLAMA_API_KEY"]
       },
       {
         "id": "ollama-cloud",
-        "envVars": [
-          "OLLAMA_API_KEY"
-        ]
+        "envVars": ["OLLAMA_API_KEY"]
       }
     ]
   },
@@ -97,19 +86,9 @@
         "models": [
           {
             "id": "kimi-k2.5",
-            "name": "kimi-k2.5",
             "status": "deprecated",
             "reasoning": true,
-            "input": [
-              "text",
-              "image"
-            ],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
+            "input": ["text", "image"],
             "contextWindow": 262144,
             "maxTokens": 8192,
             "compat": {
@@ -118,19 +97,128 @@
             }
           },
           {
-            "id": "minimax-m2.7",
-            "name": "minimax-m2.7",
+            "id": "kimi-k2.6",
             "reasoning": true,
-            "input": [
-              "text"
-            ],
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "kimi-k2.7-code",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "kimi-k3",
+            "reasoning": true,
+            "input": ["text", "image"],
             "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
+              "input": 3,
+              "output": 15,
+              "cacheRead": 0.3
             },
-            "contextWindow": 196608,
+            "contextWindow": 1048576,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable"
+            }
+          },
+          {
+            "id": "deepseek-v4-flash",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1048576,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable"
+            }
+          },
+          {
+            "id": "deepseek-v4-flash:0731",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1048576,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "deepseek-v4-flash:preview",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1048576,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "deepseek-v4-pro",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1048576,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable"
+            }
+          },
+          {
+            "id": "deepseek-v4-pro:0813",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1048576,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "deepseek-v4-pro:preview",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 524288,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "gemma4",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "gemma4:31b",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
             "maxTokens": 8192,
             "compat": {
               "supportsTools": true,
@@ -139,17 +227,8 @@
           },
           {
             "id": "glm-5.1",
-            "name": "glm-5.1",
             "reasoning": true,
-            "input": [
-              "text"
-            ],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
+            "input": ["text"],
             "contextWindow": 202752,
             "maxTokens": 8192,
             "compat": {
@@ -160,23 +239,124 @@
           },
           {
             "id": "glm-5.2",
-            "name": "glm-5.2",
             "reasoning": true,
-            "input": [
-              "text"
-            ],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
+            "input": ["text"],
             "contextWindow": 1000000,
             "maxTokens": 8192,
             "compat": {
               "supportsTools": true,
               "supportsUsageInStreaming": true,
               "codeMode": "capable"
+            }
+          },
+          {
+            "id": "gpt-oss:120b",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "gpt-oss:20b",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "minimax-m2.7",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 196608,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "minimax-m3",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 524288,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "mistral-large-3:675b",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "nemotron-3-nano:30b",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "nemotron-3-super",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "nemotron-3-ultra",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "qwen3.5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
+            }
+          },
+          {
+            "id": "qwen3.5:397b",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 8192,
+            "compat": {
+              "supportsTools": true,
+              "supportsUsageInStreaming": true
             }
           }
         ]
@@ -188,15 +368,9 @@
     }
   },
   "contracts": {
-    "embeddingProviders": [
-      "ollama"
-    ],
-    "tools": [
-      "node_inference"
-    ],
-    "webSearchProviders": [
-      "ollama"
-    ]
+    "embeddingProviders": ["ollama"],
+    "tools": ["node_inference"],
+    "webSearchProviders": ["ollama"]
   },
   "configSchema": {
     "type": "object",

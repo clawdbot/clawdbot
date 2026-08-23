@@ -902,8 +902,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, scenario());
         await page.goto(`${suite.server.baseUrl}chat`);
         await page.locator(".chat-group").first().waitFor();
-        await page.locator(".chat-side-panel-toggle").click();
-        await openFromEmpty(page, "Files");
+        await activateChatHeaderPanelAction(page, "Show session files");
         await openFromPlus(page, "Terminal");
         await openFromPlus(page, "Side chat");
         await selectTab(page, "Side chat");

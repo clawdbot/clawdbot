@@ -18,15 +18,10 @@ const runGatewayUpdateMock =
   vi.fn<typeof import("../../infra/update-runner.js").runGatewayUpdate>();
 const runGatewayUpdatePreflightMock =
   vi.fn<typeof import("../../infra/update-runner.js").runGatewayUpdatePreflight>();
-type UpdateInstallSurface = Awaited<
-  ReturnType<typeof import("../../infra/update-runner.js").resolveUpdateInstallSurface>
->;
-const resolveUpdateInstallSurfaceMock = vi.fn<() => Promise<UpdateInstallSurface>>(async () => ({
-  kind: "git",
-  mode: "git",
-  root: "/tmp/openclaw",
-  packageRoot: "/tmp/openclaw",
-}));
+const resolveUpdateInstallSurfaceMock =
+  vi.fn<typeof import("../../infra/update-runner.js").resolveUpdateInstallSurface>();
+const initializeGatewayUpdateStatusMock =
+  vi.fn<typeof import("../../infra/update-startup.js").initializeGatewayUpdateStatus>();
 const getLatestUpdateRestartSentinelMock = vi.fn<() => RestartSentinelPayload | null>(() => null);
 const refreshLatestUpdateRestartSentinelMock = vi.fn<() => Promise<RestartSentinelPayload | null>>(
   async () => null,
@@ -34,7 +29,6 @@ const refreshLatestUpdateRestartSentinelMock = vi.fn<() => Promise<RestartSentin
 const recordLatestUpdateRestartSentinelMock = vi.fn();
 const isRestartEnabledMock = vi.fn(() => true);
 const readPackageVersionMock = vi.fn(async () => "1.0.0");
-const checkUpdateStatusMock = vi.fn();
 const versionMock = vi.hoisted(() => ({ value: "1.0.0" }));
 const detectRespawnSupervisorMock = vi.fn<() => RespawnSupervisor | null>(() => null);
 const normalizeUpdateChannelMock = vi.fn((): UpdateChannel | null => null);
@@ -117,16 +111,6 @@ vi.mock("../../config/sessions.js", () => ({
   },
 }));
 
-vi.mock("../../infra/openclaw-root.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/openclaw-root.js")>(
-    "../../infra/openclaw-root.js",
-  );
-  return {
-    ...actual,
-    resolveOpenClawPackageRoot: async () => "/tmp/openclaw",
-  };
-});
-
 vi.mock("../../infra/restart-sentinel.js", async () => {
   const actual = await vi.importActual("../../infra/restart-sentinel.js");
   return {
@@ -154,10 +138,6 @@ vi.mock("../../infra/package-json.js", () => ({
   readPackageVersion: readPackageVersionMock,
 }));
 
-vi.mock("../../infra/update-check.js", () => ({
-  checkUpdateStatus: checkUpdateStatusMock,
-}));
-
 vi.mock("../../version.js", () => ({
   get VERSION() {
     return versionMock.value;
@@ -178,6 +158,7 @@ vi.mock("../../infra/update-channels.js", async () => {
 vi.mock("../../infra/update-startup.js", () => ({
   getUpdateAvailable: getUpdateAvailableMock,
   getUpdateSchedule: getUpdateScheduleMock,
+  initializeGatewayUpdateStatus: initializeGatewayUpdateStatusMock,
   refreshGatewayUpdateStatus: refreshGatewayUpdateStatusMock,
 }));
 
@@ -290,12 +271,19 @@ beforeEach(() => {
   });
   runGatewayUpdatePreflightMock.mockReset();
   runGatewayUpdatePreflightMock.mockResolvedValue(undefined);
-  resolveUpdateInstallSurfaceMock.mockClear();
-  resolveUpdateInstallSurfaceMock.mockResolvedValue({
-    kind: "git",
-    mode: "git",
+  resolveUpdateInstallSurfaceMock.mockReset();
+  resolveUpdateInstallSurfaceMock.mockImplementation(async ({ root, installKind }) =>
+    root && installKind === "git"
+      ? { kind: "git", mode: "git", root, packageRoot: root }
+      : root && installKind === "package"
+        ? { kind: "package-root", mode: "unknown", root, packageRoot: root }
+        : { kind: "missing", mode: "unknown" },
+  );
+  initializeGatewayUpdateStatusMock.mockReset();
+  initializeGatewayUpdateStatusMock.mockResolvedValue({
     root: "/tmp/openclaw",
-    packageRoot: "/tmp/openclaw",
+    status: { root: "/tmp/openclaw", installKind: "git", packageManager: "pnpm" },
+    installReceipt: null,
   });
   getLatestUpdateRestartSentinelMock.mockClear();
   refreshLatestUpdateRestartSentinelMock.mockClear();
@@ -378,6 +366,11 @@ async function withProcessEnv<T>(
 }
 
 function mockGlobalInstallSurface() {
+  initializeGatewayUpdateStatusMock.mockResolvedValueOnce({
+    root: "/tmp/openclaw-global",
+    status: { root: "/tmp/openclaw-global", installKind: "package", packageManager: "npm" },
+    installReceipt: null,
+  });
   resolveUpdateInstallSurfaceMock.mockResolvedValueOnce({
     kind: "global",
     mode: "npm",
@@ -387,11 +380,10 @@ function mockGlobalInstallSurface() {
 }
 
 function mockGitInstallSurface(root: string) {
-  resolveUpdateInstallSurfaceMock.mockResolvedValueOnce({
-    kind: "git",
-    mode: "git",
+  initializeGatewayUpdateStatusMock.mockResolvedValueOnce({
     root,
-    packageRoot: root,
+    status: { root, installKind: "git", packageManager: "pnpm" },
+    installReceipt: null,
   });
 }
 

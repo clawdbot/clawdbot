@@ -59,7 +59,10 @@ export async function launchTuiCli(opts: TuiOptions): Promise<void> {
     });
     const { detach } = attachChildProcessBridge(child);
 
-    child.once("error", (error) => {
+    child.on("error", (error) => {
+      if (child.pid !== undefined) {
+        return;
+      }
       detach();
       reject(new Error(`failed to launch TUI: ${formatErrorMessage(error)}`));
     });

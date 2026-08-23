@@ -194,7 +194,7 @@ function makeDeviceRequiredShortCircuitResult(url: string): GatewayProbeResult {
   };
 }
 
-function resolveProbeAuthSummary(params: {
+export function resolveProbeAuthSummary(params: {
   role?: string | null;
   scopes?: string[];
   authMetadataPresent?: boolean;

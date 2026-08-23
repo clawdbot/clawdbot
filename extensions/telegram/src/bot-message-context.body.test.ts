@@ -147,6 +147,7 @@ async function resolveBody(overrides: Partial<BodyParams> = {}) {
     chatId,
     senderId: String(chatId),
     senderUsername: "",
+    threadSpec: { scope: "none" },
     effectiveGroupAllow: normalizeAllowFrom([]),
     effectiveDmAllow: normalizeAllowFrom([]),
     requireMention: false,

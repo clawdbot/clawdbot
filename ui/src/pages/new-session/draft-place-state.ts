@@ -165,25 +165,34 @@ export class DraftPlaceState {
     return this.agents().find((agent) => normalizeAgentId(agent.id) === agentId);
   }
 
+  devicePlacementRequirement() {
+    return this.modelControl.resolveAgentRuntime({
+      agent: this.selectedAgent(),
+      context: this.read().context,
+    })?.devicePlacement;
+  }
+
   devices() {
-    return projectDevicePlacements(this.gateway.environments);
+    return projectDevicePlacements(this.gateway.environments, this.devicePlacementRequirement());
+  }
+
+  private findDevice(deviceId: string) {
+    return findDevicePlacement(
+      this.gateway.environments,
+      deviceId,
+      this.devicePlacementRequirement(),
+    );
   }
 
   devicePlacementReady(): boolean {
-    return (
-      !this.deviceIdValue ||
-      findDevicePlacement(this.gateway.environments, this.deviceIdValue)?.selectable === true
-    );
+    return !this.deviceIdValue || this.findDevice(this.deviceIdValue)?.selectable === true;
   }
 
   devicePlacementDisabledReason(): string | undefined {
     if (!this.deviceIdValue) {
       return undefined;
     }
-    return (
-      findDevicePlacement(this.gateway.environments, this.deviceIdValue)?.disabledReason ??
-      t("newSession.nodeUnavailable")
-    );
+    return this.findDevice(this.deviceIdValue)?.disabledReason ?? t("newSession.nodeUnavailable");
   }
 
   isAdmin(): boolean {
@@ -498,7 +507,7 @@ export class DraftPlaceState {
     if (snapshot.submitting || snapshot.pendingPlacementSessionKey) {
       return;
     }
-    if (deviceId && findDevicePlacement(this.gateway.environments, deviceId)?.selectable !== true) {
+    if (deviceId && this.findDevice(deviceId)?.selectable !== true) {
       return;
     }
     if (deviceId === this.deviceIdValue && !this.cloudProfileIdValue) {
@@ -532,12 +541,14 @@ export class DraftPlaceState {
 
   selectCloudProfile(profileId: string) {
     const snapshot = this.read();
+    const profile = this.gateway.cloudProfiles.find((candidate) => candidate.id === profileId);
     if (
       snapshot.submitting ||
       snapshot.pendingPlacementSessionKey ||
       !this.isAdmin() ||
       !this.worktreeAvailable() ||
-      !this.gateway.cloudProfiles.some((profile) => profile.id === profileId)
+      !profile ||
+      Boolean(this.modelControl.cloudRuntimeUnsupportedReason(profile))
     ) {
       return;
     }
@@ -572,6 +583,17 @@ export class DraftPlaceState {
   }
 
   restorePreferenceSelections() {
+    const selectedCloudProfile = this.gateway.cloudProfiles.find(
+      (profile) => profile.id === this.cloudProfileIdValue,
+    );
+    if (
+      selectedCloudProfile &&
+      this.modelControl.cloudRuntimeUnsupportedReason(selectedCloudProfile) &&
+      !this.read().pendingPlacementSessionKey
+    ) {
+      this.selectDevice("");
+      return;
+    }
     let changed = false;
     const preferredWhere = this.whereSelectedByUser ? null : this.preferredWhereRestore;
     let preferredProject = this.projectSelectedByUser ? "" : this.preferredProjectRestore;
@@ -591,15 +613,18 @@ export class DraftPlaceState {
     }
 
     if (preferredWhere?.kind === "device" && this.gateway.cloudProfilesReady) {
-      const device = findDevicePlacement(this.gateway.environments, preferredWhere.id);
+      const device = this.findDevice(preferredWhere.id);
       this.deviceIdValue = device?.selectable === true ? preferredWhere.id : "";
       this.cloudProfileIdValue = "";
       this.repositoryState.forceWorktree(Boolean(this.deviceIdValue));
       this.preferredWhereRestore = null;
       changed = true;
     } else if (preferredWhere?.kind === "cloud" && this.gateway.cloudProfilesReady) {
-      const profileAvailable = this.gateway.cloudProfiles.some(
+      const preferredProfile = this.gateway.cloudProfiles.find(
         (profile) => profile.id === preferredWhere.id,
+      );
+      const profileAvailable = Boolean(
+        preferredProfile && !this.modelControl.cloudRuntimeUnsupportedReason(preferredProfile),
       );
       const projectReady = !preferredProject || this.browser.projectId === preferredProject;
       if (this.isAdmin() && profileAvailable && projectReady && this.worktreeAvailable()) {

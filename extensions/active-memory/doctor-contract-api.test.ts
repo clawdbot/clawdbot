@@ -65,6 +65,7 @@ describe("active-memory doctor state migration", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+    resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 

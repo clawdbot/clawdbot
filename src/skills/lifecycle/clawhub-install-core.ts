@@ -74,6 +74,7 @@ export type ClawHubInstallParams = {
   config?: OpenClawConfig;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   clawManaged?: boolean;
+  onAfterBackup?: (backupDir: string) => Promise<string | undefined>;
 };
 
 export type InstallClawHubSkillResult =
@@ -313,6 +314,7 @@ async function installArchiveResolution(params: {
   logger?: Logger;
   config?: OpenClawConfig;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
+  onAfterBackup?: (backupDir: string) => Promise<string | undefined>;
 }) {
   return await withExtractedArchiveRoot({
     archivePath: params.archivePath,
@@ -326,6 +328,7 @@ async function installArchiveResolution(params: {
         extractedRoot: rootDir,
         mode: params.force ? "update" : "install",
         logger: params.logger,
+        onAfterBackup: params.onAfterBackup,
         policy: {
           config: params.config,
           onInstallPolicyWarning: params.onInstallPolicyWarning,
@@ -361,6 +364,7 @@ async function installGitHubResolution(params: {
   logger?: Logger;
   config?: OpenClawConfig;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
+  onAfterBackup?: (backupDir: string) => Promise<string | undefined>;
 }) {
   // Preserve the repository root for sourcePath selection. Root markers validate
   // the selected skill directory afterward, so nested paths are not applied twice.
@@ -375,6 +379,7 @@ async function installGitHubResolution(params: {
         extractedRoot: resolveGitHubSkillSourceDir(repoRoot, params.sourcePath),
         mode: params.force ? "update" : "install",
         logger: params.logger,
+        onAfterBackup: params.onAfterBackup,
         policy: {
           config: params.config,
           onInstallPolicyWarning: params.onInstallPolicyWarning,
@@ -588,6 +593,7 @@ export async function performClawHubSkillInstall(
               logger: params.logger,
               config: params.config,
               onInstallPolicyWarning: params.onInstallPolicyWarning,
+              onAfterBackup: params.onAfterBackup,
             })
           : await installArchiveResolution({
               workspaceDir: params.workspaceDir,
@@ -605,6 +611,7 @@ export async function performClawHubSkillInstall(
               logger: params.logger,
               config: params.config,
               onInstallPolicyWarning: params.onInstallPolicyWarning,
+              onAfterBackup: params.onAfterBackup,
             });
       if (!install.ok) {
         return { ok: false, error: install.error };

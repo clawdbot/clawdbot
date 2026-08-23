@@ -30,10 +30,8 @@ import {
   formatOAuthRefreshFailureLoginCommandMarkdown,
   type OAuthRefreshFailureReason,
 } from "../agents/auth-profiles/oauth-refresh-failure.js";
-import {
-  resolveAuthStorePathForDisplay,
-  resolveSharedAuthStoreOwnership,
-} from "../agents/auth-profiles/path-resolve.js";
+import { resolveSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { resolveAuthStorePathForDisplay } from "../agents/auth-profiles/paths.js";
 import { inspectPersistedSharedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

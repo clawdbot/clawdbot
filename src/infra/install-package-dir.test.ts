@@ -281,6 +281,37 @@ describe("installPackageDir", () => {
     ).resolves.toHaveLength(0);
   });
 
+  it("restores edits detected after the existing install moves to backup", async () => {
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
+    const { installBaseDir, sourceDir, targetDir } =
+      await createExistingInstallFixture(fixtureRoot);
+
+    const result = await installPackageDir({
+      sourceDir,
+      targetDir,
+      mode: "update",
+      timeoutMs: 1_000,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: false,
+      depsLogMessage: "Installing deps…",
+      afterBackup: async (backupDir) => {
+        await fs.writeFile(path.join(backupDir, "local.txt"), "keep me");
+        return { ok: false, error: "existing install changed" };
+      },
+    });
+
+    expect(result).toEqual({ ok: false, error: "existing install changed" });
+    await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("old");
+    await expect(fs.readFile(path.join(targetDir, "local.txt"), "utf8")).resolves.toBe("keep me");
+    await expect(
+      listMatchingDirs(installBaseDir, ".openclaw-install-stage-"),
+    ).resolves.toHaveLength(0);
+    await expect(
+      fs.readdir(path.join(installBaseDir, ".openclaw-install-backups")),
+    ).resolves.toHaveLength(0);
+  });
+
   it("restores the original install if publish rename fails", async () => {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");

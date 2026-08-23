@@ -86,7 +86,22 @@ describe("worker placement dispatch", () => {
   });
 
   it("recovers a completed turn's durable pending workspace result before stale-claim teardown", async () => {
-    const harness = createTestHarness();
+    const publicationOrder: string[] = [];
+    const prepareAcceptedWorkspacePublication = vi.fn(async (claim) => {
+      expect(
+        placementStore
+          .listPendingWorkspaceResults()
+          .find((pending) => pending.claimId === claim.claimId)?.workspaceAcceptedAtMs,
+      ).toBeNull();
+      publicationOrder.push("prepare");
+    });
+    const publishAcceptedWorkspace = vi.fn(async () => {
+      publicationOrder.push("publish");
+    });
+    const harness = createTestHarness({
+      prepareAcceptedWorkspacePublication,
+      publishAcceptedWorkspace,
+    });
     const active = harness.placements.seedActive(2);
     harness.markEnvironmentOwnerEpoch(2);
     if (active.state !== "active") {
@@ -163,6 +178,9 @@ describe("worker placement dispatch", () => {
 
     await harness.service.reconcile();
 
+    expect(prepareAcceptedWorkspacePublication).toHaveBeenCalledWith(claim);
+    expect(publishAcceptedWorkspace).toHaveBeenCalledWith(claim);
+    expect(publicationOrder).toEqual(["prepare", "publish"]);
     expect(harness.placements.current()).toMatchObject({
       state: "active",
       turnClaim: null,
@@ -341,7 +359,8 @@ describe("worker placement dispatch", () => {
   });
 
   it("reclaims an accepted pending result after a post-destroy gateway restart", async () => {
-    const harness = createTestHarness();
+    const publishAcceptedWorkspace = vi.fn(async () => undefined);
+    const harness = createTestHarness({ publishAcceptedWorkspace });
     const active = harness.placements.seedActive(2);
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
@@ -372,6 +391,7 @@ describe("worker placement dispatch", () => {
       turnClaim: null,
       workspaceBaseManifestRef: harness.reconciledManifestRef,
     });
+    expect(publishAcceptedWorkspace).toHaveBeenCalledWith(claim);
     expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
   });
 
@@ -480,18 +500,16 @@ describe("worker placement dispatch", () => {
     expect(harness.placements.current()).toMatchObject({
       state: "draining",
       workspaceBaseManifestRef: harness.reconciledManifestRef,
-      turnClaim: { owner: "worker" },
+      turnClaim: null,
     });
-    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
-      { workspaceAcceptedAtMs: expect.any(Number) },
-    ]);
+    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
     expect(harness.log).toContain("placement:draining");
     expect(harness.log).toContain("workspace:resume");
   });
 
-  it("preserves a draining provider destroy failure after teardown owns the stopped tunnel", async () => {
+  it("recovers a failed provider destroy and allows a normal local reclaim", async () => {
     const harness = createTestHarness({
-      destroyFails: true,
+      destroyFailureCount: 1,
       destroyFailureState: "destroying",
       resumeFails: true,
     });
@@ -500,17 +518,18 @@ describe("worker placement dispatch", () => {
     await expect(harness.service.reclaim(REQUEST)).rejects.toThrow("destroy pending");
 
     expect(harness.environments.get(active.environmentId)).toMatchObject({
-      state: "destroying",
-      ownerEpoch: active.activeOwnerEpoch,
+      state: "destroyed",
     });
     expect(harness.placements.current()).toMatchObject({
-      state: "draining",
-      turnClaim: { owner: "worker" },
+      state: "failed",
+      turnClaim: null,
     });
-    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
-      { workspaceAcceptedAtMs: expect.any(Number) },
-    ]);
+    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(harness.environments.destroy).toHaveBeenCalledTimes(2);
     expect(harness.log).not.toContain("workspace:resume");
+
+    await expect(harness.service.reclaim(REQUEST)).resolves.toMatchObject({ state: "local" });
+    expect(harness.environments.destroy).toHaveBeenCalledTimes(2);
   });
 
   it.each<DispatchStage>([
@@ -561,7 +580,7 @@ describe("worker placement dispatch", () => {
     );
   });
 
-  it.each(["requested", "provisioning", "syncing"] as const)(
+  it.each(["requested", "syncing"] as const)(
     "allows explicit redispatch after restart recovery fails an interrupted %s placement",
     async (interruptedState) => {
       let interrupted = placementStore.startDispatch(REQUEST);
