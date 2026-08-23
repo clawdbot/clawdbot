@@ -20,7 +20,10 @@ import type { OpenClawConfig } from "./types.openclaw.js";
 type PluginAliasResolver = (pluginId: string) => string;
 
 function toPolicyId(pluginId: string, resolveAlias: PluginAliasResolver | undefined): string {
-  return normalizePluginId(resolveAlias ? resolveAlias(pluginId) : pluginId);
+  // The registry resolver already falls back to the built-in fold for keys the registry does not
+  // know, so folding again after it would rewrite an installed plugin whose exact id is a fold
+  // key ("minimax-portal") onto the bundled owner — a plugin the runtime keeps running.
+  return resolveAlias ? resolveAlias(pluginId) : normalizePluginId(pluginId);
 }
 
 /**

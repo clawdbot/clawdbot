@@ -97,4 +97,34 @@ describe("createConfiguredChannelOwnershipPolicy", () => {
 
     expect(policyFor({ config }).isPluginExplicitlySelected("zzproof-plus")).toBe(true);
   });
+
+  // Codex review P1 on #123209: an installed plugin may claim a built-in legacy alias key
+  // ("minimax-portal") as its exact manifest id. Gateway startup pre-seeds exact installed ids
+  // before any alias fallback, so folding the written id first attributed that plugin's policy
+  // and explicit selection to the bundled owner the legacy alias names.
+  it("attributes policy to an installed plugin whose exact id is a built-in legacy alias", () => {
+    const aliasRegistry = {
+      diagnostics: [],
+      plugins: [
+        { id: "minimax", origin: "bundled", providers: ["minimax", "minimax-portal"] },
+        { id: "minimax-portal", origin: "installed" },
+      ],
+    } as unknown as PluginManifestRegistry;
+    const policyOn = (entry: { enabled: boolean }) =>
+      createConfiguredChannelOwnershipPolicy({
+        config: {
+          plugins: { entries: { "minimax-portal": entry } },
+        } as unknown as OpenClawConfig,
+        registry: aliasRegistry,
+        env: {},
+      });
+
+    const disabled = policyOn({ enabled: false });
+    expect(disabled.isPluginPolicyDisabled("minimax-portal")).toBe(true);
+    expect(disabled.isPluginPolicyDisabled("minimax")).toBe(false);
+
+    const selected = policyOn({ enabled: true });
+    expect(selected.isPluginExplicitlySelected("minimax-portal")).toBe(true);
+    expect(selected.isPluginExplicitlySelected("minimax")).toBe(false);
+  });
 });

@@ -13,7 +13,7 @@ import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtime
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { findChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { normalizePluginId, normalizePluginsConfig } from "../plugins/config-state.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { collectConfiguredSpeechProviderIds } from "../plugins/gateway-startup-speech-providers.js";
@@ -722,9 +722,10 @@ function disableImplicitPreferredOverPlugin(params: {
 }): OpenClawConfig {
   // Match ownership policy's view of "hand-picked": both must canonicalize aliases, or validation
   // can retain a fallback's strict schema while this writes `enabled: false` for it and startup
-  // runs the farther preferred replacement instead.
-  const canonicalId = (id: string) =>
-    createManifestPluginAliasResolver(params.manifestRegistry)(normalizePluginId(id));
+  // runs the farther preferred replacement instead. The resolver must see the written id before
+  // any built-in legacy fold, or an installed plugin claiming a fold key as its exact manifest id
+  // is attributed to the bundled owner the fold names.
+  const canonicalId = createManifestPluginAliasResolver(params.manifestRegistry);
   if (
     isPluginExplicitlySelectedByAlias(
       params.originalConfig,

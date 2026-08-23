@@ -2,7 +2,6 @@ import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 // Assembles the channel ownership policy from operator config so config validation and the
 // operator-facing runtime schema pick the same channel owner plugin activation does.
 import { normalizeChatChannelId } from "../channels/registry.js";
-import { normalizePluginId } from "../plugins/config-state.js";
 import { createManifestPluginAliasResolver } from "../plugins/manifest-plugin-alias.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
@@ -45,15 +44,17 @@ export function createConfiguredChannelOwnershipPolicy(params: {
 }): ChannelOwnershipPolicy {
   // Policy lists accept a plugin's channel ids and legacy ids; Gateway startup canonicalizes them
   // through the registry, so ownership has to resolve them the same way.
-  const resolveAlias = createManifestPluginAliasResolver(params.registry);
-  const sourceConfig = params.sourceConfig ?? params.config;
-
+  //
   // Explicit selection is keyed by whatever the OPERATOR wrote — a legacy id, a channel alias, a
   // padded or differently-cased variant — while Gateway startup normalizes those written keys
   // through its own resolver and runs the plugin. `isPluginExplicitlySelectedByAlias` canonicalizes
   // both sides, and auto-enable's preservation check now shares it, so the two cannot disagree
-  // about whether the operator hand-picked a plugin.
-  const canonicalId = (pluginId: string) => resolveAlias(normalizePluginId(pluginId));
+  // about whether the operator hand-picked a plugin. The resolver must see the written id before
+  // any built-in legacy fold: startup pre-seeds exact installed ids, so an installed plugin whose
+  // manifest id IS a fold key ("minimax-portal") would otherwise have its policy attributed to
+  // the bundled owner the fold names.
+  const canonicalId = createManifestPluginAliasResolver(params.registry);
+  const sourceConfig = params.sourceConfig ?? params.config;
   // Auto-enable's per-channel candidate set is what activation actually selects from. Once any
   // claimant declares `preferOver`, that set narrows to the declaring pair, so a third claimant is
   // never auto-enabled on that channel however close its origin sits. Ownership read only "not
@@ -100,7 +101,7 @@ export function createConfiguredChannelOwnershipPolicy(params: {
 
   return {
     isPluginActive: (pluginId, channelId) => {
-      if (isPluginPolicyDisabled(params.config, pluginId, resolveAlias)) {
+      if (isPluginPolicyDisabled(params.config, pluginId, canonicalId)) {
         return false;
       }
       const alias = canonicalId(pluginId);
@@ -122,7 +123,7 @@ export function createConfiguredChannelOwnershipPolicy(params: {
     isPluginExplicitlySelected: (pluginId) =>
       isPluginExplicitlySelectedByAlias(sourceConfig, pluginId, canonicalId, params.registry),
     isPluginPolicyDisabled: (pluginId) =>
-      isPluginPolicyDisabled(params.config, pluginId, resolveAlias),
+      isPluginPolicyDisabled(params.config, pluginId, canonicalId),
     resolveChannelPreferOverIds: (record, channelId) =>
       resolveChannelPreferOverIds({
         record,

@@ -1,4 +1,5 @@
 // Maps manifest-declared aliases (channels, providers, legacy ids) back to the owning plugin id.
+import { normalizePluginId } from "./config-state.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 
 export function normalizePluginAliasKey(value: string): string {
@@ -56,14 +57,17 @@ export function collectManifestPluginAliases(
  * Config policy lists accept any of a plugin's aliases, and Gateway startup canonicalizes them
  * through the registry before applying `plugins.deny`/`plugins.entries`. Cold config paths that
  * hold a manifest registry but no installed index use this to reach the same canonical id.
+ *
+ * Registry spellings win; the built-in legacy fold applies only to keys the registry does not
+ * know. An installed plugin may claim a fold key ("minimax-portal") as its exact manifest id, and
+ * startup's registry normalizer pre-seeds exact installed ids without ever folding, so folding a
+ * registry-known key here would attribute its policy to the bundled owner the fold names.
  */
 export function createManifestPluginAliasResolver(
   registry: PluginManifestRegistry,
 ): (pluginId: string) => string {
   const aliases = new Map<string, string>();
   collectManifestPluginAliases(registry, aliases);
-  return (pluginId: string) => {
-    const trimmed = pluginId.trim();
-    return aliases.get(normalizePluginAliasKey(trimmed)) ?? trimmed;
-  };
+  return (pluginId: string) =>
+    aliases.get(normalizePluginAliasKey(pluginId)) ?? normalizePluginId(pluginId);
 }

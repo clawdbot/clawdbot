@@ -71,6 +71,41 @@ describe("isPluginPolicyDisabled", () => {
     ).toBe(true);
   });
 
+  // Codex review P1 on #123209: an installed plugin may claim a built-in legacy alias key
+  // ("minimax-portal") as its exact manifest id. Gateway startup pre-seeds exact installed ids
+  // before any alias fallback, so policy written against that id must stay on the installed
+  // plugin instead of folding onto the bundled owner the legacy alias names.
+  it("keeps policy on an installed plugin whose exact id is a built-in legacy alias", () => {
+    const registry = {
+      diagnostics: [],
+      plugins: [
+        { id: "minimax", origin: "bundled", providers: ["minimax", "minimax-portal"] },
+        { id: "minimax-portal", origin: "installed" },
+      ],
+    } as unknown as PluginManifestRegistry;
+    const resolveAlias = createManifestPluginAliasResolver(registry);
+    const config = {
+      plugins: { entries: { "minimax-portal": { enabled: false } } },
+    } as unknown as OpenClawConfig;
+
+    expect(isPluginPolicyDisabled(config, "minimax-portal", resolveAlias)).toBe(true);
+    expect(isPluginPolicyDisabled(config, "minimax", resolveAlias)).toBe(false);
+  });
+
+  // The fold is the fallback, not gone: with no registry claimant for the key, a policy entry
+  // written under the legacy id still lands on the bundled plugin it names.
+  it("still folds a built-in legacy alias the registry does not know", () => {
+    const registry = {
+      diagnostics: [],
+      plugins: [{ id: "other", origin: "workspace" }],
+    } as unknown as PluginManifestRegistry;
+    const config = { plugins: { deny: ["minimax-portal"] } } as OpenClawConfig;
+
+    expect(
+      isPluginPolicyDisabled(config, "minimax", createManifestPluginAliasResolver(registry)),
+    ).toBe(true);
+  });
+
   // Codex review P2 on #123209: `normalizePluginEntries` merges colliding keys and keeps an
   // earlier boolean when the later entry omits one, so an alias entry must not erase it.
   it("keeps a disabled entry when a colliding alias entry omits enabled", () => {
