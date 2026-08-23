@@ -33,6 +33,7 @@ import {
   retirePlaywrightBrowserConnectionExact,
   takeCachedPlaywrightBrowserConnection,
   ensureContextState,
+  withPlaywrightConnectionLease,
 } from "./pw-session-connection.js";
 import {
   cachedByCdpUrl,
@@ -307,7 +308,7 @@ async function withPlaywrightSafeReadReconnect<T>(
 ): Promise<T> {
   const connected = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
   try {
-    return await run(connected.browser);
+    return await withPlaywrightConnectionLease(connected, () => run(connected.browser));
   } catch (err) {
     if (!isRecoverablePlaywrightDisconnectError(err) || opts.attempt?.cancelled) {
       throw err;
@@ -317,7 +318,7 @@ async function withPlaywrightSafeReadReconnect<T>(
       throw err;
     }
     const retry = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
-    return await run(retry.browser);
+    return await withPlaywrightConnectionLease(retry, () => run(retry.browser));
   }
 }
 
@@ -478,7 +479,28 @@ export async function createPageViaPlaywright(
   url: string;
   type: string;
 }> {
-  const { browser } = await connectBrowser(opts.cdpUrl, opts.cdpPolicy ?? opts.ssrfPolicy);
+  const connected = await connectBrowser(opts.cdpUrl, opts.cdpPolicy ?? opts.ssrfPolicy);
+  // Page creation is not safely replayable after an ambiguous disconnect, so hold a
+  // lease for its whole duration: max-age recycling must not close this connection
+  // mid-flight.
+  return await withPlaywrightConnectionLease(connected, () =>
+    createPageOnConnection(connected.browser, opts),
+  );
+}
+
+async function createPageOnConnection(
+  browser: Browser,
+  opts: {
+    cdpUrl: string;
+    url: string;
+    cdpPolicy?: SsrFPolicy;
+  } & BrowserNavigationPolicyOptions,
+): Promise<{
+  targetId: string;
+  title: string;
+  url: string;
+  type: string;
+}> {
   const context = browser.contexts()[0] ?? (await browser.newContext());
   ensureContextState(context);
 

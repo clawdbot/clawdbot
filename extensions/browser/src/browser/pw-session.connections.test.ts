@@ -968,3 +968,128 @@ describe("pw-session connection scoping", () => {
     expect(connectOverCdpSpy).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("pw-session connection max-age recycling", () => {
+  const CDP_URL = "http://127.0.0.1:9222";
+  const MAX_AGE_MS = 30 * 60 * 1000;
+
+  /** Browser mock whose page creation can be held open across a recycle boundary. */
+  function makeCreatePageBrowser(targetId: string) {
+    const browserClose = vi.fn(async () => {});
+    const openPages: import("playwright-core").Page[] = [];
+    let releaseNewPage: (() => void) | null = null;
+    const newPageGate = new Promise<void>((resolve) => {
+      releaseNewPage = resolve;
+    });
+    let gateNewPage = false;
+
+    const page = {
+      on: vi.fn(),
+      context: () => context,
+      goto: vi.fn(async () => null),
+      title: vi.fn(async () => `title:${targetId}`),
+      url: vi.fn(() => "about:blank"),
+      close: vi.fn(async () => {}),
+      route: vi.fn(async () => {}),
+      unroute: vi.fn(async () => {}),
+      mainFrame: () => ({}),
+    } as unknown as import("playwright-core").Page;
+
+    const context = {
+      pages: () => openPages,
+      on: vi.fn(),
+      newPage: vi.fn(async () => {
+        if (gateNewPage) {
+          await newPageGate;
+        }
+        openPages.push(page);
+        return page;
+      }),
+      newCDPSession: vi.fn(async () => ({
+        send: vi.fn(async (method: string) =>
+          method === "Target.getTargetInfo" ? { targetInfo: { targetId, title: targetId } } : {},
+        ),
+        detach: vi.fn(async () => {}),
+      })),
+    } as unknown as import("playwright-core").BrowserContext;
+
+    const browser = {
+      contexts: () => [context],
+      on: vi.fn(),
+      off: vi.fn(),
+      close: browserClose,
+    } as unknown as import("playwright-core").Browser;
+
+    return {
+      browser,
+      browserClose,
+      holdNextPageCreation: () => {
+        gateNewPage = true;
+      },
+      releasePageCreation: () => releaseNewPage?.(),
+    };
+  }
+
+  it("does not sever an in-flight page creation when the connection ages out", async () => {
+    vi.useFakeTimers();
+    const aged = makeCreatePageBrowser("T1");
+    connectOverCdpSpy.mockImplementation((async () => aged.browser) as never);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    // Establish and cache the connection, then start a mutation and hold it open.
+    await listPagesViaPlaywright({ cdpUrl: CDP_URL });
+    aged.holdNextPageCreation();
+    const creating = createPageViaPlaywright({ cdpUrl: CDP_URL, url: "about:blank" });
+
+    // Cross the max-age boundary while the mutation is still in flight.
+    await vi.advanceTimersByTimeAsync(MAX_AGE_MS + 2 * 60_000);
+    expect(aged.browserClose).not.toHaveBeenCalled();
+
+    aged.releasePageCreation();
+    // The mutation must still succeed - page creation is not safely replayable.
+    await expect(creating).resolves.toMatchObject({ targetId: "T1", type: "page" });
+
+    // Once the lease drains, the deferred recycle completes.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(aged.browserClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("recycles an idle aged connection and reconnects the next read", async () => {
+    vi.useFakeTimers();
+    const first = makeBrowser("A", "https://a.example/first");
+    const second = makeBrowser("A", "https://a.example/second");
+    let calls = 0;
+    connectOverCdpSpy.mockImplementation((async () => {
+      calls += 1;
+      return calls === 1 ? first.browser : second.browser;
+    }) as never);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    await listPagesViaPlaywright({ cdpUrl: CDP_URL });
+    expect(connectOverCdpSpy).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(MAX_AGE_MS + 60_000);
+    expect(first.browserClose).toHaveBeenCalledTimes(1);
+
+    // The recycled connection is gone from the cache, so the next read opens a new one
+    // and returns normally rather than surfacing the disconnect.
+    const page = await getPageForTargetId({ cdpUrl: CDP_URL });
+    expect(page.url()).toBe("https://a.example/second");
+    expect(connectOverCdpSpy).toHaveBeenCalledTimes(2);
+    expect(second.browserClose).not.toHaveBeenCalled();
+  });
+
+  it("keeps a young connection cached across sweeps", async () => {
+    vi.useFakeTimers();
+    const fresh = makeBrowser("A", "https://a.example");
+    connectOverCdpSpy.mockImplementation((async () => fresh.browser) as never);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    await listPagesViaPlaywright({ cdpUrl: CDP_URL });
+    await vi.advanceTimersByTimeAsync(MAX_AGE_MS - 60_000);
+
+    expect(fresh.browserClose).not.toHaveBeenCalled();
+    await listPagesViaPlaywright({ cdpUrl: CDP_URL });
+    expect(connectOverCdpSpy).toHaveBeenCalledTimes(1);
+  });
+});

@@ -92,6 +92,12 @@ export type ConnectedBrowser = {
   browser: Browser;
   cdpUrl: string;
   onDisconnected?: () => void;
+  /** Epoch ms when this CDP connection was established; drives max-age recycling. */
+  connectedAt?: number;
+  /** In-flight operations holding this connection; recycling waits for it to drain to zero. */
+  leases?: number;
+  /** Set when max-age recycling was deferred because leases were still outstanding. */
+  recyclePending?: boolean;
 };
 
 export type DownloadPayload = PlaywrightDownload & {

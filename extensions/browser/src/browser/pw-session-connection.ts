@@ -148,10 +148,30 @@ export function clearBlockedPageRef(cdpUrl: string, page: Page): void {
   blockedPageRefsByCdpUrl.get(normalizeCdpUrl(cdpUrl))?.delete(page);
 }
 
+/**
+ * Timer handle for the max-age recycling sweep (see below). Declared here, ahead of
+ * takeCachedPlaywrightBrowserConnection, because every path that removes an entry from
+ * cachedByCdpUrl - not just the sweep's own eviction - must be able to stop the sweep
+ * once the cache is empty. A close driven by connection teardown, test cleanup, or an
+ * explicit retire all funnel through this one function; if only the sweep's own code
+ * path stopped the timer, any of those other paths could empty the cache while leaving
+ * a real (non-fake-timer-aware) interval running past the point anything is cached.
+ */
+let connectionRecycleSweep: ReturnType<typeof setInterval> | undefined;
+
+function stopConnectionRecycleSweepWhenIdle(): void {
+  if (!connectionRecycleSweep || cachedByCdpUrl.size > 0) {
+    return;
+  }
+  clearInterval(connectionRecycleSweep);
+  connectionRecycleSweep = undefined;
+}
+
 export function takeCachedPlaywrightBrowserConnection(cdpUrl: string): ConnectedBrowser | null {
   const normalized = normalizeCdpUrl(cdpUrl);
   const cur = cachedByCdpUrl.get(normalized);
   cachedByCdpUrl.delete(normalized);
+  stopConnectionRecycleSweepWhenIdle();
   const pending = connectingByCdpUrl.get(normalized);
   if (pending) {
     // Invalidation must also retire an in-flight connect. Otherwise it can
@@ -342,6 +362,89 @@ export function evictStalePlaywrightBrowserConnection(
   }
 }
 
+/**
+ * Max-age recycling for cached Playwright CDP connections.
+ *
+ * Playwright's connection-scoped object registry retains a client object and a
+ * dispatcher pair for every network request materialized by page event
+ * listeners, for the life of the connection. On a long-lived connectOverCDP
+ * connection that registry grows without bound, and it grows from browser
+ * EVENTS rather than from gateway operations: an idle tab running polling JS
+ * accumulates retained objects while no plugin code path executes at all. An
+ * acquisition-time age check therefore cannot bound it, because no acquisition
+ * may happen for hours. A periodic sweep can.
+ *
+ * Recycling is lease-aware. Closing a connection out from under an in-flight
+ * operation would turn a healthy action into a disconnect failure, and page
+ * creation and navigation are deliberately not replayable after an ambiguous
+ * disconnect. So an aged connection that still has leases is unpublished from
+ * the cache immediately - no new operation can join it, and the next
+ * connectBrowser() opens a fresh one - and is closed by whichever lease
+ * releases last.
+ */
+const PLAYWRIGHT_CONNECTION_MAX_AGE_MS = 30 * 60 * 1000;
+const PLAYWRIGHT_CONNECTION_SWEEP_INTERVAL_MS = 60 * 1000;
+
+/** Arm the sweep lazily, so importing this module never starts a timer on its own. */
+function ensureConnectionRecycleSweep(): void {
+  if (connectionRecycleSweep) {
+    return;
+  }
+  connectionRecycleSweep = setInterval(
+    recycleAgedPlaywrightConnections,
+    PLAYWRIGHT_CONNECTION_SWEEP_INTERVAL_MS,
+  );
+  connectionRecycleSweep.unref?.();
+}
+
+/** Record that an operation is using this connection; recycling defers until it releases. */
+export function acquirePlaywrightConnectionLease(connection: ConnectedBrowser): void {
+  connection.leases = (connection.leases ?? 0) + 1;
+}
+
+/** Release an operation's hold, closing the connection if recycling was waiting on it. */
+export function releasePlaywrightConnectionLease(connection: ConnectedBrowser): void {
+  const remaining = Math.max(0, (connection.leases ?? 0) - 1);
+  connection.leases = remaining;
+  if (remaining > 0 || !connection.recyclePending) {
+    return;
+  }
+  connection.recyclePending = false;
+  // The sweep already unpublished it, so this handle is the only thing left to close.
+  void closeTrackedPlaywrightConnection(connection).catch(() => {});
+}
+
+/** Run an operation under a lease so max-age recycling cannot close its connection. */
+export async function withPlaywrightConnectionLease<T>(
+  connection: ConnectedBrowser,
+  run: () => Promise<T>,
+): Promise<T> {
+  acquirePlaywrightConnectionLease(connection);
+  try {
+    return await run();
+  } finally {
+    releasePlaywrightConnectionLease(connection);
+  }
+}
+
+function recycleAgedPlaywrightConnections(): void {
+  const now = Date.now();
+  for (const [url, connection] of [...cachedByCdpUrl]) {
+    if (now - (connection.connectedAt ?? now) <= PLAYWRIGHT_CONNECTION_MAX_AGE_MS) {
+      continue;
+    }
+    if ((connection.leases ?? 0) > 0) {
+      connection.recyclePending = true;
+      // Unpublish now so no further operation joins a connection that is already
+      // scheduled to close; the last lease release closes it.
+      takeCachedPlaywrightBrowserConnection(url);
+      continue;
+    }
+    evictStalePlaywrightBrowserConnection(url, connection.browser);
+  }
+  stopConnectionRecycleSweepWhenIdle();
+}
+
 function hasBlockedTargetsForCdpUrl(cdpUrl: string): boolean {
   const prefix = `${normalizeCdpUrl(cdpUrl)}::`;
   for (const key of blockedTargetsByCdpUrl) {
@@ -478,8 +581,15 @@ export async function connectBrowser(
             cachedByCdpUrl.delete(normalized);
           }
         };
-        const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected };
+        const connected: ConnectedBrowser = {
+          browser,
+          cdpUrl: normalized,
+          onDisconnected,
+          connectedAt: Date.now(),
+          leases: 0,
+        };
         cachedByCdpUrl.set(normalized, connected);
+        ensureConnectionRecycleSweep();
         browser.on("disconnected", onDisconnected);
         observeBrowser(browser);
         return connected;
@@ -630,7 +740,16 @@ async function getPageForTargetIdOnce(opts: {
   if (opts.targetId && isBlockedTarget(opts.cdpUrl, opts.targetId)) {
     throw new BlockedBrowserTargetError();
   }
-  const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
+  const connected = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
+  return await withPlaywrightConnectionLease(connected, () =>
+    resolvePageForTargetId(connected.browser, opts),
+  );
+}
+
+async function resolvePageForTargetId(
+  browser: Browser,
+  opts: { cdpUrl: string; targetId?: string },
+): Promise<Page> {
   const pages = await getAllPages(browser);
   if (!pages.length) {
     throw new Error("No pages available in the connected browser.");
