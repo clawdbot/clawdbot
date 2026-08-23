@@ -3695,7 +3695,7 @@ openclaw-sidebar-attention {
   gap: 2px;
   overflow-x: auto;
   padding: 0 6px 8px;
-  border-block-end: 1px solid var(--border);
+  border-block-end: 1px solid var(--border-strong);
   scrollbar-width: thin;
 }
 
@@ -3724,7 +3724,7 @@ openclaw-sidebar-attention {
 }
 
 .sidebar-issues-panel__tab[aria-selected="true"] {
-  background: var(--secondary);
+  background: color-mix(in srgb, var(--bg-hover) 92%, var(--text) 8%);
   color: var(--text-strong);
 }
 
