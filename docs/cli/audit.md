@@ -193,6 +193,28 @@ their exact tuple was recorded and the gate changed the outcome.
 Portable actions and early suppressions that have no durable delivery record
 use the generic decision-fact owner instead of duplicating delivery state.
 
+Plugin, node, and worker receipts use the same coverage vocabulary:
+
+- A registered plugin `before_tool_call` hook allow/block, node pairing or
+  capability decision, and exact worker credential/build/owner-epoch admission
+  are `enforced` gates.
+- A successful node result or completed plugin-owned run is
+  `attribution-only`; success never upgrades the earlier gate into proof of
+  authorization.
+- A plugin node policy that returns without its supplied node callback is
+  `unknown` with `node.action_callback` missing.
+- An action performed wholly inside an ACP or other external native runtime
+  without an OpenClaw pre-action callback produces an ACP-owner `unsupported`
+  receipt after admitted prompt submission, with `native.action_callback`
+  missing. It does not claim a side effect. Add an authoritative native-action
+  callback to the adapter to provide stronger evidence; transcript or task text
+  cannot repair this evidence gap.
+
+These generic receipts retain no plugin id, node id, worker environment or
+session id, credential or build hash, token, command, parameters, or raw error
+text. Owner-native approval, pairing, placement, and worker-operation rows are
+not duplicated.
+
 JSON output is the Gateway's safe-only result without lossy reformatting. An
 exact result contains one bounded V1 context (maximum 16 KiB), up to 100
 `decisionDisplays`, coverage and

@@ -1504,6 +1504,26 @@ ${actionRun}`;
 }
 
 describe("ci workflow guards", () => {
+  it("gates frozen runtime-pair compatibility on the trusted suite outcome", () => {
+    const workflow = readReleaseChecksWorkflow();
+    const laneJob = workflow.jobs.qa_lab_runtime_pair_lane_release_checks;
+    const suiteValidation = laneJob.steps.find(
+      (step: WorkflowStep) => step.name === "Validate runtime-pair lane",
+    );
+    const reportValidation = laneJob.steps.find(
+      (step: WorkflowStep) => step.name === "Validate runtime-pair lane report",
+    );
+
+    for (const step of [suiteValidation, reportValidation]) {
+      expect(step?.env?.CANDIDATE_SUITE_OUTCOME).toBe(
+        "${{ steps.candidate_runtime_pair.outcome }}",
+      );
+      expect(step?.run).toContain('--candidate-suite-outcome "$CANDIDATE_SUITE_OUTCOME"');
+      expect(step?.run).toContain('--target-sha "$RELEASE_CHECK_TARGET_SHA"');
+      expect(step?.run).toContain('--lane "$RUNTIME_PAIR_LANE"');
+    }
+  });
+
   it("retains pending same-SHA QA calls in the shared concurrency group", () => {
     const workflowPath = ".github/workflows/qa-live-transports-convex.yml";
     const workflowSource = readFileSync(workflowPath, "utf8");

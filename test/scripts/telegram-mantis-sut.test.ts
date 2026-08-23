@@ -201,6 +201,7 @@ describe("Telegram Mantis SUT", () => {
       },
       gatewayPort: 19_879,
       groupId: "-100123456789",
+      mockHost: "mock-openai",
       mockPort: 19_882,
       outputDir,
       testerId: "12345",
@@ -212,6 +213,7 @@ describe("Telegram Mantis SUT", () => {
     expect(config.channels.telegram.streaming).toEqual({ mode: "partial" });
     expect(config.channels.telegram).not.toHaveProperty("replyToMode");
     expect(config.commands.ownerAllowFrom).toEqual(["telegram:12345"]);
+    expect(config.models.providers.openai.baseUrl).toBe("http://mock-openai:19882/v1");
     expect(config.session.sendPolicy).toEqual({ default: "deny" });
   });
 });

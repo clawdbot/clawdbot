@@ -5,6 +5,10 @@ import {
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import {
+  getWorkerTurnExecutionIdentityCapability,
+  type WorkerTurnExecutionIdentityCapability,
+} from "./placement-turn-claim-events.js";
 
 type WorkerPlacementBinding = Readonly<{
   sessionId: string;
@@ -15,6 +19,9 @@ type WorkerPlacementBinding = Readonly<{
 export type WorkerSessionPlacementGate = {
   /** Credential verification only; this does not grant operational worker authority. */
   readWorkerTurnClaim(binding: WorkerPlacementBinding): WorkerSessionTurnClaim | undefined;
+  getExecutionIdentityCapability?(
+    claim: WorkerSessionTurnClaim,
+  ): WorkerTurnExecutionIdentityCapability | undefined;
   validateWorkerTurn(claim: WorkerSessionTurnClaim): boolean;
   isWorkerTurnToolAuthorized(claim: WorkerSessionTurnClaim, toolName: string): boolean;
   updateAckCursors(input: {
@@ -62,6 +69,8 @@ export function createWorkerSessionPlacementGate(
 
   return {
     readWorkerTurnClaim,
+    getExecutionIdentityCapability: (claim) =>
+      getWorkerTurnExecutionIdentityCapability(store, claim),
     validateWorkerTurn,
 
     isWorkerTurnToolAuthorized(claim, toolName): boolean {

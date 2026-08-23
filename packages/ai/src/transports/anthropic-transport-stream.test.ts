@@ -340,7 +340,7 @@ describe("anthropic transport stream", () => {
     configureAiTransportHost({
       ...coreTransportHost,
       buildModelFetch: buildGuardedModelFetchMock,
-      redactSecrets: redactTestSecrets,
+      redactModelVisibleSecrets: redactTestSecrets,
       resolveProviderRequestCapabilities: (input) => {
         const endpointClass = resolveTestEndpointClass(input.baseUrl);
         return {
@@ -3780,7 +3780,7 @@ describe("anthropic transport stream", () => {
     // No images → returns sanitized text string, not array
     expect(typeof toolResult.content).toBe("string");
     expect(toolResult.content).toContain('"type":"resource"');
-    expect(toolResult.content).toContain('{\\"key\\":\\"***\\"}');
+    expect(toolResult.content).toContain('{\\"key\\":\\"value\\"}');
     expect(toolResult.is_error).toBe(false);
   });
 

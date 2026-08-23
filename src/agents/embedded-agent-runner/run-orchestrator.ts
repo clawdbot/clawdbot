@@ -32,6 +32,10 @@ import {
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { resolveModelCandidateChain } from "../model-fallback-candidates.js";
 import {
+  getPreparedModelRuntimePluginGeneration,
+  withPreparedModelRuntimePluginGenerationScope,
+} from "../prepared-model-runtime-generation-scope.js";
+import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
 } from "../prepared-model-runtime.js";
@@ -90,11 +94,14 @@ export function runEmbeddedAgent(
   const lifecycleGeneration =
     internalParamsInput.lifecycleGeneration ??
     captureAgentRunLifecycleGeneration(internalParamsInput.runId);
+  const pluginGeneration =
+    internalParamsInput.pluginGeneration ?? getPreparedModelRuntimePluginGeneration();
   return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
     runEmbeddedAgentInternal({
       ...internalParamsInput,
       config,
       lifecycleGeneration,
+      ...(pluginGeneration ? { pluginGeneration } : {}),
     }),
   );
 }
@@ -454,7 +461,14 @@ async function runEmbeddedAgentInternal(
             preparedModelRuntime,
           });
         };
-        return await withPluginRuntimeGenerationScope(preparedModelRuntime, runPrepared);
+        const runWithPreparedRuntime = () =>
+          withPluginRuntimeGenerationScope(preparedModelRuntime, runPrepared);
+        return params.pluginGeneration
+          ? await withPreparedModelRuntimePluginGenerationScope(
+              params.pluginGeneration,
+              runWithPreparedRuntime,
+            )
+          : await runWithPreparedRuntime();
       } finally {
         preparedModelRuntimeLease.release();
       }

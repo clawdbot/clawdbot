@@ -6363,12 +6363,19 @@ describe("gateway server chat", () => {
 
       const historyMessages = await fetchHistoryMessages(ws, { maxChars: 5 });
       expect(JSON.stringify(historyMessages)).toContain("abcde\\n...(truncated)...");
+      // The capped row is structurally marked so a client can detect the bounded
+      // preview without sniffing the sentinel, then fetch the durable content.
+      expect(
+        (historyMessages[0] as Record<string, unknown> | undefined)?.["__openclaw"],
+      ).toMatchObject({ truncated: true, reason: "display-cap" });
 
       const full = await fetchChatMessage(ws, makeMainMessageParams("msg-full-assistant"));
       expect(full.ok).toBe(true);
       expect(full.unavailableReason).toBeUndefined();
       expect(JSON.stringify(full.message)).toContain("abcdefghij");
       expect(JSON.stringify(full.message)).not.toContain("...(truncated)...");
+      const fullMeta = (full.message as Record<string, unknown> | undefined)?.["__openclaw"];
+      expect((fullMeta as { truncated?: unknown } | undefined)?.truncated).toBeUndefined();
     });
   });
 

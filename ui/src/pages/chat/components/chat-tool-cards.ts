@@ -41,10 +41,6 @@ export {
   type WidgetPromptEventDetail,
 } from "./widget-card.ts";
 
-type FullMessageRequest = NonNullable<
-  Extract<SidebarContent, { kind: "markdown" }>["fullMessageRequest"]
->;
-
 export function shouldToggleSelectableDisclosure(event: MouseEvent): boolean {
   if (event.detail === 0) {
     return true;
@@ -147,25 +143,17 @@ function handleRawDetailsToggle(event: Event) {
   body.hidden = expanded;
 }
 
-function buildSidebarContent(
-  value: string,
-  options?: {
-    rawText?: string | null;
-    fullMessageRequest?: FullMessageRequest;
-  },
-): SidebarContent {
+function buildSidebarContent(value: string, options?: { rawText?: string | null }): SidebarContent {
   return {
     kind: "markdown",
     content: value,
     ...(options?.rawText ? { rawText: options.rawText } : {}),
-    ...(options?.fullMessageRequest ? { fullMessageRequest: options.fullMessageRequest } : {}),
   };
 }
 
 function buildPreviewSidebarContent(
   preview: ToolPreview,
   rawText?: string | null,
-  options?: { fullMessageRequest?: FullMessageRequest },
 ): SidebarContent | null {
   if (preview.kind !== "canvas" || preview.render !== "url" || !preview.viewId || !preview.url) {
     return null;
@@ -180,20 +168,7 @@ function buildPreviewSidebarContent(
     // trusted global embed mode would re-grant same-origin to widget script.
     ...(preview.sandbox ? { sandbox: preview.sandbox } : {}),
     ...(rawText ? { rawText } : {}),
-    ...(options?.fullMessageRequest ? { fullMessageRequest: options.fullMessageRequest } : {}),
   };
-}
-
-function buildToolSidebarFullMessageRequest(
-  card: ToolCard,
-  sessionKey: string | undefined,
-): FullMessageRequest | undefined {
-  if (!sessionKey || !card.messageId) {
-    return undefined;
-  }
-  // A transcript entry can contain multiple tool blocks. Until the request can
-  // identify a specific block, upgrading by message id can show the wrong tool.
-  return undefined;
 }
 
 export function renderRawOutputToggle(text: string) {
@@ -324,26 +299,6 @@ export function syncToolDisclosureOverflow(event: Event): void {
     "chat-tool-disclosure--overflowing",
     Boolean(content && content.scrollWidth > content.clientWidth),
   );
-}
-
-export function toggleToolDisclosureKeepingScroll(event: Event, toggle: () => void): void {
-  const target = event.currentTarget;
-  const row = target instanceof Element ? target.closest<HTMLElement>(".chat-virtual-row") : null;
-  const scroller = row?.closest<HTMLElement>(".chat-thread");
-  const rowTop = row?.getBoundingClientRect().top;
-  toggle();
-  if (!row || !scroller || rowTop === undefined) {
-    return;
-  }
-  requestAnimationFrame(() => {
-    // ResizeObserver runs after rAF. Wait one more frame so TanStack applies
-    // its end-anchor delta before we restore this disclosure row's position.
-    requestAnimationFrame(() => {
-      if (row.isConnected) {
-        scroller.scrollTop += row.getBoundingClientRect().top - rowTop;
-      }
-    });
-  });
 }
 
 function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolCardOutcome) {
@@ -903,8 +858,7 @@ export function renderToolCard(
               type="button"
               aria-expanded=${String(expanded)}
               aria-label=${resolveToolRowText(card, opts.runActive)}
-              @click=${(event: MouseEvent) =>
-                toggleToolDisclosureKeepingScroll(event, () => opts.onToggleExpanded(card.id))}
+              @click=${() => opts.onToggleExpanded(card.id)}
             ></button>
             <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
             <span class="chat-tool-disclosure__content"
@@ -928,7 +882,7 @@ export function renderToolCard(
             @focus=${syncToolDisclosureOverflow}
             @click=${(event: MouseEvent) => {
               if (shouldToggleSelectableDisclosure(event)) {
-                toggleToolDisclosureKeepingScroll(event, () => opts.onToggleExpanded(card.id));
+                opts.onToggleExpanded(card.id);
               }
             }}
           >
@@ -986,15 +940,13 @@ export function renderExpandedToolCardContent(
       ? resolveToolWorkspaceFilePath(card, view)
       : null;
   const canOpenSidebar = Boolean(onOpenSidebar);
-  const fullMessageRequest = buildToolSidebarFullMessageRequest(card, sessionKey);
   const previewSidebarContent =
     card.preview?.kind === "canvas"
-      ? buildPreviewSidebarContent(card.preview, card.outputText, { fullMessageRequest })
+      ? buildPreviewSidebarContent(card.preview, card.outputText)
       : null;
   const sidebarActionContent =
     previewSidebarContent ??
     buildSidebarContent(buildToolCardSidebarContent(card), {
-      fullMessageRequest,
       rawText: card.outputText ?? null,
     });
   const visiblePreview = card.preview

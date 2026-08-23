@@ -17,7 +17,6 @@ export type ApplicationOverlaySnapshot = {
   approvalBusy: boolean;
   approvalCanGrant: boolean;
   approvalErrors: ReadonlyMap<string, string>;
-  approvalNowMs: number;
   devicePairSetupOpen: boolean;
   devicePairSetupLifecycle: DevicePairSetupLifecycle;
   devicePairPendingCount: number;

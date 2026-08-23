@@ -6,7 +6,8 @@ import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import {
   openScopeUpgradeDetails,
-  scopeUpgradeStatusVisible,
+  renderScopeUpgradeTrigger,
+  scopeUpgradeStatusUsesSessionHeader,
 } from "../../app/device-scope-upgrade.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
@@ -27,7 +28,6 @@ import {
   canDeleteSessionRows,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
-import { isActiveTask } from "../../lib/tasks/data.ts";
 import { renderBoardViewSwitch } from "./board-session-surface.ts";
 import { displayedChatSessionBranches } from "./chat-history.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
@@ -83,7 +83,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       return [];
     }
     const actions: HeaderMenuStatusAction[] = [];
-    if (scopeUpgradeStatusVisible(this.context.gateway.snapshot)) {
+    if (scopeUpgradeStatusUsesSessionHeader(this.context.gateway.snapshot)) {
       actions.push({
         id: "access",
         label: t("connection.scopeUpgrade.status"),
@@ -273,6 +273,14 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const desktopEnvironmentId = resolveChatPaneDesktopTarget(row);
     const desktopPanelAvailable =
       desktopEnvironmentId !== null && isDesktopPanelAvailable(this.context.gateway.snapshot);
+    const accessStatusAction =
+      this.active &&
+      !this.narrow &&
+      scopeUpgradeStatusUsesSessionHeader(this.context.gateway.snapshot)
+        ? renderScopeUpgradeTrigger(
+            "btn btn--ghost btn--icon chat-icon-btn scope-upgrade-status-trigger",
+          )
+        : nothing;
     const openDesktopPanel = sessionWorkspace.onToggleDesktop ?? (() => undefined);
     const discussion = this.resolveSessionDiscussionAction();
     const sidePanelOpen = (sidebarLayout ?? this.state?.sidebarLayout)?.open === true;
@@ -355,7 +363,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         ),
         icon: icons.listChecks,
         active: !backgroundTasks.collapsed,
-        badge: backgroundTasks.tasks?.filter(isActiveTask).length ?? 0,
+        badge: backgroundTasks.activeCount,
         onActivate: backgroundTasks.onToggleCollapsed,
       });
     }
@@ -452,7 +460,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       canReveal,
       copiedAction: this.headerCopiedAction,
       renameDisabledReason,
-      panelActions: html`${browserPanelAction}${backgroundTasksAction}${sidePanelAction}`,
+      panelActions: html`${accessStatusAction}${browserPanelAction}${backgroundTasksAction}${sidePanelAction}`,
       discussionAction: nothing,
       diffAction: nothing,
       backgroundTasksAction: nothing,

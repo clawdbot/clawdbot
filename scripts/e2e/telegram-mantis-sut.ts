@@ -179,9 +179,11 @@ export function createOpenClawGatewaySpawnSpec(params: {
 
 export function writeSutConfig(params: {
   configPatch?: Record<string, unknown>;
+  fixturePluginsDir?: string;
   gatewayPort: number;
   groupId: string;
   mcpAppFixture?: boolean;
+  mockHost: string;
   mockPort: number;
   outputDir: string;
   repoRoot?: string;
@@ -192,6 +194,13 @@ export function writeSutConfig(params: {
   const workspace = path.join(tempRoot, "workspace");
   fs.mkdirSync(stateDir, { recursive: true });
   fs.mkdirSync(workspace, { recursive: true });
+  let fixturePluginsRoot: string | undefined;
+  if (params.fixturePluginsDir) {
+    fixturePluginsRoot = path.join(tempRoot, "fixture-plugins");
+    // Fixture code crosses into the same isolated runtime as candidate code. Copying keeps
+    // agent staging immutable from the SUT while adding no authority outside the container.
+    fs.cpSync(params.fixturePluginsDir, fixturePluginsRoot, { recursive: true });
+  }
   const configPath = path.join(tempRoot, "openclaw.json");
   const baseConfig = {
     agents: {
@@ -200,6 +209,9 @@ export function writeSutConfig(params: {
         models: {
           "openai/gpt-5.6-luna": { params: { openaiWsWarmup: false, transport: "sse" } },
         },
+        // Keep the pdf tool on the one catalog model instead of walking fallback
+        // candidates the mock never scripted.
+        pdfModel: { primary: "openai/gpt-5.6-luna" },
       },
       entries: {
         main: {
@@ -270,7 +282,7 @@ export function writeSutConfig(params: {
         openai: {
           api: "openai-responses",
           apiKey: { id: "OPENAI_API_KEY", provider: "default", source: "env" },
-          baseUrl: `http://127.0.0.1:${params.mockPort}/v1`,
+          baseUrl: `http://${params.mockHost}:${params.mockPort}/v1`,
           models: [
             {
               api: "openai-responses",
@@ -287,6 +299,7 @@ export function writeSutConfig(params: {
       allow: ["telegram", "openai"],
       enabled: true,
       entries: { openai: { enabled: true }, telegram: { enabled: true } },
+      ...(fixturePluginsRoot ? { load: { paths: [fixturePluginsRoot] } } : {}),
     },
   };
   const config = mergeConfig(baseConfig, params.configPatch ?? {});
@@ -545,6 +558,7 @@ function cleanupFailureMessage(message: string, cleanupErrors: unknown[]): strin
 
 export async function startMantisSut(params: {
   configPatch?: Record<string, unknown>;
+  fixturePluginsDir?: string;
   gatewayPort: number;
   groupId: string;
   mockPort: number;
@@ -559,15 +573,15 @@ export async function startMantisSut(params: {
   onRuntimeDisposed?: () => void;
 }): Promise<MantisSutRuntime> {
   const drained = await drainSutUpdates(params.sutToken);
-  const config = writeSutConfig(params);
+  const config = writeSutConfig({ ...params, mockHost: "mock-openai" });
   // The root wrapper relocates tempRoot into its bounded filesystem, then restores this
   // exact path as a symlink before Docker starts. Keep controller and claim paths anchored
   // here so live log reads, mock updates, stop, and destroy all share one runtime identity.
-  const requestLog = path.join(config.tempRoot, "mock-openai-requests.ndjson");
-  const mockLog = path.join(config.tempRoot, "mock-openai.log");
   const mockResponseControlDir = path.join(config.tempRoot, "mock-control");
   fs.mkdirSync(mockResponseControlDir, { mode: 0o700 });
   const mockResponseControl = path.join(mockResponseControlDir, "response.json");
+  const requestLog = path.join(mockResponseControlDir, "mock-openai-requests.ndjson");
+  const mockLog = path.join(mockResponseControlDir, "mock-openai.log");
   fs.writeFileSync(
     mockResponseControl,
     `${JSON.stringify({
@@ -576,6 +590,8 @@ export async function startMantisSut(params: {
     })}\n`,
     { mode: 0o600 },
   );
+  fs.writeFileSync(requestLog, "", { mode: 0o600 });
+  fs.writeFileSync(mockLog, "", { mode: 0o600 });
   const proxyControlDir = path.join(config.tempRoot, "proxy-control");
   fs.mkdirSync(proxyControlDir, { mode: 0o700 });
   const proxyControl = path.join(proxyControlDir, "control.json");

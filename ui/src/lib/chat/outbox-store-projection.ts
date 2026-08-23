@@ -9,7 +9,7 @@ import type { StoredComposerSession } from "./outbox-store-codec.ts";
 import {
   applyStoredChatOutboxScope,
   hasKnownSessionDefaults,
-  readStoredOutboxStore,
+  readProjectedOutboxStore,
   resolveComposerStorageScope,
   resolveStoredComposerSession,
   resolveStoredChatOutboxScope,
@@ -36,7 +36,7 @@ function listStoredComposerRows(
   }
   try {
     const target = storageTargetForGateway(state.settings?.gatewayUrl);
-    const store = readStoredOutboxStore(storage, target);
+    const store = readProjectedOutboxStore(storage, target);
     let migrated = false;
     const selectedAgentId = resolveUiKnownSelectedGlobalAgentId(state);
     const defaultAgentId = hasKnownSessionDefaults(state)

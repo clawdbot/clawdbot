@@ -123,6 +123,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
           },
           ctxPayload: context.ctxPayload,
           record: context.turn.record,
+          dispatchReplyFromConfig: turn.opts.dispatchReplyFromConfig,
           delivery: {
             deliverWithProviderMessageSending: async (payload, info) =>
               await deliverReply(turn, payload, info),

@@ -44,28 +44,24 @@ const CHUNKED_PAYLOAD_MAX_CHUNKS = optionalPositiveInteger(
   "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_CHUNKS",
 );
 
+function usageText() {
+  return [
+    "Usage:",
+    "  node --import tsx scripts/e2e/telegram-user-credential.ts export (--desktop-tdata-dir <path> | --desktop-tdata-archive <tdata.tgz>) --output <payload.json>",
+    "  node --import tsx scripts/e2e/telegram-user-credential.ts restore --payload-file <payload.json> --user-driver-dir <path> --desktop-workdir <path>",
+    "  node --import tsx scripts/e2e/telegram-user-credential.ts lease-restore --user-driver-dir <path> --desktop-workdir <path> --lease-file <lease.json> [--payload-output <payload.json>] [--env-file <path>] [--credential-role maintainer|ci]",
+    "  node --import tsx scripts/e2e/telegram-user-credential.ts heartbeat --lease-file <lease.json> [--env-file <path>] [--credential-role maintainer|ci]",
+    "  node --import tsx scripts/e2e/telegram-user-credential.ts heartbeat-loop --lease-file <lease.json> [--interval-ms <milliseconds>] [--env-file <path>] [--credential-role maintainer|ci]",
+    "  node --import tsx scripts/e2e/telegram-user-credential.ts release --lease-file <lease.json> [--env-file <path>] [--credential-role maintainer|ci]",
+  ].join("\n");
+}
+
 function usage(): never {
-  throw new Error(
-    [
-      "Usage:",
-      "  node --import tsx scripts/e2e/telegram-user-credential.ts export (--desktop-tdata-dir <path> | --desktop-tdata-archive <tdata.tgz>) --output <payload.json>",
-      "  node --import tsx scripts/e2e/telegram-user-credential.ts restore --payload-file <payload.json> --user-driver-dir <path> --desktop-workdir <path>",
-      "  node --import tsx scripts/e2e/telegram-user-credential.ts lease-restore --user-driver-dir <path> --desktop-workdir <path> --lease-file <lease.json> [--payload-output <payload.json>] [--env-file <path>] [--credential-role maintainer|ci]",
-      "  node --import tsx scripts/e2e/telegram-user-credential.ts release --lease-file <lease.json> [--env-file <path>] [--credential-role maintainer|ci]",
-    ].join("\n"),
-  );
+  throw new Error(usageText());
 }
 
 function printUsage() {
-  console.log(
-    [
-      "Usage:",
-      "  node --import tsx scripts/e2e/telegram-user-credential.ts export (--desktop-tdata-dir <path> | --desktop-tdata-archive <tdata.tgz>) --output <payload.json>",
-      "  node --import tsx scripts/e2e/telegram-user-credential.ts restore --payload-file <payload.json> --user-driver-dir <path> --desktop-workdir <path>",
-      "  node --import tsx scripts/e2e/telegram-user-credential.ts lease-restore --user-driver-dir <path> --desktop-workdir <path> --lease-file <lease.json> [--payload-output <payload.json>] [--env-file <path>] [--credential-role maintainer|ci]",
-      "  node --import tsx scripts/e2e/telegram-user-credential.ts release --lease-file <lease.json> [--env-file <path>] [--credential-role maintainer|ci]",
-    ].join("\n"),
-  );
+  console.log(usageText());
 }
 
 function parseArgs(argv: string[]) {
@@ -272,10 +268,22 @@ function joinBrokerEndpoint(siteUrl: string, endpoint: string) {
   return `${normalized}/qa-credentials/v1/${endpoint}`;
 }
 
+class QaCredentialBrokerError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.code = code;
+    this.name = "QaCredentialBrokerError";
+  }
+}
+
 function assertBrokerSuccess(payload: JsonObject, action: string) {
   if (payload.status === "error") {
-    throw new Error(
-      `${action} failed: ${requireString(payload, "code")} ${readOptionalCredentialString(payload, "message") || ""}`.trim(),
+    const code = requireString(payload, "code");
+    throw new QaCredentialBrokerError(
+      code,
+      `${action} failed: ${code} ${readOptionalCredentialString(payload, "message") || ""}`.trim(),
     );
   }
   if (payload.status !== "ok") {
@@ -711,7 +719,7 @@ async function releaseTelegramUserLeaseBody(params: {
   });
 }
 
-async function releaseTelegramUserLease(opts: Map<string, string>) {
+async function resolveTelegramUserLeaseAction(opts: Map<string, string>) {
   const leaseFile = opts.get("lease-file");
   if (!leaseFile) {
     usage();
@@ -719,6 +727,89 @@ async function releaseTelegramUserLease(opts: Map<string, string>) {
   const lease = await readJson(leaseFile);
   const leaseRole = resolveTelegramUserCredentialRole(requireString(lease, "actorRole"));
   const config = await resolveConvexLeaseConfig(opts, leaseRole);
+  return { config, lease, leaseFile };
+}
+
+async function heartbeatTelegramUserLeaseBody(params: {
+  lease: JsonObject;
+  leaseTtlMs: number;
+  siteUrl: string;
+  token: string;
+}) {
+  return postBroker({
+    action: "heartbeat",
+    siteUrl: params.siteUrl,
+    token: params.token,
+    body: {
+      kind: requireString(params.lease, "kind"),
+      ownerId: requireString(params.lease, "ownerId"),
+      actorRole: requireString(params.lease, "actorRole"),
+      credentialId: requireString(params.lease, "credentialId"),
+      leaseToken: requireString(params.lease, "leaseToken"),
+      leaseTtlMs: params.leaseTtlMs,
+    },
+  });
+}
+
+async function heartbeatTelegramUserLease(opts: Map<string, string>) {
+  const { config, lease } = await resolveTelegramUserLeaseAction(opts);
+  await heartbeatTelegramUserLeaseBody({
+    lease,
+    leaseTtlMs: config.leaseTtlMs,
+    siteUrl: config.siteUrl,
+    token: config.token,
+  });
+  console.log(
+    JSON.stringify({ status: "ok", credentialId: requireString(lease, "credentialId") }, null, 2),
+  );
+}
+
+async function heartbeatTelegramUserLeaseLoop(opts: Map<string, string>) {
+  const { config, lease, leaseFile } = await resolveTelegramUserLeaseAction(opts);
+  const intervalMs = optionalPositiveInteger(
+    opts.get("interval-ms"),
+    config.heartbeatIntervalMs,
+    "interval-ms",
+  );
+  const lostMarker = `${expandHome(leaseFile)}.lost`;
+  await unlink(lostMarker).catch((error: unknown) => {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  });
+
+  while (true) {
+    try {
+      await heartbeatTelegramUserLeaseBody({
+        lease,
+        leaseTtlMs: config.leaseTtlMs,
+        siteUrl: config.siteUrl,
+        token: config.token,
+      });
+    } catch (error) {
+      if (
+        error instanceof QaCredentialBrokerError &&
+        (error.code === "LEASE_NOT_OWNER" || error.code === "LEASE_EXPIRED")
+      ) {
+        await writePrivateJson(lostMarker, { code: error.code });
+        return;
+      }
+      // Heartbeats are idempotent, so all non-terminal failures are safe to retry. A lapsed
+      // lease returns LEASE_EXPIRED next time, making loss observable through the marker.
+      const code = error instanceof Error && "code" in error ? error.code : undefined;
+      const discriminator =
+        typeof code === "string" ? code : error instanceof Error ? error.name : "unknown";
+      console.error(`Credential lease heartbeat failed (${discriminator}); retrying.`);
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, intervalMs);
+    });
+  }
+}
+
+async function releaseTelegramUserLease(opts: Map<string, string>) {
+  const { config, lease, leaseFile } = await resolveTelegramUserLeaseAction(opts);
   await releaseTelegramUserLeaseBody({
     siteUrl: config.siteUrl,
     token: config.token,
@@ -743,6 +834,10 @@ async function main(argv = process.argv) {
     await restoreTelegramUserPayloadFromFile(opts);
   } else if (command === "lease-restore") {
     await leaseAndRestoreTelegramUser(opts);
+  } else if (command === "heartbeat") {
+    await heartbeatTelegramUserLease(opts);
+  } else if (command === "heartbeat-loop") {
+    await heartbeatTelegramUserLeaseLoop(opts);
   } else if (command === "release") {
     await releaseTelegramUserLease(opts);
   } else {

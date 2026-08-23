@@ -23,7 +23,12 @@ import {
   type ChatSessionScrollPosition,
 } from "../scroll.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
+import {
+  reconcileChatTranscriptInteractionResize,
+  resolveChatTranscriptInteractionRow,
+} from "./chat-transcript-interaction-anchor.ts";
 import { extractTranscriptRange, previewTranscriptRowKeys } from "./chat-transcript-range.ts";
+import { initialScrollMargin, syncScrollMargin } from "./chat-transcript-scroll-margin.ts";
 
 export type TranscriptRow<T = unknown> =
   | { kind: "item"; key: string; item: T }
@@ -65,20 +70,6 @@ function initialTranscriptRect(host: ReactiveControllerHost) {
     width: width || (typeof window === "undefined" ? 0 : window.innerWidth),
     height: height || (typeof window === "undefined" ? 0 : window.innerHeight),
   };
-}
-
-function transcriptScrollMargin(element: Element | null): number {
-  if (!(element instanceof HTMLElement) || typeof getComputedStyle !== "function") {
-    return 0;
-  }
-  const margin = Number.parseFloat(getComputedStyle(element).paddingTop);
-  return Number.isFinite(margin) ? margin : 0;
-}
-
-function initialTranscriptScrollMargin(host: ReactiveControllerHost): number {
-  return host instanceof HTMLElement
-    ? transcriptScrollMargin(host.querySelector(".chat-thread"))
-    : 0;
 }
 
 class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscriptSession {
@@ -140,6 +131,15 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
   private readonly measureRowRefs = new Map<string, (element?: Element) => void>();
   private pruneDetachedRowsQueued = false;
   private pendingRowMeasureFrame: number | null = null;
+  private pendingInteractionRow: HTMLElement | null = null;
+  private readonly captureInteractionResize = (event: Event) => {
+    const row = resolveChatTranscriptInteractionRow(event);
+    if (!row) {
+      return;
+    }
+    this.pendingInteractionRow = row;
+    this.host.requestUpdate();
+  };
   private measureConnectedRows(): void {
     // Only width invalidation owns forced DOM reads. Ordinary row refs stay on
     // TanStack's observer path so resizeItem cannot perturb scroll restoration.
@@ -151,7 +151,11 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       instance.resizeItem(index, size);
     }
   }
-  private readonly handleGeometryCommit = () => {
+  private readonly handleGeometryCommit = (event: Event) => {
+    this.reconcileInteractionResize(event.target);
+    if (event instanceof CustomEvent && event.detail?.widthChanged === false) {
+      return;
+    }
     const rect = this.scrollElement?.getBoundingClientRect();
     if (!rect || rect.width === 0 || rect.height === 0) {
       return;
@@ -233,7 +237,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       getItemKey: () => "",
       initialRect: initialTranscriptRect(host),
       initialOffset: initialOffset ?? Number.MAX_SAFE_INTEGER,
-      scrollMargin: initialTranscriptScrollMargin(host),
+      scrollMargin: initialScrollMargin(host),
       anchorTo: "end",
       followOnAppend: false,
       observeElementRect: (instance, callback) =>
@@ -258,7 +262,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
               CHAT_TRANSCRIPT_END_THRESHOLD_PX;
           this.observedWidth = rect.width;
           this.observedHeight = rect.height;
-          this.syncScrollMargin(instance.scrollElement);
+          syncScrollMargin(instance.scrollElement, instance);
           callback(rect);
           if (wasAtEndBeforeResize) {
             instance.scrollToEnd({ behavior: "auto" });
@@ -328,6 +332,7 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     for (const controller of this.controllers) {
       controller.hostUpdated?.();
     }
+    this.reconcileInteractionResize();
     this.reconcileImplicitEndAnchor();
     this.applyPendingScrollOffset();
   }
@@ -389,7 +394,11 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
         this.syncAnnouncement(announcement, announce);
         const virtualRows = virtualizer.getVirtualItems();
         return html`
-          <div class="chat-thread-inner chat-thread-inner--virtual" ${ref(this.scrollElementRef)}>
+          <div
+            class="chat-thread-inner chat-thread-inner--virtual"
+            ${ref(this.scrollElementRef)}
+            @click=${this.captureInteractionResize}
+          >
             <div
               class="chat-virtual-sizer"
               style=${styleMap({ height: `${virtualizer.getTotalSize()}px` })}
@@ -530,6 +539,20 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     this.focusedRowKey = this.rowKeyFromEvent(event, event.relatedTarget);
   }
 
+  private reconcileInteractionResize(sidebarCommitTarget?: EventTarget | null): void {
+    const virtualizer = this.virtualizerController.getVirtualizer();
+    if (
+      reconcileChatTranscriptInteractionResize(
+        this.pendingInteractionRow,
+        sidebarCommitTarget,
+        this.scrollElement,
+        virtualizer,
+      )
+    ) {
+      this.pendingInteractionRow = null;
+    }
+  }
+
   private rowKeyFromEvent(event: FocusEvent, target: EventTarget | null = event.target) {
     if (!(target instanceof Element) || !this.scrollElement?.contains(target)) {
       return null;
@@ -581,18 +604,6 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
         align: "end",
       });
     }
-  }
-
-  private syncScrollMargin(scrollElement: HTMLDivElement | null): void {
-    const scrollMargin = transcriptScrollMargin(scrollElement);
-    const virtualizer = this.virtualizerController.getVirtualizer();
-    if (scrollMargin === virtualizer.options.scrollMargin) {
-      return;
-    }
-    virtualizer.setOptions({
-      ...virtualizer.options,
-      scrollMargin,
-    });
   }
 
   private reconcileImplicitEndAnchor(): void {

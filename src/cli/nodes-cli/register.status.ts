@@ -489,7 +489,7 @@ export function registerNodesStatusCommands(nodes: Command) {
             defaultRuntime.log(muted("- (none effective)"));
           } else {
             for (const c of commands) {
-              defaultRuntime.log(`- ${c}`);
+              defaultRuntime.log(`- ${sanitizeTerminalText(c)}`);
             }
           }
           if (pendingCommands.length > 0) {

@@ -5,6 +5,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { createTerminalTool } from "../agents/tools/terminal-tool.js";
 import {
   getGlobalPluginRegistry,
   initializeGlobalHookRunner,
@@ -596,12 +597,29 @@ describe("loadGatewayPlugins", () => {
   });
 
   test("binds channel reply dispatch to the owning Gateway context", async () => {
+    const terminalSessions = { listAgent: vi.fn(() => []) };
     const context = {
       label: "channel-reply-owner",
       workerSessionPlacementService: { getMany: vi.fn(() => new Map()) },
+      terminalSessions,
     } as unknown as GatewayRequestContext;
     serverPluginsModule.setFallbackGatewayContext(context);
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+    dispatchReplyFromConfig.mockImplementationOnce(async () => {
+      const result = await createTerminalTool({
+        agentId: "main",
+        agentSessionKey: "agent:main:telegram:direct:123",
+        sessionId: "session-123",
+      }).execute("terminal-list", { action: "list" });
+      expect(result.details).toEqual({ sessions: [] });
+      expect(terminalSessions.listAgent).toHaveBeenCalledWith({
+        kind: "agent",
+        agentId: "main",
+        agentSessionKey: "agent:main:telegram:direct:123",
+        agentSessionId: "session-123",
+      });
+      return { counts: {}, queuedFinal: false };
+    });
 
     loadGatewayPluginsForTest();
     const runtimeOptions = getLastPluginLoadOption("runtimeOptions") as

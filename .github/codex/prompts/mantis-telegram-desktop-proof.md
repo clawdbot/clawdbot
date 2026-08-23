@@ -8,7 +8,7 @@ continuous event recording, capture, and cleanup.
 
 - No PR mutations, commits, pushes, labels, reviews, or merges.
 - Do not read prepared worktrees. Pass their exact paths only to the lane helper.
-- Write only under `MANTIS_OUTPUT_DIR`.
+- Write only under `MANTIS_OUTPUT_DIR` and the fixture staging directory described below.
 - Never invent a pass, hide an attempt, edit trusted facts/media, or use old chat history.
 - A visible defect is a failure. An unproven comparison is `block`, not a pass.
 
@@ -48,6 +48,16 @@ mock OpenAI endpoint; the QA user is the gateway owner, so owner commands such a
 `/send off` work without a patch.
 Optional field: `mockResponseChunkDelayMs`.
 
+For scenarios that need an agent-authored plugin, write a complete plugin package
+under `MANTIS_FIXTURE_PLUGINS_DIR/baseline` and/or
+`MANTIS_FIXTURE_PLUGINS_DIR/candidate` before `start`. The harness copies the
+selected lane directory into that lane's isolated SUT; fixture code never runs on
+the runner host. Add the fixture id through `configPatch.plugins.allow` while
+retaining `telegram` and `openai`, then enable it through its entry or owning slot.
+Do not set `plugins.load.paths`; the harness owns that path. Use the same fixture
+package in both lane directories for a fair comparison unless different fixtures
+are an explicit part of the scenario.
+
 ## Primitive CLI
 
 Use `$OPENCLAW_TELEGRAM_MANTIS_LANE_CMD` with `--lane baseline|candidate`:
@@ -70,7 +80,8 @@ Use `$OPENCLAW_TELEGRAM_MANTIS_LANE_CMD` with `--lane baseline|candidate`:
 [--until-provider-requests N]` (returns early when all supplied conditions hold;
   event/text conditions count only events after the cursor, provider count is
   cumulative for the lane)
-- `requests` (redacted provider requests; zero is a valid recorded fact)
+- `requests` (redacted provider requests; media/file items appear as structured
+  `contentFacts`; zero is a valid recorded fact)
 - `press --message-id ID --button INDEX`
 - `delete --message-id ID` (only user messages sent in this session)
 - `desktop --actions-file <public-json> [--timeout-seconds N]` (run an
@@ -95,6 +106,9 @@ from `responseEvents` in `scripts/e2e/mock-openai-server.mjs`, and use
 `packages/ai/src/transports/openai-responses-stream-parity.test.ts` for reasoning
 event examples. These harness sources are safe to read; prepared proof worktrees
 remain off limits.
+The SUT agent runs Code Mode. Script catalog-tool turns as an `exec` function
+call whose JavaScript invokes the catalog tool, such as `pdf(...)`. See
+`mantis-recipes/staged-media-provider-proof.md` for the complete event script.
 For normal group turns, address the current bot with `@{sut}`; the harness
 expands it to the live SUT username. Omit it only when an unmentioned message
 is intentionally part of the scenario.
@@ -116,10 +130,13 @@ baseline lane that reproduces the defect is a successful capture. A PR-level
 pass claim requires an observed, material baseline/candidate difference caused
 by the changed behavior. That difference may be trusted Bot API payload/status
 facts even when pixels are identical; screenshots remain comparison context.
-Provider request logs are diagnostic and pacing signals, not standalone
-comparison evidence. Identical pixels alone do not force `block` when the
-trusted recorded facts differ materially. If neither pixels nor trusted facts prove a
-difference, use `block`. When the expected result is silence, focus the
+Provider request facts are tamper-evident comparison evidence: the provider
+sidecar records them outside the candidate runtime, so candidate code cannot
+alter or remove a recorded request after the fact. Requests still originate
+inside the SUT, so the facts prove what the candidate runtime sent — the
+behavior under proof — not who sent it. Identical pixels alone do not force `block`
+when the recorded facts differ materially. If neither pixels nor recorded facts
+prove a difference, use `block`. When the expected result is silence, focus the
 session-owned user message that triggered the silent outcome.
 Decide before finalizing each lane. If its setup did not exercise the intended
 behavior, call `block`; do not call `finish` and describe the block only in prose.
@@ -129,7 +146,9 @@ behavior, call `block`; do not call `finish` and describe the block only in pros
 Inspect `mantis-lane-facts.json`, every returned event/request, the inspection
 PNG, final PNG, and cropped GIF. Confirm the evaluated message is fully visible
 near the bottom and the recording covers the behavior—not only its final state.
-Iterate as needed; all attempts remain recorded.
+Iteration is allowed, but if `start` reports `desktop-unavailable`, record that
+fact and use `block`; never retry that lane. Two non-advancing repeats of the
+same failing step mean classify and stop, not retry. All attempts remain recorded.
 
 If you design a novel working scenario worth reusing, optionally write
 `MANTIS_OUTPUT_DIR/recipe-suggestion.md` with its trigger, exact commands, and

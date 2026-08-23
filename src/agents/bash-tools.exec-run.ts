@@ -32,6 +32,7 @@ import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import {
+  assertSupportedExecParams,
   createExecRequestPreparation,
   type ExecToolArgs,
   resolveExecPreparedRunEnvironment,
@@ -176,9 +177,7 @@ export function createExecTool(
     finalizeBeforeToolCallParams: requestPreparation.finalizeBeforeToolCallParams,
     execute: async (toolCallId, args, signal, onUpdate) => {
       signal?.throwIfAborted();
-      if (Object.hasOwn(args, "timeout")) {
-        throw new Error('exec parameter "timeout" is unsupported; use "timeoutSeconds" instead');
-      }
+      assertSupportedExecParams(args);
       // Review cancellation belongs to this execution, never another call on the shared tool.
       const autoReviewer =
         defaults?.autoReviewer ??

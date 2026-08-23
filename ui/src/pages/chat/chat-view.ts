@@ -158,7 +158,6 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     approvalBusy?: boolean;
     approvalCanGrant: boolean;
     approvalErrors?: ReadonlyMap<string, string>;
-    approvalNowMs?: number;
     onApprovalDecision?: (
       approvalId: string,
       decision: ExecApprovalDecision,
@@ -568,7 +567,6 @@ export function renderChat(props: ChatProps) {
                           busy: props.approvalBusy === true,
                           canGrant: props.approvalCanGrant,
                           error: props.approvalErrors?.get(props.inlineApproval.id) ?? null,
-                          nowMs: props.approvalNowMs ?? Date.now(),
                           variant: "inline",
                           onDecision: props.onApprovalDecision,
                         })}

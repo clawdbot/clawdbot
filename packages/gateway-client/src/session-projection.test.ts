@@ -106,6 +106,42 @@ describe("readSessionMessageIdentity", () => {
     expect(normalizeSessionProjectionRunId(input)).toBe(expected);
   });
 
+  it("recovers the originating run from a persisted CLI assistant send key", () => {
+    expect(
+      readSessionMessageIdentity({
+        role: "assistant",
+        api: "cli",
+        content: "Done",
+        idempotencyKey: "cli-assistant:run-cli-1",
+      }),
+    ).toMatchObject({
+      idempotencyKey: "cli-assistant:run-cli-1",
+      runId: "run-cli-1",
+    });
+  });
+
+  it("keeps assistant dedupe identity separate from producer-owned run identity", () => {
+    expect(
+      readSessionMessageIdentity({
+        role: "assistant",
+        content: "Commentary",
+        idempotencyKey: "codex-app-server:thread-1:turn-1:commentary:item-1",
+        __openclaw: { mirrorOrigin: "codex-app-server", runId: "run-1" },
+      }),
+    ).toMatchObject({
+      idempotencyKey: "codex-app-server:thread-1:turn-1:commentary:item-1",
+      runId: "run-1",
+    });
+    expect(
+      readSessionMessageIdentity({
+        role: "assistant",
+        content: "Imported history",
+        idempotencyKey: "codex-app-server:thread-1:history:turn-1:assistant",
+        __openclaw: { mirrorOrigin: "codex-app-server" },
+      }),
+    ).toHaveProperty("runId", null);
+  });
+
   it("requires every imported source component before claiming provider identity", () => {
     const identity = readSessionMessageIdentity(
       createMessage("user", "imported", {
@@ -200,6 +236,22 @@ describe("session transcript projection", () => {
     state = projectLiveSessionMessage(state, persisted, { runId: "final-run" });
 
     expect(state.messages).toEqual([persisted]);
+  });
+
+  it("does not promote a provisional final into same-run Codex commentary", () => {
+    const commentary = createMessage("assistant", "commentary", {
+      id: "commentary-1",
+      mirrorOrigin: "codex-app-server",
+      runId: "run-1",
+    });
+    const final = createMessage("assistant", "final answer");
+    let state = projectLiveSessionMessage(createSessionProjection(primaryScope), commentary, {
+      runId: "run-1",
+    });
+
+    state = projectLiveSessionMessage(state, final, { runId: "run-1" });
+
+    expect(state.messages).toEqual([commentary, final]);
   });
 
   it("keeps the durable assistant identity when its run's terminal projection replays", () => {

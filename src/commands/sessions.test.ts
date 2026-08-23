@@ -1,5 +1,10 @@
 // Sessions command tests cover listing, details, filtering, and transcript display behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  assignSessionOwner,
+  recordSessionParticipant,
+} from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   cleanupStore,
@@ -52,7 +57,7 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("agent:main:+15555550123")) ?? "";
     expect(row).toBe(
-      "direct      agent:main:+15555550123    45m ago   test:opus      OpenAI Codex       2.0k/200k (1%)       id:abc123",
+      "direct      agent:main:+15555550123    45m ago   test:opus      OpenAI Codex       2.0k/200k (1%)       visibility:shared id:abc123",
     );
   });
 
@@ -110,7 +115,7 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
     expect(row).toBe(
-      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
+      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    visibility:shared id:main-session",
     );
   });
 
@@ -144,7 +149,7 @@ describe("sessionsCommand", () => {
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
     expect(row).toBe(
-      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
+      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    visibility:shared id:main-session",
     );
   });
 
@@ -277,6 +282,99 @@ describe("sessionsCommand", () => {
     expect(main?.totalTokensFresh).toBe(true);
     expect(group?.totalTokens).toBeNull();
     expect(group?.totalTokensFresh).toBe(false);
+  });
+
+  it("defaults missing collaboration visibility to shared in JSON output", async () => {
+    const sessionKey = "agent:main:legacy-shared";
+    const store = await writeStore(
+      {
+        [sessionKey]: {
+          sessionId: "legacy-shared-session",
+          updatedAt: Date.now() - 60_000,
+          model: "test:opus",
+        },
+      },
+      "sessions-default-visibility",
+    );
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{ key: string; visibility?: SessionEntry["visibility"] }>;
+    }>(sessionsCommand, store);
+    expect(payload.sessions?.find((entry) => entry.key === sessionKey)).toMatchObject({
+      visibility: "shared",
+    });
+  });
+
+  it("preserves collaboration metadata in JSON and human output", async () => {
+    const sessionKey = "agent:main:shared";
+    const store = await writeStore(
+      {
+        [sessionKey]: {
+          sessionId: "shared-session",
+          updatedAt: Date.now() - 60_000,
+          model: "test:opus",
+          visibility: "suggest",
+          createdActor: { type: "human", id: "profile-creator", label: "Creator" },
+        },
+      },
+      "sessions-collaboration",
+    );
+    const scope = { agentId: "main", sessionKey, storePath: store };
+    assignSessionOwner(scope, {
+      owner: { type: "human", id: "profile-owner", label: "Grace" },
+      assignedBy: { type: "human", id: "profile-admin", label: "Admin" },
+      assignedAt: Date.now() - 30_000,
+    });
+    for (const [id, label] of [
+      ["profile-ada", "Ada"],
+      ["profile-ben", "Ben"],
+      ["profile-cam", "Cam"],
+      ["profile-dee", "Dee"],
+      ["profile-eli", "Eli"],
+    ] as const) {
+      recordSessionParticipant(scope, {
+        actor: { type: "human", id, label },
+        source: "profile",
+      });
+    }
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+    const row = logs.find((line) => line.includes(sessionKey)) ?? "";
+    expect(row).toContain(
+      "visibility:suggest owner:profile-owner participants:profile-ada,profile-ben,profile-cam,profile-dee,+1",
+    );
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<
+        Pick<
+          SessionEntry,
+          "visibility" | "createdActor" | "owner" | "participants" | "participantCount"
+        > & {
+          key: string;
+          sharingRole?: unknown;
+        }
+      >;
+    }>(sessionsCommand, store);
+    const shared = payload.sessions?.find((entry) => entry.key === sessionKey);
+    expect(shared).toMatchObject({
+      visibility: "suggest",
+      createdActor: { type: "human", id: "profile-creator" },
+      owner: {
+        actor: { type: "human", id: "profile-owner" },
+        assignedBy: { type: "human", id: "profile-admin" },
+        assignedAt: Date.now() - 30_000,
+      },
+      participantCount: 5,
+      participants: [
+        { type: "human", id: "profile-ada", source: "profile" },
+        { type: "human", id: "profile-ben", source: "profile" },
+        { type: "human", id: "profile-cam", source: "profile" },
+        { type: "human", id: "profile-dee", source: "profile" },
+        { type: "human", id: "profile-eli", source: "profile" },
+      ],
+    });
+    expect(shared).not.toHaveProperty("sharingRole");
   });
 
   it("reports the SQLite database and omits the retired sessionFile field", async () => {

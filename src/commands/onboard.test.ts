@@ -463,44 +463,35 @@ describe("setupWizardCommand", () => {
     expect(mocks.runGuidedOnboarding).not.toHaveBeenCalled();
   });
 
-  it("fails fast for invalid non-interactive --mode before reset", async () => {
+  it.each([
+    { mode: "typo", json: true },
+    { mode: "", json: false },
+  ])("fails fast for invalid non-interactive --mode $mode before reset", async ({ mode, json }) => {
     const runtime = makeRuntime();
+    const message = `Invalid --mode "${mode}". Use "local" or "remote", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`;
 
     await setupWizardCommand(
       {
         reset: true,
         nonInteractive: true,
         acceptRisk: true,
-        mode: "typo" as never,
+        mode: mode as never,
+        ...(json && { json }),
       },
       runtime,
     );
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      `Invalid --mode "typo". Use "local" or "remote", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
-    );
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(message);
+    if (json) {
+      expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
+        JSON.stringify({ ok: false, phase: "options", message }, null, 2),
+      );
+    } else {
+      expect(runtime.log).not.toHaveBeenCalled();
+    }
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(mocks.handleReset).not.toHaveBeenCalled();
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
-  });
-
-  it("fails fast for an empty non-interactive --mode before reset", async () => {
-    const runtime = makeRuntime();
-
-    await setupWizardCommand(
-      {
-        reset: true,
-        nonInteractive: true,
-        acceptRisk: true,
-        mode: "" as never,
-      },
-      runtime,
-    );
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      `Invalid --mode "". Use "local" or "remote", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
-    );
-    expect(mocks.handleReset).not.toHaveBeenCalled();
   });
 
   it("validates a remote URL before reset", async () => {

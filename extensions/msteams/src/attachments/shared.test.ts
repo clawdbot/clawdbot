@@ -534,6 +534,11 @@ describe("Graph shared-link helpers", () => {
     ["https://graph.microsoft.com/v1.0/me", false],
     ["https://smba.trafficmanager.net/amer/v3", false],
     ["https://example.com/file.pdf", false],
+    ["https://notonedrive.com/x", false],
+    ["https://evil1drv.ms/x", false],
+    ["https://fakeonedrive.live.com/x", false],
+    ["https://evilsharepoint.com/x", false],
+    ["http://onedrive.com/x", false],
     ["not-a-url", false],
   ])("isGraphSharedLinkUrl(%s) === %s", (url, expected) => {
     expect(isGraphSharedLinkUrl(url)).toBe(expected);

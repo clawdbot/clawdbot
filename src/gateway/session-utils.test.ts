@@ -919,6 +919,37 @@ describe("gateway session utils", () => {
     ).toBe(128_000);
   });
 
+  test("session rows project the selected catalog context window", () => {
+    const catalog = [
+      {
+        provider: "claude-cli",
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        contextWindow: 1_000_000,
+        contextWindows: [
+          { id: "200k", label: "200K", contextWindow: 200_000 },
+          { id: "1m", label: "1M", contextWindow: 1_000_000 },
+        ],
+        contextWindowDefault: "1m",
+      },
+    ];
+    const cfg = createModelDefaultsConfig({ primary: "claude-cli/claude-fable-5" });
+
+    const defaults = getSessionDefaults(cfg, catalog);
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: { sessionId: "ctx", contextWindow: "200k" } as SessionEntry,
+      modelCatalog: catalog,
+    });
+
+    expect(defaults).toMatchObject({ contextWindow: "1m", contextTokens: 1_000_000 });
+    expect(row).toMatchObject({ contextWindow: "200k", contextTokens: 200_000 });
+    expect(row.contextWindows).toEqual(catalog[0]?.contextWindows);
+  });
+
   test("session rows project automation bindings and event fields forward them", () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
     registerSessionAutomationSource({

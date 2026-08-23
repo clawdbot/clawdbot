@@ -68,6 +68,7 @@ function backgroundTasks(selectedTask: TaskSummary): BackgroundTasksProps {
     loading: false,
     error: null,
     tasks: [selectedTask],
+    activeCount: selectedTask.status === "queued" || selectedTask.status === "running" ? 1 : 0,
     subagentActivity: {
       rows: [],
       overflowWorking: 0,
@@ -99,7 +100,6 @@ function renderDetail(host: TaskDetailHost, content: SidebarContent, layout: Sid
     backgroundTasks: backgroundTasks(task("running")),
     chat: { paneId: "pane-1" } as ChatProps,
     content,
-    fullMessageLoader: null,
     host: host as ChatPageHost,
     layout,
     transcript: {} as ChatTranscriptController,

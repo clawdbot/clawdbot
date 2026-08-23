@@ -11,10 +11,12 @@ import {
   readScopeUpgradeAvailability,
   type ScopeUpgradeState,
 } from "./device-scope-upgrade-availability.ts";
-import { SCOPE_UPGRADE_DETAILS_EVENT } from "./device-scope-upgrade.ts";
+import {
+  SCOPE_UPGRADE_DETAILS_EVENT,
+  SCOPE_UPGRADE_TRIGGER_ID,
+  renderScopeUpgradeTrigger,
+} from "./device-scope-upgrade.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
-
-const SCOPE_UPGRADE_TRIGGER_ID = "scope-upgrade-trigger";
 
 type UpgradeOperation = {
   client: GatewayBrowserClient;
@@ -281,16 +283,10 @@ class ScopeUpgradeSurface extends OpenClawLightDomContentsElement {
       </button>
     </div>`;
     const trigger = props.showTrigger
-      ? html`<button
-          id=${SCOPE_UPGRADE_TRIGGER_ID}
-          type="button"
-          class="shell-chrome-controls__button scope-upgrade-shell-status scope-upgrade-status-trigger"
-          aria-label=${t("connection.scopeUpgrade.showDetails")}
-          aria-haspopup="dialog"
-          @click=${this.showDetailsFromTrigger}
-        >
-          ${icons.shieldQuestion}
-        </button>`
+      ? renderScopeUpgradeTrigger(
+          "shell-chrome-controls__button scope-upgrade-shell-status scope-upgrade-status-trigger",
+          this.showDetailsFromTrigger,
+        )
       : nothing;
     if (props.mobile) {
       return html`${trigger}${this.detailsOpen

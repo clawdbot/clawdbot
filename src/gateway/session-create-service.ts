@@ -147,6 +147,7 @@ async function existingModelSelectionWouldChange(params: {
   existingEntry: SessionEntry;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   requestedModel?: string;
+  requestedContextWindow?: string;
   requestedThinkingLevel?: string;
   subagentModelHint?: string;
 }): Promise<boolean> {
@@ -157,6 +158,13 @@ async function existingModelSelectionWouldChange(params: {
     return true;
   }
   const requestedThinkingLevel = normalizeOptionalString(params.requestedThinkingLevel);
+  const requestedContextWindow = normalizeOptionalString(params.requestedContextWindow);
+  if (
+    requestedContextWindow &&
+    requestedContextWindow !== normalizeOptionalString(params.existingEntry.contextWindow)
+  ) {
+    return true;
+  }
   if (
     requestedThinkingLevel &&
     requestedThinkingLevel !== normalizeOptionalString(params.existingEntry.thinkingLevel)
@@ -279,6 +287,7 @@ export async function createGatewaySession(params: {
   label?: string;
   category?: string;
   model?: string;
+  contextWindow?: string;
   thinkingLevel?: string;
   /** Registry identity recorded only when this request creates a logical session node. */
   projectId?: string;
@@ -967,6 +976,7 @@ export async function createGatewaySession(params: {
         // `created` event; only a genuinely new row is a node creation.
         createdNewEntry = existingEntry === undefined;
         const requestedModel = normalizeOptionalString(params.model);
+        const requestedContextWindow = normalizeOptionalString(params.contextWindow);
         const requestedThinkingLevel = normalizeOptionalString(params.thinkingLevel);
         if (existingEntry?.sessionId && params.allowExistingModelSelection !== true) {
           const gateDefaultModel = resolveDefaultModelForAgent({
@@ -982,6 +992,7 @@ export async function createGatewaySession(params: {
             existingEntry,
             loadGatewayModelCatalog: params.loadGatewayModelCatalog,
             requestedModel,
+            requestedContextWindow,
             requestedThinkingLevel,
             subagentModelHint: isSubagentSessionKey(target.canonicalKey)
               ? resolveSubagentConfiguredModelSelection({
@@ -1009,12 +1020,18 @@ export async function createGatewaySession(params: {
             ),
           storeKey: target.canonicalKey,
           agentId: target.agentId,
+          // Patch appliers read key presence as caller intent (present = change,
+          // null = clear), so omitted create fields must stay absent: a present
+          // undefined model trips the selection lock and drops modelFallback,
+          // and present undefined contextWindow/thinkingLevel take the
+          // reject-invalid branch instead of the model-change clearing branch.
           patch: {
             key: target.canonicalKey,
             label: normalizeOptionalString(params.label),
             category: normalizeOptionalString(params.category),
-            model: catalogModel ?? requestedModel,
-            thinkingLevel: requestedThinkingLevel,
+            ...((catalogModel ?? requestedModel) ? { model: catalogModel ?? requestedModel } : {}),
+            ...(requestedContextWindow ? { contextWindow: requestedContextWindow } : {}),
+            ...(requestedThinkingLevel ? { thinkingLevel: requestedThinkingLevel } : {}),
           },
           loadGatewayModelCatalog: params.loadGatewayModelCatalog,
           authorizedAgentHarnessId: params.authorizedAgentHarnessId,
