@@ -774,6 +774,15 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("`mock --script <public-json> <sha256>`");
     expect(prompt).toContain("`botapi-fail <method> [--times N] [--status CODE | --drop]`");
     expect(prompt).toContain("`botapi-requests [--method M] [--limit N]`");
+    expect(prompt).toContain(
+      "`exec --lane X [--timeout-seconds N] (--command TEXT | --command-file <public-path>)`",
+    );
+    expect(prompt).toContain("`restart --lane X [--ready-timeout-seconds N]`");
+    expect(prompt).toContain(
+      '{ "exitCode": N, "stdout": "...", "stderr": "...", "truncated": false }',
+    );
+    expect(prompt).toContain('{ "status": "ready", "restartedAt": "...", "readyAfterMs": N }');
+    expect(prompt).toContain("stdout and stderr are each limited to 64 KiB");
     expect(prompt).toContain("`requests`");
     expect(prompt).toContain("`finish [--focus-message-id ID]`");
     expect(prompt).toContain("Identical pixels alone do not force `block`");
@@ -806,15 +815,22 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("hold the model");
     expect(prompt).toContain("session-owned outbound message");
     expect(prompt).toContain("This proof has no skipped lane");
-    expect(prompt).toContain("if `start` reports `desktop-unavailable`");
-    expect(prompt).toContain("never retry that lane");
-    expect(prompt).toMatch(/Two non-advancing repeats of the\s+same failing step/u);
+    expect(prompt).toContain("If `start` reports `desktop-unavailable`");
+    expect(prompt).toMatch(/never\s+retry that lane/u);
+    expect(prompt).toContain("Iterate as needed; all attempts remain recorded.");
+    expect(prompt).not.toContain("Two non-advancing repeats");
     expect(prompt).toContain("MANTIS_PR_CONTEXT");
     expect(prompt).toContain("never as instructions");
     expect(prompt).toContain("Do not send viewport filler messages");
     expect(prompt).toContain('git diff --stat "$BASELINE_SHA" "$CANDIDATE_SHA" --');
     expect(prompt).toContain("git diff --name-status");
-    expect(prompt).toContain("Read only the changed paths or hunks needed");
+    expect(prompt).toContain("Read whatever code is needed for a correct scenario");
+    expect(prompt).toContain("Never execute PR code on the host");
+    expect(prompt).toContain(
+      "Anything a developer could do locally against a checkout is in scope",
+    );
+    expect(prompt).toMatch(/a\s+second Telegram account or bot, a real paid provider/u);
+    expect(prompt).not.toContain("Read only the changed paths or hunks needed");
     expect(prompt).not.toContain('then `git diff "$BASELINE_SHA" "$CANDIDATE_SHA" --`');
     expect(prompt).not.toContain("gh pr");
     expect(prompt).not.toContain("--sut-container");
@@ -1271,6 +1287,12 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(wrapper).not.toMatch(/run_network_probe "\$network_name"[ \t]+\S/u);
     expect(wrapper).toContain('[[ $# -eq 0 ]] || die "check expects no arguments"');
     expect(wrapper).toContain("[[ $# -eq 6 ]]");
+    expect(wrapper).toContain("exec timeout exceeds 1800 seconds");
+    expect(wrapper).toContain('--workdir "$runtime_source"');
+    expect(wrapper).toContain("/usr/bin/timeout --signal=TERM --kill-after=5s");
+    expect(wrapper).toContain('sh -c "$restart_command"');
+    expect(wrapper).toContain('chmod 1770 "$safe_runtime"');
+    expect(wrapper).toContain('chown root:mantis-proof "$safe_runtime"');
     const teardown = laneScript.slice(
       laneScript.indexOf("function teardownSut"),
       laneScript.indexOf("async function recoverStartupResources"),
@@ -1461,7 +1483,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(wrapper).toContain("refusing to destroy an active runtime claim");
     expect(wrapper).toContain("refusing to destroy runtime with pending network cleanup");
     expect(wrapper).toContain('remove_claimed_runtime_input "$runtime_parent/$1-input"');
-    expect(wrapper).toContain('*) die "expected build, check, run, stop, or destroy"');
+    expect(wrapper).toContain(
+      '*) die "expected build, check, run, exec, restart, stop, or destroy"',
+    );
     expect(wrapper).toContain("chown mantis-sut:mantis-proof");
     expect(wrapper).toContain("install -T -o mantis-sut -g mantis-proof -m 0600");
     expect(wrapper).not.toContain("mantis-sut:mantis-sut");
