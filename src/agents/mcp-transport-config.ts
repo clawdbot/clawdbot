@@ -74,7 +74,7 @@ const warnedDroppedStdioEnvKeys = createDedupeCache({
 function warnDroppedStdioEnvOnce(serverName: string, key: string): void {
   const logServerName = sanitizeForLog(serverName);
   const logKey = sanitizeForLog(key);
-  if (warnedDroppedStdioEnvKeys.check(`${logServerName}:${logKey}`)) {
+  if (warnedDroppedStdioEnvKeys.check(JSON.stringify([serverName, key]))) {
     return;
   }
   logWarn(
