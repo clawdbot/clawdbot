@@ -121,6 +121,23 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun stopTtsCancelsTheOutputOwnedWhenTheActionStarted() =
+    runTest {
+      val manager = createManager(scope = this)
+      val priorClear = CompletableDeferred<String?>()
+      setPrivateField(manager, "realtimeSessionId", "relay-a")
+      setPrivateField(manager, "realtimeOutputTurnId", "turn-a")
+      setPrivateField(manager, "pendingRealtimeOutputClear", priorClear)
+
+      manager.stopTts()
+      setPrivateField(manager, "realtimeSessionId", null)
+      setPrivateField(manager, "realtimeOutputTurnId", "turn-b")
+      runCurrent()
+
+      assertNull(readPrivateField(manager, "pendingRealtimeOutputClear"))
+    }
+
+  @Test
   fun disablingPlaybackCancelsTrackedJobOnce() {
     val manager = createManager()
     val playbackJob = Job()

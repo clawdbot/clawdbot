@@ -1725,6 +1725,8 @@ class TalkModeManager internal constructor(
   }
 
   internal suspend fun pauseRealtimeCaptureForPushToTalk(captureId: String) {
+    val cancellationSessionId = realtimeSessionId
+    val cancellationTurnId = realtimeOutputTurnId?.trim()?.takeIf(String::isNotEmpty)
     val captureJobs =
       synchronized(realtimeCapturePauseLock) {
         val currentSessionId = realtimeSessionId
@@ -1741,7 +1743,13 @@ class TalkModeManager internal constructor(
     appendJob?.cancelAndJoin()
     // Stop input first so no frame can create new provider output while the
     // cancellation boundary is being established.
-    if (!cancelRealtimeOutput(reason = "android-push-to-talk")) {
+    if (
+      !cancelRealtimeOutput(
+        reason = "android-push-to-talk",
+        sessionId = cancellationSessionId,
+        turnId = cancellationTurnId,
+      )
+    ) {
       Log.w(tag, "realtime output cancellation was not confirmed; closing relay")
       stopRealtimeRelay(preserveStatus = true)
       synchronized(realtimeCapturePauseLock) {
@@ -2916,18 +2924,32 @@ class TalkModeManager internal constructor(
   }
 
   fun stopTts() {
+    val sessionId = realtimeSessionId
+    val turnId = realtimeOutputTurnId?.trim()?.takeIf(String::isNotEmpty)
     realtimeOutputSuppressed = true
     stopRealtimePlayback()
-    scope.launch { cancelRealtimeOutput(reason = "android-stop-tts") }
+    if (sessionId != null && turnId != null) {
+      scope.launch {
+        cancelRealtimeOutput(
+          reason = "android-stop-tts",
+          sessionId = sessionId,
+          turnId = turnId,
+        )
+      }
+    }
     stopSpeaking(resetInterrupt = true)
     _isSpeaking.value = false
     setStatus(nativeText("Listening"))
   }
 
-  private suspend fun cancelRealtimeOutput(reason: String): Boolean =
+  private suspend fun cancelRealtimeOutput(
+    reason: String,
+    sessionId: String?,
+    turnId: String?,
+  ): Boolean =
     realtimeOutputCancellationMutex.withLock {
-      val sessionId = realtimeSessionId ?: return@withLock true
-      val turnId = realtimeOutputTurnId?.trim()?.takeIf(String::isNotEmpty) ?: return@withLock false
+      sessionId ?: return@withLock true
+      turnId ?: return@withLock false
       val clear = CompletableDeferred<String?>()
       pendingRealtimeOutputClear = clear
       try {
