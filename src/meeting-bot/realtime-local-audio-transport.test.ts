@@ -131,7 +131,7 @@ describe("local meeting realtime audio transport", () => {
       bargeInInputCommand: ["barge"],
       spawn: spawn as never,
     });
-    transport.startBargeInMonitor?.(() => {});
+    transport.startBargeInMonitor?.(() => false);
 
     for (const [command, label] of [
       ["play", "audio output"],
