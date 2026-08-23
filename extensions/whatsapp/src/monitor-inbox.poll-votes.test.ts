@@ -330,7 +330,7 @@ describe("web monitor inbox poll vote hook", () => {
     const baileysCache = createBaileysCacheSupport();
     const pollMessageId = "POLL-HOOK-THROWS";
     const voteMessageId = "VOTE-HOOK-THROWS";
-    const { message: pollCreationMessage, pollEncKey } = buildPollCreationMessageForTests({
+    const { pollEncKey } = buildPollCreationMessageForTests({
       section: "pollCreationMessage",
       options: ["Pizza", "Sushi"],
     });
