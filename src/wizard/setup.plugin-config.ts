@@ -352,7 +352,6 @@ export async function setupPluginConfig(params: {
         label: p.name,
         hint: t("wizard.plugins.fieldsCount", {
           count: Object.keys(p.uiHints).length,
-          plural: Object.keys(p.uiHints).length === 1 ? "" : "s",
         }),
       })),
     ],

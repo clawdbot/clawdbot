@@ -18,6 +18,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const workspaceSourceAliases = [
   {
+    find: "@openclaw/localization-core/locale-registry",
+    replacement: path.resolve(repoRoot, "packages/localization-core/src/locale-registry.ts"),
+  },
+  {
     find: "@openclaw/gateway-client/browser",
     replacement: path.resolve(repoRoot, "packages/gateway-client/src/browser.ts"),
   },

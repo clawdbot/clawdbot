@@ -357,6 +357,12 @@ describe("Control UI Vite config", () => {
   it("resolves Control UI dev-server source aliases for internal packages", () => {
     const aliases = resolveSourcePackageAliasesForVite();
     expect(
+      aliases.find((alias) => alias.find === "@openclaw/localization-core/locale-registry"),
+    )?.toEqual({
+      find: "@openclaw/localization-core/locale-registry",
+      replacement: path.join(repoRoot, "packages/localization-core/src/locale-registry.ts"),
+    });
+    expect(
       aliases.find((alias) => alias.find === "@openclaw/normalization-core/agent-id"),
     )?.toEqual({
       find: "@openclaw/normalization-core/agent-id",

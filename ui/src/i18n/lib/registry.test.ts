@@ -1,5 +1,6 @@
 // @vitest-environment node
 
+import { SUPPORTED_LOCALES as TARGET_LOCALES } from "@openclaw/localization-core/locale-registry";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_LOCALE,
@@ -56,6 +57,14 @@ describe("resolveNavigatorLocale", () => {
 });
 
 describe("lazy locale registry", () => {
+  it("keeps shipped catalogs separate from the product locale target", () => {
+    expect(TARGET_LOCALES).toHaveLength(22);
+    expect(TARGET_LOCALES).toContain("sv");
+    expect(SUPPORTED_LOCALES).toHaveLength(21);
+    expect(SUPPORTED_LOCALES).not.toContain("sv");
+    expect(resolveNavigatorLocale("sv-SE")).toBe(DEFAULT_LOCALE);
+  });
+
   it("keeps English as the default and materializes every registered foreign catalog", async () => {
     expect(DEFAULT_LOCALE).toBe("en");
     expect(SUPPORTED_LOCALES).toHaveLength(21);

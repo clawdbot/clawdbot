@@ -1,4 +1,5 @@
 // Control UI i18n module implements registry behavior.
+import { matchInferredOpenClawLocale } from "@openclaw/localization-core/locale-registry";
 import type { Locale, TranslationMap } from "./types.ts";
 
 type LazyLocale = Exclude<Locale, "en">;
@@ -63,23 +64,11 @@ function isLazyLocale(locale: Locale): locale is LazyLocale {
 }
 
 export function resolveNavigatorLocale(browserLanguage: string): Locale {
-  const navLang = browserLanguage.toLowerCase();
-  if (navLang.startsWith("zh")) {
-    const [, ...subtags] = navLang.split("-");
-    if (subtags.includes("hant")) {
-      return "zh-TW";
-    }
-    if (subtags.includes("hans")) {
-      return "zh-CN";
-    }
-    return subtags.some((subtag) => subtag === "tw" || subtag === "hk" || subtag === "mo")
-      ? "zh-TW"
-      : "zh-CN";
+  const locale = matchInferredOpenClawLocale(browserLanguage, SUPPORTED_LOCALES);
+  if (locale && isSupportedLocale(locale)) {
+    return locale;
   }
-  return (
-    LAZY_LOCALES.find((locale) => navLang.startsWith(locale.split("-")[0]!.toLowerCase())) ??
-    DEFAULT_LOCALE
-  );
+  return DEFAULT_LOCALE;
 }
 
 export async function loadLazyLocaleTranslation(locale: Locale): Promise<TranslationMap | null> {
