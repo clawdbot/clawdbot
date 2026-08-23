@@ -69,6 +69,26 @@ async function runAccountFooterProof(page: Page, sidebar: Locator, branch: "feat
     )?.trim();
     const buildPrefix = branch === "main" ? "git@0123456" : "feat/sidebar-f…@0123456";
     expect(buildLabel?.startsWith(`${buildPrefix} · `)).toBe(true);
+    const buildLink = menu.getByRole("link", { name: "Control UI build details" });
+    const buildTooltip = sidebar.locator("openclaw-sidebar-build-chip openclaw-tooltip wa-tooltip");
+    const buildTooltipCard = sidebar.locator(".sidebar-build-hover-card");
+    await page.clock.install();
+    await buildLink.hover();
+    await page.clock.runFor(300);
+    await page.mouse.move(0, 0);
+    await page.clock.runFor(300);
+    expect(await buildTooltip.getAttribute("open")).toBeNull();
+    await buildLink.hover();
+    await page.clock.runFor(600);
+    await expect.poll(() => buildTooltip.getAttribute("open")).not.toBeNull();
+    await page.clock.resume();
+    await captureUnionProof(page, "build-chip-hover-intent", `${branch}-${theme}-intent-open.png`, [
+      footer,
+      menuSurface,
+      buildTooltipCard,
+    ]);
+    await page.mouse.move(0, 0);
+    await buildTooltipCard.waitFor({ state: "hidden" });
     await captureUnionProof(page, "sidebar-account-footer", `${branch}-${theme}-menu-default.png`, [
       footer,
       menuSurface,
