@@ -420,7 +420,7 @@ describe("sidebar attention refresh ownership", () => {
     switchedAuth.resolve({ ts: 3, providers: [] });
   });
 
-  it("clears a stale failure alert when the gateway reports an automation change", async () => {
+  it("opens top-mounted attention downward and clears stale live automation alerts", async () => {
     const responses = {
       "cron.list": [cronListResponse([cronJob("failed")]), cronListResponse([])],
       "models.authStatus": [{ ts: 1, providers: [] }],
@@ -478,10 +478,26 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() =>
       expect(element.querySelector<HTMLButtonElement>(".sidebar-issues-button")).not.toBeNull(),
     );
-    element.querySelector<HTMLButtonElement>(".sidebar-issues-button")?.click();
+    const trigger = element.querySelector<HTMLButtonElement>(".sidebar-issues-button")!;
+    vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({
+      x: 20,
+      y: 10,
+      left: 20,
+      top: 10,
+      right: 52,
+      bottom: 42,
+      width: 32,
+      height: 32,
+      toJSON: () => ({}),
+    });
+    trigger.click();
     await waitForFast(() =>
       expect(element.querySelector('[data-attention-kind="cronFailed"]')).not.toBeNull(),
     );
+    const panel = element.querySelector<HTMLElement>(".sidebar-issues-panel")!;
+    expect(panel.style.top).toBe("50px");
+    expect(panel.style.bottom).toBe("");
+    expect(panel.style.getPropertyValue("--sidebar-issues-panel-top")).toBe("50px");
 
     eventListener?.({ type: "event", event: "cron", payload: {} });
     await waitForFast(() =>

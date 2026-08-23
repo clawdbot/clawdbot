@@ -41,6 +41,7 @@ import {
   buildSidebarAttentionItems,
   type SidebarAttentionItem,
 } from "./sidebar-attention-items.ts";
+import type { SidebarAttentionPanelPosition } from "./sidebar-attention-panel.runtime.ts";
 import "./tooltip.ts";
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
 
@@ -64,7 +65,11 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   @state() private modelAuthStatus: ModelAuthStatusResult | null = null;
   @state() private dismissed: SidebarAttentionDismissals = {};
   @state() private panelOpen = false;
-  @state() private panelPosition = { left: 8, bottom: 8 };
+  @state() private panelPosition: SidebarAttentionPanelPosition = {
+    left: 8,
+    anchor: "bottom",
+    bottom: 8,
+  };
   @state() private selectedTab: IssueTab = "all";
   @state() private overflowAbove = false;
   @state() private overflowBelow = false;
@@ -471,12 +476,13 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     const rect = trigger.getBoundingClientRect();
     const width = Math.min(390, globalThis.innerWidth - 16);
     const preferredLeft = rect.left + rect.width / 2 - width / 2;
+    const left = Math.max(8, Math.min(preferredLeft, globalThis.innerWidth - width - 8));
     this.panelTrigger = trigger;
     this.panelRenderer = panelRenderer;
-    this.panelPosition = {
-      left: Math.max(8, Math.min(preferredLeft, globalThis.innerWidth - width - 8)),
-      bottom: Math.max(8, globalThis.innerHeight - rect.top + 8),
-    };
+    this.panelPosition =
+      rect.top < globalThis.innerHeight / 2
+        ? { left, anchor: "top", top: Math.max(8, rect.bottom + 8) }
+        : { left, anchor: "bottom", bottom: Math.max(8, globalThis.innerHeight - rect.top + 8) };
     this.selectedTab = "all";
     this.panelOpen = true;
     document.addEventListener("pointerdown", this.closeOnOutsidePointer, true);
