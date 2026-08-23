@@ -229,7 +229,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     if (changed.has("activeRouteId") && changed.get("activeRouteId") !== undefined) {
       this.closePanel(false);
     }
-    if (this.panelOpen && this.currentItems().length === 0 && !this.hasUpdateSurface()) {
+    if (this.panelOpen && this.currentItems().length === 0 && !this.updateSurfaceVisible()) {
       this.closePanel(false);
     }
   }
@@ -287,8 +287,12 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       return;
     }
     const items = this.buildItems();
+    const updateSurfaceSignature = this.updateSurfaceSignature();
+    const dismissableItems = updateSurfaceSignature
+      ? [...items, { kind: "updateAvailable" as const, signature: updateSurfaceSignature }]
+      : items;
     const stored = loadDismissals(this.dismissedScope);
-    const pruned = pruneDismissals(stored, items);
+    const pruned = pruneDismissals(stored, dismissableItems);
     if (pruned !== stored) {
       saveDismissals(this.dismissedScope, pruned);
     }
@@ -333,6 +337,37 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       snapshot?.updateStatusBanner ||
       snapshot?.updateSchedule?.campaign,
     );
+  }
+
+  private updateSurfaceSignature(): string | null {
+    if (!this.hasUpdateSurface()) {
+      return null;
+    }
+    const snapshot = this.context?.overlays.snapshot;
+    const campaign = snapshot?.updateSchedule?.campaign;
+    return [
+      snapshot?.controlUiRefreshRequired ? "refresh" : "",
+      snapshot?.updateRunning ? "running" : "",
+      campaign?.id ?? "",
+      campaign?.state ?? "",
+      campaign?.updatedAtMs ?? "",
+      snapshot?.updateAvailable?.upstreamSha ?? snapshot?.updateAvailable?.latestVersion ?? "",
+      snapshot?.updateStatusBanner?.tone ?? "",
+      snapshot?.updateStatusBanner?.text ?? "",
+    ].join("\n");
+  }
+
+  private updateSurfaceVisible(): boolean {
+    const signature = this.updateSurfaceSignature();
+    return Boolean(signature && !this.dismissed.updateAvailable?.includes(signature));
+  }
+
+  private dismissUpdateSurface() {
+    const signature = this.updateSurfaceSignature();
+    if (!this.dismissedScope || !signature) {
+      return;
+    }
+    this.dismissed = addDismissal(this.dismissedScope, "updateAvailable", signature);
   }
 
   private readonly closeOnOutsidePointer = (event: PointerEvent) => {
@@ -475,7 +510,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       return (
         !element.hasAttribute("disabled") &&
         !element.closest("[hidden]") &&
-        (!closedDetails || element.matches("summary"))
+        (!closedDetails || element.matches("summary") || Boolean(element.closest("summary")))
       );
     });
     const first = rows[0];
@@ -521,7 +556,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   }
 
   private renderUpdateSurface() {
-    if (!this.hasUpdateSurface()) {
+    if (!this.updateSurfaceVisible()) {
       return nothing;
     }
     const context = this.context;
@@ -547,6 +582,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       .onRefresh=${this.onRefresh ?? (() => undefined)}
       .onHoldUpdate=${() => context.overlays.holdUpdate()}
       .onReviewUpdate=${() => this.onNavigate?.("updates")}
+      .onDismiss=${() => this.dismissUpdateSurface()}
     ></openclaw-sidebar-update-card>`;
   }
 
@@ -631,6 +667,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     const facts = item.action.kind === "askCustodian" ? item.action.alert.facts : [];
     const visibleFacts = facts.filter((fact) => fact !== item.label);
     const actionLabel = item.action.kind === "askCustodian" ? t("nav.askOpenClaw") : item.label;
+    const inlineAction = item.inlineAction;
     return html`<details
       class="sidebar-issues-panel__details sidebar-issues-panel__details--${item.severity}"
       data-attention-kind=${item.kind}
@@ -639,8 +676,36 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
         <span class="sidebar-issues-panel__icon" aria-hidden="true">${icons[item.icon]}</span>
         <span class="sidebar-issues-panel__content">
           <span class="sidebar-issues-panel__entity" title=${item.label}>${item.label}</span>
-          <span class="sidebar-issues-panel__state" title=${item.detail}>${item.detail}</span>
+          <span class="sidebar-issues-panel__state-row">
+            <span class="sidebar-issues-panel__state" title=${item.detail}>${item.detail}</span>
+            ${inlineAction
+              ? html`<button
+                  type="button"
+                  class="sidebar-issues-panel__inline-action"
+                  @click=${(event: Event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    this.onNavigate?.(inlineAction.routeId);
+                  }}
+                >
+                  ${inlineAction.label}
+                </button>`
+              : nothing}
+          </span>
         </span>
+        <button
+          type="button"
+          class="sidebar-issues-panel__dismiss"
+          aria-label=${t("attention.dismissItem", { item: item.label })}
+          title=${t("attention.dismissItem", { item: item.label })}
+          @click=${(event: Event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.dismiss(item);
+          }}
+        >
+          ${icons.x}
+        </button>
         <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </summary>
       <div class="sidebar-issues-panel__body">
@@ -657,13 +722,6 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
           >
             ${actionLabel}
           </button>
-          <button
-            type="button"
-            class="sidebar-issues-panel__action"
-            @click=${() => this.dismiss(item)}
-          >
-            ${t("common.dismiss")}
-          </button>
         </div>
       </div>
     </details>`;
@@ -673,7 +731,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     if (this.context?.gateway.snapshot.phase !== "connected") {
       return nothing;
     }
-    const updateSurface = this.hasUpdateSurface();
+    const updateSurface = this.updateSurfaceVisible();
     const allItems = this.currentItems();
     const approvalQueue = allItems.flatMap((item) => item.approvalQueue ?? []);
     const items = allItems

@@ -462,6 +462,7 @@ export const en: TranslationMap = {
       availableSummary: "A newer revision is ready.",
       blockedTitle: "Update blocked",
       blockedSummary: "The selected revision could not be applied to this checkout.",
+      viewDetails: "View details",
     },
     dialog: {
       installing: "Installing the update on the Gateway. It restarts once the install finishes.",
@@ -4241,6 +4242,9 @@ export const en: TranslationMap = {
     cronErrorUnknown: "Unknown error",
     cronFailed: "{job} failed",
     cronOverdue: "{job} overdue",
+    automationFailed: "Automation failed · {time}",
+    automationOverdue: "Automation overdue · {time}",
+    dismissItem: "Dismiss {item}",
     issues: "Inbox",
     issueCount: "{count} inbox item",
     issueCountPlural: "{count} inbox items",
@@ -4252,6 +4256,8 @@ export const en: TranslationMap = {
       system: "System",
     },
     modelAuthExpired: "Model auth expired: {providers}",
+    modelAuthExpiredState: "Model auth expired · {time}",
+    reconnect: "Reconnect",
     pendingApproval: "{count} pending approval",
     pendingApprovals: "{count} pending approvals",
     alerts: {

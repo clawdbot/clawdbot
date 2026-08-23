@@ -144,11 +144,7 @@ describe("cron attention details", () => {
       (item) => item.kind === "cronFailed",
     );
 
-    expect(failed.map((item) => item.label)).toEqual([
-      "Nightly backup failed",
-      "reason-id failed",
-      "unknown-id failed",
-    ]);
+    expect(failed.map((item) => item.label)).toEqual(["Nightly backup", "reason-id", "unknown-id"]);
     expect(failed.map(itemFacts)).toEqual([
       "Nightly backup: disk full",
       "reason-id: timeout",
@@ -179,10 +175,7 @@ describe("cron attention details", () => {
       (item) => item.kind === "cronOverdue",
     );
 
-    expect(overdue.map((item) => item.label)).toEqual([
-      "Nightly backup overdue",
-      "unnamed-id overdue",
-    ]);
+    expect(overdue.map((item) => item.label)).toEqual(["Nightly backup", "unnamed-id"]);
     expect(overdue.map(itemFacts)).toEqual(["Nightly backup: 5m late", "unnamed-id: 5m late"]);
   });
 
@@ -306,7 +299,12 @@ describe("model auth attention", () => {
   });
 
   it("presents expired providers to the custodian with raw status", () => {
-    const action = authItems("main")[0]?.action;
+    const item = authItems("main")[0];
+    expect(item).toMatchObject({
+      label: "OpenAI",
+      inlineAction: { label: "Reconnect", routeId: "model-providers" },
+    });
+    const action = item?.action;
     expect(action).toMatchObject({ kind: "askCustodian" });
     if (action?.kind !== "askCustodian") {
       throw new Error("expected model auth custodian action");

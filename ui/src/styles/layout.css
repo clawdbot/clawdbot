@@ -3819,6 +3819,13 @@ openclaw-sidebar-attention {
   white-space: nowrap;
 }
 
+.sidebar-issues-panel__state-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
 .sidebar-issues-panel__entity {
   color: var(--text-strong);
   font-size: var(--control-ui-text-sm);
@@ -3826,8 +3833,73 @@ openclaw-sidebar-attention {
 }
 
 .sidebar-issues-panel__state {
+  min-width: 0;
+  flex: 1 1 auto;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
+}
+
+.sidebar-issues-panel__inline-action {
+  min-height: 24px;
+  flex: none;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text);
+  cursor: var(--cursor-action);
+  font: inherit;
+  font-size: var(--control-ui-text-xs);
+  font-weight: 550;
+}
+
+.sidebar-issues-panel__dismiss {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.sidebar-issues-panel__dismiss svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sidebar-issues-panel__summary:focus-within .sidebar-issues-panel__dismiss {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: hover) {
+  .sidebar-issues-panel__summary:hover .sidebar-issues-panel__dismiss {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .sidebar-issues-panel__inline-action:hover,
+  .sidebar-issues-panel__dismiss:hover {
+    background: var(--bg-hover);
+    color: var(--text-strong);
+  }
+}
+
+.sidebar-issues-panel__inline-action:focus-visible,
+.sidebar-issues-panel__dismiss:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .sidebar-issues-panel__chevron {

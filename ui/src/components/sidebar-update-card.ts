@@ -34,6 +34,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onRefresh: () => void = () => undefined;
   @property({ attribute: false }) onHoldUpdate: () => Promise<boolean> = async () => false;
   @property({ attribute: false }) onReviewUpdate: () => void = () => undefined;
+  @property({ attribute: false }) onDismiss: (() => void) | undefined = undefined;
   @state() private holdingCampaignId: string | null = null;
   @state() private nativeUpdateAvailable = hasNativeUpdateBridge();
   private nativeUpdateDeclined = false;
@@ -150,11 +151,12 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     const targetLabel = formatUpdateTargetLabel(this.updateSchedule, this.updateAvailable);
     const campaignLabel = formatUpdateCampaignLabel(this.updateSchedule);
     const blocked = statusBanner && statusBanner.tone !== "info";
+    const blockedReason = statusBanner?.text.trim() || t("updates.sidebar.blockedSummary");
     return {
       detail: blocked
         ? targetLabel
-          ? `${targetLabel} · ${t("updates.sidebar.blockedSummary")}`
-          : t("updates.sidebar.blockedSummary")
+          ? `${targetLabel} · ${blockedReason}`
+          : blockedReason
         : campaignLabel && targetLabel
           ? t("updates.sidebar.campaignTarget", { status: campaignLabel, target: targetLabel })
           : (campaignLabel ??
@@ -179,12 +181,42 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     return html`<details
       class="sidebar-issues-panel__details sidebar-issues-panel__details--${summary.severity}"
     >
-      <summary class="sidebar-issues-panel__summary">
+      <summary class="sidebar-issues-panel__summary" data-issue-row-focus>
         <span class="sidebar-issues-panel__icon" aria-hidden="true">${summary.icon}</span>
         <span class="sidebar-issues-panel__content">
           <span class="sidebar-issues-panel__entity" title=${summary.title}>${summary.title}</span>
-          <span class="sidebar-issues-panel__state">${summary.detail}</span>
+          <span class="sidebar-issues-panel__state-row">
+            <span class="sidebar-issues-panel__state" title=${summary.detail}
+              >${summary.detail}</span
+            >
+            <button
+              type="button"
+              class="sidebar-issues-panel__inline-action"
+              @click=${(event: Event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                this.onReviewUpdate();
+              }}
+            >
+              ${t("updates.sidebar.viewDetails")}
+            </button>
+          </span>
         </span>
+        ${this.onDismiss
+          ? html`<button
+              type="button"
+              class="sidebar-issues-panel__dismiss"
+              aria-label=${t("attention.dismissItem", { item: summary.title })}
+              title=${t("attention.dismissItem", { item: summary.title })}
+              @click=${(event: Event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                this.onDismiss?.();
+              }}
+            >
+              ${icons.x}
+            </button>`
+          : nothing}
         <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </summary>
       <div class="sidebar-issues-panel__body sidebar-update-issue__body">${this.renderCard()}</div>
