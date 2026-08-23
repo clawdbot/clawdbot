@@ -147,6 +147,28 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(options.repair).toBe(true);
   });
 
+  it("rejects --force without a repair mode", async () => {
+    await runMaintenanceCli(["doctor", "--force", "--non-interactive"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor --force requires --repair, --fix, or --yes. Use `openclaw doctor --fix --force` to allow aggressive repairs.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("writes JSON when rejecting --force without a repair mode", async () => {
+    const message =
+      "doctor --force requires --repair, --fix, or --yes. Use `openclaw doctor --fix --force` to allow aggressive repairs.";
+
+    await runMaintenanceCli(["doctor", "--post-upgrade", "--json", "--force"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledWith(jsonFailure(message));
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
   it("passes session sqlite options to doctor command", async () => {
     doctorCommand.mockResolvedValue(undefined);
 

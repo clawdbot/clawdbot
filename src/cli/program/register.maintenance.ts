@@ -55,7 +55,7 @@ export function registerMaintenanceCommands(program: Command) {
     .option("--yes", "Accept defaults without prompting", false)
     .option("--repair", "Apply recommended repairs without prompting", false)
     .option("--fix", "Apply recommended repairs (alias for --repair)", false)
-    .option("--force", "Apply aggressive repairs (overwrites custom service config)", false)
+    .option("--force", "With --repair, --fix, or --yes, allow aggressive repairs", false)
     .option("--non-interactive", "Run without prompts (safe migrations only)", false)
     .option("--generate-gateway-token", "Generate and configure a gateway token", false)
     .option(
@@ -126,6 +126,12 @@ export function registerMaintenanceCommands(program: Command) {
         return exitDoctorError(
           "doctor --json runs read-only lint checks and cannot be combined with --repair, --fix, or --force.",
           true,
+        );
+      }
+      if (opts.force === true && opts.repair !== true && opts.fix !== true && opts.yes !== true) {
+        return exitDoctorError(
+          "doctor --force requires --repair, --fix, or --yes. Use `openclaw doctor --fix --force` to allow aggressive repairs.",
+          opts.json === true,
         );
       }
       if (opts.lint === true || jsonImpliesLint) {
