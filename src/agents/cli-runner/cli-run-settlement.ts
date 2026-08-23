@@ -13,7 +13,7 @@ import {
   resolveCliRuntimeArtifactFingerprint,
   resolveCliRuntimeOwnerFingerprint,
 } from "../cli-auth-epoch.js";
-import type { CliOutput } from "../cli-output-contracts.js";
+import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
 import { claudeCliSessionTranscriptHasContent as claudeCliSessionTranscriptHasContentImpl } from "../command/attempt-execution.helpers.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
 import { resolveExplicitFinalSourceReplyDeliveryEvidence } from "../embedded-agent-runner/delivery-evidence.js";
@@ -27,6 +27,11 @@ import type { ClaudeCliRunDiagnosticLifecycle } from "./run-diagnostics.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
+
+/** Operator-visible reason recorded on trace attempts and agent_end when a live turn kept partial output. */
+export function formatCliTerminalInterruption(interruption: CliTerminalInterruption): string {
+  return `CLI turn ${interruption.reason} after partial output`;
+}
 
 export const cliRunSettlementDeps = {
   claudeCliSessionTranscriptHasContent: claudeCliSessionTranscriptHasContentImpl,
@@ -485,19 +490,16 @@ export function buildCliRunResult(params: {
     sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
   });
   const unflushedCliSessionId =
-    !output.terminalInterruption &&
-    !sessionBindingDisabled &&
-    effectiveCliSessionId &&
-    bindingFlushOk === false
+    !sessionBindingDisabled && effectiveCliSessionId && bindingFlushOk === false
       ? effectiveCliSessionId
       : undefined;
-  const persistedCliSessionId = output.terminalInterruption
-    ? undefined
-    : sessionBindingDisabled
-      ? undefined
-      : unflushedCliSessionId
-        ? undefined
-        : effectiveCliSessionId;
+  const terminalInterruption = output.terminalInterruption;
+  // An interrupted live turn closed its process, so its native continuity is dead.
+  const cliSessionBindingCleared =
+    terminalInterruption !== undefined ||
+    sessionBindingDisabled ||
+    unflushedCliSessionId !== undefined;
+  const persistedCliSessionId = cliSessionBindingCleared ? undefined : effectiveCliSessionId;
   const createdReseedReceipt =
     persistedCliSessionId &&
     usedHistoryPrompt &&
@@ -519,15 +521,13 @@ export function buildCliRunResult(params: {
       ? runParams.cliSessionBinding.reseedReceipt
       : undefined;
   const reseedReceipt = createdReseedReceipt ?? preservedReseedReceipt;
-  const agentSessionId = output.terminalInterruption
-    ? ""
-    : sessionBindingDisabled
-      ? (runParams.sessionId ?? "")
-      : unflushedCliSessionId
-        ? ""
+  const agentSessionId =
+    terminalInterruption || unflushedCliSessionId
+      ? ""
+      : sessionBindingDisabled
+        ? (runParams.sessionId ?? "")
         : (effectiveCliSessionId ?? runParams.sessionId ?? "");
   const yielded = output.yielded === true;
-  const terminalInterruption = output.terminalInterruption;
   const stopReason = terminalInterruption?.reason ?? (yielded ? "end_turn" : "completed");
 
   if (!terminalInterruption) {
@@ -587,7 +587,7 @@ export function buildCliRunResult(params: {
             model: context.modelId,
             result: terminalInterruption?.reason ?? "success",
             ...(terminalInterruption
-              ? { reason: `CLI turn ${terminalInterruption.reason} after partial output` }
+              ? { reason: formatCliTerminalInterruption(terminalInterruption) }
               : {}),
           },
         ],
@@ -644,9 +644,7 @@ export function buildCliRunResult(params: {
               },
             }
           : {}),
-        ...(terminalInterruption || sessionBindingDisabled || unflushedCliSessionId
-          ? { clearCliSessionBinding: true }
-          : {}),
+        ...(cliSessionBindingCleared ? { clearCliSessionBinding: true } : {}),
       },
     },
     ...(output.didSendViaMessagingTool ? { didSendViaMessagingTool: true } : {}),

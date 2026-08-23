@@ -30,7 +30,7 @@ import {
   streamJsonOutputLimitErrorText,
 } from "../cli-output-stream.js";
 import { parseCliOutput } from "../cli-output.js";
-import { isFailoverError, isTimeoutError, type FailoverError } from "../failover-error.js";
+import { isFailoverError, isSignalTimeoutReason, type FailoverError } from "../failover-error.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
 import {
   armClaudeTurnTimers,
@@ -132,15 +132,6 @@ function finishClaudeTurn(host: ClaudeLiveTurnHost, output: CliOutput): void {
   host.scheduleIdleClose();
 }
 
-function isPlainDomAbortError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    error.name === "AbortError" &&
-    error.message === "This operation was aborted" &&
-    !("cause" in error && error.cause !== undefined)
-  );
-}
-
 export function failClaudeTurn(host: ClaudeLiveTurnHost, error: unknown): void {
   const turn = host.currentTurn;
   if (!turn) {
@@ -151,29 +142,28 @@ export function failClaudeTurn(host: ClaudeLiveTurnHost, error: unknown): void {
     `claude live session turn failed: provider=${host.providerId} model=${host.modelId} durationMs=${Date.now() - turn.startedAtMs} error=${errorKind}`,
   );
   turn.streamingParser.finish();
-  const partialOutputAbort =
-    !isFailoverError(error) && (isAbortError(error) || isTimeoutError(error));
-  const partialOutput = partialOutputAbort ? turn.streamingParser.getOutput() : undefined;
+  // Caller interruptions (abort signal, caller deadline) keep already-streamed text.
+  // Structured CLI failures still reject so failover and empty-output handling are unchanged.
+  // Deadline vs abort follows the signal-reason rule run-diagnostics uses: only a TimeoutError
+  // reason is a deadline; failover message patterns would read a plain abort as a timeout.
+  const interrupted =
+    !isFailoverError(error) && (isAbortError(error) || isSignalTimeoutReason(error));
+  const partialOutput = interrupted ? turn.streamingParser.getOutput() : undefined;
   failActiveClaudeLiveTools(turn, error);
   clearClaudeTurnTimers(turn);
   host.outstandingBackgroundTaskIds.clear();
   host.currentTurn = null;
-  if (partialOutput?.text?.trim() && !partialOutput.errorText) {
-    cliBackendLog.info(
-      `claude live session aborted turn preserved partial output: provider=${host.providerId} model=${host.modelId} durationMs=${Date.now() - turn.startedAtMs} ${formatCliBackendOutputDigest(partialOutput.text)}`,
-    );
-    turn.resolve({
-      ...partialOutput,
-      terminalInterruption: {
-        reason: isTimeoutError(error) && !isPlainDomAbortError(error) ? "timeout" : "aborted",
-      },
-    });
-    if (!host.closing) {
-      host.scheduleIdleClose();
-    }
+  if (!partialOutput?.text.trim() || partialOutput.errorText) {
+    turn.reject(error);
     return;
   }
-  turn.reject(error);
+  cliBackendLog.info(
+    `claude live session aborted turn preserved partial output: provider=${host.providerId} model=${host.modelId} durationMs=${Date.now() - turn.startedAtMs} ${formatCliBackendOutputDigest(partialOutput.text)}`,
+  );
+  turn.resolve({
+    ...partialOutput,
+    terminalInterruption: { reason: isSignalTimeoutReason(error) ? "timeout" : "aborted" },
+  });
 }
 
 export function createClaudeOutputLimitError(

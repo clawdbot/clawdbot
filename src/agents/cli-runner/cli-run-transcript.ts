@@ -34,6 +34,11 @@ export function buildCliHookUserMessage(prompt: string): unknown {
   };
 }
 
+/** Interrupted turns persist as aborted so replayed history never reads partial text as a finished reply. */
+export function resolveCliAssistantStopReason(output: CliOutput): StopReason {
+  return output.terminalInterruption ? "aborted" : "stop";
+}
+
 export function buildCliHookAssistantMessage(params: {
   text: string;
   provider: string;
@@ -45,7 +50,7 @@ export function buildCliHookAssistantMessage(params: {
     cacheWrite?: number;
     total?: number;
   };
-  stopReason?: StopReason;
+  stopReason: StopReason;
 }): unknown {
   return {
     role: "assistant",
@@ -54,7 +59,7 @@ export function buildCliHookAssistantMessage(params: {
     provider: params.provider,
     model: params.model,
     ...(params.usage ? { usage: params.usage } : {}),
-    stopReason: params.stopReason ?? "stop",
+    stopReason: params.stopReason,
     timestamp: Date.now(),
   };
 }
@@ -82,7 +87,7 @@ function buildCliContextEngineAssistantMessage(params: {
     cacheWrite?: number;
     total?: number;
   };
-  stopReason?: StopReason;
+  stopReason: StopReason;
 }): AgentMessage {
   return buildCliHookAssistantMessage(params) as AgentMessage;
 }
@@ -147,7 +152,7 @@ export async function persistCliAssistantTranscript(params: {
     cacheWrite?: number;
     total?: number;
   };
-  stopReason?: StopReason;
+  stopReason: StopReason;
 }): Promise<{
   owned: boolean;
   idempotencyKey?: string;
@@ -194,7 +199,7 @@ export async function persistCliAssistantTranscript(params: {
           id: params.modelId,
         },
         content: [{ type: "text", text: params.text }],
-        stopReason: params.stopReason ?? "stop",
+        stopReason: params.stopReason,
         usage: buildUsageWithNoCost({
           input: params.usage?.input,
           output: params.usage?.output,
@@ -363,7 +368,7 @@ export async function finalizeCliContextEngineTurn(params: {
         provider: runParams.provider,
         model: context.modelId,
         usage: params.output.usage,
-        stopReason: params.output.terminalInterruption ? "aborted" : undefined,
+        stopReason: resolveCliAssistantStopReason(params.output),
       }),
     );
   }

@@ -62,8 +62,8 @@ describe("claude live session aborted-turn partial output", () => {
       },
     },
     {
-      name: "AbortError wrapping a TimeoutError",
-      reason: "timeout",
+      name: "AbortError wrapping a TimeoutError (an abort, not a deadline)",
+      reason: "aborted",
       abort: (controller: AbortController) => {
         const timeout = new Error("caller deadline exceeded");
         timeout.name = "TimeoutError";

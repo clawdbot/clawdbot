@@ -31,7 +31,7 @@ export type CliTerminalFailure =
     }
   | { reason: "synthetic_no_response" };
 
-type CliTerminalInterruption = {
+export type CliTerminalInterruption = {
   reason: "aborted" | "timeout";
 };
 
