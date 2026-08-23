@@ -24,7 +24,7 @@ export type NodeHostConfig = {
   browserProxy?: NodeHostBrowserProxyConfig;
   /** MCP servers started and exposed by the headless node host. */
   mcp?: {
-    servers?: Record<string, McpServerConfig>;
+    servers?: Record<string, McpServerConfig<string | number | boolean>>;
   };
   /** Skills published by the headless node host. */
   skills?: {

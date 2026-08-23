@@ -1146,6 +1146,27 @@ describe("core MCP SecretRef schema", () => {
 
     expect(result.success).toBe(true);
   });
+
+  it.each(["env", "headers"] as const)(
+    "keeps nodeHost.mcp server %s values scalar-only",
+    (field) => {
+      const secretRef = { source: "env", provider: "default", id: "MCP_TOKEN" };
+      const result = OpenClawSchema.safeParse({
+        nodeHost: {
+          mcp: {
+            servers: {
+              example: {
+                command: "example-mcp",
+                [field]: { API_TOKEN: secretRef },
+              },
+            },
+          },
+        },
+      });
+
+      expect(result.success).toBe(false);
+    },
+  );
 });
 
 describe("broadcast", () => {
