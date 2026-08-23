@@ -7,6 +7,7 @@ import {
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
 } from "../../../../src/agents/internal-runtime-context.js";
 import { markCompleteReplyConfig } from "../../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
+import { buildChannelSourceTurnId } from "../../../../src/auto-reply/reply/source-turn-id.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -24,6 +25,7 @@ import {
 import { buildMockOpenAiResponsesProvider } from "../../../../src/gateway/test-openai-responses-model.js";
 import { resetAgentEventsForTest } from "../../../../src/infra/agent-events.js";
 import { resetSystemEventsForTest } from "../../../../src/infra/system-events.js";
+import { createUserTurnTranscriptRecorder } from "../../../../src/sessions/user-turn-transcript.js";
 import { resetTaskRegistryForTests } from "../../../../src/tasks/task-runtime.test-helpers.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
@@ -57,6 +59,9 @@ type ProofInbound = {
 };
 
 type ProofDispatch = (input: ProofInbound) => Promise<void>;
+type ProofRecorderFactory = (input: {
+  messageId: string;
+}) => ReturnType<typeof createUserTurnTranscriptRecorder>;
 
 let sequence = 0;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -123,6 +128,7 @@ function writeAssistantResponse(response: ServerResponse, text: string): void {
 async function writeInboundProofPlugin(params: {
   dispatchKey: string;
   pluginDir: string;
+  recorderKey: string;
 }): Promise<void> {
   await fs.mkdir(params.pluginDir, { recursive: true });
   await fs.writeFile(
@@ -144,6 +150,9 @@ async function writeInboundProofPlugin(params: {
     [
       `const channelId = ${JSON.stringify(PROOF_CHANNEL_ID)};`,
       `const dispatchKey = ${JSON.stringify(params.dispatchKey)};`,
+      `const recorderKey = ${JSON.stringify(params.recorderKey)};`,
+      "const createRecorder = globalThis[recorderKey];",
+      'if (typeof createRecorder !== "function") { throw new Error("proof transcript recorder factory unavailable"); }',
       "let deliverySequence = 0;",
       "module.exports = {",
       "  id: channelId,",
@@ -204,6 +213,9 @@ async function writeInboundProofPlugin(params: {
       '                accountId: "default",',
       '                route: { agentId: "main", sessionKey },',
       "                ctxPayload,",
+      "                replyOptions: {",
+      "                  userTurnTranscriptRecorder: createRecorder({ messageId }),",
+      "                },",
       "                delivery: {",
       "                  deliver: async (payload) => ({",
       "                    messageIds: [`delivery-${++deliverySequence}`],",
@@ -281,11 +293,12 @@ describe("Gateway runtime-only inbound context", () => {
       const bundledPluginsDir = path.join(tempHome, "empty-bundled-plugins");
       const configPath = path.join(stateDir, "openclaw.json");
       const dispatchKey = nextId("openclaw-runtime-only-proof-dispatch");
+      const recorderKey = nextId("openclaw-runtime-only-proof-recorder");
       await Promise.all([
         fs.mkdir(workspaceDir, { recursive: true }),
         fs.mkdir(bundledPluginsDir, { recursive: true }),
         fs.mkdir(path.dirname(configPath), { recursive: true }),
-        writeInboundProofPlugin({ dispatchKey, pluginDir }),
+        writeInboundProofPlugin({ dispatchKey, pluginDir, recorderKey }),
       ]);
 
       const token = nextId("runtime-only-proof-token");
@@ -293,7 +306,6 @@ describe("Gateway runtime-only inbound context", () => {
       // instead of synchronously recompiling the entire SDK graph inside the Vitest worker.
       for (const [key, value] of Object.entries({
         HOME: tempHome,
-        NODE_ENV: "production",
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_GATEWAY_TOKEN: token,
         OPENCLAW_SKIP_GMAIL_WATCHER: "1",
@@ -370,9 +382,6 @@ describe("Gateway runtime-only inbound context", () => {
             },
           },
           gateway: { auth: { mode: "token", token } },
-          // This proof exercises provider-bound and transcript behavior only. Denying source
-          // delivery keeps an intentionally bodyless synthetic turn out of recovery custody.
-          session: { sendPolicy: { default: "deny" } },
           plugins: {
             enabled: true,
             allow: [PROOF_CHANNEL_ID],
@@ -381,6 +390,22 @@ describe("Gateway runtime-only inbound context", () => {
             slots: { memory: "none" },
           },
         } satisfies OpenClawConfig;
+
+        (globalThis as Record<string, unknown>)[recorderKey] = (({ messageId }) => {
+          const sourceTurnId = buildChannelSourceTurnId({
+            provider: PROOF_CHANNEL_ID,
+            accountId: "default",
+            conversationId: "proof-destination",
+            messageId,
+          });
+          if (!sourceTurnId) {
+            throw new Error("runtime-only proof source turn id was not created");
+          }
+          return createUserTurnTranscriptRecorder({
+            input: { text: "", idempotencyKey: sourceTurnId },
+            target: () => undefined,
+          });
+        }) satisfies ProofRecorderFactory;
 
         gateway = await startGatewayWithClient({
           cfg: config,
@@ -482,6 +507,7 @@ describe("Gateway runtime-only inbound context", () => {
           providerServer.close(() => resolve());
         });
         delete (globalThis as Record<string, unknown>)[dispatchKey];
+        delete (globalThis as Record<string, unknown>)[recorderKey];
         envSnapshot.restore();
       }
     },
