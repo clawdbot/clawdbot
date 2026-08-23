@@ -7,8 +7,8 @@ import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import {
   formatBuildChipText,
-  formatIdentityMenuBuildLabel,
   formatSettingsBuildLabel,
+  formatSidebarBuildSubtitle,
   renderSidebarServerDetails,
 } from "./sidebar-build-chip-format.ts";
 import "./tooltip.ts";
@@ -24,7 +24,7 @@ class SidebarBuildChip extends OpenClawLightDomContentsElement {
       this.variant === "settings"
         ? formatSettingsBuildLabel(CONTROL_UI_BUILD_INFO, this.gatewayVersion)
         : this.variant === "identity"
-          ? formatIdentityMenuBuildLabel(CONTROL_UI_BUILD_INFO)
+          ? formatSidebarBuildSubtitle(CONTROL_UI_BUILD_INFO)
           : formatBuildChipText(CONTROL_UI_BUILD_INFO);
     if (!text) {
       return nothing;
