@@ -43,22 +43,6 @@ function manifest(canonical: string, ...aliases: string[]): PluginManifestRecord
 }
 
 describe("secrets runtime Talk capability owners", () => {
-  it("resolves the legacy top-level Talk API key without changing its owner behavior", async () => {
-    const snapshot = await prepare(
-      {
-        talk: {
-          apiKey: ref("LEGACY_TALK_KEY"),
-          provider: "openai",
-          providers: { openai: {} },
-        },
-      },
-      { LEGACY_TALK_KEY: "legacy-key" },
-    );
-
-    expect(snapshot.config.talk as { apiKey?: unknown }).toMatchObject({ apiKey: "legacy-key" });
-    expect(snapshot.degradedOwners).toEqual([]);
-  });
-
   it.each(["speech", "realtime"] as const)(
     "resolves selected %s refs and ignores inactive refs",
     async (surface) => {
@@ -103,30 +87,6 @@ describe("secrets runtime Talk capability owners", () => {
     },
   );
 
-  it("does not resolve a canonical realtime fallback when the selected alias overrides it", async () => {
-    const snapshot = await prepare(
-      {
-        talk: {
-          realtime: {
-            provider: "grok-voice",
-            providers: {
-              xai: { apiKey: ref("MISSING_CANONICAL_KEY") },
-              "grok-voice": { apiKey: ref("READY_ALIAS_KEY") },
-            },
-          },
-        },
-      },
-      { READY_ALIAS_KEY: "ready" },
-      [manifest("xai", "grok-voice")],
-    );
-
-    expect(snapshot.degradedOwners).toEqual([]);
-    expect(snapshot.warnings).toContainEqual(
-      expect.objectContaining({ path: "talk.realtime.providers.xai.apiKey" }),
-    );
-    expect(snapshot.config.talk?.realtime?.providers?.["grok-voice"]?.apiKey).toBe("ready");
-  });
-
   it.each([false, true])(
     "inherits the global TTS key only without a Talk override (%s)",
     async (override) => {
@@ -148,23 +108,6 @@ describe("secrets runtime Talk capability owners", () => {
       );
     },
   );
-
-  it("activates an inherited TTS key when Talk has no provider override", async () => {
-    const snapshot = await prepare(
-      {
-        tts: { providers: { openai: { apiKey: ref("MISSING_INHERITED_KEY") } } },
-        talk: { provider: "openai" },
-      },
-      {},
-    );
-
-    expect(snapshot.degradedOwners).toContainEqual(
-      expect.objectContaining({
-        ownerId: "talk:speech",
-        paths: ["tts.providers.openai.apiKey"],
-      }),
-    );
-  });
 
   it.each([
     { changedOwner: "talk", tts: "stale", talk: "cold" },

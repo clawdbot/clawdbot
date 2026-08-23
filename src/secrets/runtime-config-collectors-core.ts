@@ -161,19 +161,6 @@ function collectTalkAssignments(params: {
   if (!isRecord(talk)) {
     return;
   }
-  // Keep resolving the legacy flat key while configurations migrate to the
-  // provider map. It has no selected-provider owner because it predates that
-  // surface and must retain the original fail-open collection behavior.
-  collectSecretInputAssignment({
-    value: talk.apiKey,
-    path: "talk.apiKey",
-    expected: "string",
-    defaults: params.defaults,
-    context: params.context,
-    apply: (value) => {
-      talk.apiKey = value;
-    },
-  });
   for (const surface of ["speech", "realtime"] as const) {
     const section =
       surface === "speech" ? talk : isRecord(talk.realtime) ? talk.realtime : undefined;
@@ -195,9 +182,9 @@ function collectTalkAssignments(params: {
             )
         : [normalizedConfiguredId]
       : undefined;
-    const normalizedProviderIds = providerIds
-      ?.map((id) => normalizeOptionalLowercaseString(id) ?? id)
-      .filter((id, index, ids) => ids.indexOf(id) === index);
+    const normalizedProviderIds = providerIds?.map(
+      (id) => normalizeOptionalLowercaseString(id) ?? id,
+    );
     const providerId = normalizedProviderIds?.[0];
     const selected = configuredId
       ? findTalkProviderConfig(section.providers, configuredId)
@@ -256,7 +243,7 @@ function collectTalkAssignments(params: {
         ? inherited
         : undefined;
     const entries = Object.entries(isRecord(section.providers) ? section.providers : {});
-    if (inheritedKey) {
+    if (inheritedKey && selected) {
       entries.push([inheritedKey.id, inheritedKey.config]);
     }
     for (const [id, config] of entries) {
@@ -266,19 +253,6 @@ function collectTalkAssignments(params: {
       const isInherited = config === inheritedKey?.config;
       const destination = isInherited && selected ? selected.config : config;
       const normalized = normalizeOptionalLowercaseString(id);
-      const isOverriddenRealtimeCanonicalFallback =
-        surface === "realtime" &&
-        normalized === providerId &&
-        normalized !== normalizedConfiguredId &&
-        selected?.config.apiKey !== undefined;
-      const active = Boolean(
-        isInherited ||
-        (providerId &&
-          (normalized === normalizedConfiguredId ||
-            (surface === "realtime" &&
-              normalized === providerId &&
-              !isOverriddenRealtimeCanonicalFallback))),
-      );
       collectRuntimeSecretInputAssignment({
         value: config.apiKey,
         path: isInherited
@@ -287,7 +261,12 @@ function collectTalkAssignments(params: {
         expected: "string",
         defaults: params.defaults,
         context: params.context,
-        active,
+        active: Boolean(
+          isInherited ||
+          (providerId &&
+            (normalized === normalizedConfiguredId ||
+              (surface === "realtime" && normalized === providerId))),
+        ),
         inactiveReason: "Talk provider is not selected.",
         owner,
         apply: (resolved) => {
