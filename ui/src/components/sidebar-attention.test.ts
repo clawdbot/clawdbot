@@ -565,6 +565,7 @@ describe("update attention", () => {
         target: { kind: "package" as const, version: "2026.8.2" },
       },
       updateCampaignStatusHydrated: true,
+      updateReconciliationPending: false,
       updateRunning: false,
       updateStatusBanner: null,
     };
@@ -613,6 +614,7 @@ describe("update attention", () => {
       },
       updateSchedule: null,
       updateCampaignStatusHydrated: true,
+      updateReconciliationPending: false,
       updateRunning: false,
       updateStatusBanner: null as null | { tone: "warn" | "danger"; text: string },
     };
@@ -638,6 +640,13 @@ describe("update attention", () => {
     overlaySnapshot.updateStatusBanner = { tone: "warn", text: "Update blocked" };
     expect(element.updateSurfaceVisible()).toBe(true);
     overlaySnapshot.updateStatusBanner = { tone: "danger", text: "Update failed" };
+    expect(element.updateSurfaceVisible()).toBe(true);
+
+    overlaySnapshot.updateStatusBanner = null;
+    overlaySnapshot.updateRunning = true;
+    expect(element.updateSurfaceVisible()).toBe(true);
+    overlaySnapshot.updateRunning = false;
+    overlaySnapshot.updateReconciliationPending = true;
     expect(element.updateSurfaceVisible()).toBe(true);
   });
 

@@ -396,7 +396,12 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   }
 
   private updateSurfaceForced(): boolean {
-    return isUpdateAttentionForced(this.context?.overlays.snapshot.updateStatusBanner?.tone);
+    const snapshot = this.context?.overlays.snapshot;
+    return (
+      snapshot?.updateRunning ||
+      snapshot?.updateReconciliationPending ||
+      isUpdateAttentionForced(snapshot?.updateStatusBanner?.tone)
+    );
   }
 
   private updateSurfaceVisible(): boolean {
