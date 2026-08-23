@@ -2429,9 +2429,7 @@ describe("talk realtime gateway relay", () => {
       fixture.events.filter(
         (entry) =>
           (entry.payload as { type?: string }).type === "toolResult" &&
-          ["native-2", "native-3"].includes(
-            (entry.payload as { callId?: string }).callId ?? "",
-          ),
+          ["native-2", "native-3"].includes((entry.payload as { callId?: string }).callId ?? ""),
       ),
     ).toHaveLength(0);
   });

@@ -852,8 +852,7 @@ describe("validateTalkSessionRelayParams", () => {
     expectAccepted(validateTalkSessionAppendAudioParams, [
       talkSession({ audioBase64: "aGVsbG8=", timestamp: 123 }),
     ]);
-    const cancelOutput = talkSession({ reason: "barge-in", turnId: "turn-7" });
-    expectAccepted(validateTalkSessionCancelOutputParams, [cancelOutput]);
+    expectAccepted(validateTalkSessionCancelOutputParams, [talkSession({ turnId: "turn-7" })]);
     expectAccepted(validateTalkSessionSubmitToolResultParams, [
       talkSession({
         callId: "call-1",
