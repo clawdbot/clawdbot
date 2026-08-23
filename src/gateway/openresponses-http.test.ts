@@ -391,12 +391,17 @@ describe("OpenResponses HTTP API (e2e)", () => {
     }
   });
 
-  it.each([false, true])(
-    "accepts the official OpenAI SDK plain-text response format (stream: %s)",
-    async (stream) => {
+  it.each([
+    { stream: false, text: "SDK plain-text response", expected: "SDK plain-text response" },
+    { stream: true, text: "SDK plain-text response", expected: "SDK plain-text response" },
+    { stream: false, text: "", expected: "No response from OpenClaw." },
+    { stream: true, text: "", expected: "No response from OpenClaw." },
+  ])(
+    "returns visible official SDK response text (stream: $stream, text: $text)",
+    async ({ stream, text, expected }) => {
       agentCommandMock.mockClear();
       agentCommandMock.mockResolvedValueOnce({
-        payloads: [{ text: "SDK plain-text response" }],
+        payloads: [{ text }],
       } as never);
 
       const client = new OpenAI({
@@ -421,17 +426,51 @@ describe("OpenResponses HTTP API (e2e)", () => {
             textDeltas.push(event.delta);
           }
         }
-        expect(textDeltas.join("")).toBe("SDK plain-text response");
+        expect(textDeltas.join("")).toBe(expected);
         expect(eventTypes).toContain("response.completed");
       } else {
         const response = await client.responses.create({ ...request, stream: false });
         expect(response.status).toBe("completed");
-        expect(response.output_text).toBe("SDK plain-text response");
+        expect(response.output_text).toBe(expected);
       }
 
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("preserves buffered leading text in official SDK streaming snapshots", async () => {
+    const expected = "<tag>ok</tag>";
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string }).runId;
+      if (!runId) {
+        throw new Error("expected a streaming response run ID");
+      }
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: expected, delta: "tag>ok</tag>" },
+      });
+      return { payloads: [{ text: expected }] };
+    }) as never);
+
+    const client = new OpenAI({
+      apiKey: "test",
+      baseURL: `http://127.0.0.1:${enabledPort}/v1`,
+      defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+      maxRetries: 0,
+    });
+    const stream = client.responses.stream({
+      model: "openclaw",
+      input: "Preserve the complete assistant snapshot.",
+    });
+    const deltas: string[] = [];
+    stream.on("response.output_text.delta", (event) => deltas.push(event.delta));
+
+    const response = await stream.finalResponse();
+    expect(deltas.join("")).toBe(expected);
+    expect(response.output_text).toBe(expected);
+  });
 
   it.each([
     { name: "rewritten", replacementText: "final answer" },
