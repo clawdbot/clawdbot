@@ -3668,7 +3668,7 @@ openclaw-sidebar-attention {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 2px;
+  gap: 0;
   overflow-y: auto;
   padding: 6px;
   overscroll-behavior: contain;
@@ -3676,6 +3676,16 @@ openclaw-sidebar-attention {
   scrollbar-gutter: stable;
   scrollbar-width: thin;
   touch-action: pan-y;
+}
+
+.sidebar-issues-panel__list > [data-attention-kind] {
+  box-sizing: border-box;
+  margin-inline: -6px;
+  padding-inline: 6px;
+}
+
+.sidebar-issues-panel__list > [data-attention-kind] + [data-attention-kind] {
+  border-block-start: 2px solid var(--sidebar-bg);
 }
 
 .sidebar-issues-panel__list:focus-visible {
