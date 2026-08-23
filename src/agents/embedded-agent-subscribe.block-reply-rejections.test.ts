@@ -761,7 +761,7 @@ describe("subscribeEmbeddedAgentSession block reply rejections", () => {
     await subscription.waitForPendingEvents();
 
     expect(onBlockReply).toHaveBeenCalledOnce();
-    expect(onBlockReply.mock.calls[0]?.[0]).toEqual(
+    expect(onBlockReply).toHaveBeenCalledWith(
       expect.objectContaining({ mediaUrls: ["/tmp/generated.png"] }),
     );
     expect(subscription.getPendingToolMediaReply()).toEqual(
