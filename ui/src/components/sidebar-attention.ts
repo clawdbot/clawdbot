@@ -647,7 +647,6 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
         >${item.detail}</span
       >`;
     }
-    const inlineAction = item.inlineAction;
     return html`<span class="sidebar-issues-panel__state-row" title=${item.detail}>
       ${item.meta.context
         ? html`<span class="sidebar-issues-panel__meta-context">${item.meta.context}</span>
@@ -656,21 +655,6 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       <span class="sidebar-issues-panel__meta-status">${item.meta.status}</span>
       <span aria-hidden="true">·</span>
       <span class="sidebar-issues-panel__meta-time">${item.meta.time}</span>
-      ${inlineAction
-        ? html`<button
-            type="button"
-            class="sidebar-issues-panel__inline-action"
-            @click=${(event: Event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              (this.onNavigate ?? ((routeId) => this.context?.navigate(routeId)))(
-                inlineAction.routeId,
-              );
-            }}
-          >
-            ${inlineAction.label}
-          </button>`
-        : nothing}
     </span>`;
   }
 
@@ -727,6 +711,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     const facts = item.action.kind === "askCustodian" ? item.action.alert.facts : [];
     const visibleFacts = facts.filter((fact) => fact !== item.label);
     const actionLabel = item.action.kind === "askCustodian" ? t("nav.askOpenClaw") : item.label;
+    const inlineAction = item.inlineAction;
     return html`<details
       class="sidebar-issues-panel__details sidebar-issues-panel__details--${item.severity}"
       data-attention-kind=${item.kind}
@@ -765,9 +750,25 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
             </ul>`
           : nothing}
         <div class="sidebar-issues-panel__actions">
+          ${inlineAction
+            ? html`<button
+                type="button"
+                class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
+                @click=${() => {
+                  this.closePanel(false);
+                  (this.onNavigate ?? ((routeId) => this.context?.navigate(routeId)))(
+                    inlineAction.routeId,
+                  );
+                }}
+              >
+                ${inlineAction.label}
+              </button>`
+            : nothing}
           <button
             type="button"
-            class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
+            class="sidebar-issues-panel__action ${inlineAction
+              ? ""
+              : "sidebar-issues-panel__action--primary"}"
             @click=${() => void this.open(item)}
           >
             ${actionLabel}
