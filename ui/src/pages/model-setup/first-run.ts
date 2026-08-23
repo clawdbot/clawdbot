@@ -2,10 +2,9 @@ import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
 import { sessionRouteNamespaceFromPath } from "../../app-route-paths.ts";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { readSessionDefaults } from "../../app/gateway-store.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { cacheModelSetupDetection, type ModelSetupDetectionConnection } from "./detect-cache.ts";
-import { detectModelSetup } from "./rpc.ts";
 
 export function isDefaultChatLanding(
   location: RouteLocation,
@@ -72,15 +71,6 @@ function startModelSetupFirstRunRedirect(params: {
   redirect: () => void;
   onInitialDecision: () => void;
 }): () => void {
-  let detection:
-    | {
-        connection: ModelSetupDetectionConnection;
-        attempts: number;
-        phase: "in-flight" | "retry-ready" | "settled";
-      }
-    | undefined;
-  let redirected = false;
-  let disposed = false;
   let initialDecisionSettled = false;
   const settleInitialDecision = () => {
     if (!initialDecisionSettled) {
@@ -91,10 +81,10 @@ function startModelSetupFirstRunRedirect(params: {
   const handleSnapshot: Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0] = (
     snapshot,
   ) => {
-    if (redirected) {
+    if (initialDecisionSettled) {
       return;
     }
-    if (snapshot.phase !== "connected" || !snapshot.client) {
+    if (snapshot.phase !== "connected") {
       // A build fence can move a previously authenticated client straight into
       // reconnecting or reload-required, while a terminal first attempt returns
       // to stopped. Do not hold the router when the shell needs to present recovery.
@@ -103,73 +93,25 @@ function startModelSetupFirstRunRedirect(params: {
       }
       return;
     }
+    const defaults = snapshot.hello ? readSessionDefaults(snapshot.hello) : undefined;
+    const selectedAgentId = params.context.agentSelection.state.selectedId?.trim() || null;
+    const defaultAgentId = defaults?.defaultAgentId?.trim() || null;
+    const usesDefaultAgent = selectedAgentId === null || selectedAgentId === defaultAgentId;
     if (
-      !hasOperatorAdminAccess(snapshot.hello?.auth ?? null) ||
-      isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") !== true
+      hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
+      isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") === true &&
+      defaults?.modelConfigured === false &&
+      usesDefaultAgent &&
+      params.isStillDefaultLanding()
     ) {
-      settleInitialDecision();
-      return;
+      params.redirect();
     }
-    const agentId = params.context.agentSelection.state.selectedId;
-    const connection = { client: snapshot.client, hello: snapshot.hello, agentId };
-    const previous = detection;
-    const sameGeneration =
-      connection.client === previous?.connection.client &&
-      connection.hello === previous?.connection.hello &&
-      connection.agentId === previous?.connection.agentId;
-    if (sameGeneration && previous?.phase !== "retry-ready") {
-      return;
-    }
-    detection =
-      sameGeneration && previous
-        ? { connection, attempts: previous.attempts + 1, phase: "in-flight" }
-        : { connection, attempts: 1, phase: "in-flight" };
-    const attempt = detection;
-    void detectModelSetup(snapshot.client, agentId ?? undefined)
-      .then((result) => {
-        if (disposed || detection !== attempt) {
-          return;
-        }
-        const current = params.context.gateway.snapshot;
-        if (
-          current.phase !== "connected" ||
-          current.client !== connection.client ||
-          current.hello !== connection.hello ||
-          params.context.agentSelection.state.selectedId !== connection.agentId
-        ) {
-          return;
-        }
-        detection = { ...attempt, phase: "settled" };
-        cacheModelSetupDetection(connection, result);
-        if (!result.setupComplete && !redirected && params.isStillDefaultLanding()) {
-          redirected = true;
-          params.redirect();
-        }
-        settleInitialDecision();
-      })
-      .catch(() => {
-        if (disposed || detection !== attempt) {
-          return;
-        }
-        // One same-generation retry absorbs a transient startup race without
-        // turning first-run guidance into a background retry loop.
-        detection = { ...attempt, phase: attempt.attempts < 2 ? "retry-ready" : "settled" };
-        if (detection.phase === "retry-ready" && params.isStillDefaultLanding()) {
-          handleSnapshot(params.context.gateway.snapshot);
-        } else {
-          settleInitialDecision();
-        }
-      });
+    settleInitialDecision();
   };
   const unsubscribe = params.context.gateway.subscribe(handleSnapshot);
-  const unsubscribeSelection = params.context.agentSelection.subscribe(() =>
-    handleSnapshot(params.context.gateway.snapshot),
-  );
   handleSnapshot(params.context.gateway.snapshot);
   return () => {
-    disposed = true;
     unsubscribe();
-    unsubscribeSelection();
     settleInitialDecision();
   };
 }

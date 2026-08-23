@@ -1,5 +1,6 @@
 // Gateway health state builds snapshots, caches health probes, and broadcasts health/presence version changes.
 import type { Snapshot } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveAgentEffectiveModelPrimary } from "../../agents/agent-scope.js";
 import { createConfigIO, getRuntimeConfig } from "../../config/io.js";
 import { STATE_DIR } from "../../config/paths.js";
 import { getRuntimeConfigAppliedHash } from "../../config/runtime-snapshot.js";
@@ -78,6 +79,7 @@ export function buildGatewaySnapshot(opts: {
       : null,
     sessionDefaults: {
       defaultAgentId,
+      modelConfigured: Boolean(resolveAgentEffectiveModelPrimary(cfg, defaultAgentId)),
       ownership: selection.ownership,
       selectionRequired: selection.selectionRequired,
       mainKey,

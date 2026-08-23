@@ -1708,6 +1708,7 @@ function installControlUiMockGateway(
               defaultAgentId: scenario.defaultAgentId,
               mainKey: "main",
               mainSessionKey: scenario.sessionKey,
+              modelConfigured: Boolean(scenario.agentModel),
               scope: "agent",
             },
           },
