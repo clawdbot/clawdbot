@@ -166,13 +166,14 @@ function parseDaysOption(raw: unknown, fallback = 30): number {
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return Math.max(1, Math.floor(raw));
   }
-  if (typeof raw === "string" && raw.trim() !== "") {
+  if (typeof raw === "string") {
     const parsed = parseStrictPositiveInteger(raw);
     if (parsed !== undefined) {
       return parsed;
     }
-    // A present-but-unparseable value is operator error; the main RPC path
-    // rejects malformed --timeout the same way instead of silently defaulting.
+    // A present-but-unparseable value (including an explicit empty one) is
+    // operator error; the main RPC path rejects malformed --timeout the same
+    // way instead of silently defaulting.
     throw new Error(`Invalid --days. Use a positive integer, e.g. --days 30. Received: "${raw}".`);
   }
   return fallback;

@@ -341,14 +341,17 @@ describe("gateway-cli coverage", () => {
     expect(runtimeErrors).toHaveLength(0);
   });
 
-  it.each(["abc", "7d", "1.5"])("rejects malformed usage-cost --days %s", async (days) => {
-    callGateway.mockClear();
+  it.each(["abc", "7d", "1.5", "", "  "])(
+    "rejects malformed usage-cost --days %j",
+    async (days) => {
+      callGateway.mockClear();
 
-    await expectGatewayExit(["gateway", "usage-cost", "--days", days, "--json"]);
+      await expectGatewayExit(["gateway", "usage-cost", "--days", days, "--json"]);
 
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(runtimeErrors.join("\n")).toContain("Invalid --days");
-  });
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(runtimeErrors.join("\n")).toContain("Invalid --days");
+    },
+  );
 
   it("rejects a malformed --timeout before the health auth diagnostic", async () => {
     callGateway.mockClear();
