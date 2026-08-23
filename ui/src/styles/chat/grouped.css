@@ -114,7 +114,8 @@
   margin-block-start: var(--chat-message-type-boundary-gap);
 }
 
-.chat-group > .chat-group-messages
+.chat-group
+  > .chat-group-messages
   > :is(
     .chat-bubble--tool-shell + .chat-bubble:not(.chat-bubble--tool-shell),
     .chat-bubble:not(.chat-bubble--tool-shell) + .chat-bubble--tool-shell,

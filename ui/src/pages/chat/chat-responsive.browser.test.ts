@@ -298,7 +298,14 @@ function runBlockSpacingHtml() {
             <div class="chat-bubble" data-run-block="text"><div class="chat-text">Opening text</div></div>
             <div class="chat-bubble" data-run-block="detail"><div class="chat-text">Detail text</div></div>
             <div class="chat-bubble chat-bubble--tool-shell" data-run-block="tool">Tool row</div>
-            <div class="chat-activity-group" data-run-block="list">Tool list</div>
+            <div class="chat-activity-group" data-run-block="list">
+              <div class="chat-activity-group__body">
+                <div class="chat-group-messages">
+                  <div class="chat-bubble" data-expanded-row="text">Expanded detail</div>
+                  <div class="chat-bubble chat-bubble--tool-shell" data-expanded-row="tool">Expanded tool row</div>
+                </div>
+              </div>
+            </div>
             <div class="chat-activity-group chat-work-group" data-run-block="work">
               <button class="chat-inline-disclosure chat-activity-group__summary" type="button">Worked for 10s</button>
               <div class="chat-work-group__separator"></div>
@@ -1354,6 +1361,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           textToTool: gap('[data-run-block="detail"]', '[data-run-block="tool"]'),
           toolToList: gap('[data-run-block="tool"]', '[data-run-block="list"]'),
           listToWork: gap('[data-run-block="list"]', '[data-run-block="work"]'),
+          expandedTextToTool: gap('[data-expanded-row="text"]', '[data-expanded-row="tool"]'),
           workedForSeparator: gap(
             '[data-run-block="work"] > button',
             ".chat-work-group__separator",
@@ -1364,9 +1372,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
       expect(gaps).toEqual({
         intraTurn: 2,
-        textToTool: 4,
+        textToTool: 12,
         toolToList: 12,
         listToWork: 12,
+        expandedTextToTool: 6,
         workedForSeparator: 0,
         turn: 50,
       });
