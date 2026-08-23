@@ -17,6 +17,7 @@ import {
   createClaudeTestBindingStateStore,
   createClaudeTestBindingStore,
 } from "./thread-store.test-helpers.js";
+import { MIN_BRIDGE_VERSION_FOR_TOOL_REFRESH } from "./version.js";
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -43,6 +44,21 @@ function makeBridge(): ClaudeDynamicToolBridge {
   return { specs: [], handlers: new Map() } as unknown as ClaudeDynamicToolBridge;
 }
 
+/**
+ * Wrap a bare `request` stub as a client. Supplies `getServerInfo` reporting a
+ * bridge at the tool-refresh floor, so tests exercising the refresh path see a
+ * capable bridge rather than tripping the openclaw-d42b version gate.
+ */
+function asClient(request: unknown): ClaudeAppServerClient {
+  return {
+    request,
+    getServerInfo: () => ({
+      name: "@zeroaltitude/openclaw-claude-bridge",
+      version: MIN_BRIDGE_VERSION_FOR_TOOL_REFRESH,
+    }),
+  } as unknown as ClaudeAppServerClient;
+}
+
 function makeClient(opts: {
   threadStartResponse?: unknown;
   threadResumeError?: Error;
@@ -50,6 +66,13 @@ function makeClient(opts: {
   refreshToolsResponse?: unknown;
   refreshToolsError?: Error;
   threadForkError?: Error;
+  /**
+   * Version the bridge reports at `initialize`. Defaults to the floor that
+   * enables the in-place refresh — a pre-0.7.6 bridge is gated off it, because
+   * it answers `refreshed: true` while wedging the session's MCP binding
+   * (openclaw-d42b).
+   */
+  bridgeVersion?: string;
 }): ClaudeAppServerClient {
   const request = vi.fn(async (method: string, _params?: unknown) => {
     if (method === "thread/start") {
@@ -90,7 +113,11 @@ function makeClient(opts: {
     }
     return {};
   });
-  return { request } as unknown as ClaudeAppServerClient;
+  const getServerInfo = () => ({
+    name: "@zeroaltitude/openclaw-claude-bridge",
+    version: opts.bridgeVersion ?? MIN_BRIDGE_VERSION_FOR_TOOL_REFRESH,
+  });
+  return { request, getServerInfo } as unknown as ClaudeAppServerClient;
 }
 
 function makeParams(): EmbeddedRunAttemptParams {
@@ -208,7 +235,7 @@ describe("startOrResumeClaudeThread", () => {
       }
       return {};
     });
-    const client = { request } as unknown as ClaudeAppServerClient;
+    const client = asClient(request);
     const result = await startOrResumeClaudeThread({
       client,
       params: makeParams(),
@@ -296,7 +323,7 @@ describe("startOrResumeClaudeThread", () => {
       }
       return {};
     });
-    const client = { request } as unknown as ClaudeAppServerClient;
+    const client = asClient(request);
 
     const result = await startOrResumeClaudeThread({
       client,
@@ -341,7 +368,7 @@ describe("startOrResumeClaudeThread", () => {
       }
       return {};
     });
-    const client = { request } as unknown as ClaudeAppServerClient;
+    const client = asClient(request);
 
     await startOrResumeClaudeThread({
       client,
@@ -450,7 +477,7 @@ describe("startOrResumeClaudeThread", () => {
     const request = vi.fn(async (_method: string, _params?: unknown) => ({
       thread: { id: "thr_patched" },
     }));
-    const client = { request } as unknown as ClaudeAppServerClient;
+    const client = asClient(request);
     const result = await startOrResumeClaudeThread({
       client,
       params: makeParams(),
@@ -509,7 +536,7 @@ describe("startOrResumeClaudeThread", () => {
     }));
 
     const first = startOrResumeClaudeThread({
-      client: { request: firstRequest } as unknown as ClaudeAppServerClient,
+      client: asClient(firstRequest),
       params: makeParams(),
       cfg: BASE_CFG,
       bridge: makeBridge(),
@@ -523,7 +550,7 @@ describe("startOrResumeClaudeThread", () => {
     await firstResumeDidStart;
 
     const second = startOrResumeClaudeThread({
-      client: { request: secondRequest } as unknown as ClaudeAppServerClient,
+      client: asClient(secondRequest),
       params: makeParams(),
       cfg: BASE_CFG,
       bridge: makeBridge(),
@@ -558,7 +585,7 @@ describe("startOrResumeClaudeThread", () => {
     const request = vi.fn(async (_method: string, _params?: unknown) => ({
       thread: { id: "thr_no_patch" },
     }));
-    const client = { request } as unknown as ClaudeAppServerClient;
+    const client = asClient(request);
     await startOrResumeClaudeThread({
       client,
       params: makeParams(),
@@ -823,5 +850,60 @@ describe("startOrResumeClaudeThread — catalog drift refreshed in place", () =>
       ([m]) => m,
     );
     expect(methods).not.toContain("thread/refresh_tools");
+  });
+
+  // ── version gate (openclaw-d42b) ──────────────────────────────────────────
+  //
+  // A bridge below MIN_BRIDGE_VERSION_FOR_TOOL_REFRESH answers
+  // `{ refreshed: true }` and THEN breaks the session: it forwards our
+  // shape-only sdk server entry to Query.setMcpServers, which reads the absent
+  // `instance` as "no longer desired", disconnects the in-process MCP transport,
+  // and yet still tells the CLI the server exists. Every later
+  // mcp__openclaw__* call fails `SDK MCP server not found: openclaw` for the
+  // life of the attempt. The response is indistinguishable from a good one, so
+  // the ONLY defense is to not ask an old bridge at all.
+
+  it("does NOT ask a pre-fix bridge to refresh — it would answer true and wedge the session", async () => {
+    await seed();
+    const client = makeClient({
+      bridgeVersion: "0.7.5",
+      // Deliberately the pre-fix bridge's lie: it would claim success.
+      refreshToolsResponse: { refreshed: true },
+    });
+    const result = await startOrResumeClaudeThread(args(client, "fp-drifted"));
+    const methods = (client.request as unknown as { mock: { calls: [string][] } }).mock.calls.map(
+      ([m]) => m,
+    );
+    expect(methods).not.toContain("thread/refresh_tools");
+    // Rotation is the correct, always-safe fallback.
+    expect(result.outcome).toBe("forked");
+    expect(result.threadId).toBe("thr_forked_001");
+  });
+
+  it("rotates rather than refreshing when the bridge version is unknown", async () => {
+    await seed();
+    const client = makeClient({
+      bridgeVersion: undefined,
+      refreshToolsResponse: { refreshed: true },
+    });
+    // makeClient defaults to the enabling floor, so null it out explicitly to
+    // model a bridge that reported no version at initialize.
+    (client as unknown as { getServerInfo: () => null }).getServerInfo = () => null;
+    const result = await startOrResumeClaudeThread(args(client, "fp-drifted"));
+    const methods = (client.request as unknown as { mock: { calls: [string][] } }).mock.calls.map(
+      ([m]) => m,
+    );
+    expect(methods).not.toContain("thread/refresh_tools");
+    expect(result.outcome).toBe("forked");
+  });
+
+  it("refreshes on a bridge above the gate", async () => {
+    await seed();
+    const client = makeClient({
+      bridgeVersion: "0.8.0",
+      refreshToolsResponse: { refreshed: true },
+    });
+    const result = await startOrResumeClaudeThread(args(client, "fp-drifted"));
+    expect(result.outcome).toBe("refreshed");
   });
 });

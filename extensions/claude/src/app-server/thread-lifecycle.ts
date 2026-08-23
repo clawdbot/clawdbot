@@ -52,6 +52,7 @@ import {
   type ClaudeBindingSessionIdentity,
 } from "./thread-store.js";
 import type { ThreadStartParams } from "./types.js";
+import { compareClaudeBridgeVersions, MIN_BRIDGE_VERSION_FOR_TOOL_REFRESH } from "./version.js";
 
 const THREAD_NOT_FOUND_RE = /thread not found/i;
 
@@ -292,6 +293,11 @@ async function startOrResumeClaudeThreadLocked(
  * that the tools are already current — so the caller must rotate. Any RPC
  * error is treated the same way: fall back rather than proceed on the
  * assumption that a policy change took effect when it may not have.
+ *
+ * Gated on MIN_BRIDGE_VERSION_FOR_TOOL_REFRESH. A bridge below that floor
+ * answers `{ refreshed: true }` and then wedges the session's MCP binding
+ * (openclaw-d42b) — it cannot be detected from the response, so we must not ask
+ * it in the first place. See the constant's doc comment for the mechanism.
  */
 async function tryRefreshToolsInPlace(args: {
   client: ClaudeAppServerClient;
@@ -302,12 +308,39 @@ async function tryRefreshToolsInPlace(args: {
 }): Promise<boolean> {
   const { client, threadId, bridge, identity } = args;
   try {
+    // Inside the try deliberately: this whole function is best-effort, and
+    // rotation is always correct. A surprise here (an unexpected client shape,
+    // a bridge that reported no version) must degrade to rotation, never fail
+    // the turn.
+    const bridgeVersion = client.getServerInfo()?.version;
+    if (compareClaudeBridgeVersions(bridgeVersion, MIN_BRIDGE_VERSION_FOR_TOOL_REFRESH) < 0) {
+      embeddedAgentLog.debug(
+        "claude-bridge: bridge predates the thread/refresh_tools fix; rotating instead",
+        {
+          sessionKey: identity.sessionKey,
+          threadId,
+          bridgeVersion: bridgeVersion ?? "unknown",
+          required: MIN_BRIDGE_VERSION_FOR_TOOL_REFRESH,
+        },
+      );
+      return false;
+    }
     const raw = await client.request<unknown>(
       "thread/refresh_tools",
       {
         threadId,
-        // Mirrors the sdk-type server registration turn-runner.ts builds; the
-        // bridge owns the instance, so it only needs the shape and the specs.
+        // Shape only, no `instance` — matching the sdk-type server registration
+        // turn-runner.ts builds. Correct because the bridge owns the instance
+        // and splices its own back in when it recognises the server name as
+        // one it owns.
+        //
+        // Do NOT "fix" this by trying to send an instance: there is nothing
+        // sendable over JSON-RPC, and a bridge >= 0.7.6 rejects an sdk-type
+        // server it does not own rather than forwarding it. It is the BRIDGE's
+        // job to keep the live transport attached; before 0.7.6 it forwarded
+        // this shape verbatim to Query.setMcpServers, which read the missing
+        // `instance` as "no longer desired" and tore the transport down — see
+        // MIN_BRIDGE_VERSION_FOR_TOOL_REFRESH.
         servers: { openclaw: { type: "sdk", name: "openclaw" } },
         dynamicTools: bridge.specs,
       },
