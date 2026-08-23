@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
@@ -10,10 +13,13 @@ import { deliverClientVoiceMutationDigest } from "./client-voice-mutation-digest
 import {
   type ClientVoiceSessionRecord,
   VOICE_SESSION_RECORD_VERSION,
+  writeVoiceSessionRecordInTransaction,
 } from "./client-voice-session-store.js";
 import {
-  createOrResumeClientVoiceSession,
   appendClientVoiceTranscript,
+  assertClientVoiceSessionOpen,
+  createOrResumeClientVoiceSession,
+  resolveOpenClientVoiceSessionId,
 } from "./client-voice-session.js";
 import { clientVoiceSessionTesting } from "./client-voice-session.test-support.js";
 
@@ -74,12 +80,13 @@ async function seedAgentSession(agentSessionKey: string, withDelivery = false): 
   return sessionId;
 }
 
-function mutationDigestRecord(): ClientVoiceSessionRecord {
+function mutationDigestRecord(agentSessionKey?: string): ClientVoiceSessionRecord {
   return {
     version: VOICE_SESSION_RECORD_VERSION,
     voiceSessionId: "voice-raw-main",
     agentId: "main",
     sessionKey: "main",
+    ...(agentSessionKey ? { agentSessionKey } : {}),
     origin: "client",
     status: "closed",
     createdAt: 1,
@@ -126,6 +133,7 @@ describe("client voice agent-session routing", () => {
       const voiceSessionId = createOrResumeClientVoiceSession({
         agentId: "main",
         sessionKey: "main",
+        agentSessionKey,
         origin: "client",
       });
 
@@ -149,15 +157,136 @@ describe("client voice agent-session routing", () => {
     },
   );
 
+  it("keeps transcript persistence on the canonical target pinned at call creation", async () => {
+    const agentSessionKey = "agent:main:main";
+    const sessionId = await seedAgentSession(agentSessionKey);
+    const voiceSessionId = createOrResumeClientVoiceSession({
+      agentId: "main",
+      sessionKey: "main",
+      agentSessionKey,
+      origin: "client",
+    });
+
+    await appendClientVoiceTranscript({
+      agentId: "main",
+      sessionKey: "main",
+      voiceSessionId,
+      entryId: "config-drift-final",
+      role: "user",
+      text: "persist on the original target",
+      config: {
+        session: { mainKey: "work" },
+        agents: { entries: { main: { default: true } } },
+      },
+    });
+
+    expect(sessionAccessorMocks.appendTranscriptMessage).toHaveBeenCalledWith(
+      { agentId: "main", sessionId, sessionKey: agentSessionKey },
+      expect.objectContaining({ eventId: `voice:${voiceSessionId}:config-drift-final` }),
+    );
+  });
+
+  it("rejects configured-target drift for a pinned call", () => {
+    const voiceSessionId = createOrResumeClientVoiceSession({
+      agentId: "main",
+      sessionKey: "main",
+      agentSessionKey: "agent:main:main",
+      origin: "client",
+      voiceSessionId: "voice-pinned-target",
+    });
+
+    expect(() =>
+      createOrResumeClientVoiceSession({
+        agentId: "main",
+        sessionKey: "main",
+        agentSessionKey: "agent:main:work",
+        origin: "client",
+        voiceSessionId,
+      }),
+    ).toThrow("canonical target does not match");
+    expect(() =>
+      assertClientVoiceSessionOpen({
+        agentId: "main",
+        sessionKey: "main",
+        agentSessionKey: "agent:main:work",
+        voiceSessionId,
+      }),
+    ).toThrow("canonical target does not match");
+  });
+
+  it("preserves an unpinned row and allows a fresh call after config drift", () => {
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        writeVoiceSessionRecordInTransaction(database, {
+          version: VOICE_SESSION_RECORD_VERSION,
+          voiceSessionId: "voice-legacy-target",
+          agentId: "main",
+          sessionKey: "main",
+          origin: "client",
+          status: "open",
+          createdAt: 7,
+          updatedAt: 7,
+          consultRunIds: [],
+          effects: [],
+          transcriptFailureKeys: [],
+        });
+      },
+      { agentId: "main" },
+    );
+
+    expect(
+      resolveOpenClientVoiceSessionId({ agentId: "main", sessionKey: "main" }),
+    ).toBeUndefined();
+    expect(() =>
+      createOrResumeClientVoiceSession({
+        agentId: "main",
+        sessionKey: "main",
+        agentSessionKey: "agent:main:work",
+        origin: "client",
+        voiceSessionId: "voice-legacy-target",
+        now: 8,
+      }),
+    ).toThrow("has no pinned agent-session target");
+    expect(clientVoiceSessionTesting.readRecord("main", "voice-legacy-target")).toMatchObject({
+      status: "open",
+      updatedAt: 7,
+    });
+    expect(
+      clientVoiceSessionTesting.readRecord("main", "voice-legacy-target")?.agentSessionKey,
+    ).toBeUndefined();
+
+    const freshVoiceSessionId = createOrResumeClientVoiceSession({
+      agentId: "main",
+      sessionKey: "main",
+      agentSessionKey: "agent:main:work",
+      origin: "client",
+      voiceSessionId: "voice-after-config-drift",
+      now: 8,
+    });
+    expect(resolveOpenClientVoiceSessionId({ agentId: "main", sessionKey: "main" })).toBe(
+      freshVoiceSessionId,
+    );
+    expect(clientVoiceSessionTesting.readRecord("main", freshVoiceSessionId)).toMatchObject({
+      agentSessionKey: "agent:main:work",
+    });
+  });
+
   it.each(aliasedAgentSessionCases)(
     "routes $label mutation digests through the canonical agent session",
     async ({ config, agentSessionKey }) => {
       await seedAgentSession(agentSessionKey, true);
-      const record = mutationDigestRecord();
+      const record = mutationDigestRecord(agentSessionKey);
+      runOpenClawAgentWriteTransaction(
+        (database) => writeVoiceSessionRecordInTransaction(database, record),
+        { agentId: record.agentId },
+      );
 
       await deliverClientVoiceMutationDigest(record, config, new AbortController().signal);
 
       expect(record.sessionKey).toBe("main");
+      expect(clientVoiceSessionTesting.readRecord("main", record.voiceSessionId)).toMatchObject({
+        agentSessionKey,
+      });
       expect(sendDurableMessageBatch).toHaveBeenCalledWith(
         expect.objectContaining({
           channel: "discord",
@@ -171,4 +300,35 @@ describe("client voice agent-session routing", () => {
       );
     },
   );
+
+  it("does not infer an unpinned digest target from changed configuration", async () => {
+    await seedAgentSession("agent:main:work", true);
+    const record = mutationDigestRecord();
+    runOpenClawAgentWriteTransaction(
+      (database) => writeVoiceSessionRecordInTransaction(database, record),
+      { agentId: record.agentId },
+    );
+
+    await expect(
+      deliverClientVoiceMutationDigest(
+        record,
+        {
+          session: { mainKey: "work" },
+          agents: { entries: { main: { default: true } } },
+        },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow("has no pinned agent-session target");
+
+    expect(sendDurableMessageBatch).not.toHaveBeenCalled();
+    expect(clientVoiceSessionTesting.readRecord("main", record.voiceSessionId)).toMatchObject({
+      status: "closed",
+    });
+    expect(
+      clientVoiceSessionTesting.readRecord("main", record.voiceSessionId)?.digestDeliveredAt,
+    ).toBeUndefined();
+    expect(
+      clientVoiceSessionTesting.readRecord("main", record.voiceSessionId)?.agentSessionKey,
+    ).toBeUndefined();
+  });
 });

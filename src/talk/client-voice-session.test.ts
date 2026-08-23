@@ -27,14 +27,16 @@ import {
   closeClientVoiceSession,
   closeRelayVoiceSessionRecord,
   closeStaleClientVoiceSessions,
-  createOrResumeClientVoiceSession,
   ensureClientVoiceAgentSessionEntry,
   isClientVoiceSessionConfirmable,
-  registerClientVoiceConsultRun,
   resolveClientVoiceAgentSessionId,
   resolveClientVoiceRunBinding,
   resolveOpenClientVoiceSessionId,
 } from "./client-voice-session.js";
+import {
+  createOrResumeClientVoiceSession,
+  registerClientVoiceConsultRun,
+} from "./client-voice-session.test-helpers.js";
 import { clientVoiceSessionTesting } from "./client-voice-session.test-support.js";
 import { VOICE_TRANSCRIPT_MAX_UNRESOLVED } from "./voice-transcript.js";
 
@@ -274,6 +276,7 @@ describe("client voice session", () => {
     const binding = (voiceSessionId: string) => ({
       agentId: "main",
       sessionKey: "agent:main:main",
+      agentSessionKey: "agent:main:main",
       voiceSessionId,
     });
     expect(isClientVoiceSessionConfirmable(binding(capable))).toBe(true);

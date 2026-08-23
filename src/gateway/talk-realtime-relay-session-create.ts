@@ -53,11 +53,12 @@ import {
   MAX_RELAY_TOOL_CALL_IDENTITY_BYTES,
   RelayToolCallLedger,
 } from "./talk-realtime-relay-tool-call-ledger.js";
+import { enqueueRelayVoiceTranscript } from "./talk-realtime-relay-voice.js";
 import {
-  enqueueRelayVoiceTranscript,
-  resolveRelaySessionTarget,
-} from "./talk-realtime-relay-voice.js";
-import { registerTalkConnectionCleanup } from "./talk-session-registry.js";
+  forgetUnifiedTalkSession,
+  registerTalkConnectionCleanup,
+} from "./talk-session-registry.js";
+import { resolveTalkSessionTarget } from "./talk-session-target.js";
 
 // The relay contract is 20 ms of 24 kHz mono PCM16 per browser event.
 const RELAY_OUTPUT_AUDIO_FRAME_BYTES = 960;
@@ -130,7 +131,7 @@ export function createTalkRealtimeRelaySession(
   );
   const relayConfig = params.cfg ?? params.context.getRuntimeConfig();
   const relaySessionTarget = params.sessionKey
-    ? resolveRelaySessionTarget(relayConfig, params.sessionKey)
+    ? resolveTalkSessionTarget(relayConfig, params.sessionKey)
     : undefined;
   const consultRunner = relaySessionTarget
     ? createTalkClientAgentConsultRunner({

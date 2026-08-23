@@ -8,7 +8,6 @@ import {
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import { mergeSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSessionStoreKey } from "../gateway/session-store-key.js";
 import {
   onTrustedInternalDiagnosticEvent,
   onTrustedToolExecutionEvent,
@@ -30,13 +29,16 @@ import {
 } from "./client-voice-mutation-digest-owner.js";
 import {
   assertVoiceSessionOwnership as assertOwnership,
+  assertVoiceSessionTarget,
   type ClientVoiceRunBinding,
   type ClientVoiceSessionRecord,
   type ClientVoiceToolEffect,
   operationKey,
+  normalizeVoiceAgentSessionKey,
   parseStoredVoiceSessionRecord as parseStoredRecord,
   readVoiceSessionRecord as readRecord,
   readVoiceSessionRecordInTransaction as readRecordInTransaction,
+  requireVoiceSessionAgentSessionKey,
   VOICE_SESSION_CACHE_SCOPE as CACHE_SCOPE,
   VOICE_SESSION_RECORD_VERSION as RECORD_VERSION,
   VOICE_SESSION_STALE_AFTER_MS as STALE_AFTER_MS,
@@ -56,13 +58,37 @@ const voiceSessionOperations = createVoiceTranscriptOperationRegistry(
 let unsubscribeToolEffects: (() => void) | undefined;
 let unsubscribeRunCompletion: (() => void) | undefined;
 
+function assertVoiceSessionResume(
+  record: ClientVoiceSessionRecord,
+  params: {
+    agentId: string;
+    sessionKey: string;
+    agentSessionKey: string;
+    origin: "client" | "relay";
+    provider?: string;
+  },
+): string {
+  const target = assertVoiceSessionTarget(record, params);
+  if (record.origin !== params.origin) {
+    throw new Error("voice session origin does not match");
+  }
+  if (record.status !== "open") {
+    throw new Error("voice session is already closed");
+  }
+  if (record.provider && params.provider && record.provider !== params.provider) {
+    throw new Error("voice session provider does not match");
+  }
+  return target;
+}
+
 function hasLiveConsultRun(record: ClientVoiceSessionRecord): boolean {
   return record.consultRunIds.some((runId) => {
     const binding = voiceSessionByRunId.get(runId);
     return (
       binding?.agentId === record.agentId &&
       binding.voiceSessionId === record.voiceSessionId &&
-      binding.sessionKey === record.sessionKey
+      binding.sessionKey === record.sessionKey &&
+      binding.agentSessionKey === record.agentSessionKey
     );
   });
 }
@@ -172,6 +198,7 @@ function ensureToolEffectSubscription(): void {
 export function createOrResumeClientVoiceSession(params: {
   agentId: string;
   sessionKey: string;
+  agentSessionKey: string;
   provider?: string;
   origin: "client" | "relay";
   transcriptCapable?: boolean;
@@ -185,16 +212,7 @@ export function createOrResumeClientVoiceSession(params: {
     (database) => {
       const existing = readRecordInTransaction(database, voiceSessionId);
       if (existing) {
-        assertOwnership(existing, params);
-        if (existing.origin !== params.origin) {
-          throw new Error("voice session origin does not match");
-        }
-        if (existing.status !== "open") {
-          throw new Error("voice session is already closed");
-        }
-        if (existing.provider && provider && existing.provider !== provider) {
-          throw new Error("voice session provider does not match");
-        }
+        assertVoiceSessionResume(existing, { ...params, provider });
         if (!existing.provider && provider) {
           existing.provider = provider;
         }
@@ -210,6 +228,7 @@ export function createOrResumeClientVoiceSession(params: {
         voiceSessionId,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
+        agentSessionKey: normalizeVoiceAgentSessionKey(params.agentSessionKey),
         ...(provider ? { provider } : {}),
         origin: params.origin,
         ...(params.transcriptCapable === true ? { transcriptCapable: true } : {}),
@@ -224,6 +243,21 @@ export function createOrResumeClientVoiceSession(params: {
     { agentId: params.agentId },
   );
   return voiceSessionId;
+}
+
+/** Reject an incompatible explicit resume before a fallible provider transport is created. */
+export function assertClientVoiceSessionResume(params: {
+  agentId: string;
+  sessionKey: string;
+  agentSessionKey: string;
+  voiceSessionId: string;
+  provider?: string;
+  origin: "client" | "relay";
+}): void {
+  const record = readRecord(params.agentId, params.voiceSessionId);
+  if (record) {
+    assertVoiceSessionResume(record, params);
+  }
 }
 
 /** Read the canonical agent-session id without creating state during provider startup. */
@@ -268,19 +302,18 @@ export async function ensureClientVoiceAgentSessionEntry(params: {
 export function registerClientVoiceConsultRun(params: {
   agentId: string;
   sessionKey: string;
+  agentSessionKey: string;
   voiceSessionId: string;
   runId: string;
   config?: OpenClawConfig;
 }): void {
-  let recordClosed = false;
-  runOpenClawAgentWriteTransaction(
+  const binding = runOpenClawAgentWriteTransaction(
     (database) => {
       const record = readRecordInTransaction(database, params.voiceSessionId);
       if (!record) {
         throw new Error("voice session not found");
       }
-      assertOwnership(record, params);
-      recordClosed = record.status === "closed";
+      const agentSessionKey = assertVoiceSessionTarget(record, params);
       // A close can race in while chat.send is still acking this run. The run has
       // already started, so bind it anyway (even on a closed record) to keep effect
       // capture; aborting here would drop a just-confirmed high-impact action.
@@ -289,6 +322,7 @@ export function registerClientVoiceConsultRun(params: {
         record.updatedAt = Date.now();
         writeRecordInTransaction(database, record);
       }
+      return { agentSessionKey, recordClosed: record.status === "closed" };
     },
     { agentId: params.agentId },
   );
@@ -296,10 +330,11 @@ export function registerClientVoiceConsultRun(params: {
     agentId: params.agentId,
     voiceSessionId: params.voiceSessionId,
     sessionKey: params.sessionKey,
+    agentSessionKey: binding.agentSessionKey,
   });
   // Bound to a call that already closed: re-arm the point-in-time summary owner so
   // the run completion becomes a retry point without coupling it to transcript work.
-  if (recordClosed && params.config) {
+  if (binding.recordClosed && params.config) {
     mutationDigestDeliveryOwner.record({
       agentId: params.agentId,
       voiceSessionId: params.voiceSessionId,
@@ -332,13 +367,14 @@ export function isClientVoiceSessionConfirmable(binding: ClientVoiceRunBinding):
 export function assertClientVoiceSessionOpen(params: {
   agentId: string;
   sessionKey: string;
+  agentSessionKey: string;
   voiceSessionId: string;
 }): "client" | "relay" {
   const record = readRecord(params.agentId, params.voiceSessionId);
   if (!record) {
     throw new Error("voice session not found");
   }
-  assertOwnership(record, params);
+  assertVoiceSessionTarget(record, params);
   if (record.status !== "open") {
     throw new Error("voice session is closed");
   }
@@ -374,6 +410,7 @@ export function resolveOpenClientVoiceSessionId(params: {
     if (
       record?.origin === "client" &&
       record.status === "open" &&
+      record.agentSessionKey !== undefined &&
       record.agentId === params.agentId &&
       record.sessionKey === params.sessionKey
     ) {
@@ -437,64 +474,52 @@ function appendVoiceTranscript(params: {
     normalized.agentId,
     normalized.voiceSessionId,
     async () => {
-      const record = readRecord(normalized.agentId, normalized.voiceSessionId);
-      if (!record) {
-        throw new Error("voice session not found");
-      }
-      assertOwnership(record, normalized);
-      if (record.status !== "open") {
-        throw new Error("voice session is closed");
-      }
-      if (record.origin !== normalized.origin) {
-        throw new Error("voice session origin does not allow this transcript source");
-      }
       const failureKey = transcriptFailureKey(normalized.entryId);
-      if (
-        record.transcriptFailureKeys.length >= VOICE_TRANSCRIPT_MAX_UNRESOLVED &&
-        !record.transcriptFailureKeys.includes(failureKey)
-      ) {
-        throw new Error("voice transcript persistence has too many unresolved entries");
-      }
-      // Voice ownership keeps the client-visible key, while transcript storage follows the
-      // configured canonical agent-session key (including global and custom-main aliases).
-      const agentSessionKey = normalized.config
-        ? resolveSessionStoreKey({
-            cfg: normalized.config,
-            sessionKey: normalized.sessionKey,
-            storeAgentId: normalized.agentId,
-          })
-        : normalized.sessionKey;
-      const sessionEntry = loadSessionEntryReadOnly({
-        agentId: normalized.agentId,
-        sessionKey: agentSessionKey,
-      });
-      if (!sessionEntry?.sessionId) {
-        throw new Error(`agent session not found (${agentSessionKey})`);
-      }
-      const observedAt = Date.now();
-      const timestamp = normalized.timestamp ?? observedAt;
-      // Reserve before the fallible append. A crash can leave a conservative
-      // retry requirement, but can never let close skip an accepted entry.
-      runOpenClawAgentWriteTransaction(
+      // Validate the authoritative row and reserve the fallible append in one commit. A crash
+      // can leave a conservative retry requirement, but close can never skip an accepted entry.
+      const target = runOpenClawAgentWriteTransaction(
         (database) => {
-          const current = readRecordInTransaction(database, normalized.voiceSessionId);
-          if (!current) {
-            throw new Error("voice session disappeared during transcript reservation");
+          const record = readRecordInTransaction(database, normalized.voiceSessionId);
+          if (!record) {
+            throw new Error("voice session not found");
           }
-          assertOwnership(current, normalized);
-          if (!current.transcriptFailureKeys.includes(failureKey)) {
-            current.transcriptFailureKeys.push(failureKey);
+          assertOwnership(record, normalized);
+          if (record.status !== "open") {
+            throw new Error("voice session is closed");
           }
-          current.updatedAt = Date.now();
-          writeRecordInTransaction(database, current);
+          if (record.origin !== normalized.origin) {
+            throw new Error("voice session origin does not allow this transcript source");
+          }
+          const agentSessionKey = requireVoiceSessionAgentSessionKey(record);
+          if (
+            record.transcriptFailureKeys.length >= VOICE_TRANSCRIPT_MAX_UNRESOLVED &&
+            !record.transcriptFailureKeys.includes(failureKey)
+          ) {
+            throw new Error("voice transcript persistence has too many unresolved entries");
+          }
+          if (!record.transcriptFailureKeys.includes(failureKey)) {
+            record.transcriptFailureKeys.push(failureKey);
+          }
+          record.updatedAt = Date.now();
+          writeRecordInTransaction(database, record);
+          return { agentSessionKey, provider: record.provider ?? "realtime" };
         },
         { agentId: normalized.agentId },
       );
+      const sessionEntry = loadSessionEntryReadOnly({
+        agentId: normalized.agentId,
+        sessionKey: target.agentSessionKey,
+      });
+      if (!sessionEntry?.sessionId) {
+        throw new Error(`agent session not found (${target.agentSessionKey})`);
+      }
+      const observedAt = Date.now();
+      const timestamp = normalized.timestamp ?? observedAt;
       await appendTranscriptMessage(
         {
           agentId: normalized.agentId,
           sessionId: sessionEntry.sessionId,
-          sessionKey: agentSessionKey,
+          sessionKey: target.agentSessionKey,
         },
         {
           ...(normalized.config ? { config: normalized.config } : {}),
@@ -503,7 +528,7 @@ function appendVoiceTranscript(params: {
             role: normalized.role,
             text: normalized.text,
             timestamp,
-            provider: record.provider ?? "realtime",
+            provider: target.provider,
           }),
           now: timestamp,
         },
@@ -515,6 +540,9 @@ function appendVoiceTranscript(params: {
             throw new Error("voice session disappeared during transcript append");
           }
           assertOwnership(current, normalized);
+          if (requireVoiceSessionAgentSessionKey(current) !== target.agentSessionKey) {
+            throw new Error("voice session canonical target changed during transcript append");
+          }
           // Reaching here means this exact eventId is durably persisted (fresh append or
           // idempotent dedup of our own prior write). Arm confirmation bookkeeping in both
           // cases so a retry after a partial failure still records the user utterance.
@@ -600,6 +628,7 @@ async function closeClientVoiceSessionInternal(params: {
         throw new Error("voice session disappeared during close");
       }
       assertOwnership(current, params);
+      requireVoiceSessionAgentSessionKey(current);
       if (
         current.transcriptFailureKeys.length > 0 &&
         params.transcriptFailurePolicy === "require-success"

@@ -1,6 +1,5 @@
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSessionStoreKey } from "../gateway/session-store-key.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveSessionDeliveryTarget } from "../infra/outbound/targets-session.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
@@ -8,6 +7,7 @@ import {
   type ClientVoiceSessionRecord,
   type ClientVoiceToolEffect,
   readVoiceSessionRecordInTransaction,
+  requireVoiceSessionAgentSessionKey,
   writeVoiceSessionRecordInTransaction,
 } from "./client-voice-session-store.js";
 
@@ -44,17 +44,11 @@ export async function deliverClientVoiceMutationDigest(
   if (record.digestDeliveredAt) {
     return;
   }
+  const agentSessionKey = requireVoiceSessionAgentSessionKey(record);
   const text = formatMutationDigest(record.effects);
   if (!text) {
     return;
   }
-  // The durable voice record retains the client-visible key; delivery follows the same
-  // canonical agent session that owned the consult and transcript.
-  const agentSessionKey = resolveSessionStoreKey({
-    cfg: config,
-    sessionKey: record.sessionKey,
-    storeAgentId: record.agentId,
-  });
   const entry = loadSessionEntryReadOnly({
     agentId: record.agentId,
     sessionKey: agentSessionKey,
@@ -90,6 +84,9 @@ export async function deliverClientVoiceMutationDigest(
       const current = readVoiceSessionRecordInTransaction(database, record.voiceSessionId);
       if (!current || current.digestDeliveredAt) {
         return;
+      }
+      if (requireVoiceSessionAgentSessionKey(current) !== agentSessionKey) {
+        throw new Error("voice session canonical target changed during digest delivery");
       }
       current.digestDeliveredAt = deliveredAt;
       current.updatedAt = deliveredAt;

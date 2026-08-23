@@ -288,6 +288,7 @@ export function createTalkClientAgentConsultRunner(params: {
           registerClientVoiceConsultRun({
             agentId: params.agentId,
             sessionKey: params.voiceSessionKey,
+            agentSessionKey: params.agentSessionKey,
             voiceSessionId,
             runId,
             config: params.config,

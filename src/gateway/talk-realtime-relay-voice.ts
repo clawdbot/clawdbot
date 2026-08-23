@@ -1,6 +1,4 @@
-import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolveTalkSessionAgentId } from "../talk/agent-target.js";
 import {
   appendRelayVoiceTranscript,
   closeRelayVoiceSessionRecord,
@@ -10,30 +8,13 @@ import {
   normalizeVoiceTranscriptText,
   VOICE_TRANSCRIPT_QUEUE_POLICY,
 } from "../talk/voice-transcript.js";
-import { resolveSessionStoreKey } from "./session-store-key.js";
 import { drainingRelaySessions, type RelaySession } from "./talk-realtime-relay-state.js";
+import { resolveTalkSessionTarget } from "./talk-session-target.js";
 
 const RELAY_TRANSCRIPT_RETRY_DELAYS_MS = [0, 500, 2_000] as const;
 
 function logRelayVoiceFailure(session: RelaySession, message: string, error: unknown): void {
   session.context.logGateway?.warn(`${message}: ${formatErrorMessage(error)}`);
-}
-
-export function resolveRelaySessionTarget(config: OpenClawConfig, sessionKey: string) {
-  const voiceSessionKey = sessionKey.trim();
-  if (!voiceSessionKey) {
-    throw new Error("Realtime relay session key must be non-empty");
-  }
-  const agentId = resolveTalkSessionAgentId(config, voiceSessionKey);
-  return {
-    agentId,
-    voiceSessionKey,
-    agentSessionKey: resolveSessionStoreKey({
-      cfg: config,
-      sessionKey: voiceSessionKey,
-      storeAgentId: agentId,
-    }),
-  };
 }
 
 export function bindRelaySessionKey(session: RelaySession, sessionKey: string): void {
@@ -48,20 +29,18 @@ export function bindRelaySessionKey(session: RelaySession, sessionKey: string): 
     return;
   }
   const config = session.voiceConfig ?? session.context.getRuntimeConfig();
-  const agentId = session.agentId ?? resolveTalkSessionAgentId(config, voiceSessionKey);
-  const agentSessionKey = resolveSessionStoreKey({
-    cfg: config,
-    sessionKey: voiceSessionKey,
-    storeAgentId: agentId,
-  });
-  if (session.agentSessionKey && session.agentSessionKey !== agentSessionKey) {
+  const target = resolveTalkSessionTarget(config, voiceSessionKey);
+  if (
+    (session.agentId && session.agentId !== target.agentId) ||
+    (session.agentSessionKey && session.agentSessionKey !== target.agentSessionKey)
+  ) {
     throw new Error("Realtime relay session target changed after ownership was pinned");
   }
   if (!session.sessionKey) {
     session.sessionKey = voiceSessionKey;
   }
-  session.agentSessionKey ??= agentSessionKey;
-  session.agentId ??= agentId;
+  session.agentSessionKey ??= target.agentSessionKey;
+  session.agentId ??= target.agentId;
 }
 
 export function resolveRelayAgentId(session: RelaySession, sessionKey: string): string {
@@ -80,9 +59,15 @@ export function ensureRelayVoiceSession(session: RelaySession): boolean {
     return false;
   }
   try {
+    const agentId = resolveRelayAgentId(session, session.sessionKey);
+    const agentSessionKey = session.agentSessionKey;
+    if (!agentSessionKey) {
+      throw new Error("Realtime relay voice session has no pinned canonical target");
+    }
     createOrResumeClientVoiceSession({
-      agentId: resolveRelayAgentId(session, session.sessionKey),
+      agentId,
       sessionKey: session.sessionKey,
+      agentSessionKey,
       provider: session.provider,
       origin: "relay",
       voiceSessionId: session.id,

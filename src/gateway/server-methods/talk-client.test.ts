@@ -16,9 +16,9 @@ import {
 import { resetClientVoiceConfirmationStateForTest } from "../../talk/client-voice-confirmation.test-support.js";
 import {
   closeClientVoiceSession,
-  createOrResumeClientVoiceSession,
   ensureClientVoiceAgentSessionEntry,
 } from "../../talk/client-voice-session.js";
+import { createOrResumeClientVoiceSession } from "../../talk/client-voice-session.test-helpers.js";
 import { clientVoiceSessionTesting } from "../../talk/client-voice-session.test-support.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { talkClientHandlers } from "./talk-client.js";

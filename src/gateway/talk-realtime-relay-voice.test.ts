@@ -111,6 +111,7 @@ describe("realtime relay voice transcript persistence", () => {
       expect.objectContaining({
         agentId: "main",
         sessionKey: "main",
+        agentSessionKey: "agent:main:main",
       }),
     );
     expect(voiceSessionMocks.appendRelayVoiceTranscript).toHaveBeenCalledOnce();

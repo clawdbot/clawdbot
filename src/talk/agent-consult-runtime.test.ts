@@ -256,6 +256,7 @@ describe("realtime voice agent consult runtime", () => {
     const voiceSessionId = createOrResumeClientVoiceSession({
       agentId: "main",
       sessionKey: "agent:main:main",
+      agentSessionKey: "agent:main:main",
       origin: "client",
       transcriptCapable: true,
       voiceSessionId: "voice-gpt-live",
@@ -310,6 +311,7 @@ describe("realtime voice agent consult runtime", () => {
         registerClientVoiceConsultRun({
           agentId: "main",
           sessionKey: "agent:main:main",
+          agentSessionKey: "agent:main:main",
           voiceSessionId,
           runId: startedRun.runId,
         });

@@ -403,6 +403,7 @@ export function registerTalkRealtimeRelayAgentRun(params: {
   registerClientVoiceConsultRun({
     agentId: resolveRelayAgentId(session, voiceSessionKey),
     sessionKey: voiceSessionKey,
+    agentSessionKey,
     voiceSessionId: session.id,
     runId: params.runId,
   });

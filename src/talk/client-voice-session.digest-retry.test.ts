@@ -14,12 +14,11 @@ import {
   normalizeSessionDeliveryState,
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
+import { closeClientVoiceSession, closeStaleClientVoiceSessions } from "./client-voice-session.js";
 import {
-  closeClientVoiceSession,
-  closeStaleClientVoiceSessions,
   createOrResumeClientVoiceSession,
   registerClientVoiceConsultRun,
-} from "./client-voice-session.js";
+} from "./client-voice-session.test-helpers.js";
 import { clientVoiceSessionTesting } from "./client-voice-session.test-support.js";
 
 const { sendDurableMessageBatch } = vi.hoisted(() => ({
@@ -165,18 +164,21 @@ describe("client voice session digest retry", () => {
   });
 
   it("retries a deferred digest on the next lifecycle trigger after run completion", async () => {
-    await seedSession("agent:main:main", {
+    const agentSessionKey = "agent:main:main";
+    await seedSession(agentSessionKey, {
       channel: "discord",
       to: "channel:voice-updates",
     });
     const voiceSessionId = createOrResumeClientVoiceSession({
       agentId: "main",
-      sessionKey: "agent:main:main",
+      sessionKey: "main",
+      agentSessionKey,
       origin: "client",
     });
     registerClientVoiceConsultRun({
       agentId: "main",
-      sessionKey: "agent:main:main",
+      sessionKey: "main",
+      agentSessionKey,
       voiceSessionId,
       runId: "run-live",
     });
@@ -197,7 +199,7 @@ describe("client voice session digest retry", () => {
     // Call ends while the consult still runs, so the digest is deferred.
     await closeClientVoiceSession({
       agentId: "main",
-      sessionKey: "agent:main:main",
+      sessionKey: "main",
       voiceSessionId,
       config: {},
     });
@@ -210,13 +212,21 @@ describe("client voice session digest retry", () => {
       clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.digestDeliveredAt,
     ).toBeUndefined();
 
-    await closeStaleClientVoiceSessions({ agentId: "main", config: {} });
+    await closeStaleClientVoiceSessions({
+      agentId: "main",
+      config: { session: { mainKey: "work" } },
+    });
     await vi.waitFor(() =>
       expect(
         clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.digestDeliveredAt,
       ).toEqual(expect.any(Number)),
     );
     expect(sendDurableMessageBatch).toHaveBeenCalledTimes(2);
+    expect(sendDurableMessageBatch).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({ key: agentSessionKey, policyKey: agentSessionKey }),
+      }),
+    );
   });
 
   it("retries the mutation digest after a transient close-time send failure", async () => {

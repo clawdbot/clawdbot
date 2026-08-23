@@ -24,6 +24,8 @@ export type ClientVoiceSessionRecord = {
   voiceSessionId: string;
   agentId: string;
   sessionKey: string;
+  /** Canonical agent-session target. Missing only on preserved pre-pin audit rows. */
+  agentSessionKey?: string;
   provider?: string;
   origin: "client" | "relay";
   status: "open" | "closed";
@@ -45,6 +47,7 @@ export type ClientVoiceRunBinding = {
   agentId: string;
   voiceSessionId: string;
   sessionKey: string;
+  agentSessionKey: string;
 };
 
 const TRANSCRIPT_FAILURE_KEY_PATTERN = /^[0-9a-f]{64}$/;
@@ -61,6 +64,7 @@ const clientVoiceSessionRecordSchema = z.looseObject({
   voiceSessionId: z.string(),
   agentId: z.string(),
   sessionKey: z.string(),
+  agentSessionKey: z.string().trim().min(1).optional(),
   provider: z
     .string()
     .refine((value) => value.trim().length > 0)
@@ -167,6 +171,35 @@ export function assertVoiceSessionOwnership(
   if (record.agentId !== params.agentId || record.sessionKey !== params.sessionKey) {
     throw new Error("voice session does not belong to this agent session");
   }
+}
+
+export function normalizeVoiceAgentSessionKey(agentSessionKey: string): string {
+  const normalized = agentSessionKey.trim();
+  if (!normalized) {
+    throw new Error("voice session canonical target must be non-empty");
+  }
+  return normalized;
+}
+
+export function requireVoiceSessionAgentSessionKey(record: ClientVoiceSessionRecord): string {
+  if (!record.agentSessionKey) {
+    // Pre-pin records remain readable as audit evidence, but current routing cannot prove
+    // their original canonical target. Never infer it from mutable configuration.
+    throw new Error("voice session has no pinned agent-session target; start a new voice session");
+  }
+  return record.agentSessionKey;
+}
+
+export function assertVoiceSessionTarget(
+  record: ClientVoiceSessionRecord,
+  params: { agentId: string; sessionKey: string; agentSessionKey: string },
+): string {
+  assertVoiceSessionOwnership(record, params);
+  const storedTarget = requireVoiceSessionAgentSessionKey(record);
+  if (storedTarget !== normalizeVoiceAgentSessionKey(params.agentSessionKey)) {
+    throw new Error("voice session canonical target does not match this agent session");
+  }
+  return storedTarget;
 }
 
 export function operationKey(agentId: string, voiceSessionId: string): string {

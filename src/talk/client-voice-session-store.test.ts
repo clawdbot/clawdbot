@@ -23,22 +23,31 @@ function storedRecord(transcriptFailureKeys: unknown): string {
 
 describe("client voice session store", () => {
   it("defaults unresolved transcript failures for existing records", () => {
+    const record = parseStoredVoiceSessionRecord(
+      JSON.stringify({
+        version: VOICE_SESSION_RECORD_VERSION,
+        voiceSessionId: "voice-1",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        origin: "client",
+        status: "open",
+        createdAt: 1,
+        updatedAt: 1,
+        consultRunIds: [],
+        effects: [],
+      }),
+    );
+    expect(record?.transcriptFailureKeys).toEqual([]);
+    expect(record?.agentSessionKey).toBeUndefined();
+  });
+
+  it("accepts and normalizes the additive canonical target", () => {
+    const value = JSON.parse(storedRecord([])) as Record<string, unknown>;
     expect(
       parseStoredVoiceSessionRecord(
-        JSON.stringify({
-          version: VOICE_SESSION_RECORD_VERSION,
-          voiceSessionId: "voice-1",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          origin: "client",
-          status: "open",
-          createdAt: 1,
-          updatedAt: 1,
-          consultRunIds: [],
-          effects: [],
-        }),
-      )?.transcriptFailureKeys,
-    ).toEqual([]);
+        JSON.stringify({ ...value, agentSessionKey: "  agent:main:main  " }),
+      )?.agentSessionKey,
+    ).toBe("agent:main:main");
   });
 
   it("rejects malformed, duplicate, or over-cap unresolved transcript failures", () => {
@@ -60,6 +69,7 @@ describe("client voice session store", () => {
     { name: "version", patch: { version: 2 } },
     { name: "origin", patch: { origin: "server" } },
     { name: "provider", patch: { provider: "   " } },
+    { name: "canonical target", patch: { agentSessionKey: "   " } },
     { name: "updated timestamp", patch: { updatedAt: "later" } },
   ])("rejects an invalid $name", ({ patch }) => {
     const value = JSON.parse(storedRecord([])) as Record<string, unknown>;

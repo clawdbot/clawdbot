@@ -141,6 +141,7 @@ function installVoiceRunBinding(runId: string): void {
     agentId: "main",
     voiceSessionId: `voice-${runId}`,
     sessionKey: "agent:main:voice",
+    agentSessionKey: "agent:main:voice",
   };
   vi.spyOn(clientVoiceSession, "resolveClientVoiceRunBinding").mockImplementation(
     (candidateRunId) => (candidateRunId === runId ? binding : undefined),

@@ -78,6 +78,7 @@ const mocks = vi.hoisted(() => ({
   ]),
   closeStaleClientVoiceSessions: vi.fn(async () => 0),
   createOrResumeClientVoiceSession: vi.fn(() => "voice-test"),
+  assertClientVoiceSessionResume: vi.fn(),
   ensureClientVoiceAgentSessionEntry: vi.fn(async () => "session-main"),
   resolveClientVoiceAgentSessionId: vi.fn<() => string | undefined>(() => "session-main"),
   assertClientVoiceSessionOpen: vi.fn(),
@@ -177,6 +178,7 @@ vi.mock("../../talk/client-voice-session.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../talk/client-voice-session.js")>();
   return {
     ...actual,
+    assertClientVoiceSessionResume: mocks.assertClientVoiceSessionResume,
     assertClientVoiceSessionOpen: mocks.assertClientVoiceSessionOpen,
     closeStaleClientVoiceSessions: mocks.closeStaleClientVoiceSessions,
     createOrResumeClientVoiceSession: mocks.createOrResumeClientVoiceSession,
@@ -2551,6 +2553,7 @@ describe("talk.client.toolCall handler", () => {
     expect(mocks.createOrResumeClientVoiceSession).toHaveBeenCalledWith({
       agentId: "main",
       sessionKey: "main",
+      agentSessionKey: "agent:main:main",
       origin: "client",
     });
     expect(mocks.registerClientVoiceConsultRun).toHaveBeenCalledWith(
@@ -2580,6 +2583,7 @@ describe("talk.client.toolCall handler", () => {
     expect(mocks.assertClientVoiceSessionOpen).toHaveBeenCalledWith({
       agentId: "main",
       sessionKey: "main",
+      agentSessionKey: "agent:main:main",
       voiceSessionId: "voice-test",
     });
     expectRespondOk(respond, { runId: "run-voice-1" });
@@ -2647,12 +2651,14 @@ describe("talk.client.toolCall handler", () => {
     expect(mocks.assertClientVoiceSessionOpen).toHaveBeenCalledWith({
       agentId: "main",
       sessionKey: "main",
+      agentSessionKey: "agent:main:main",
       voiceSessionId: "voice-test",
     });
     expect(mocks.registerClientVoiceConsultRun).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "main",
         sessionKey: "main",
+        agentSessionKey: "agent:main:main",
         voiceSessionId: "voice-test",
         runId: "run-voice-1",
       }),
@@ -2753,17 +2759,20 @@ describe("talk.client.toolCall handler", () => {
     expect(mocks.createOrResumeClientVoiceSession).toHaveBeenCalledWith({
       agentId: "main",
       sessionKey: "main",
+      agentSessionKey: "global",
       origin: "client",
     });
     expect(mocks.assertClientVoiceSessionOpen).toHaveBeenCalledWith({
       agentId: "main",
       sessionKey: "main",
+      agentSessionKey: "global",
       voiceSessionId: "voice-test",
     });
     expect(mocks.registerClientVoiceConsultRun).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "main",
         sessionKey: "main",
+        agentSessionKey: "global",
         voiceSessionId: "voice-test",
         runId: "run-voice-1",
       }),
@@ -3124,6 +3133,49 @@ describe("talk.client.create handler", () => {
       silenceDurationMs: 650,
       prefixPaddingMs: 250,
       reasoningEffort: "low",
+    });
+  });
+
+  it("rejects a mismatched explicit resume before creating provider transport", async () => {
+    const createBrowserSession = vi.fn(async () => ({
+      provider: "openai",
+      transport: "webrtc" as const,
+      clientSecret: "secret",
+    }));
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider: {
+        id: "openai",
+        label: "OpenAI Realtime",
+        isConfigured: () => true,
+        createBrowserSession,
+        createBridge: vi.fn(),
+      },
+      providerConfig: { apiKey: "openai-key" },
+    });
+    mocks.assertClientVoiceSessionResume.mockImplementationOnce(() => {
+      throw new Error("voice session canonical target does not match this agent session");
+    });
+    const respond = vi.fn();
+
+    await callTalkHandler("talk.client.create", {
+      params: { sessionKey: "main", voiceSessionId: "voice-existing" },
+      respond,
+      context: {
+        getRuntimeConfig: () => ({ talk: { realtime: { provider: "openai" } } }) as OpenClawConfig,
+      },
+    });
+
+    expect(mocks.assertClientVoiceSessionResume).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "main",
+      agentSessionKey: "agent:main:main",
+      voiceSessionId: "voice-existing",
+      provider: "openai",
+      origin: "client",
+    });
+    expect(createBrowserSession).not.toHaveBeenCalled();
+    expectRespondError(respond, {
+      message: "Error: voice session canonical target does not match this agent session",
     });
   });
 
@@ -3521,6 +3573,7 @@ describe("talk.client.create handler", () => {
     expect(mocks.registerClientVoiceConsultRun).toHaveBeenCalledWith({
       agentId: "main",
       sessionKey: "main",
+      agentSessionKey: "agent:main:main",
       voiceSessionId: "voice-test",
       runId: "talk-realtime-consult:gpt-live",
       config,
