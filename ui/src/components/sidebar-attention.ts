@@ -256,7 +256,10 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     this.nativeUpdateDeclined = true;
     const snapshot = this.context?.overlays.snapshot;
     const campaign = snapshot?.updateSchedule?.campaign;
-    const busy = snapshot?.updateRunning || campaign?.state === "applying";
+    const busy =
+      snapshot?.updateRunning ||
+      snapshot?.updateReconciliationPending ||
+      campaign?.state === "applying";
     if (
       snapshot &&
       (snapshot.updateAvailable || campaign) &&
@@ -418,16 +421,15 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     const context = this.context;
     const snapshot = context?.overlays.snapshot;
     const campaign = snapshot?.updateSchedule?.campaign;
-    const busy = snapshot?.updateRunning || campaign?.state === "applying";
+    const busy =
+      snapshot?.updateRunning ||
+      snapshot?.updateReconciliationPending ||
+      campaign?.state === "applying";
     if (
       !context ||
       !snapshot ||
       busy ||
-      !isUpdateActionable(
-        snapshot.updateAvailable,
-        snapshot.updateSchedule,
-        snapshot.updateRunning,
-      ) ||
+      !isUpdateActionable(snapshot.updateAvailable, snapshot.updateSchedule, busy) ||
       !canCallGatewayMethod(context.gateway.snapshot, "update.run", "operator.admin")
     ) {
       return;
@@ -602,11 +604,12 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     const overlaySnapshot = this.context.overlays.snapshot;
     const updateBusy =
       overlaySnapshot.updateRunning ||
+      overlaySnapshot.updateReconciliationPending ||
       overlaySnapshot.updateSchedule?.campaign?.state === "applying";
     const updateActionable = isUpdateActionable(
       overlaySnapshot.updateAvailable,
       overlaySnapshot.updateSchedule,
-      overlaySnapshot.updateRunning,
+      updateBusy,
     );
     const canUpdate = canCallGatewayMethod(
       this.context.gateway.snapshot,

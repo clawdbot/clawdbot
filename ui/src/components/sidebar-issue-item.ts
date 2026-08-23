@@ -117,7 +117,7 @@ export function renderSidebarUpdateSurface(params: {
     .updateAvailable=${snapshot.updateAvailable}
     .updateSchedule=${snapshot.updateSchedule}
     .heldUpdateCampaignId=${snapshot.heldUpdateCampaignId}
-    .updateBusy=${snapshot.updateRunning}
+    .updateBusy=${snapshot.updateRunning || snapshot.updateReconciliationPending}
     .statusBanner=${snapshot.updateStatusBanner}
     .watchUpdateProgress=${params.watchUpdateProgress}
     .canUpdate=${canCallGatewayMethod(gateway, "update.run", "operator.admin")}

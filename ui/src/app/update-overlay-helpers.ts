@@ -625,11 +625,11 @@ export function formatUpdateTargetLabel(
 export function isUpdateActionable(
   updateAvailable: UpdateAvailable | null | undefined,
   updateSchedule: UpdateScheduleState | null | undefined,
-  updateRunning: boolean,
+  updateBusy: boolean,
 ): boolean {
   const target = updateSchedule?.target;
   return Boolean(
-    updateRunning ||
+    updateBusy ||
     updateSchedule?.campaign ||
     (updateAvailable && updateAvailable.latestVersion !== updateAvailable.currentVersion) ||
     (updateAvailable?.commitsBehind !== undefined && updateAvailable.commitsBehind > 0) ||

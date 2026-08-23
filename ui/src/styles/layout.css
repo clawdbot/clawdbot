@@ -3295,7 +3295,7 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   display: flex;
   height: 32px;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   transform: translateY(-50%);
 }
 

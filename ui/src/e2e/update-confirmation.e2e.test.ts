@@ -335,6 +335,15 @@ suite.define(() => {
         });
 
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
+        await page.getByRole("button", { name: "Close", exact: true }).click();
+        const footerUpdate = page.locator(".sidebar-footer-update");
+        await expect.poll(() => footerUpdate.isDisabled()).toBe(true);
+        await page.locator(".sidebar-issues-button").click();
+        const updateIssue = page.locator(
+          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
+        );
+        await updateIssue.locator("summary").click();
+        expect(await updateIssue.locator(".sidebar-update-card__action").isDisabled()).toBe(true);
       },
     );
   });
