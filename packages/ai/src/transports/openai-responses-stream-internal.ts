@@ -20,7 +20,11 @@ import {
   type ResponsesToolCallState,
 } from "../providers/openai-responses-tool-call-tracker.js";
 import type { Api, AssistantMessage, Model, TextContent, ToolCall, Usage } from "../types.js";
-import { parseStreamingJson } from "../utils/json-parse.js";
+import {
+  createToolArgumentPreviewSchedule,
+  parseStreamingJson,
+  type ToolArgumentPreviewSchedule,
+} from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
   type FirstStreamEventInternalOptions,
@@ -126,6 +130,8 @@ export async function processResponsesStream<TApi extends Api>(
   type StreamingToolCallState = ResponsesToolCallState & {
     block: StreamingToolCallBlock;
     contentIndex: number;
+    // Preview refresh schedule for streamed arguments; done/terminal parses stay authoritative.
+    previewSchedule: ToolArgumentPreviewSchedule;
   };
   type ResponsesOutputSlot = ResponsesStreamOutputSlot<
     ResponsesStreamOutputMessage,
@@ -318,6 +324,7 @@ export async function processResponsesStream<TApi extends Api>(
             block: toolCallBlock,
             contentIndex,
             argumentStreamReliable: true,
+            previewSchedule: createToolArgumentPreviewSchedule(),
             ...readResponsesToolCallItemIdentity(item),
           };
           streamingToolCalls.register(event, toolCallState);
@@ -467,7 +474,11 @@ export async function processResponsesStream<TApi extends Api>(
         const toolCall = streamingToolCalls.resolve(event);
         if (toolCall) {
           toolCall.block.partialJson += event.delta;
-          toolCall.block.arguments = parseStreamingJson(toolCall.block.partialJson);
+          // Preview refresh is geometric; the done event and terminal finalize
+          // re-parse the full buffer authoritatively either way.
+          if (toolCall.previewSchedule(toolCall.block.partialJson.length)) {
+            toolCall.block.arguments = parseStreamingJson(toolCall.block.partialJson);
+          }
           stream.push({
             type: "toolcall_delta",
             contentIndex: toolCall.contentIndex,

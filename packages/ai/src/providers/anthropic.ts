@@ -53,7 +53,12 @@ import type {
 } from "../types.js";
 import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
-import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
+import {
+  createToolArgumentPreviewSchedule,
+  parseJsonWithRepair,
+  parseStreamingJson,
+  type ToolArgumentPreviewSchedule,
+} from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { projectProviderError } from "../utils/provider-error.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
@@ -432,6 +437,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
       };
       const blocks = output.content as Block[];
       const blockIndexes = new Map<number, number>();
+      // Preview schedules are per active tool call; WeakMap keys die with the block.
+      const toolArgumentPreviewSchedules = new WeakMap<
+        Extract<Block, { type: "toolCall" }>,
+        ToolArgumentPreviewSchedule
+      >();
       const sealedToolCalls: Array<{
         block: Extract<Block, { type: "toolCall" }>;
         contentIndex: number;
@@ -565,6 +575,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
             };
             output.content.push(block);
             blockIndexes.set(event.index, output.content.length - 1);
+            toolArgumentPreviewSchedules.set(block, createToolArgumentPreviewSchedule());
             eventSink.push({
               type: "toolcall_start",
               contentIndex: output.content.length - 1,
@@ -604,7 +615,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
             const block = index === undefined ? undefined : blocks[index];
             if (index !== undefined && block?.type === "toolCall") {
               block.partialJson = (block.partialJson ?? "") + event.delta.partial_json;
-              block.arguments = parseStreamingJson(block.partialJson);
+              // Preview refresh is scheduled geometrically; the terminal
+              // finalize re-parses the full buffer authoritatively either way.
+              if (toolArgumentPreviewSchedules.get(block)?.(block.partialJson.length)) {
+                block.arguments = parseStreamingJson(block.partialJson);
+              }
               eventSink.push({
                 type: "toolcall_delta",
                 contentIndex: index,
