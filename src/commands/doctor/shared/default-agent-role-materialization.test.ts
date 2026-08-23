@@ -3,7 +3,7 @@ import {
   AgentSelectionRequiredError,
   listAgentEntries,
   resolveDefaultAgentId,
-  resolveSystemAgentTargetAgentId,
+  resolveAmbientOwnerAgentId,
 } from "../../../agents/agent-scope-config.js";
 import { materializeLegacyDefaultAgentRoles } from "../../../config/legacy.default-agent-roles.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -42,7 +42,7 @@ function snapshotSurfaces(cfg: OpenClawConfig): SurfaceSnapshot {
     heartbeat: resolveHeartbeatAgents(cfg).map((entry) => entry.agentId),
     consult: (() => {
       try {
-        return resolveSystemAgentTargetAgentId(cfg);
+        return resolveAmbientOwnerAgentId(cfg);
       } catch (error) {
         if (error instanceof AgentSelectionRequiredError) {
           return null;

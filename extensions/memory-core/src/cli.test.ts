@@ -5,6 +5,7 @@ import path from "node:path";
 import { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resolveSessionTranscriptsDirForAgent as resolveTestSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
@@ -161,6 +162,10 @@ afterAll(async () => {
   if (!fixtureRoot) {
     return;
   }
+  // The agent close releases its leases through shared state and reopens it, so the
+  // shared handle is released second; otherwise Windows fails the removal with EBUSY.
+  closeOpenClawAgentDatabasesForTest();
+  resetPluginStateStoreForTests();
   await fs.rm(fixtureRoot, { recursive: true, force: true });
   resetMemoryCoreDreamingStateForTests();
 });
@@ -300,6 +305,78 @@ describe("memory cli", () => {
     registerMemoryCli(program, hostOptions);
     await program.parseAsync(["memory", ...args], { from: "user" });
   }
+
+  const configuredAgents = {
+    agents: { ownership: "explicit" as const, entries: { main: {}, ops: {} } },
+  };
+
+  function mockCommandManagerForConfiguredAgents() {
+    getMemorySearchManager.mockImplementation(async () => ({
+      manager: {
+        status: () => makeMemoryStatus({ workspaceDir: undefined }),
+        sync: vi.fn(async () => {}),
+        search: vi.fn(async () => []),
+        close: vi.fn(async () => {}),
+      },
+    }));
+  }
+
+  it.each([
+    ["status", ["status", "--agent", "nope-zzz"]],
+    ["index", ["index", "--agent", "nope-zzz"]],
+    ["search", ["search", "foo", "--agent", "nope-zzz"]],
+  ])("rejects an unknown explicit agent before %s acquires a manager", async (_name, args) => {
+    getRuntimeConfig.mockReturnValue(configuredAgents);
+    mockCommandManagerForConfiguredAgents();
+
+    await expect(runMemoryCli(args)).rejects.toThrow(
+      'Unknown agent id "nope-zzz". Run openclaw agents list to see configured agents.',
+    );
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["status", ["status", "--agent", ""]],
+    ["search", ["search", "foo", "--agent", ""]],
+  ])("rejects an explicitly blank agent before %s acquires a manager", async (_name, args) => {
+    getRuntimeConfig.mockReturnValue(configuredAgents);
+    mockCommandManagerForConfiguredAgents();
+
+    await expect(runMemoryCli(args)).rejects.toThrow("--agent must not be blank");
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["status", ["status", "--agent", "ops"]],
+    ["index", ["index", "--agent", "ops"]],
+    ["search", ["search", "foo", "--agent", "ops"]],
+  ])("keeps a valid explicit agent working for %s", async (_name, args) => {
+    getRuntimeConfig.mockReturnValue(configuredAgents);
+    mockCommandManagerForConfiguredAgents();
+
+    await runMemoryCli(args);
+
+    expect(getMemorySearchManager).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "ops" }),
+    );
+  });
+
+  it.each([
+    ["status", ["status"]],
+    ["index", ["index"]],
+    ["search", ["search", "foo"]],
+  ])("keeps a configured single-agent install working for %s", async (_name, args) => {
+    getRuntimeConfig.mockReturnValue({ agents: { entries: { solo: {} } } });
+    resolveDefaultAgentId.mockReturnValue("solo");
+    mockCommandManagerForConfiguredAgents();
+
+    await runMemoryCli(args);
+
+    expect(getMemorySearchManager).toHaveBeenCalledTimes(1);
+    expect(getMemorySearchManager).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "solo" }),
+    );
+  });
 
   it("drains session backfill in one apply command before preview", async () => {
     const workspaceDir = path.join(workspaceFixtureRoot, `session-backfill-${workspaceCaseId++}`);
@@ -726,6 +803,28 @@ describe("memory cli", () => {
     } finally {
       await configureMemoryCoreDreamingStateForTests();
     }
+  });
+
+  it("fans index out to every keyed agent entry", async () => {
+    const agentIds = ["main", "ops"];
+    getRuntimeConfig.mockReturnValue(configuredAgents);
+    const syncedAgentIds: string[] = [];
+    getMemorySearchManager.mockImplementation(async ({ agentId }: { agentId: string }) => ({
+      manager: {
+        sync: vi.fn(async () => {
+          syncedAgentIds.push(agentId);
+        }),
+        status: () => makeMemoryStatus({ workspaceDir: undefined }),
+        close: vi.fn(async () => {}),
+      },
+    }));
+
+    await runMemoryCli(["index"]);
+
+    expect(
+      getMemorySearchManager.mock.calls.map(([params]) => (params as { agentId: string }).agentId),
+    ).toEqual(agentIds);
+    expect(syncedAgentIds).toEqual(agentIds);
   });
 
   it("resolves configured memory SecretRefs through gateway snapshot", async () => {
@@ -1368,6 +1467,7 @@ describe("memory cli", () => {
         cfg: {},
         agentId: "main",
         purpose: "cli",
+        inspectSources: true,
       });
       expectLogged(log, "Memory index updated (main): 1 file indexed.");
       expect(close).toHaveBeenCalled();
@@ -1383,7 +1483,20 @@ describe("memory cli", () => {
       probeVectorAvailability: vi.fn(async () => true),
       probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
       sync,
-      status: () => makeMemoryStatus({ workspaceDir, sources: ["memory"] }),
+      status: () =>
+        makeMemoryStatus({
+          workspaceDir,
+          sources: ["memory"],
+          sourceCounts: [
+            {
+              source: "memory",
+              files: 0,
+              chunks: 0,
+              eligible: 0,
+              issues: ["no eligible memory files found"],
+            },
+          ],
+        }),
       close,
     });
 
@@ -1405,7 +1518,20 @@ describe("memory cli", () => {
     const sync = vi.fn(async () => {});
     mockManager({
       sync,
-      status: () => makeMemoryStatus({ workspaceDir, sources: ["memory"] }),
+      status: () =>
+        makeMemoryStatus({
+          workspaceDir,
+          sources: ["memory"],
+          sourceCounts: [
+            {
+              source: "memory",
+              files: 0,
+              chunks: 0,
+              eligible: 0,
+              issues: ["no eligible memory files found"],
+            },
+          ],
+        }),
       close,
     });
 
@@ -1439,6 +1565,7 @@ describe("memory cli", () => {
         cfg: {},
         agentId: "main",
         purpose: "cli",
+        inspectSources: true,
       });
       expect(close).toHaveBeenCalled();
       expect(log).toHaveBeenCalledWith("Memory index updated (main): 1 file indexed.");

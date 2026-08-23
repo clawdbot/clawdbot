@@ -59,6 +59,7 @@ function createDeferredGatewayNodesRuntime(runtime: PluginRuntime): PluginRuntim
   return {
     list: (...args) => runtime.nodes.list(...args),
     invoke: (...args) => runtime.nodes.invoke(...args),
+    openDuplex: (...args) => runtime.nodes.openDuplex(...args),
   };
 }
 
@@ -102,6 +103,7 @@ function loadOpenClawPluginsInternal(
   if (cacheEnabled) {
     const cached = getReusableCachedPluginRegistry(context.cacheKey);
     if (cached) {
+      maybeThrowOnPluginLoadError(cached, options.throwOnLoadError);
       if (context.shouldActivate) {
         activatePluginRegistry(
           cached,

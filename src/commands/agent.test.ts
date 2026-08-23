@@ -142,6 +142,19 @@ vi.mock("../agents/thinking-runtime.js", () => ({
         entry.id === params.model &&
         entry.reasoning !== undefined,
     ) ?? false,
+  needsThinkHydration: (
+    catalog: Array<{ id: string; provider: string; reasoning?: boolean }> | undefined,
+    provider: string,
+    model: string,
+    agentRuntime: string,
+  ) =>
+    agentRuntime !== "openclaw" ||
+    !catalog?.some(
+      (entry) =>
+        entry.provider.toLowerCase() === provider.toLowerCase() &&
+        entry.id === model &&
+        entry.reasoning !== undefined,
+    ),
   normalizeThinkingCatalogProviders: <T extends { provider: string }>(catalog: T[]) =>
     catalog.map((entry) => ({ ...entry, provider: entry.provider.toLowerCase() })),
   resolveCandidateThinkingLevel: ({ level }: { level?: string }) => level,

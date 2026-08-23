@@ -242,6 +242,10 @@ describe("worker placement dispatch reclaim", () => {
         }
         return local;
       },
+      validateAbandonSource: vi.fn(),
+      abandonSource: vi.fn(async () => {
+        throw new Error("unexpected source abandonment");
+      }),
       resolveDestination: async () => ({
         profileId: "destination-profile",
         executionMode: REQUEST.executionMode,

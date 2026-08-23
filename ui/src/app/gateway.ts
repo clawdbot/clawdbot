@@ -1,4 +1,4 @@
-import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-contract.js";
+import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import type { EventLogEntry } from "../api/event-log.ts";
 import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
 import type { AuthenticatedUser } from "./user-profile.ts";

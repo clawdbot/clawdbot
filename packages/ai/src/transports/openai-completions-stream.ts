@@ -15,7 +15,11 @@ import {
   tagUnresolvedTextAsCommentary,
   type PendingCommentaryTags,
 } from "../utils/assistant-text-phase.js";
-import { parseStreamingJson } from "../utils/json-parse.js";
+import {
+  createToolArgumentPreviewSchedule,
+  parseStreamingJson,
+  type ToolArgumentPreviewSchedule,
+} from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
 import { withFirstStreamEventTimeout } from "../utils/stream-first-event-timeout.js";
@@ -114,6 +118,8 @@ export async function processCompletionsStream(
   let isFlushingPendingPostToolCallDeltas = false;
   const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
   const toolCallBlocksById = new Map<string, ToolCallBlock>();
+  // Preview schedules are per active tool call; WeakMap keys die with the block.
+  const toolArgumentPreviewSchedules = new WeakMap<ToolCallBlock, ToolArgumentPreviewSchedule>();
   const provisionalCommentaryTags: PendingCommentaryTags = new Map();
   const toolCallBlockIndices = new WeakMap<ToolCallBlock, number>();
   let explicitVisibleTextBlocks: Set<TextBlock> | undefined;
@@ -268,6 +274,7 @@ export async function processCompletionsStream(
       arguments: toolCall.arguments,
       partialArgs: toolCall.partialArgs,
     };
+    toolArgumentPreviewSchedules.set(block, createToolArgumentPreviewSchedule());
     currentBlock = block;
     output.content.push(block);
     toolCallBlockIndices.set(block, output.content.length - 1);
@@ -515,6 +522,7 @@ export async function processCompletionsStream(
               partialArgs: "",
               ...(initialSig ? { thoughtSignature: initialSig } : {}),
             };
+            toolArgumentPreviewSchedules.set(block, createToolArgumentPreviewSchedule());
             output.content.push(block);
             toolCallBlockIndices.set(block, output.content.length - 1);
             pushStreamEvent({
@@ -540,7 +548,11 @@ export async function processCompletionsStream(
           }
           if (toolCall.function?.arguments) {
             block.partialArgs += toolCall.function.arguments;
-            block.arguments = parseStreamingJson(block.partialArgs);
+            // Preview refresh is scheduled geometrically; the terminal
+            // finalize re-parses the full buffer authoritatively either way.
+            if (toolArgumentPreviewSchedules.get(block)?.(block.partialArgs.length)) {
+              block.arguments = parseStreamingJson(block.partialArgs);
+            }
             pushStreamEvent({
               type: "toolcall_delta",
               contentIndex: toolCallBlockIndices.get(block) ?? -1,

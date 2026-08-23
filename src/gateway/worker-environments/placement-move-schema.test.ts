@@ -25,7 +25,13 @@ describe("worker placement move schema", () => {
     const metadataBefore = database.db
       .prepare("SELECT schema_version, updated_at FROM schema_meta WHERE meta_key = 'primary'")
       .get();
-    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace("  target_machine_class TEXT,\n", "");
+    const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(
+      "  target_machine_class TEXT,\n",
+      "",
+    ).replace(
+      "  -- Explicit source abandonment is a durable operator decision. Keep the bit\n  -- bare and nullable so same-version older readers can safely omit it.\n  abandon_source INTEGER,\n",
+      "",
+    );
     const moveSchemaStart = previousSchema.indexOf(
       "CREATE TABLE IF NOT EXISTS worker_session_placement_moves (",
     );
@@ -61,6 +67,11 @@ describe("worker placement move schema", () => {
     });
     expect(database.db.prepare("PRAGMA table_info(worker_session_placement_moves)").all()).toEqual(
       expect.arrayContaining([expect.objectContaining({ name: "target_machine_class" })]),
+    );
+    expect(database.db.prepare("PRAGMA table_info(worker_session_placement_moves)").all()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "abandon_source", type: "INTEGER", notnull: 0 }),
+      ]),
     );
     const databasePath = database.path;
     closeOpenClawStateDatabaseForTest();

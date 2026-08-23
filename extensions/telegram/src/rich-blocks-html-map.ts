@@ -17,6 +17,7 @@ import {
   VOID_TAGS,
   type HtmlNode,
 } from "./rich-blocks-html.js";
+import { renderTelegramMonospaceGrid } from "./text-width.js";
 // Block-level islands the agent contract documents. A supported open tag with a
 // matching close (or a void tag) becomes a typed block; anything else stays text.
 const BLOCK_ISLAND_TAGS = new Set([
@@ -298,9 +299,17 @@ function tableToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBl
   if (tableColumnCount(cells) > TABLE_COLUMN_LIMIT) {
     // Mirror the markdown table path: over-wide tables degrade to a readable
     // monospace grid instead of an API-rejected table block.
-    const grid = cells
-      .map((row) => `| ${row.map((cell) => richTextToPlainString(cell.text ?? "")).join(" | ")} |`)
-      .join("\n");
+    const gridRows = cells.map((row) =>
+      row.flatMap((cell) =>
+        // Colspans consume adjacent columns; rowspans stay row-local rather
+        // than growing this fallback into a second table layout engine.
+        Array.from(
+          { length: Math.min(cell.colspan ?? 1, TABLE_COLUMN_LIMIT + 1) },
+          (_value, index) => (index === 0 ? richTextToPlainString(cell.text ?? "") : ""),
+        ),
+      ),
+    );
+    const grid = renderTelegramMonospaceGrid(gridRows);
     return {
       type: "pre",
       text: caption !== undefined ? `${richTextToPlainString(caption)}\n${grid}` : grid,

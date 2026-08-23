@@ -140,7 +140,7 @@ enum ChatCodeHighlighter {
                 // trailing digits never reach here because the identifier
                 // branch below consumes them first.
                 while end < chars.count,
-                      chars[end].isHexDigit || chars[end] == "." || chars[end] == "_"
+                      chars[end].isNumber || chars[end].isHexDigit || chars[end] == "." || chars[end] == "_"
                       || chars[end] == "x" || chars[end] == "X" || chars[end] == "o"
                       || chars[end] == "b"
                 {

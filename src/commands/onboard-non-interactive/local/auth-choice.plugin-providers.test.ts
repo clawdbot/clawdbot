@@ -143,6 +143,7 @@ async function applyProviderModelChoice(params: {
   providerId: string;
   modelRef: string;
   nextConfig?: OpenClawConfig;
+  target?: typeof target;
 }) {
   const runtime = createRuntime();
   const nextConfig = params.nextConfig ?? { agents: { defaults: {} } };
@@ -173,13 +174,59 @@ async function applyProviderModelChoice(params: {
     opts: {} as never,
     runtime: runtime as never,
     baseConfig: nextConfig,
-    target,
+    target: params.target ?? target,
     resolveApiKey: vi.fn(),
     toApiKeyCredential: vi.fn(),
   });
 }
 
 describe("applyNonInteractivePluginProviderChoice", () => {
+  it.each(["nvidia", "google"])(
+    "keeps %s provider model selection on the configured explicit-fleet agent",
+    async (providerId) => {
+      const modelRef = `${providerId}/selected`;
+      const result = await applyProviderModelChoice({
+        providerId,
+        modelRef,
+        target: {
+          agentId: "ops",
+          agentDir: "/tmp/ops-agent",
+          workspaceDir: "/tmp/ops-workspace",
+        },
+        nextConfig: {
+          agents: {
+            ownership: "explicit",
+            defaults: {
+              systemAgent: { agentId: "ops" },
+              model: { primary: "anthropic/global" },
+              models: { "anthropic/global": { alias: "Global" } },
+            },
+            entries: {
+              main: { model: { primary: "anthropic/main" } },
+              ops: {
+                model: { primary: "openai/ops" },
+                models: { "openai/ops": { alias: "Operations" } },
+              },
+            },
+          },
+        },
+      });
+
+      expect(result?.agents?.defaults?.model).toEqual({ primary: "anthropic/global" });
+      expect(result?.agents?.defaults?.models).toEqual({
+        "anthropic/global": { alias: "Global" },
+      });
+      expect(result?.agents?.entries?.ops?.model).toEqual({ primary: modelRef });
+      expect(result?.agents?.entries?.ops?.models).toEqual({
+        "openai/ops": { alias: "Operations" },
+      });
+      expect(result?.agents?.entries?.main?.model).toEqual({ primary: "anthropic/main" });
+      expect(ensureCodexRuntimePluginForModelSelection).toHaveBeenCalledWith(
+        expect.objectContaining({ model: modelRef }),
+      );
+    },
+  );
+
   it.each([
     { providerId: "lmstudio", modelRef: "lmstudio/qwen/qwen3-1.7b" },
     { providerId: "ollama", modelRef: "ollama/qwen3:8b" },
@@ -287,6 +334,63 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(result).toEqual({ plugins: { allow: ["vllm"] } });
   });
 
+  it.each([false, true])(
+    "keeps media setup global without replacing the text model (explicit fleet: %s)",
+    async (explicitFleet) => {
+      const runtime = createRuntime();
+      const provider = { id: "pixverse", pluginId: "pixverse", label: "PixVerse" };
+      const initialConfig: OpenClawConfig = {
+        agents: {
+          defaults: { model: { primary: "openai/gpt-5.6" } },
+          ...(explicitFleet
+            ? { ownership: "explicit", entries: { main: { model: { primary: "openai/agent" } } } }
+            : {}),
+        },
+      };
+      const runNonInteractive = vi.fn(async ({ config }: { config: OpenClawConfig }) => ({
+        ...config,
+        agents: {
+          ...config.agents,
+          defaults: {
+            ...config.agents?.defaults,
+            mediaModels: { video: { primary: "pixverse/pixverse-v5.6" } },
+          },
+        },
+      }));
+      resolvePreferredProviderForAuthChoice.mockResolvedValue("pixverse" as never);
+      resolvePluginProvidersCore.mockImplementation((...args: unknown[]) => {
+        const input = args[0] as { providerRefs?: string[] } | undefined;
+        return (input?.providerRefs?.includes("pixverse") ? [provider] : []) as never;
+      });
+      resolveProviderPluginChoice.mockImplementation((...args: unknown[]) => {
+        const input = args[0] as { providers?: unknown[] } | undefined;
+        return input?.providers?.includes(provider)
+          ? { provider, method: { runNonInteractive } }
+          : undefined;
+      });
+
+      const result = await applyNonInteractivePluginProviderChoice({
+        nextConfig: initialConfig,
+        authChoice: "pixverse-api-key",
+        opts: { pixverseApiKey: "pixverse-test-key" } as never,
+        runtime: runtime as never,
+        baseConfig: initialConfig,
+        target,
+        resolveApiKey: vi.fn(),
+        toApiKeyCredential: vi.fn(),
+      });
+
+      expect(runNonInteractive).toHaveBeenCalledOnce();
+      expect(result?.agents?.defaults?.model).toEqual({ primary: "openai/gpt-5.6" });
+      expect(result?.agents?.defaults?.mediaModels?.video).toEqual({
+        primary: "pixverse/pixverse-v5.6",
+      });
+      if (explicitFleet) {
+        expect(result?.agents?.entries?.main?.model).toEqual({ primary: "openai/agent" });
+      }
+    },
+  );
+
   it("installs an official catalog provider before applying a cold auth choice", async () => {
     const runtime = createRuntime();
     const runNonInteractive = vi.fn(async ({ config }: { config: OpenClawConfig }) => ({
@@ -300,6 +404,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     const provider = { id: "groq", pluginId: "groq", label: "Groq" };
     resolveProviderInstallCatalogEntry.mockReturnValue({
       pluginId: "groq",
+      providerId: "groq",
       label: "Groq",
       origin: "bundled",
       install: {
@@ -358,6 +463,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       }),
     );
     expect(resolvePluginProvidersCore).toHaveBeenCalledTimes(2);
+    expect(mockArg(resolvePluginProvidersCore, 1).providerRefs).toEqual(["groq"]);
     expect(runNonInteractive).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
       agents: {

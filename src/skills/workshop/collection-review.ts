@@ -29,6 +29,7 @@ import {
 import { listWritableSkillCollection } from "./collection-reconcile.js";
 import {
   isSkillCollectionReviewDue,
+  recordSkillCollectionReviewFailure,
   withSkillCollectionReviewClaim,
 } from "./collection-review-state.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
@@ -192,31 +193,52 @@ export async function runScheduledSkillCollectionReviews(params: {
     const agentId = agentIds[0]!;
     const stateOptions = params.env ? { env: params.env } : {};
     try {
-      await withSkillCollectionReviewClaim(
-        workspaceDir,
-        async () => {
-          if (!isSkillCollectionReviewDue(workspaceDir, nowMs, stateOptions)) {
-            return;
-          }
-          const reviewModels = agentIds.map((id) =>
-            resolveCollectionReviewIdentity(params.config, id, params.env),
-          );
-          const reviewModel = reviewModels[0]!;
-          if (
-            reviewModels.some(
-              (candidate) =>
-                candidate.provider !== reviewModel.provider ||
-                candidate.model !== reviewModel.model ||
-                candidate.authIdentity !== reviewModel.authIdentity,
-            )
-          ) {
-            throw new Error("Shared workspace agents use different collection-review identities.");
-          }
-          await runWithGatewayIndependentRootWorkAdmission(async () => {
-            await runSkillCollectionReview({ ...params, agentId, agentIds, workspaceDir });
-          });
-        },
-        stateOptions,
+      await runWithGatewayIndependentRootWorkAdmission(() =>
+        withSkillCollectionReviewClaim(
+          workspaceDir,
+          async () => {
+            if (!isSkillCollectionReviewDue(workspaceDir, nowMs, stateOptions)) {
+              return;
+            }
+            // Persist only admitted review failures while the claim is held;
+            // admission and acquisition failures must not count as attempts.
+            try {
+              const reviewModels = agentIds.map((id) =>
+                resolveCollectionReviewIdentity(params.config, id, params.env),
+              );
+              const reviewModel = reviewModels[0]!;
+              if (
+                reviewModels.some(
+                  (candidate) =>
+                    candidate.provider !== reviewModel.provider ||
+                    candidate.model !== reviewModel.model ||
+                    candidate.authIdentity !== reviewModel.authIdentity,
+                )
+              ) {
+                throw new Error(
+                  "Shared workspace agents use different collection-review identities.",
+                );
+              }
+              await runSkillCollectionReview({ ...params, agentId, agentIds, workspaceDir });
+            } catch (error) {
+              try {
+                recordSkillCollectionReviewFailure(workspaceDir, Date.now(), error, stateOptions);
+              } catch (recordError) {
+                reportError(
+                  new AggregateError(
+                    [error, recordError],
+                    `Skill collection review failed and its retry backoff could not be recorded for ${workspaceDir}.`,
+                    { cause: error },
+                  ),
+                  workspaceDir,
+                );
+                return;
+              }
+              throw error;
+            }
+          },
+          stateOptions,
+        ),
       );
     } catch (error) {
       reportError(error, workspaceDir);

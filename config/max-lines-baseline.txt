@@ -499,7 +499,6 @@ src/cli/plugins-cli-test-helpers.ts
 src/cli/plugins-cli.install.test.ts
 src/cli/plugins-cli.runtime.ts
 src/cli/plugins-cli.update.test.ts
-src/cli/program/register.status-health-sessions.ts
 src/cli/run-main.exit.test.ts
 src/cli/run-main.ts
 src/cli/skills-cli.commands.test.ts

@@ -19,7 +19,7 @@ const mockState = vi.hoisted(() => ({
   })),
   resolveCommandText: vi.fn((_trigger: string, text: string) => text),
   buildModelsProviderData: vi.fn(async () => ({ providers: [], modelNames: new Map() })),
-  resolveMattermostModelPickerEntry: vi.fn(() => ({ kind: "summary" })),
+  resolveMattermostModelPickerEntry: vi.fn((): { kind: string } | null => ({ kind: "summary" })),
   authorizeMattermostCommandInvocation: vi.fn(() => ({
     ok: true,
     commandAuthorized: true,
@@ -49,6 +49,7 @@ const mockState = vi.hoisted(() => ({
     delete_at: 0,
   })),
   listMattermostCommands: vi.fn(async () => []),
+  dispatchInbound: vi.fn(async () => undefined),
 }));
 
 vi.mock("./runtime-api.js", () => {
@@ -83,7 +84,10 @@ vi.mock("../runtime.js", () => ({
       },
       text: {
         hasControlCommand: () => false,
+        resolveTextChunkLimit: () => 4000,
+        resolveMarkdownTableMode: () => "off",
       },
+      inbound: { dispatch: mockState.dispatchInbound },
       pairing: {
         readAllowFromStore: vi.fn(async () => []),
       },
@@ -123,6 +127,11 @@ vi.mock("./monitor-auth.js", () => ({
 }));
 
 vi.mock("./reply-delivery.js", () => ({
+  createMattermostReplyDeliveryBarrier: vi.fn(() => ({
+    markDeliverySettled: vi.fn(),
+    resolveTimeoutPolicy: vi.fn(),
+    trackDmChannelResolution: vi.fn(),
+  })),
   deliverMattermostReplyPayload: vi.fn(),
 }));
 
@@ -225,6 +234,7 @@ describe("slash-http cfg threading", () => {
     mockState.normalizeMattermostAllowList.mockClear();
     mockState.getMattermostCommand.mockClear();
     mockState.listMattermostCommands.mockClear();
+    mockState.dispatchInbound.mockClear();
     ({ createSlashCommandHttpHandler } = await import("./slash-http.js"));
   });
 
@@ -263,6 +273,66 @@ describe("slash-http cfg threading", () => {
       expect.objectContaining({
         cfg,
         accountId: "default",
+      }),
+    );
+  });
+
+  it("keeps the slash team scope on direct conversations", async () => {
+    mockState.resolveMattermostModelPickerEntry.mockReturnValueOnce(null);
+    mockState.parseSlashCommandPayload.mockReturnValueOnce({
+      token: "valid-token",
+      command: "/oc_status",
+      text: "status",
+      channel_id: "dm-1",
+      user_id: "user-1",
+      user_name: "alice",
+      team_id: "team-1",
+    });
+    mockState.getMattermostCommand.mockResolvedValueOnce({
+      id: "cmd-status",
+      token: "valid-token",
+      team_id: "team-1",
+      trigger: "oc_status",
+      method: "P",
+      url: callbackUrlFixture,
+      delete_at: 0,
+    });
+    mockState.authorizeMattermostCommandInvocation.mockReturnValueOnce({
+      ok: true,
+      commandAuthorized: true,
+      channelInfo: { id: "dm-1", type: "D", name: "alice", display_name: "Alice" },
+      kind: "direct",
+      chatType: "direct",
+      channelName: "alice",
+      channelDisplay: "Alice",
+      roomLabel: "Alice",
+    });
+    const handler = createSlashCommandHttpHandler({
+      account: accountFixture,
+      cfg: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+      registeredCommands: [
+        {
+          id: "cmd-status",
+          teamId: "team-1",
+          trigger: "oc_status",
+          token: "valid-token",
+          url: callbackUrlFixture,
+          managed: false,
+        },
+      ],
+    });
+
+    await handler(createRequest(), createResponse().res);
+
+    expect(mockState.dispatchInbound).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctxPayload: expect.objectContaining({
+          ChatType: "direct",
+          ConversationRouteContextObserved: true,
+          ConversationRoutePeerId: "user-1",
+          GroupSpace: "team-1",
+        }),
       }),
     );
   });

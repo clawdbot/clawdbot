@@ -647,13 +647,16 @@ export class ChatPage extends OpenClawLightDomElement {
                           .maxRatio=${0.85}
                           .label=${t("nav.resize")}
                           @resize=${(event: CustomEvent<{ splitRatio: number }>) => {
-                            const current = this.layout;
-                            if (current) {
-                              this.persistLayout(
-                                resizePanes(current, column.id, paneIndex, event.detail.splitRatio),
-                              );
-                            }
+                            this.layout = this.layout
+                              ? resizePanes(
+                                  this.layout,
+                                  column.id,
+                                  paneIndex,
+                                  event.detail.splitRatio,
+                                )
+                              : undefined;
                           }}
+                          @resize-end=${() => this.persistLayout(this.layout)}
                         ></resizable-divider>
                       `
                     : nothing}
@@ -672,13 +675,11 @@ export class ChatPage extends OpenClawLightDomElement {
                     .maxRatio=${0.85}
                     .label=${t("nav.resize")}
                     @resize=${(event: CustomEvent<{ splitRatio: number }>) => {
-                      const current = this.layout;
-                      if (current) {
-                        this.persistLayout(
-                          resizeColumns(current, columnIndex, event.detail.splitRatio),
-                        );
-                      }
+                      this.layout = this.layout
+                        ? resizeColumns(this.layout, columnIndex, event.detail.splitRatio)
+                        : undefined;
                     }}
+                    @resize-end=${() => this.persistLayout(this.layout)}
                   ></resizable-divider>
                 `
               : nothing}

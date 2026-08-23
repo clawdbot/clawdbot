@@ -138,7 +138,7 @@ suite.define(() => {
       await page.getByText("Disk monitor is ready.", { exact: true }).waitFor();
       await sidebarRow.getByText("Disk monitor", { exact: true }).waitFor();
       expect(await page.locator(".chat-cloud-disk-space-notice").count()).toBe(0);
-      await expectAccessibleBadge("ok", "Runner: active");
+      await expectAccessibleBadge("ok", "Placement: active");
       await capture("01-healthy.png");
 
       await refresh({
@@ -154,7 +154,7 @@ suite.define(() => {
       expect(await warning.textContent()).toContain(
         "96% used · 247 MB free. Delete unneeded files or stop the cloud worker before large writes.",
       );
-      await expectAccessibleBadge("warning", "Runner: active · Cloud session disk space is low");
+      await expectAccessibleBadge("warning", "Placement: active · Cloud session disk space is low");
       await capture("02-warning.png");
 
       await refresh({
@@ -172,13 +172,13 @@ suite.define(() => {
       );
       await expectAccessibleBadge(
         "critical",
-        "Runner: active · Cloud session disk space is critically low",
+        "Placement: active · Cloud session disk space is critically low",
       );
       await capture("03-critical.png");
 
       await refresh({ ...healthy, observedAtMs: observedAtMs + 3_000 });
       await expect.poll(() => page.locator(".chat-cloud-disk-space-notice").count()).toBe(0);
-      await expectAccessibleBadge("ok", "Runner: active");
+      await expectAccessibleBadge("ok", "Placement: active");
       await capture("04-recovered.png");
     } finally {
       await suite.closeBrowserContext(context);

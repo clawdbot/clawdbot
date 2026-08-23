@@ -35,7 +35,7 @@ test(
       deviceId: "missing-device",
     });
     expect(dispatch.ok).toBe(false);
-    expect(dispatch.error?.message).toContain("session-owned managed worktree");
+    expect(dispatch.error?.message).toBe("device worker is not a paired node host: missing-device");
 
     const reset = await rpcReq(ws, "sessions.reset", { key: sessionKey });
     expect(reset).toMatchObject({ ok: true, payload: { key: sessionKey } });
