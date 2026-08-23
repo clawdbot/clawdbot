@@ -9,7 +9,7 @@ const {
   resolveLineChannelAccessTokenMock,
   recordChannelActivityMock,
 } = vi.hoisted(() => ({
-  lineFetchMock: vi.fn(),
+  lineFetchMock: vi.fn<typeof fetch>(),
   requireRuntimeConfigMock: vi.fn((cfg: unknown) => cfg ?? {}),
   resolveLineAccountMock: vi.fn(() => ({ accountId: "default" })),
   resolveLineChannelAccessTokenMock: vi.fn(() => "line-token"),
@@ -95,6 +95,28 @@ describe("LINE bounded provider responses", () => {
       throw new Error("expected an accepted LINE delivery without a readable receipt");
     }
     expect(caught.deliveryResult).toEqual({ messageIds: [], visibleReplySent: true });
+    expect(textSpy).not.toHaveBeenCalled();
+    expect(tracked.wasCanceled()).toBe(true);
+  });
+
+  it("bounds an accepted retry-key conflict without reclassifying it as rejected", async () => {
+    const tracked = createTrackedResponse("x".repeat(16 * 1024 + 1), {
+      status: 409,
+      statusText: "Conflict",
+      headers: { "content-type": "application/json" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    lineFetchMock.mockResolvedValueOnce(tracked.response);
+
+    const caught = await captureError(() =>
+      sendModule.pushMessageLine("U123", "Hello", { cfg: LINE_TEST_CFG }),
+    );
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    expect(caught).not.toBeInstanceOf(HTTPFetchError);
+    expect(lineFetchMock).toHaveBeenCalledOnce();
+    const requestInit = lineFetchMock.mock.calls[0]?.[1];
+    expect(new Headers(requestInit?.headers).get("X-Line-Retry-Key")).toBeTruthy();
     expect(textSpy).not.toHaveBeenCalled();
     expect(tracked.wasCanceled()).toBe(true);
   });
