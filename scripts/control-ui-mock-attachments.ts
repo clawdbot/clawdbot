@@ -343,7 +343,18 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       content: [documentAttachment("bundle.zip", "application/zip")],
       timestamp: baseTime + 12,
     },
-    sectionTitle("Unavailable", baseTime + 13),
+    sectionTitle("Link", baseTime + 13),
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "[OpenClaw documentation](https://docs.openclaw.ai)",
+        },
+      ],
+      timestamp: baseTime + 14,
+    },
+    sectionTitle("Unavailable", baseTime + 15),
     {
       role: "assistant",
       content: [
@@ -366,7 +377,7 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
           },
         },
       ],
-      timestamp: baseTime + 14,
+      timestamp: baseTime + 16,
     },
   ];
 }
