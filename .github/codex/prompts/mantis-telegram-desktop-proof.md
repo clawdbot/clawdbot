@@ -195,4 +195,6 @@ node --import tsx scripts/mantis/build-telegram-desktop-proof-evidence.mts \
 
 Required final state: `MANTIS_OUTPUT_DIR/mantis-evidence.json`; trusted facts for
 every exercised lane; paired native GIFs for visible comparisons; exact evaluated
-message focused in each final frame.
+message focused in each final frame. Never end your turn with a handoff, summary,
+or plan instead of that manifest; if context was compacted, re-read
+`MANTIS_PR_CONTEXT` and your files under `MANTIS_OUTPUT_DIR` and keep going.

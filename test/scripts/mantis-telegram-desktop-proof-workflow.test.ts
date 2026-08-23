@@ -20,6 +20,7 @@ const DISPATCH_WORKFLOW = ".github/workflows/mantis-telegram-desktop-proof-dispa
 const LIVE_WORKFLOW = ".github/workflows/mantis-telegram-live.yml";
 const SCENARIO_WORKFLOW = ".github/workflows/mantis-scenario.yml";
 const PROMPT = ".github/codex/prompts/mantis-telegram-desktop-proof.md";
+const RESUME_PROMPT = ".github/codex/prompts/mantis-telegram-desktop-proof-resume.md";
 const TELEGRAM_PROOF_SKILL = ".agents/skills/telegram-crabbox-e2e-proof/SKILL.md";
 const DOCS = ["docs/help/testing.md", "docs/concepts/qa-e2e-automation.md"];
 
@@ -227,6 +228,24 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       fenceScript.indexOf('kill -KILL -- "-$command_pid"'),
     );
     expect(fenceScript).toContain("exit 97");
+  });
+
+  it("resumes the agent thread when it ends without a manifest", () => {
+    const run = workflowStep("Run Codex Mantis Telegram agent").run ?? "";
+    const resumePrompt = readFileSync(RESUME_PROMPT, "utf8");
+    const prompt = readFileSync(PROMPT, "utf8");
+    const initialRun = `run_codex < ${PROMPT}`;
+    const resumeRun = `run_codex resume --last - < ${RESUME_PROMPT}`;
+
+    expect(run).toContain(initialRun);
+    expect(run).toContain('sudo test -f "$manifest"');
+    expect(run).toContain(resumeRun);
+    expect(run.indexOf(initialRun)).toBeLessThan(run.indexOf('sudo test -f "$manifest"'));
+    expect(run.indexOf('sudo test -f "$manifest"')).toBeLessThan(run.indexOf(resumeRun));
+    expect(resumePrompt).toContain("`MANTIS_OUTPUT_DIR/mantis-evidence.json` does not");
+    expect(resumePrompt).toContain("re-read\n`MANTIS_PR_CONTEXT`");
+    expect(resumePrompt).toContain("`abort --lane <lane>` first");
+    expect(prompt).toMatch(/Never end your turn with a handoff, summary,\s+or plan/u);
   });
 
   it("reports an honest blocked proof without failing the workflow", () => {

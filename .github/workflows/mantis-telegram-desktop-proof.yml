@@ -872,9 +872,23 @@ jobs:
             -c 'service_tier="fast"'
             --sandbox danger-full-access
           )
-          scripts/mantis/run-with-lease-fence.sh "$lease_lost_marker" -- \
-            sudo -u codex -- "$codex_bin" "${codex_args[@]}" \
-              < .github/codex/prompts/mantis-telegram-desktop-proof.md
+          run_codex() {
+            scripts/mantis/run-with-lease-fence.sh "$lease_lost_marker" -- \
+              sudo -u codex -- "$codex_bin" "${codex_args[@]}" "$@"
+          }
+          run_codex < .github/codex/prompts/mantis-telegram-desktop-proof.md
+          manifest="$GITHUB_WORKSPACE/$MANTIS_OUTPUT_DIR/mantis-evidence.json"
+          # Codex can end a turn before the proof exists: run 32615428295 (2026-08) stopped
+          # on a post-compaction "handoff" message with no manifest. Resume the same thread
+          # with the correction instead of dead-ending the run; the bound keeps a stuck
+          # agent finite. Non-zero Codex exits still fail the step immediately.
+          for resume_attempt in 1 2 3; do
+            if sudo test -f "$manifest"; then
+              break
+            fi
+            echo "::warning::Mantis agent ended without ${MANTIS_OUTPUT_DIR}/mantis-evidence.json; resuming the thread (${resume_attempt}/3)"
+            run_codex resume --last - < .github/codex/prompts/mantis-telegram-desktop-proof-resume.md
+          done
 
       - name: Clean up abandoned Mantis sessions
         id: abandoned_cleanup
