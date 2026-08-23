@@ -58,6 +58,7 @@ export type GatewayWsMessageHandlerParams = {
   browserRateLimiter?: AuthRateLimiter;
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
   isStartupPending?: () => boolean;
+  isPendingWorkerNodeSetup?: (setupId: string, deviceId: string) => boolean;
   gatewayMethods: string[];
   events: string[];
   extraHandlers: GatewayRequestHandlers;
@@ -129,6 +130,7 @@ export type AuthenticatedGatewayConnect = {
   isBrowserOperatorUi: boolean;
   isWebchat: boolean;
   isNativeAppUi: boolean;
+  startupPending: boolean;
   device: ConnectParams["device"] | null | undefined;
   devicePublicKey: string | null;
   deviceAuthPayloadVersion: "v2" | "v3" | null;

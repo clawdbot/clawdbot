@@ -341,7 +341,7 @@ suite.define(() => {
           ts: Date.now(),
         });
         await gateway.emitGatewayEvent("sessions.changed", { sessionKey, reason: "dispatch" });
-        await pollLocatorText(startupStatus).toContain(`Runner: ${state}`);
+        await pollLocatorText(startupStatus).toContain(`Placement: ${state}`);
       };
 
       for (const [state, generation] of [
@@ -371,7 +371,7 @@ suite.define(() => {
         app.runtime?.context.navigate("chat", { pathname });
       }, controlUiSessionPath(sessionKey));
       await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));
-      await pollLocatorText(startupStatus).toContain("Runner: starting");
+      await pollLocatorText(startupStatus).toContain("Placement: starting");
       expect(await gateway.getRequests("sessions.abort")).toHaveLength(0);
       expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.delete")).toHaveLength(0);

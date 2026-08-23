@@ -6,8 +6,8 @@ import type { TelegramChatDetails, TelegramGetChat } from "./bot/types.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import {
   buildTelegramStatusReactionVariants,
-  isTelegramSupportedReactionEmoji,
   resolveTelegramAllowedEmojiReactions,
+  resolveTelegramReactionEmoji,
   resolveTelegramReactionVariant,
   resolveTelegramStatusReactionEmojis,
 } from "./status-reaction-variants.js";
@@ -335,14 +335,14 @@ describe("buildTelegramStatusReactionVariants", () => {
   });
 });
 
-describe("isTelegramSupportedReactionEmoji", () => {
+describe("resolveTelegramReactionEmoji", () => {
   it("accepts Telegram-supported reaction emojis", () => {
-    expect(isTelegramSupportedReactionEmoji("👀")).toBe(true);
-    expect(isTelegramSupportedReactionEmoji("👨‍💻")).toBe(true);
+    expect(resolveTelegramReactionEmoji("👀")).toBe("👀");
+    expect(resolveTelegramReactionEmoji("👨‍💻")).toBe("👨‍💻");
   });
 
   it("rejects unsupported emojis", () => {
-    expect(isTelegramSupportedReactionEmoji("🫠")).toBe(false);
+    expect(resolveTelegramReactionEmoji("🫠")).toBeUndefined();
   });
 });
 
@@ -375,6 +375,20 @@ describe("resolveTelegramAllowedEmojiReactions", () => {
       chatId: 1,
     });
     expect(result ? Array.from(result).toSorted() : null).toEqual(["👍", "🔥"]);
+  });
+
+  it("normalizes emoji presentation selectors without admitting custom reactions", async () => {
+    const result = await resolveTelegramAllowedEmojiReactions({
+      chat: {
+        available_reactions: [
+          { type: "emoji", emoji: "❤️" },
+          { type: "custom_emoji", custom_emoji_id: "❤️" },
+        ],
+      } as never,
+      chatId: 1,
+    });
+
+    expect(result).toEqual(new Set(["❤"]));
   });
 
   it("treats malformed available_reactions payloads as an empty allowlist instead of throwing", async () => {
@@ -418,6 +432,25 @@ describe("resolveTelegramAllowedEmojiReactions", () => {
 });
 
 describe("resolveTelegramReactionVariant", () => {
+  it.each([
+    ["❤️", "❤"],
+    ["❤︎", "❤"],
+    ["⚡️", "⚡"],
+    ["✍️", "✍"],
+    ["🕊️", "🕊"],
+    ["☃️", "☃"],
+    ["❤️‍🔥", "❤‍🔥"],
+    ["🤷‍♂️", "🤷‍♂"],
+  ] as const)("selects the canonical Telegram reaction for %s", (requestedEmoji, expectedEmoji) => {
+    expect(
+      resolveTelegramReactionVariant({
+        requestedEmoji,
+        variantsByRequestedEmoji: new Map(),
+        allowedEmojiReactions: new Set([expectedEmoji]),
+      }),
+    ).toBe(expectedEmoji);
+  });
+
   it("returns requested emoji when already Telegram-supported", () => {
     const variantsByEmoji = buildTelegramStatusReactionVariants({
       ...DEFAULT_EMOJIS,

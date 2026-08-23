@@ -87,7 +87,7 @@ export function requireWorkerLeaseStatus(value: unknown): WorkerLeaseStatus {
 }
 
 export function resolveWorkerTransportModeError(
-  provider: WorkerProvider,
+  provider: WorkerProvider<"internal">,
   transportMode: WorkerExecutionMode,
 ): WorkerProviderError | undefined {
   const modes = provider.supportedExecutionModes;
@@ -100,7 +100,7 @@ export function resolveWorkerTransportModeError(
 }
 
 export function resolveWorkerLeaseModeError(
-  provider: WorkerProvider,
+  provider: WorkerProvider<"internal">,
   lease: WorkerLease,
 ): WorkerProviderError | undefined {
   return resolveWorkerTransportModeError(provider, lease.node ? "worker-turn" : "remote-exec");

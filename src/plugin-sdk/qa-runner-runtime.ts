@@ -82,6 +82,7 @@ type QaRunnerCredentialHost = {
 };
 
 type QaRunnerTransportFlowPreparationInput = {
+  signal?: AbortSignal;
   config: Record<string, unknown>;
   scenarioId: string;
   scenarioTitle: string;

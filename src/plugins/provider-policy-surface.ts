@@ -8,6 +8,7 @@ import type {
   ProviderResolveModelRoutesContext,
 } from "../plugin-sdk/provider-model-types.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import type {
   ProviderApplyConfigDefaultsContext,
   ProviderNormalizeConfigContext,
@@ -82,6 +83,12 @@ const bundledProviderPolicySurfaceByPluginId = new Map<
   BundledProviderPolicySurface | null
 >();
 const externalProviderPolicySurfaceByPluginId = new Map<string, ProviderPolicySurface | null>();
+
+// Policy hooks and negative lookups must not outlive plugin replacement or installation.
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  bundledProviderPolicySurfaceByPluginId.clear();
+  externalProviderPolicySurfaceByPluginId.clear();
+});
 
 const PROVIDER_POLICY_HOOK_KEYS = [
   "normalizeConfig",

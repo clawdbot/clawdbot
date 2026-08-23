@@ -108,6 +108,31 @@ describe("resolveExecWorkdir", () => {
     });
   });
 
+  it("treats exact empty workdir as omitted when a local cwd default exists", async () => {
+    await withTempDir(async (workspaceDir) => {
+      await expect(
+        resolveExecWorkdir({
+          host: "gateway",
+          workdir: "",
+          defaultCwd: workspaceDir,
+        }),
+      ).resolves.toEqual({ kind: "local", hostCwd: workspaceDir });
+    });
+  });
+
+  it("treats exact empty workdir as omitted when no local cwd default exists", async () => {
+    await withTempDir(async (workspaceDir) => {
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await expect(
+        resolveExecWorkdir({
+          host: "gateway",
+          workdir: "",
+        }),
+      ).resolves.toEqual({ kind: "local", hostCwd: workspaceDir });
+    });
+  });
+
   it("uses current cwd for omitted local workdir only when no default exists", async () => {
     await withTempDir(async (workspaceDir) => {
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
@@ -151,6 +176,23 @@ describe("resolveExecWorkdir", () => {
       await expect(
         resolveExecWorkdir({
           host: "sandbox",
+          sandbox: sandboxConfig(workspaceDir),
+        }),
+      ).resolves.toEqual({
+        kind: "sandbox",
+        hostCwd: workspaceDir,
+        containerCwd: "/workspace",
+        scriptPreflightCwd: workspaceDir,
+      });
+    });
+  });
+
+  it("treats exact empty workdir as omitted for sandbox hosts", async () => {
+    await withTempDir(async (workspaceDir) => {
+      await expect(
+        resolveExecWorkdir({
+          host: "sandbox",
+          workdir: "",
           sandbox: sandboxConfig(workspaceDir),
         }),
       ).resolves.toEqual({
@@ -980,6 +1022,26 @@ describe("resolveExecWorkdir", () => {
         nodeCwd: "/remote/node/default",
       }),
     ).resolves.toEqual({ kind: "node", remoteCwd: "/remote/node/workspace" });
+  });
+
+  it("treats exact empty workdir as omitted for node hosts with a node cwd", async () => {
+    await expect(
+      resolveExecWorkdir({
+        host: "node",
+        workdir: "",
+        nodeCwd: "/remote/node/default",
+      }),
+    ).resolves.toEqual({ kind: "node", remoteCwd: "/remote/node/default" });
+  });
+
+  it("treats exact empty workdir as omitted for node hosts without a node cwd", async () => {
+    await expect(
+      resolveExecWorkdir({
+        host: "node",
+        workdir: "",
+        defaultCwd: "/gateway/default",
+      }),
+    ).resolves.toEqual({ kind: "node" });
   });
 
   it("rejects blank explicit node workdirs", async () => {

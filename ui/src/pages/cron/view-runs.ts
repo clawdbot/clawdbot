@@ -37,6 +37,11 @@ type CronRunsSectionProps = {
   runsDeliveryStatuses: CronDeliveryStatus[];
   runsQuery: string;
   runsSortDir: CronSortDir;
+  conditionActivity?: {
+    checkCount: number;
+    lastCheckedAtMs?: number;
+    lastFiredAtMs?: number;
+  };
   onLoadMoreRuns: () => void;
   onRunsFiltersChange: (patch: {
     cronRunsStatuses?: CronRunsStatusValue[];
@@ -46,6 +51,49 @@ type CronRunsSectionProps = {
   }) => void | Promise<void>;
   onNavigateToChat?: (sessionKey: string) => void;
 };
+
+function renderConditionMetric(label: string, value: string) {
+  return html`
+    <div class="cron-condition-activity__metric">
+      <dt>${label}</dt>
+      <dd>${value}</dd>
+    </div>
+  `;
+}
+
+function renderConditionActivity(activity: NonNullable<CronRunsSectionProps["conditionActivity"]>) {
+  const lastChecked = formatRelativeTimestamp(activity.lastCheckedAtMs, {
+    fallback: t("cron.runs.notChecked"),
+  });
+  const lastFired = formatRelativeTimestamp(activity.lastFiredAtMs, {
+    fallback: t("cron.runs.neverFired"),
+  });
+  return html`
+    <div class="cron-condition-activity" data-test-id="cron-condition-activity">
+      <div class="cron-condition-activity__intro">
+        <div class="settings-row__title">
+          <span class="cron-condition-activity__icon" aria-hidden="true">${icon("gitBranch")}</span>
+          ${t("cron.runs.conditionActivity")}
+        </div>
+        <div class="settings-row__desc">${t("cron.runs.conditionActivityHint")}</div>
+      </div>
+      <dl class="cron-condition-activity__metrics">
+        ${renderConditionMetric(t("cron.runs.checks"), String(activity.checkCount))}
+        ${renderConditionMetric(t("cron.runs.lastChecked"), lastChecked)}
+        ${renderConditionMetric(t("cron.runs.lastFired"), lastFired)}
+      </dl>
+    </div>
+  `;
+}
+
+function conditionEmptyHint(activity: NonNullable<CronRunsSectionProps["conditionActivity"]>) {
+  if (activity.checkCount === 0) {
+    return t("cron.runs.emptyConditionUnchecked");
+  }
+  const key =
+    activity.checkCount === 1 ? "cron.runs.emptyConditionHintOne" : "cron.runs.emptyConditionHint";
+  return t(key, { count: String(activity.checkCount) });
+}
 
 function getRunStatusOptions(): Array<{ value: CronRunsStatusValue; label: string }> {
   return [
@@ -175,10 +223,11 @@ export function renderRunsSection(props: CronRunsSectionProps) {
     .map((option) => option.label);
   const statusSummary = summarizeSelection(selectedStatusLabels, t("cron.runs.allStatuses"));
   const deliverySummary = summarizeSelection(selectedDeliveryLabels, t("cron.runs.allDelivery"));
-  // The sort select's .value binding commits before its options exist;
-  // selected attributes preserve non-first values.
+  const sortLabel =
+    props.runsSortDir === "asc" ? t("cron.runs.oldestFirst") : t("cron.runs.newestFirst");
   return html`
     <div class="cron-runs">
+      ${props.conditionActivity ? renderConditionActivity(props.conditionActivity) : nothing}
       <div class="cron-run-filters">
         <div class="cron-search-box cron-run-filter-search">
           <span class="cron-search-box__icon" aria-hidden="true">${icon("search")}</span>
@@ -224,31 +273,56 @@ export function renderRunsSection(props: CronRunsSectionProps) {
             void props.onRunsFiltersChange({ cronRunsDeliveryStatuses: [] });
           },
         })}
-        <select
-          class="cron-run-sort"
-          aria-label=${t("cron.jobs.sort")}
-          title=${t("cron.jobs.sort")}
-          .value=${props.runsSortDir}
-          @change=${(e: Event) =>
-            props.onRunsFiltersChange({
-              cronRunsSortDir: (e.target as HTMLSelectElement).value as CronSortDir,
-            })}
-        >
-          <option value="desc" ?selected=${props.runsSortDir === "desc"}>
-            ${t("cron.runs.newestFirst")}
-          </option>
-          <option value="asc" ?selected=${props.runsSortDir === "asc"}>
-            ${t("cron.runs.oldestFirst")}
-          </option>
-        </select>
+        <div class="cron-filter-dropdown">
+          <wa-dropdown
+            class="cron-filter-dropdown__details"
+            placement="bottom-start"
+            @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+              const value = event.detail.item.value;
+              if (value === "asc" || value === "desc") {
+                void props.onRunsFiltersChange({ cronRunsSortDir: value });
+              }
+            }}
+          >
+            <button
+              slot="trigger"
+              type="button"
+              class="btn btn--sm cron-filter-dropdown__trigger cron-run-sort"
+              aria-label=${`${t("cron.jobs.sort")} ${sortLabel}`}
+            >
+              <span>${sortLabel}</span>
+              ${icon("chevronDown")}
+            </button>
+            <wa-dropdown-item value="desc" aria-current=${String(props.runsSortDir === "desc")}>
+              ${t("cron.runs.newestFirst")}
+              <span slot="details" aria-hidden="true">
+                ${props.runsSortDir === "desc" ? icon("check") : nothing}
+              </span>
+            </wa-dropdown-item>
+            <wa-dropdown-item value="asc" aria-current=${String(props.runsSortDir === "asc")}>
+              ${t("cron.runs.oldestFirst")}
+              <span slot="details" aria-hidden="true">
+                ${props.runsSortDir === "asc" ? icon("check") : nothing}
+              </span>
+            </wa-dropdown-item>
+          </wa-dropdown>
+        </div>
       </div>
       ${runs.length === 0
         ? hasRunFilters
           ? html`<div class="muted cron-runs__empty">${t("cron.runs.noMatching")}</div>`
           : html`
               <div class="cron-empty-state">
-                <div class="cron-empty-state__title">${t("cron.runs.emptyTitle")}</div>
-                <div class="cron-empty-state__copy">${t("cron.runs.emptyHint")}</div>
+                <div class="cron-empty-state__title">
+                  ${props.conditionActivity
+                    ? t("cron.runs.emptyConditionTitle")
+                    : t("cron.runs.emptyTitle")}
+                </div>
+                <div class="cron-empty-state__copy">
+                  ${props.conditionActivity
+                    ? conditionEmptyHint(props.conditionActivity)
+                    : t("cron.runs.emptyHint")}
+                </div>
               </div>
             `
         : html`

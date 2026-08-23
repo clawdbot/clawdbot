@@ -7,7 +7,6 @@ import {
   validateSessionTypingParams,
   type SessionSuggestion,
   type SessionSuggestionResolution,
-  type SessionSharingIdentity,
   type SessionTypingEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -33,10 +32,11 @@ import {
 import { resolveSessionSubscriptionKeys as subscriptionKeys } from "../session-subscription-keys.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { appendSessionAudit } from "./session-audit.js";
 import {
   broadcastTypingThrottled,
   liveViewerIdentities,
+  TYPING_PREVIEW_THROTTLE_MS,
+  TYPING_THROTTLE_MS,
   updateTypingConnections,
 } from "./session-typing-state.js";
 import {
@@ -111,30 +111,6 @@ function runSessionSuggestionMutation<T>(params: {
     respondSessionSuggestionSessionChanged(params.respond, params.sessionKey);
     return { ok: false };
   }
-}
-
-function resolutionAuditAction(resolution: SessionSuggestionResolution): string {
-  switch (resolution) {
-    case "send":
-      return "sent a suggestion immediately";
-    case "queue":
-      return "queued a suggestion";
-    case "edit":
-      return "moved a suggestion into the composer";
-    case "dismiss":
-      return "dismissed a suggestion";
-  }
-  throw new Error(`unsupported suggestion resolution: ${String(resolution)}`);
-}
-
-function actorIdentity(client: GatewayClient | null): SessionSharingIdentity {
-  return (
-    gatewayClientSessionCreator(client) ?? {
-      type: "system",
-      id: "operator.admin",
-      label: "Administrator",
-    }
-  );
 }
 
 function attributedSuggestionClient(
@@ -516,21 +492,17 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
       action: "resolved",
       suggestion: projected,
     });
-    const actor = actorIdentity(client);
-    try {
-      await appendSessionAudit({
-        cfg: context.getRuntimeConfig(),
-        target: { ...target, sessionKey: target.canonicalKey },
-        text: `${actor.label ?? actor.id} ${resolutionAuditAction(resolution)}.`,
-        now: Date.now(),
-      });
-    } catch (error) {
-      context.logGateway.warn(`failed to append suggestion resolution audit: ${String(error)}`);
-    }
     respond(true, { suggestion: projected });
   },
 
-  "session.typing": ({ params, respond, client, context }) => {
+  "session.typing": ({ params: requestParams, respond, client, context }) => {
+    const params =
+      typeof requestParams.preview === "string"
+        ? {
+            ...requestParams,
+            preview: Array.from(requestParams.preview.trim()).slice(0, 400).join(""),
+          }
+        : requestParams;
     if (!assertValidParams(params, validateSessionTypingParams, "session.typing", respond)) {
       return;
     }
@@ -574,10 +546,11 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     ]);
     const now = Date.now();
     const typingKey = `${actor.id}\0${target.agentId}\0${target.canonicalKey}\0${target.entry.sessionId}`;
-    const effectiveTyping = updateTypingConnections({
+    const { typing: effectiveTyping, preview } = updateTypingConnections({
       key: typingKey,
       connectionId: client?.connId ?? actor.id,
       typing: params.typing,
+      ...(params.typing && params.preview ? { preview: params.preview } : {}),
       now,
     });
     if (!params.typing && effectiveTyping) {
@@ -587,6 +560,8 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     const broadcast = broadcastTypingThrottled({
       key: typingKey,
       typing: effectiveTyping,
+      signature: `${effectiveTyping}\0${preview ?? ""}`,
+      intervalMs: preview ? TYPING_PREVIEW_THROTTLE_MS : TYPING_THROTTLE_MS,
       now,
       emit: () => {
         const current = resolveSessionSharingTarget({
@@ -619,6 +594,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           agentId: target.agentId,
           actor,
           typing: effectiveTyping,
+          ...(preview ? { preview } : {}),
           ts: Date.now(),
         };
         context.broadcast("session.typing", event, {

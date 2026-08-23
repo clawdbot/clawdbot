@@ -75,6 +75,5 @@ export function shouldPruneTerminalTask(
   if (cronHistoryOverflowTaskIds.has(task.taskId)) {
     return true;
   }
-  const cleanupAfter = resolveEffectiveTaskCleanupAfter(task);
-  return cleanupAfter !== undefined && now >= cleanupAfter;
+  return now >= resolveEffectiveTaskCleanupAfter(task);
 }

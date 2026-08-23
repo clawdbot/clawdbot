@@ -44,6 +44,7 @@ type ModelProvidersViewProps = {
   loading: boolean;
   refreshing: boolean;
   error: string | null;
+  providerUsageFailed: boolean;
   updatedAt: number | null;
   costDays: number;
   credentialAgentLabel: string;
@@ -574,6 +575,16 @@ function renderModelReadiness(props: ModelProvidersViewProps) {
   `;
 }
 
+function renderProviderNoticeRow(text: string) {
+  return html`
+    <div class="settings-row">
+      <div class="settings-row__text">
+        <span class="settings-row__desc provider-usage-error">${text}</span>
+      </div>
+    </div>
+  `;
+}
+
 export function renderModelProviders(props: ModelProvidersViewProps) {
   if (!props.connected) {
     return renderSettingsPage(
@@ -587,14 +598,9 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
     `);
   }
   const providerRows = html`
-    ${props.error
-      ? html`
-          <div class="settings-row">
-            <div class="settings-row__text">
-              <span class="settings-row__desc provider-usage-error">${props.error}</span>
-            </div>
-          </div>
-        `
+    ${props.error ? renderProviderNoticeRow(props.error) : nothing}
+    ${props.providerUsageFailed
+      ? renderProviderNoticeRow(t("usage.providerUsage.unavailable"))
       : nothing}
     ${props.cards.length === 0
       ? renderSettingsEmpty(

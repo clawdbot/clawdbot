@@ -37,6 +37,7 @@ export type WorkerTurnExecutionIdentity = Readonly<{
   delegatedAuthority: AgentRunDelegatedAuthority;
   executionIdentityToken: ExecutionIdentityAdmissionToken;
   operationalRunInstance: OperationalRunInstanceRef;
+  receiptAuthority: () => void;
   sessionKey: string;
   turnClaim: WorkerSessionTurnClaim;
 }>;
@@ -86,14 +87,6 @@ export function bindWorkerTurnExecutionIdentity(
   if (!path || !store.validateTurnClaim(claim) || !delegatedAuthority) {
     throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
   }
-  const identity = Object.freeze({
-    agentId: source.agentId,
-    delegatedAuthority,
-    executionIdentityToken: token,
-    operationalRunInstance,
-    sessionKey: source.sessionKey,
-    turnClaim: claim,
-  });
   const assertActive = () => {
     if (
       !store.validateTurnClaim(claim) ||
@@ -102,6 +95,15 @@ export function bindWorkerTurnExecutionIdentity(
       throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
     }
   };
+  const identity = Object.freeze({
+    agentId: source.agentId,
+    delegatedAuthority,
+    executionIdentityToken: token,
+    operationalRunInstance,
+    receiptAuthority: assertActive,
+    sessionKey: source.sessionKey,
+    turnClaim: claim,
+  });
   const capability = Object.freeze({
     async run<T>(callback: (current: WorkerTurnExecutionIdentity) => Promise<T> | T): Promise<T> {
       assertActive();
@@ -118,17 +120,11 @@ export function bindWorkerTurnExecutionIdentity(
 
 export function getWorkerTurnExecutionIdentityCapability(
   store: WorkerTurnExecutionIdentityStore,
-  binding: { sessionId: string; environmentId: string; ownerEpoch: number; runId: string },
+  claim: WorkerSessionTurnClaim,
 ): WorkerTurnExecutionIdentityCapability | undefined {
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
-  const bound = path ? workerTurnExecutionIdentities.get(path)?.get(binding.sessionId) : undefined;
-  const owner = bound?.claim.owner;
-  return bound &&
-    owner?.kind === "worker" &&
-    bound.claim.runId === binding.runId &&
-    owner.environmentId === binding.environmentId &&
-    owner.ownerEpoch === binding.ownerEpoch &&
-    store.validateTurnClaim(bound.claim)
+  const bound = path ? workerTurnExecutionIdentities.get(path)?.get(claim.sessionId) : undefined;
+  return bound && bound.claimKey === claimKey(claim) && store.validateTurnClaim(claim)
     ? bound.capability
     : undefined;
 }

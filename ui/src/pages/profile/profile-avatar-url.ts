@@ -1,4 +1,5 @@
 import { normalizeRouteBasePath } from "@openclaw/uirouter";
+import { buildControlUiUserAvatarPath } from "../../../../src/gateway/control-ui-user-avatar-route.js";
 
 export function userProfileAvatarUrl(
   gatewayUrl: string,
@@ -28,10 +29,10 @@ export function userProfileAvatarUrl(
     url.password = "";
     const sameOriginResourceBase =
       url.origin === pageUrl.origin ? normalizeRouteBasePath(resourceBasePath) : "";
-    url.pathname = `${sameOriginResourceBase}/api/users/${encodeURIComponent(profileId)}/avatar`;
-    url.search = `?v=${revision}`;
-    url.hash = "";
-    return url.href;
+    return new URL(
+      buildControlUiUserAvatarPath(profileId, revision, sameOriginResourceBase),
+      url.origin,
+    ).href;
   } catch {
     return null;
   }

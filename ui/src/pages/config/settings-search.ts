@@ -10,9 +10,9 @@ import {
   matchesConfigSectionSearch,
   parseConfigSearchQuery,
 } from "../../components/config-form.search.ts";
-import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
 import { splitConfigSchemaByTier } from "../../components/config-form.tiers.ts";
 import { t } from "../../i18n/index.ts";
+import { schemaType, type JsonSchema } from "../../lib/config-form-utils.ts";
 import { configPageForSection } from "./config-sections.ts";
 import { memoryVisibleSchemaKeys } from "./memory-schema.ts";
 import { SETTINGS_SEARCH_TARGETS, type SettingsSearchTarget } from "./settings-targets.ts";

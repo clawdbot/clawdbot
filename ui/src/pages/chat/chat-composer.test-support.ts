@@ -18,6 +18,8 @@ export function createComposerProps(overrides: Partial<ComposerProps> = {}): Com
     stream: null,
     queue: [],
     draft: "",
+    modelCatalog: [],
+    modelSwitching: false,
     sessions: null,
     assistantName: "OpenClaw",
     onDraftChange: vi.fn(),

@@ -536,10 +536,10 @@ Plugin-owned capability split:
 
 ### llama.cpp
 
-The bundled `llama-cpp` plugin provides two local text providers:
+The bundled `llama-cpp` plugin provides one local text provider with two setup choices:
 
-- `llama-cpp` installs and manages a verified llama-server and local GGUF files.
-- `llama-server` connects to a server that you already run and discovers its models.
+- **Managed local server** installs and supervises a verified llama-server and local GGUF files.
+- **Existing llama-server** connects to a server that you operate and discovers its models.
 
 Install the plugin once for either path:
 
@@ -547,8 +547,8 @@ Install the plugin once for either path:
 openclaw plugins install @openclaw/llama-cpp-provider
 ```
 
-See [llama.cpp](/plugins/llama-cpp) for the managed path and
-[llama-server](/providers/llama-server) for the external path.
+Both use `llama-cpp/<model>` references. See [llama.cpp](/plugins/llama-cpp) for setup,
+discovery, authentication, and managed local embeddings.
 
 ### LM Studio
 

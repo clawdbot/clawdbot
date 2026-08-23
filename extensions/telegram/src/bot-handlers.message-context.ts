@@ -23,7 +23,6 @@ import {
   buildSenderName,
   getTelegramTextParts,
   resolveTelegramPrimaryMedia,
-  resolveTelegramForumThreadId,
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
@@ -81,9 +80,7 @@ export type TelegramSessionState = {
 export type ResolveTelegramSessionStateParams = {
   chatId: number | string;
   isGroup: boolean;
-  isForum: boolean;
-  messageThreadId?: number;
-  resolvedThreadId?: number;
+  threadSpec: TelegramThreadSpec;
   botHasTopicsEnabled?: boolean;
   senderId?: string | number;
   runtimeCfg: OpenClawConfig;
@@ -187,14 +184,8 @@ export function createTelegramMessageSessionRuntime({
   const resolveTelegramSessionState = (
     params: ResolveTelegramSessionStateParams,
   ): TelegramSessionState => {
-    const resolvedThreadId =
-      params.resolvedThreadId ??
-      resolveTelegramForumThreadId({
-        isForum: params.isForum,
-        messageThreadId: params.messageThreadId,
-      });
-    const dmThreadId = !params.isGroup ? params.messageThreadId : undefined;
-    const topicThreadId = resolvedThreadId ?? dmThreadId;
+    const dmThreadId = params.threadSpec.scope === "dm" ? params.threadSpec.id : undefined;
+    const topicThreadId = params.threadSpec.id;
     const { topicConfig } = resolveTelegramGroupConfig(
       params.chatId,
       topicThreadId,
@@ -205,8 +196,7 @@ export function createTelegramMessageSessionRuntime({
       accountId,
       chatId: params.chatId,
       isGroup: params.isGroup,
-      resolvedThreadId,
-      replyThreadId: topicThreadId,
+      threadSpec: params.threadSpec,
       senderId: params.senderId,
       topicAgentId: topicConfig?.agentId,
     });

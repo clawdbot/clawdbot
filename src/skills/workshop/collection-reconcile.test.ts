@@ -625,30 +625,38 @@ describe("skill collection reconciliation", () => {
       { env: testState.env },
     );
     await acquired;
-    const startedAt = performance.now();
-    const clockSpy = vi
-      .spyOn(performance, "now")
-      .mockReturnValueOnce(startedAt)
-      .mockReturnValueOnce(startedAt + 5_001)
-      .mockReturnValueOnce(startedAt)
-      .mockReturnValue(startedAt + 5_001);
+    const expectCollectionLeaseTimeout = async (operation: () => Promise<unknown>) => {
+      const startedAt = performance.now();
+      const clockSpy = vi
+        .spyOn(performance, "now")
+        // Let the canonical bundle read acquire and release its target lease,
+        // then advance only the nested collection-lease acquisition past its budget.
+        .mockReturnValueOnce(startedAt)
+        .mockReturnValueOnce(startedAt)
+        .mockReturnValueOnce(startedAt)
+        .mockReturnValueOnce(startedAt)
+        .mockReturnValue(startedAt + 5_001);
+      try {
+        await expect(operation()).rejects.toMatchObject({
+          code: "OPENCLAW_STATE_LEASE_TIMEOUT",
+        });
+      } finally {
+        clockSpy.mockRestore();
+      }
+    };
 
     try {
-      await Promise.all([
-        expect(listSkillProposals({ workspaceDir, env: testState.env })).rejects.toMatchObject({
-          code: "OPENCLAW_STATE_LEASE_TIMEOUT",
-        }),
-        expect(
-          inspectSkillProposal(proposal.record.id, {
+      await expectCollectionLeaseTimeout(
+        async () => await listSkillProposals({ workspaceDir, env: testState.env }),
+      );
+      await expectCollectionLeaseTimeout(
+        async () =>
+          await inspectSkillProposal(proposal.record.id, {
             workspaceDir,
             env: testState.env,
           }),
-        ).rejects.toMatchObject({
-          code: "OPENCLAW_STATE_LEASE_TIMEOUT",
-        }),
-      ]);
+      );
     } finally {
-      clockSpy.mockRestore();
       releaseLock?.();
       await heldLock;
     }

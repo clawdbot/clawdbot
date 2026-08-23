@@ -238,7 +238,8 @@ function createCronDeliverySchema(): TSchema {
         accountId: deliveryStringSchema("Delivery account"),
         failureDestination: Type.Optional(
           Type.Union([failureDestinationObject, Type.Null()], {
-            description: "Failure destination; null clears.",
+            description:
+              "Failure-alert route override and alternate for immediate required-delivery failure; null clears.",
           }),
         ),
         completionDestination: Type.Optional(
@@ -252,8 +253,8 @@ function createCronDeliverySchema(): TSchema {
   );
 }
 
-// Omitting `failureAlert` means "leave defaults/unchanged"; `false` explicitly disables alerts.
-// Runtime handles `failureAlert === false` in cron/service/timer.ts.
+// Omitting `failureAlert` means "leave defaults/unchanged"; `false` disables regular alerts.
+// Runtime handles `failureAlert === false` in cron/service/failure-alerts.ts.
 // The schema declares `type: "object"` to stay compatible with providers that
 // enforce an OpenAPI 3.0 subset (e.g. Gemini via GitHub Copilot).  The
 // description tells the LLM that `false` is also accepted.
@@ -271,7 +272,8 @@ function createCronFailureAlertSchema(): TSchema {
         accountId: Type.Optional(Type.String()),
       },
       additionalProperties: true,
-      description: "Failure alert; false disables.",
+      description:
+        "Failure alert policy/route override. Route-backed jobs default to after=2 and cooldownMs=3600000; false disables execution/delivery alerts but not the auto-disable safety notice.",
     }),
   );
 }

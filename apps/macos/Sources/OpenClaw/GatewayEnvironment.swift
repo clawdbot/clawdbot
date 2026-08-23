@@ -122,12 +122,12 @@ enum GatewayEnvironment {
     {
         if let raw = environment["OPENCLAW_GATEWAY_PORT"] {
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let parsed = Int(trimmed), parsed > 0 { return parsed }
+            if let parsed = Int(trimmed), (1...65535).contains(parsed) { return parsed }
         }
-        if let configPort, configPort > 0 {
+        if let configPort, (1...65535).contains(configPort) {
             return configPort
         }
-        return storedPort > 0 ? storedPort : profile.defaultGatewayPort
+        return (1...65535).contains(storedPort) ? storedPort : profile.defaultGatewayPort
     }
 
     static func expectedGatewayVersion() -> Semver? {

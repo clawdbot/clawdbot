@@ -433,13 +433,19 @@ function openArtifact(
 
 export function createSessionWorkspaceProps(
   state: SessionWorkspaceHost,
-  options?: { narrowLayout?: boolean; draftScope?: string; expanded?: boolean },
+  options?: {
+    narrowLayout?: boolean;
+    draftScope?: string;
+    expanded?: boolean;
+    presented?: boolean;
+  },
 ): SessionWorkspaceProps {
   state.sessionWorkspaceDraftScope = options?.draftScope;
   const workspace = getSessionWorkspace(state);
   if (
     // The collapsed header still renders the diff action, so load its checkout
     // capability eagerly instead of waiting for the file rail to open.
+    options?.presented !== false &&
     (options?.expanded === true ||
       !workspace.collapsed ||
       isGatewayMethodAdvertised(state, "sessions.diff") === true) &&

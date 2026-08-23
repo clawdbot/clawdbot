@@ -10,17 +10,13 @@ import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/se
 import { resolveFreshSessionTotalTokens } from "../../../config/sessions/types.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
-import {
-  buildAgentRunTerminalOutcomeFromWaitResult,
-  classifyAgentRunTerminalOutcome,
-} from "../../agent-run-terminal-outcome.js";
+import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import { extractStoredAssistantText, sanitizeTextContent } from "../../tools/chat-history-text.js";
-import {
-  isAnnounceSkip,
-  selectDeliverableSessionsReply,
-} from "../../tools/sessions-send-tokens.js";
+import { isAnnounceSkip } from "../../tools/sessions-send-tokens.js";
+import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
+import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
 import {
   captureSubagentCompletionReplyUsing,
   readLatestSubagentOutputWithRetryUsing,
@@ -356,7 +352,7 @@ export function applySubagentWaitOutcome(params: {
   // primary normalizers, so apply the canonical classification here instead
   // of re-enumerating reason groups.
   if (terminalOutcome) {
-    switch (classifyAgentRunTerminalOutcome(terminalOutcome)) {
+    switch (classifySubagentTerminalOutcome(terminalOutcome)) {
       case "timeout":
         outcome = { status: "timeout" };
         break;
@@ -443,11 +439,7 @@ type ChildCompletionRow = {
   label?: string;
   createdAt: number;
   execution: ChildCompletionExecution;
-  frozenResultText?: string | null;
-  completion?: {
-    resultText?: string | null;
-    fallbackResultText?: string | null;
-  };
+  completion?: Parameters<typeof resolveSubagentCompletionResultText>[0]["completion"];
 };
 
 type ChildCompletionSection = {
@@ -456,21 +448,12 @@ type ChildCompletionSection = {
   actionable: boolean;
 };
 
-function selectChildCompletionResultText(child: ChildCompletionRow): string | undefined {
-  const primary = child.completion?.resultText;
-  const fallback = child.completion?.fallbackResultText ?? child.frozenResultText;
-  if (child.execution.outcome?.status === "ok") {
-    return selectDeliverableSessionsReply(primary, fallback);
-  }
-  return (primary ?? fallback)?.trim() || undefined;
-}
-
 function hasCapturedChildCompletionReply(child: ChildCompletionRow): boolean {
-  return [
-    child.completion?.resultText,
-    child.completion?.fallbackResultText,
-    child.frozenResultText,
-  ].some((value) => Boolean(value?.trim()));
+  return Boolean(
+    child.completion?.terminalReply ||
+    child.completion?.resultText?.trim() ||
+    child.completion?.fallbackResultText?.trim(),
+  );
 }
 
 export function buildChildCompletionFindings(
@@ -498,7 +481,7 @@ export function buildChildCompletionFindings(
 
   const sections: ChildCompletionSection[] = [];
   for (const [index, child] of sorted.entries()) {
-    const resultText = selectChildCompletionResultText(child);
+    const resultText = resolveSubagentCompletionResultText(child);
     const outcome = describeSubagentOutcome(child.execution.outcome);
     if (
       child.execution.outcome?.status === "ok" &&
@@ -571,20 +554,12 @@ export function buildChildCompletionFindings(
 }
 
 export function dedupeLatestChildCompletionRows(
-  children: Array<{
-    runId: string;
-    childSessionKey: string;
-    task: string;
-    label?: string;
-    generation?: number;
-    createdAt: number;
-    execution: ChildCompletionExecution;
-    frozenResultText?: string | null;
-    completion?: {
-      resultText?: string | null;
-      fallbackResultText?: string | null;
-    };
-  }>,
+  children: Array<
+    ChildCompletionRow & {
+      runId: string;
+      generation?: number;
+    }
+  >,
 ) {
   const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
   for (const child of children) {
@@ -597,21 +572,13 @@ export function dedupeLatestChildCompletionRows(
 }
 
 export function filterCurrentDirectChildCompletionRows(
-  children: Array<{
-    runId: string;
-    childSessionKey: string;
-    requesterSessionKey: string;
-    requesterAgentId?: string;
-    task: string;
-    label?: string;
-    createdAt: number;
-    execution: ChildCompletionExecution;
-    frozenResultText?: string | null;
-    completion?: {
-      resultText?: string | null;
-      fallbackResultText?: string | null;
-    };
-  }>,
+  children: Array<
+    ChildCompletionRow & {
+      runId: string;
+      requesterSessionKey: string;
+      requesterAgentId?: string;
+    }
+  >,
   params: {
     requesterSessionKey: string;
     requesterAgentId?: string;

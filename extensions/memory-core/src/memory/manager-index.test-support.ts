@@ -102,6 +102,7 @@ export type ManagerIndexFixture = {
   getFreshManager: (
     cfg: ManagerConfig,
     purpose?: "default" | "status" | "cli",
+    inspectSources?: boolean,
   ) => Promise<MemoryIndexManager>;
   getFtsSessionManager: (params: { stateDirName: string }) => Promise<MemoryIndexManager | null>;
   seedSessionTranscript: (params: {
@@ -473,9 +474,10 @@ export function createManagerIndexFixture(deps: {
   const getFreshManager = async (
     cfg: ManagerConfig,
     purpose?: "default" | "status" | "cli",
+    inspectSources?: boolean,
   ): Promise<MemoryIndexManager> => {
     const manager = requireManager(
-      await deps.getMemorySearchManager({ cfg, agentId: "main", purpose }),
+      await deps.getMemorySearchManager({ cfg, agentId: "main", purpose, inspectSources }),
     );
     trackManager(manager);
     return manager;

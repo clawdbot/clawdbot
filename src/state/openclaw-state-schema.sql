@@ -258,6 +258,11 @@ CREATE TABLE IF NOT EXISTS audit_identity_keys (
   created_at INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS config_revision_keys (
+  id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+  hmac_key BLOB NOT NULL CHECK (length(hmac_key) = 32)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS execution_identity_contexts (
   context_id TEXT NOT NULL PRIMARY KEY CHECK (length(context_id) BETWEEN 1 AND 256),
   execution_id TEXT NOT NULL UNIQUE CHECK (length(execution_id) BETWEEN 1 AND 256),
@@ -2285,6 +2290,9 @@ CREATE TABLE IF NOT EXISTS worker_session_placement_moves (
   -- Keep this nullable column constraint-free so lazy ALTER TABLE produces the
   -- same shape as fresh databases; placement-move code validates its value.
   target_machine_class TEXT,
+  -- Explicit source abandonment is a durable operator decision. Keep the bit
+  -- bare and nullable so same-version older readers can safely omit it.
+  abandon_source INTEGER,
   last_error TEXT,
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
@@ -2366,6 +2374,86 @@ CREATE TABLE IF NOT EXISTS worker_workspace_pending_results (
   created_at_ms INTEGER NOT NULL,
   FOREIGN KEY (session_id) REFERENCES worker_session_placements(session_id) ON DELETE CASCADE
 ) STRICT;
+
+-- GitHub publication intent records the authoritative session worktree. Cloud
+-- requests execute only after the exact turn claim's result is accepted locally.
+-- Secrets stay in the effective Gateway-owned GitHub profile and never enter
+-- this row or the worker protocol.
+CREATE TABLE IF NOT EXISTS github_publication_requests (
+  request_id TEXT NOT NULL PRIMARY KEY,
+  idempotency_key TEXT NOT NULL,
+  request_digest TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  worktree_id TEXT NOT NULL,
+  repository_fingerprint TEXT NOT NULL,
+  claim_id TEXT,
+  run_id TEXT,
+  environment_id TEXT,
+  owner_epoch INTEGER CHECK (owner_epoch IS NULL OR owner_epoch >= 1),
+  placement_generation INTEGER CHECK (
+    placement_generation IS NULL OR placement_generation >= 0
+  ),
+  identity_source TEXT NOT NULL CHECK (
+    identity_source IN ('system-detected', 'system-configured', 'agent-override')
+  ),
+  identity_profile_id TEXT,
+  identity_account_id INTEGER NOT NULL CHECK (identity_account_id >= 1),
+  identity_login TEXT NOT NULL,
+  title TEXT,
+  body TEXT,
+  status TEXT NOT NULL CHECK (
+    status IN ('requested', 'publishing', 'published', 'failed')
+  ),
+  gateway_instance_id TEXT,
+  repository TEXT,
+  branch TEXT NOT NULL,
+  base_branch TEXT,
+  source_head_commit TEXT,
+  source_index_tree TEXT,
+  workspace_tree TEXT,
+  head_commit TEXT,
+  pull_request_url TEXT,
+  error_code TEXT,
+  next_action TEXT,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  reported_at_ms INTEGER,
+  UNIQUE (session_id, idempotency_key),
+  CHECK (
+    (claim_id IS NULL AND run_id IS NULL AND environment_id IS NULL
+      AND owner_epoch IS NULL AND placement_generation IS NULL)
+    OR
+    (claim_id IS NOT NULL AND run_id IS NOT NULL AND placement_generation IS NOT NULL
+      AND ((environment_id IS NULL AND owner_epoch IS NULL)
+        OR (environment_id IS NOT NULL AND owner_epoch IS NOT NULL)))
+  ),
+  CHECK (
+    (identity_source IS 'system-detected' AND identity_profile_id IS NULL)
+    OR
+    (identity_source IN ('system-configured', 'agent-override')
+      AND identity_profile_id IS NOT NULL)
+  ),
+  CHECK (
+    (source_head_commit IS NULL AND source_index_tree IS NULL AND workspace_tree IS NULL)
+    OR
+    (source_head_commit IS NOT NULL AND workspace_tree IS NOT NULL)
+  ),
+  CHECK (
+    (status IS 'published' AND pull_request_url IS NOT NULL AND error_code IS NULL
+      AND next_action IS NULL)
+    OR
+    (status IS 'failed' AND pull_request_url IS NULL AND error_code IS NOT NULL
+      AND next_action IS NOT NULL)
+    OR
+    (status IN ('requested', 'publishing') AND pull_request_url IS NULL
+      AND error_code IS NULL AND next_action IS NULL)
+  )
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_github_publication_requests_pending
+  ON github_publication_requests(status, updated_at_ms, request_id);
 
 -- One active, opaque admission credential per worker environment. Plaintext
 -- may be retried until delivery acknowledgement but never enters durable state.

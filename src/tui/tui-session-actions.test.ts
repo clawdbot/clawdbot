@@ -216,6 +216,10 @@ describe("tui session actions", () => {
       agentNames,
       updateHeader,
       updateFooter,
+      resolveSessionSelection: vi.fn((_raw?: string, agentId = state.currentAgentId) => ({
+        key: `agent:${agentId}:${state.sessionMainKey}`,
+        agentId,
+      })),
     });
 
     await expect(refreshAgents()).resolves.toEqual({ ok: true, value: undefined });
@@ -227,12 +231,136 @@ describe("tui session actions", () => {
       { id: "system-agent", kind: "system", name: "System Agent" },
     ]);
     expect(state.currentAgentId).toBe("team-lead");
+    expect(state.currentSessionKey).toBe("agent:team-lead:primary");
     expect([...agentNames]).toEqual([
       ["team-lead", "Lead Agent"],
       ["system-agent", "System Agent"],
     ]);
     expect(updateHeader).toHaveBeenCalledTimes(1);
     expect(updateFooter).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      scope: "per-sender" as const,
+      previousKey: "agent:research:main",
+      nextKey: "agent:ops:main",
+    },
+    {
+      scope: "global" as const,
+      previousKey: "global",
+      nextKey: "global",
+    },
+  ])(
+    "retires the complete $scope session when its selected agent disappears",
+    async ({ scope, previousKey, nextKey }) => {
+      const state = createBaseState({
+        agents: [{ id: "research" }],
+        currentAgentId: "research",
+        currentSessionKey: previousKey,
+        currentSessionId: "old-session",
+        sessionMainKey: "main",
+        sessionScope: scope,
+        activeChatRunId: "old-run",
+        pendingSubmit: acceptedSubmit("pending-run"),
+        historyLoaded: true,
+        sessionInfo: { updatedAt: 100, thinkingLevel: "high", verboseLevel: "full" },
+      });
+      sendPendingUser(state, "pending-run", "stale prompt");
+      const loadHistory = vi.fn();
+      const invalidateRunOwnership = vi.fn();
+      const clearLocalRunIds = vi.fn();
+      const clearAll = vi.fn();
+      const clearPendingUsers = vi.fn();
+      const btw = createBtwPresenter();
+      const { refreshAgents } = createTestSessionActions({
+        client: makeTuiBackend({
+          loadHistory,
+          listAgents: vi.fn().mockResolvedValue({
+            defaultId: "ops",
+            mainKey: "main",
+            scope,
+            agents: [{ id: "ops" }],
+          }),
+        }),
+        chatLog: makeChatLog({ clearAll, clearPendingUsers }),
+        btw,
+        state,
+        invalidateRunOwnership,
+        clearLocalRunIds,
+        resolveSessionSelection: vi.fn((_raw?: string, agentId = state.currentAgentId) => ({
+          key: scope === "global" ? "global" : `agent:${agentId}:main`,
+          agentId,
+        })),
+      });
+
+      await expect(refreshAgents()).resolves.toEqual({ ok: true, value: undefined });
+
+      expect(state).toMatchObject({
+        currentAgentId: "ops",
+        currentSessionKey: nextKey,
+        currentSessionId: null,
+        activeChatRunId: null,
+        pendingSubmit: null,
+        historyLoaded: false,
+        sessionInfo: { updatedAt: null },
+      });
+      expect(state.sessionInfo.thinkingLevel).toBe("high");
+      expect(state.sessionInfo.verboseLevel).toBeUndefined();
+      expect(state.sessionProjection?.entries).toEqual([]);
+      expect(invalidateRunOwnership).toHaveBeenCalledOnce();
+      expect(clearLocalRunIds).toHaveBeenCalledOnce();
+      expect(clearAll).toHaveBeenCalledOnce();
+      expect(clearPendingUsers).toHaveBeenCalledOnce();
+      expect(btw.clear).toHaveBeenCalledOnce();
+      expect(loadHistory).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves the complete selected session when its agent remains in the roster", async () => {
+    const state = createBaseState({
+      agents: [{ id: "research" }],
+      currentAgentId: "research",
+      currentSessionKey: "agent:research:incident",
+      currentSessionId: "current-session",
+      sessionScope: "per-sender",
+      activeChatRunId: "current-run",
+      pendingSubmit: acceptedSubmit("pending-run"),
+      historyLoaded: true,
+      sessionInfo: { updatedAt: 100, thinkingLevel: "high" },
+    });
+    sendPendingUser(state, "pending-run", "current prompt");
+    const previousProjection = state.sessionProjection;
+    const invalidateRunOwnership = vi.fn();
+    const resolveSessionSelection = vi.fn();
+    const { refreshAgents } = createTestSessionActions({
+      client: makeTuiBackend({
+        listAgents: vi.fn().mockResolvedValue({
+          defaultId: "ops",
+          mainKey: "main",
+          scope: "per-sender",
+          agents: [{ id: "ops" }, { id: "research" }],
+        }),
+      }),
+      state,
+      invalidateRunOwnership,
+      resolveSessionSelection,
+    });
+
+    await expect(refreshAgents()).resolves.toEqual({ ok: true, value: undefined });
+
+    expect(state).toMatchObject({
+      currentAgentId: "research",
+      currentSessionKey: "agent:research:incident",
+      currentSessionId: "current-session",
+      activeChatRunId: "current-run",
+      historyLoaded: true,
+      sessionInfo: { updatedAt: 100, thinkingLevel: "high" },
+    });
+    expect(state.pendingSubmit).toEqual(acceptedSubmit("pending-run"));
+    expect(state.sessionProjection).toBe(previousProjection);
+    expect(invalidateRunOwnership).not.toHaveBeenCalled();
+    expect(resolveSessionSelection).not.toHaveBeenCalled();
   });
 
   it("queues session refreshes and applies the latest result", async () => {
@@ -1397,6 +1525,7 @@ describe("tui session actions", () => {
     const state = createBaseState({
       currentSessionKey: "agent:main:source",
       sessionInfo: {
+        displayName: "Production incident",
         fastMode: true,
         verboseLevel: "full",
         traceLevel: "raw",
@@ -1418,6 +1547,7 @@ describe("tui session actions", () => {
     await setSession("agent:main:target");
 
     expect(state.sessionInfo).toMatchObject({
+      displayName: undefined,
       fastMode: undefined,
       verboseLevel: undefined,
       traceLevel: undefined,

@@ -11,6 +11,7 @@ import {
   CODEX_CLI_PROFILE_ID,
   type OAuthCredential,
   buildOauthProviderAuthResult,
+  resolveOpenAICodexAuthIdentity,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
   DEFAULT_CONTEXT_TOKENS,
@@ -40,7 +41,6 @@ import {
   OPENAI_GPT_55_PRO_MODEL_ID as OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
   OPENAI_GPT_56_VARIANT_MODEL_IDS as OPENAI_CODEX_GPT_56_MODEL_IDS,
 } from "./model-route-contract.js";
-import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 import { loginOpenAICodexDeviceCode } from "./openai-chatgpt-device-code.js";
 import { loginOpenAICodexOAuth } from "./openai-chatgpt-oauth.runtime.js";
 import {
@@ -327,6 +327,25 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
       maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
       cost: OPENAI_CODEX_GPT_54_MINI_COST,
     };
+  } else if (
+    ctx.agentRuntimeId === "codex" &&
+    ctx.authProfileId === undefined &&
+    ctx.authProfileMode === undefined &&
+    ctx.providerConfig?.auth === undefined
+  ) {
+    // Codex owns its account-scoped model catalog. When that catalog is not yet
+    // available, keep the requested identity intact and let the native runtime
+    // decide whether the account can actually use it.
+    templateIds = OPENAI_CODEX_GPT_56_MODEL_IDS;
+    patch = {
+      reasoning: true,
+      input: ["text", "image"],
+      thinkingLevelMap: OPENAI_CODEX_GPT_56_THINKING_LEVEL_MAP,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      },
+    };
   } else {
     return undefined;
   }
@@ -365,6 +384,8 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
       contextWindow: patch?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
       contextTokens: patch?.contextTokens,
       maxTokens: patch?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+      ...(patch?.thinkingLevelMap ? { thinkingLevelMap: patch.thinkingLevelMap } : {}),
+      ...(patch?.compat ? { compat: patch.compat } : {}),
     } as ProviderRuntimeModel)
   );
 }
@@ -435,8 +456,8 @@ async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
   try {
     const { refreshOpenAICodexToken } = await import("./openai-chatgpt-provider.runtime.js");
     const refreshed = await refreshOpenAICodexToken(cred.refresh);
-    const identity = resolveCodexAuthIdentity({
-      accessToken: refreshed.access,
+    const identity = resolveOpenAICodexAuthIdentity({
+      access: refreshed.access,
       email: cred.email,
     });
     return {
@@ -481,8 +502,8 @@ async function runOpenAICodexOAuth(ctx: OpenAICodexOAuthContext) {
     return { profiles: [] };
   }
 
-  const identity = resolveCodexAuthIdentity({
-    accessToken: creds.access,
+  const identity = resolveOpenAICodexAuthIdentity({
+    access: creds.access,
     email: readStringValue(creds.email),
   });
 
@@ -551,8 +572,8 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
     });
     spin.stop("OpenAI device code complete");
 
-    const identity = resolveCodexAuthIdentity({
-      accessToken: creds.access,
+    const identity = resolveOpenAICodexAuthIdentity({
+      access: creds.access,
     });
 
     return buildOauthProviderAuthResult({
