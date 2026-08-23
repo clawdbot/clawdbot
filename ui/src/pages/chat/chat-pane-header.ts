@@ -56,6 +56,9 @@ import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import type { SidebarLayout } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneHeader extends ChatPaneDiscussion {
+  private headerWorkspaceIconRouteUrl: string | null = null;
+  private headerWorkspaceIconAvailability: boolean | null = null;
+
   /** Gateway-served project icon for a session workspace, on the same credentials as agent avatars. */
   private resolveWorkspaceIcon(sessionKey: string | undefined) {
     if (!sessionKey) {
@@ -76,6 +79,18 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       authTokens,
       authReady: Boolean(gateway.snapshot.hello || authTokens.length),
     };
+  }
+
+  private setHeaderWorkspaceIconAvailability(routeUrl: string, available: boolean | null) {
+    if (
+      this.headerWorkspaceIconRouteUrl === routeUrl &&
+      this.headerWorkspaceIconAvailability === available
+    ) {
+      return;
+    }
+    this.headerWorkspaceIconRouteUrl = routeUrl;
+    this.headerWorkspaceIconAvailability = available;
+    this.requestUpdate();
   }
 
   private compactHeaderStatusActions(): HeaderMenuStatusAction[] {
@@ -295,7 +310,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         aria-expanded=${String(sidePanelOpen)}
         @click=${toggleSidePanel}
       >
-        ${sidePanelOpen ? icons.panelRightClose : icons.panelRightOpen}
+        ${icons.panelRight}
       </button>
     </openclaw-tooltip>`;
     const browserPanelAction = sessionWorkspace.onToggleBrowser
@@ -437,6 +452,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           (owner) => owner.type === "human" && owner.id === sharingSnapshot.selfUser?.id,
         ) ?? null)
       : null;
+    const workspaceIcon = this.resolveWorkspaceIcon(workspace.root ? row?.key : undefined);
     const header = renderChatPaneHeader({
       paneId: this.paneId,
       narrow: this.narrow,
@@ -451,7 +467,14 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       renameValue: this.headerRenameValue,
       workspaceRoot: workspace.root,
       workspaceLabel: workspace.label,
-      workspaceIcon: this.resolveWorkspaceIcon(workspace.root ? row?.key : undefined),
+      workspaceIcon,
+      workspaceIconAvailability:
+        workspaceIcon?.routeUrl === this.headerWorkspaceIconRouteUrl
+          ? this.headerWorkspaceIconAvailability
+          : null,
+      onWorkspaceIconAvailabilityChange: workspaceIcon
+        ? (available) => this.setHeaderWorkspaceIconAvailability(workspaceIcon.routeUrl, available)
+        : undefined,
       parentSession: resolveChatPaneParentSession(row, this.state?.sessionsResult?.sessions ?? []),
       branch,
       branches: this.state ? displayedChatSessionBranches(this.state) : [],

@@ -1055,17 +1055,31 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           <div class="chat-split-view__cell" style="width: 320px;">
             <div class="chat-pane__header">
               <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle" type="button">N</button>
-              <span class="chat-pane__session-title"
-                ><span class="chat-pane__session-title-text"
-                  >A deliberately long split-pane session title</span
-                ></span
-              >
-              <openclaw-session-owner-chip>
-                <span class="session-owner-chip session-owner-chip--header">O</span>
-              </openclaw-session-owner-chip>
-              <button class="chat-pane__workspace-chip" type="button">
-                ${iconSvg()}<span>openclaw-workspace</span>
-              </button>
+              <div class="chat-pane__crumbs">
+                <button class="chat-pane__workspace-chip" type="button">
+                  ${iconSvg()}<span>openclaw-workspace</span>
+                </button>
+                <span class="chat-pane__crumb-sep" aria-hidden="true">/</span>
+                <span class="chat-pane__session-identity">
+                  <span class="chat-pane__session-title"
+                    ><span class="chat-pane__session-title-text"
+                      >A deliberately long split-pane session title</span
+                    ></span
+                  >
+                </span>
+                <span class="chat-pane__session-controls">
+                  <span class="chat-pane__people">
+                    <openclaw-session-owner-chip>
+                      <span class="session-owner-chip session-owner-chip--header">O</span>
+                    </openclaw-session-owner-chip>
+                    <span class="chat-pane__sharing-anchor">
+                      <wa-dropdown class="chat-pane__sharing-menu">
+                        <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__sharing-trigger" type="button">S</button>
+                      </wa-dropdown>
+                    </span>
+                  </span>
+                </span>
+              </div>
               <div class="chat-pane__face-switch chat-pane__face-switch--split">
                 <div class="settings-segmented">
                   <button class="settings-segmented__btn" type="button">Chat</button>
@@ -1080,9 +1094,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                   >B</button>
                 </wa-dropdown>
               </div>
-              <wa-dropdown class="chat-pane__sharing-menu">
-                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__sharing-trigger" type="button">S</button>
-              </wa-dropdown>
               <wa-dropdown class="chat-pane__branches-menu">
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__branches-trigger" type="button">R</button>
               </wa-dropdown>
@@ -1212,9 +1223,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                   <span class="chat-pane__parent-session-text">Release preparation with a long parent name</span>
                 </button>
                 <span class="chat-pane__crumb-sep" aria-hidden="true">/</span>
-                <button class="chat-pane__session-title chat-pane__session-title-button" type="button">
-                  <span class="chat-pane__session-title-text">Implementation details with a long child name</span>
-                </button>
+                <span class="chat-pane__session-identity">
+                  <button class="chat-pane__session-title chat-pane__session-title-button" type="button">
+                    <span class="chat-pane__session-title-text">Implementation details with a long child name</span>
+                  </button>
+                </span>
               </div>
               <div class="chat-pane__actions">
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane" type="button">X</button>
@@ -1247,8 +1260,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
       const normal = await readState();
       expect(normal).toMatchObject({
-        firstSeparator: "block",
-        secondSeparator: "block",
+        firstSeparator: "flex",
+        secondSeparator: "flex",
         parentEllipses: true,
         childEllipses: true,
         overflow: 0,
@@ -1261,7 +1274,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const narrow = await readState();
       expect(narrow).toMatchObject({
         firstSeparator: "none",
-        secondSeparator: "block",
+        secondSeparator: "flex",
         parentEllipses: true,
         childEllipses: true,
         overflow: 0,

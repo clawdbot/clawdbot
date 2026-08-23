@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { property } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
 import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { t } from "../i18n/index.ts";
 import { AuthenticatedAvatarRouteLoader } from "../lib/authenticated-avatar-route.ts";
@@ -15,7 +15,6 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) authToken: string | null = null;
   @property({ attribute: false }) avatarAuthReady = false;
   @property({ attribute: false }) avatarText = "";
-  @property({ attribute: false }) subtitle = "";
   @property({ attribute: false }) environment: ControlUiEnvironment | null = null;
   @property({ attribute: false }) menuOpen = false;
   /** Unread sessions exist on non-active agents; surfaces next to the name. */
@@ -26,6 +25,12 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false })
   onMenuPointerEnter?: (trigger: HTMLElement, event: PointerEvent) => void;
   @property({ attribute: false }) onMenuPointerLeave?: () => void;
+  @state() private nameOverflow = false;
+
+  private readonly nameResizeObserver =
+    typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(() => this.syncNameOverflow());
 
   private readonly avatarLoader = new AuthenticatedAvatarRouteLoader(() => {
     if (this.isConnected) {
@@ -33,9 +38,44 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
     }
   });
 
+  override connectedCallback() {
+    super.connectedCallback();
+    void this.updateComplete.then(() => {
+      if (this.isConnected) {
+        this.observeNameOverflow();
+      }
+    });
+  }
+
   override disconnectedCallback() {
+    this.nameResizeObserver?.disconnect();
     this.avatarLoader.reset();
     super.disconnectedCallback();
+  }
+
+  override updated() {
+    this.observeNameOverflow();
+  }
+
+  private observeNameOverflow() {
+    const name = this.querySelector<HTMLElement>(".sidebar-agent-card__name-text");
+    if (!name) {
+      return;
+    }
+    this.nameResizeObserver?.disconnect();
+    this.nameResizeObserver?.observe(name);
+    this.syncNameOverflow();
+  }
+
+  private syncNameOverflow() {
+    const name = this.querySelector<HTMLElement>(".sidebar-agent-card__name-text");
+    if (name) {
+      name.dataset.direction = getComputedStyle(name).direction;
+    }
+    const overflow = Boolean(name && name.scrollWidth > name.clientWidth + 1);
+    if (overflow !== this.nameOverflow) {
+      this.nameOverflow = overflow;
+    }
   }
 
   override render() {
@@ -96,23 +136,20 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
           </span>
           <span class="sidebar-agent-card__text">
             <span class="sidebar-agent-card__name">
-              ${this.agentName}
-              <span class="sidebar-agent-card__chevron" aria-hidden="true"
-                >${icons.chevronDown}</span
+              <span
+                class="sidebar-agent-card__name-text ${this.nameOverflow
+                  ? "sidebar-agent-card__name-text--overflow"
+                  : ""}"
+                dir="auto"
+                >${this.agentName}</span
               >
+              <span class="sidebar-agent-card__chevron" aria-hidden="true"
+                >${icons.chevronsUpDown}</span
+              >
+              ${this.environment
+                ? html`<span class="control-ui-environment-pill">${this.environment.label}</span>`
+                : nothing}
             </span>
-            ${this.subtitle || this.environment
-              ? html`<span class="sidebar-agent-card__subtitle-row">
-                  ${this.subtitle
-                    ? html`<span class="sidebar-agent-card__subtitle">${this.subtitle}</span>`
-                    : nothing}
-                  ${this.environment
-                    ? html`<span class="control-ui-environment-pill"
-                        >${this.environment.label}</span
-                      >`
-                    : nothing}
-                </span>`
-              : nothing}
           </span>
           ${this.menuUnread && !this.menuOpen
             ? html`<span

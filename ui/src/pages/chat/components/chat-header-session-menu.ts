@@ -494,7 +494,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
           aria-label=${menuLabel}
           aria-haspopup="menu"
         >
-          ${icons.moreHorizontal}
+          ${icons.moreHorizontalSolid}
           ${this.compact && statusTone
             ? html`<span
                 class="chat-header-session-menu__status-dot"

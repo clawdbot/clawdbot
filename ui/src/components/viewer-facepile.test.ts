@@ -155,6 +155,7 @@ type ViewerFacepileElement = HTMLElement & {
   sessionKey?: string;
   excludeUserId?: string;
   staticUsers?: readonly PresenceViewer[];
+  staticTooltips?: readonly string[];
   maxVisible: number;
   updateComplete: Promise<boolean>;
 };
@@ -184,6 +185,7 @@ it("renders ordered static participant actors without presence filtering", async
   // SAFETY: the registered custom element exposes the tested reactive properties.
   const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
   facepile.maxVisible = 2;
+  facepile.staticTooltips = ["Ada · Member", "Research · Agent", "Bob · Member"];
   facepile.staticUsers = [
     { id: "profile-ada", name: "Ada", watchedSessions: [] },
     { id: "research", name: "Research", watchedSessions: [] },
@@ -200,6 +202,18 @@ it("renders ordered static participant actors without presence filtering", async
     ).toEqual(["profile-ada", "research"]);
   });
   expect(facepile.querySelector(".viewer-avatar--overflow")?.textContent?.trim()).toBe("+1");
+  const tooltips = [...facepile.querySelectorAll("openclaw-tooltip")];
+  expect(
+    tooltips.slice(0, 2).map((tooltip) => (tooltip as HTMLElement & { content?: string }).content),
+  ).toEqual(["Ada · Member", "Research · Agent"]);
+  const overflowContent = tooltips[2]?.querySelector('[slot="content"]');
+  expect(
+    [...(overflowContent?.querySelectorAll(".viewer-facepile__overflow-tooltip-row") ?? [])].map(
+      (row) => row.querySelector(".viewer-facepile__overflow-tooltip-label")?.textContent?.trim(),
+    ),
+  ).toEqual(["Bob · Member"]);
+  expect(overflowContent?.querySelectorAll("openclaw-viewer-avatar")).toHaveLength(1);
+  expect(overflowContent?.querySelector("[data-viewer-id]")).toBeNull();
 });
 
 it("excludes the session owner before choosing visible avatars and overflow", async () => {

@@ -286,8 +286,11 @@ suite.define(() => {
 
       const cells = page.locator(".chat-split-view__cell");
       const actionRows = headers.locator(".chat-pane__actions");
+      const sessionMenus = headers.locator(".chat-pane__session-menu-anchor");
       await expect.poll(() => actionRows.first().isVisible()).toBe(false);
       await expect.poll(() => actionRows.last().isVisible()).toBe(true);
+      await expect.poll(() => sessionMenus.first().isVisible()).toBe(false);
+      await expect.poll(() => sessionMenus.last().isVisible()).toBe(true);
       expect(
         await headers
           .first()
@@ -302,6 +305,8 @@ suite.define(() => {
       await expect.poll(() => cells.first().getAttribute("class")).toContain("--active");
       await expect.poll(() => actionRows.first().isVisible()).toBe(true);
       await expect.poll(() => actionRows.last().isVisible()).toBe(false);
+      await expect.poll(() => sessionMenus.first().isVisible()).toBe(true);
+      await expect.poll(() => sessionMenus.last().isVisible()).toBe(false);
       const paneEmphasis = await cells.evaluateAll((nodes) =>
         nodes.map((cell) => {
           const style = getComputedStyle(cell);

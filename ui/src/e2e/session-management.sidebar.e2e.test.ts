@@ -272,9 +272,7 @@ suite.define(() => {
       );
       const shell = page.locator(".shell");
       const shellNav = page.locator(".shell-nav");
-      const collapseButton = page
-        .locator(".shell-chrome-controls")
-        .getByRole("button", { name: "Collapse sidebar" });
+      const collapseButton = page.locator(".sidebar-brand__collapse");
       const expandButton = page.locator(".shell-chrome-controls__nav-toggle");
       const drawerToggle = page
         .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")

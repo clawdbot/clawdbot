@@ -40,7 +40,7 @@ function renderViewerAvatar(view: IdentityAvatarView) {
   return html`${renderIdentityAvatarImage({ view, fallbackSelector: ".viewer-avatar" })}${fallback}`;
 }
 
-export type ViewerAvatarVariant = "session" | "footer" | "profile";
+export type ViewerAvatarVariant = "session" | "footer" | "profile" | "tooltip";
 
 class ViewerAvatar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) user: PresenceViewer | null = null;
@@ -77,6 +77,7 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) sessionKey?: string;
   @property({ attribute: false }) excludeUserId?: string;
   @property({ attribute: false }) staticUsers?: readonly PresenceViewer[];
+  @property({ attribute: false }) staticTooltips?: readonly string[];
   @property({ type: Number, attribute: "max-visible" }) maxVisible = 3;
 
   override render() {
@@ -102,25 +103,43 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
     }
     const visible = users.slice(0, this.maxVisible);
     const overflow = users.slice(this.maxVisible);
+    const tooltipLabel = (user: PresenceViewer, index: number) =>
+      this.staticTooltips?.[index] ?? presenceViewerLabel(user);
     return html`<span
       class="viewer-facepile viewer-facepile--session"
       data-viewer-count=${users.length}
       aria-label=${users.map(presenceViewerLabel).join(", ")}
     >
       ${visible.map(
-        (user) => html`<openclaw-tooltip .content=${presenceViewerLabel(user)}>
+        (user, index) => html`<openclaw-tooltip .content=${tooltipLabel(user, index)}>
           <span class="viewer-facepile__tooltip-anchor">
             <openclaw-viewer-avatar .user=${user} variant="session"></openclaw-viewer-avatar>
           </span>
         </openclaw-tooltip>`,
       )}
       ${overflow.length > 0
-        ? html`<openclaw-tooltip .content=${overflow.map(presenceViewerLabel).join("\n")}>
+        ? html`<openclaw-tooltip class="viewer-facepile__overflow-tooltip-owner">
             <span
               class="viewer-avatar viewer-avatar--overflow"
-              aria-label=${overflow.map(presenceViewerLabel).join(", ")}
+              aria-label=${overflow
+                .map((user, index) => tooltipLabel(user, this.maxVisible + index))
+                .join(", ")}
               >+${overflow.length}</span
             >
+            <span slot="content" class="viewer-facepile__overflow-tooltip">
+              ${overflow.map(
+                (user, index) => html`<span class="viewer-facepile__overflow-tooltip-row">
+                  <openclaw-viewer-avatar
+                    .user=${user}
+                    .markAsViewer=${false}
+                    variant="tooltip"
+                  ></openclaw-viewer-avatar>
+                  <span class="viewer-facepile__overflow-tooltip-label"
+                    >${tooltipLabel(user, this.maxVisible + index)}</span
+                  >
+                </span>`,
+              )}
+            </span>
           </openclaw-tooltip>`
         : nothing}
     </span>`;

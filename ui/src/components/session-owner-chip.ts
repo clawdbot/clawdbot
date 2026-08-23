@@ -7,6 +7,7 @@ import { takeGraphemes } from "../lib/graphemes.ts";
 import { resolveAvatar } from "../lib/identity-avatar.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import "./viewer-facepile.ts";
+import "./tooltip.ts";
 
 export type SessionCreatedActor = ProtocolSessionCreatedActor;
 export type SessionOwnerOption = NonNullable<SessionsListResult["owners"]>[number];
@@ -188,7 +189,7 @@ class SessionOwnerChip extends OpenClawLightDomElement {
         </span>
       `;
     }
-    return html`
+    const ownerChip = html`
       <span
         class="session-owner-chip session-owner-chip--${this.size} ${this.viewingNow === false
           ? "session-owner-chip--away"
@@ -196,7 +197,7 @@ class SessionOwnerChip extends OpenClawLightDomElement {
         style="--owner-hue: ${ownerHue(owner.id)}"
         role="img"
         aria-label=${accessibleLabel}
-        title=${accessibleLabel}
+        title=${this.size === "header" ? nothing : accessibleLabel}
         >${avatar?.kind === "profile"
           ? html`<openclaw-viewer-avatar
               .user=${{
@@ -212,6 +213,9 @@ class SessionOwnerChip extends OpenClawLightDomElement {
           : initials}</span
       >
     `;
+    return this.size === "header"
+      ? html`<openclaw-tooltip .content=${attributionLabel}>${ownerChip}</openclaw-tooltip>`
+      : ownerChip;
   }
 }
 

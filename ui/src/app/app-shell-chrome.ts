@@ -190,6 +190,13 @@ export class ShellChromeOwner {
     const nextNavCollapsed =
       host.navDrawerOpen ||
       !(context.navigation.snapshot.navCollapsed && !host.desktopNavigationExpanded);
+    const activeElement = host.ownerDocument.activeElement;
+    const expansionTrigger =
+      !nextNavCollapsed &&
+      activeElement instanceof HTMLElement &&
+      activeElement.matches(".shell-chrome-controls__nav-toggle")
+        ? activeElement
+        : trigger;
     host.desktopNavigationExpanded = false;
     if (nextNavCollapsed) {
       this.dismissSidebarTransientMenus();
@@ -199,6 +206,12 @@ export class ShellChromeOwner {
     if (nextNavCollapsed) {
       void host.updateComplete.then(() => {
         this.restoreFocusTo(host.querySelector<HTMLElement>(".shell-chrome-controls__nav-toggle"));
+      });
+    } else if (expansionTrigger) {
+      void host.updateComplete.then(() => {
+        if (!expansionTrigger.isConnected) {
+          this.restoreFocusTo(host.querySelector<HTMLElement>(".sidebar-brand__collapse"));
+        }
       });
     }
   }

@@ -51,6 +51,8 @@ type ChatPaneHeaderProps = {
   workspaceLabel: string | null;
   /** Gateway-resolved project icon for the chip; absent keeps the folder glyph. */
   workspaceIcon: { routeUrl: string; authTokens: readonly string[]; authReady: boolean } | null;
+  workspaceIconAvailability: boolean | null;
+  onWorkspaceIconAvailabilityChange?: (available: boolean | null) => void;
   parentSession: ChatPaneParentSession | null;
   branch: string | null;
   branches: SessionBranch[];
@@ -172,17 +174,83 @@ function renderIdentityCrumbs(
   if (parentCrumb) {
     segments.push(parentCrumb);
   }
-  segments.push(renderSessionCrumb(props));
+  segments.push(renderSessionIdentity(props));
+  const compactProjectIdentity = Boolean(
+    projectCrumb && props.workspaceIcon && props.workspaceIconAvailability !== false,
+  );
   return html`
     <div class="chat-pane__crumbs">
       ${segments.map(
         (segment, index) =>
-          html`${index > 0
+          html`${index > 0 && !(compactProjectIdentity && index === 1)
             ? html`<span class="chat-pane__crumb-sep" aria-hidden="true">/</span>`
             : nothing}${segment}`,
       )}
+      ${renderSessionControls(props)}
     </div>
   `;
+}
+
+function renderSessionIdentity(props: ChatPaneHeaderProps) {
+  return html`<span class="chat-pane__session-identity">
+    ${renderSessionCrumb(props)}
+    ${props.sessionMenuAction === nothing
+      ? nothing
+      : html`<span class="chat-pane__session-menu-anchor">${props.sessionMenuAction}</span>`}
+  </span>`;
+}
+
+function renderSessionParticipants(props: ChatPaneHeaderProps) {
+  const participants = props.session?.participants;
+  return props.showOwnerChip && participants?.length
+    ? html`<openclaw-viewer-facepile
+        class="chat-pane__participants"
+        .staticUsers=${participants.map((participant) => ({
+          id: participant.id ?? "",
+          name: participant.label,
+          avatarUrl: participant.avatarUrl,
+          watchedSessions: [],
+        }))}
+        .staticTooltips=${participants.map(
+          (participant) =>
+            `${participant.label ?? participant.id ?? ""} · ${t(
+              participant.type === "agent" ? "newSession.agent" : "chat.sessionSharing.selected",
+            )}`,
+        )}
+        .maxVisible=${2}
+        variant="session"
+      ></openclaw-viewer-facepile>`
+    : nothing;
+}
+
+function renderSessionControls(props: ChatPaneHeaderProps) {
+  const sharingControl = props.sharingControl ?? nothing;
+  const presence = props.presence ?? nothing;
+  const participants = renderSessionParticipants(props);
+  const ownerActor = props.showOwnerChip ? props.session?.owner?.actor : undefined;
+  const ownerAttribution = props.session?.owner?.assignedAt !== undefined ? "owned" : "created";
+  const owner = renderSessionOwnerChip(
+    ownerActor,
+    "header",
+    ownerAttribution,
+    props.ownerViewing ? true : undefined,
+  );
+  if (
+    sharingControl === nothing &&
+    !ownerActor?.id &&
+    participants === nothing &&
+    presence === nothing
+  ) {
+    return nothing;
+  }
+  return html`<span class="chat-pane__session-controls">
+    <span class="chat-pane__people"
+      >${owner} ${participants} ${presence}
+      ${sharingControl === nothing
+        ? nothing
+        : html`<span class="chat-pane__sharing-anchor">${sharingControl}</span>`}</span
+    >
+  </span>`;
 }
 
 function renderParentSessionCrumb(props: ChatPaneHeaderProps): TemplateResult | null {
@@ -269,9 +337,16 @@ function renderProjectCrumb(
           workspace: props.workspaceLabel,
         })}
       >
-        ${copied ? icons.check : renderWorkspaceChipIcon(props.workspaceIcon)}<span
-          >${copied ? t("chat.sessionHeader.copied") : props.workspaceLabel}</span
-        >
+        ${copied
+          ? icons.check
+          : renderWorkspaceChipIcon(
+              props.workspaceIcon,
+              props.onWorkspaceIconAvailabilityChange,
+            )}${copied
+          ? html`<span>${t("chat.sessionHeader.copied")}</span>`
+          : props.workspaceIcon && props.workspaceIconAvailability !== false
+            ? nothing
+            : html`<span>${props.workspaceLabel}</span>`}
       </button>
       ${props.canReveal && props.workspaceRoot
         ? html`<wa-dropdown-item value="reveal">${revealLabel(props.platform)}</wa-dropdown-item>`
@@ -286,12 +361,16 @@ function renderProjectCrumb(
   `;
 }
 
-function renderWorkspaceChipIcon(icon: ChatPaneHeaderProps["workspaceIcon"]) {
+function renderWorkspaceChipIcon(
+  icon: ChatPaneHeaderProps["workspaceIcon"],
+  onAvailabilityChange: ChatPaneHeaderProps["onWorkspaceIconAvailabilityChange"],
+) {
   return icon
     ? html`<openclaw-workspace-icon
         .routeUrl=${icon.routeUrl}
         .authTokens=${icon.authTokens}
         .authReady=${icon.authReady}
+        .onAvailabilityChange=${onAvailabilityChange}
       ></openclaw-workspace-icon>`
     : icons.folder;
 }
@@ -417,7 +496,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
   return html`
     <div class="chat-pane__header" @mousedown=${beginNativeWindowDrag}>
       ${props.mergedChrome
-        ? html`<openclaw-tooltip .content=${drawerLabel}>
+        ? html`<openclaw-tooltip .content=${drawerLabel} .hoverOnly=${true}>
             <button
               class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle"
               type="button"
@@ -445,27 +524,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
           >`
         : nothing}
       ${renderIdentityCrumbs(props, copied, copyPathLabel, copyBranchLabel)}
-      ${renderSessionOwnerChip(
-        props.showOwnerChip ? props.session?.owner?.actor : undefined,
-        "header",
-        props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
-        props.ownerViewing,
-      )}
-      ${props.showOwnerChip && props.session?.participants?.length
-        ? html`<openclaw-viewer-facepile
-            class="chat-pane__participants"
-            .staticUsers=${props.session.participants.map((participant) => ({
-              id: participant.id ?? "",
-              name: participant.label,
-              avatarUrl: participant.avatarUrl,
-              watchedSessions: [],
-            }))}
-            .maxVisible=${4}
-            variant="session"
-          ></openclaw-viewer-facepile>`
-        : nothing}
-      ${renderChatPanePlacement(props)} ${props.presence ?? nothing} ${props.faceControl ?? nothing}
-      ${props.sharingControl ?? nothing}
+      ${renderChatPanePlacement(props)} ${props.faceControl ?? nothing}
       ${!props.catalog && props.branches.length > 1
         ? html`
             <openclaw-tooltip
@@ -602,7 +661,6 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
               </button>
             </openclaw-tooltip>`
           : nothing}
-        ${props.sessionMenuAction}
       </div>
     </div>
   `;

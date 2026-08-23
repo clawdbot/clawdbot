@@ -46,6 +46,10 @@ import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 
+const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
+  ? "⌘K"
+  : "Ctrl K";
+
 type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   activePluginTabId: string;
   activeWorkboardBoardId: string;
@@ -124,7 +128,6 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         .authToken=${avatarAuthToken}
         .avatarAuthReady=${avatarAuthReady}
         .avatarText=${cardAvatarText}
-        .subtitle=${host.agentChipSubtitle(cardAgentId)}
         .environment=${host.sessionDataContext?.config?.current?.environment ?? null}
         .menuOpen=${host.sidebarMenus.agentMenuPosition !== null}
         .menuUnread=${menuUnread}
@@ -157,6 +160,30 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
             ?disabled=${!newSessionAccess.allowed}
           >
             ${icons.plus}
+          </button>
+        </openclaw-tooltip>
+        <openclaw-tooltip .content=${`${t("chat.openCommandPalette")} (${PALETTE_SHORTCUT})`}>
+          <button
+            class="sidebar-brand__icon sidebar-brand__search"
+            type="button"
+            ?disabled=${!host.onOpenPalette}
+            @click=${() => host.onOpenPalette?.()}
+            aria-label=${t("chat.openCommandPalette")}
+          >
+            ${icons.search}
+          </button>
+        </openclaw-tooltip>
+        <openclaw-tooltip .content=${`${t("nav.collapse")} (⌘B)`}>
+          <button
+            class="sidebar-brand__icon sidebar-brand__collapse"
+            type="button"
+            ?disabled=${!host.onToggleSidebar}
+            @click=${({ currentTarget }: MouseEvent) =>
+              currentTarget instanceof HTMLElement && host.onToggleSidebar?.(currentTarget)}
+            aria-label=${t("nav.collapse")}
+            aria-expanded="true"
+          >
+            ${icons.panelLeft}
           </button>
         </openclaw-tooltip>
       </div>

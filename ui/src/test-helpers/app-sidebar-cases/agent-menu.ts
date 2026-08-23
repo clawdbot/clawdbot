@@ -480,6 +480,7 @@ describe("AppSidebar agent chip", () => {
     expect(menu?.querySelector(".sidebar-customize-menu__title")).toBeNull();
     expect(menu?.querySelector(".sidebar-agent-menu__filter")).toBeNull();
     expect(menu?.querySelector(".sidebar-agent-menu__agent-switch")).toBeNull();
+    expect(menu?.querySelector('[role="separator"]')).toBeNull();
     expect(
       [...(menu?.children ?? [])]
         .filter((element) => element.localName === "wa-dropdown-item")

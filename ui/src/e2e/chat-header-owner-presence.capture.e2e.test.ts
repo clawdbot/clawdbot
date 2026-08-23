@@ -88,6 +88,13 @@ suite.define(() => {
         await expect
           .poll(() => header.locator(".session-owner-chip--header").getAttribute("class"))
           .not.toContain("session-owner-chip--away");
+        const ownerStyle = await header
+          .locator(".session-owner-chip--header")
+          .evaluate((element) => {
+            const style = getComputedStyle(element);
+            return { filter: style.filter, opacity: style.opacity };
+          });
+        expect(ownerStyle).toEqual({ filter: "none", opacity: "1" });
 
         const clip = await header.boundingBox();
         if (!clip) {

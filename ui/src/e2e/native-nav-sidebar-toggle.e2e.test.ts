@@ -147,33 +147,59 @@ suite.define(() => {
   it("keeps the web expand/collapse controls in plain browsers", async () => {
     const page = await openPage({ nativeNav: false });
 
-    const toggle = page.locator(".shell-chrome-controls__nav-toggle");
-    await expect.poll(() => toggle.isVisible()).toBe(true);
-    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
-    await toggle.click();
-    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Expand sidebar");
-    await toggle.click();
-    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
+    const collapse = page.locator(".sidebar-brand__collapse");
+    await expect.poll(() => collapse.isVisible()).toBe(true);
+    await expect.poll(() => collapse.getAttribute("aria-label")).toBe("Collapse sidebar");
+    await collapse.click();
+    const search = page.locator(".shell-chrome-controls__search");
+    const expand = page.locator(".shell-chrome-controls__nav-toggle");
+    await expect.poll(() => search.isVisible()).toBe(true);
+    await expect.poll(() => expand.isVisible()).toBe(true);
+    await expect.poll(() => expand.getAttribute("aria-label")).toBe("Expand sidebar");
+    await expect
+      .poll(() => page.locator(".shell-chrome-controls__separator").isVisible())
+      .toBe(true);
+    await expect
+      .poll(() =>
+        page
+          .locator(".shell-chrome-controls button")
+          .evaluateAll((buttons) => buttons.map((button) => button.getAttribute("aria-label"))),
+      )
+      .toEqual(["Expand sidebar", "Open command palette"]);
+    await expect.poll(() => page.locator(".sidebar-attention--floating").count()).toBe(0);
+    await expand.focus();
+    await page.keyboard.press("Meta+b");
+    await expect.poll(() => collapse.isVisible()).toBe(true);
+    await expect
+      .poll(() => collapse.evaluate((element) => element === document.activeElement))
+      .toBe(true);
+    await collapse.click();
+    await expand.click();
+    await expect.poll(() => collapse.isVisible()).toBe(true);
+    await expect
+      .poll(() => collapse.evaluate((element) => element === document.activeElement))
+      .toBe(true);
   });
 
   it("keeps pointer-triggered sidebar focus from opening its tooltip", async () => {
     const page = await openPage({ hasTouch: true, nativeNav: false });
-    const toggle = page.locator(".shell-chrome-controls__nav-toggle");
-    const tooltip = toggle.locator("xpath=..").locator("wa-tooltip");
-    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
+    const collapse = page.locator(".sidebar-brand__collapse");
+    await expect.poll(() => collapse.getAttribute("aria-label")).toBe("Collapse sidebar");
 
     // Safari does not focus buttons on tap. Reproduce that ordering so the
     // shell's post-collapse focus, rather than the pointer itself, owns focus.
-    await toggle.evaluate((element) => {
+    await collapse.evaluate((element) => {
       for (const type of ["pointerdown", "pointerup"]) {
         element.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerType: "touch" }));
       }
       (element as HTMLElement).click();
     });
 
-    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Expand sidebar");
+    const expand = page.locator(".shell-chrome-controls__nav-toggle");
+    const tooltip = expand.locator("xpath=..").locator("wa-tooltip");
+    await expect.poll(() => expand.getAttribute("aria-label")).toBe("Expand sidebar");
     await expect
-      .poll(() => toggle.evaluate((element) => element === document.activeElement))
+      .poll(() => expand.evaluate((element) => element === document.activeElement))
       .toBe(true);
     await expect.poll(() => tooltip.getAttribute("open")).toBeNull();
   });
@@ -207,9 +233,10 @@ suite.define(() => {
     });
     expect(initialWidth).toBeGreaterThan(0);
 
-    // Expanded native-nav hosts keep the cluster's search (no native search
-    // control exists while the rail is open) but hide the duplicate nav toggle.
-    await expect.poll(() => page.locator(".shell-chrome-controls__search").isVisible()).toBe(true);
+    // Expanded native-nav hosts keep search in the sidebar header while both
+    // duplicate in-page collapse controls stay hidden.
+    await expect.poll(() => page.locator(".sidebar-brand__search").isVisible()).toBe(true);
+    await expect.poll(() => page.locator(".sidebar-brand__collapse").isVisible()).toBe(false);
     await expect
       .poll(() => page.locator(".shell-chrome-controls__nav-toggle").isVisible())
       .toBe(false);
@@ -249,7 +276,7 @@ suite.define(() => {
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
   });
 
-  it("hosts navigation, search, sessions, and history in web titlebar chrome", async () => {
+  it("keeps native titlebar controls clustered left in both sidebar states", async () => {
     const page = await openPage({ webChrome: true });
     const toolbar = page.locator(".macos-titlebar-controls");
     await expect.poll(() => toolbar.isVisible()).toBe(true);
@@ -258,17 +285,68 @@ suite.define(() => {
     const back = toolbar.getByRole("button", { name: "Back" });
     const forward = toolbar.getByRole("button", { name: "Forward" });
     const search = toolbar.getByRole("button", { name: "Open command palette" });
-    const newThread = toolbar.getByRole("button", { name: "New session" });
     await expect.poll(() => back.isDisabled()).toBe(true);
     await expect.poll(() => forward.isDisabled()).toBe(true);
     await expect.poll(() => search.isVisible()).toBe(true);
-    await expect.poll(() => newThread.count()).toBe(0);
 
+    const expectControlRail = async (toggleLabel: "Collapse sidebar" | "Expand sidebar") => {
+      const metrics = await toolbar.getByRole("button").evaluateAll((buttons) =>
+        buttons.map((button) => {
+          const bounds = button.getBoundingClientRect();
+          return {
+            centerY: bounds.y + bounds.height / 2,
+            label: button.getAttribute("aria-label"),
+            left: bounds.left,
+            right: bounds.right,
+          };
+        }),
+      );
+      expect(metrics.map(({ label }) => label)).toEqual([
+        "Back",
+        "Forward",
+        toggleLabel,
+        "Open command palette",
+      ]);
+      expect(new Set(metrics.map(({ centerY }) => centerY)).size).toBe(1);
+      expect(metrics[0]!.left).toBe(92);
+      expect(metrics[1]!.left - metrics[0]!.right).toBe(4);
+      expect(metrics[2]!.left - metrics[1]!.right).toBe(4);
+      expect(metrics[3]!.left - metrics[2]!.right).toBe(4);
+      expect(metrics[3]!.right).toBe(216);
+    };
+
+    await expectControlRail("Collapse sidebar");
     await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
-    await expect.poll(() => newThread.isVisible()).toBe(true);
+    await expect
+      .poll(() =>
+        page
+          .locator(".chat-pane__header")
+          .evaluate((header) => header.getBoundingClientRect().left),
+      )
+      .toBe(0);
+    const expand = toolbar.getByRole("button", { name: "Expand sidebar" });
+    await expectControlRail("Expand sidebar");
+    const collapsedBoundary = await page
+      .locator(".macos-titlebar-controls")
+      .evaluate((controls) => {
+        const clusterEnd = Number.parseFloat(
+          getComputedStyle(controls).getPropertyValue("--shell-native-titlebar-cluster-end"),
+        );
+        const identity = document.querySelector<HTMLElement>(".chat-pane__crumbs");
+        return {
+          clusterEnd,
+          identityLeft: identity?.getBoundingClientRect().left ?? 0,
+          clusterRight: controls.getBoundingClientRect().right,
+        };
+      });
+    expect(collapsedBoundary.clusterEnd).toBe(216);
+    expect(collapsedBoundary.clusterRight).toBe(216);
+    expect(collapsedBoundary.identityLeft - collapsedBoundary.clusterEnd).toBe(12);
+    await expect.poll(() => toolbar.getByRole("button", { name: "New session" }).count()).toBe(0);
+    await expect.poll(() => page.locator(".sidebar-attention--floating").count()).toBe(0);
     await search.click();
     await expect.poll(() => page.locator(".cmd-palette-overlay").isVisible()).toBe(true);
     await page.keyboard.press("Escape");
@@ -292,9 +370,7 @@ suite.define(() => {
     await expect.poll(() => back.isDisabled()).toBe(true);
     await expect.poll(() => forward.isDisabled()).toBe(false);
 
-    await newThread.click();
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-    await toolbar.getByRole("button", { name: "Expand sidebar" }).click();
+    await expand.click();
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .not.toContain("shell--nav-collapsed");

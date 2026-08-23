@@ -8,7 +8,6 @@ import type {
 } from "../components/app-sidebar-workboard.ts";
 import { icons } from "../components/icons.ts";
 import { renderLazyElementModal } from "../components/lazy-view-error.ts";
-import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
 import {
   renderLazySettingsSidebar,
   type SettingsSidebarModule,
@@ -48,9 +47,6 @@ import {
 import { createUpdateProgressWatcher } from "./update-overlay-helpers.ts";
 
 const EMPTY_SESSION_HAS_DRAFT = () => false;
-const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
-  ? "⌘K"
-  : "Ctrl K";
 const SCOPE_UPGRADE_SURFACE_ELEMENT = {
   tagName: "openclaw-device-scope-upgrade-banner",
   label: t("connection.scopeUpgrade.status"),
@@ -328,10 +324,6 @@ export function renderApplicationShell(host: ShellViewHost) {
   const selectedAgentId = routeAgentIsKnown
     ? routeAgentId
     : normalizeAgentId(context.agentSelection.state.selectedId ?? gatewaySnapshot.assistantAgentId);
-  const newSessionAccess = readSessionMethodAccess(gatewaySnapshot, {
-    method: "sessions.create",
-    params: {},
-  });
   const openNewSession = (agentId: string, target?: NewSessionTarget) => {
     const access = readSessionMethodAccess(context.gateway.snapshot, {
       method: "sessions.create",
@@ -377,6 +369,8 @@ export function renderApplicationShell(host: ShellViewHost) {
       devGitBranch: config.devGitBranch,
       watchUpdateProgress,
       onOpenApprovals: () => host.openApprovals(),
+      onOpenPalette: () => host.openPalette(),
+      onToggleSidebar: (trigger?: HTMLElement) => host.toggleNavigationSurface(trigger),
       onRetryConnect: () => context.gateway.connect(),
       onOpenNewSession: openNewSession,
       onUpdateSidebarEntries: (entries: string[]) =>
@@ -474,12 +468,8 @@ export function renderApplicationShell(host: ShellViewHost) {
               .historyOnly=${settingsTakeover}
               .canGoBack=${host.nativeHistoryState.canGoBack}
               .canGoForward=${host.nativeHistoryState.canGoForward}
-              .newSessionDisabledReason=${newSessionAccess.allowed
-                ? undefined
-                : newSessionAccess.reason}
               .onToggleSidebar=${() => host.toggleNavigationSurface()}
               .onOpenPalette=${() => host.openPalette()}
-              .onOpenNewSession=${() => host.handleNativeNewSession()}
             ></openclaw-macos-titlebar-controls>
           `
         : nothing}
@@ -493,12 +483,10 @@ export function renderApplicationShell(host: ShellViewHost) {
         .onOpenPalette=${() => host.openPalette()}
         .onToggleDrawer=${(trigger: HTMLElement) => host.toggleNavigationSurface(trigger)}
       ></openclaw-app-topbar>
-      ${!onboarding && !settingsTakeover && !mobileNavLayout
+      ${navCollapsed && !onboarding && !settingsTakeover && !mobileNavLayout
         ? html`
             <div class="shell-chrome-controls">
-              <openclaw-tooltip
-                .content=${`${t(navCollapsed ? "nav.expand" : "nav.collapse")} (⌘B)`}
-              >
+              <openclaw-tooltip .content=${`${t("nav.expand")} (⌘B)`} .hoverOnly=${true}>
                 <button
                   type="button"
                   class="shell-chrome-controls__button shell-chrome-controls__nav-toggle"
@@ -507,29 +495,14 @@ export function renderApplicationShell(host: ShellViewHost) {
                   data-env-avatar=${navCollapsed && config.environment
                     ? config.assistantIdentity.name.charAt(0)
                     : nothing}
-                  @click=${() => host.toggleNavigationSurface()}
+                  @click=${({ currentTarget }: MouseEvent) =>
+                    currentTarget instanceof HTMLElement &&
+                    host.toggleNavigationSurface(currentTarget)}
                 >
-                  ${navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose}
+                  ${icons.panelLeft}
                 </button>
               </openclaw-tooltip>
-              ${navCollapsed
-                ? html`<openclaw-tooltip
-                    .content=${newSessionAccess.allowed
-                      ? t("chat.runControls.newSession")
-                      : newSessionAccess.reason}
-                  >
-                    <button
-                      type="button"
-                      class="shell-chrome-controls__button shell-chrome-controls__new-thread"
-                      aria-label=${t("chat.runControls.newSession")}
-                      ?disabled=${!newSessionAccess.allowed}
-                      @click=${() => openNewSession(selectedAgentId)}
-                    >
-                      ${icons.plus}
-                    </button>
-                  </openclaw-tooltip>`
-                : nothing}
-              <openclaw-tooltip .content=${`${t("chat.openCommandPalette")} (${PALETTE_SHORTCUT})`}>
+              <openclaw-tooltip .content=${t("chat.commandPaletteTitle")} .hoverOnly=${true}>
                 <button
                   type="button"
                   class="shell-chrome-controls__button shell-chrome-controls__search"
@@ -539,19 +512,7 @@ export function renderApplicationShell(host: ShellViewHost) {
                   ${icons.search}
                 </button>
               </openclaw-tooltip>
-              ${navCollapsed && custodianPanelAvailable
-                ? html`<openclaw-tooltip .content=${t("nav.askOpenClaw")}>
-                    <button
-                      type="button"
-                      class="shell-chrome-controls__button shell-chrome-controls__custodian"
-                      aria-label=${t("nav.askOpenClaw")}
-                      @click=${() =>
-                        window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))}
-                    >
-                      ${icons.lobster}
-                    </button>
-                  </openclaw-tooltip>`
-                : nothing}
+              <span class="shell-chrome-controls__separator" aria-hidden="true"></span>
             </div>
           `
         : nothing}
@@ -594,7 +555,6 @@ export function renderApplicationShell(host: ShellViewHost) {
       >
         ${renderFloatingUpdateCard({
           navigationSurfaceHidden,
-          mobileNavLayout,
           onboarding,
           compact: mergedChatChrome,
           updateAvailable: overlaySnapshot.updateAvailable,
@@ -610,8 +570,6 @@ export function renderApplicationShell(host: ShellViewHost) {
           onRefresh: () => host.refreshControlUi(),
           onHoldUpdate: () => context.overlays.holdUpdate(),
           onReviewUpdate: () => host.navigate("updates"),
-          onNavigate: (routeId) => host.navigate(routeId),
-          onOpenApprovals: () => host.openApprovals(),
         })}
         ${pageActionsBlocked && gatewaySnapshot.phase !== "reload-required"
           ? html`<div class="connection-action-block" role="status" aria-live="polite">

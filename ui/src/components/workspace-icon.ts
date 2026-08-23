@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { AuthenticatedAvatarRouteLoader } from "../lib/authenticated-avatar-route.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
@@ -15,8 +15,11 @@ class WorkspaceIcon extends OpenClawLightDomContentsElement {
   /** Ordered credential candidates; a stale saved token falls through to the session password. */
   @property({ attribute: false }) authTokens: readonly string[] = [];
   @property({ attribute: false }) authReady = false;
+  @property({ attribute: false }) onAvailabilityChange?: (available: boolean | null) => void;
   /** Route whose bytes the browser refused to decode; keyed so a new session retries. */
   @state() private undecodableRouteUrl: string | null = null;
+  private renderedAvailability: boolean | null = null;
+  private reportedAvailability: boolean | null | undefined;
   private readonly loader = new AuthenticatedAvatarRouteLoader(
     () => {
       if (this.isConnected) {
@@ -35,12 +38,28 @@ class WorkspaceIcon extends OpenClawLightDomContentsElement {
     return this.loader.withActiveRoutes(() => this.renderContent());
   }
 
+  override updated(changed: PropertyValues<this>) {
+    if (
+      changed.has("routeUrl") ||
+      changed.has("onAvailabilityChange") ||
+      this.renderedAvailability !== this.reportedAvailability
+    ) {
+      this.reportedAvailability = this.renderedAvailability;
+      this.onAvailabilityChange?.(this.renderedAvailability);
+    }
+  }
+
   private renderContent() {
     const routeUrl = this.routeUrl;
-    const blobUrl =
-      routeUrl && this.authReady && this.undecodableRouteUrl !== routeUrl
-        ? this.loader.resolve(routeUrl, this.authTokens)
-        : null;
+    const canResolve = Boolean(routeUrl && this.authReady && this.undecodableRouteUrl !== routeUrl);
+    const blobUrl = canResolve && routeUrl ? this.loader.resolve(routeUrl, this.authTokens) : null;
+    this.renderedAvailability = blobUrl
+      ? true
+      : routeUrl && this.undecodableRouteUrl === routeUrl
+        ? false
+        : canResolve && routeUrl && this.loader.status(routeUrl, this.authTokens) === "missing"
+          ? false
+          : null;
     if (!blobUrl) {
       return icons.folder;
     }

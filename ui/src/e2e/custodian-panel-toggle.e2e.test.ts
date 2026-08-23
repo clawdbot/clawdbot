@@ -75,7 +75,7 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
     try {
       const response = await page.goto(`${server.baseUrl}chat`);
       expect(response?.status()).toBe(200);
-      await page.locator(".shell-chrome-controls__search").waitFor();
+      await page.locator(".sidebar-brand__search").waitFor();
       await page.locator(".sidebar-identity-card").waitFor();
       await expect.poll(() => page.locator(".sidebar-footer-bar__custodian").count()).toBe(0);
       await page.screenshot({
@@ -133,7 +133,7 @@ describeControlUiE2e("Control UI Ask OpenClaw panel toggle mocked Gateway E2E", 
       // the palette unit test), so this asserts the gated entry exists and
       // reopens through the Inbox path — the palette click-through composition
       // proved timing-flaky on loaded CI runners without adding coverage.
-      await page.locator(".shell-chrome-controls__search").click();
+      await page.locator(".sidebar-brand__search").click();
       await page.getByPlaceholder("Search chats and commands…").fill("Ask OpenClaw");
       const paletteItem = page.locator(".cmd-palette__item--active", { hasText: "Ask OpenClaw" });
       await paletteItem.waitFor();

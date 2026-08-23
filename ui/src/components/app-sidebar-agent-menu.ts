@@ -391,7 +391,9 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
               </div>
             `
           : nothing}
-        <div class="sidebar-customize-menu__separator" role="separator"></div>
+        ${agents.length > 1
+          ? html`<div class="sidebar-customize-menu__separator" role="separator"></div>`
+          : nothing}
         <wa-dropdown-item class="sidebar-customize-menu__item" value="command:new-agent">
           <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.users}</span>
           <span class="sidebar-customize-menu__text">${t("custodian.newAgent")}</span>

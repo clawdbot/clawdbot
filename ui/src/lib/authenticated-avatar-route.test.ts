@@ -88,6 +88,22 @@ it("shares pending fetches and revokes the resolved blob on reset", async () => 
   await vi.waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:assistant-avatar"));
 });
 
+it("distinguishes a cached missing route from its initial pending state", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 404 } as Response);
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  const onUpdate = vi.fn();
+  const loader = new AuthenticatedAvatarRouteLoader(onUpdate, { cacheNotFound: true });
+
+  expect(loader.resolve("/avatar/missing", ["token"])).toBeNull();
+  expect(loader.status("/avatar/missing", ["token"])).toBe("pending");
+  await vi.waitFor(() => expect(onUpdate).toHaveBeenCalledOnce());
+  expect(loader.status("/avatar/missing", ["token"])).toBe("missing");
+
+  expect(loader.resolve("/avatar/missing", ["token"])).toBeNull();
+  expect(fetchMock).toHaveBeenCalledOnce();
+  loader.reset();
+});
+
 it("leaves misses retryable for a later identity update", async () => {
   vi.stubGlobal(
     "URL",

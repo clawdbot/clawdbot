@@ -219,12 +219,12 @@ describe("OpenClaw shell dock suppression", () => {
     renderLit(shell.render(), container);
     expect(desktopAvailable()).toBe(true);
 
-    // Collapsed-nav fallback: the Ask OpenClaw toggle joins the chrome strip
-    // only while the sidebar (its footer home) is hidden, and stays admin-gated.
+    // Collapsed navigation keeps only the recovery control; Ask OpenClaw stays
+    // available from the command palette instead of widening the header strip.
     expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
     context.navigation.snapshot.navCollapsed = true;
     renderLit(shell.render(), container);
-    expect(container.querySelector(".shell-chrome-controls__custodian")).not.toBeNull();
+    expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
     context.gateway.snapshot.hello!.auth = { role: "operator", scopes: ["operator.read"] };
     renderLit(shell.render(), container);
     expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();

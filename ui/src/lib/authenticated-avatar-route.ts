@@ -1,5 +1,6 @@
 type AvatarRouteEntry = {
   blobUrl: string | null;
+  status: "pending" | "available" | "missing";
   consumers: Map<symbol, () => void>;
   controller: AbortController;
   releaseTimer: ReturnType<typeof setTimeout> | undefined;
@@ -123,6 +124,10 @@ async function fetchAvatarRoute(
   }
   if (!blobUrl) {
     if (notFound && cacheNotFound) {
+      entry.status = "missing";
+      for (const update of entry.consumers.values()) {
+        update();
+      }
       return;
     }
     if (retryDelayMs !== undefined) {
@@ -150,6 +155,7 @@ async function fetchAvatarRoute(
     return;
   }
   entry.blobUrl = blobUrl;
+  entry.status = "available";
   for (const update of entry.consumers.values()) {
     update();
   }
@@ -201,6 +207,7 @@ export class AuthenticatedAvatarRouteLoader {
     if (!entry) {
       entry = {
         blobUrl: null,
+        status: "pending",
         consumers: new Map(),
         controller: new AbortController(),
         releaseTimer: undefined,
@@ -228,5 +235,19 @@ export class AuthenticatedAvatarRouteLoader {
     entry.consumers.set(this.owner, this.onUpdate);
     this.keys.add(key);
     return entry.blobUrl;
+  }
+
+  /** Distinguishes an in-flight route from a stable 404 without starting another request. */
+  status(url: string, authTokens: readonly string[]): "pending" | "available" | "missing" {
+    if (!url.startsWith("/")) {
+      return "available";
+    }
+    const key = avatarRouteKey(
+      url,
+      authTokens,
+      this.options.cacheNotFound === true,
+      this.options.retryUnavailable === true,
+    );
+    return sharedAvatarRoutes.get(key)?.status ?? "pending";
   }
 }

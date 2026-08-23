@@ -123,6 +123,12 @@ suite.define(() => {
       const field = page.locator(".chat-pane__session-title-input");
       await field.waitFor({ state: "visible" });
       expect(await field.inputValue()).toBe("");
+      const focusState = await field.evaluate((input) => ({
+        focused: input === document.activeElement,
+        indicator: getComputedStyle(input).boxShadow,
+      }));
+      expect(focusState.focused).toBe(true);
+      expect(focusState.indicator).not.toBe("none");
     } finally {
       await context.close();
     }

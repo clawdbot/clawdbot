@@ -97,6 +97,8 @@ export const toolIcons = {
   />`),
   panelLeft: strokeIcon(svg` <rect x="3" y="3" width="18" height="18" rx="2" />
     <path d="M9 3v18" stroke-linecap="round" />`),
+  panelRight: strokeIcon(svg` <rect x="3" y="3" width="18" height="18" rx="2" />
+    <path d="M15 3v18" stroke-linecap="round" />`),
   panelLeftClose: strokeIcon(svg` <rect x="3" y="3" width="18" height="18" rx="2" />
     <path d="M9 3v18" stroke-linecap="round" />
     <path d="M16 10l-3 2 3 2" stroke-linecap="round" stroke-linejoin="round" />`),
@@ -108,6 +110,8 @@ export const toolIcons = {
     stroke-linecap="round"
     stroke-linejoin="round"
   />`),
+  chevronsUpDown: strokeIcon(svg`<path d="m7 15 5 5 5-5" />
+    <path d="m7 9 5-5 5 5" />`),
   chevronRight: strokeIcon(svg` <path
     d="M9 18l6-6-6-6"
     stroke-linecap="round"
@@ -277,9 +281,20 @@ export const toolIcons = {
       d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"
     />
     <path d="m2 2 20 20" />`),
-  moreHorizontal: strokeIcon(svg` <circle cx="12" cy="12" r="1.5" />
-    <circle cx="6" cy="12" r="1.5" />
-    <circle cx="18" cy="12" r="1.5" />`),
+  // Filled on purpose: three stroked rings read as hollow circles at the sizes
+  // this glyph is used at, and thin out further wherever a surface overrides the
+  // shared stroke width. Filling keeps one solid dot triplet everywhere.
+  moreHorizontal: strokeIcon(svg` <g fill="currentColor" stroke="none">
+      <circle cx="5" cy="12" r="1.5" />
+      <circle cx="12" cy="12" r="1.5" />
+      <circle cx="19" cy="12" r="1.5" />
+    </g>`),
+  ellipsis: strokeIcon(svg` <circle cx="12" cy="12" r="1.25" fill="currentColor" stroke="none" />
+    <circle cx="5" cy="12" r="1.25" fill="currentColor" stroke="none" />
+    <circle cx="19" cy="12" r="1.25" fill="currentColor" stroke="none" />`),
+  moreHorizontalSolid: strokeIcon(svg` <circle cx="12" cy="12" r="1" fill="currentColor" />
+    <circle cx="6" cy="12" r="1" fill="currentColor" />
+    <circle cx="18" cy="12" r="1" fill="currentColor" />`),
   arrowUpDown: strokeIcon(svg` <path d="m21 16-4 4-4-4" />
     <path d="M17 20V4" />
     <path d="m3 8 4-4 4 4" />

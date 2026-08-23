@@ -51,6 +51,8 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
     | ((listener: (progress: UpdateProgress) => void) => () => void)
     | undefined = undefined;
   @property({ attribute: false }) onOpenApprovals?: () => void;
+  @property({ attribute: false }) onOpenPalette?: () => void;
+  @property({ attribute: false }) onToggleSidebar?: (trigger?: HTMLElement) => void;
   @property({ attribute: false }) onRetryConnect?: () => void;
   @property({ attribute: false }) onOpenNewSession?: (
     agentId: string,

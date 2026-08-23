@@ -473,7 +473,6 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       await status.click();
       const guidance = page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true });
       await guidance.waitFor();
-
       expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);
       expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(0);
       await page.getByRole("button", { name: "Close limited access details" }).click();

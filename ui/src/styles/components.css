@@ -55,9 +55,11 @@ openclaw-session-owner-chip {
 }
 
 .session-owner-chip--header {
-  width: 20px;
-  height: 20px;
-  font-size: 10px;
+  width: 18px;
+  height: 18px;
+  border-color: transparent;
+  box-shadow: none;
+  font-size: 9px;
 }
 
 .session-owner-chip .viewer-avatar {
@@ -196,29 +198,9 @@ openclaw-session-owner-chip {
   color: var(--accent);
 }
 
-.connect-splash__logo {
-  width: 44px;
-  height: 44px;
-  animation: connect-splash-wiggle 1.8s ease-in-out infinite;
-}
-
-@keyframes connect-splash-wiggle {
-  0%,
-  100% {
-    transform: rotate(-6deg);
-  }
-  50% {
-    transform: rotate(6deg);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .connect-splash {
     opacity: 1;
-    animation: none;
-  }
-
-  .connect-splash__logo {
     animation: none;
   }
 }

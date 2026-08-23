@@ -240,7 +240,11 @@ describe("AppSidebar viewer presence", () => {
     expect(sessionFacepile?.querySelector('[data-viewer-id="alice"] img')).not.toBeNull();
     expect(
       [...(sessionFacepile?.querySelectorAll("openclaw-tooltip") ?? [])].map(
-        (tooltip) => (tooltip as HTMLElement & { content?: string }).content,
+        (tooltip) =>
+          [...tooltip.querySelectorAll<HTMLElement>(".viewer-facepile__overflow-tooltip-label")]
+            .map((label) => label.textContent?.trim())
+            .filter(Boolean)
+            .join("\n") || (tooltip as HTMLElement & { content?: string }).content,
       ),
     ).toEqual(["Alice", "bob@example.test", "Carol", "Dave\nErin\nFrank"]);
 
