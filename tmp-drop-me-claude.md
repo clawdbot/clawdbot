@@ -1677,3 +1677,19 @@ Independent reviewers were notified not to cosign the invalidated SHA and will
 be renewed against the next exact candidate. The third-freeze corpus is under
 `.gate-out/continuation-drift-cure/freeze-3-50595d784e0ed4bfab789c7bfe8b488088285d07/`.
 Presentation, PR head, deployment, and behavioral proof remain untouched.
+
+## 2026-08-23T11:50:00Z - Third frozen upstream merge
+
+Frozen upstream `50595d784e0ed4bfab789c7bfe8b488088285d07` was merged by
+exact object with `--no-ff`. Git's `ort` result was conflict-free. The merge
+commit is `11a7532d2ed4b95f0847ccf3a8e2946bb3bc3cf5` with exact parents:
+
+1. `1159baf13615d92640acff32504016dae51b6517`;
+2. `50595d784e0ed4bfab789c7bfe8b488088285d07`.
+
+The nine-commit increment projected 55 paths spanning scheduled delivery,
+prepared gateway-update identity, follow-up guidance, Slack threading,
+Discord socket handling, onboarding, terminal disposal, Talk cancellation,
+and cron output. No manual conflict decision was required. The candidate and
+remote ref matched exactly after a normal push. Presentation and PR head
+remain unchanged.
