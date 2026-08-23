@@ -244,6 +244,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       void task.finally(() => {
         pendingBlockReplyTasks.delete(task);
       });
+      return true;
     } catch (err) {
       recordDeliveryFailure(err);
       if (deliveryGeneration !== blockReplyDeliveryGeneration) {
