@@ -1,10 +1,18 @@
 // Slack helper module supports account configured behavior.
 import { hasConfiguredAccountValue } from "openclaw/plugin-sdk/account-resolution";
+import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
-import type { ResolvedSlackAccount } from "./accounts.js";
+
+type SlackCredentialAccount = {
+  identity: "bot" | "user";
+  botToken?: string;
+  appToken?: string;
+  userToken?: string;
+  config: SlackAccountConfig;
+};
 
 export function hasSlackAccountCredentials(params: {
-  config: ResolvedSlackAccount["config"];
+  config: SlackAccountConfig;
   identityTokenConfigured: boolean;
   appTokenConfigured: boolean;
 }): boolean {
@@ -26,7 +34,7 @@ export function hasSlackAccountCredentials(params: {
   return params.appTokenConfigured;
 }
 
-export function isSlackPluginAccountConfigured(account: ResolvedSlackAccount): boolean {
+export function isSlackPluginAccountConfigured(account: SlackCredentialAccount): boolean {
   const identityToken = account.identity === "user" ? account.userToken : account.botToken;
   return hasSlackAccountCredentials({
     config: account.config,
@@ -35,7 +43,7 @@ export function isSlackPluginAccountConfigured(account: ResolvedSlackAccount): b
   });
 }
 
-export function isSlackSetupAccountConfigured(account: ResolvedSlackAccount): boolean {
+export function isSlackSetupAccountConfigured(account: SlackCredentialAccount): boolean {
   if (account.config.mode === "relay") {
     return isSlackPluginAccountConfigured(account);
   }
