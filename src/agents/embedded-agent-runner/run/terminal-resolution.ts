@@ -496,11 +496,15 @@ async function surfaceIncompleteTurn(
   });
   input.setTerminalLifecycleMeta({ replayInvalid, livenessState });
   if (input.authProfileId) {
-    await input.maybeMarkAuthProfileFailure({
-      profileId: input.authProfileId,
-      reason: input.assistantProfileFailureReason,
-      modelId: input.modelId,
-    });
+    try {
+      await input.maybeMarkAuthProfileFailure({
+        profileId: input.authProfileId,
+        reason: input.assistantProfileFailureReason,
+        modelId: input.modelId,
+      });
+    } catch (error) {
+      log.warn(`terminal auth bookkeeping failed; preserving result: ${String(error)}`);
+    }
   }
   return {
     action: "complete",

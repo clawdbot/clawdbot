@@ -25,6 +25,17 @@ type JsonObject = Record<string, unknown>;
 type MantisSutLane = "baseline" | "candidate";
 type SpawnedDaemon = { child: ReturnType<typeof spawn>; error?: Error };
 
+type MantisSutExecResult = {
+  exitCode: number;
+  stderr: string;
+  stderrBytes: number;
+  stdout: string;
+  stdoutBytes: number;
+  truncated: boolean;
+};
+
+const MAX_EXEC_OUTPUT_BYTES = 64 * 1024;
+
 function mergeConfig(base: unknown, patch: Record<string, unknown>): Record<string, unknown> {
   const merged = isRecord(base) ? { ...base } : {};
   for (const [key, value] of Object.entries(patch)) {
@@ -434,6 +445,59 @@ export async function waitForLog(
   throw new Error(`${label} did not become ready within ${timeoutMs}ms${timeoutDetail}`);
 }
 
+export async function waitForLogAfter(
+  logPath: string,
+  offset: number,
+  pattern: RegExp,
+  label: string,
+  timeoutMs: number,
+): Promise<void> {
+  const started = Date.now();
+  let cursor = offset;
+  let carry = "";
+  while (true) {
+    if (fs.existsSync(logPath)) {
+      const size = fs.statSync(logPath).size;
+      if (size < cursor) {
+        cursor = 0;
+        carry = "";
+      }
+      if (size > cursor) {
+        const descriptor = fs.openSync(logPath, "r");
+        try {
+          const buffer = Buffer.alloc(Math.min(64 * 1024, size - cursor));
+          while (cursor < size) {
+            const bytesRead = fs.readSync(
+              descriptor,
+              buffer,
+              0,
+              Math.min(buffer.length, size - cursor),
+              cursor,
+            );
+            if (bytesRead === 0) {
+              break;
+            }
+            cursor += bytesRead;
+            const text = `${carry}${buffer.subarray(0, bytesRead).toString("utf8")}`;
+            if (pattern.test(text)) {
+              return;
+            }
+            carry = text.slice(-256);
+          }
+        } finally {
+          fs.closeSync(descriptor);
+        }
+      }
+    }
+    const remainingMs = timeoutMs - (Date.now() - started);
+    if (remainingMs <= 0) {
+      break;
+    }
+    await sleep(Math.min(250, remainingMs));
+  }
+  throw new Error(`${label} did not become ready within ${timeoutMs}ms`);
+}
+
 export function createContainerizedSutSpawnSpec(params: {
   containerName: string;
   gatewayPort: number;
@@ -480,7 +544,7 @@ export function createContainerizedSutSpawnSpec(params: {
   };
 }
 
-type SutContainerAction = "destroy" | "stop";
+type SutContainerAction = "destroy" | "restart" | "stop";
 type SutContainerCommandRunner = (
   command: string,
   args: string[],
@@ -522,6 +586,87 @@ export function runSutContainerAction(
       `Container-isolated SUT ${action} failed with exit code ${result.status ?? "unknown"}.${stderr ? `\n${stderr}` : ""}`,
     );
   }
+}
+
+function collectBoundedOutput(stream: NodeJS.ReadableStream): {
+  bytes: () => number;
+  text: () => string;
+} {
+  let byteCount = 0;
+  const chunks: Buffer[] = [];
+  let retainedBytes = 0;
+  stream.on("data", (value: Buffer | string) => {
+    const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+    byteCount += chunk.length;
+    const remaining = MAX_EXEC_OUTPUT_BYTES - retainedBytes;
+    if (remaining > 0) {
+      const retained = chunk.subarray(0, remaining);
+      chunks.push(retained);
+      retainedBytes += retained.length;
+    }
+  });
+  return {
+    bytes: () => byteCount,
+    text: () => Buffer.concat(chunks, retainedBytes).toString("utf8"),
+  };
+}
+
+export async function execMantisSut(
+  sut: Pick<MantisSutRuntime, "containerName" | "tempRoot">,
+  command: string,
+  timeoutSeconds: number,
+): Promise<MantisSutExecResult> {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(
+      "sudo",
+      [
+        "-n",
+        "/usr/local/sbin/openclaw-mantis-sut-container",
+        "exec",
+        sut.containerName,
+        sut.tempRoot,
+        "--timeout-seconds",
+        String(timeoutSeconds),
+        "--",
+        command,
+      ],
+      { env: childProcessBaseEnv(), stdio: ["ignore", "pipe", "pipe"] },
+    );
+    const stdout = collectBoundedOutput(child.stdout);
+    const stderr = collectBoundedOutput(child.stderr);
+    let spawnError: Error | undefined;
+    child.once("error", (error) => {
+      spawnError = error;
+    });
+    child.once("close", (exitCode, signal) => {
+      if (spawnError) {
+        reject(
+          new Error(`Failed to exec in container-isolated SUT: ${spawnError.message}`, {
+            cause: spawnError,
+          }),
+        );
+        return;
+      }
+      if (signal) {
+        reject(new Error(`Container-isolated SUT exec was terminated by ${signal}.`));
+        return;
+      }
+      const stdoutBytes = stdout.bytes();
+      const stderrBytes = stderr.bytes();
+      resolve({
+        exitCode: exitCode ?? 1,
+        stderr: stderr.text(),
+        stderrBytes,
+        stdout: stdout.text(),
+        stdoutBytes,
+        truncated: stdoutBytes > MAX_EXEC_OUTPUT_BYTES || stderrBytes > MAX_EXEC_OUTPUT_BYTES,
+      });
+    });
+  });
+}
+
+export function restartMantisSut(sut: Pick<MantisSutRuntime, "containerName" | "tempRoot">): void {
+  runSutContainerAction("restart", sut.containerName, sut.tempRoot);
 }
 
 export function preserveMantisSutRuntimeArtifacts(

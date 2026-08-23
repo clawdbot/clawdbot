@@ -2,7 +2,11 @@ import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 
-type LiveTerminalIdentity = { runId: string; afterBoundaryRunId?: string };
+type LiveTerminalIdentity = {
+  runId: string;
+  afterBoundaryRunId?: string;
+  disposition?: "aborted" | "error" | "timeout";
+};
 
 const liveTerminalIdentities = new WeakMap<object, LiveTerminalIdentity>();
 const authoritativeTerminals = new WeakMap<object, AuthoritativeTerminal>();
@@ -19,11 +23,13 @@ export function rememberLiveTerminalRun(
   message: unknown,
   runId: string | null | undefined,
   afterBoundaryRunId?: string,
+  disposition?: LiveTerminalIdentity["disposition"],
 ): unknown {
   if (runId && message && typeof message === "object") {
     liveTerminalIdentities.set(message, {
       runId,
       ...(afterBoundaryRunId ? { afterBoundaryRunId } : {}),
+      ...(disposition ? { disposition } : {}),
     });
   }
   return message;
@@ -44,6 +50,14 @@ export function readLiveTerminalRunId(message: unknown): string | null {
 export function readLiveTerminalAfterBoundaryRunId(message: unknown): string | null {
   return message && typeof message === "object"
     ? (liveTerminalIdentities.get(message)?.afterBoundaryRunId ?? null)
+    : null;
+}
+
+export function readLiveTerminalDisposition(
+  message: unknown,
+): LiveTerminalIdentity["disposition"] | null {
+  return message && typeof message === "object"
+    ? (liveTerminalIdentities.get(message)?.disposition ?? null)
     : null;
 }
 

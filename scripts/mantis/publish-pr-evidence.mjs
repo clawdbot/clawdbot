@@ -9,7 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 
-/** @typedef {Record<string, unknown> & { expected?: string, fixed?: boolean, ref?: string, sha?: string, status?: string }} EvidenceLane */
+/** @typedef {Record<string, unknown> & { detail?: string, digest?: string, expected?: string, fixed?: boolean, ref?: string, sha?: string, status?: string }} EvidenceLane */
 /**
  * @typedef {{
  *   alt?: string,
@@ -27,7 +27,7 @@ import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 /**
  * @typedef {{
  *   artifacts: EvidenceArtifact[],
- *   comparison: { baseline?: EvidenceLane, candidate: EvidenceLane, outcome?: "blocked" | "fail" | "pass", pass?: boolean },
+ *   comparison: { baseline?: EvidenceLane, candidate: EvidenceLane, differential?: string, outcome?: "blocked" | "fail" | "pass", pass?: boolean },
  *   id: string,
  *   manifestDir: string,
  *   scenario: string,
@@ -70,6 +70,31 @@ import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 const MANTIS_ARTIFACT_UPLOAD_TIMEOUT_MS = 300_000;
 // Untrusted storage error bodies are for diagnostics only; keep them small.
 const MANTIS_UPLOAD_ERROR_BODY_MAX_BYTES = 64 * 1024;
+const COMMENT_GRAPHEME_SEGMENTER = new Intl.Segmenter("en", { granularity: "grapheme" });
+
+/**
+ * @param {string | undefined} value
+ * @param {number} maxLength
+ * @returns {string | undefined}
+ */
+export function sanitizeCommentText(value, maxLength) {
+  const escaped = value
+    ?.trim()
+    .replace(/\s+/gu, " ")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("`", "&#96;");
+  if (!escaped) {
+    return undefined;
+  }
+  const graphemes = Array.from(
+    COMMENT_GRAPHEME_SEGMENTER.segment(escaped),
+    ({ segment }) => segment,
+  );
+  return graphemes.length > maxLength ? `${graphemes.slice(0, maxLength - 1).join("")}…` : escaped;
+}
+
 function parseArgs(argv) {
   const args = {};
   for (let index = 0; index < argv.length; index += 1) {
@@ -366,7 +391,15 @@ function laneLine(label, lane) {
   } else if (lane.ref) {
     pieces.push(` at \`${lane.ref}\``);
   }
-  if (lane.expected) {
+  if (lane.digest) {
+    const judgment = lane.detail ?? sanitizeCommentText(lane.expected, 1_000);
+    if (judgment) {
+      pieces.push(` — ${judgment}`);
+    }
+    pieces.push(` · facts: ${lane.digest}`);
+  } else if (lane.detail) {
+    pieces.push(` — ${lane.detail}`);
+  } else if (lane.expected) {
     pieces.push(`, expected ${lane.expected}`);
   }
   return pieces.join("");
@@ -454,6 +487,9 @@ export function renderEvidenceComment({
   const candidateLine = laneLine("Candidate (PR merged onto main)", candidate);
   if (candidateLine) {
     lines.push(candidateLine);
+  }
+  if (comparison.differential) {
+    lines.push(`- Differential (trusted facts): ${comparison.differential}`);
   }
   const overall = overallStatus(manifest);
   if (overall) {

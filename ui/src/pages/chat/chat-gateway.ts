@@ -17,6 +17,7 @@ import {
   type ChatEventPayload,
   type ChatState,
 } from "./chat-history.ts";
+import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   getChatSessionProjection,
   publishChatSessionProjectionMessages,
@@ -446,6 +447,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         normalizedMessage,
         terminalRunId,
         terminalAfterBoundaryRunId,
+        "aborted",
       );
       publishVisibleTerminal(
         normalizedMessage,
@@ -491,14 +493,32 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
               visiblePayloadMessage,
               terminalRunId,
               terminalAfterBoundaryRunId,
+              projectedRun?.currentRun?.status === "timeout" ? "timeout" : "error",
             ),
           );
         } else {
           state.chatMessages = materializeVisibleStream({ includeCurrent: true });
-          state.chatMessages = [...state.chatMessages, visiblePayloadMessage];
+          state.chatMessages = [
+            ...state.chatMessages,
+            rememberLiveTerminalRun(
+              visiblePayloadMessage,
+              terminalRunId,
+              terminalAfterBoundaryRunId,
+              projectedRun?.currentRun?.status === "timeout" ? "timeout" : "error",
+            ),
+          ];
         }
       } else {
         state.chatMessages = materializeVisibleStream({ includeCurrent: true });
+        const materialized = state.chatMessages.findLast(
+          (message) => transcriptRunId(message) === terminalRunId,
+        );
+        rememberLiveTerminalRun(
+          materialized,
+          terminalRunId,
+          terminalAfterBoundaryRunId,
+          projectedRun?.currentRun?.status === "timeout" ? "timeout" : "error",
+        );
       }
     }
     // The shared Gateway projection owns timeout classification; preserve it

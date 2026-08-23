@@ -1007,10 +1007,7 @@ describe("grouped chat rendering", () => {
 
   it("collapses long user messages and toggles their disclosure state", () => {
     const container = document.createElement("div");
-    const collapsedLines = [
-      "Inspect AGENTS.md:188 first.",
-      ...Array.from({ length: 11 }, (_, index) => `Prompt line ${index}`),
-    ];
+    const collapsedLines = ["Inspect AGENTS.md:188 first.", "a".repeat(1_201)];
     const expandedTail = "Full prompt tail after the disclosure boundary.";
     const markdownContent = [...collapsedLines, expandedTail].join("\n");
     const onToggleUserMessageExpanded = vi.fn();
@@ -1074,7 +1071,7 @@ describe("grouped chat rendering", () => {
 
   it("collapses a long single-line user message without truncating its DOM", () => {
     const container = document.createElement("div");
-    const markdownContent = `${"a".repeat(699)}😀`;
+    const markdownContent = `${"a".repeat(1_199)}😀`;
 
     renderGroupedMessage(
       container,
@@ -1088,20 +1085,29 @@ describe("grouped chat rendering", () => {
     expect(expectElement(disclosure, ".chat-text", HTMLDivElement).textContent).toContain("😀");
   });
 
-  it("does not add prompt disclosure controls to short user or assistant messages", () => {
+  it("does not add prompt disclosure controls to short multiline user or assistant messages", () => {
     const container = document.createElement("div");
     const onToggleUserMessageExpanded = vi.fn();
+    const shortMultilinePrompt = [
+      "please re-review these:",
+      "#127818",
+      "#127826",
+      "#127844",
+      "#127881",
+      "",
+      "rerun the same session we had for these",
+    ].join("\n");
 
     renderGroupedMessage(
       container,
-      { role: "user", content: "Short prompt", timestamp: 1001 },
+      { role: "user", content: shortMultilinePrompt, timestamp: 1001 },
       "user",
       { onToggleUserMessageExpanded },
     );
-    expect(container.querySelector(".chat-message-disclosure")).not.toBeNull();
-    expect(
-      container.querySelector<HTMLButtonElement>(".chat-message-disclosure__toggle")?.hidden,
-    ).toBe(true);
+    expect(container.querySelector(".chat-message-disclosure")).toBeNull();
+    for (const line of shortMultilinePrompt.split("\n").filter(Boolean)) {
+      expect(container.textContent).toContain(line);
+    }
 
     renderAssistantMessage(
       container,

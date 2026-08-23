@@ -1621,6 +1621,137 @@ describe("chat transcript rendering", () => {
     );
   });
 
+  it("announces a run preamble and its later terminal answer separately", () => {
+    const transcript = createTestTranscript();
+    const container = document.createElement("div");
+    const user = {
+      kind: "group",
+      key: "group:user:announcement",
+      role: "user",
+      messages: [
+        {
+          key: "message:user:announcement",
+          message: {
+            role: "user",
+            content: "Start",
+            __openclaw: { id: "user:announcement", idempotencyKey: "run-announcement:user" },
+          },
+        },
+      ],
+      timestamp: 1,
+      isStreaming: false,
+    };
+    const renderItems = (items: ReturnType<typeof chatThread.buildCachedChatItems>) => {
+      vi.mocked(chatThread.buildCachedChatItems).mockReturnValue(items);
+      renderChatInto(container, { transcript, messages: items });
+    };
+
+    renderItems([user] as ReturnType<typeof chatThread.buildCachedChatItems>);
+    const stream = {
+      kind: "stream" as const,
+      key: "stream:announcement",
+      text: "Latest streamed narration",
+      startedAt: 2,
+      isStreaming: true,
+      runId: "run-announcement",
+      boundaryId: "send:run-announcement",
+    };
+    renderItems([
+      user,
+      stream,
+      {
+        kind: "reading-indicator",
+        key: "reading:announcement",
+        startedAt: 2,
+        runId: "run-announcement",
+        boundaryId: "send:run-announcement",
+      },
+    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+
+    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+      "Latest streamed narration",
+    );
+
+    renderItems([
+      user,
+      {
+        kind: "group",
+        key: "group:assistant:persisted-announcement",
+        role: "assistant",
+        messages: [
+          {
+            key: "assistant:persisted-announcement",
+            message: {
+              role: "assistant",
+              content: "Persisted narration while the run continues",
+              runId: "run-announcement",
+            },
+          },
+        ],
+        timestamp: 3,
+        isStreaming: false,
+        runId: "run-announcement",
+      },
+      {
+        kind: "reading-indicator",
+        key: "reading:persisted-announcement",
+        startedAt: 4,
+        runId: "run-announcement",
+        boundaryId: "send:run-announcement",
+      },
+    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+
+    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+      "Persisted narration while the run continues",
+    );
+
+    renderItems([
+      user,
+      { ...stream, isStreaming: false },
+      {
+        kind: "group",
+        key: "group:tool:announcement",
+        role: "tool",
+        messages: [
+          {
+            key: "tool:announcement",
+            message: {
+              role: "toolResult",
+              content: "Tool output",
+              runId: "run-announcement",
+            },
+          },
+        ],
+        timestamp: 3,
+        isStreaming: false,
+        runId: "run-announcement",
+      },
+      {
+        kind: "group",
+        key: "group:assistant:announcement",
+        role: "assistant",
+        messages: [
+          {
+            key: "assistant:announcement",
+            message: {
+              role: "assistant",
+              phase: "final_answer",
+              content: "Terminal answer",
+              runId: "run-announcement",
+            },
+          },
+        ],
+        timestamp: 4,
+        isStreaming: false,
+        runId: "run-announcement",
+      },
+    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+
+    expect(container.querySelector(".chat-transcript-announcement")?.textContent).toBe(
+      "Terminal answer",
+    );
+  });
+
   it("does not announce appended rows from an inactive split pane", () => {
     const transcript = createTestTranscript();
     const container = document.createElement("div");
@@ -2603,6 +2734,160 @@ describe("chat loading skeleton", () => {
     expect(
       renderMessageGroupMock.mock.calls.at(-1)?.[1].activeContinuation?.options.runOutputTokens,
     ).toBe(7_200);
+  });
+
+  it("keeps multi-part run usage current when only output tokens change", () => {
+    const runId = "run-composed";
+    const user = {
+      kind: "group",
+      key: "group:user:run-composed",
+      role: "user",
+      messages: [
+        {
+          key: "message:user:run-composed",
+          message: {
+            role: "user",
+            content: "Start the work.",
+            timestamp: 0,
+            __openclaw: { id: "user:run-composed", idempotencyKey: `${runId}:user` },
+          },
+        },
+      ],
+      timestamp: 0,
+      isStreaming: false,
+    };
+    const assistant = {
+      kind: "group",
+      key: "group:assistant:run-start",
+      role: "assistant",
+      messages: [
+        {
+          key: "message:assistant:run-start",
+          message: { role: "assistant", content: "Starting the work.", timestamp: 1 },
+        },
+      ],
+      timestamp: 1,
+      isStreaming: false,
+      runId,
+    };
+    const tool = {
+      kind: "group",
+      key: "group:tool:run-work",
+      role: "tool",
+      messages: [
+        {
+          key: "message:tool:run-work",
+          message: { role: "toolResult", content: "Tool complete.", timestamp: 2 },
+        },
+      ],
+      timestamp: 2,
+      isStreaming: false,
+      runId,
+    };
+    const reading = {
+      kind: "reading-indicator",
+      key: "reading:run-composed",
+      startedAt: 1,
+      runId,
+    };
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
+      user,
+      assistant,
+      tool,
+      reading,
+    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+    const container = document.createElement("div");
+    const streamPartsSpy = vi.spyOn(chatMessage, "renderStreamGroupParts");
+
+    renderChatInto(container, { canAbort: true, runId, runOutputTokens: 5_500, stream: null });
+    streamPartsSpy.mockClear();
+    renderChatInto(container, { canAbort: true, runId, runOutputTokens: 7_200, stream: null });
+
+    expect(streamPartsSpy.mock.calls.at(-1)?.[1].runOutputTokens).toBe(7_200);
+  });
+
+  it("keeps the completed recap on one composed multi-part run", () => {
+    const runId = "run-composed";
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
+      {
+        kind: "group",
+        key: "group:user:run-composed",
+        role: "user",
+        messages: [
+          {
+            key: "message:user:run-composed",
+            message: {
+              role: "user",
+              content: "Start the work.",
+              timestamp: 0,
+              __openclaw: { id: "user:run-composed", idempotencyKey: `${runId}:user` },
+            },
+          },
+        ],
+        timestamp: 0,
+        isStreaming: false,
+      },
+      {
+        kind: "group",
+        key: "group:assistant:run-start",
+        role: "assistant",
+        messages: [
+          {
+            key: "message:assistant:run-start",
+            message: { role: "assistant", content: "Starting the work.", timestamp: 1 },
+          },
+        ],
+        timestamp: 1,
+        isStreaming: false,
+        runId,
+      },
+      {
+        kind: "group",
+        key: "group:tool:run-work",
+        role: "tool",
+        messages: [
+          {
+            key: "message:tool:run-work",
+            message: { role: "toolResult", content: "Tool complete.", timestamp: 2 },
+          },
+        ],
+        timestamp: 2,
+        isStreaming: false,
+        runId,
+      },
+      {
+        kind: "group",
+        key: "group:assistant:run-finish",
+        role: "assistant",
+        messages: [
+          {
+            key: "message:assistant:run-finish",
+            message: { role: "assistant", content: "Finished the work.", timestamp: 3 },
+          },
+        ],
+        timestamp: 3,
+        isStreaming: false,
+        runId,
+      },
+    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
+    vi.spyOn(chatProgress, "resolveTurnRecap").mockReturnValue({
+      runtimeMs: 5_000,
+      outputTokens: 42,
+    });
+
+    const container = renderChatView();
+
+    const frameCall = renderMessageGroupMock.mock.calls.find(([group]) =>
+      group.key.startsWith("agent-run:"),
+    );
+    expect(frameCall).toBeDefined();
+    expect(frameCall?.[0].messages).toHaveLength(1);
+    expect(frameCall?.[1].frameContent).toBeDefined();
+    expect(frameCall?.[1].turnRecap).toEqual({
+      runtimeMs: 5_000,
+      outputTokens: 42,
+    });
+    expect(container.querySelector(".chat-turn-recap")).toBeNull();
   });
 
   it("releases the embedded recap when a later reply becomes the settled turn", () => {
@@ -7171,6 +7456,23 @@ describe("right-click Reply", () => {
     dispatchContextMenu(bubble);
     document.querySelector<HTMLButtonElement>('[aria-label="Copy as markdown"]')!.click();
     expect(onCopy).toHaveBeenCalledOnce();
+  });
+
+  it("offers Reply only for the bubble that owns the frame actions", () => {
+    const onSetReply = vi.fn();
+    const { bubble, group } = renderChatBubble(
+      { onSetReply },
+      { messageId: "commentary", text: "Intermediate commentary" },
+    );
+    const actionOwner = document.createElement("div");
+    actionOwner.dataset.messageActionsFor = "terminal";
+    group.append(actionOwner);
+    group.dataset.chatRowKey = 'agent-run:["run-1","send:send-1"]';
+
+    const event = dispatchContextMenu(bubble);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
   });
 
   it("dismisses an inline confirmation before opening the reply context menu", () => {

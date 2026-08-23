@@ -12,6 +12,8 @@
   --card-highlight: rgba(255, 255, 255, 0.04);
   --popover: #191c24;
   --popover-foreground: #f0f0f2;
+  --session-hovercard-surface: color-mix(in srgb, var(--card) 94%, black 6%);
+  --session-hovercard-progress-surface: color-mix(in srgb, var(--card) 58%, var(--bg) 42%);
 
   /* Panel */
   --panel: #0e1015;
@@ -504,6 +506,12 @@
   --card-highlight: rgba(60, 42, 24, 0.03);
   --popover: #ffffff;
   --popover-foreground: #211e1a;
+  --session-hovercard-surface: var(--card);
+  --session-hovercard-progress-surface: color-mix(
+    in srgb,
+    var(--card) 54%,
+    var(--panel-strong) 46%
+  );
 
   --panel: #faf9f7;
   --panel-strong: #f4f1ec;
@@ -724,6 +732,12 @@
   --card-highlight: rgba(0, 0, 0, 0.02);
   --popover: #ffffff;
   --popover-foreground: #18181b;
+  --session-hovercard-surface: var(--card);
+  --session-hovercard-progress-surface: color-mix(
+    in srgb,
+    var(--card) 52%,
+    var(--panel-strong) 48%
+  );
 
   --panel: #f9f9fb;
   --panel-strong: #f2f2f5;
@@ -867,6 +881,12 @@
   --card-highlight: rgba(80, 50, 20, 0.02);
   --popover: #ffffff;
   --popover-foreground: #2c2118;
+  --session-hovercard-surface: var(--card);
+  --session-hovercard-progress-surface: color-mix(
+    in srgb,
+    var(--card) 48%,
+    var(--panel-strong) 52%
+  );
 
   --panel: #f7f2ec;
   --panel-strong: #f0e8e0;

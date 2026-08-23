@@ -33,6 +33,7 @@ import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
 import { forgetPromptBuildDrainCacheForRun } from "./run/attempt-prompt-helpers.js";
 import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
 import { createMcpAttemptCarryover } from "./run/attempt-result.js";
+import { activateCodeModeReconciliation } from "./run/code-mode-reconciliation.js";
 import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
 import { createEmbeddedRunCompactionRuntime } from "./run/compaction-runtime.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
@@ -520,6 +521,16 @@ export async function runPreparedEmbeddedLoop(
         failoverRetryController.resetSameModelRateLimitRetries();
       }
       if (assistantFailureOutcome.action === "retry") {
+        continue;
+      }
+      if (
+        activateCodeModeReconciliation({
+          attempt,
+          hostOwnsToolSurface: !pluginHarnessOwnsTransport,
+          retryState: terminalRetryState,
+          activateInternalPrompt: sessionPromptState.activateInternalPrompt,
+        })
+      ) {
         continue;
       }
       let assistantProfileFailureReason = assistantFailureOutcome.assistantProfileFailureReason;

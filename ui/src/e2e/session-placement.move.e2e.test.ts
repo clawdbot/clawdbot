@@ -319,7 +319,11 @@ suite.define(() => {
         const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
         await expect.poll(() => panes.count()).toBe(2);
         for (const pane of await panes.all()) {
-          await expect.poll(() => pane.getByText(partialText, { exact: true }).count()).toBe(1);
+          await expect
+            .poll(() =>
+              pane.locator(".chat-thread-inner").getByText(partialText, { exact: true }).count(),
+            )
+            .toBe(1);
         }
 
         await gateway.deferNext("sessions.move");
@@ -383,7 +387,10 @@ suite.define(() => {
           .poll(() => page.getByRole("button", { name: "Device offline" }).count())
           .toBe(0);
         for (const pane of await panes.all()) {
-          await expect.poll(() => pane.getByText(partialText, { exact: true }).count()).toBe(1);
+          const transcript = pane.locator(".chat-thread-inner");
+          await expect
+            .poll(() => transcript.getByText(partialText, { exact: true }).count())
+            .toBe(1);
           await expect
             .poll(() => pane.locator(`[data-entry-id="${abandonedPartialIdentity.id}"]`).count())
             .toBe(1);
@@ -453,8 +460,11 @@ suite.define(() => {
 
         await gateway.emitChatFinal({ runId: localRunId, sessionKey, text: finalText });
         for (const pane of await panes.all()) {
-          await expect.poll(() => pane.getByText(partialText, { exact: true }).count()).toBe(1);
-          await expect.poll(() => pane.getByText(finalText, { exact: true }).count()).toBe(1);
+          const transcript = pane.locator(".chat-thread-inner");
+          await expect
+            .poll(() => transcript.getByText(partialText, { exact: true }).count())
+            .toBe(1);
+          await expect.poll(() => transcript.getByText(finalText, { exact: true }).count()).toBe(1);
           expect(await pane.locator(".chat-duplicate-count").count()).toBe(0);
           expect(await pane.locator(`[data-entry-id="${localFinalIdentity.id}"]`).count()).toBe(1);
         }
@@ -471,8 +481,11 @@ suite.define(() => {
         const reloadedPanes = page.locator("openclaw-chat-pane.chat-split-view__pane");
         await expect.poll(() => reloadedPanes.count()).toBe(2);
         for (const pane of await reloadedPanes.all()) {
-          await expect.poll(() => pane.getByText(partialText, { exact: true }).count()).toBe(1);
-          await expect.poll(() => pane.getByText(finalText, { exact: true }).count()).toBe(1);
+          const transcript = pane.locator(".chat-thread-inner");
+          await expect
+            .poll(() => transcript.getByText(partialText, { exact: true }).count())
+            .toBe(1);
+          await expect.poll(() => transcript.getByText(finalText, { exact: true }).count()).toBe(1);
           expect(await pane.locator(".chat-duplicate-count").count()).toBe(0);
           expect(await pane.locator(`[data-entry-id="${localFinalIdentity.id}"]`).count()).toBe(1);
         }

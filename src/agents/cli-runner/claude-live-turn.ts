@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isAbortError } from "../../infra/abort-signal.js";
 import {
   emitTrustedDiagnosticEvent,
   type DiagnosticToolExecutionErrorEvent,
@@ -29,7 +30,7 @@ import {
   streamJsonOutputLimitErrorText,
 } from "../cli-output-stream.js";
 import { parseCliOutput } from "../cli-output.js";
-import type { FailoverError } from "../failover-error.js";
+import { isFailoverError, isSignalTimeoutReason, type FailoverError } from "../failover-error.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
 import {
   armClaudeTurnTimers,
@@ -141,11 +142,28 @@ export function failClaudeTurn(host: ClaudeLiveTurnHost, error: unknown): void {
     `claude live session turn failed: provider=${host.providerId} model=${host.modelId} durationMs=${Date.now() - turn.startedAtMs} error=${errorKind}`,
   );
   turn.streamingParser.finish();
+  // Caller interruptions (abort signal, caller deadline) keep already-streamed text.
+  // Structured CLI failures still reject so failover and empty-output handling are unchanged.
+  // Deadline vs abort follows the signal-reason rule run-diagnostics uses: only a TimeoutError
+  // reason is a deadline; failover message patterns would read a plain abort as a timeout.
+  const interrupted =
+    !isFailoverError(error) && (isAbortError(error) || isSignalTimeoutReason(error));
+  const partialOutput = interrupted ? turn.streamingParser.getOutput() : undefined;
   failActiveClaudeLiveTools(turn, error);
   clearClaudeTurnTimers(turn);
   host.outstandingBackgroundTaskIds.clear();
   host.currentTurn = null;
-  turn.reject(error);
+  if (!partialOutput?.text.trim() || partialOutput.errorText) {
+    turn.reject(error);
+    return;
+  }
+  cliBackendLog.info(
+    `claude live session aborted turn preserved partial output: provider=${host.providerId} model=${host.modelId} durationMs=${Date.now() - turn.startedAtMs} ${formatCliBackendOutputDigest(partialOutput.text)}`,
+  );
+  turn.resolve({
+    ...partialOutput,
+    terminalInterruption: { reason: isSignalTimeoutReason(error) ? "timeout" : "aborted" },
+  });
 }
 
 export function createClaudeOutputLimitError(
