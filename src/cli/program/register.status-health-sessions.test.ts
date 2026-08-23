@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   sessionsTailCommand: vi.fn(),
   sessionsCompactCommand: vi.fn(),
   sessionsArchiveCommand: vi.fn(),
+  sessionsRestoreCommand: vi.fn(),
   sessionsDeleteCommand: vi.fn(),
   exportTrajectoryCommand: vi.fn(),
   setVerbose: vi.fn(),
@@ -29,6 +30,7 @@ const sessionsCleanupCommand = mocks.sessionsCleanupCommand;
 const sessionsTailCommand = mocks.sessionsTailCommand;
 const sessionsCompactCommand = mocks.sessionsCompactCommand;
 const sessionsArchiveCommand = mocks.sessionsArchiveCommand;
+const sessionsRestoreCommand = mocks.sessionsRestoreCommand;
 const sessionsDeleteCommand = mocks.sessionsDeleteCommand;
 const exportTrajectoryCommand = mocks.exportTrajectoryCommand;
 const setVerbose = mocks.setVerbose;
@@ -81,6 +83,7 @@ vi.mock("../../commands/sessions-compact.js", () => ({
 
 vi.mock("../../commands/sessions-lifecycle.js", () => ({
   sessionsArchiveCommand: mocks.sessionsArchiveCommand,
+  sessionsRestoreCommand: mocks.sessionsRestoreCommand,
   sessionsDeleteCommand: mocks.sessionsDeleteCommand,
 }));
 
@@ -117,6 +120,7 @@ describe("registerStatusHealthSessionsCommands", () => {
     sessionsTailCommand.mockResolvedValue(undefined);
     sessionsCompactCommand.mockResolvedValue(undefined);
     sessionsArchiveCommand.mockResolvedValue(undefined);
+    sessionsRestoreCommand.mockResolvedValue(undefined);
     sessionsDeleteCommand.mockResolvedValue(undefined);
     exportTrajectoryCommand.mockResolvedValue(undefined);
   });
@@ -373,6 +377,25 @@ describe("registerStatusHealthSessionsCommands", () => {
       agent: "work",
       dryRun: false,
       yes: true,
+      json: true,
+    });
+  });
+
+  it("forwards restore options through the stock lifecycle command", async () => {
+    await runCli([
+      "sessions",
+      "restore",
+      "agent:work:scratch-1",
+      "--agent",
+      "work",
+      "--dry-run",
+      "--json",
+    ]);
+
+    expectCommandOptions(sessionsRestoreCommand, {
+      keys: ["agent:work:scratch-1"],
+      agent: "work",
+      dryRun: true,
       json: true,
     });
   });
