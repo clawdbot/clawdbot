@@ -1,146 +1,367 @@
 .session-progress-card {
+  --session-progress-neutral: var(--muted);
+  --session-progress-marker-size: 14px;
+
   box-sizing: border-box;
   min-width: 0;
   color: var(--text);
 }
 
 .session-hovercard {
+  --session-hovercard-context-icon-size: var(--space-4);
+
   display: grid;
-  gap: var(--space-3);
+  gap: 0;
   min-width: 0;
+}
+
+.session-hovercard__section {
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  background: transparent;
+}
+
+.session-hovercard__section + .session-hovercard__section {
+  border-top: 1px solid color-mix(in srgb, var(--border-strong) 68%, transparent);
+}
+
+.session-hovercard__section--header {
+  padding-block: 14px 12px;
+}
+
+.session-hovercard__section--metadata,
+.session-hovercard__section--prs {
+  padding-block: 11px;
+}
+
+.session-hovercard__section--optional {
+  padding-block: 12px;
 }
 
 .session-hovercard__header {
-  display: flex;
-  align-items: center;
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
   gap: var(--space-3);
   min-width: 0;
-}
-
-.session-hovercard__avatar,
-.session-hovercard__avatar-fallback {
-  display: grid;
-  width: 34px;
-  height: 34px;
-  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--accent-subtle) 70%, var(--panel-strong));
-  color: var(--text);
-  flex: 0 0 34px;
-  font-size: var(--control-ui-text-xs);
-  font-weight: 700;
-  place-items: center;
-}
-
-.session-hovercard__avatar > .channel-avatar {
-  box-sizing: border-box;
-  width: 34px;
-  height: 34px;
-  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
-  flex: 0 0 34px;
 }
 
 .session-hovercard__heading {
   display: grid;
-  gap: 2px;
+  width: 100%;
+  grid-template-rows: auto auto;
+  gap: var(--space-1);
   min-width: 0;
 }
 
 .session-hovercard__title {
-  overflow: hidden;
   color: var(--text);
-  font-size: var(--control-ui-text-sm);
+  font-size: var(--control-ui-text-md);
   font-weight: 650;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+  white-space: normal;
+}
+
+.session-hovercard__meta {
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.35;
+  overflow-wrap: normal;
+  word-break: normal;
+  white-space: normal;
+}
+
+.session-hovercard__no-pr,
+.session-hovercard__more {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
+}
+
+.session-hovercard__created-age {
+  align-self: start;
+  justify-self: end;
+  min-width: max-content;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.session-hovercard__pr-list {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.session-hovercard__context {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.session-hovercard__context-row {
+  display: grid;
+  grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
+}
+
+.session-hovercard__context-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--session-hovercard-context-icon-size);
+  height: var(--session-hovercard-context-icon-size);
+  align-self: center;
+  color: var(--muted);
+}
+
+.session-hovercard__context-icon svg {
+  display: block;
+  width: var(--session-hovercard-context-icon-size);
+  height: var(--session-hovercard-context-icon-size);
+  flex: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.session-hovercard__context-value {
+  min-width: 0;
+  overflow-wrap: break-word;
+  color: var(--muted);
+  font-weight: 450;
+}
+
+.session-hovercard__context-text {
+  display: block;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.session-hovercard__meta,
-.session-hovercard__no-pr,
-.session-hovercard__more {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.35;
-}
-
-.session-hovercard__chips {
+.session-hovercard__identity-copy {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  flex-wrap: wrap;
-}
-
-.session-hovercard__chip,
-.session-hovercard__diff {
-  display: inline-flex;
-  align-items: center;
+  align-items: baseline;
   gap: 5px;
   min-width: 0;
-  border: 1px solid color-mix(in srgb, currentColor 24%, var(--border));
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, currentColor 8%, transparent);
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: 1.4;
+  overflow: hidden;
+  color: var(--text);
+  white-space: nowrap;
 }
 
-.session-hovercard__chip {
-  padding: 3px 8px;
+.session-hovercard__participants {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 450;
+  white-space: nowrap;
+}
+
+.session-hovercard__identity-name {
+  flex: none;
+  font-weight: 500;
+}
+
+.session-hovercard__identity-separator {
+  flex: none;
+  color: var(--muted);
+}
+
+.session-hovercard__participant {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-hovercard__participants-more {
+  flex: none;
+  color: var(--muted);
+}
+
+.session-hovercard__creator-avatar,
+.session-hovercard__creator-avatar .viewer-avatar {
+  display: block;
+  box-sizing: border-box;
+  width: var(--session-hovercard-context-icon-size);
+  height: var(--session-hovercard-context-icon-size);
+  aspect-ratio: 1;
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  outline: 0;
+  overflow: hidden;
+  align-self: center;
+  box-shadow: none;
+}
+
+.session-hovercard__creator-avatar .channel-avatar {
+  width: var(--session-hovercard-context-icon-size);
+  height: var(--session-hovercard-context-icon-size);
+  box-shadow: none;
+}
+
+.session-hovercard__creator-avatar .viewer-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.session-hovercard__creator-avatar-fallback {
+  display: grid;
+  width: var(--session-hovercard-context-icon-size);
+  height: var(--session-hovercard-context-icon-size);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent-subtle) 70%, var(--panel-strong));
+  color: var(--text);
+  font-size: 8px;
+  font-weight: 700;
+  place-items: center;
+}
+
+.session-hovercard__pr-row,
+.session-hovercard__branch-row {
+  display: grid;
+  grid-template-columns: var(--session-hovercard-context-icon-size) auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--space-2);
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
   text-decoration: none;
 }
 
+.session-hovercard__pr-row {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+
+.session-hovercard__branch-row {
+  grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr) auto;
+}
+
+.session-hovercard__pr-state-icon,
+.session-hovercard__branch-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--session-hovercard-context-icon-size);
+  height: var(--session-hovercard-context-icon-size);
+}
+
+.session-hovercard__pr-state-icon svg,
+.session-hovercard__branch-icon svg {
+  width: var(--session-hovercard-context-icon-size);
+  height: var(--session-hovercard-context-icon-size);
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .session-hovercard__diff {
-  padding: 3px 7px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.session-hovercard__pr-chip[data-state="open"] {
-  color: var(--ok);
+.session-hovercard__pr-row[data-state="open"] {
+  --session-pr-state-color: var(--ok);
 }
 
-.session-hovercard__pr-chip[data-state="draft"] {
-  color: var(--muted);
+.session-hovercard__pr-row[data-state="draft"] {
+  --session-pr-state-color: var(--muted);
 }
 
-.session-hovercard__pr-chip[data-state="merged"] {
-  color: var(--pr-merged);
+.session-hovercard__pr-row[data-state="merged"] {
+  --session-pr-state-color: var(--pr-merged);
 }
 
-.session-hovercard__pr-chip[data-state="closed"] {
-  color: var(--danger);
+.session-hovercard__pr-row[data-state="closed"] {
+  --session-pr-state-color: var(--danger);
 }
 
 .session-hovercard__pr-number,
-.session-hovercard__pr-state,
 .session-hovercard__files {
   color: currentColor;
 }
 
-.session-hovercard__checks[data-checks="passing"],
+.session-hovercard__pr-number {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.session-hovercard__pr-state-icon {
+  color: var(--session-pr-state-color, var(--muted));
+}
+
+.session-hovercard__pr-row .session-hovercard__diff {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  column-gap: var(--space-2);
+  justify-self: end;
+  font: inherit;
+}
+
+.session-hovercard__pr-row .session-hovercard__files {
+  grid-column: 1;
+  justify-self: end;
+}
+
+.session-hovercard__pr-row .session-hovercard__additions {
+  grid-column: 2;
+}
+
+.session-hovercard__pr-row .session-hovercard__deletions {
+  grid-column: 3;
+}
+
+.session-hovercard__branch-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .session-hovercard__additions {
   color: var(--ok);
 }
 
-.session-hovercard__checks[data-checks="failing"],
 .session-hovercard__deletions {
   color: var(--danger);
 }
 
-.session-hovercard__checks[data-checks="pending"] {
-  color: var(--warn);
-}
-
 .session-hovercard__no-pr a {
-  color: inherit;
+  color: var(--accent);
   text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentcolor 45%, transparent);
   text-underline-offset: 2px;
 }
 
-.session-hovercard__divider {
-  height: 1px;
-  background: var(--border);
+.session-hovercard__branch-row + .session-hovercard__no-pr {
+  margin-top: var(--space-2);
+  padding-left: calc(var(--session-hovercard-context-icon-size) + var(--space-2));
 }
 
 .session-hovercard__excerpt {
@@ -153,6 +374,21 @@
   font-size: var(--control-ui-text-sm);
   line-height: 1.45;
   overflow-wrap: anywhere;
+}
+
+.session-hovercard__progress-footer {
+  padding-block: 12px 14px;
+  border-radius: 0 0 calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px);
+  background: var(--session-hovercard-progress-surface);
+}
+
+.session-hovercard__progress-footer .session-progress-card__heading {
+  margin-bottom: var(--space-3);
+}
+
+.session-hovercard__progress-footer .session-progress-card__heading-actions {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
 
 .session-progress-card--composer {
@@ -196,7 +432,7 @@
 
 .session-progress-card__summary {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 7px;
   min-width: 0;
@@ -211,6 +447,25 @@
   display: none;
 }
 
+.session-progress-card__chevron {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  transition: transform 0.16s var(--ease-out);
+}
+
+.session-progress-card__chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-progress-card--composer:not([open]) .session-progress-card__chevron {
+  transform: rotate(-90deg);
+}
+
 .session-progress-card__summary:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
   outline-offset: -2px;
@@ -219,19 +474,39 @@
 .session-progress-card__current-marker,
 .session-progress-card__step-marker {
   display: inline-flex;
-  width: 14px;
+  box-sizing: border-box;
+  width: var(--session-progress-marker-size);
+  height: var(--session-progress-marker-size);
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+  align-self: start;
+  flex: none;
+  padding: 0;
+  margin: 0;
+  font-size: 0;
+  line-height: 0;
+}
+
+.session-progress-card__current-marker svg,
+.session-progress-card__step-marker svg {
+  width: var(--session-progress-marker-size);
+  height: var(--session-progress-marker-size);
+  margin: 0;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .session-progress-card__current-marker {
-  color: var(--accent);
-  transition: transform var(--duration-fast) ease;
+  color: var(--session-progress-neutral);
 }
 
-.session-progress-card--composer[open] .session-progress-card__current-marker {
-  transform: rotate(90deg);
+.session-progress-card__current-marker > .session-run-spinner,
+.session-progress-card__step-marker > .session-run-spinner {
+  width: var(--session-progress-marker-size);
+  height: var(--session-progress-marker-size);
+  border-color: color-mix(in srgb, var(--session-progress-neutral) 28%, transparent);
+  border-top-color: var(--session-progress-neutral);
 }
 
 .session-progress-card__current {
@@ -279,8 +554,6 @@
 
 .session-progress-card__markdown + .session-progress-card__steps {
   margin-top: var(--space-3);
-  padding-top: var(--space-3);
-  border-top: 1px solid var(--border);
 }
 
 .session-progress-card__markdown progress {
@@ -304,7 +577,7 @@
 
 .session-progress-card__steps {
   display: grid;
-  gap: 4px;
+  row-gap: var(--space-2);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -312,9 +585,9 @@
 
 .session-progress-card__step {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr);
-  align-items: baseline;
-  gap: 7px;
+  grid-template-columns: var(--session-progress-marker-size) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2);
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   line-height: 1.4;
@@ -334,16 +607,15 @@
 }
 
 .session-progress-card__step--in_progress .session-progress-card__step-marker {
-  color: var(--accent);
+  color: var(--session-progress-neutral);
 }
 
 .session-progress-card__step--pending .session-progress-card__step-marker {
-  color: color-mix(in srgb, var(--muted) 72%, transparent);
+  color: var(--session-progress-neutral);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .session-progress-card--composer,
-  .session-progress-card__current-marker {
+  .session-progress-card--composer {
     animation: none;
     transition: none;
   }
