@@ -1127,7 +1127,6 @@ export const en: TranslationMap = {
     statusTimeout: "Timed out",
     waitingForAnswer: "Waiting for your answer",
     waitingForApproval: "Waiting for approval",
-    waitingForConcurrency: "Waiting for a concurrency slot",
     runFailedReason: "Run failed: {reason}",
     runErrorTimedOut: "Timed out",
     runErrorUnknown: "Unknown error",
