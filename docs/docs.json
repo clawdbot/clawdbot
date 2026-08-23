@@ -1539,6 +1539,7 @@
                   "providers/fal",
                   "providers/featherless",
                   "providers/fireworks",
+                  "providers/freetoken",
                   "providers/github-copilot",
                   "providers/gmi",
                   "providers/google",

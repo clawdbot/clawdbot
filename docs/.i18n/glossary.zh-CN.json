@@ -1814,5 +1814,21 @@
   {
     "source": "macOS widget panel",
     "target": "macOS 小组件面板"
+  },
+  {
+    "source": "FreeToken",
+    "target": "FreeToken"
+  },
+  {
+    "source": "FreeToken plugin",
+    "target": "FreeToken 插件"
+  },
+  {
+    "source": "freetoken",
+    "target": "freetoken"
+  },
+  {
+    "source": "FreeToken (local MoE models)",
+    "target": "FreeToken（本地 MoE 模型）"
   }
 ]

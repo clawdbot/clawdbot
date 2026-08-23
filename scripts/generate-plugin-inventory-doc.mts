@@ -170,6 +170,7 @@ function humanizeId(value: string) {
     ["exa", "Exa"],
     ["fal", "fal"],
     ["feishu", "Feishu"],
+    ["freetoken", "FreeToken"],
     ["github", "GitHub"],
     ["googlechat", "Google Chat"],
     ["gpt", "GPT"],

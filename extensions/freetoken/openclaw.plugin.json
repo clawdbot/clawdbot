@@ -1,0 +1,52 @@
+{
+  "id": "freetoken",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["freetoken"],
+  "modelCatalog": {
+    "discovery": {
+      "freetoken": "refreshable"
+    }
+  },
+  "providerRequest": {
+    "providers": {
+      "freetoken": {
+        "family": "freetoken"
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "freetoken": {
+        "external": false
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "freetoken",
+        "envVars": ["FREETOKEN_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "freetoken",
+      "method": "custom",
+      "choiceId": "freetoken",
+      "choiceLabel": "FreeToken",
+      "choiceHint": "Edge-native OpenAI-compatible MoE server",
+      "groupId": "freetoken",
+      "groupLabel": "FreeToken",
+      "groupHint": "Local/self-hosted MoE inference"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
