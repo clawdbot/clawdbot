@@ -314,10 +314,12 @@ describe("worker placement startup health lifetime", () => {
     },
   );
 
-  it("drains periodic post-readiness session evidence before stopping environments", async () => {
-    const evidence = createDeferredCore<"current">();
-    runtimeFactoryMocks.resolveSessionEvidence.mockImplementation(async () => evidence.promise);
-    runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValue(
+  it("immediately retires absent sessions after readiness and drains retirement on stop", async () => {
+    const evidence = createDeferredCore<"absent">();
+    const reconcileActive = vi.fn().mockResolvedValue(undefined);
+    const retireSessionPlacement = vi.fn();
+    runtimeFactoryMocks.resolveSessionEvidence.mockImplementationOnce(async () => evidence.promise);
+    runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValueOnce(
       runtimeFactoryMocks.resolveSessionEvidence,
     );
     runtimeFactoryMocks.createDiskSpace.mockReturnValue({
@@ -330,7 +332,7 @@ describe("worker placement startup health lifetime", () => {
       forceDestroyEnvironment: vi.fn(),
       reclaim: vi.fn(),
       reconcile: vi.fn().mockResolvedValue(undefined),
-      reconcileActive: vi.fn().mockResolvedValue(undefined),
+      reconcileActive,
     });
     const placement = {
       sessionId: "session-startup",
@@ -364,7 +366,7 @@ describe("worker placement startup health lifetime", () => {
         workspaceResultInstanceId: () => "gateway-test",
         get: () => placement,
         list: () => [placement],
-        retireSessionPlacement: vi.fn(),
+        retireSessionPlacement,
         pruneOrphanedWorkspaceReconciliations: () => [],
         listWorkspaceReconciliationOwners: () => [],
         listPendingWorkspaceResults: () => [],
@@ -376,7 +378,6 @@ describe("worker placement startup health lifetime", () => {
     });
     let sidecar: { stop: () => Promise<void> } | undefined;
     const unregisterSidecar = vi.fn();
-    vi.useFakeTimers();
     try {
       const starting = runtime.startRuntime({
         isClosePreludeStarted: () => false,
@@ -386,9 +387,9 @@ describe("worker placement startup health lifetime", () => {
         unregisterSidecar,
       });
       await expect(starting).resolves.toBe(sidecar);
-      expect(runtimeFactoryMocks.resolveSessionEvidence).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(60_000);
       expect(runtimeFactoryMocks.resolveSessionEvidence).toHaveBeenCalledOnce();
+      expect(reconcileActive).not.toHaveBeenCalled();
+      expect(retireSessionPlacement).not.toHaveBeenCalled();
 
       const stopping = sidecar?.stop();
       const repeatedStop = sidecar?.stop();
@@ -400,14 +401,14 @@ describe("worker placement startup health lifetime", () => {
       expect(repeatedStop).toBe(stopping);
       expect(environments.stopNodeEnrollmentWaits).toHaveBeenCalledOnce();
       expect(environments.stop).not.toHaveBeenCalled();
-      evidence.resolve("current");
+      evidence.resolve("absent");
       await Promise.all([stopping, repeatedStop]);
+      expect(retireSessionPlacement).toHaveBeenCalledOnce();
       expect(environments.stop).toHaveBeenCalledOnce();
       expect(unregisterSidecar).not.toHaveBeenCalled();
     } finally {
-      evidence.resolve("current");
+      evidence.resolve("absent");
       await sidecar?.stop();
-      vi.useRealTimers();
     }
   });
 

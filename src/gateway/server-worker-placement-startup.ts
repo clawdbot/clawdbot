@@ -646,6 +646,11 @@ export function createGatewayWorkerPlacementRuntime(
       if (hooks.isClosePreludeStarted()) {
         return await stopBeforeReady();
       }
+      void trackOperation(
+        placementReconcile,
+        sessionRetirement.reconcile(),
+        "Worker placement reconcile sweep failed",
+      );
       void sweepDiskSpace();
       placementReconcileInterval = setInterval(
         sweepActivePlacements,
