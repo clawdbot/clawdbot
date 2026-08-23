@@ -1,5 +1,6 @@
 // Core gateway method descriptors keep handler names, auth scopes, startup availability, and write policy in one table.
 import type { OperatorScope } from "../operator-scopes.js";
+import { isSessionProfileDependentMethod } from "../session-sharing-target-input.js";
 import {
   DYNAMIC_GATEWAY_METHOD_SCOPE,
   NODE_GATEWAY_METHOD_SCOPE,
@@ -33,6 +34,41 @@ type CoreGatewayMethodSpecRow = readonly [
   policy?: CoreGatewayMethodPolicy,
 ];
 
+const PROFILE_DEPENDENT_CORE_METHODS = new Set([
+  "agent.wait",
+  "ui.command",
+  "users.linkEmail",
+  "users.setAvatar",
+  "users.setDisplayName",
+]);
+const PROFILE_DEPENDENT_CORE_PREFIXES = [
+  "artifacts.",
+  "chat.",
+  "conversations.",
+  "controlUi.session",
+  "mcp.app.",
+  "openclaw.approval.",
+  "openclaw.chat",
+  "progressCard.",
+  "projects.",
+  "secrets.",
+  "session.",
+  "sessions.",
+  "taskSuggestions.",
+  "tasks.",
+  "terminal.",
+  "users.prefs.",
+] as const;
+
+/** Classifies core methods whose behavior reads or mutates durable user/session ownership. */
+function isCoreGatewayMethodProfileDependent(method: string): boolean {
+  return (
+    isSessionProfileDependentMethod(method) ||
+    PROFILE_DEPENDENT_CORE_METHODS.has(method) ||
+    PROFILE_DEPENDENT_CORE_PREFIXES.some((prefix) => method.startsWith(prefix))
+  );
+}
+
 // This is the canonical core method policy table: every core handler must appear here so
 // listing, authorization, startup availability, and write throttling stay in sync.
 const CORE_GATEWAY_METHOD_SPECS = [
@@ -65,7 +101,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["config.set", "config", "operator.admin", "<=2026.7"],
   ["config.apply", "config", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
   ["config.patch", "config", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
-  ["config.schema", "config", "operator.admin", "<=2026.7"],
+  ["config.schema", "config", "operator.read", "<=2026.7"],
   ["config.schema.lookup", "config", "operator.read", "<=2026.7"],
   ["exec.approvals.get", "exec-approvals", "operator.admin", "<=2026.7"],
   ["exec.approvals.set", "exec-approvals", "operator.admin", "<=2026.7"],
@@ -306,10 +342,10 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["cron.status", "cron", "operator.read", "<=2026.7"],
   ["cron.scratch.get", "cron", "operator.admin", "2026.7"],
   ["cron.scratch.set", "cron", "operator.admin", "2026.7"],
-  ["cron.add", "cron", "operator.admin", "<=2026.7"],
-  ["cron.update", "cron", "operator.admin", "<=2026.7"],
-  ["cron.remove", "cron", "operator.admin", "<=2026.7"],
-  ["cron.run", "cron", "operator.admin", "<=2026.7"],
+  ["cron.add", "cron", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
+  ["cron.update", "cron", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
+  ["cron.remove", "cron", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
+  ["cron.run", "cron", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
   ["cron.runs", "cron", "operator.read", "<=2026.7"],
   ["gateway.identity.get", "system", "operator.read", "<=2026.7"],
   // Deprecated read-only compatibility preview; new restart flows request the
@@ -357,7 +393,17 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.usage.timeseries", "usage", "operator.read", "<=2026.7", { advertise: false }],
   ["sessions.usage.logs", "usage", "operator.read", "<=2026.7", { advertise: false }],
   ["poll", "send", "operator.write", "<=2026.7", { advertise: false }],
-  ["sessions.steer", "sessions-messaging", "operator.write", "<=2026.7", { advertise: false }],
+  [
+    "sessions.steer",
+    "sessions-messaging",
+    "operator.write",
+    "<=2026.7",
+    {
+      advertise: false,
+      description:
+        "Deprecated alias for chat.send queueMode interrupt; removal per protocol deprecation policy.",
+    },
+  ],
   ["push.test", "push", "operator.write", "<=2026.7", { advertise: false }],
   ["attach.grant", "attach", "operator.admin", "<=2026.7", { controlPlaneWrite: true }],
   ["attach.revoke", "attach", "operator.admin", "<=2026.7"],
@@ -438,14 +484,14 @@ const CORE_GATEWAY_METHOD_SPECS = [
   [
     "sessions.dispatch",
     "sessions-dispatch",
-    "operator.admin",
+    "dynamic",
     "2026.7",
     { startup: true, controlPlaneWrite: true },
   ],
   [
     "sessions.reclaim",
     "sessions-dispatch",
-    "operator.admin",
+    "operator.write",
     "2026.7",
     { startup: true, controlPlaneWrite: true },
   ],
@@ -537,7 +583,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   [
     "sessions.move",
     "sessions-dispatch",
-    "operator.admin",
+    "dynamic",
     "2026.8",
     { startup: true, controlPlaneWrite: true },
   ],
@@ -549,6 +595,34 @@ const CORE_GATEWAY_METHOD_SPECS = [
     "tools.github.configure",
     "tools-github",
     "operator.admin",
+    "2026.8",
+    { controlPlaneWrite: true },
+  ],
+  [
+    "tools.github.authorize.start",
+    "tools-github",
+    "operator.admin",
+    "2026.8",
+    { controlPlaneWrite: true },
+  ],
+  [
+    "tools.github.authorize.poll",
+    "tools-github",
+    "operator.admin",
+    "2026.8",
+    { controlPlaneWrite: true },
+  ],
+  [
+    "tools.github.authorize.cancel",
+    "tools-github",
+    "operator.admin",
+    "2026.8",
+    { controlPlaneWrite: true },
+  ],
+  [
+    "sessions.github.publish",
+    "sessions-github",
+    "operator.write",
     "2026.8",
     { controlPlaneWrite: true },
   ],
@@ -671,6 +745,7 @@ export function createCoreGatewayMethodDescriptors(
       handler,
       owner: { kind: "core", area: "gateway" },
       scope: spec.scope,
+      profileAccess: isCoreGatewayMethodProfileDependent(spec.name) ? "required" : "independent",
       ...(spec.since ? { since: spec.since } : {}),
       ...(spec.advertise === false ? { advertise: false } : {}),
       ...(spec.startup === true ? { startup: "unavailable-until-sidecars" } : {}),

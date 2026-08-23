@@ -1,3 +1,4 @@
+import type { ControlUiEnvironment } from "../gateway/control-ui-bootstrap-contract.js";
 // Defines gateway runtime and networking configuration types.
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { SecretInput } from "./types.secrets.js";
@@ -137,6 +138,8 @@ export type GatewayControlUiConfig = {
   basePath?: string;
   /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
   root?: string;
+  /** Optional visual label and named color distinguishing this Gateway environment. */
+  environment?: ControlUiEnvironment;
   /** Optional service credential used only for Control UI GitHub previews and discovery. */
   github?: { token?: SecretInput };
   /**
@@ -159,6 +162,8 @@ export type GatewayControlUiConfig = {
    * Default off; prefer hosted /__openclaw__/canvas or /__openclaw__/a2ui content.
    */
   allowExternalEmbedUrls?: boolean;
+  /** Fetch public-site favicons through the Gateway for Control UI links (default true). */
+  automaticallyFetchFavicons?: boolean;
   /** Optional max-width for grouped Control UI chat messages (default: min(900px, 68%)). */
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];

@@ -776,6 +776,32 @@ struct ChatSessionSidebarModelTests {
         #expect(cleared.lastRunError == nil)
     }
 
+    @Test func `active run id tombstone clears exact ids while omission is inert`() throws {
+        let existing = self.entry(
+            key: "agent:main:work",
+            updatedAt: 100,
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: ["run-exact"])
+        let decoder = JSONDecoder()
+
+        let omitted = try decoder.decode(
+            OpenClawChatSessionsChangedEvent.self,
+            from: Data(#"{"reason":"run-progress","session":{"key":"agent:main:work","updatedAt":200,"hasActiveRun":true}}"#.utf8))
+        let retained = try #require(ChatSessionSidebarModel.applying(
+            sessionChange: omitted,
+            to: [existing]))
+        #expect(retained[0].activeRunIds == ["run-exact"])
+
+        let tombstoned = try decoder.decode(
+            OpenClawChatSessionsChangedEvent.self,
+            from: Data(#"{"reason":"run-progress","session":{"key":"agent:main:work","updatedAt":300,"hasActiveRun":true,"activeRunIds":null}}"#.utf8))
+        let cleared = try #require(ChatSessionSidebarModel.applying(
+            sessionChange: tombstoned,
+            to: retained))
+        #expect(cleared[0].activeRunIds == nil)
+    }
+
     @Test func `subtitle precedence keeps attention and status above observer digest`() {
         let digest = OpenClawChatSessionObserverDigest(
             runId: "run-1",

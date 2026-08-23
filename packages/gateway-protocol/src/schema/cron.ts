@@ -97,6 +97,11 @@ function cronRunStatusSchema(options: Record<string, unknown> = {}) {
 }
 
 const CronRunStatusSchema = cronRunStatusSchema();
+const CronCompletionStatusSchema = Type.Union([
+  Type.Literal("succeeded"),
+  Type.Literal("failed"),
+  Type.Literal("unknown"),
+]);
 const CronConfigRevisionSchema = Type.String({ minLength: 1, maxLength: 128 });
 const DeprecatedCronRunStatusSchema = cronRunStatusSchema({
   deprecated: true,
@@ -122,6 +127,11 @@ const CronJobsLastRunStatusFilterSchema = Type.Union([
   Type.Literal("error"),
   Type.Literal("skipped"),
   Type.Literal("unknown"),
+]);
+const CronJobsTriggerFilterSchema = Type.Union([
+  Type.Literal("all"),
+  Type.Literal("conditional"),
+  Type.Literal("unconditional"),
 ]);
 const CronJobsSortBySchema = Type.Union([
   Type.Literal("nextRunAtMs"),
@@ -617,6 +627,7 @@ export const CronListParamsSchema = closedObject({
   enabled: Type.Optional(CronJobsEnabledFilterSchema),
   scheduleKind: Type.Optional(CronJobsScheduleKindFilterSchema),
   lastRunStatus: Type.Optional(CronJobsLastRunStatusFilterSchema),
+  trigger: Type.Optional(CronJobsTriggerFilterSchema),
   sortBy: Type.Optional(CronJobsSortBySchema),
   sortDir: Type.Optional(CronSortDirSchema),
   agentId: Type.Optional(NonEmptyString),
@@ -753,6 +764,7 @@ export const CronRunLogEntrySchema = closedObject({
   jobId: NonEmptyString,
   action: Type.Literal("finished"),
   status: Type.Optional(CronRunStatusSchema),
+  completionStatus: Type.Optional(CronCompletionStatusSchema),
   error: Type.Optional(Type.String()),
   errorReason: Type.Optional(FailoverReasonSchema),
   summary: Type.Optional(Type.String()),

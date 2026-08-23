@@ -147,7 +147,9 @@ describe("AppSidebar session ownership filtering", () => {
     expect(sidebar.querySelector('[data-session-key="agent:main:bob"]')).toBeNull();
     expect(sidebar.querySelector('[data-session-section="category:Research"]')).not.toBeNull();
     expect(sidebar.querySelector('[data-session-section="category:Operations"]')).toBeNull();
-    expect(sidebar.querySelector(".sidebar-session-sort--filtered")).not.toBeNull();
+    expect(
+      sidebar.querySelector(".sidebar-session-toolbar .sidebar-session-sort--filtered"),
+    ).not.toBeNull();
   });
 
   it("filters adopted catalog rows by authoritative live ownership", async () => {

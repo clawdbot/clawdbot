@@ -89,6 +89,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Managed local GitHub CLI profile and optional Git author for agent tools. Omit this object to preserve the Gateway runtime user's native account and author; repository remote credentials are never overridden.",
   "tools.github.profileId":
     "Opaque generated profile version used to switch managed credentials atomically.",
+  "tools.github.kind":
+    "Marks a managed OAuth profile whose rotating refresh credential is owned by the Gateway. Omitted profiles use a personal access token.",
   "tools.github.gitAuthor.name": "Optional process-local Git author and committer name.",
   "tools.github.gitAuthor.email": "Optional process-local Git author and committer email.",
   "agents.entries.*.tools.github":
@@ -144,7 +146,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.codeMode.snapshotTtlSeconds":
     "How long suspended code-mode snapshots can be resumed with `wait` before they expire.",
   "tools.codeMode.searchDefaultLimit":
-    "Default number of hidden catalog search results returned by `tools.search` inside code mode.",
+    "Default number of hidden catalog search results returned by `catalog.search` inside code mode.",
   "tools.codeMode.maxSearchLimit":
     "Maximum number of hidden catalog search results a code-mode program can request.",
   "tools.swarm":
@@ -194,6 +196,12 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
   "gateway.controlUi.root":
     "Optional filesystem root for Control UI assets (defaults to dist/control-ui).",
+  "gateway.controlUi.environment":
+    "Optional public environment identity shown in the Control UI stripe, agent avatar, label pills, browser title, and favicon. Omit it to preserve the default appearance.",
+  "gateway.controlUi.environment.label":
+    "Environment label displayed in the Control UI and browser tab; surrounding whitespace is trimmed and the label must contain 1 to 24 characters.",
+  "gateway.controlUi.environment.color":
+    "Named environment color ramp: teal, amber, purple, coral, pink, blue, green, red, or gray.",
   "gateway.controlUi.toolTitles":
     "Opt-in AI purpose titles for tool calls in Control UI chat (default off). When enabled, the chat.toolTitles method generates short titles for complex tool calls with the agent's utility model (an explicit utilityModel may route bounded tool arguments to the operator-chosen provider like every utility task; the derived default stays on the session's provider) and caches them in the per-agent state database. Setting utilityModel to an empty string disables titles too. Leave off to keep tool rendering fully deterministic with no background model calls.",
   "gateway.controlUi.github.token":
@@ -204,6 +212,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     'Iframe sandbox policy for hosted Control UI embeds. "strict" disables scripts, "scripts" allows interactive embeds while keeping origin isolation (default), and "trusted" adds `allow-same-origin` for same-site documents that intentionally need stronger privileges.',
   "gateway.controlUi.allowExternalEmbedUrls":
     "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
+  "gateway.controlUi.automaticallyFetchFavicons":
+    "Fetch link favicons through the Gateway (default on). The Gateway requests only HTTPS /favicon.ico from public destinations, applies strict SSRF checks to every DNS result and redirect, and validates bounded image bytes. Set false to prevent all favicon route requests and destination fetches.",
   "gateway.controlUi.allowedOrigins":
     'Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":

@@ -99,6 +99,8 @@ function makeClient(params: {
   connId: string;
   deviceId?: string;
   authenticatedUserId?: string;
+  profileId?: string;
+  githubSyncPending?: boolean;
 }): GatewayClient {
   return {
     connId: params.connId,
@@ -107,6 +109,21 @@ function makeClient(params: {
       ...(params.deviceId ? { device: { id: params.deviceId } } : {}),
     },
     ...(params.authenticatedUserId ? { authenticatedUserId: params.authenticatedUserId } : {}),
+    ...(params.profileId
+      ? {
+          authenticatedUserProfile: {
+            profileId: params.profileId,
+            displayName: null,
+            hasAvatar: false,
+            updatedAt: 1,
+          },
+        }
+      : {}),
+    ...(params.githubSyncPending
+      ? {
+          authenticatedGitHubIdentitySync: async () => ({ profileId: "pending", updatedAt: 1 }),
+        }
+      : {}),
   } as GatewayClient;
 }
 
@@ -283,6 +300,64 @@ describe("openclaw.chat session ownership", () => {
 
     expect(resumed.ok).toBe(true);
     expect(handle).toHaveBeenCalledWith("continue");
+  });
+
+  it("uses the immutable profile across a GitHub login rename", async () => {
+    const sessions = new Map<string, SystemAgentChatSession>();
+    const context = makeContext(sessions);
+    await callChat(
+      context,
+      { sessionId: "github-rename" },
+      makeClient({
+        connId: "conn-old",
+        authenticatedUserId: "old-login@github",
+        profileId: "profile-account-a",
+      }),
+    );
+    const handle = expectDefined(createdEngines[0], "created system-agent engine").handle;
+
+    const resumed = await callChat(
+      context,
+      { sessionId: "github-rename", message: "continue" },
+      makeClient({
+        connId: "conn-new",
+        authenticatedUserId: "new-login@github",
+        profileId: "profile-account-a",
+      }),
+    );
+
+    expect(sessions.get("github-rename")?.ownerKey).toBe("user:profile-account-a");
+    expect(resumed.ok).toBe(true);
+    expect(handle).toHaveBeenCalledWith("continue");
+  });
+
+  it("rejects pending GitHub ownership and binds only the attached canonical profile", async () => {
+    const sessions = new Map<string, SystemAgentChatSession>();
+    const context = makeContext(sessions);
+    const pendingClient = makeClient({
+      connId: "conn-pending",
+      deviceId: "device-pending",
+      authenticatedUserId: "released-login@github",
+      githubSyncPending: true,
+    });
+
+    const pending = await callChat(context, { sessionId: "github-pending" }, pendingClient);
+    expect(pending).toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE", retryable: true },
+    });
+    expect(sessions.has("github-pending")).toBe(false);
+
+    pendingClient.authenticatedUserProfile = {
+      profileId: "profile-canonical",
+      displayName: null,
+      hasAvatar: false,
+      updatedAt: 2,
+    };
+    const attached = await callChat(context, { sessionId: "github-pending" }, pendingClient);
+
+    expect(attached.ok).toBe(true);
+    expect(sessions.get("github-pending")?.ownerKey).toBe("user:profile-canonical");
   });
 
   it("lets the same paired device resume after reconnecting", async () => {

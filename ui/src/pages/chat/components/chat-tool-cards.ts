@@ -2,11 +2,18 @@
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import { icons, type IconName } from "../../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
 import "../../../components/tooltip.ts";
+import { syncTabGroupLabel } from "../../../components/web-awesome-tabs.ts";
 import { t } from "../../../i18n/index.ts";
-import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
+import type {
+  ToolApprovalReview,
+  ToolCard,
+  ToolCardOutcome,
+} from "../../../lib/chat/chat-types.ts";
+import { readToolApprovalReviews } from "../../../lib/chat/tool-approval-reviews.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
   formatDistinctCollapsedToolSummaryText as distinctSummaryText,
@@ -33,10 +40,6 @@ export {
   WIDGET_PROMPT_EVENT,
   type WidgetPromptEventDetail,
 } from "./widget-card.ts";
-
-type FullMessageRequest = NonNullable<
-  Extract<SidebarContent, { kind: "markdown" }>["fullMessageRequest"]
->;
 
 export function shouldToggleSelectableDisclosure(event: MouseEvent): boolean {
   if (event.detail === 0) {
@@ -140,25 +143,17 @@ function handleRawDetailsToggle(event: Event) {
   body.hidden = expanded;
 }
 
-function buildSidebarContent(
-  value: string,
-  options?: {
-    rawText?: string | null;
-    fullMessageRequest?: FullMessageRequest;
-  },
-): SidebarContent {
+function buildSidebarContent(value: string, options?: { rawText?: string | null }): SidebarContent {
   return {
     kind: "markdown",
     content: value,
     ...(options?.rawText ? { rawText: options.rawText } : {}),
-    ...(options?.fullMessageRequest ? { fullMessageRequest: options.fullMessageRequest } : {}),
   };
 }
 
 function buildPreviewSidebarContent(
   preview: ToolPreview,
   rawText?: string | null,
-  options?: { fullMessageRequest?: FullMessageRequest },
 ): SidebarContent | null {
   if (preview.kind !== "canvas" || preview.render !== "url" || !preview.viewId || !preview.url) {
     return null;
@@ -173,20 +168,7 @@ function buildPreviewSidebarContent(
     // trusted global embed mode would re-grant same-origin to widget script.
     ...(preview.sandbox ? { sandbox: preview.sandbox } : {}),
     ...(rawText ? { rawText } : {}),
-    ...(options?.fullMessageRequest ? { fullMessageRequest: options.fullMessageRequest } : {}),
   };
-}
-
-function buildToolSidebarFullMessageRequest(
-  card: ToolCard,
-  sessionKey: string | undefined,
-): FullMessageRequest | undefined {
-  if (!sessionKey || !card.messageId) {
-    return undefined;
-  }
-  // A transcript entry can contain multiple tool blocks. Until the request can
-  // identify a specific block, upgrading by message id can show the wrong tool.
-  return undefined;
 }
 
 export function renderRawOutputToggle(text: string) {
@@ -317,26 +299,6 @@ export function syncToolDisclosureOverflow(event: Event): void {
     "chat-tool-disclosure--overflowing",
     Boolean(content && content.scrollWidth > content.clientWidth),
   );
-}
-
-export function toggleToolDisclosureKeepingScroll(event: Event, toggle: () => void): void {
-  const target = event.currentTarget;
-  const row = target instanceof Element ? target.closest<HTMLElement>(".chat-virtual-row") : null;
-  const scroller = row?.closest<HTMLElement>(".chat-thread");
-  const rowTop = row?.getBoundingClientRect().top;
-  toggle();
-  if (!row || !scroller || rowTop === undefined) {
-    return;
-  }
-  requestAnimationFrame(() => {
-    // ResizeObserver runs after rAF. Wait one more frame so TanStack applies
-    // its end-anchor delta before we restore this disclosure row's position.
-    requestAnimationFrame(() => {
-      if (row.isConnected) {
-        scroller.scrollTop += row.getBoundingClientRect().top - rowTop;
-      }
-    });
-  });
 }
 
 function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolCardOutcome) {
@@ -692,12 +654,7 @@ export function renderToolOutcome(outcome: ToolCardOutcome, exitCode?: number) {
   return label ? html`<div class="chat-tool-card__outcome">${label}</div>` : nothing;
 }
 
-function renderTerminalBlock(
-  command: string,
-  output: string | undefined,
-  outcome: ToolCardOutcome,
-  exitCode?: number,
-) {
+function renderTerminalBlock(command: string, output: string | undefined) {
   return html`
     <div class="chat-tool-term">
       <div class="chat-tool-term__cmd">
@@ -707,8 +664,43 @@ function renderTerminalBlock(
       ${output?.trim()
         ? html`<pre class="chat-tool-term__out"><code>${output}</code></pre>`
         : nothing}
-      ${renderToolOutcome(outcome, exitCode)}
     </div>
+  `;
+}
+
+function renderToolCardModes(
+  card: ToolCard,
+  diff: NonNullable<ToolCallView["diff"]>,
+  outcome: ToolCardOutcome,
+  isError: boolean,
+) {
+  const active = isError ? "raw" : "diff";
+  const modeLabel = t("chat.toolCards.viewMode");
+  return html`
+    <wa-tab-group
+      class="chat-tool-card__modes"
+      aria-label=${modeLabel}
+      .active=${active}
+      activation="auto"
+      without-scroll-controls
+      ${ref((element) => syncTabGroupLabel(element, modeLabel))}
+    >
+      <wa-tab slot="nav" id=${`${card.id}-diff-tab`} panel="diff" ?active=${active === "diff"}>
+        ${t("chat.toolCards.diff")}
+      </wa-tab>
+      <wa-tab slot="nav" id=${`${card.id}-raw-tab`} panel="raw" ?active=${active === "raw"}>
+        ${t("chat.toolCards.raw")}
+      </wa-tab>
+      <wa-tab-panel id=${`${card.id}-diff-panel`} name="diff" ?active=${active === "diff"}>
+        ${renderDiffBlock(diff, outcome)}
+      </wa-tab-panel>
+      <wa-tab-panel id=${`${card.id}-raw-panel`} name="raw" ?active=${active === "raw"}>
+        ${renderToolDataBlock({
+          ...(isError ? { label: t("chat.toolCards.toolError") } : {}),
+          text: card.outputText!,
+        })}
+      </wa-tab-panel>
+    </wa-tab-group>
   `;
 }
 
@@ -768,6 +760,57 @@ export function resolveToolRowText(card: ToolCard, runActive?: boolean): string 
   return [display.label, toolArgumentPreview(card.args)].filter(Boolean).join(" ");
 }
 
+function toolReviewLabel(review: ToolApprovalReview): string {
+  const key =
+    review.status === "in_progress"
+      ? "reviewing"
+      : review.status === "timed_out"
+        ? "timedOut"
+        : review.status;
+  return t(`chat.toolCards.review.${key}`, { reviewer: review.label });
+}
+
+export function renderToolApprovalReviews(card: ToolCard) {
+  const reviews = readToolApprovalReviews(card.details);
+  if (reviews.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div class="chat-tool-reviews">
+      ${reviews.map((review) => {
+        const adverse = ["denied", "timed_out", "aborted"].includes(review.status);
+        return html`
+          <div class="chat-tool-review" data-review-status=${review.status}>
+            <div class="chat-tool-review__header">
+              <span class="chat-tool-review__icon"
+                >${adverse ? icons.shieldX : icons.shieldCheck}</span
+              >
+              <span class="chat-tool-review__label">${toolReviewLabel(review)}</span>
+              ${review.riskLevel
+                ? html`<span class="chat-tool-review__chip"
+                    >${t("chat.toolCards.review.risk", { level: review.riskLevel })}</span
+                  >`
+                : nothing}
+              ${review.userAuthorization
+                ? html`<span class="chat-tool-review__chip"
+                    >${t("chat.toolCards.review.authorization", {
+                      level: review.userAuthorization,
+                    })}</span
+                  >`
+                : nothing}
+            </div>
+            ${review.status === "in_progress"
+              ? nothing
+              : html`<div class="chat-tool-review__rationale">
+                  ${review.rationale ?? t("chat.toolCards.review.noRationale")}
+                </div>`}
+          </div>
+        `;
+      })}
+    </div>
+  `;
+}
+
 export function renderToolCard(
   card: ToolCard,
   opts: {
@@ -781,6 +824,7 @@ export function renderToolCard(
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    showApprovalReviews?: boolean;
   },
 ) {
   const outcome = resolveToolCardOutcome(card, opts.runActive);
@@ -814,8 +858,7 @@ export function renderToolCard(
               type="button"
               aria-expanded=${String(expanded)}
               aria-label=${resolveToolRowText(card, opts.runActive)}
-              @click=${(event: MouseEvent) =>
-                toggleToolDisclosureKeepingScroll(event, () => opts.onToggleExpanded(card.id))}
+              @click=${() => opts.onToggleExpanded(card.id)}
             ></button>
             <span class="chat-tool-msg-summary__icon">${renderToolIcon(icon)}</span>
             <span class="chat-tool-disclosure__content"
@@ -839,7 +882,7 @@ export function renderToolCard(
             @focus=${syncToolDisclosureOverflow}
             @click=${(event: MouseEvent) => {
               if (shouldToggleSelectableDisclosure(event)) {
-                toggleToolDisclosureKeepingScroll(event, () => opts.onToggleExpanded(card.id));
+                opts.onToggleExpanded(card.id);
               }
             }}
           >
@@ -865,6 +908,7 @@ export function renderToolCard(
             </div>
           `
         : nothing}
+      ${opts.showApprovalReviews === false ? nothing : renderToolApprovalReviews(card)}
     </div>
   `;
 }
@@ -896,15 +940,13 @@ export function renderExpandedToolCardContent(
       ? resolveToolWorkspaceFilePath(card, view)
       : null;
   const canOpenSidebar = Boolean(onOpenSidebar);
-  const fullMessageRequest = buildToolSidebarFullMessageRequest(card, sessionKey);
   const previewSidebarContent =
     card.preview?.kind === "canvas"
-      ? buildPreviewSidebarContent(card.preview, card.outputText, { fullMessageRequest })
+      ? buildPreviewSidebarContent(card.preview, card.outputText)
       : null;
   const sidebarActionContent =
     previewSidebarContent ??
     buildSidebarContent(buildToolCardSidebarContent(card), {
-      fullMessageRequest,
       rawText: card.outputText ?? null,
     });
   const visiblePreview = card.preview
@@ -958,14 +1000,15 @@ export function renderExpandedToolCardContent(
     return html`
       <div class="chat-tool-card chat-tool-card--flush ${isError ? "chat-tool-card--error" : ""}">
         <div class="chat-tool-card__actions">${sidebarAction}</div>
-        ${renderTerminalBlock(view.command, card.outputText, outcome, card.exitCode)}
+        ${renderTerminalBlock(view.command, card.outputText)}
         ${Object.keys(extraArgs).length > 0 ? renderArgsKeyValueList(extraArgs) : nothing}
+        ${renderToolOutcome(outcome, card.exitCode)}
       </div>
     `;
   }
 
-  // Edits and writes with a resolvable diff render it inline; the raw tool
-  // output stays reachable behind the raw-details toggle.
+  // Edits and writes with a resolvable diff render it inline. When raw output
+  // also exists, the shared tab primitive owns both views and their semantics.
   if ((view.kind === "edit" || view.kind === "write") && view.diff && view.diff.length > 0) {
     return html`
       <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
@@ -977,12 +1020,10 @@ export function renderExpandedToolCardContent(
           )}
           <div class="chat-tool-card__actions">${diffCopyAction}${sidebarAction}</div>
         </div>
-        ${renderDiffBlock(view.diff, outcome)} ${renderToolOutcome(outcome, card.exitCode)}
-        ${isError && hasOutput
-          ? renderToolDataBlock({ label: t("chat.toolCards.toolError"), text: card.outputText! })
-          : hasOutput
-            ? renderRawOutputToggle(card.outputText!)
-            : nothing}
+        ${hasOutput
+          ? renderToolCardModes(card, view.diff, outcome, isError)
+          : renderDiffBlock(view.diff, outcome)}
+        ${renderToolOutcome(outcome, card.exitCode)}
       </div>
     `;
   }

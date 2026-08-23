@@ -78,11 +78,12 @@ export function parseCronCommandEnv(values: unknown): Record<string, string> | u
 }
 
 export const getCronChannelOptions = () => {
-  // Keep help truthful even before the plugin registry is bootstrapped.
+  // Keep help truthful even before the plugin registry is bootstrapped. The fallback names the
+  // channel plugin id the runtime resolves, not a per-conversation platform channel identifier.
   const pluginIds = listChannelPlugins()
     .map((plugin) => plugin.id)
     .filter(Boolean);
-  return pluginIds.length > 0 ? ["last", ...pluginIds].join("|") : "last|<channel-id>";
+  return pluginIds.length > 0 ? ["last", ...pluginIds].join("|") : "last|<channel-plugin-id>";
 };
 
 function toLocalIsoTime(value: unknown): string | undefined {
@@ -479,7 +480,7 @@ export function printCronList(
     formatCell("Model", CRON_MODEL_PAD),
   ].join(" ");
 
-  runtime.log(rich ? theme.heading(header) : header);
+  const lines = [rich ? theme.heading(header) : header];
   const now = Date.now();
 
   for (const job of jobs) {
@@ -554,8 +555,10 @@ export function printCronList(
         : colorize(rich, theme.muted, modelLabel),
     ].join(" ");
 
-    runtime.log(line.trimEnd());
+    lines.push(line.trimEnd());
   }
+
+  runtime.log(lines.join("\n"));
 }
 
 export function printCronShow(

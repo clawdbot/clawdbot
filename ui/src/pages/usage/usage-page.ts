@@ -25,6 +25,7 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
+import type { ProviderUsageRequestResult } from "../../lib/provider-usage-request.ts";
 import {
   requestSessionUsageLogs,
   requestSessionUsageTimeSeries,
@@ -36,7 +37,6 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { mergeUsageCacheStatus } from "./cache-status.ts";
-import type { ProviderUsageSummary } from "./data-types.ts";
 import { failUsageDetailRefresh } from "./detail-refresh.ts";
 import {
   currentLocalDate,
@@ -68,7 +68,7 @@ export type UsageRouteData = {
   };
   result: SessionsUsageResult | null;
   costSummary: CostUsageSummary | null;
-  providerUsageSummary: ProviderUsageSummary | null;
+  providerUsage: ProviderUsageRequestResult | null;
   loadedAtMs: number | null;
   error: string | null;
 };
@@ -86,7 +86,7 @@ class UsagePage extends OpenClawLightDomElement {
 
   @state() private usageResult: SessionsUsageResult | null = null;
   @state() private usageCostSummary: CostUsageSummary | null = null;
-  @state() private providerUsageSummary: ProviderUsageSummary | null = null;
+  @state() private providerUsage: ProviderUsageRequestResult | null = null;
   @state() private usageError: string | null = null;
   @state() private usageStartDate = currentLocalDate();
   @state() private usageEndDate = currentLocalDate();
@@ -189,13 +189,16 @@ class UsagePage extends OpenClawLightDomElement {
       this.usageTaskActiveClient = null;
       this.usageResult = value.result;
       this.usageCostSummary = value.costSummary;
-      this.providerUsageSummary = value.providerUsageSummary;
+      this.providerUsage = value.providerUsage;
       this.usageError = null;
-      this.refreshPolicy.markLoaded();
+      this.refreshPolicy.setLastLoadedAtMs(value.providerUsage.ok ? Date.now() : null);
       this.refreshPolicy.flushPending();
     },
     onError: (error) => {
       this.usageTaskActiveClient = null;
+      if (this.providerUsage?.ok === false) {
+        this.providerUsage = null;
+      }
       if (isMissingOperatorReadScopeError(error)) {
         this.usageResult = null;
         this.usageCostSummary = null;
@@ -311,8 +314,8 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageAgentId = data.query.agentId;
     this.usageResult = data.result;
     this.usageCostSummary = data.costSummary;
-    this.providerUsageSummary = data.providerUsageSummary;
-    this.refreshPolicy.setLastLoadedAtMs(data.loadedAtMs);
+    this.providerUsage = data.providerUsage;
+    this.refreshPolicy.setLastLoadedAtMs(data.providerUsage?.ok ? data.loadedAtMs : null);
     this.usageError = data.error;
   }
 
@@ -338,7 +341,7 @@ class UsagePage extends OpenClawLightDomElement {
     }
     this.usageResult = null;
     this.usageCostSummary = null;
-    this.providerUsageSummary = null;
+    this.providerUsage = null;
     this.refreshPolicy.resetPayload();
     this.usageError = null;
     this.usageAgentId = this.context.agentSelection.state.scopeId;
@@ -363,9 +366,8 @@ class UsagePage extends OpenClawLightDomElement {
       this.refreshPolicy.markLoadDeferred();
       return Promise.resolve();
     }
-    if (this.usageLoading) {
-      return Promise.resolve();
-    }
+    // Filter changes must supersede active work; Task.run fences the old result
+    // so it cannot publish under the newly rendered query controls.
     this.routeDataEnabled = false;
     this.usageLoadStartDate = this.usageStartDate;
     this.usageLoadEndDate = this.usageEndDate;
@@ -501,7 +503,8 @@ class UsagePage extends OpenClawLightDomElement {
           this.usageResult?.cacheStatus,
           this.usageCostSummary?.cacheStatus,
         ),
-        providerUsage: this.providerUsageSummary?.providers ?? [],
+        providerUsage: this.providerUsage?.ok ? this.providerUsage.value.providers : [],
+        providerUsageUnavailable: this.providerUsage?.ok === false,
       },
       filters: {
         startDate: this.usageStartDate,

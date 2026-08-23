@@ -113,6 +113,7 @@ function useMemoryProviderOwner(params: {
       plugins: [
         {
           pluginId: params.pluginId,
+          startup: { sidecar: false, memory: false, agentHarnesses: [] },
           contributions: {
             contracts: { [params.contract]: [params.adapterId] },
           },
@@ -135,7 +136,15 @@ describe("ensurePluginRegistryLoaded", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.resolvePluginMetadataSnapshot.mockReset().mockReturnValue({
-      index: { installRecords: {}, plugins: [{ pluginId: "openai" }] },
+      index: {
+        installRecords: {},
+        plugins: [
+          {
+            pluginId: "openai",
+            startup: { sidecar: false, memory: false, agentHarnesses: [] },
+          },
+        ],
+      },
       manifestRegistry: { plugins: [], diagnostics: [] },
     } as never);
     mocks.isPluginMetadataSnapshotCompatible.mockReturnValue(true);

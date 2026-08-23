@@ -5,7 +5,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
 import { createQaRunnerRuntime } from "./harness-runtime.js";
@@ -80,19 +80,17 @@ describe("QA runner runtime integration", () => {
         text: "ping",
       });
 
-      await Promise.race([
-        vi.waitFor(
-          () => {
-            expect(harness.state.getSnapshot().messages).toContainEqual(
-              expect.objectContaining({ direction: "outbound", text: "qa-echo: ping" }),
-            );
-          },
-          { interval: 25, timeout: 2_000 },
-        ),
+      const outbound = await Promise.race([
+        harness.state.waitFor({
+          kind: "message-text",
+          direction: "outbound",
+          textIncludes: "qa-echo: ping",
+        }),
         harness.gatewayTask.then(() => {
           throw new Error("QA Channel gateway stopped before delivering the turn");
         }),
       ]);
+      expect(outbound).toMatchObject({ direction: "outbound", text: "qa-echo: ping" });
     } finally {
       await harness.stop();
     }

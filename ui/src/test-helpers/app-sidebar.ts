@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import type {
+  PreservedSessionWorktree,
   SessionCatalogPullRequestSummary,
   SessionsCatalogListResult,
   SessionsPatchManyParams,
@@ -252,7 +253,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     Promise.resolve({
       deleted: [] as string[],
       errors: [] as string[],
-      preservedWorktrees: [] as Array<{ id: string; branch: string; path: string }>,
+      preservedWorktrees: [] as PreservedSessionWorktree[],
     }),
   );
   const refresh = vi.fn((_options?: Parameters<SessionCapability["refresh"]>[0]) =>
@@ -629,8 +630,8 @@ export function setupSidebarTest() {
       configurable: true,
       value: createStorageMock(),
     });
-    // The Coding zone defaults to collapsed on first run; most cases assert its
-    // contents, so start expanded. Collapse-specific tests override this value.
+    // Coding defaults to compact; most cases assert expanded contents, so start
+    // expanded. Collapse tests override this value.
     localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", JSON.stringify([]));
   });
 

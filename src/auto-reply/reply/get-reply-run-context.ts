@@ -4,6 +4,7 @@ import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runn
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
+import { copyChannelParticipantAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import { logVerbose } from "../../globals.js";
@@ -52,7 +53,7 @@ import {
 } from "./session-reset-prompt.js";
 import { resolveSessionStableReplyMode } from "./session-stable-reply-mode.js";
 import {
-  isExplicitSourceReplyCommand,
+  isDirectedSourceReplyTurn,
   isSyntheticSourceReplyTurn,
 } from "./source-reply-delivery-mode.js";
 import { shouldApplyStartupContext, buildSessionStartupContextPrelude } from "./startup-context.js";
@@ -111,6 +112,10 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     ctx,
     isHeartbeat,
   });
+  copyChannelParticipantAdmissionEvidence(ctx, promptSessionCtx);
+  if (sessionCtx !== ctx) {
+    copyChannelParticipantAdmissionEvidence(sessionCtx, promptSessionCtx);
+  }
   const inboundEventKind = promptSessionCtx.InboundEventKind;
   const { sourceReplyDeliveryMode, injectedSessionStableMode } = resolvePromptSourceReplyMode({
     promptSessionCtx,
@@ -218,11 +223,18 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     sourceConversationContextByMode[sessionPromptSourceReplyDeliveryMode ?? "automatic"];
   // Claude CLI fixes the system prompt at session creation; group intro must stay session-stable.
   const groupIntro = isGroupChat ? buildGroupIntro({ sessionEntry, defaultActivation }) : "";
-  const isDirectedTurn =
-    isExplicitSourceReplyCommand(ctx, cfg) ||
-    (inboundEventKind !== "room_event" && (isDirectChat || ctx.WasMentioned === true));
+  const isDirectedTurn = isDirectedSourceReplyTurn(ctx, cfg, isDirectChat, inboundEventKind);
+  const isAmbientRoomEvent = inboundEventKind === "room_event" && !isDirectedTurn;
   const allowEmptyAssistantReplyAsSilent =
-    isGroupChat && !isDirectedTurn && silentReplySettings.policy === "allow";
+    isGroupChat &&
+    !isDirectedTurn &&
+    (isAmbientRoomEvent || silentReplySettings.policy === "allow");
+  // Heartbeats retain the embedded runner's trigger-owned optional default.
+  const terminalReplyExpectation = isHeartbeat
+    ? undefined
+    : isAmbientRoomEvent
+      ? "optional"
+      : "required";
   const groupSystemPrompt = normalizeOptionalString(promptSessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
@@ -471,6 +483,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     getInboundContext: () => ({ activeGoalContext, inboundUserContext }),
     refreshInboundContextAfterAdmissionWait,
     allowEmptyAssistantReplyAsSilent,
+    terminalReplyExpectation,
   } as const;
 }
 

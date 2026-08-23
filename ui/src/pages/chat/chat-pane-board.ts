@@ -185,7 +185,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return null;
     }
     return {
-      active: board.face === "dashboard",
+      active: board.face === "dashboard" && this.visuallyPresented,
       basePath: state.basePath,
       client,
       sessionKey: this.resolveBoardSessionKey(board.snapshot.sessionKey),
@@ -228,7 +228,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
 
   protected refreshSwarmRoster(): void {
     const state = this.state;
-    if (!state) {
+    if (!state || !this.presented) {
       return;
     }
     const parentKey = this.resolveBoardSessionKey();
@@ -237,6 +237,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       ({ isSwarmEnabledInConfig, SwarmRosterHydrator }) => {
         if (
           !this.state ||
+          !this.presented ||
           this.state.connectionEpoch !== sourceEpoch ||
           parentKey !== this.resolveBoardSessionKey()
         ) {
@@ -341,7 +342,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       board.hasBoard &&
       Boolean(sessionKey) &&
       (board.face === "dashboard" || this.retainedBoardSessionKey === sessionKey);
-    const boardActive = board.face === "dashboard";
+    const boardActive = board.face === "dashboard" && this.visuallyPresented;
     const renderSurface = (active: boolean) =>
       renderBoardSessionSurface({
         active,
@@ -393,6 +394,9 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
   }
 
   protected handleBoardCommand(event: BoardCommandEvent): void {
+    if (!this.presented) {
+      return;
+    }
     const board = this.resolveBoardView();
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
     if (!sessionKey || this.resolveBoardSessionKey(event.sessionKey) !== sessionKey) {

@@ -15,7 +15,7 @@ export type SessionActivityFilters = {
   time: ActivityTimeFilter;
 };
 
-type ActivityPerson = PresenceViewer & { count: number };
+type ActivityPerson = PresenceViewer & { count: number; lastActiveAt: number };
 
 type SessionActivityDay = {
   key: string;
@@ -129,10 +129,12 @@ function dayStart(timestamp: number): number {
 function projectPeople(rows: readonly GatewaySessionRow[]): ActivityPerson[] {
   const people = new Map<string, ActivityPerson>();
   for (const row of rows) {
+    const lastActiveAt = sessionActivityTimestamp(row);
     for (const actor of sessionActors(row)) {
       const existing = people.get(actor.id);
       if (existing) {
         existing.count += 1;
+        existing.lastActiveAt = Math.max(existing.lastActiveAt, lastActiveAt);
         continue;
       }
       people.set(actor.id, {
@@ -141,13 +143,14 @@ function projectPeople(rows: readonly GatewaySessionRow[]): ActivityPerson[] {
         avatarUrl: normalized(actor.avatarUrl),
         watchedSessions: [],
         count: 1,
+        lastActiveAt,
       });
     }
   }
   return [...people.values()].toSorted((a, b) => {
-    const countOrder = b.count - a.count;
-    if (countOrder !== 0) {
-      return countOrder;
+    const activityOrder = b.lastActiveAt - a.lastActiveAt;
+    if (activityOrder !== 0) {
+      return activityOrder;
     }
     const labelA = presenceViewerLabel(a).toLowerCase();
     const labelB = presenceViewerLabel(b).toLowerCase();

@@ -48,7 +48,7 @@ export const ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES = 2;
 export function resolveAssistantAttachmentAvailability(
   source: string,
   localMediaPreviewRoots: readonly string[],
-  basePath: string | undefined,
+  resourceBasePath: string | undefined,
   authToken: string | null | undefined,
   onRequestUpdate: (() => void) | undefined,
 ): AssistantAttachmentAvailability {
@@ -67,7 +67,7 @@ export function resolveAssistantAttachmentAvailability(
     };
   }
   const normalizedAuthToken = authToken?.trim() ?? "";
-  const cacheKey = `${basePath ?? ""}::${normalizedAuthToken}::${source}`;
+  const cacheKey = `${resourceBasePath ?? ""}::${normalizedAuthToken}::${source}`;
   const resource = observeChatMediaResource<AssistantAttachmentAvailability>(
     "assistant-attachment",
     cacheKey,
@@ -156,7 +156,7 @@ export function resolveAssistantAttachmentAvailability(
         ),
       ASSISTANT_ATTACHMENT_METADATA_FETCH_TIMEOUT_MS,
     );
-    const pending = fetch(buildAssistantAttachmentMetaUrl(source, basePath), {
+    const pending = fetch(buildAssistantAttachmentMetaUrl(source, resourceBasePath), {
       method: "GET",
       headers,
       credentials: "same-origin",
@@ -250,8 +250,8 @@ function createUnavailableAssistantAttachment(
   };
 }
 
-function buildAssistantAttachmentMetaUrl(source: string, basePath?: string): string {
-  const attachmentUrl = buildAssistantAttachmentUrl(source, basePath);
+function buildAssistantAttachmentMetaUrl(source: string, resourceBasePath?: string): string {
+  const attachmentUrl = buildAssistantAttachmentUrl(source, resourceBasePath);
   return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
 }
 

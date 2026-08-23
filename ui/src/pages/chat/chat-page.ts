@@ -5,7 +5,6 @@ import { repeat } from "lit/directives/repeat.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { mergeChatPageChrome, mobileNavLayoutMediaQuery } from "../../app/mobile-nav-layout.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
-import "../../components/session-link-hovercard-registration.ts";
 import "../../components/resizable-divider.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { McpAppUnmountGate } from "../../components/mcp-app-unmount.ts";
@@ -648,13 +647,16 @@ export class ChatPage extends OpenClawLightDomElement {
                           .maxRatio=${0.85}
                           .label=${t("nav.resize")}
                           @resize=${(event: CustomEvent<{ splitRatio: number }>) => {
-                            const current = this.layout;
-                            if (current) {
-                              this.persistLayout(
-                                resizePanes(current, column.id, paneIndex, event.detail.splitRatio),
-                              );
-                            }
+                            this.layout = this.layout
+                              ? resizePanes(
+                                  this.layout,
+                                  column.id,
+                                  paneIndex,
+                                  event.detail.splitRatio,
+                                )
+                              : undefined;
                           }}
+                          @resize-end=${() => this.persistLayout(this.layout)}
                         ></resizable-divider>
                       `
                     : nothing}
@@ -673,13 +675,11 @@ export class ChatPage extends OpenClawLightDomElement {
                     .maxRatio=${0.85}
                     .label=${t("nav.resize")}
                     @resize=${(event: CustomEvent<{ splitRatio: number }>) => {
-                      const current = this.layout;
-                      if (current) {
-                        this.persistLayout(
-                          resizeColumns(current, columnIndex, event.detail.splitRatio),
-                        );
-                      }
+                      this.layout = this.layout
+                        ? resizeColumns(this.layout, columnIndex, event.detail.splitRatio)
+                        : undefined;
                     }}
+                    @resize-end=${() => this.persistLayout(this.layout)}
                   ></resizable-divider>
                 `
               : nothing}
@@ -706,7 +706,7 @@ export class ChatPage extends OpenClawLightDomElement {
         );
       }),
     );
-    const rendered = html`
+    const renderValue = () => html`
       <div class="chat-split-view__drop-container">
         ${this.renderSplitLayout(layout, Boolean(this.layout), retainedSessions)}
         ${indicator
@@ -725,7 +725,7 @@ export class ChatPage extends OpenClawLightDomElement {
           : nothing}
       </div>
     `;
-    return this.mcpAppUnmountGate.render(JSON.stringify([...nextPaneKeys]), rendered, () =>
+    return this.mcpAppUnmountGate.render(JSON.stringify([...nextPaneKeys]), renderValue, () =>
       [...this.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].filter(
         (pane) => !nextPaneKeys.has(pane.dataset.mcpAppOwnerKey ?? ""),
       ),

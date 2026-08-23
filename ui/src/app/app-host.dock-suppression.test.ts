@@ -104,7 +104,6 @@ describe("OpenClaw shell dock suppression", () => {
           approvalQueue: [],
           approvalBusy: false,
           approvalErrors: new Map(),
-          approvalNowMs: 0,
           devicePairSetupOpen: false,
           devicePairSetupLifecycle: { phase: "selection", access: "full" },
           devicePairPendingCount: 0,
@@ -166,10 +165,10 @@ describe("OpenClaw shell dock suppression", () => {
     expect(
       (
         container.querySelector("openclaw-terminal-panel") as HTMLElement & {
-          sessionBottomOnly: boolean;
+          sessionKey: string | null;
         }
-      ).sessionBottomOnly,
-    ).toBe(true);
+      ).sessionKey,
+    ).toBe("agent:main:main");
     expect(container.querySelector("openclaw-browser-panel")).toBeNull();
     expect(container.querySelector("openclaw-desktop-panel")).toBeNull();
 

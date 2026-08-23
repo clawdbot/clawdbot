@@ -542,4 +542,22 @@ describe("browser.request profile selection", () => {
       details: errorBody,
     });
   });
+
+  it("returns UNAVAILABLE for an incomplete node file envelope", async () => {
+    const { respond } = await runBrowserRequest(
+      { method: "POST", path: "/screenshot" },
+      {
+        ok: true,
+        payload: { result: { path: "/node/browser/screenshot.png" } },
+      },
+    );
+
+    const [ok, payload, error] = firstRespondCall(respond);
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error).toMatchObject({
+      code: "UNAVAILABLE",
+      message: "browser proxy file transfer failed",
+    });
+  });
 });

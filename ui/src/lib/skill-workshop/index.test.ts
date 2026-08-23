@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   filterSkillWorkshopAppliedSkills,
   filterSkillWorkshopProposals,
+  findSkillWorkshopAppliedPredecessor,
   type SkillWorkshopProposal,
   type SkillWorkshopProposalStatus,
 } from "./index.ts";
@@ -30,6 +31,7 @@ function proposal(options: {
     recencyGroup: "today",
     ageLabel: "now",
     supportFiles: [],
+    bodyLoaded: true,
     isNew: false,
   };
 }
@@ -97,5 +99,27 @@ describe("Skill Workshop proposal filtering", () => {
       ]);
     }
     expect(filterSkillWorkshopProposals(proposals, "all", "")).toEqual(proposals);
+  });
+
+  it("points every applied revision at the one it replaced", () => {
+    const proposals = [
+      proposal({ key: "v3", updatedAt: 3 }),
+      proposal({ key: "v1", updatedAt: 1 }),
+      proposal({ key: "v2", updatedAt: 2 }),
+      proposal({ key: "other", slug: "other-skill", updatedAt: 9 }),
+      proposal({ key: "pending", status: "pending", updatedAt: 4 }),
+    ];
+
+    const [skill] = filterSkillWorkshopAppliedSkills(proposals, "release-sanity");
+    expect(
+      skill?.revisions.map(({ proposal: item, previous }) => [item.key, previous?.key]),
+    ).toEqual([
+      ["v3", "v2"],
+      ["v2", "v1"],
+      ["v1", undefined],
+    ]);
+    expect(findSkillWorkshopAppliedPredecessor(proposals, "v3")?.key).toBe("v2");
+    expect(findSkillWorkshopAppliedPredecessor(proposals, "v1")).toBeNull();
+    expect(findSkillWorkshopAppliedPredecessor(proposals, "pending")).toBeNull();
   });
 });

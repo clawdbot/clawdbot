@@ -95,7 +95,7 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
       return;
     }
     try {
-      const { profiles } = await discoverPlaceCatalog(scope.client, true);
+      const { profiles } = await discoverPlaceCatalog(scope.client, true, true);
       if (!this.isConnectionScopeCurrent(scope)) {
         return;
       }

@@ -16,6 +16,27 @@ const deadSessionScreenshotPath = process.env.OPENCLAW_TERMINAL_DEAD_SESSION_SCR
 const deadSessionVideoDir = process.env.OPENCLAW_TERMINAL_DEAD_SESSION_VIDEO_DIR?.trim();
 
 suite.define(() => {
+  it("returns from an unavailable focused terminal", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      await installMockGateway(page);
+      await page.goto(`${suite.server.baseUrl}dashboards`);
+      await page.locator("openclaw-app-shell").waitFor();
+      await page.goto(`${suite.server.baseUrl}?view=terminal`);
+
+      await page.waitForURL(`${suite.server.baseUrl}focus/terminal`);
+      expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+      expect(await page.evaluate(() => document.fullscreenElement)).toBeNull();
+
+      await page
+        .getByText("The terminal is not available on this gateway.", { exact: true })
+        .waitFor();
+      const back = page.getByRole("button", { name: "Back", exact: true });
+      await back.waitFor();
+      await back.click();
+      await page.waitForURL(`${suite.server.baseUrl}dashboards`);
+    });
+  });
+
   it("fences an SW-less stale build before it can restore an ownerless terminal", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const gatewayUrl = suite.server.baseUrl.replace(/^http/u, "ws");
@@ -223,7 +244,7 @@ suite.define(() => {
         terminalEnabled: true,
       });
 
-      const response = await page.goto(`${suite.server.baseUrl}?view=terminal`);
+      const response = await page.goto(`${suite.server.baseUrl}focus/terminal`);
       expect(response?.status()).toBe(200);
       const connect = await gateway.waitForRequest("connect");
 
@@ -350,7 +371,7 @@ suite.define(() => {
           terminalEnabled: true,
         });
 
-        const response = await page.goto(`${suite.server.baseUrl}?view=terminal`);
+        const response = await page.goto(`${suite.server.baseUrl}focus/terminal`);
         expect(response?.status()).toBe(200);
         await gateway.waitForRequest("connect");
         await gateway.resolveDeferred("connect");

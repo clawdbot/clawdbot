@@ -508,6 +508,22 @@
   color: var(--link-hover);
 }
 
+.chat-text :where(.markdown-link-favicon) {
+  display: none;
+  width: 1em;
+  height: 1em;
+  margin-inline-end: 0.3em;
+  vertical-align: -0.12em;
+}
+
+.chat-text :where(.markdown-link-favicon.is-loaded) {
+  display: inline-block;
+}
+
+.chat-text :where(a:has(> .markdown-link-favicon.is-loaded)) {
+  text-decoration: none;
+}
+
 /* GitHub links carry the brand mark so a bare URL and a "[#3434]" shorthand read
    as the same destination. Painted as a masked ::before rather than markup: it
    stays out of the accessibility tree and out of copied text, and currentColor

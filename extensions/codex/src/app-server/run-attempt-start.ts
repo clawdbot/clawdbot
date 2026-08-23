@@ -42,6 +42,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     bundleMcpThreadConfig,
     nativeToolSurfaceEnabled,
     nativeProviderWebSearchSupport,
+    effectiveRuntimeModelId,
     sandboxExecServerEnabled,
   } = runtime;
   const { toolBridge, toolState } = attemptTools;
@@ -81,6 +82,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     const startupResult = await startCodexAttemptThread({
       attemptClientFactory,
       bindingStore,
+      runtime: connection.options.runtime,
       appServer: pluginAppServer,
       pluginConfig,
       computerUseConfig,
@@ -96,6 +98,9 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       shellEnvironment: connection.shellEnvironment,
       disableLoginShell: connection.disableLoginShell,
       buildAttemptParams: buildActiveRunAttemptParams,
+      ...(effectiveRuntimeModelId !== runtimeParams.modelId
+        ? { runtimeModelId: effectiveRuntimeModelId }
+        : {}),
       sessionAgentId,
       effectiveWorkspace,
       effectiveCwd,
@@ -115,6 +120,11 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       startupTimeoutMs,
       signal: runAbortController.signal,
       onStartupTimeout: () => runAbortController.abort("codex_startup_timeout"),
+      onExecutionDisconnect: (error) => {
+        state.executionDisconnectError = error;
+        embeddedAgentLog.warn(error.message);
+        runAbortController.abort("client_closed");
+      },
       spawnedBy: params.spawnedBy,
     });
     state.client = startupResult.client;
@@ -123,7 +133,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     state.turnRouter = startupResult.turnRouter;
     state.turnRoute = startupResult.turnRoute;
     // Adopt cleanup ownership before any fallible validation of the started thread.
-    state.sandboxExecEnvironmentAcquired = Boolean(startupResult.sandboxEnvironment);
+    state.sandboxExecEnvironment = startupResult.sandboxEnvironment;
     state.releaseSharedClientLease = startupResult.releaseSharedClientLease;
     state.restartContextEngineCodexThread = startupResult.restartContextEngineCodexThread;
     pluginAppServer = startupResult.pluginAppServer;
@@ -228,6 +238,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     await runCleanupStep("codex-start-failure-abort-listener", () =>
       params.abortSignal?.removeEventListener("abort", abortFromUpstream),
     );
-    throw error;
+    throw state.executionDisconnectError ?? error;
   }
 }

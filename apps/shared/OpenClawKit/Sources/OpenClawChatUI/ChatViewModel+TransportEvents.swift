@@ -258,7 +258,8 @@ extension OpenClawChatViewModel {
             existing: existing,
             snapshot: snapshot,
             phase: phase,
-            runID: runID)
+            activeRunIDs: change.activeRunIds,
+            activeRunIDsPresent: change.activeRunIdsPresent)
         self.sessions = OpenClawChatSessionListOrganizer.organize(updated)
         self.persistSessionsToCache(self.sessions)
         return .merged
@@ -325,10 +326,9 @@ extension OpenClawChatViewModel {
         existing: OpenClawChatSessionEntry,
         snapshot: OpenClawChatSessionEntry,
         phase: String,
-        runID: String?) -> OpenClawChatSessionEntry
+        activeRunIDs: [String]?,
+        activeRunIDsPresent: Bool) -> OpenClawChatSessionEntry
     {
-        let isTerminal = phase == "end" || phase == "error"
-        let existingActiveRunIDs = existing.activeRunIds?.compactMap { Self.normalizedRunID($0) } ?? []
         var merged = existing
         merged.updatedAt = snapshot.updatedAt ?? existing.updatedAt
         merged.status = snapshot.status ?? existing.status
@@ -339,16 +339,8 @@ extension OpenClawChatViewModel {
             merged.lastRunError = snapshot.lastRunError ?? existing.lastRunError
         }
 
-        if let activeRunIDs = snapshot.activeRunIds {
+        if activeRunIDsPresent {
             merged.activeRunIds = activeRunIDs
-        } else if phase == "start", let runID {
-            merged.activeRunIds = existingActiveRunIDs.contains(runID)
-                ? existingActiveRunIDs
-                : existingActiveRunIDs + [runID]
-            merged.hasActiveRun = true
-        } else if isTerminal, let runID {
-            merged.activeRunIds = existingActiveRunIDs.filter { $0 != runID }
-            merged.hasActiveRun = merged.activeRunIds?.isEmpty == false
         }
 
         switch phase {
@@ -403,11 +395,30 @@ extension OpenClawChatViewModel {
     }
 
     private func handleSessionMessageEvent(_ payload: OpenClawSessionMessageEventPayload) {
-        guard let message = payload.message else { return }
-        let sanitized = Self.stripInboundMetadata(from: message)
         let isCurrentSession = payload.sessionKey.map {
             self.matchesCurrentSessionKey(incoming: $0, agentId: payload.agentId, current: self.sessionKey)
         } ?? true
+        if isCurrentSession, payload.hasActiveRun != nil || payload.activeRunIdsPresent {
+            let change = OpenClawChatSessionsChangedEvent(
+                sessionKey: payload.sessionKey,
+                agentId: payload.agentId,
+                reason: "message",
+                hasActiveRun: payload.hasActiveRun,
+                activeRunIds: payload.activeRunIds,
+                activeRunIdsPresent: payload.activeRunIdsPresent)
+            if let projected = ChatSessionSidebarModel.applying(
+                sessionChange: change,
+                to: self.sessions,
+                activeAgentId: self.activeAgentId)
+            {
+                self.sessions = projected
+            }
+            if payload.activeRunIdsPresent {
+                self.updateActiveSessionRunIDs(payload.activeRunIds ?? [])
+            }
+        }
+        guard let message = payload.message else { return }
+        let sanitized = Self.stripInboundMetadata(from: message)
         // Confirmation is gateway-scoped, not presentation-scoped. A flush
         // can drain session A while session B is visible, and A's event must
         // still retire its durable row before this handler returns early.

@@ -57,6 +57,7 @@ type ExecApprovalsState = {
   onRemove: (path: Array<string | number>) => void;
   onLoad: () => void;
   onSave: () => void;
+  canAdmin: boolean;
 };
 
 const EXEC_APPROVALS_DEFAULT_SCOPE = "__defaults__";
@@ -187,7 +188,7 @@ export function resolveExecApprovalsState(props: DevicesProps): ExecApprovalsSta
     : [];
   return {
     ready,
-    disabled: props.execApprovalsSaving || props.execApprovalsLoading,
+    disabled: !props.canAdmin || props.execApprovalsSaving || props.execApprovalsLoading,
     dirty: props.execApprovalsDirty,
     loading: props.execApprovalsLoading,
     saving: props.execApprovalsSaving,
@@ -207,6 +208,7 @@ export function resolveExecApprovalsState(props: DevicesProps): ExecApprovalsSta
     onRemove: props.onExecApprovalsRemove,
     onLoad: props.onLoadExecApprovals,
     onSave: props.onSaveExecApprovals,
+    canAdmin: props.canAdmin,
   };
 }
 
@@ -223,19 +225,27 @@ export function renderExecApprovals(state: ExecApprovalsState) {
     </button>
   `;
   const rows = html`
-    ${renderExecApprovalsTarget(state)}
-    ${!ready
-      ? renderSettingsRow({
-          title: t("devices.execApprovals.loadHint"),
-          control: html`
-            <button class="btn" ?disabled=${state.loading || !targetReady} @click=${state.onLoad}>
-              ${state.loading ? t("common.loading") : t("common.loadApprovals")}
-            </button>
-          `,
-        })
-      : state.nativePolicy
-        ? renderNativeExecApprovals(state.nativePolicy)
-        : html`${renderExecApprovalsScope(state)} ${renderExecApprovalsPolicy(state)}`}
+    ${!state.canAdmin
+      ? renderSettingsRow({ title: t("devices.readOnly.adminRequired") })
+      : html`
+          ${renderExecApprovalsTarget(state)}
+          ${!ready
+            ? renderSettingsRow({
+                title: t("devices.execApprovals.loadHint"),
+                control: html`
+                  <button
+                    class="btn"
+                    ?disabled=${state.loading || !targetReady}
+                    @click=${state.onLoad}
+                  >
+                    ${state.loading ? t("common.loading") : t("common.loadApprovals")}
+                  </button>
+                `,
+              })
+            : state.nativePolicy
+              ? renderNativeExecApprovals(state.nativePolicy)
+              : html`${renderExecApprovalsScope(state)} ${renderExecApprovalsPolicy(state)}`}
+        `}
   `;
   return html`
     ${renderSettingsSection(
@@ -249,7 +259,10 @@ export function renderExecApprovals(state: ExecApprovalsState) {
       },
       rows,
     )}
-    ${ready && !state.nativePolicy && state.selectedScope !== EXEC_APPROVALS_DEFAULT_SCOPE
+    ${state.canAdmin &&
+    ready &&
+    !state.nativePolicy &&
+    state.selectedScope !== EXEC_APPROVALS_DEFAULT_SCOPE
       ? renderExecApprovalsAllowlist(state)
       : nothing}
   `;

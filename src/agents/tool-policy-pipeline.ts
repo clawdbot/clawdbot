@@ -261,15 +261,3 @@ function describeUnknownAllowlistSuffix(params: {
         : "These entries won't match any tool unless the plugin is enabled.";
   return preface ? `${preface} ${detail}` : detail;
 }
-
-/** Clears process-local warning dedupe state between tests. */
-function resetToolPolicyWarningCacheForTest(): void {
-  seenToolPolicyWarnings.clear();
-  toolPolicyWarningOrder.length = 0;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.toolPolicyWarningCacheTestApi")
-  ] = { resetToolPolicyWarningCacheForTest };
-}

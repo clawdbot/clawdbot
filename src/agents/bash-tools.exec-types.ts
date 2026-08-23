@@ -28,6 +28,7 @@ export type ExecToolDefaults = {
   hasCronTool?: boolean;
   host?: ExecTarget;
   mode?: ExecMode;
+  bypassHostApprovalFloors?: boolean;
   security?: ExecSecurity;
   ask?: ExecAsk;
   trigger?: string;

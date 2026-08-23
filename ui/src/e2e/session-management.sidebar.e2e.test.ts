@@ -693,11 +693,10 @@ suite.define(() => {
       await page.mouse.move(sourceBox.x + sourceBox.width / 2 + 12, sourceBox.y + 12, {
         steps: 4,
       });
-      const sessionList = page.locator(".sidebar-sessions");
-      await sessionList.waitFor({ state: "visible" });
-      const targetBox = await sessionList.boundingBox();
+      await chatsGroup.waitFor({ state: "visible" });
+      const targetBox = await chatsGroup.boundingBox();
       if (!targetBox) {
-        throw new Error("expected session list bounds");
+        throw new Error("expected ungrouped session bounds");
       }
       await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, {
         steps: 8,

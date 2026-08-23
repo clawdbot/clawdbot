@@ -22,6 +22,7 @@ import {
 } from "../../../components/markdown-tables.ts";
 import { t } from "../../../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
+import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
 import {
   handleTranscriptContextMenu,
   handleTranscriptPointerUp,
@@ -150,6 +151,7 @@ function renderTranscriptShell(
       ${ref((element) => {
         if (element instanceof HTMLElement) {
           initializeMarkdownCodeBlocks(element);
+          hydrateLinkFavicons(element, props.fetchLinkFavicon);
         }
       })}
       role="log"

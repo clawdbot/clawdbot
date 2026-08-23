@@ -70,7 +70,7 @@ openclaw-session-owner-chip {
 .session-owner-stack {
   position: relative;
   display: inline-flex;
-  width: 24px;
+  width: 28px;
   height: 20px;
   align-items: center;
   justify-content: flex-end;
@@ -81,17 +81,15 @@ openclaw-session-owner-chip {
   z-index: 0;
   left: 0;
   display: inline-flex;
-  width: 14px;
-  height: 14px;
 }
 
 .session-owner-stack__back .viewer-avatar,
 .session-owner-stack__overflow {
-  width: 14px;
-  height: 14px;
+  width: 18px;
+  height: 18px;
   border: 1px solid var(--sidebar-bg, var(--bg));
   border-radius: var(--radius-full);
-  font-size: 7px;
+  font-size: 8px;
 }
 
 .session-owner-stack__overflow {
@@ -107,6 +105,8 @@ openclaw-session-owner-chip {
 .session-owner-stack__front {
   position: relative;
   z-index: 1;
+  width: 18px;
+  height: 18px;
 }
 
 /* Leading slot shared by every sidebar row: the row's own artwork plus a run
@@ -133,6 +133,14 @@ openclaw-session-owner-chip {
   width: 16px;
   height: 16px;
   transition: transform var(--duration-fast) ease;
+}
+
+.channel-avatar {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  object-fit: cover;
 }
 
 .session-glyph__emoji {
@@ -311,6 +319,19 @@ openclaw-session-owner-chip {
   padding-left: 18px;
   font-size: 12px;
   line-height: 1.55;
+}
+
+.login-gate__failure-steps .login-gate__command {
+  display: inline-flex;
+  box-sizing: border-box;
+  max-width: 100%;
+  margin: 2px 3px;
+  vertical-align: middle;
+}
+
+.login-gate__failure-steps .login-gate__command code {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .login-gate__failure-steps li + li {
@@ -715,6 +736,59 @@ openclaw-session-owner-chip {
   box-shadow: var(--shadow-lg);
 }
 
+.app-toast--anchored {
+  right: auto;
+  left: var(--app-toast-anchor-center);
+  top: var(--app-toast-anchor-top);
+  transform: translateX(-50%);
+  gap: var(--space-2);
+  max-width: min(520px, calc(var(--app-toast-anchor-width) - 24px));
+  padding: 8px 12px;
+  border-color: color-mix(in srgb, var(--info) 12%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--info) 12%, var(--popover));
+  transition-property: translate, scale, opacity;
+}
+
+.app-toast--anchored[data-active="true"] {
+  translate: 0 0;
+  scale: 1;
+  opacity: 1;
+  transition-duration: 200ms;
+  transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@starting-style {
+  .app-toast--anchored[data-active="true"] {
+    translate: 0 -100%;
+    scale: 0.95;
+    opacity: 0;
+  }
+}
+
+.app-toast--anchored[data-active="false"] {
+  translate: 0 -100%;
+  scale: 0.95;
+  opacity: 0;
+  pointer-events: none;
+  transition-duration: 400ms;
+  transition-timing-function: cubic-bezier(0.7, 0, 0.84, 0);
+}
+
+.app-toast__icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  color: var(--info);
+}
+
+.app-toast__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
 /* A corner toast degenerates at phone widths, where it would span nearly the
  * whole viewport anyway. Use the full-width top idiom instead. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
@@ -722,6 +796,12 @@ openclaw-session-owner-chip {
     left: max(12px, var(--safe-area-left));
     right: max(12px, var(--safe-area-right));
     max-width: none;
+  }
+
+  .app-toast--anchored {
+    left: var(--app-toast-anchor-center);
+    right: auto;
+    max-width: calc(var(--app-toast-anchor-width) - 24px);
   }
 }
 
@@ -739,6 +819,25 @@ openclaw-session-owner-chip {
   -webkit-line-clamp: 3;
   line-clamp: 3;
   -webkit-box-orient: vertical;
+}
+
+.app-toast--anchored .app-toast__message {
+  display: block;
+  white-space: nowrap;
+  font-size: var(--control-ui-text-sm);
+}
+
+.app-toast--anchored .app-toast__dismiss {
+  width: 24px;
+  height: 24px;
+  margin-left: 2px;
+  border-radius: var(--radius-full);
+  color: var(--muted);
+}
+
+.app-toast--anchored .app-toast__dismiss svg {
+  width: 16px;
+  height: 16px;
 }
 
 .app-toast__action,
@@ -765,6 +864,14 @@ openclaw-session-owner-chip {
   color: var(--muted);
   font-size: 20px;
   line-height: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-toast--anchored,
+  .app-toast--anchored[data-active="true"],
+  .app-toast--anchored[data-active="false"] {
+    transition: none;
+  }
 }
 
 .app-toast__action:hover,
@@ -802,32 +909,78 @@ openclaw-github-link-hovercard-provider {
   display: contents;
 }
 
-openclaw-session-link-hovercard-provider {
-  display: contents;
-}
-
 openclaw-session-progress-hovercard-provider {
   display: contents;
 }
 
 .session-progress-hovercard {
+  --session-hovercard-shift-x: 0;
+  --session-hovercard-shift-y: 0;
+
   position: fixed;
   z-index: 1990;
-  width: min(380px, calc(100vw - 24px));
+  width: min(296px, calc(100vw - 24px));
   max-height: min(520px, calc(100vh - 24px));
-  padding: 14px 16px;
+  padding: 0;
   overflow: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  background: var(--card);
+  background: var(--session-hovercard-surface);
   box-shadow: var(--shadow-lg);
   color: var(--text);
   pointer-events: none;
+  opacity: 0;
+  transform: translate3d(var(--session-hovercard-shift-x), var(--session-hovercard-shift-y), 0)
+    scale(0.99);
+  transition:
+    opacity 100ms var(--ease-out),
+    transform 100ms var(--ease-out);
+}
+
+.session-progress-hovercard[data-side="right"] {
+  --session-hovercard-shift-x: -4px;
+  transform-origin: top left;
+}
+
+.session-progress-hovercard[data-side="left"] {
+  --session-hovercard-shift-x: 4px;
+  transform-origin: top right;
+}
+
+.session-progress-hovercard[data-side="bottom"] {
+  --session-hovercard-shift-y: -4px;
+  transform-origin: top left;
+}
+
+.session-progress-hovercard[data-side="top"] {
+  --session-hovercard-shift-y: 4px;
+  transform-origin: bottom left;
+}
+
+.session-progress-hovercard[data-open="true"] {
+  opacity: 1;
+  transform: translate3d(0, 0, 0) scale(1);
+  transition-duration: 150ms;
+}
+
+.session-progress-hovercard[data-instant="true"][data-open="true"] {
+  transition: none;
 }
 
 @media (hover: hover) {
-  .session-progress-hovercard {
+  .session-progress-hovercard[data-open="true"] {
     pointer-events: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-progress-hovercard {
+    transform: none;
+    transition: opacity 80ms linear;
+  }
+
+  .session-progress-hovercard[data-open="true"] {
+    transform: none;
   }
 }
 
@@ -837,10 +990,10 @@ openclaw-session-progress-hovercard-provider {
   width: min(440px, calc(100vw - 24px));
   min-height: 112px;
   padding: 16px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 88%, transparent);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--card) 96%, var(--bg) 4%);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--overlay-shadow);
   color: var(--text);
   font-family: var(--font-body);
   /* Interactive by design: hover intent and text selection both need the card to
@@ -1078,134 +1231,6 @@ openclaw-session-progress-hovercard-provider {
   }
 }
 
-.session-link-hovercard {
-  position: fixed;
-  z-index: 1990;
-  width: min(400px, calc(100vw - 24px));
-  min-height: 96px;
-  padding: 16px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 88%, transparent);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--card) 96%, var(--bg) 4%);
-  box-shadow: var(--shadow-lg);
-  color: var(--text);
-  font-family: var(--font-body);
-  pointer-events: auto;
-  opacity: 0;
-  transform: translateY(-5px) scale(0.99);
-  transform-origin: bottom left;
-  transition:
-    opacity var(--duration-normal) var(--ease-out),
-    transform var(--duration-normal) var(--ease-out);
-}
-
-.session-link-hovercard[data-side="bottom"] {
-  transform: translateY(5px) scale(0.99);
-  transform-origin: top left;
-}
-
-.session-link-hovercard[data-side="right"] {
-  transform: translateX(-5px) scale(0.99);
-  transform-origin: left center;
-}
-
-.session-link-hovercard[data-open="true"] {
-  opacity: 1;
-  transform: translateY(0) scale(1);
-}
-
-.session-link-hovercard__title {
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-lg);
-  font-weight: 650;
-  letter-spacing: -0.012em;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.session-link-hovercard__meta {
-  margin-top: 6px;
-  color: var(--muted);
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-sm);
-  overflow-wrap: anywhere;
-}
-
-.session-link-hovercard__message {
-  display: -webkit-box;
-  margin-top: 14px;
-  color: var(--text);
-  font-size: var(--control-ui-text-md);
-  line-height: 1.45;
-  overflow: hidden;
-  overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-}
-
-.session-link-hovercard__footer {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 14px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
-.session-link-hovercard__archived {
-  padding: 3px 7px;
-  border-radius: var(--radius-full);
-  background: var(--bg-muted);
-}
-
-.session-link-hovercard__time {
-  margin-left: auto;
-}
-
-.session-link-hovercard__loading,
-.session-link-hovercard__unavailable {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 64px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
-.session-link-hovercard__loading::before {
-  width: 18px;
-  height: 18px;
-  margin-right: 9px;
-  border: 2px solid color-mix(in srgb, var(--muted) 25%, transparent);
-  border-top-color: var(--muted);
-  border-radius: 50%;
-  content: "";
-  animation: session-hovercard-spin 0.8s linear infinite;
-}
-
-@keyframes session-hovercard-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (max-width: 560px) {
-  .session-link-hovercard {
-    padding: 14px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .session-link-hovercard {
-    transition: none;
-  }
-
-  .session-link-hovercard__loading::before {
-    animation: none;
-  }
-}
-
 .btn--ghost {
   border-color: transparent;
   background: transparent;
@@ -1218,7 +1243,7 @@ openclaw-session-progress-hovercard-provider {
   border-color: transparent;
 }
 
-.btn:disabled {
+.btn:is(:disabled, [aria-disabled="true"]) {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -1244,7 +1269,8 @@ openclaw-session-progress-hovercard-provider {
 
 .field input,
 .field textarea,
-.field select {
+.field select,
+.input {
   border: 1px solid var(--input);
   background: var(--card);
   border-radius: var(--radius-md);
@@ -1257,21 +1283,25 @@ openclaw-session-progress-hovercard-provider {
 }
 
 .field input:not([type="checkbox"]):not([type="radio"]),
-.field select {
+.field select,
+input.input:not([type="checkbox"]):not([type="radio"]),
+select.input {
   height: 38px;
 }
 
 @media (hover: none) and (pointer: coarse) {
   .field input,
   .field textarea,
-  .field select {
+  .field select,
+  .input {
     font-size: 16px;
   }
 }
 
 .field input:focus-visible,
 .field textarea:focus-visible,
-.field select:focus-visible {
+.field select:focus-visible,
+.input:focus-visible {
   border-color: var(--ring);
   box-shadow: var(--focus-ring);
 }
@@ -1662,41 +1692,47 @@ openclaw-session-progress-hovercard-provider {
   stroke-linejoin: round;
 }
 
-.scope-upgrade-chip-row {
-  display: flex;
-  min-height: 30px;
-  justify-content: flex-end;
-  align-items: center;
+.scope-upgrade-status-trigger {
+  color: color-mix(in srgb, var(--warn) 82%, var(--text-strong));
+  background: color-mix(in srgb, var(--warn) 11%, transparent);
 }
 
-.scope-upgrade-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  min-height: 30px;
-  padding: 5px 11px;
-  border: 1px solid color-mix(in srgb, var(--warn) 32%, var(--border));
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--warn) 9%, var(--bg-elevated));
-  color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.scope-upgrade-chip:hover {
+.scope-upgrade-status-trigger:hover {
   background: color-mix(in srgb, var(--warn) 14%, var(--bg-elevated));
 }
 
-.scope-upgrade-chip:focus-visible {
+.scope-upgrade-status-trigger:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
 
-.scope-upgrade-chip__dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: currentColor;
+.scope-upgrade-details-popover {
+  --max-width: min(380px, calc(100vw - 32px));
+}
+
+.scope-upgrade-details-popover::part(body) {
+  padding: 0;
+}
+
+.scope-upgrade-details {
+  width: min(380px, calc(100vw - 32px));
+  box-shadow: var(--overlay-shadow);
+}
+
+.scope-upgrade-details-dialog .scope-upgrade-details {
+  width: 100%;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  box-shadow: 0 -18px 48px color-mix(in srgb, black 24%, transparent);
+}
+
+@media (max-width: 560px) {
+  .scope-upgrade-details {
+    flex-wrap: wrap;
+  }
+
+  .scope-upgrade-details .callout__content {
+    flex-basis: calc(100% - 38px);
+  }
 }
 
 .callout.danger {
@@ -1746,6 +1782,7 @@ openclaw-session-progress-hovercard-provider {
 .lazy-view-error {
   margin: auto;
   display: grid;
+  align-content: center;
   gap: 8px;
   justify-items: center;
   text-align: center;
@@ -1792,12 +1829,15 @@ openclaw-session-progress-hovercard-provider {
 }
 
 .lazy-view-error__subtitle {
+  max-width: 40ch;
   font-size: 13px;
   line-height: 1.5;
   color: var(--muted);
 }
 
-.lazy-view-error__action {
+.lazy-view-error__actions {
+  display: flex;
+  gap: 8px;
   margin-top: 8px;
 }
 
@@ -3081,10 +3121,6 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
-.chat-queue__item--steered {
-  background: var(--info-subtle);
-}
-
 /* The edited row keeps its slot so the operator can see where the corrected
    message lands; the outline says the composer owns it right now.
    Editing is an active state, not a failure, so it uses the informational
@@ -3167,10 +3203,6 @@ td.data-table-key-col {
   color: var(--danger);
 }
 
-.chat-queue__item--steered .chat-queue__icon {
-  color: var(--info);
-}
-
 /* Reconnect rows mirror the connection pill's amber status dot so the queue
    reads as quiet auto-retry status, not a failure needing action. */
 .chat-queue__dot {
@@ -3199,11 +3231,6 @@ td.data-table-key-col {
   font-weight: 600;
   line-height: 1.5;
   white-space: nowrap;
-}
-
-.chat-queue__badge--steered {
-  background: color-mix(in srgb, var(--info) 16%, transparent);
-  color: var(--info);
 }
 
 .chat-queue__item--failed .chat-queue__badge {
@@ -3271,8 +3298,7 @@ td.data-table-key-col {
   margin-left: auto;
 }
 
-.chat-queue__steer,
-.chat-queue__retry {
+.chat-queue__action {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -3287,8 +3313,7 @@ td.data-table-key-col {
   cursor: var(--cursor-action);
 }
 
-.chat-queue__steer svg,
-.chat-queue__retry svg {
+.chat-queue__action svg {
   width: 12px;
   height: 12px;
   fill: none;
@@ -3298,8 +3323,7 @@ td.data-table-key-col {
   stroke-linejoin: round;
 }
 
-.chat-queue__steer:hover:not(:disabled),
-.chat-queue__retry:hover:not(:disabled) {
+.chat-queue__action:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
@@ -3872,10 +3896,10 @@ td.data-table-key-col {
   max-height: 320px;
   overflow-y: auto;
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--overlay-shadow);
   color: var(--text);
 }
 

@@ -418,6 +418,11 @@ async function createSessionEntry(
           if (!result.ok) {
             throw new Error(result.error.message);
           }
+          if (result.postCommit.status === "failed") {
+            // Plugin initialization owns guarded rollback and recovery. Do not
+            // finalize an initializationPending row whose callback failed.
+            throw result.postCommit.error;
+          }
           created = result;
         }
         if (recovered && !finalEntryPatch) {

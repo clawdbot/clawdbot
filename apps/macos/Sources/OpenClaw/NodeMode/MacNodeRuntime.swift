@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 import OpenClawIPC
 import OpenClawKit
@@ -89,7 +88,7 @@ actor MacNodeClaudeSessionCatalogWorker {
     }
 
     private func cancel(id: UUID) {
-        if let index = self.pending.firstIndex(where: { $0.id == id }) {
+        if let index = pending.firstIndex(where: { $0.id == id }) {
             let pending = self.pending.remove(at: index)
             pending.continuation.resume(throwing: CancellationError())
             return
@@ -198,45 +197,34 @@ actor MacNodeRuntime {
     /// One branch per advertised native command keeps command ownership explicit.
     func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         let command = req.command
-        if self.isCanvasCommand(command), !Self.canvasEnabled() {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: OpenClawNodeError(
-                    code: .unavailable,
-                    message: "CANVAS_DISABLED: enable Canvas in Settings"))
+        if let rejection = Self.canvasCommandRejection(req) {
+            return rejection
         }
-        if let cuaResponse = await self.handleCuaInvokeIfSelected(req) {
+        if let cuaResponse = await handleCuaInvokeIfSelected(req) {
             return cuaResponse
         }
         do {
             switch command {
             case OpenClawCanvasCommand.present.rawValue,
                  OpenClawCanvasCommand.hide.rawValue,
-                 OpenClawCanvasCommand.navigate.rawValue,
-                 OpenClawCanvasCommand.evalJS.rawValue,
-                 OpenClawCanvasCommand.snapshot.rawValue:
-                return try await self.handleCanvasInvoke(req)
-            case OpenClawCanvasA2UICommand.reset.rawValue,
-                 OpenClawCanvasA2UICommand.push.rawValue,
-                 OpenClawCanvasA2UICommand.pushJSONL.rawValue:
-                return try await self.handleA2UIInvoke(req)
+                 OpenClawCanvasCommand.navigate.rawValue:
+                return try await handleCanvasInvoke(req)
             case OpenClawCameraCommand.snap.rawValue,
                  OpenClawCameraCommand.clip.rawValue,
                  OpenClawCameraCommand.list.rawValue,
                  OpenClawCameraCommand.ptzStatus.rawValue,
                  OpenClawCameraCommand.ptzControl.rawValue:
-                return try await self.handleCameraInvoke(req)
+                return try await handleCameraInvoke(req)
             case OpenClawLocationCommand.get.rawValue:
-                return try await self.handleLocationInvoke(req)
+                return try await handleLocationInvoke(req)
             case MacNodeScreenCommand.snapshot.rawValue:
-                return try await self.handleScreenSnapshotInvoke(req)
+                return try await handleScreenSnapshotInvoke(req)
             case MacNodeScreenCommand.record.rawValue:
-                return try await self.handleScreenRecordInvoke(req)
+                return try await handleScreenRecordInvoke(req)
             case OpenClawComputerCommand.act.rawValue:
-                return try await self.handleComputerActInvoke(req)
+                return try await handleComputerActInvoke(req)
             case OpenClawSystemCommand.notify.rawValue:
-                return try await self.handleSystemNotify(req)
+                return try await handleSystemNotify(req)
             case MacNodeCodexThreadCatalogContract.listCommand,
                  MacNodeCodexThreadCatalogContract.turnsCommand:
                 return try await self.handleCodexThreadInvoke(req)
@@ -265,13 +253,36 @@ actor MacNodeRuntime {
             case .deviceNotFound, .unsupported, .partial: .unavailable
             }
             return Self.errorResponse(req, code: code, message: error.localizedDescription)
+        } catch let error as MacNodeCanvasTargetError {
+            return Self.errorResponse(req, code: .invalidRequest, message: error.localizedDescription)
         } catch {
             return Self.errorResponse(req, code: .unavailable, message: error.localizedDescription)
         }
     }
 
-    private func isCanvasCommand(_ command: String) -> Bool {
-        command.hasPrefix("canvas.") || command.hasPrefix("canvas.a2ui.")
+    private static let canvasCommands: Set<String> = [
+        OpenClawCanvasCommand.present.rawValue,
+        OpenClawCanvasCommand.hide.rawValue,
+        OpenClawCanvasCommand.navigate.rawValue,
+    ]
+
+    private static func canvasCommandRejection(_ req: BridgeInvokeRequest) -> BridgeInvokeResponse? {
+        guard req.command.hasPrefix("canvas.") else { return nil }
+        guard self.canvasCommands.contains(req.command) else {
+            return self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "INVALID_REQUEST: unknown command")
+        }
+        guard self.canvasEnabled() else {
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: OpenClawNodeError(
+                    code: .unavailable,
+                    message: "CANVAS_DISABLED: enable Canvas in Settings"))
+        }
+        return nil
     }
 
     private func handleCuaInvokeIfSelected(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse? {
@@ -301,13 +312,13 @@ actor MacNodeRuntime {
                 message: "UNAVAILABLE: Codex session catalog is disabled")
         }
         let payload: String = if req.command == MacNodeCodexThreadCatalogContract.listCommand {
-            if let request = self.codexThreadListRequest {
+            if let request = codexThreadListRequest {
                 try await request(req.paramsJSON)
             } else {
                 try await self.codexThreadCatalogClient.list(paramsJSON: req.paramsJSON)
             }
         } else {
-            if let request = self.codexThreadTurnsRequest {
+            if let request = codexThreadTurnsRequest {
                 try await request(req.paramsJSON)
             } else {
                 try await self.codexThreadCatalogClient.turns(paramsJSON: req.paramsJSON)
@@ -341,8 +352,7 @@ extension MacNodeRuntime {
                 OpenClawCanvasPresentParams()
             let urlTrimmed = params.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let url = urlTrimmed.isEmpty ? nil : urlTrimmed
-            let hostedTarget = try await self.canvasHostedSurfaceResolver.resolveTarget(url)
-            let effectiveURL = hostedTarget?.url.absoluteString ?? url
+            let effectiveURL = try await resolveCanvasTarget(url)
             let placement = params.placement.map {
                 CanvasPlacement(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
             }
@@ -351,8 +361,7 @@ extension MacNodeRuntime {
                 _ = try CanvasManager.shared.showDetailed(
                     sessionKey: sessionKey,
                     target: effectiveURL,
-                    placement: placement,
-                    trustedA2UIActions: hostedTarget?.allowsA2UIActions == true)
+                    placement: placement)
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.hide.rawValue:
@@ -363,70 +372,38 @@ extension MacNodeRuntime {
             return BridgeInvokeResponse(id: req.id, ok: true)
         case OpenClawCanvasCommand.navigate.rawValue:
             let params = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON)
-            let hostedTarget = try await self.canvasHostedSurfaceResolver.resolveTarget(params.url)
-            let effectiveURL = hostedTarget?.url.absoluteString ?? params.url
+            let effectiveURL = try await resolveCanvasTarget(params.url)
             let sessionKey = self.mainSessionKey
             try await MainActor.run {
                 _ = try CanvasManager.shared.show(
                     sessionKey: sessionKey,
-                    path: effectiveURL,
-                    trustedA2UIActions: hostedTarget?.allowsA2UIActions == true)
+                    path: effectiveURL)
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
-        case OpenClawCanvasCommand.evalJS.rawValue:
-            let params = try Self.decodeParams(OpenClawCanvasEvalParams.self, from: req.paramsJSON)
-            let sessionKey = self.mainSessionKey
-            let result = try await CanvasManager.shared.eval(
-                sessionKey: sessionKey,
-                javaScript: params.javaScript)
-            let payload = try Self.encodePayload(["result": result] as [String: String])
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
-        case OpenClawCanvasCommand.snapshot.rawValue:
-            let params = try? Self.decodeParams(OpenClawCanvasSnapshotParams.self, from: req.paramsJSON)
-            let format = params?.format ?? .jpeg
-            let maxWidth: Int? = {
-                if let raw = params?.maxWidth, raw > 0 {
-                    return raw
-                }
-                return switch format {
-                case .png: 900
-                case .jpeg: 1600
-                }
-            }()
-            let quality = params?.quality ?? 0.9
-
-            let sessionKey = self.mainSessionKey
-            let path = try await CanvasManager.shared.snapshot(sessionKey: sessionKey, outPath: nil)
-            defer { try? FileManager().removeItem(atPath: path) }
-            let data = try Data(contentsOf: URL(fileURLWithPath: path))
-            guard let image = NSImage(data: data) else {
-                return Self.errorResponse(req, code: .unavailable, message: "canvas snapshot decode failed")
-            }
-            let encoded = try Self.encodeCanvasSnapshot(
-                image: image,
-                format: format,
-                maxWidth: maxWidth,
-                quality: quality)
-            let payload = try Self.encodePayload([
-                "format": format == .jpeg ? "jpeg" : "png",
-                "base64": encoded.base64EncodedString(),
-            ])
-            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
         default:
             return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
         }
     }
 
-    private func handleA2UIInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        switch req.command {
-        case OpenClawCanvasA2UICommand.reset.rawValue:
-            try await self.handleA2UIReset(req)
-        case OpenClawCanvasA2UICommand.push.rawValue,
-             OpenClawCanvasA2UICommand.pushJSONL.rawValue:
-            try await self.handleA2UIPush(req)
-        default:
-            Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
+    private func resolveCanvasTarget(_ rawTarget: String?) async throws -> String? {
+        guard let target = rawTarget?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty else {
+            return nil
         }
+        if CanvasHostedURLResolver.isHostedTarget(target) {
+            return try await self.canvasHostedSurfaceResolver.resolveTarget(target)?.absoluteString
+        }
+        guard CanvasHostedURLResolver.isAppLocalTarget(target) else {
+            throw MacNodeCanvasTargetError.invalidTarget
+        }
+        return target
+    }
+}
+
+private enum MacNodeCanvasTargetError: LocalizedError {
+    case invalidTarget
+
+    var errorDescription: String? {
+        "INVALID_REQUEST: canvas target must be a hosted widget-document path or app-local Canvas URL"
     }
 }
 
@@ -802,119 +779,6 @@ extension MacNodeRuntime {
     }
 }
 
-// MARK: - A2UI host
-
-extension MacNodeRuntime {
-    private func handleA2UIReset(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        try await self.ensureA2UIHost()
-
-        let sessionKey = self.mainSessionKey
-        let json = try await CanvasManager.shared.eval(sessionKey: sessionKey, javaScript: """
-        (() => {
-          const host = globalThis.openclawA2UI;
-          if (!host) return JSON.stringify({ ok: false, error: "missing openclawA2UI" });
-          return JSON.stringify(host.reset());
-        })()
-        """)
-        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
-    }
-
-    private func handleA2UIPush(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let command = req.command
-        let messages: [OpenClawKit.AnyCodable]
-        if command == OpenClawCanvasA2UICommand.pushJSONL.rawValue {
-            let params = try Self.decodeParams(OpenClawCanvasA2UIPushJSONLParams.self, from: req.paramsJSON)
-            messages = try OpenClawCanvasA2UIJSONL.decodeMessagesFromJSONL(params.jsonl)
-        } else {
-            do {
-                let params = try Self.decodeParams(OpenClawCanvasA2UIPushParams.self, from: req.paramsJSON)
-                messages = params.messages
-            } catch {
-                let params = try Self.decodeParams(OpenClawCanvasA2UIPushJSONLParams.self, from: req.paramsJSON)
-                messages = try OpenClawCanvasA2UIJSONL.decodeMessagesFromJSONL(params.jsonl)
-            }
-        }
-
-        try await self.ensureA2UIHost()
-
-        let messagesJSON = try OpenClawCanvasA2UIJSONL.encodeMessagesJSONArray(messages)
-        let js = """
-        (() => {
-          try {
-            const host = globalThis.openclawA2UI;
-            if (!host) return JSON.stringify({ ok: false, error: "missing openclawA2UI" });
-            const messages = \(messagesJSON);
-            return JSON.stringify(host.applyMessages(messages));
-          } catch (e) {
-            return JSON.stringify({ ok: false, error: String(e?.message ?? e) });
-          }
-        })()
-        """
-        let sessionKey = self.mainSessionKey
-        let resultJSON = try await CanvasManager.shared.eval(sessionKey: sessionKey, javaScript: js)
-        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: resultJSON)
-    }
-
-    private func ensureA2UIHost() async throws {
-        if await self.isA2UIReady() {
-            return
-        }
-        guard let a2uiUrl = await self.canvasHostedSurfaceResolver.resolveA2UIURL() else {
-            throw NSError(domain: "Canvas", code: 30, userInfo: [
-                NSLocalizedDescriptionKey: "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host",
-            ])
-        }
-        let sessionKey = self.mainSessionKey
-        _ = try await MainActor.run {
-            try CanvasManager.shared.prepare(
-                sessionKey: sessionKey,
-                target: a2uiUrl,
-                trustedA2UIActions: true)
-        }
-        if await self.isA2UIReady(poll: true) {
-            return
-        }
-        if let refreshedUrl = await self.canvasHostedSurfaceResolver.resolveA2UIURL(forceRefresh: true) {
-            _ = try await MainActor.run {
-                try CanvasManager.shared.prepare(
-                    sessionKey: sessionKey,
-                    target: refreshedUrl,
-                    trustedA2UIActions: true)
-            }
-            if await self.isA2UIReady(poll: true) {
-                return
-            }
-        }
-        throw NSError(domain: "Canvas", code: 31, userInfo: [
-            NSLocalizedDescriptionKey: "A2UI_HOST_UNAVAILABLE: A2UI host not reachable",
-        ])
-    }
-
-    private func isA2UIReady(poll: Bool = false) async -> Bool {
-        let deadline = poll ? Date().addingTimeInterval(6.0) : Date()
-        while true {
-            do {
-                let sessionKey = self.mainSessionKey
-                let ready = try await CanvasManager.shared.eval(sessionKey: sessionKey, javaScript: """
-                (() => {
-                  const host = globalThis.openclawA2UI;
-                  return String(Boolean(host));
-                })()
-                """)
-                let trimmed = ready.trimmingCharacters(in: .whitespacesAndNewlines)
-                if trimmed == "true" {
-                    return true
-                }
-            } catch {
-                // Ignore transient eval failures while the page is loading.
-            }
-
-            guard poll, Date() < deadline else { return false }
-            try? await Task.sleep(nanoseconds: 120_000_000)
-        }
-    }
-}
-
 // MARK: - Native system notifications
 
 extension MacNodeRuntime {
@@ -1047,60 +911,5 @@ extension MacNodeRuntime {
             id: req.id,
             ok: false,
             error: OpenClawNodeError(code: code, message: message))
-    }
-
-    private static func encodeCanvasSnapshot(
-        image: NSImage,
-        format: OpenClawCanvasSnapshotFormat,
-        maxWidth: Int?,
-        quality: Double) throws -> Data
-    {
-        let source = Self.scaleImage(image, maxWidth: maxWidth) ?? image
-        guard let tiff = source.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff)
-        else {
-            throw NSError(domain: "Canvas", code: 22, userInfo: [
-                NSLocalizedDescriptionKey: "snapshot encode failed",
-            ])
-        }
-
-        switch format {
-        case .png:
-            guard let data = rep.representation(using: .png, properties: [:]) else {
-                throw NSError(domain: "Canvas", code: 23, userInfo: [
-                    NSLocalizedDescriptionKey: "png encode failed",
-                ])
-            }
-            return data
-        case .jpeg:
-            let clamped = min(1.0, max(0.05, quality))
-            guard let data = rep.representation(
-                using: .jpeg,
-                properties: [.compressionFactor: clamped])
-            else {
-                throw NSError(domain: "Canvas", code: 24, userInfo: [
-                    NSLocalizedDescriptionKey: "jpeg encode failed",
-                ])
-            }
-            return data
-        }
-    }
-
-    private static func scaleImage(_ image: NSImage, maxWidth: Int?) -> NSImage? {
-        guard let maxWidth, maxWidth > 0 else { return image }
-        let size = image.size
-        guard size.width > 0, size.width > CGFloat(maxWidth) else { return image }
-        let scale = CGFloat(maxWidth) / size.width
-        let target = NSSize(width: CGFloat(maxWidth), height: size.height * scale)
-
-        let out = NSImage(size: target)
-        out.lockFocus()
-        image.draw(
-            in: NSRect(origin: .zero, size: target),
-            from: NSRect(origin: .zero, size: size),
-            operation: .copy,
-            fraction: 1.0)
-        out.unlockFocus()
-        return out
     }
 }

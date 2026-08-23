@@ -583,12 +583,10 @@ type LoadedReferenceAsset = Awaited<ReturnType<typeof loadReferenceAssets>>[numb
 type ExecutedVideoGeneration = {
   provider: string;
   model: string;
-  savedPaths: string[];
   /** URLs of url-only assets that were not saved locally. */
   urlOnlyUrls: string[];
   /** Total generated video count, including url-only assets. */
   count: number;
-  paths: string[];
   mediaUrls: string[];
   attachments: AgentGeneratedAttachment[];
   contentText: string;
@@ -784,17 +782,21 @@ async function executeVideoGenerationJob(params: {
     },
   );
   const attachments: AgentGeneratedAttachment[] = [
-    ...savedVideos.map((video, index) => ({
-      type: "video" as const,
-      path: video.path,
-      mimeType: video.contentType,
-      name: video.id,
-      sizeBytes: video.size,
-      ...(typeof normalizedDurationSeconds === "number"
-        ? { durationMs: normalizedDurationSeconds * 1000 }
-        : {}),
-      ...savedVideoMetadata[index],
-    })),
+    ...savedVideos.map((video, index) =>
+      Object.assign(
+        {
+          type: "video" as const,
+          path: video.path,
+          mimeType: video.contentType,
+          name: video.id,
+          sizeBytes: video.size,
+          ...(typeof normalizedDurationSeconds === "number"
+            ? { durationMs: normalizedDurationSeconds * 1000 }
+            : {}),
+        },
+        savedVideoMetadata[index] ?? {},
+      ),
+    ),
     ...urlOnlyVideos.map((video) => ({
       type: "video" as const,
       url: video.url,
@@ -819,10 +821,8 @@ async function executeVideoGenerationJob(params: {
   return {
     provider: result.provider,
     model: result.model,
-    savedPaths: savedVideos.map((video) => video.path),
     urlOnlyUrls: urlOnlyVideos.map((video) => video.url),
     count: totalCount,
-    paths: savedVideos.map((video) => video.path),
     mediaUrls: allMediaUrls,
     attachments,
     contentText: lines.join("\n"),
@@ -1270,7 +1270,6 @@ export function createVideoGenerateTool(options?: {
           provider: executed.provider,
           model: executed.model,
           count: executed.count,
-          paths: executed.savedPaths,
         });
 
         return {

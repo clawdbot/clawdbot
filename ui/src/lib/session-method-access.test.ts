@@ -51,6 +51,39 @@ describe("readSessionMethodAccess", () => {
     });
   });
 
+  it.each([
+    ["sessions.dispatch", { key: "agent:main:device", deviceId: "runner" }],
+    ["sessions.move", { key: "agent:main:device", target: { kind: "device", deviceId: "runner" } }],
+  ])("allows write-scoped device placement through %s", (method, params) => {
+    expect(
+      readSessionMethodAccess(snapshot({ methods: [method], scopes: ["operator.write"] }), {
+        method,
+        params,
+        requiredScope: "operator.write",
+      }),
+    ).toEqual({ allowed: true, requiredScope: "operator.write" });
+  });
+
+  it.each([
+    ["sessions.dispatch", { key: "agent:main:cloud", profileId: "aws" }],
+    ["sessions.move", { key: "agent:main:cloud", target: { kind: "profile", profileId: "aws" } }],
+  ])("keeps profile placement admin-only through %s", (method, params) => {
+    expect(
+      readSessionMethodAccess(snapshot({ methods: [method], scopes: ["operator.write"] }), {
+        method,
+        params,
+        requiredScope: "operator.admin",
+      }),
+    ).toMatchObject({ allowed: false, requiredScope: "operator.admin" });
+    expect(
+      readSessionMethodAccess(snapshot({ methods: [method], scopes: ["operator.admin"] }), {
+        method,
+        params,
+        requiredScope: "operator.admin",
+      }),
+    ).toEqual({ allowed: true, requiredScope: "operator.admin" });
+  });
+
   it("keeps model and effort patch access independent", () => {
     const writeOnly = snapshot({ methods: ["sessions.patch"], scopes: ["operator.write"] });
     expect(

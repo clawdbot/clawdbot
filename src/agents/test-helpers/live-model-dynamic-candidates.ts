@@ -29,9 +29,9 @@ const providerRuntimeLoader = createLazyImportLoader<ProviderRuntimeModule>(
 
 async function prepareProviderDynamicModelDefault(
   params: Parameters<DynamicModelPreparer>[0],
-): Promise<void> {
+): ReturnType<DynamicModelPreparer> {
   const { prepareProviderDynamicModel } = await providerRuntimeLoader.load();
-  await prepareProviderDynamicModel(params);
+  return await prepareProviderDynamicModel(params);
 }
 
 async function runProviderDynamicModelDefault(
@@ -108,20 +108,22 @@ export async function appendPrioritizedDynamicLiveModels(params: {
       modelRegistry: params.modelRegistry,
       providerConfig,
     };
-    await prepareDynamicModel({
+    const prepared = await prepareDynamicModel({
       provider: ref.provider,
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
       context,
     });
-    const resolved = await resolveDynamicModel({
-      provider: ref.provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-      context,
-    });
+    const resolved =
+      prepared ??
+      (await resolveDynamicModel({
+        provider: ref.provider,
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+        context,
+      }));
     if (!resolved) {
       continue;
     }

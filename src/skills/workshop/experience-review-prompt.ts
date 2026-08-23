@@ -1,12 +1,12 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { RunSkillUsage } from "../runtime/run-usage.js";
+import { resolveSkillWorkshopProjectionBudgets } from "./model-context-budget.js";
 import {
   SKILL_AUTHORING_STANDARDS_PROMPT,
   SKILL_AUTONOMOUS_CAPTURE_EXCLUSIONS_PROMPT,
 } from "./skill-authoring-standards.js";
 
-const EXPERIENCE_REVIEW_MAX_TRANSCRIPT_CHARS = 60_000;
 const EXPERIENCE_REVIEW_MAX_SKILL_ENTRIES = 50;
 const EXPERIENCE_REVIEW_MAX_SKILL_LINE_CHARS = 200;
 const EXPERIENCE_REVIEW_MAX_USED_SKILLS_CHARS = 2_000;
@@ -84,15 +84,23 @@ function renderMessage(message: unknown): string {
   return `[${role}${toolName}${error}]\n${renderContent(message.content)}`;
 }
 
-export function formatSkillExperienceReviewTranscript(messages: readonly unknown[]): string {
+export function formatSkillExperienceReviewTranscript(
+  messages: readonly unknown[],
+  maxChars = resolveSkillWorkshopProjectionBudgets(Number.MAX_SAFE_INTEGER).reviewTranscriptChars,
+): string {
   const rendered = messages.map(renderMessage);
   const full = rendered.join("\n\n");
-  if (full.length <= EXPERIENCE_REVIEW_MAX_TRANSCRIPT_CHARS) {
+  if (full.length <= maxChars) {
     return full;
   }
-  const first = truncateUtf16Safe(rendered[0] ?? "", 6_000);
-  const tailBudget = EXPERIENCE_REVIEW_MAX_TRANSCRIPT_CHARS - first.length - 80;
-  return `${first}\n\n[older trajectory omitted]\n\n${sliceUtf16Safe(full, -tailBudget)}`;
+  const marker = "\n\n[older trajectory omitted]\n\n";
+  const contentBudget = Math.max(0, maxChars - marker.length);
+  const first = truncateUtf16Safe(
+    rendered[0] ?? "",
+    Math.min(6_000, Math.floor(contentBudget / 3)),
+  );
+  const tailBudget = Math.max(0, contentBudget - first.length);
+  return `${first}${marker}${sliceUtf16Safe(full, -tailBudget)}`;
 }
 
 function renderExistingSkillsSection(

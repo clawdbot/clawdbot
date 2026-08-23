@@ -167,6 +167,7 @@ export class DiscordVoiceSessions {
 
     const existing = this.params.sessions.get(guildId);
     if (existing && existing.channelId === channelId) {
+      existing.autoJoinWhenOccupied = options?.autoJoinWhenOccupied === true;
       if (authority) {
         existing.generation = authority.generation;
       }
@@ -430,6 +431,7 @@ export class DiscordVoiceSessions {
 
     const entry: VoiceSessionEntry = {
       generation: authority?.generation ?? 0,
+      autoJoinWhenOccupied: options?.autoJoinWhenOccupied === true,
       sessionLifecycle: { status: "active" },
       guildId,
       guildName:
@@ -647,6 +649,7 @@ export class DiscordVoiceSessions {
     }
     const { DiscordRealtimeVoiceSession } = await import("./realtime-session.runtime.js");
     const realtime = new DiscordRealtimeVoiceSession({
+      accountId: this.params.accountId,
       bootstrapContextInstructions,
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,

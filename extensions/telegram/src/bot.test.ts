@@ -539,6 +539,7 @@ async function writeDirectTelegramTranscriptMessages(params: {
     accountId: "default",
     chatId: params.chatId,
     isGroup: false,
+    threadSpec: { scope: "none" },
     senderId: params.senderId,
   }).route;
   const sessionKey = resolveTelegramConversationBaseSessionKey({
@@ -2608,6 +2609,7 @@ describe("createTelegramBot", () => {
       accountId: "default",
       chatId: 1234,
       isGroup: false,
+      threadSpec: { scope: "none" },
       senderId: 9,
     }).route;
     const sessionKey = resolveTelegramConversationBaseSessionKey({
@@ -2715,6 +2717,7 @@ describe("createTelegramBot", () => {
           accountId: "default",
           chatId: 1234,
           isGroup: false,
+          threadSpec: { scope: "none" },
           senderId: 9,
         }).route;
         const sessionKey = resolveTelegramConversationBaseSessionKey({
@@ -4318,6 +4321,65 @@ describe("createTelegramBot", () => {
     expect(result).toEqual({ kind: "failed-retryable", error: expect.any(Error) });
     expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1", expect.any(AbortSignal));
     expect(replySpy).not.toHaveBeenCalled();
+  });
+
+  it("durably retries when primary media hydration outlives its claim owner", async () => {
+    const claimOwner = new AbortController();
+    const timeoutError = new Error("claim adoption stalled");
+    const mediaFetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      claimOwner.abort(timeoutError);
+      expect(init?.signal?.aborted).toBe(true);
+      return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      });
+    });
+    const ssrfMock = mockPinnedHostnameResolution();
+
+    try {
+      createTelegramBot({
+        token: "tok",
+        telegramTransport: makeTelegramTransport(mediaFetch as typeof fetch),
+      });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      const update = {
+        update_id: 98083,
+        message: {
+          chat: { id: 7, type: "private" },
+          message_id: 9002,
+          caption: "inspect this image",
+          date: 1_736_380_800,
+          from: { id: 42, first_name: "Ada" },
+          photo: [{ file_id: "primary-photo-1" }],
+        },
+      };
+
+      const { result } = await runWithTelegramUpdateProcessingFrame(() =>
+        runWithTelegramSpooledReplayUpdate(
+          update,
+          () =>
+            handler({
+              update,
+              message: update.message,
+              me: { username: "openclaw_bot" },
+              getFile: async () => ({ file_path: "media/primary-photo.jpg" }),
+            }),
+          {
+            abortSignal: claimOwner.signal,
+            onAdopted: vi.fn(),
+            onDeferred: vi.fn(),
+            onAdoptionFinalizing: vi.fn(),
+            onAbandoned: vi.fn(),
+          },
+        ),
+      );
+
+      expect(result).toEqual({ kind: "failed-retryable", error: timeoutError });
+      expect(mediaFetch).toHaveBeenCalledTimes(1);
+      expect(replySpy).not.toHaveBeenCalled();
+    } finally {
+      ssrfMock.mockRestore();
+    }
   });
 
   it("reuses resolved media when hydrating cached Telegram reply chains", async () => {

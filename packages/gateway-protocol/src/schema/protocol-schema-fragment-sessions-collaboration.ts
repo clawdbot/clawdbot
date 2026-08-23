@@ -1,9 +1,19 @@
 import * as sessionDiscussion from "./session-discussion.js";
+import * as sessionGitHubPublication from "./session-github-publication.js";
 import * as sessionPlacement from "./session-placement.js";
 import * as sessionsSharing from "./sessions-sharing.js";
 import * as sessionsSuggestions from "./sessions-suggestions.js";
 
 export const SessionCollaborationProtocolSchemas = {
+  SessionGitHubPublishParams: sessionGitHubPublication.SessionGitHubPublishParamsSchema,
+  SessionGitHubPublicationRequested:
+    sessionGitHubPublication.SessionGitHubPublicationRequestedSchema,
+  SessionGitHubPublicationPublishing:
+    sessionGitHubPublication.SessionGitHubPublicationPublishingSchema,
+  SessionGitHubPublicationPublished:
+    sessionGitHubPublication.SessionGitHubPublicationPublishedSchema,
+  SessionGitHubPublicationFailed: sessionGitHubPublication.SessionGitHubPublicationFailedSchema,
+  SessionGitHubPublicationResult: sessionGitHubPublication.SessionGitHubPublicationResultSchema,
   SessionVisibility: sessionsSharing.SessionVisibilitySchema,
   SessionSharingIdentity: sessionsSharing.SessionSharingIdentitySchema,
   SessionSharingRole: sessionsSharing.SessionSharingRoleSchema,

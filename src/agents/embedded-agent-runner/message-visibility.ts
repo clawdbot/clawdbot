@@ -1,5 +1,9 @@
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
+  isReplyPayloadTerminalContent,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
+import {
   isSilentReplyPayloadText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
@@ -23,6 +27,7 @@ type PayloadVisibilityOptions = {
   includeErrorPayloads?: boolean;
   includeReasoningPayloads?: boolean;
   includeSilentReplyPayloads?: boolean;
+  requireTerminalContent?: boolean;
 };
 
 function hasNonEmptyStringArray(value: unknown): boolean {
@@ -106,7 +111,13 @@ export function hasVisibleAgentPayload(
       if (!payload || typeof payload !== "object") {
         return false;
       }
-      const record = payload as AgentPayloadLike;
+      const record = payload as AgentPayloadLike & ReplyPayload;
+      if (
+        options.requireTerminalContent &&
+        (record.visible === false || !isReplyPayloadTerminalContent(record))
+      ) {
+        return false;
+      }
       if (options.includeErrorPayloads === false && record.isError === true) {
         return false;
       }
@@ -128,6 +139,19 @@ export function hasVisibleAgentPayload(
         record.channelData,
       );
     })
+  );
+}
+
+/** Honors recorded visibility before deriving it from the payload's visible content. */
+export function hasExplicitlyVisibleAgentPayload(payload: unknown): boolean {
+  if (payload && typeof payload === "object" && !Array.isArray(payload) && "visible" in payload) {
+    if (typeof payload.visible === "boolean") {
+      return payload.visible;
+    }
+  }
+  return hasVisibleAgentPayload(
+    { payloads: [payload] },
+    { includeErrorPayloads: false, includeReasoningPayloads: false },
   );
 }
 

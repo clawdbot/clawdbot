@@ -5,7 +5,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { resolveCatalogOwnedModelCompat } from "../model-compat-catalog.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
-  attachModelProviderMetadataOwners,
+  attachModelProviderRequestRouteFacts,
   attachModelProviderRequestTransport,
   resolveProviderRequestConfig,
   sanitizeConfiguredModelProviderRequest,
@@ -165,7 +165,7 @@ export function buildConfiguredFallbackModel(params: {
     cfg,
     agentDir,
     workspaceDir,
-    model: attachModelProviderMetadataOwners(
+    model: attachModelProviderRequestRouteFacts(
       attachModelProviderLocalService(
         attachModelProviderRequestTransport(
           {

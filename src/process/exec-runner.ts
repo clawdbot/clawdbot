@@ -16,10 +16,12 @@ import {
   MAX_PRESERVED_PENDING_LINE_BYTES,
   resolveMaxOutputBytes,
   resolveOutputCapture,
+  shouldTerminateOnOutputError,
   shouldTerminateOnOutputLimit,
   type CapturedOutputBuffers,
   type CommandOutputCaptureMode,
   type CommandOutputCaptureOption,
+  type CommandOutputErrorOption,
   type CommandOutputLimitOption,
   type CommandOutputStream,
   type PreserveOutputLine,
@@ -57,12 +59,16 @@ export type CommandOptions = {
   onOutputChunk?: (chunk: Buffer, stream: CommandOutputStream) => boolean | void;
   /** Accept a successful exit when only the selected diagnostic output stream failed. */
   tolerateOutputError?: { stdout?: boolean; stderr?: boolean };
+  /** Terminate when the selected output stream emits an error. */
+  terminateOnOutputError?: CommandOutputErrorOption;
   terminateOnOutputLimit?: CommandOutputLimitOption;
   maxPreservedOutputLines?: number;
   preserveOutputLine?: PreserveOutputLine;
   killProcessTree?: boolean;
   /** Signal used when terminating the direct child; tree termination owns its own grace policy. */
   killSignal?: NodeJS.Signals | number;
+  /** Grace between graceful termination and the force-kill fallback. */
+  killGraceMs?: number;
 };
 
 export async function runCommandWithTimeout(
@@ -97,11 +103,17 @@ async function runCommandWithOutputEncoding(
     signal,
     killProcessTree,
     killSignal,
+    killGraceMs,
   } = options;
   const resolvedTimeoutMs =
     typeof timeoutMs === "number" ? resolveTimerTimeoutMs(timeoutMs, 1) : undefined;
   const hasInput = input !== undefined;
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
+  const resolvedKillGraceMs = resolveTimerTimeoutMs(
+    killGraceMs,
+    COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+    0,
+  );
 
   if (signal?.aborted) {
     return {
@@ -153,6 +165,7 @@ async function runCommandWithOutputEncoding(
   let noOutputTimer: NodeJS.Timeout | undefined;
   let outputObserverError: unknown;
   let outputErrorStream: CommandOutputStream | undefined;
+  let terminatingOutputError: Error | undefined;
 
   const { child, invocation } = spawnCommandWithInvocation(argv, {
     buffer: false,
@@ -162,7 +175,7 @@ async function runCommandWithOutputEncoding(
     encoding: "buffer",
     baseEnv,
     env,
-    forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+    forceKillAfterDelay: resolvedKillGraceMs,
     killSignal,
     ...(hasInput ? { input } : {}),
     reject: false,
@@ -184,6 +197,7 @@ async function runCommandWithOutputEncoding(
     killProcessTree,
     isChildExited: () => childExited,
     isCommandSettled: () => commandSettled,
+    killGraceMs: resolvedKillGraceMs,
   });
 
   const clearNoOutputTimer = () => {
@@ -324,12 +338,21 @@ async function runCommandWithOutputEncoding(
     return buffer;
   };
 
-  child.stdout?.once("error", () => {
-    outputErrorStream ??= "stdout";
-  });
-  child.stderr?.once("error", () => {
-    outputErrorStream ??= "stderr";
-  });
+  const onOutputError = (error: unknown, stream: CommandOutputStream) => {
+    outputErrorStream ??= stream;
+    if (
+      termination ||
+      options.tolerateOutputError?.[stream] === true ||
+      !shouldTerminateOnOutputError(options.terminateOnOutputError, stream)
+    ) {
+      return;
+    }
+    terminatingOutputError = toErrorObject(error, `Command ${stream} stream failed`);
+    Object.assign(terminatingOutputError, { outputErrorStream: stream });
+    cancel("signal");
+  };
+  child.stdout?.once("error", (error) => onOutputError(error, "stdout"));
+  child.stderr?.once("error", (error) => onOutputError(error, "stderr"));
   child.stdout?.on("data", (chunk) => {
     const buffer = observeOutputChunk(chunk, "stdout");
     appendPreservedOutputLines({
@@ -367,6 +390,9 @@ async function runCommandWithOutputEncoding(
     releaseOutput();
   });
   await terminationController.settle();
+  if (terminatingOutputError) {
+    throw terminatingOutputError;
+  }
   if (outputObserverError !== undefined) {
     throw toErrorObject(outputObserverError, "Command output observer failed");
   }

@@ -260,7 +260,7 @@ async function expectListedSessionActiveRun(
   const payload = expectRespondPayload(respond);
   const session = findSession(payload, "agent:main:main");
   expect(session.hasActiveRun).toBe(expected);
-  expect(session.activeRunIds).toEqual(expected ? ["run-1"] : undefined);
+  expect(session.activeRunIds).toEqual(expected ? ["run-1"] : []);
   expect(session.status).toBe(expectedStatus);
 }
 
@@ -741,6 +741,25 @@ test("sessions.list replaces a previous terminal status when execution starts", 
     "running",
     { status: "failed" },
   );
+});
+
+test("sessions.list distinguishes proven idle from unavailable run identities", async () => {
+  await writeMainSessionStore();
+
+  const idle = await invokeSessionsList({ requestId: "req-sessions-list-idle-exact-runs" });
+  const idleSession = findSession(expectRespondPayload(idle.respond), "agent:main:main");
+  expect(idleSession).toMatchObject({ hasActiveRun: false, activeRunIds: [] });
+
+  embeddedRunMock.activeIds.add("sess-main");
+  const unavailable = await invokeSessionsList({
+    requestId: "req-sessions-list-unavailable-runs",
+  });
+  const unavailableSession = findSession(
+    expectRespondPayload(unavailable.respond),
+    "agent:main:main",
+  );
+  expect(unavailableSession).toMatchObject({ hasActiveRun: true });
+  expect(unavailableSession).not.toHaveProperty("activeRunIds");
 });
 
 test("sessions.changed publishes visible active run ids", async () => {

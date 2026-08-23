@@ -18,6 +18,7 @@ const agentCommandFromIngressMock = vi.fn();
 const queueEmbeddedAgentMessageWithOutcomeAsyncMock = vi.fn();
 const resolveActiveEmbeddedRunSessionIdMock = vi.fn();
 const runBtwSideQuestionMock = vi.fn();
+const formatSessionUsageCostSummaryMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 const applySessionPatchProjectionMock = vi.fn();
 const projectSessionsPatchEntryMock = vi.fn();
@@ -101,6 +102,10 @@ vi.mock("../agents/embedded-agent-runner/runs.js", () => ({
 
 vi.mock("../agents/btw.js", () => ({
   runBtwSideQuestion: (...args: unknown[]) => runBtwSideQuestionMock(...args),
+}));
+
+vi.mock("../auto-reply/reply/commands-session-cost.runtime.js", () => ({
+  formatSessionUsageCostSummary: (...args: unknown[]) => formatSessionUsageCostSummaryMock(...args),
 }));
 
 vi.mock("../infra/agent-events.js", () => ({
@@ -319,6 +324,8 @@ describe("EmbeddedTuiBackend", () => {
     resolveActiveEmbeddedRunSessionIdMock.mockReset();
     resolveActiveEmbeddedRunSessionIdMock.mockReturnValue(undefined);
     runBtwSideQuestionMock.mockReset();
+    formatSessionUsageCostSummaryMock.mockReset();
+    formatSessionUsageCostSummaryMock.mockResolvedValue("💸 Usage cost\nSession $1.23");
     updateSessionStoreMock.mockReset();
     updateSessionStoreMock.mockImplementation(
       async (_storePath: string, update: (store: Record<string, unknown>) => unknown) =>
@@ -1120,6 +1127,35 @@ describe("EmbeddedTuiBackend", () => {
       sessionKey: "global",
       storePath: "/tmp/openclaw-work-sessions.json",
     });
+  });
+
+  it("runs local usage cost with the canonical session entry and selected agent", async () => {
+    const cfg = { session: { scope: "global" } };
+    const sessionEntry = { sessionId: "session-work", updatedAt: embeddedEventTimestamp };
+    loadSessionEntryMock.mockReturnValueOnce({
+      cfg,
+      canonicalKey: "global",
+      storePath: "/tmp/openclaw-work-sessions.json",
+      entry: sessionEntry,
+    });
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(
+      backend.runUsageCostCommand({ sessionKey: "global", agentId: "work" }),
+    ).resolves.toEqual({
+      text: "💸 Usage cost\nSession $1.23",
+    });
+
+    expect(loadSessionEntryMock).toHaveBeenCalledWith("global", { agentId: "work" });
+    expect(formatSessionUsageCostSummaryMock).toHaveBeenCalledWith({
+      cfg,
+      sessionKey: "global",
+      agentId: "work",
+      sessionEntry,
+      storePath: "/tmp/openclaw-work-sessions.json",
+    });
+    expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
   });
 
   it("loads history thinking defaults from configured replace-mode models", async () => {

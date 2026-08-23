@@ -1512,7 +1512,7 @@ describe("initSessionState RawBody", () => {
     });
   });
 
-  it("records channel senders but skips unknown and own-agent prompt identities", async () => {
+  it("keeps channel and agent participant sources distinct", async () => {
     const root = await makeCaseDir("openclaw-session-participant-admission-");
     const storePath = path.join(root, "sessions.json");
     const cfg = { session: { store: storePath } } as OpenClawConfig;
@@ -1536,10 +1536,29 @@ describe("initSessionState RawBody", () => {
     });
     await initSessionState({
       ctx: {
+        RawBody: "channel-created prompt",
+        ChatType: "direct",
+        SessionKey: "agent:main:channel-created-participant",
+        SenderId: "channel-created-sender",
+        SessionCreation: { via: "channel", actor: { type: "human", id: "channel-actor" } },
+      },
+      cfg,
+    });
+    await initSessionState({
+      ctx: {
         RawBody: "own agent prompt",
         ChatType: "direct",
         SessionKey: "agent:main:own-agent-participant",
         SessionCreation: { via: "spawn", actor: { type: "agent", id: "main" } },
+      },
+      cfg,
+    });
+    await initSessionState({
+      ctx: {
+        RawBody: "delegated agent prompt",
+        ChatType: "direct",
+        SessionKey: "agent:main:delegated-agent-participant",
+        SessionCreation: { via: "spawn", actor: { type: "agent", id: "research" } },
       },
       cfg,
     });
@@ -1555,7 +1574,23 @@ describe("initSessionState RawBody", () => {
         },
       ]);
       expect(participants.get("agent:main:unknown-participant")).toBeUndefined();
+      expect(participants.get("agent:main:channel-created-participant")).toEqual([
+        {
+          actor: { type: "human", id: "channel-created-sender" },
+          firstPromptedAt: expect.any(Number),
+          lastPromptedAt: expect.any(Number),
+          source: "channel",
+        },
+      ]);
       expect(participants.get("agent:main:own-agent-participant")).toBeUndefined();
+      expect(participants.get("agent:main:delegated-agent-participant")).toEqual([
+        {
+          actor: { type: "agent", id: "research" },
+          firstPromptedAt: expect.any(Number),
+          lastPromptedAt: expect.any(Number),
+          source: "agent",
+        },
+      ]);
     });
   });
 

@@ -8,6 +8,11 @@ enum DashboardNotificationsRequest: String {
     case sendTest = "send-test"
 }
 
+struct DashboardNotificationsSnapshot: Encodable, Equatable {
+    let permission: String
+    let test: TestNotificationOutcome?
+}
+
 @MainActor
 final class DashboardNotificationsMessageHandler: NSObject, WKScriptMessageHandler {
     weak var owner: DashboardWindowController?
@@ -57,32 +62,50 @@ extension DashboardWindowController {
 
         switch request {
         case .status:
-            Task { await self.publishNotificationsStatus() }
+            Task { await self.refreshNotificationsPermission() }
         case .requestPermission:
             Task {
                 _ = await PermissionManager.ensure([.notifications], interactive: true)
-                await self.publishNotificationsStatus()
+                await self.refreshNotificationsPermission()
             }
         case .sendTest:
             Task {
-                _ = await NotificationManager().send(
-                    title: "OpenClaw",
-                    body: "Test notification",
-                    sound: nil)
+                guard self.notificationTestOutcome != .pending else { return }
+                self.notificationTestOutcome = .pending
+                await self.publishNotificationsStatus()
+                self.notificationTestOutcome = await TestNotificationAction.send()
                 await self.publishNotificationsStatus()
             }
         }
     }
 
+    static func notificationsSnapshot(
+        permission: String,
+        testOutcome: TestNotificationOutcome?) -> DashboardNotificationsSnapshot
+    {
+        DashboardNotificationsSnapshot(permission: permission, test: testOutcome)
+    }
+
+    private func refreshNotificationsPermission() async {
+        guard PermissionManager.notificationCenterAvailable else { return }
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        self.notificationPermission = Self.notificationsPermissionLabel(for: settings.authorizationStatus)
+        await self.publishNotificationsStatus()
+    }
+
     private func publishNotificationsStatus() async {
         // Honest absence beats a fabricated status when the process is unbundled.
         guard PermissionManager.notificationCenterAvailable else { return }
-        let settings = await UNUserNotificationCenter.current().notificationSettings()
-        let permission = Self.notificationsPermissionLabel(for: settings.authorizationStatus)
+        let snapshot = Self.notificationsSnapshot(
+            permission: self.notificationPermission,
+            testOutcome: self.notificationTestOutcome)
+        guard let data = try? JSONEncoder().encode(snapshot),
+              let json = String(data: data, encoding: .utf8)
+        else { return }
         // Keep a global snapshot so late subscribers can read status without a bridge round-trip.
         _ = try? await self.webView.evaluateJavaScript(
             """
-            window.__OPENCLAW_NATIVE_NOTIFICATIONS__ = {permission:"\(permission)"};
+            window.__OPENCLAW_NATIVE_NOTIFICATIONS__ = \(json);
             window.dispatchEvent(new CustomEvent('openclaw:native-notifications-status', \
             {detail:window.__OPENCLAW_NATIVE_NOTIFICATIONS__}));
             """)

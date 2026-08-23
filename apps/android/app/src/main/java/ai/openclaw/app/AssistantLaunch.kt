@@ -22,7 +22,6 @@ enum class HomeDestination {
   Connect,
   Chat,
   Voice,
-  Screen,
   Settings,
 }
 

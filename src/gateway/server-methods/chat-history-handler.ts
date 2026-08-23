@@ -247,7 +247,7 @@ async function handleChatHistoryRequest({
   const selectedAgent = validateChatSelectedAgent({
     cfg,
     requestedSessionKey: sessionKey,
-    agentId: requestedAgentId,
+    explicitAgentId: agentIdOverride,
   });
   if (!selectedAgent.ok) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
@@ -502,7 +502,9 @@ async function handleChatHistoryRequest({
     defaultAgentId: compatibilityOwnerAgentId,
   });
   sessionInfo.hasActiveRun = activeRunState.active;
-  sessionInfo.activeRunIds = activeRunState.runIds;
+  if (activeRunState.runIds !== undefined) {
+    sessionInfo.activeRunIds = activeRunState.runIds;
+  }
   if (activeRunState.active) {
     sessionInfo.status = activeRunState.status ?? "running";
   }

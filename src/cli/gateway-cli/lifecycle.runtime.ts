@@ -4,10 +4,8 @@
 // a facade also evaluates its siblings and drags their graphs onto cold start.
 export {
   abortEmbeddedAgentRun,
-  getActiveEmbeddedRunCount,
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
-  waitForActiveEmbeddedRuns,
 } from "../../agents/embedded-agent-runner/runs.js";
 export { markRestartAbortedMainSessions } from "../../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 export { getRuntimeConfig } from "../../config/config.js";
@@ -41,6 +39,10 @@ export {
 } from "../../infra/supervisor-markers.js";
 export { writeDiagnosticStabilityBundleForFailureSync } from "../../logging/diagnostic-stability-bundle.js";
 export {
+  createGatewayActiveWorkSnapshot,
+  waitForGatewayActiveWork,
+} from "../../infra/gateway-active-work.js";
+export {
   advanceCronActiveJobGeneration,
   resetCronActiveJobs,
   waitForActiveCronJobs,
@@ -50,13 +52,6 @@ export {
   retireActiveCronTaskRunTracking,
   waitForActiveCronTaskRuns,
 } from "../../cron/service/active-run-cancellation.js";
-export {
-  getActiveTaskCount,
-  markGatewayDraining,
-  resetAllLanes,
-  waitForActiveTasks,
-} from "../../process/command-queue.js";
-export { waitForActiveGatewayRootWork } from "../../process/gateway-work-admission.js";
-export { getInspectableActiveTaskRestartBlockers } from "../../tasks/task-registry.maintenance.js";
+export { markGatewayDraining, resetAllLanes } from "../../process/command-queue.js";
 export { reloadTaskRuntimeStateFromStore } from "../../tasks/runtime-internal.js";
 export { abortPendingChannelReloads } from "../../gateway/server-reload-contracts.js";

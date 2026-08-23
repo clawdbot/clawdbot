@@ -1,3 +1,5 @@
+import { buildAssistantMediaUrl } from "../../../app/assistant-media.ts";
+
 export function isLocalAssistantAttachmentSource(source: string): boolean {
   const trimmed = source.trim();
   if (/^\/(?:__openclaw__|media|api\/chat\/media\/outgoing)\//.test(trimmed)) {
@@ -114,20 +116,13 @@ export function isLocalAttachmentPreviewAllowed(
 
 export function buildAssistantAttachmentUrl(
   source: string,
-  basePath?: string,
+  resourceBasePath?: string,
   mediaTicket?: string | null,
 ): string {
   if (!isLocalAssistantAttachmentSource(source)) {
     return source;
   }
-  const normalizedBasePath =
-    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
-  const params = new URLSearchParams({ source });
-  const normalizedMediaTicket = mediaTicket?.trim();
-  if (normalizedMediaTicket) {
-    params.set("mediaTicket", normalizedMediaTicket);
-  }
-  return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
+  return buildAssistantMediaUrl(source, resourceBasePath, mediaTicket);
 }
 
 export function appendAttachmentUrlSearchParam(

@@ -89,6 +89,9 @@ describe("terminal tool", () => {
 
   it("uses a flat action enum and the owner-only core gate", () => {
     const tool = createTerminalTool();
+    expect(tool.description).toContain(
+      "Terminals opened from this chat's Control UI panel are shared with the agent",
+    );
     expect(tool.parameters).toMatchObject({
       properties: {
         action: {
@@ -108,6 +111,7 @@ describe("terminal tool", () => {
     const tool = createTerminalTool({
       agentId: "main",
       agentSessionKey: "agent:main:main",
+      sessionId: "main-session-id",
       getGatewayContext: () => makeContext(manager),
     });
     expect(tool.outputSchema).toBeDefined();
@@ -179,6 +183,7 @@ describe("terminal tool", () => {
       createTerminalTool({
         agentId: "main",
         agentSessionKey,
+        sessionId: "shared-session-id",
         runId,
         lookupTaskByRunIdForChildSession,
         getGatewayContext: () => makeContext(manager),
@@ -193,11 +198,18 @@ describe("terminal tool", () => {
       ["run-2", agentSessionKey],
       ["conversation-run", agentSessionKey],
     ]);
-    expect(manager.closeAgentSessions("task-1")).toBe(1);
+    expect(manager.closeTaskSessions("task-1")).toBe(1);
     expect(firstBackend.killed).toBe(true);
     expect(secondBackend.killed).toBe(false);
     expect(persistentBackend.killed).toBe(false);
-    expect(manager.listAgent(agentSessionKey, "main")).toHaveLength(2);
+    expect(
+      manager.listAgent({
+        kind: "agent",
+        agentSessionKey,
+        agentSessionId: "shared-session-id",
+        agentId: "main",
+      }),
+    ).toHaveLength(2);
   });
 
   it("binds the matching child session when task run ids collide", async () => {
@@ -223,6 +235,7 @@ describe("terminal tool", () => {
     const tool = createTerminalTool({
       agentId: "main",
       agentSessionKey,
+      sessionId: "shared-run-session-id",
       runId: "shared-run",
       lookupTaskByRunIdForChildSession,
       getGatewayContext: () => makeContext(manager),
@@ -231,8 +244,8 @@ describe("terminal tool", () => {
     await tool.execute("open", { action: "open" });
 
     expect(lookupTaskByRunIdForChildSession).toHaveBeenCalledWith("shared-run", agentSessionKey);
-    expect(manager.closeAgentSessions("task-2")).toBe(1);
-    expect(manager.closeAgentSessions("task-1")).toBe(0);
+    expect(manager.closeTaskSessions("task-2")).toBe(1);
+    expect(manager.closeTaskSessions("task-1")).toBe(0);
     expect(backend.killed).toBe(true);
   });
 
@@ -258,6 +271,7 @@ describe("terminal tool", () => {
     const tool = createTerminalTool({
       agentId: "main",
       agentSessionKey,
+      sessionId: "cron-session-id",
       runId: "cron-agent-run",
       lookupTaskByRunIdForChildSession,
       getGatewayContext: () => makeContext(manager),
@@ -270,7 +284,7 @@ describe("terminal tool", () => {
         "detached-task-run",
         agentSessionKey,
       );
-      expect(manager.closeAgentSessions("cron-task")).toBe(1);
+      expect(manager.closeTaskSessions("cron-task")).toBe(1);
       expect(backend.killed).toBe(true);
     } finally {
       releaseAgentRunContext("cron-agent-run", claimId);
@@ -286,6 +300,7 @@ describe("terminal tool", () => {
     const tool = createTerminalTool({
       agentId: "main",
       agentSessionKey: "agent:main:completed-task",
+      sessionId: "completed-session-id",
       runId: "completed-run",
       lookupTaskByRunIdForChildSession: vi.fn(async () => ({
         taskId: "task-completed",
@@ -308,6 +323,7 @@ describe("terminal tool", () => {
     const tool = createTerminalTool({
       agentId: "main",
       agentSessionKey: "agent:main:main",
+      sessionId: "main-session-id",
       getGatewayContext: () => ({
         terminalSessions: manager,
         isTerminalEnabled: () => true,
@@ -329,6 +345,7 @@ describe("terminal tool", () => {
     const tool = createTerminalTool({
       agentId: "main",
       agentSessionKey: "agent:main:main",
+      sessionId: "main-session-id",
       getGatewayContext: () => ({
         terminalSessions: manager,
         isTerminalEnabled: () => true,
@@ -350,6 +367,7 @@ describe("terminal tool", () => {
     const tool = createTerminalTool({
       agentId: "main",
       agentSessionKey: "agent:main:main",
+      sessionId: "main-session-id",
       getGatewayContext: () => ({
         ...makeContext(manager),
         isTerminalEnabled: () => false,
@@ -366,6 +384,7 @@ describe("terminal tool", () => {
     const tool = createTerminalTool({
       agentId: "main",
       agentSessionKey: "agent:main:main",
+      sessionId: "main-session-id",
       getGatewayContext: () => makeContext(manager),
     });
 
@@ -387,6 +406,7 @@ describe("terminal tool", () => {
       const tool = createTerminalTool({
         agentId: "main",
         agentSessionKey: "agent:main:main",
+        sessionId: "main-session-id",
         getGatewayContext: () => makeContext(manager),
       });
       const opening = tool.execute("open", { action: "open" });
@@ -404,7 +424,7 @@ describe("terminal tool", () => {
     }
   });
 
-  it("cannot read, input, or close connection-owned and other-agent terminals", async () => {
+  it("cannot list or operate connection-owned and replacement-incarnation terminals", async () => {
     const connBackend = makeBackend();
     const otherBackend = makeBackend();
     const backends = [connBackend, otherBackend];
@@ -423,7 +443,12 @@ describe("terminal tool", () => {
       env: {},
     });
     const other = await manager.open({
-      owner: { kind: "agent", agentSessionKey: "agent:main:other" },
+      owner: {
+        kind: "agent",
+        agentSessionKey: "agent:main:main",
+        agentSessionId: "replacement-session-id",
+        agentId: "main",
+      },
       agentId: "main",
       cwd: "/tmp",
       shell: "/bin/sh",
@@ -437,6 +462,7 @@ describe("terminal tool", () => {
     }
     const tool = createTerminalTool({
       agentSessionKey: "agent:main:main",
+      sessionId: "main-session-id",
       getGatewayContext: () => makeContext(manager),
     });
 
@@ -513,6 +539,7 @@ describe("terminal tool", () => {
       const tool = createTerminalTool({
         agentId: "main",
         agentSessionKey: "agent:main:main",
+        sessionId: "main-session-id",
         getGatewayContext: () => makeContext(manager),
       });
 

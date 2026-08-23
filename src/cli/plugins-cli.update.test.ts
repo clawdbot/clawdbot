@@ -426,7 +426,10 @@ describe("plugins cli update", () => {
     expect(configWriteMock).not.toHaveBeenCalled();
   });
 
-  it("updates tracked hook packs through plugins update", async () => {
+  it.each([
+    ["demo-hooks", undefined],
+    ["@acme/demo-hooks", "@acme/demo-hooks"],
+  ])("updates tracked hook packs through plugins update (%s)", async (target, specOverride) => {
     const cfg = {} as OpenClawConfig;
     const nextConfig = cfg;
 
@@ -452,16 +455,14 @@ describe("plugins cli update", () => {
       ],
     });
 
-    await runPluginsCommand([
-      "plugins",
-      "update",
-      "demo-hooks",
-      "--dangerously-force-unsafe-install",
-    ]);
+    await runPluginsCommand(["plugins", "update", target, "--dangerously-force-unsafe-install"]);
 
     const hookUpdateParams = expectSingleCallParams(updateNpmInstalledHookPacksMock);
     expect(hookUpdateParams.config).toEqual({ ...cfg, plugins: { installs: {} } });
     expect(hookUpdateParams.hookIds).toEqual(["demo-hooks"]);
+    expect(hookUpdateParams.specOverrides).toEqual(
+      specOverride ? { "demo-hooks": specOverride } : undefined,
+    );
     expect(hookUpdateParams.dangerouslyForceUnsafeInstall).toBe(true);
     expect(updateNpmInstalledPluginsMock).not.toHaveBeenCalled();
     expect(configWriteMock).toHaveBeenCalledWith(nextConfig);

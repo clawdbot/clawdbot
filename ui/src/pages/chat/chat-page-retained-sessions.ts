@@ -190,6 +190,7 @@ export class ChatPageRetainedSessions {
       }
       const presented = areUiSessionKeysEquivalent(pane.sessionKey ?? "", sessionKey);
       pane.classList.toggle("chat-pane-cache__pane--visible", presented);
+      pane.visuallyPresented = presented;
       if (preview) {
         pane.toggleAttribute("inert", true);
         continue;

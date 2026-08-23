@@ -22,7 +22,6 @@ import { readToolStringParam, ToolInputError } from "./common.js";
 
 const SKILL_COLLECTION_HISTORY_REASON_MAX_CHARS = 300;
 const SKILL_COLLECTION_HISTORY_NAME_LIMIT = 10;
-const SKILL_COLLECTION_HISTORY_TEXT_MAX_CHARS = 8_000;
 const SKILL_COLLECTION_HISTORY_TRUNCATION_MARKER = "\n(history truncated)";
 
 function summarizeSkillNames(names: string[]) {
@@ -149,10 +148,13 @@ export async function executeSkillCollectionRestore(params: {
   };
 }
 
-export function executeSkillCollectionHistory(params: {
-  workspaceDir: string;
-  env?: NodeJS.ProcessEnv;
-}) {
+export function executeSkillCollectionHistory(
+  params: {
+    workspaceDir: string;
+    env?: NodeJS.ProcessEnv;
+  },
+  maxChars: number,
+) {
   const outcomes = listSkillCollectionReviewOutcomes(
     params.workspaceDir,
     params.env ? { env: params.env } : {},
@@ -160,8 +162,7 @@ export function executeSkillCollectionHistory(params: {
   const reviews = [];
   let text = "Recent collection reviews, newest first:";
   let truncated = false;
-  const textLimit =
-    SKILL_COLLECTION_HISTORY_TEXT_MAX_CHARS - SKILL_COLLECTION_HISTORY_TRUNCATION_MARKER.length;
+  const textLimit = maxChars - SKILL_COLLECTION_HISTORY_TRUNCATION_MARKER.length;
   for (const outcome of outcomes) {
     const review = {
       createTime: new Date(outcome.createTime).toISOString(),

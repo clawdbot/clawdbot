@@ -200,22 +200,24 @@ describe("session state events", () => {
     const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
     disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
     // Drain notices queued by earlier tests before checking this watcher's routing.
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(21_000);
     wakes.mockClear();
     const database = createDatabaseOptions();
     seedChild(database, nestedWatcher);
 
     recordSessionStateEvent(eventInput({ watcherSessionKeys: [nestedWatcher] }), database);
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(21_000);
     expect(peekSystemEventEntries(nestedWatcher)).toHaveLength(1);
     expect(wakes).not.toHaveBeenCalled();
 
     seedChild(database, watcher);
     recordSessionStateEvent(eventInput(), database);
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(21_000);
     expect(wakes).toHaveBeenCalledWith(
       // intent "immediate" is load-bearing: event-intent wakes defer on heartbeat
-      // dueness and would sit on the notice until the next scheduled tick.
+      // dueness and would sit on the notice until the next scheduled tick. The
+      // wake itself coalesces for SESSION_STATE_WAKE_COALESCE_MS (20s), hence
+      // the 21s timer advances in these tests.
       expect.objectContaining({
         source: "session-state",
         sessionKey: watcher,
@@ -595,7 +597,7 @@ describe("session state events", () => {
     vi.useFakeTimers();
     const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
     disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(21_000);
     wakes.mockClear();
     const database = createDatabaseOptions();
     registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
@@ -612,7 +614,7 @@ describe("session state events", () => {
         database,
       );
     }
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(21_000);
 
     expect(listSessionStateEventsSince(group, "main", 0, 200, database).events).toHaveLength(2);
     expect(peekSystemEventEntries(watcher)).toHaveLength(1);
@@ -659,7 +661,7 @@ describe("session state events", () => {
     vi.useFakeTimers();
     const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
     disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(21_000);
     wakes.mockClear();
     const database = createDatabaseOptions();
     const coordinator = "agent:main:coordinator";
@@ -678,7 +680,7 @@ describe("session state events", () => {
       },
       database,
     );
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(21_000);
 
     expect(peekSystemEventEntries(coordinator)).toHaveLength(1);
     expect(wakes).toHaveBeenCalledTimes(1);
@@ -688,7 +690,7 @@ describe("session state events", () => {
     vi.useFakeTimers();
     const wakes = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
     disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(wakes);
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(21_000);
     wakes.mockClear();
     const database = createDatabaseOptions();
     registerMainSessionGroupWatch({ sessionKey: group, agentId: "main" }, database);
@@ -717,7 +719,7 @@ describe("session state events", () => {
       },
       database,
     );
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(21_000);
 
     expect(peekSystemEventEntries(watcher)).toHaveLength(1);
     expect(wakes).toHaveBeenCalledTimes(1);

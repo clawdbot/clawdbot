@@ -37,6 +37,7 @@ export function makeQaSuiteTestScenario(
     execution: {
       kind: "flow",
       ...(params.channel ? { channel: params.channel } : {}),
+      channels: params.channel ? [params.channel] : [],
       ...(params.suiteIsolation ? { suiteIsolation: params.suiteIsolation } : {}),
       ...(params.transportPolicy ? { transportPolicy: params.transportPolicy } : {}),
       ...(params.config ? { config: params.config } : {}),

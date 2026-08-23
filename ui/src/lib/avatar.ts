@@ -8,8 +8,8 @@ import { takeGraphemes } from "./graphemes.ts";
 const CONTROL_UI_SAME_ORIGIN_AVATAR_URL_RE = /^\/(?!\/)/;
 const UNSAFE_ASSISTANT_TEXT_AVATAR_CHARS = /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u;
 
-export function assistantAvatarFallbackUrl(basePath: string): string {
-  return controlUiPublicAssetPath("apple-touch-icon.png", basePath);
+export function assistantAvatarFallbackUrl(resourceBasePath: string): string {
+  return controlUiPublicAssetPath("apple-touch-icon.png", resourceBasePath);
 }
 
 export function isRenderableControlUiAvatarUrl(value: string): boolean {

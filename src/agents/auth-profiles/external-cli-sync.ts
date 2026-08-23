@@ -86,6 +86,7 @@ const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
   {
     profileId: CLAUDE_CLI_PROFILE_ID,
     provider: "claude-cli",
+    aliases: ["anthropic"],
     readCredentials: (options) => {
       const credential = readClaudeCliCredentialsCached({
         ttlMs: EXTERNAL_CLI_SYNC_TTL_MS,

@@ -21,12 +21,15 @@ import {
   validateCommandLaneGroupSpec,
 } from "./command-queue.capacity-groups.js";
 import {
-  type ActiveTaskWaiter,
+  createLaneQueue,
+  dequeueLaneQueue,
+  enqueueLaneQueue,
   type CommandLaneTaskMarker,
   getQueueState,
   type LaneState,
   normalizeLane,
   type QueueEntry,
+  type QueuePriority,
 } from "./command-queue.state.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import {
@@ -173,7 +176,7 @@ function getLaneState(lane: string): LaneState {
   }
   const created: LaneState = {
     lane,
-    queue: [],
+    queue: createLaneQueue(),
     activeTaskIds: new Set(),
     maxConcurrent: 1,
     draining: false,
@@ -212,38 +215,6 @@ function retireIdleScopedCommandLane(state: LaneState): void {
   }
 }
 
-function hasPendingActiveTasks(taskIds: Set<number>): boolean {
-  const queueState = getQueueState();
-  for (const state of queueState.lanes.values()) {
-    for (const taskId of state.activeTaskIds) {
-      if (taskIds.has(taskId)) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-function resolveActiveTaskWaiter(waiter: ActiveTaskWaiter, result: { drained: boolean }): void {
-  const queueState = getQueueState();
-  if (!queueState.activeTaskWaiters.delete(waiter)) {
-    return;
-  }
-  if (waiter.timeout) {
-    clearTimeout(waiter.timeout);
-  }
-  waiter.resolve(result);
-}
-
-function notifyActiveTaskWaiters(): void {
-  const queueState = getQueueState();
-  for (const waiter of Array.from(queueState.activeTaskWaiters)) {
-    if (waiter.activeTaskIds.size === 0 || !hasPendingActiveTasks(waiter.activeTaskIds)) {
-      resolveActiveTaskWaiter(waiter, { drained: true });
-    }
-  }
-}
-
 function normalizeTaskTimeoutMs(value: number | undefined): number | undefined {
   if (value === undefined || !Number.isFinite(value) || value <= 0) {
     return undefined;
@@ -251,7 +222,7 @@ function normalizeTaskTimeoutMs(value: number | undefined): number | undefined {
   return clampPositiveTimerTimeoutMs(value);
 }
 
-function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]): number {
+function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]): QueuePriority {
   switch (priority) {
     case "foreground":
       return 1;
@@ -263,18 +234,8 @@ function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]):
 }
 
 function enqueueLaneEntry(state: LaneState, entry: QueueEntry): void {
-  const insertAt = state.queue.findIndex(
-    (queued) =>
-      queued.priority < entry.priority ||
-      (queued.priority === entry.priority && queued.sequence > entry.sequence),
-  );
-  entry.queuedAheadAtEnqueue = insertAt < 0 ? state.queue.length : insertAt;
+  entry.queuedAheadAtEnqueue = enqueueLaneQueue(state.queue, entry);
   entry.activeAheadAtEnqueue = state.activeTaskIds.size;
-  if (insertAt < 0) {
-    state.queue.push(entry);
-    return;
-  }
-  state.queue.splice(insertAt, 0, entry);
 }
 
 async function runQueueEntryTask(
@@ -428,7 +389,7 @@ function drainLane(
       state.queue.length > 0 &&
       canAdmitInGroup(lane)
     ) {
-      const entry = state.queue.shift() as QueueEntry;
+      const entry = dequeueLaneQueue(state.queue) as QueueEntry;
       const waitedMs = Date.now() - entry.enqueuedAt;
       const activeBeforeStart = state.activeTaskIds.size;
       const taskId = getQueueState().nextTaskId++;
@@ -460,7 +421,6 @@ function drainLane(
           });
           const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
           if (completedCurrentGeneration) {
-            notifyActiveTaskWaiters();
             diag.debug(
               `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
             );
@@ -481,7 +441,6 @@ function drainLane(
             );
           }
           if (completedCurrentGeneration) {
-            notifyActiveTaskWaiters();
             drainReadyCommandLane(lane, state);
           }
           entry.reject(err);
@@ -727,8 +686,8 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
     return 0;
   }
   const removed = state.queue.length;
-  const pending = state.queue.splice(0);
-  for (const entry of pending) {
+  let entry: QueueEntry | undefined;
+  while ((entry = dequeueLaneQueue(state.queue))) {
     entry.reject(new CommandLaneClearedError(cleaned));
   }
   return removed;
@@ -752,7 +711,6 @@ export function resetCommandLane(lane: string = CommandLane.Main): number {
   // Clearing activeTaskIds may release multiple shared slots. Re-arbitrate the
   // whole group so the reset lane cannot reclaim them ahead of older siblings.
   drainReadyCommandLane(cleaned);
-  notifyActiveTaskWaiters();
   return released;
 }
 
@@ -786,58 +744,4 @@ export function resetAllLanes(): void {
   for (const lane of lanesToDrain) {
     drainReadyCommandLane(lane);
   }
-  notifyActiveTaskWaiters();
-}
-
-/**
- * Returns the total number of actively executing tasks across all lanes
- * (excludes queued-but-not-started entries).
- */
-export function getActiveTaskCount(): number {
-  const queueState = getQueueState();
-  let total = 0;
-  for (const s of queueState.lanes.values()) {
-    total += s.activeTaskIds.size;
-  }
-  return total;
-}
-
-/**
- * Wait for all currently active tasks across all lanes to finish.
- * Polls at a short interval; resolves when no tasks are active or
- * when `timeoutMs` elapses (whichever comes first). If no timeout is passed,
- * waits indefinitely for the active set captured at call time.
- *
- * New tasks enqueued after this call are ignored — only tasks that are
- * already executing are waited on.
- */
-export function waitForActiveTasks(timeoutMs?: number): Promise<{ drained: boolean }> {
-  const queueState = getQueueState();
-  const activeAtStart = new Set<number>();
-  for (const state of queueState.lanes.values()) {
-    for (const taskId of state.activeTaskIds) {
-      activeAtStart.add(taskId);
-    }
-  }
-
-  if (activeAtStart.size === 0) {
-    return Promise.resolve({ drained: true });
-  }
-  if (timeoutMs !== undefined && timeoutMs <= 0) {
-    return Promise.resolve({ drained: false });
-  }
-
-  return new Promise((resolve) => {
-    const waiter: ActiveTaskWaiter = {
-      activeTaskIds: activeAtStart,
-      resolve,
-    };
-    if (timeoutMs !== undefined) {
-      waiter.timeout = setTimeout(() => {
-        resolveActiveTaskWaiter(waiter, { drained: false });
-      }, timeoutMs);
-    }
-    queueState.activeTaskWaiters.add(waiter);
-    notifyActiveTaskWaiters();
-  });
 }

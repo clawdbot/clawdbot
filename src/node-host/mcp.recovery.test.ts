@@ -3,6 +3,7 @@
 import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { OpenClawStreamableHTTPClientTransport } from "../agents/mcp-http-transport.js";
 import { startNodeHostMcpManager } from "./mcp.js";
 
@@ -14,7 +15,7 @@ function createClient(params: {
   tools?: () => Tool[];
   connect?: () => Promise<void>;
   list?: (input?: { cursor?: string }) => Promise<{ tools: Tool[]; nextCursor?: string }>;
-  call?: () => Promise<CallToolResult>;
+  call?: (input: { name: string; arguments?: Record<string, unknown> }) => Promise<CallToolResult>;
 }) {
   const call =
     params.call ??
@@ -82,7 +83,8 @@ describe("node host MCP live lifecycle", () => {
           notifyToolsChanged = options.onToolsChanged;
           return client;
         },
-        resolveTransport: () => stdioTransport,
+        // This test deliberately holds both list calls; request timeout is not its contract.
+        resolveTransport: () => ({ ...stdioTransport, requestTimeoutMs: 5_000 }),
         warn: vi.fn(),
       },
     );
@@ -144,6 +146,64 @@ describe("node host MCP live lifecycle", () => {
     await expect(manager.callMcpTool({ server: "docs", tool: "structured" })).rejects.toMatchObject(
       { code: "MCP_TOOL_ERROR" },
     );
+    await manager.close();
+  });
+
+  it("validates a call against the schema dispatched before a catalog refresh", async () => {
+    const schemaA = {
+      type: "object" as const,
+      properties: { revision: { const: "a" } },
+      required: ["revision"],
+    };
+    const schemaB = {
+      type: "object" as const,
+      properties: { revision: { const: "b" } },
+      required: ["revision"],
+    };
+    let listed = [{ ...tool("versioned"), outputSchema: schemaA }];
+    let notifyToolsChanged: (() => void) | undefined;
+    let resolveCall: ((result: CallToolResult) => void) | undefined;
+    const client = createClient({
+      tools: () => listed,
+      call: async () =>
+        await new Promise<CallToolResult>((resolve) => {
+          resolveCall = resolve;
+        }),
+    });
+    const manager = await startNodeHostMcpManager(
+      { docs: { command: "docs" } },
+      {
+        createClient: (_serverName, options) => {
+          notifyToolsChanged = options.onToolsChanged;
+          return client;
+        },
+        resolveTransport: () => stdioTransport,
+        warn: vi.fn(),
+      },
+    );
+
+    const calling = manager.callMcpTool({ server: "docs", tool: "versioned" });
+    await vi.waitFor(() => expect(client.callTool).toHaveBeenCalledOnce());
+    listed = [{ ...tool("versioned"), outputSchema: schemaB }];
+    notifyToolsChanged?.();
+    await vi.waitFor(() => expect(client.request).toHaveBeenCalledTimes(2));
+    resolveCall?.({ content: [], structuredContent: { revision: "a" } });
+
+    await expect(calling).resolves.toMatchObject({ structuredContent: { revision: "a" } });
+    await manager.close();
+  });
+
+  it("does not publish duplicate canonical wire names", async () => {
+    const client = createClient({ tools: () => [tool("search"), tool(" search ")] });
+    const manager = await startNodeHostMcpManager(
+      { docs: { command: "docs" } },
+      { createClient: () => client, resolveTransport: () => stdioTransport, warn: vi.fn() },
+    );
+
+    expect(manager.descriptors).toEqual([]);
+    await expect(manager.callMcpTool({ server: "docs", tool: "search" })).rejects.toMatchObject({
+      code: "MCP_TOOL_UNAVAILABLE",
+    });
     await manager.close();
   });
 
@@ -260,6 +320,58 @@ describe("node host MCP live lifecycle", () => {
     await manager.close();
   });
 
+  it("closes only after an accepted catalog refresh and session disposal settle", async () => {
+    let notifyToolsChanged: (() => void) | undefined;
+    let listCount = 0;
+    const refreshStarted = createDeferred();
+    const refreshRelease = createDeferred<{ tools: Tool[] }>();
+    const disposalStarted = createDeferred();
+    const disposalRelease = createDeferred();
+    const client = createClient({
+      list: async () => {
+        listCount += 1;
+        if (listCount === 1) {
+          return { tools: [tool("initial")] };
+        }
+        refreshStarted.resolve();
+        return await refreshRelease.promise;
+      },
+    });
+    client.close.mockImplementation(async () => {
+      client.onclose?.();
+      disposalStarted.resolve();
+      await disposalRelease.promise;
+      refreshRelease.reject(new Error("session disposed"));
+    });
+    const manager = await startNodeHostMcpManager(
+      { docs: { command: "docs" } },
+      {
+        createClient: (_serverName, options) => {
+          notifyToolsChanged = options.onToolsChanged;
+          return client;
+        },
+        resolveTransport: () => stdioTransport,
+        warn: vi.fn(),
+      },
+    );
+
+    notifyToolsChanged?.();
+    await refreshStarted.promise;
+    let closeSettled = false;
+    const closing = manager.close().then(() => {
+      closeSettled = true;
+    });
+    await disposalStarted.promise;
+    await Promise.resolve();
+    expect(closeSettled).toBe(false);
+    expect(client.close).toHaveBeenCalledOnce();
+
+    disposalRelease.resolve();
+    await closing;
+    expect(closeSettled).toBe(true);
+    expect(client.request).toHaveBeenCalledTimes(2);
+  });
+
   it("fences a stale refresh and reconnects after transport close", async () => {
     let notifyToolsChanged: (() => void) | undefined;
     let resolveStale: ((value: { tools: Tool[] }) => void) | undefined;
@@ -356,10 +468,7 @@ describe("node host MCP live lifecycle", () => {
   });
 
   it("recovers only an exact stateful Streamable HTTP 404 and never replays the call", async () => {
-    let releaseReplacement: (() => void) | undefined;
-    const replacementReady = new Promise<void>((resolve) => {
-      releaseReplacement = resolve;
-    });
+    const replacementReady = createDeferred();
     const expiredStateful = createClient({
       tools: () => [tool("run")],
       call: async () => {
@@ -371,7 +480,7 @@ describe("node host MCP live lifecycle", () => {
         expiredStateful,
         createClient({
           tools: () => [tool("run")],
-          connect: async () => await replacementReady,
+          connect: async () => await replacementReady.promise,
         }),
       ],
       stateless: [
@@ -421,7 +530,7 @@ describe("node host MCP live lifecycle", () => {
       "stateful",
     );
 
-    releaseReplacement?.();
+    replacementReady.resolve();
     await vi.waitFor(() =>
       expect(manager.descriptors.map((descriptor) => descriptor.mcp?.server)).toContain("stateful"),
     );
@@ -490,6 +599,55 @@ describe("node host MCP live lifecycle", () => {
     const attemptsAtClose = attempts;
     await vi.advanceTimersByTimeAsync(30_000);
     expect(attempts).toBe(attemptsAtClose);
+  });
+
+  it("bounds reconnect fan-out and retires admission-queued attempts on close", async () => {
+    vi.useFakeTimers();
+    let active = 0;
+    let maxActive = 0;
+    const attemptsByServer = new Map<string, number>();
+    const retryReleases: Array<() => void> = [];
+    const servers = Object.fromEntries(
+      Array.from({ length: 7 }, (_, index) => [`server-${index}`, { command: "server" }]),
+    );
+    const createClientMock = vi.fn((serverName: string) =>
+      createClient({
+        connect: async () => {
+          const attempts = (attemptsByServer.get(serverName) ?? 0) + 1;
+          attemptsByServer.set(serverName, attempts);
+          if (attempts === 1) {
+            throw new Error("offline");
+          }
+          active += 1;
+          maxActive = Math.max(maxActive, active);
+          await new Promise<void>((resolve) => {
+            retryReleases.push(() => {
+              active -= 1;
+              resolve();
+            });
+          });
+        },
+      }),
+    );
+    const manager = await startNodeHostMcpManager(servers, {
+      createClient: createClientMock,
+      resolveTransport: () => stdioTransport,
+      warn: vi.fn(),
+    });
+    expect(createClientMock).toHaveBeenCalledTimes(7);
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(active).toBe(6);
+    expect(maxActive).toBe(6);
+    expect(createClientMock).toHaveBeenCalledTimes(13);
+
+    await manager.close();
+    expect(createClientMock).toHaveBeenCalledTimes(13);
+    for (const release of retryReleases.splice(0)) {
+      release();
+    }
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(createClientMock).toHaveBeenCalledTimes(13);
   });
 
   it("keeps global ordering and descriptor caps after refresh", async () => {

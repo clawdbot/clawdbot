@@ -199,7 +199,7 @@ it("projects a lifecycle-owned worker run without widening event visibility", ()
         canonicalKey: "agent:main:worker",
         sessionId: "worker-session",
       }),
-    ).toEqual({ active: true, runIds: [] });
+    ).toEqual({ active: true });
   } finally {
     clearAgentRunContext("worker-run");
   }
@@ -224,7 +224,7 @@ it("projects reply lifecycle state without hiding independent embedded work", ()
         canonicalKey: sessionKey,
         sessionId,
       }),
-    ).toEqual({ active: true, runIds: [], status: "queued" });
+    ).toEqual({ active: true, status: "queued" });
 
     operation.markWaitingForGlobalLane();
     expect(
@@ -234,7 +234,7 @@ it("projects reply lifecycle state without hiding independent embedded work", ()
         canonicalKey: sessionKey,
         sessionId,
       }),
-    ).toEqual({ active: true, runIds: [], status: "queued" });
+    ).toEqual({ active: true, status: "queued" });
     operation.markGlobalLaneWaitEnded();
 
     operation.setPhase("running");
@@ -246,7 +246,7 @@ it("projects reply lifecycle state without hiding independent embedded work", ()
         canonicalKey: sessionKey,
         sessionId,
       }),
-    ).toEqual({ active: true, runIds: [], status: "queued" });
+    ).toEqual({ active: true, status: "queued" });
     operation.markGlobalLaneWaitEnded();
     markReplyOperationExecutionStarted(operation);
     expect(
@@ -256,7 +256,7 @@ it("projects reply lifecycle state without hiding independent embedded work", ()
         canonicalKey: sessionKey,
         sessionId,
       }),
-    ).toEqual({ active: true, runIds: [] });
+    ).toEqual({ active: true });
     operation.markWaitingForGlobalLane();
     expect(
       resolveVisibleActiveSessionRunState({
@@ -265,7 +265,7 @@ it("projects reply lifecycle state without hiding independent embedded work", ()
         canonicalKey: sessionKey,
         sessionId,
       }),
-    ).toEqual({ active: true, runIds: [] });
+    ).toEqual({ active: true });
     operation.markGlobalLaneWaitEnded();
     expect(operation.abortByUser()).toBe(true);
     expect(isEmbeddedAgentRunActive(sessionId)).toBe(true);
@@ -286,7 +286,7 @@ it("projects reply lifecycle state without hiding independent embedded work", ()
         canonicalKey: sessionKey,
         sessionId,
       }),
-    ).toEqual({ active: true, runIds: [] });
+    ).toEqual({ active: true });
   } finally {
     clearActiveEmbeddedRun(sessionId, replacementHandle, sessionKey);
     operation.complete();
@@ -310,7 +310,7 @@ it("preserves an independent lifecycle-owned worker while a reply operation sett
         canonicalKey: sessionKey,
         sessionId,
       }),
-    ).toEqual({ active: true, runIds: [] });
+    ).toEqual({ active: true });
   } finally {
     operation.complete();
     clearAgentRunContext("worker-overlap-run");
@@ -342,7 +342,7 @@ it("does not project an aborted embedded handle retained for cleanup as active",
         canonicalKey: sessionKey,
         sessionId,
       }),
-    ).toEqual({ active: true, runIds: [] });
+    ).toEqual({ active: true });
 
     expect(abortEmbeddedAgentRun(sessionId)).toBe(true);
     expect(isEmbeddedAgentRunActive(sessionId)).toBe(true);

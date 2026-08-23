@@ -49,6 +49,7 @@ function makeContextParams(
     deps: {} as never,
     runtimeState,
     getRuntimeConfig: vi.fn(() => config),
+    getGatewayMethodRegistry: vi.fn(() => ({}) as never),
     sessionCompanion: {} as never,
     sessionObserver: {} as never,
     resolveTerminalLaunchPolicy: vi.fn(() => ({
@@ -119,6 +120,10 @@ function makeContextParams(
     getConfigReloaderHotReloadStatus: vi.fn(() => undefined),
     unavailableGatewayMethods: new Set(),
     ...overrides,
+    configRevisionProjector: overrides.configRevisionProjector ?? {
+      projectRawHash: (hash) => hash,
+      projectResolvedHash: (hash) => hash,
+    },
   };
 }
 

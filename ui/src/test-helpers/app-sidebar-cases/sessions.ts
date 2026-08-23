@@ -388,7 +388,7 @@ describe("AppSidebar session accessibility", () => {
     const row = sidebar.querySelector(`[data-session-key="${key}"]`);
     const tree = row?.closest(".sidebar-session-tree");
     const link = row?.querySelector<HTMLAnchorElement>(".sidebar-recent-session__link");
-    expect(list?.getAttribute("aria-label")).toBe("Sessions");
+    expect(list?.getAttribute("aria-label")).toBe("Other");
     expect(tree?.parentElement).toBe(list);
     expect(tree?.getAttribute("role")).toBe("listitem");
     expect(row?.hasAttribute("role")).toBe(false);

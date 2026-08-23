@@ -77,6 +77,48 @@ describe("realtime voice provider resolver", () => {
     });
   });
 
+  it("skips unavailable providers before resolving auto-selected config", () => {
+    const unavailableResolveConfig = vi.fn(() => {
+      throw new Error("unavailable provider config must not be resolved");
+    });
+    const unavailable: RealtimeVoiceProviderPlugin = {
+      ...providers[0]!,
+      resolveConfig: unavailableResolveConfig,
+      isConfigured: () => true,
+    };
+
+    const resolution = resolveConfiguredRealtimeVoiceProvider({
+      cfg: {},
+      providers: [unavailable, providers[1]!],
+      providerConfigs: {
+        second: { enabled: true },
+      },
+      isProviderAvailable: (provider) => provider.id !== unavailable.id,
+    });
+
+    expect(unavailableResolveConfig).not.toHaveBeenCalled();
+    expect(resolution.provider).toBe(providers[1]);
+  });
+
+  it("preserves the typed availability error when every auto provider is unavailable", () => {
+    class ProviderUnavailableError extends Error {}
+    const unavailable = new ProviderUnavailableError("provider owner is unavailable");
+    const assertProviderAvailable = vi.fn(() => {
+      throw unavailable;
+    });
+
+    expect(() =>
+      resolveConfiguredRealtimeVoiceProvider({
+        cfg: {},
+        providers,
+        isProviderAvailable: () => false,
+        assertProviderAvailable,
+      }),
+    ).toThrow(unavailable);
+    expect(assertProviderAvailable).toHaveBeenCalledOnce();
+    expect(assertProviderAvailable).toHaveBeenCalledWith(providers[0]);
+  });
+
   it("passes the host-selected agent to public provider readiness", () => {
     const isConfigured = vi.fn(({ agentId }) => agentId === "molty");
     const provider: RealtimeVoiceProviderPlugin = {

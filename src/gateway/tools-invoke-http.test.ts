@@ -9,6 +9,13 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { runBeforeToolCallHook as runBeforeToolCallHookType } from "../agents/agent-tools.before-tool-call.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { TerminalSessionManager } from "./terminal/session-manager.js";
+import {
+  agentTerminalOwner,
+  baseOpenRequest,
+  makeFakePty,
+} from "./terminal/session-manager.test-helpers.js";
 
 type RunBeforeToolCallHook = typeof runBeforeToolCallHookType;
 type RunBeforeToolCallHookArgs = Parameters<RunBeforeToolCallHook>[0];
@@ -98,7 +105,8 @@ vi.mock("../plugins/tools.js", () => ({
 
 // Perf: the real tool factory instantiates many tools per request; for these HTTP
 // routing/policy tests we only need a small set of tool names.
-vi.mock("../agents/openclaw-tools.js", () => {
+vi.mock("../agents/openclaw-tools.js", async () => {
+  const { createTerminalTool } = await import("../agents/tools/terminal-tool.js");
   const toolInputError = (message: string) => {
     const err = new Error(message);
     err.name = "ToolInputError";
@@ -229,7 +237,21 @@ vi.mock("../agents/openclaw-tools.js", () => {
   return {
     createOpenClawTools: (ctx: Record<string, unknown>) => {
       lastCreateOpenClawToolsContext = ctx;
-      return ctx.disablePluginTools ? tools.filter((tool) => tool.name !== "browser") : tools;
+      const selected = ctx.disablePluginTools
+        ? tools.filter((tool) => tool.name !== "browser")
+        : tools;
+      return [
+        ...selected,
+        createTerminalTool({
+          agentId:
+            typeof ctx.requesterAgentIdOverride === "string"
+              ? ctx.requesterAgentIdOverride
+              : "main",
+          agentSessionKey:
+            typeof ctx.agentSessionKey === "string" ? ctx.agentSessionKey : undefined,
+          sessionId: typeof ctx.sessionId === "string" ? ctx.sessionId : undefined,
+        }),
+      ];
     },
   };
 });
@@ -1181,6 +1203,73 @@ describe("tools.invoke Gateway RPC", () => {
     expect(hookCtx.config).toBe(cfg);
     expect(hookCtx.sessionKey).toBe("agent:main:main");
     expect(lastCreateOpenClawToolsContext?.conversationReadOrigin).toBe("delegated");
+  });
+
+  it("opens terminal against the current persisted session generation", async () => {
+    setMainAllowedTools({ allow: ["terminal"], gatewayAllow: ["terminal"] });
+    const sessionKey = "agent:main:main";
+    sessionEntries.set(sessionKey, { sessionId: "S2" });
+    const ptys = [makeFakePty(), makeFakePty()];
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      spawn: async () => ptys.shift() ?? makeFakePty(),
+    });
+    const oldOwner = agentTerminalOwner(sessionKey, "S1");
+    const oldSession = await manager.open(baseOpenRequest({ owner: oldOwner }));
+    if (!oldSession.ok) {
+      throw new Error("expected old terminal session");
+    }
+    const context = {
+      terminalSessions: manager,
+      isTerminalEnabled: () => true,
+      resolveTerminalLaunchPolicy: () => ({
+        ok: true,
+        plan: { agentId: "main", cwd: "/tmp", shell: "/bin/sh", args: [] },
+      }),
+    } as never;
+
+    try {
+      const call = await withPluginRuntimeGatewayRequestScope(
+        { context, isWebchatConnect: () => false },
+        () =>
+          invokeToolsRpc({ name: "terminal", args: { action: "open" }, sessionKey: "main" }, [
+            "operator.admin",
+          ]),
+      );
+      expect(call?.[1]?.ok).toBe(true);
+      expect(lastCreateOpenClawToolsContext?.sessionId).toBe("S2");
+      const opened = call?.[1]?.output as { details?: { sessionId?: string } } | undefined;
+      const openedSessionId = opened?.details?.sessionId;
+      expect(openedSessionId).toEqual(expect.any(String));
+      if (!openedSessionId) {
+        throw new Error("expected opened terminal session id");
+      }
+      const currentOwner = agentTerminalOwner(sessionKey, "S2");
+      expect(manager.listAgent(currentOwner).map((entry) => entry.sessionId)).toEqual([
+        openedSessionId,
+      ]);
+      expect(manager.writeAgent(oldOwner, openedSessionId, "stale")).toEqual({
+        ok: false,
+        code: "session_unavailable",
+      });
+      expect(manager.writeAgent(currentOwner, openedSessionId, "current")).toEqual({ ok: true });
+
+      sessionEntries.delete(sessionKey);
+      const missing = await withPluginRuntimeGatewayRequestScope(
+        { context, isWebchatConnect: () => false },
+        () =>
+          invokeToolsRpc({ name: "terminal", args: { action: "open" }, sessionKey: "main" }, [
+            "operator.admin",
+          ]),
+      );
+      expect(missing?.[1]).toMatchObject({
+        ok: false,
+        error: { message: "agent session id required" },
+      });
+      expect(lastCreateOpenClawToolsContext?.sessionId).toBeUndefined();
+    } finally {
+      manager.disposeAll();
+    }
   });
 
   it("requires an operation-local marker for direct conversation reads", async () => {

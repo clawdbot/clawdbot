@@ -97,6 +97,16 @@ async function writeListToolsMcpServer(params: {
     execution?: { taskSupport?: "forbidden" | "optional" | "required" };
     _meta?: Record<string, unknown>;
   }>;
+  toolsByList?: Array<
+    Array<{
+      name: string;
+      description?: string;
+      inputSchema?: unknown;
+      outputSchema?: unknown;
+      execution?: { taskSupport?: "forbidden" | "optional" | "required" };
+      _meta?: Record<string, unknown>;
+    }>
+  >;
   capabilities?: Record<string, unknown>;
   databasePath?: string;
   pidPath?: string;
@@ -114,6 +124,8 @@ async function writeListToolsMcpServer(params: {
   callToolJsonRpcErrorCode?: number;
   callToolResult?: CallToolResult;
   callToolDelayMs?: number;
+  callToolReleasePath?: string;
+  notifyListChangedOnToolCall?: boolean;
   resourcePageDelayMs?: number;
   resourcePageCount?: number;
   resourcePageCursors?: Array<string | null>;
@@ -156,11 +168,14 @@ const tools = ${JSON.stringify(
         },
       ],
     )};
+const toolsByList = ${JSON.stringify(params.toolsByList)};
 const callToolIsError = ${params.callToolIsError === true};
 const callToolJsonRpcError = ${params.callToolJsonRpcError === true};
 const callToolJsonRpcErrorCode = ${params.callToolJsonRpcErrorCode ?? -32000};
 const callToolResult = ${JSON.stringify(params.callToolResult)};
 const callToolDelayMs = ${params.callToolDelayMs ?? 0};
+const callToolReleasePath = ${JSON.stringify(params.callToolReleasePath)};
+const notifyListChangedOnToolCall = ${params.notifyListChangedOnToolCall === true};
 const resourcePageDelayMs = ${params.resourcePageDelayMs ?? 0};
 const resourcePageCount = ${params.resourcePageCount ?? 1};
 const resourcePageCursors = ${JSON.stringify(params.resourcePageCursors)};
@@ -168,6 +183,16 @@ const resourceListJsonRpcError = ${params.resourceListJsonRpcError === true};
 const resourceReadJsonRpcError = ${params.resourceReadJsonRpcError === true};
 const promptPageDelayMs = ${params.promptPageDelayMs ?? 0};
 const promptPageCursors = ${JSON.stringify(params.promptPageCursors)};
+
+async function waitForPath(filePath) {
+  while (filePath) {
+    const exists = await fs.access(filePath).then(() => true).catch(() => false);
+    if (exists) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 
 let buffer = "";
 let listCount = 0;
@@ -271,9 +296,11 @@ function handle(message) {
         jsonrpc: "2.0",
         id: message.id,
         result: {
-          tools: toolPageCursors
-            ? tools.map((tool) => ({ ...tool, name: tool.name + "-" + currentListCount }))
-            : tools,
+          tools: toolsByList
+            ? toolsByList[Math.min(currentListCount - 1, toolsByList.length - 1)]
+            : toolPageCursors
+              ? tools.map((tool) => ({ ...tool, name: tool.name + "-" + currentListCount }))
+              : tools,
           ...(toolPageCursor !== undefined && toolPageCursor !== null
             ? { nextCursor: toolPageCursor }
             : {}),
@@ -281,32 +308,14 @@ function handle(message) {
       });
       if (notifyListChangedAfterFirstList && currentListCount === 1) {
         void (async () => {
-          while (notifyListChangedReleasePath) {
-            const released = await fs
-              .access(notifyListChangedReleasePath)
-              .then(() => true)
-              .catch(() => false);
-            if (released) {
-              break;
-            }
-            await new Promise((resolve) => setTimeout(resolve, 10));
-          }
+          await waitForPath(notifyListChangedReleasePath);
           log("notify tools/list_changed");
           send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
         })();
       }
     };
     void (async () => {
-      while (listToolsReleasePath) {
-        const released = await fs
-          .access(listToolsReleasePath)
-          .then(() => true)
-          .catch(() => false);
-        if (released) {
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
+      await waitForPath(listToolsReleasePath);
       pendingTimer = setTimeout(sendListResponse, delayMs);
     })();
   }
@@ -324,18 +333,26 @@ function handle(message) {
       });
       return;
     }
-    setTimeout(() => {
-      send({
-        jsonrpc: "2.0",
-        id: message.id,
-        result: {
-          isError: callToolIsError,
-          ...(callToolResult ?? {
-            content: [{ type: "text", text: callToolIsError ? "tool failed" : "tool ok" }],
-          }),
-        },
-      });
-    }, callToolDelayMs);
+    if (notifyListChangedOnToolCall) {
+      log("notify tools/list_changed during tools/call");
+      send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+    }
+    void (async () => {
+      await waitForPath(callToolReleasePath);
+      log("delay tools/call " + callToolDelayMs);
+      pendingTimer = setTimeout(() => {
+        send({
+          jsonrpc: "2.0",
+          id: message.id,
+          result: {
+            isError: callToolIsError,
+            ...(callToolResult ?? {
+              content: [{ type: "text", text: callToolIsError ? "tool failed" : "tool ok" }],
+            }),
+          },
+        });
+      }, callToolDelayMs);
+    })();
   }
   if (message.method === "resources/list") {
     resourceListCount += 1;
@@ -950,6 +967,100 @@ describe("session MCP runtime", () => {
     expect(validator({ a: {}, b: 1 }).valid).toBe(false);
   });
 
+  it("enforces output schemas under the canonical trimmed tool name", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-canonical-schema-");
+    const serverPath = path.join(tempDir, "server.mjs");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath: path.join(tempDir, "server.log"),
+      tools: [
+        {
+          name: " spaced ",
+          inputSchema: { type: "object" },
+          outputSchema: {
+            type: "object",
+            properties: { count: { type: "number" } },
+            required: ["count"],
+          },
+        },
+      ],
+      callToolResult: { content: [], structuredContent: { count: "invalid" } },
+    });
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-canonical-schema",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: { docs: { command: process.execPath, args: [serverPath] } } } },
+    });
+
+    try {
+      expect((await runtime.getCatalog()).tools.map((entry) => entry.toolName)).toEqual(["spaced"]);
+      await expect(runtime.callTool("docs", "spaced", {})).rejects.toThrow(
+        "does not match the tool's output schema",
+      );
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("validates an in-flight result against its dispatch-time output schema", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-dispatch-schema-");
+    const serverPath = path.join(tempDir, "server.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    const releasePath = path.join(tempDir, "release-call");
+    const schema = (revision: string) => ({
+      type: "object",
+      properties: { revision: { const: revision } },
+      required: ["revision"],
+    });
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      toolsByList: [
+        [{ name: "versioned", inputSchema: { type: "object" }, outputSchema: schema("a") }],
+        [{ name: "versioned", inputSchema: { type: "object" }, outputSchema: schema("b") }],
+      ],
+      notifyListChangedOnToolCall: true,
+      capabilities: { tools: { listChanged: true } },
+      callToolReleasePath: releasePath,
+      callToolResult: { content: [], structuredContent: { revision: "a" } },
+    });
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-dispatch-schema",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: { docs: { command: process.execPath, args: [serverPath] } } } },
+    });
+
+    try {
+      expect((await runtime.getCatalog()).tools.map((entry) => entry.toolName)).toEqual([
+        "versioned",
+      ]);
+      const calling = runtime.callTool("docs", "versioned", {}).then(
+        (value) => ({ value, error: undefined }),
+        (error: unknown) => ({ value: undefined, error }),
+      );
+      await waitForFileText(
+        logPath,
+        "notify tools/list_changed during tools/call",
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+      );
+      await waitForPredicate(
+        () => runtime.peekCatalog() === null,
+        "dispatch-time catalog invalidation",
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+      );
+      expect((await runtime.getCatalog()).tools.map((entry) => entry.toolName)).toEqual([
+        "versioned",
+      ]);
+      await fs.writeFile(releasePath, "release", "utf8");
+      const outcome = await calling;
+      expect(outcome.error).toBeUndefined();
+      expect(outcome.value).toMatchObject({ structuredContent: { revision: "a" } });
+    } finally {
+      await fs.writeFile(releasePath, "release", "utf8").catch(() => {});
+      await runtime.dispose();
+    }
+  });
+
   it("keeps colliding sanitized tool definitions stable across catalog order changes", async () => {
     const catalogA = [
       { toolName: "alpha?", description: "question" },
@@ -1076,6 +1187,79 @@ describe("session MCP runtime", () => {
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the configured request timeout instead of the connection timeout for delayed MCP tools/list", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-configured-listtools-");
+    const serverPath = path.join(tempDir, "configured-list-tools.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      delayMs: 2_000,
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-configured-listtools-timeout",
+      sessionKey: "agent:test:session-configured-listtools-timeout",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            configuredListTools: {
+              command: process.execPath,
+              args: [serverPath],
+              connectionTimeoutMs: 1_000,
+              requestTimeoutMs: 4_000,
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["slow_tool"]);
+      await expect(fs.readFile(logPath, "utf8")).resolves.toContain("delay tools/list 2000");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("rejects delayed MCP tools/call responses that exceed the configured request timeout", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-call-timeout-");
+    const serverPath = path.join(tempDir, "slow-tool-call.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      callToolDelayMs: 1_500,
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-tool-call-timeout",
+      sessionKey: "agent:test:session-tool-call-timeout",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            slowToolCall: {
+              command: process.execPath,
+              args: [serverPath],
+              requestTimeoutMs: 250,
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      await runtime.getCatalog();
+      await expect(runtime.callTool("slowToolCall", "slow_tool", {})).rejects.toThrow(/timed out/i);
+      await waitForFileText(logPath, "delay tools/call 1500", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+    } finally {
+      await runtime.dispose();
     }
   });
 
@@ -1381,6 +1565,7 @@ describe("session MCP runtime", () => {
           type: "text",
           text: `structuredContent:\n${JSON.stringify(structuredContent, null, 2)}`,
         },
+        { type: "text", text: "captured screenshot" },
         { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
         { type: "text", text: "[Report] https://example.com/report" },
         { type: "text", text: "memo body" },
@@ -5454,6 +5639,244 @@ process.stdin.on("end", () => {
   );
 
   it(
+    "keeps catalog recovery single-flight while another server is recycled",
+    { timeout: 15_000 },
+    async () => {
+      const startServer = async (label: string) => {
+        let sessionGeneration = 0;
+        let listCount = 0;
+        let activeLists = 0;
+        let maxActiveLists = 0;
+        let hangCalls = true;
+        const pendingLists: Array<{
+          id: string | number;
+          response: http.ServerResponse;
+          sessionId: string;
+        }> = [];
+        const server = http.createServer((request, response) => {
+          if (request.method === "GET") {
+            response.writeHead(405).end();
+            return;
+          }
+          if (request.method === "DELETE") {
+            response.writeHead(204).end();
+            return;
+          }
+          if (request.method !== "POST") {
+            response.writeHead(405).end();
+            return;
+          }
+          let body = "";
+          request.setEncoding("utf8");
+          request.on("data", (chunk) => {
+            body += chunk;
+          });
+          request.on("end", () => {
+            const message = JSON.parse(body) as {
+              id: string | number;
+              method: string;
+              params?: { protocolVersion?: string };
+            };
+            if (message.method === "initialize") {
+              sessionGeneration += 1;
+              const sessionId = `${label}-${sessionGeneration}`;
+              response.setHeader("content-type", "application/json");
+              response.setHeader("mcp-session-id", sessionId);
+              response.writeHead(200).end(
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: message.id,
+                  result: {
+                    protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+                    capabilities: { tools: {} },
+                    serverInfo: { name: label, version: "1.0.0" },
+                  },
+                }),
+              );
+              return;
+            }
+            if (message.method === "notifications/initialized") {
+              response.writeHead(202).end();
+              return;
+            }
+            const rawSessionId = request.headers["mcp-session-id"];
+            const sessionId = typeof rawSessionId === "string" ? rawSessionId : "missing";
+            if (message.method === "tools/call") {
+              if (hangCalls) {
+                return;
+              }
+              response.setHeader("content-type", "application/json");
+              response.setHeader("mcp-session-id", sessionId);
+              response.writeHead(200).end(
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: message.id,
+                  result: {
+                    content: [],
+                    structuredContent: { revision: sessionId },
+                  },
+                }),
+              );
+              return;
+            }
+            if (message.method === "tools/list") {
+              listCount += 1;
+              if (listCount === 1) {
+                response.setHeader("content-type", "application/json");
+                response.setHeader("mcp-session-id", sessionId);
+                response.writeHead(200).end(
+                  JSON.stringify({
+                    jsonrpc: "2.0",
+                    id: message.id,
+                    result: {
+                      tools: [
+                        {
+                          name: "probe",
+                          inputSchema: { type: "object" },
+                          outputSchema: {
+                            type: "object",
+                            properties: { revision: { const: sessionId } },
+                            required: ["revision"],
+                          },
+                        },
+                      ],
+                    },
+                  }),
+                );
+                return;
+              }
+              activeLists += 1;
+              maxActiveLists = Math.max(maxActiveLists, activeLists);
+              pendingLists.push({ id: message.id, response, sessionId });
+            }
+          });
+        });
+        await new Promise<void>((resolve) => {
+          server.listen(0, "127.0.0.1", resolve);
+        });
+        const address = server.address() as { port: number };
+        return {
+          url: `http://127.0.0.1:${address.port}/mcp`,
+          activeLists: () => activeLists,
+          maxActiveLists: () => maxActiveLists,
+          allowCalls: () => {
+            hangCalls = false;
+          },
+          releaseLists: () => {
+            for (const pending of pendingLists.splice(0)) {
+              pending.response.setHeader("content-type", "application/json");
+              pending.response.setHeader("mcp-session-id", pending.sessionId);
+              pending.response.writeHead(200).end(
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: pending.id,
+                  result: {
+                    tools: [
+                      {
+                        name: "probe",
+                        inputSchema: { type: "object" },
+                        outputSchema: {
+                          type: "object",
+                          properties: { revision: { const: pending.sessionId } },
+                          required: ["revision"],
+                        },
+                      },
+                    ],
+                  },
+                }),
+              );
+              activeLists -= 1;
+            }
+          },
+          close: async () => {
+            server.closeAllConnections();
+            await new Promise<void>((resolve) => {
+              server.close(() => resolve());
+            });
+          },
+        };
+      };
+
+      const recovering = await startServer("recovering");
+      const trigger = await startServer("trigger");
+      testing.setBundleMcpCatalogListTimeoutMsForTest(4_000);
+      const runtime = createSessionMcpRuntime({
+        sessionId: "session-catalog-single-flight",
+        workspaceDir: "/workspace",
+        cfg: {
+          mcp: {
+            servers: {
+              recovering: {
+                url: recovering.url,
+                transport: "streamable-http",
+                requestTimeoutMs: 50,
+              },
+              trigger: {
+                url: trigger.url,
+                transport: "streamable-http",
+                requestTimeoutMs: 50,
+              },
+            },
+          },
+        },
+      });
+      const timeOutServer = async (serverName: string) => {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          await expect(runtime.callTool(serverName, "probe", {})).rejects.toThrow();
+        }
+      };
+
+      try {
+        const initialCatalog = await runtime.getCatalog();
+        expect(initialCatalog.tools, JSON.stringify(initialCatalog)).toHaveLength(2);
+        await timeOutServer("recovering");
+        await runtime.getCatalog();
+        await waitForPredicate(
+          () => recovering.activeLists() === 1,
+          "recovering server catalog request",
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+
+        await timeOutServer("trigger");
+        await runtime.getCatalog();
+        await Promise.race([
+          waitForPredicate(
+            () => recovering.maxActiveLists() > 1,
+            "overlapping catalog request",
+            500,
+          ).catch(() => undefined),
+          new Promise<void>((resolve) => {
+            setTimeout(resolve, 500);
+          }),
+        ]);
+        expect(recovering.maxActiveLists()).toBe(1);
+
+        recovering.allowCalls();
+        trigger.allowCalls();
+        recovering.releaseLists();
+        trigger.releaseLists();
+        await waitForPredicate(
+          () => recovering.activeLists() === 0 && trigger.activeLists() === 0,
+          "catalog requests to complete",
+          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+        );
+        const publishedCatalog = expectDefined(runtime.peekCatalog(), "published catalog");
+        expect(publishedCatalog.tools.map((tool) => `${tool.serverName}:${tool.toolName}`)).toEqual(
+          ["recovering:probe", "trigger:probe"],
+        );
+        await expect(runtime.callTool("recovering", "probe", {})).resolves.toMatchObject({
+          structuredContent: { revision: expect.stringMatching(/^recovering-/) },
+        });
+      } finally {
+        recovering.releaseLists();
+        trigger.releaseLists();
+        await runtime.dispose();
+        await Promise.all([recovering.close(), trigger.close()]);
+      }
+    },
+  );
+
+  it(
     "force-closes streamable-http transport when DELETE hangs past the timeout",
     { timeout: 15_000 },
     async () => {
@@ -5879,7 +6302,6 @@ process.on("SIGINT", shutdown);`,
       try {
         const firstCatalog = runtime.getCatalog();
         await waitForFileText(firstConnectMarkerPath, "", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
-        const firstSlowPid = Number(await fs.readFile(firstConnectMarkerPath, "utf8"));
         await waitForFileText(
           triggerLogPath,
           "sent initial tools/list_changed",
@@ -5897,18 +6319,6 @@ process.on("SIGINT", shutdown);`,
         expect(firstCatalogResult.servers.slow).toBeDefined();
         expect(secondCatalog.servers.trigger).toBeDefined();
         expect(secondCatalog.servers.slow).toBeDefined();
-        await waitForPredicate(
-          () => {
-            try {
-              process.kill(firstSlowPid, 0);
-              return false;
-            } catch (error) {
-              return (error as NodeJS.ErrnoException).code === "ESRCH";
-            }
-          },
-          "timed-out first MCP generation to exit",
-          LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
-        );
         await expect(runtime.callTool("trigger", "poke", {})).resolves.toMatchObject({
           content: [{ type: "text", text: "poked" }],
           isError: false,

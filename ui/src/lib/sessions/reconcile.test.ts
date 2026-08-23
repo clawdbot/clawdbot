@@ -163,6 +163,64 @@ test("sessions.changed deletes every null-tombstoned field, not a hand-kept list
   expect(row?.updatedAt).toBe(2);
 });
 
+test("sessions.changed clears exact run ids only for an explicit tombstone", () => {
+  const key = "agent:main:main";
+  const result = buildResult([
+    {
+      key,
+      kind: "direct",
+      updatedAt: 1,
+      hasActiveRun: true,
+      activeRunIds: ["run-exact"],
+    },
+  ]);
+
+  const omitted = reconcileSessionChanged(result, {
+    sessionKey: key,
+    reason: "run-progress",
+    updatedAt: 2,
+    hasActiveRun: true,
+  });
+  expect(omitted.row?.activeRunIds).toEqual(["run-exact"]);
+
+  const tombstoned = reconcileSessionChanged(omitted.result, {
+    sessionKey: key,
+    reason: "run-progress",
+    updatedAt: 3,
+    hasActiveRun: true,
+    activeRunIds: null,
+  });
+  expect(tombstoned.row?.activeRunIds).toBeUndefined();
+});
+
+test("authoritative snapshot omission clears cached exact run ids", () => {
+  const key = "agent:main:main";
+  const result = buildResult([
+    {
+      key,
+      kind: "direct",
+      sessionId: "session-main",
+      updatedAt: 1,
+      hasActiveRun: true,
+      activeRunIds: ["run-stale"],
+    },
+  ]);
+
+  const reconciled = reconcileSessionHistory(
+    result,
+    {
+      key,
+      kind: "direct",
+      sessionId: "session-main",
+      updatedAt: 2,
+      hasActiveRun: true,
+    },
+    undefined,
+  );
+
+  expect(reconciled?.sessions[0]?.activeRunIds).toBeUndefined();
+});
+
 test("sessions.changed invalidates the complete owner facet until canonical refresh", () => {
   const key = "agent:main:main";
   const result = buildResult([

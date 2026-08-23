@@ -93,6 +93,14 @@ export type SkillWorkshopProposalReviewCompletion = {
   recordProgress?: (progress: SkillWorkshopProposalReviewProgress) => Promise<void>;
 };
 
+/** Exact proposal revision an operator reviewed before requesting an agent-authored revision. */
+export type SkillWorkshopProposalRevisionConstraint = {
+  readonly agentId: string;
+  readonly workspaceDir: string;
+  readonly proposalId: string;
+  readonly expectedRevisionHash: string;
+};
+
 export type SkillWorkshopRunOptions = {
   env?: NodeJS.ProcessEnv;
   proposalOnly?: boolean;
@@ -102,6 +110,7 @@ export type SkillWorkshopRunOptions = {
   proposalMutationBudget?: SkillWorkshopProposalMutationBudget;
   proposalReviewCompletion?: SkillWorkshopProposalReviewCompletion;
   collectionReconcile?: SkillCollectionReconcileContext;
+  proposalRevision?: SkillWorkshopProposalRevisionConstraint;
 };
 
 export type SkillProposalScan = {
@@ -130,6 +139,10 @@ export type SkillProposalSupportFile = {
   targetContentHash?: string;
 };
 
+export type PreparedSkillProposalSupportFile = SkillProposalSupportFile & { content: string };
+
+export type SkillProposalDraftFile = "PROPOSAL.md" | `generations/${string}/PROPOSAL.md`;
+
 export type SkillProposalRecord = {
   schema: typeof SKILL_WORKSHOP_SCHEMA;
   id: string;
@@ -148,7 +161,7 @@ export type SkillProposalRecord = {
   /** Durable mutation counts keyed by run id for bounded interrupted-run recovery. */
   originRunMutationCounts?: Record<string, number>;
   proposedVersion: string;
-  draftFile: "PROPOSAL.md";
+  draftFile: SkillProposalDraftFile;
   draftHash: string;
   supportFiles?: SkillProposalSupportFile[];
   target: SkillProposalTarget;
@@ -307,7 +320,7 @@ export type SkillProposalReadResult = {
   record: SkillProposalRecord;
   revisionHash: string;
   content: string;
-  supportFiles?: SkillProposalSupportFileInput[];
+  supportFiles?: PreparedSkillProposalSupportFile[];
 };
 
 export type SkillProposalApplyResult = {

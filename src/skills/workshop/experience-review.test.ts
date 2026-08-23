@@ -26,6 +26,7 @@ function completedRun(
     senderName?: string;
     chatType?: "direct" | "group";
     modelProviderId?: string;
+    modelContextWindowTokens?: number;
     authProfileId?: string;
     usedSkills?: SkillExperienceReviewParams["usedSkills"];
   } = {},
@@ -60,6 +61,7 @@ function completedRun(
         : {
             modelProviderId: options.modelProviderId ?? "openai",
             modelId: "gpt-test",
+            modelContextWindowTokens: options.modelContextWindowTokens,
             authProfileId: options.authProfileId ?? "openai:work",
           }),
       skillWorkshopAvailable: options.skillWorkshopAvailable ?? true,
@@ -95,6 +97,35 @@ afterEach(() => {
 });
 
 describe("skill experience review scheduler", () => {
+  it.each([
+    { provider: "anthropic", contextTokens: 8_192, maxChars: 2_867 },
+    { provider: "openai", contextTokens: 200_000, maxChars: 60_000 },
+  ])(
+    "bounds the $provider review projection to its selected model",
+    async ({ provider, contextTokens, maxChars }) => {
+      vi.useFakeTimers();
+      const runReview = vi.fn().mockResolvedValue(undefined);
+      const scheduler = createSkillExperienceReviewScheduler({
+        isSystemActive: () => false,
+        runReview,
+      });
+
+      scheduler.schedule(
+        completedRun({
+          modelProviderId: provider,
+          modelContextWindowTokens: contextTokens,
+          userText: "trajectory ".repeat(20_000),
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      const candidate = runReview.mock.calls[0]?.[0] as { transcript: string } | undefined;
+      expect(candidate?.transcript.length).toBeLessThanOrEqual(maxChars);
+      expect(candidate?.transcript).toContain("older trajectory omitted");
+      scheduler.clear();
+    },
+  );
+
   it("waits for a completed substantial turn and an idle window", async () => {
     vi.useFakeTimers();
     const runReview = vi.fn().mockResolvedValue(undefined);

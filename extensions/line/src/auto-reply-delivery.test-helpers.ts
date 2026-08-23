@@ -39,13 +39,10 @@ export const createImageMessage = (url: string) => ({
   previewImageUrl: url,
 });
 
-const createLocationMessage: LineAutoReplyDeps["createLocationMessage"] = (location) =>
-  location.title.trim() && location.address.trim()
-    ? {
-        type: "location" as const,
-        ...location,
-      }
-    : null;
+const createLocationMessage: LineAutoReplyDeps["createLocationMessage"] = (location) => ({
+  type: "location" as const,
+  ...location,
+});
 
 export function createDeps(overrides?: Partial<LineAutoReplyDeps>): LineAutoReplyTestDeps {
   const replyMessageLine = vi.fn<LineAutoReplyDeps["replyMessageLine"]>(async () => ({}));

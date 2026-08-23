@@ -10,7 +10,7 @@ import {
   resolveAllowedModelRefMock,
   resolveConfiguredModelRefMock,
   resolveCronSessionMock,
-  resolveSessionAuthProfileOverrideMock,
+  resolveSessionAuthSelectionMock,
   resetRunCronIsolatedAgentTurnHarness,
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
@@ -193,7 +193,11 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
   });
 
   it("propagates a legacy source-less user auth profile into the run", async () => {
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-a");
+    resolveSessionAuthSelectionMock.mockResolvedValue({
+      profileId: "profile-a",
+      source: "user",
+      routeRequirement: undefined,
+    });
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         sessionEntry: makeCronSessionEntry({
@@ -222,7 +226,11 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
   });
 
   it("keeps a resolved fallback profile automatic when it differs from the stored pin", async () => {
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-b");
+    resolveSessionAuthSelectionMock.mockResolvedValue({
+      profileId: "profile-b",
+      source: "auto",
+      routeRequirement: undefined,
+    });
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({
         sessionEntry: makeCronSessionEntry({
@@ -251,7 +259,11 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
   });
 
   it("retries with switched auth profile state from LiveSessionModelSwitchError", async () => {
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-a");
+    resolveSessionAuthSelectionMock.mockResolvedValue({
+      profileId: "profile-a",
+      source: "auto",
+      routeRequirement: undefined,
+    });
     const cronSession = makeCronSession({
       sessionEntry: makeCronSessionEntry({
         model: undefined,

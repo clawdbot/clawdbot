@@ -1,10 +1,12 @@
 /**
  * Process-local aliases for durable storage keys and non-durable tab rows.
  */
+import { browserSessionTabRouteKey, type BrowserSessionTabRoute } from "./session-tab-route.js";
+
 type AliasIdentity = {
   sessionKey: string;
   targetId: string;
-  baseUrl?: string;
+  route?: BrowserSessionTabRoute;
   profile?: string;
 };
 
@@ -23,7 +25,10 @@ const volatileAliasStateSymbol = Symbol.for("openclaw.browser.session-tabs.volat
 const volatileExactStateSymbol = Symbol.for("openclaw.browser.session-tabs.exact-volatile-aliases");
 
 function interactionKey(identity: AliasIdentity): string {
-  return `${identity.sessionKey}\u0000${identity.baseUrl ?? ""}\u0000${identity.profile ?? ""}\u0000${identity.targetId}`;
+  const route = identity.route
+    ? browserSessionTabRouteKey(identity.route)
+    : browserSessionTabRouteKey({ kind: "browser-control" });
+  return `${identity.sessionKey}\u0000${route}\u0000${identity.profile ?? ""}\u0000${identity.targetId}`;
 }
 
 function normalizedTargetIds(

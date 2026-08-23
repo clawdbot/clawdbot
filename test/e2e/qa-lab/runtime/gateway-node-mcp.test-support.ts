@@ -9,6 +9,7 @@ import { expect, vi } from "vitest";
 import type { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { NodePluginToolDescriptor } from "../../../../packages/gateway-protocol/src/schema/nodes.js";
 import type { McpServerConfig } from "../../../../src/config/types.mcp.js";
+import { signalProcessTree } from "../../../../src/process/kill-tree.js";
 
 export const TEST_TIMEOUT_MS = 180_000;
 const WAIT_TIMEOUT_MS = 30_000;
@@ -25,6 +26,7 @@ export type CapturedChild = {
   child: ChildProcess;
   exited: Promise<void>;
   logs: () => string;
+  signalTree: (signal: "SIGTERM" | "SIGKILL") => Promise<void>;
 };
 export type HttpFixture = CapturedChild & {
   pid: number;
@@ -66,10 +68,41 @@ function captureChild(child: ChildProcess): CapturedChild {
   child.stderr?.on("data", (chunk: Buffer) => {
     stderr = (stderr + chunk.toString()).slice(-200_000);
   });
+  const pid = child.pid;
+  let termPromise: Promise<void> | undefined;
+  let killPromise: Promise<void> | undefined;
+  const signalTree = (signal: "SIGTERM" | "SIGKILL") => {
+    const existing = signal === "SIGKILL" ? killPromise : termPromise;
+    if (existing) {
+      return existing;
+    }
+    const signaled = new Promise<void>((resolve) => {
+      if (pid === undefined) {
+        resolve();
+        return;
+      }
+      signalProcessTree(pid, signal, {
+        detached: process.platform !== "win32",
+        onComplete: resolve,
+      });
+    });
+    if (signal === "SIGKILL") {
+      killPromise = signaled;
+    } else {
+      termPromise = signaled;
+    }
+    return signaled;
+  };
+  const exited = once(child, "exit").then(async () => {
+    // The root PID still identifies this task-owned tree at exit delivery. Reap
+    // descendants before any retained numeric process-group authority can age.
+    await signalTree("SIGKILL");
+  });
   return {
     child,
-    exited: once(child, "exit").then(() => {}),
+    exited,
     logs: () => `stdout:\n${stdout}\nstderr:\n${stderr}`,
+    signalTree,
   };
 }
 
@@ -107,6 +140,7 @@ export async function startHttpFixture(params: {
   const captured = captureChild(
     spawn(process.execPath, [params.fixturePath, "http", "--label-prefix", params.labelPrefix], {
       cwd: process.cwd(),
+      detached: process.platform !== "win32",
       env: params.env,
       stdio: ["ignore", "pipe", "pipe"],
     }),
@@ -174,6 +208,7 @@ export function startNodeProcess(gatewayPort: number, nodeEnv: NodeJS.ProcessEnv
       ],
       {
         cwd: process.cwd(),
+        detached: process.platform !== "win32",
         env: nodeEnv,
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -186,15 +221,15 @@ export async function stopChild(captured: CapturedChild | undefined): Promise<vo
     await captured?.exited.catch(() => {});
     return;
   }
-  captured.child.kill("SIGTERM");
+  await captured.signalTree("SIGTERM");
   const graceful = await Promise.race([
     captured.exited.then(() => true),
     delay(10_000, false, { ref: false }),
   ]);
   if (!graceful) {
-    captured.child.kill("SIGKILL");
-    await captured.exited;
+    await captured.signalTree("SIGKILL");
   }
+  await captured.exited;
 }
 
 export function processIsAlive(pid: number): boolean {

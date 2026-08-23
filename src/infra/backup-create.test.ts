@@ -981,7 +981,6 @@ describe("createBackupArchive", () => {
             maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
             env: { ...process.env, OPENCLAW_STATE_DIR: restoredStateDir },
           }).entries();
-          expect(restoredEntries).toHaveLength(2);
           expect(new Set(restoredEntries.map((entry) => entry.key)).size).toBe(2);
           expect(restoredEntries.map((entry) => entry.value)).toEqual([record, record]);
         } finally {

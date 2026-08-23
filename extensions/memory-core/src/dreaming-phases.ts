@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   formatMemoryDreamingDay,
@@ -16,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import {
   normalizeDailyIngestionState,
@@ -34,7 +36,6 @@ import {
 import { formatErrorMessage } from "./dreaming-shared.js";
 import {
   DREAMING_DAILY_INGESTION_NAMESPACE,
-  DREAMING_DAILY_PROVENANCE_NAMESPACE,
   normalizeMemoryCoreWorkspaceKey,
   readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
@@ -770,12 +771,12 @@ async function collectDailyIngestionBatches(params: {
   ingestionDreamingDay: string;
   state: DailyIngestionState;
 }): Promise<DailyIngestionCollectionResult> {
-  const provenanceEntries = await readMemoryCoreWorkspaceEntries<{
-    fileHash: string;
-    originClass: "agent" | "untrusted";
-    observedAt: number;
-  }>({ namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE, workspaceDir: params.workspaceDir });
-  const provenanceByPath = new Map(provenanceEntries.map((entry) => [entry.key, entry.value]));
+  const provenanceEntries = await listMemoryArtifactProvenance({
+    workspaceDir: params.workspaceDir,
+  });
+  const provenanceByPath = new Map(
+    provenanceEntries.map((entry) => [entry.relativePath, entry.provenance]),
+  );
   const memoryDir = path.join(params.workspaceDir, "memory");
   const cutoffMs = calculateLookbackCutoffMs(params.nowMs, params.lookbackDays);
   const entries = await fs.readdir(memoryDir, { withFileTypes: true }).catch((err: unknown) => {
@@ -948,12 +949,12 @@ export async function seedHistoricalDailyMemorySignals(params: {
       skippedPaths: [],
     };
   }
-  const provenanceEntries = await readMemoryCoreWorkspaceEntries<{
-    fileHash: string;
-    originClass: "agent" | "untrusted";
-    observedAt: number;
-  }>({ namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE, workspaceDir: params.workspaceDir });
-  const provenanceByPath = new Map(provenanceEntries.map((entry) => [entry.key, entry.value]));
+  const provenanceEntries = await listMemoryArtifactProvenance({
+    workspaceDir: params.workspaceDir,
+  });
+  const provenanceByPath = new Map(
+    provenanceEntries.map((entry) => [entry.relativePath, entry.provenance]),
+  );
 
   const resolved = normalizedPaths
     .map((filePath) => {
@@ -1306,18 +1307,20 @@ async function runLightDreaming(params: {
     nowMs,
     timezone: params.config.timezone,
   });
-  const recentEntries = await filterLiveShortTermRecallEntries({
-    workspaceDir: params.workspaceDir,
-    entries: await filterFreshLightDreamingEntries({
+  const recentEntries = (
+    await filterLiveShortTermRecallEntries({
       workspaceDir: params.workspaceDir,
-      nowMs,
-      entries: filterRecallEntriesWithinLookback({
-        entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
+      entries: await filterFreshLightDreamingEntries({
+        workspaceDir: params.workspaceDir,
         nowMs,
-        lookbackDays: params.config.lookbackDays,
+        entries: filterRecallEntriesWithinLookback({
+          entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
+          nowMs,
+          lookbackDays: params.config.lookbackDays,
+        }),
       }),
-    }),
-  });
+    })
+  ).filter((entry) => !isPromotionOriginBlocked(entry));
   const rankedEntries = dedupeEntries(
     recentEntries.toSorted((a, b) => {
       const byTime = compareStoreTimestampDesc(a.lastRecalledAt, b.lastRecalledAt);
@@ -1407,14 +1410,16 @@ async function runRemDreaming(params: {
     nowMs,
     timezone: params.config.timezone,
   });
-  const allEntries = await filterLiveShortTermRecallEntries({
-    workspaceDir: params.workspaceDir,
-    entries: filterRecallEntriesWithinLookback({
-      entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
-      nowMs,
-      lookbackDays: params.config.lookbackDays,
-    }),
-  });
+  const allEntries = (
+    await filterLiveShortTermRecallEntries({
+      workspaceDir: params.workspaceDir,
+      entries: filterRecallEntriesWithinLookback({
+        entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
+        nowMs,
+        lookbackDays: params.config.lookbackDays,
+      }),
+    })
+  ).filter((entry) => !isPromotionOriginBlocked(entry));
   // Prefer entries staged by light sleep so REM synthesises from the
   // sequential light→REM pipeline instead of rescanning the full store.
   const lightKeys = await readLightStagedKeys({

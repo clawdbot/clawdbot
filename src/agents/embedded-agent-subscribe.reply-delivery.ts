@@ -215,6 +215,18 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     rememberAssistantText(text);
   };
 
+  const replaceCurrentAssistantText = (text: string) => {
+    const count = assistantTexts.length - state.assistantTextBaseline;
+    if (!text) {
+      assistantTexts.splice(state.assistantTextBaseline, count);
+    } else if (count > 0) {
+      assistantTexts.splice(state.assistantTextBaseline, count, text);
+      rememberAssistantText(text);
+    } else {
+      pushAssistantText(text);
+    }
+  };
+
   const finalizeAssistantTexts = (args: {
     text: string;
     addedDuringMessage: boolean;
@@ -222,19 +234,22 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   }) => {
     const { text, addedDuringMessage, chunkerHasBuffered } = args;
 
+    // A run-budget timeout flush may already have committed partial text for
+    // this message. When message_end later finalizes the complete text, replace
+    // the flushed partial instead of appending a duplicate. The partial stays
+    // when message_end never arrives (hard run-budget abort) — that is the
+    // salvage the timeout flush exists for.
+    if (state.hasFlushedPartialText && text) {
+      replaceCurrentAssistantText(text);
+      state.hasFlushedPartialText = false;
+      state.assistantTextBaseline = assistantTexts.length;
+      return;
+    }
+
     // If we're not streaming block replies, ensure the final payload includes
     // the final text even when interim streaming was enabled.
     if (state.includeReasoning && text && !params.onBlockReply) {
-      if (assistantTexts.length > state.assistantTextBaseline) {
-        assistantTexts.splice(
-          state.assistantTextBaseline,
-          assistantTexts.length - state.assistantTextBaseline,
-          text,
-        );
-        rememberAssistantText(text);
-      } else {
-        pushAssistantText(text);
-      }
+      replaceCurrentAssistantText(text);
       state.suppressBlockChunks = true;
     } else if (!addedDuringMessage && !chunkerHasBuffered && text) {
       // Non-streaming models (no text_delta): ensure assistantTexts gets the final
@@ -245,14 +260,17 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     state.assistantTextBaseline = assistantTexts.length;
   };
 
-  const waitForPendingEvents = async () => {
+  const waitForPendingEvents = async (options?: { includePartialReplies?: boolean }) => {
     // Partial presentation stays concurrent with provider events, but terminal
     // settlement must observe callbacks launched while the event chain drains.
-    while (state.pendingEventChain || pendingPartialReplyTasks.size > 0) {
-      await Promise.allSettled([
-        ...(state.pendingEventChain ? [state.pendingEventChain] : []),
-        ...pendingPartialReplyTasks,
-      ]);
+    const includePartialReplies = options?.includePartialReplies !== false;
+    while (true) {
+      const eventChain = state.pendingEventChain;
+      const partialReplyTasks = includePartialReplies ? [...pendingPartialReplyTasks] : [];
+      if (!eventChain && partialReplyTasks.length === 0) {
+        return;
+      }
+      await Promise.allSettled([...(eventChain ? [eventChain] : []), ...partialReplyTasks]);
     }
   };
 
@@ -267,6 +285,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     flushDeferredBlockReplies,
     pendingBlockReplyTasks,
     pushAssistantText,
+    replaceCurrentAssistantText,
     shouldSkipAssistantText,
     waitForPendingEvents,
   };

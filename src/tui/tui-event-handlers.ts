@@ -176,6 +176,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!matchesSelectedTuiSession(state, evt)) {
       return;
     }
+    if (runCoordinator.isHistoryTerminalDiagnosticRun(evt.runId)) {
+      return;
+    }
     const isSequencedGatewayEvent = Number.isSafeInteger(evt.seq) && (evt.seq ?? -1) >= 0;
     if (
       runCoordinator.isRetiredOrphanRun(evt.runId) &&

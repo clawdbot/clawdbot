@@ -12,10 +12,7 @@ afterEach(async () => {
 });
 
 describe("chat composer steering queue", () => {
-  it.each([
-    { sendState: "steering" as const, sendRunId: "send-1" },
-    { pendingRunId: "run-1", sendRunId: "send-1" },
-  ])("renders one Steering badge for an in-flight or acknowledged steer", (steerState) => {
+  it("renders the durable steer mode without a run-bound state", () => {
     const container = document.createElement("div");
     document.body.append(container);
     render(
@@ -25,8 +22,8 @@ describe("chat composer steering queue", () => {
             id: "steer-1",
             text: "change course",
             createdAt: 1,
-            kind: "steered",
-            ...steerState,
+            queueMode: "steer",
+            sendState: "waiting-idle",
           },
         ],
         onQueueRemove: vi.fn(),
@@ -35,11 +32,9 @@ describe("chat composer steering queue", () => {
     );
 
     const badges = container.querySelectorAll(".chat-queue__badge");
-    expect(badges).toHaveLength(1);
-    expect(badges[0]?.textContent?.trim()).toBe(t("chat.queue.states.steering"));
-    const icon = container.querySelector(".chat-queue__icon");
-    expect(icon?.querySelector('polyline[points="15 10 20 15 15 20"]')).not.toBeNull();
-    expect(icon?.querySelector("circle")).toBeNull();
+    expect(badges).toHaveLength(2);
+    expect(badges[0]?.textContent?.trim()).toBe(t("chat.queue.steer"));
+    expect(badges[1]?.textContent?.trim()).toBe(t("chat.queue.states.waitingForRun"));
   });
 
   it("keeps a failed steer visually classified as an error", () => {
@@ -52,7 +47,7 @@ describe("chat composer steering queue", () => {
             id: "failed-steer",
             text: "change course",
             createdAt: 1,
-            kind: "steered",
+            queueMode: "steer",
             sendState: "failed",
             sendError: "steer rejected",
           },
@@ -64,11 +59,11 @@ describe("chat composer steering queue", () => {
 
     const row = container.querySelector(".chat-queue__item");
     expect(row?.classList.contains("chat-queue__item--failed")).toBe(true);
-    expect(row?.classList.contains("chat-queue__item--steered")).toBe(false);
     const icon = row?.querySelector(".chat-queue__icon");
     expect(icon?.querySelector('path[d^="m21.73 18"]')).not.toBeNull();
-    expect(icon?.querySelector('polyline[points="15 10 20 15 15 20"]')).toBeNull();
-    expect(container.querySelector(".chat-queue__badge--steered")).toBeNull();
+    expect(container.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe(
+      t("chat.queue.steer"),
+    );
   });
 });
 
@@ -155,7 +150,7 @@ describe("chat composer queue reordering", () => {
   it("reserves the handle column on every row so the pills never shift", () => {
     const container = renderQueue({
       queue: [
-        { id: "steer", text: "steer", createdAt: 1, kind: "steered", pendingRunId: "run-1" },
+        { id: "pending", text: "pending", createdAt: 1, pendingRunId: "run-1" },
         waiting("b", 2),
         waiting("c", 3),
       ],
@@ -224,7 +219,7 @@ describe("chat composer queue reordering", () => {
     expect(rows[1]?.querySelector(".chat-queue__edit-input")).not.toBeNull();
     expect(rows[1]?.querySelector(".chat-queue__edit-submit")).not.toBeNull();
     expect(rows[1]?.querySelector(".chat-queue__edit-cancel")).not.toBeNull();
-    expect(rows.map((row) => row.querySelector(".chat-queue__steer") !== null)).toEqual([
+    expect(rows.map((row) => row.querySelector(".chat-queue__action") !== null)).toEqual([
       true,
       false,
       true,
@@ -271,7 +266,7 @@ describe("chat composer queue reordering", () => {
   it("keeps a row that already joined a run out of the reorder set", () => {
     const container = renderQueue({
       queue: [
-        { id: "steer", text: "steer", createdAt: 1, kind: "steered", pendingRunId: "run-1" },
+        { id: "pending", text: "pending", createdAt: 1, pendingRunId: "run-1" },
         waiting("b", 2),
         waiting("c", 3),
       ],

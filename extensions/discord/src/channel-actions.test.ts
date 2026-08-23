@@ -364,7 +364,7 @@ describe("discordMessageActions", () => {
     expect(discovery?.schema).toBeUndefined();
   });
 
-  it.each(["read", "search", "edit", "delete", "react", "pin", "poll", "channel-info"])(
+  it.each(["read", "search", "edit", "delete", "react", "pin", "channel-info"])(
     "routes %s actions through gateway execution mode",
     (action) => {
       expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe(
@@ -375,6 +375,7 @@ describe("discordMessageActions", () => {
 
   it.each([
     "send",
+    "poll",
     "upload-file",
     "thread-reply",
     "sticker",
@@ -510,6 +511,11 @@ describe("discordMessageActions", () => {
       readFile: mediaReadFile,
     };
     const mediaLocalRoots = ["/tmp/media"];
+    const reply = {
+      source: "implicit" as const,
+      replyToId: "source-message-1",
+      mode: "first" as const,
+    };
 
     await discordMessageActions.handleAction?.({
       channel: "discord",
@@ -525,6 +531,7 @@ describe("discordMessageActions", () => {
       mediaLocalRoots,
       mediaReadFile,
       conversationReadOrigin: "delegated",
+      reply,
     });
 
     expect(handleDiscordMessageActionMock).toHaveBeenCalledWith({
@@ -540,6 +547,7 @@ describe("discordMessageActions", () => {
       mediaLocalRoots,
       mediaReadFile,
       conversationReadOrigin: "delegated",
+      reply,
     });
   });
 });

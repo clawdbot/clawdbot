@@ -67,7 +67,6 @@ import {
   readChatSessionSnapshot,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
-import { retirePersistedSteeredChips } from "./steer-lifecycle.ts";
 import {
   latestPersistedSteerBoundary,
   markChatStreamAfterBoundary,
@@ -120,6 +119,10 @@ function getChatHistoryPaneRequests(owner: object): ChatHistoryPaneRequests {
     chatHistoryPaneRequests.set(owner, requests);
   }
   return requests;
+}
+
+export function retireChatBranchRequests(state: ChatState): void {
+  getChatHistoryPaneRequests(state).branchVersion += 1;
 }
 
 type ChatHistoryRequestOwnership = {
@@ -274,6 +277,7 @@ type ChatSessionMessageSubscriptionState = ChatState & {
 };
 
 export type ChatHistoryResult = {
+  sourceCanonicalListRevision?: number;
   deltaCursor?: string;
   messages?: Array<unknown>;
   offset?: number;
@@ -791,9 +795,13 @@ type LoadChatHistoryOptions = {
   startup?: boolean;
 };
 
+type SharedChatHistoryResponse = ChatHistoryResponse & {
+  sourceCanonicalListRevision?: number;
+};
+
 type SharedChatHistoryRequest = {
   consumers: Set<SharedChatHistoryConsumer>;
-  promise: Promise<ChatHistoryResponse>;
+  promise: Promise<SharedChatHistoryResponse>;
 };
 
 type SharedChatHistoryRegistry = {
@@ -872,7 +880,8 @@ function requestSharedChatHistory(
   consumerOwner: object,
   isCurrentConsumer: () => boolean,
   cursor?: string,
-): Promise<ChatHistoryResponse> {
+  sourceCanonicalListRevision?: number,
+): Promise<SharedChatHistoryResponse> {
   let registry = sharedChatHistoryRequests.get(client);
   if (!registry) {
     registry = {
@@ -903,11 +912,13 @@ function requestSharedChatHistory(
       shouldContinue,
       shouldRetry,
       cursor,
-    ).finally(() => {
-      if (requests?.get(requestKey)?.promise === promise) {
-        requests.delete(requestKey);
-      }
-    });
+    )
+      .then((response) => ({ ...response, sourceCanonicalListRevision }))
+      .finally(() => {
+        if (requests?.get(requestKey)?.promise === promise) {
+          requests.delete(requestKey);
+        }
+      });
     shared = { consumers, promise };
     requests.set(requestKey, shared);
   } else {
@@ -1514,6 +1525,7 @@ async function loadChatHistoryUncached(
       state,
       () => shouldApplyChatHistoryResult(state, ownership),
       deltaCursor,
+      state.sessions?.canonicalListRevision,
     );
     if (!shouldApplyChatHistoryResult(state, ownership)) {
       recordChatHistoryTiming(state, "stale", startedAtMs, {
@@ -1535,6 +1547,8 @@ async function loadChatHistoryUncached(
         requestAgentId,
         state,
         () => shouldApplyChatHistoryResult(state, ownership),
+        undefined,
+        state.sessions?.canonicalListRevision,
       );
       if (!shouldApplyChatHistoryResult(state, ownership)) {
         recordChatHistoryTiming(state, "stale", startedAtMs, {
@@ -1559,7 +1573,6 @@ async function loadChatHistoryUncached(
       state.chatThinkingLevel = response.sessionInfo.thinkingLevel ?? null;
       state.chatQueueModeOverride = response.sessionInfo.queueMode;
       state.chatEffectiveQueueMode = response.sessionInfo.effectiveQueueMode;
-      retirePersistedSteeredChips(state);
       replaceCachedChatMessages(state, sessionKey, requestAgentId, response.deltaCursor);
       recordChatHistoryTiming(state, "applied", startedAtMs, {
         requestSessionKey: sessionKey,
@@ -1575,6 +1588,7 @@ async function loadChatHistoryUncached(
         sessionInfo: response.sessionInfo,
         ...(response.agentsList ? { agentsList: response.agentsList } : {}),
         ...(response.metadata ? { metadata: response.metadata } : {}),
+        sourceCanonicalListRevision: response.sourceCanonicalListRevision,
       };
     }
     if (isChatHistoryCursorResult(response)) {
@@ -1650,7 +1664,6 @@ async function loadChatHistoryUncached(
     if (Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")) {
       state.chatDisplayedLeafEntryId = nextDisplayedLeafEntryId;
     }
-    retirePersistedSteeredChips(state);
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
     state.currentSessionId = nextSessionId;
     replaceCachedChatMessages(state, sessionKey, requestAgentId, res.deltaCursor);

@@ -54,17 +54,20 @@ export async function clearAgentSkillFilter(
   if (!target || !Array.isArray(target.entry.skills) || !canDispatch()) {
     return false;
   }
-  const authoredAgentId = target.path[2];
+  const targetKey = target.path[2];
+  if (typeof targetKey !== "string") {
+    return false;
+  }
   return runtimeConfig.patch({
     raw: {
       agents: {
         entries: {
-          [authoredAgentId]: { skills: null },
+          [targetKey]: { skills: null },
         },
       },
     },
-    note: "Enable all agent skills",
-    replacePaths: [`agents.entries.${authoredAgentId}.skills`],
+    note: "Reset agent skills to inherited defaults",
+    replacePaths: [`agents.entries.${targetKey}.skills`],
     canDispatch,
   });
 }

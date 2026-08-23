@@ -297,6 +297,23 @@ describe("cleanup path removals", () => {
     expect(stateRemoved).toBe(true);
   });
 
+  it("returns failure when any linked dry-run target is unsafe", async () => {
+    const runtime = createRuntimeMock();
+    await expect(
+      removeStateAndLinkedPaths(
+        {
+          stateDir: "/tmp/openclaw-cleanup/state",
+          configPath: path.parse(process.cwd()).root,
+          oauthDir: "/tmp/openclaw-cleanup/oauth",
+          configInsideState: false,
+          oauthInsideState: false,
+        },
+        runtime,
+        { dryRun: true },
+      ),
+    ).resolves.toBe(false);
+  });
+
   it("keeps the canonical state lock visible until state removal completes", async () => {
     const runtime = createRuntimeMock();
     const tmpRoot = await fs.realpath(tempDirs.make("openclaw-cleanup-lock-visible-"));
@@ -739,7 +756,6 @@ describe("cleanup path removals", () => {
     const result = await removePath(process.cwd(), runtime, { dryRun: true });
 
     expect(result.ok).toBe(false);
-    expect(result.skipped).toBeUndefined();
     expect(runtime.error.mock.calls.length).toBe(1);
     expect(
       expectDefined(runtime.error.mock.calls[0], "runtime.error.mock.calls[0] test invariant")[0],
@@ -760,7 +776,6 @@ describe("cleanup path removals", () => {
       const result = await removePath(tmpRoot, runtime, { dryRun: true });
 
       expect(result.ok).toBe(false);
-      expect(result.skipped).toBeUndefined();
       expect(runtime.error.mock.calls.length).toBe(1);
       expect(
         expectDefined(runtime.error.mock.calls[0], "runtime.error.mock.calls[0] test invariant")[0],

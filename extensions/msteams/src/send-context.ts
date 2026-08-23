@@ -12,6 +12,7 @@ import {
   isAllowedBotFrameworkServiceUrl,
   normalizeBotFrameworkServiceUrl,
 } from "./bot-framework-service-url.js";
+import { resolveMSTeamsAccount } from "./channel-config.js";
 import {
   resolveMSTeamsSdkCloudOptions,
   validateMSTeamsProactiveServiceUrlBoundary,
@@ -168,6 +169,13 @@ export async function resolveMSTeamsSendContext(params: {
     throw new Error("msteams provider is not enabled");
   }
 
+  const account = resolveMSTeamsAccount(params.cfg);
+  if (account.tokenStatus === "configured_unavailable") {
+    throw new Error("msteams credential file is configured but unavailable");
+  }
+  if (!account.configured) {
+    throw new Error("msteams credentials not configured");
+  }
   const creds = resolveMSTeamsCredentials(msteamsCfg);
   if (!creds) {
     throw new Error("msteams credentials not configured");

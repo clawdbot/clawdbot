@@ -345,6 +345,7 @@ describe("registerSetupCommand", () => {
   it.each([
     ["onboarding mode", ["--mode", "remote"]],
     ["remote Gateway", ["--remote-url", "wss://example.invalid"]],
+    ["remote Gateway password", ["--remote-password", "fixture-password"]],
     ["reset", ["--reset"]],
     ["daemon", ["--daemon-runtime", "node"]],
     ["auth", ["--auth-choice", "skip"]],
@@ -357,8 +358,11 @@ describe("registerSetupCommand", () => {
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
-  it("runs setup wizard command when --wizard is set", async () => {
-    const remoteToken = ["fixture", "value"].join("-");
+  it.each([
+    { flag: "--remote-token", optionKey: "remoteToken" },
+    { flag: "--remote-password", optionKey: "remotePassword" },
+  ])("forwards $flag to the setup wizard", async ({ flag, optionKey }) => {
+    const credential = ["fixture", "value"].join("-");
     await runCli([
       "setup",
       "--wizard",
@@ -366,14 +370,14 @@ describe("registerSetupCommand", () => {
       "remote",
       "--remote-url",
       "wss://example",
-      "--remote-token",
-      remoteToken,
+      flag,
+      credential,
     ]);
 
     expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
     expect(lastWizardOptions()?.mode).toBe("remote");
     expect(lastWizardOptions()?.remoteUrl).toBe("wss://example");
-    expect(lastWizardOptions()?.remoteToken).toBe(remoteToken);
+    expect(lastWizardOptions()?.[optionKey]).toBe(credential);
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 

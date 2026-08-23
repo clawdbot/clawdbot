@@ -61,7 +61,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
 
   const identityResolverFor = (
     record: WorkerEnvironmentRecord,
-    provider: WorkerProvider,
+    provider: WorkerProvider<"internal">,
     leaseId: string,
   ) => {
     const profile = requireWorkerProfile(record.profileSnapshot.settings);
@@ -76,7 +76,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     };
   };
 
-  const providerFor = (providerId: string): WorkerProvider => {
+  const providerFor = (providerId: string): WorkerProvider<"internal"> => {
     const provider = options.resolveProvider(providerId);
     if (provider) {
       return provider;
@@ -84,14 +84,14 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     throw serviceError("provider_not_found", `Worker provider is unavailable: ${providerId}`);
   };
 
-  const listMachineOptions = (profileId: string) => {
+  const listMachineOptions = async (profileId: string) => {
     const profile = options.getConfig().cloudWorkers?.profiles?.[profileId];
     if (!profile) {
       return undefined;
     }
     const provider = options.resolveProvider(profile.provider);
     return normalizeWorkerMachineOptions(
-      provider?.listMachineOptions?.(requireWorkerProfile(profile.settings ?? {})),
+      await provider?.listMachineOptions?.(requireWorkerProfile(profile.settings ?? {})),
     );
   };
 
@@ -126,7 +126,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   const failBootstrap = async (
     record: WorkerEnvironmentRecord,
     leaseId: string,
-    provider: WorkerProvider,
+    provider: WorkerProvider<"internal">,
     error: unknown,
     failureCode: "bootstrap_failure" | "invalid_profile" = "bootstrap_failure",
     leasePatch?: TransitionPatch,
@@ -162,6 +162,26 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     throw serviceError(failureCode, `${failureLabel}: ${detail}`);
   };
 
+  const preserveIndeterminateProvisionCleanup = (
+    record: WorkerEnvironmentRecord,
+    error: ReturnType<typeof WorkerProviderError.cleanupIndeterminate>,
+  ): never => {
+    // Split the durable diagnostic budget so neither the allocation failure nor its cleanup
+    // failure can erase the other before restart reconciliation.
+    const provisionDetail = boundedError(error.provisionError, 480);
+    const cleanupDetail = boundedError(error.cleanupError, 480);
+    const detail = `${provisionDetail}; provider teardown pending: ${cleanupDetail}`;
+    store.adoptProvisionCleanupFailure({
+      environmentId: record.environmentId,
+      leaseId: error.leaseId,
+      lastError: detail,
+    });
+    throw serviceError(
+      "provider_failure",
+      `Worker provider operation failed; teardown is pending: ${detail}`,
+    );
+  };
+
   const finishNodeProvisioning = createWorkerNodeProvisioning({
     store,
     tunnels,
@@ -179,7 +199,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
 
   const finishBootstrap = async (
     record: WorkerEnvironmentRecord,
-    provider: WorkerProvider,
+    provider: WorkerProvider<"internal">,
     installation: WorkerInstallationArtifact,
   ) => {
     if (record.state !== "bootstrapping" || !record.leaseId || !record.sshEndpoint) {
@@ -209,7 +229,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
 
   const finishProvision = async (
     record: WorkerEnvironmentRecord,
-    provider: WorkerProvider,
+    provider: WorkerProvider<"internal">,
     preparedInstallation?: WorkerInstallationArtifact,
   ) => {
     let lease: WorkerLease;
@@ -244,6 +264,9 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         ),
       );
     } catch (error) {
+      if (WorkerProviderError.isCleanupIndeterminate(error)) {
+        return preserveIndeterminateProvisionCleanup(record, error);
+      }
       const detail = boundedError(error);
       if (
         error instanceof WorkerProviderError ||
@@ -352,7 +375,10 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     throw serviceError("invalid_state", `Cannot destroy worker in state: ${record.state}`);
   };
 
-  const finishDestroy = async (r: WorkerEnvironmentRecord, provider?: WorkerProvider) => {
+  const finishDestroy = async (
+    r: WorkerEnvironmentRecord,
+    provider?: WorkerProvider<"internal">,
+  ) => {
     if (!r.leaseId) {
       throw serviceError("invalid_state", "Worker environment has no lease");
     }
@@ -392,7 +418,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         // Provider inspection and the state-specific path below retain their existing retry policy.
       }
     }
-    let provider: WorkerProvider;
+    let provider: WorkerProvider<"internal">;
     try {
       provider = providerFor(record.providerId);
     } catch (error) {
@@ -601,7 +627,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
         }
         return existing;
       }
-      let provider: WorkerProvider;
+      let provider: WorkerProvider<"internal">;
       let providerId: string;
       let profileSnapshot: WorkerProfile;
       if (inherited) {

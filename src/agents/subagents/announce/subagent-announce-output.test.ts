@@ -226,7 +226,7 @@ describe("readSubagentOutput", () => {
     );
   });
 
-  it("returns only the latest assistant turn, not trailing tool output", async () => {
+  it("does not reuse assistant progress that issued a trailing tool call", async () => {
     installOutputDeps({
       messages: [
         {
@@ -244,12 +244,10 @@ describe("readSubagentOutput", () => {
       ],
     });
 
-    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
-      "Mapped the code path.",
-    );
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
   });
 
-  it("keeps earlier visible assistant text across a trailing empty assistant turn", async () => {
+  it("does not keep earlier visible progress across a trailing tool-only turn", async () => {
     installOutputDeps({
       messages: [
         {
@@ -268,8 +266,30 @@ describe("readSubagentOutput", () => {
       ],
     });
 
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+  });
+
+  it("returns a final assistant reply emitted after trailing tool activity", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Mapped the code path." },
+            { type: "toolCall", id: "call-read", name: "read", arguments: {} },
+          ],
+        },
+        { role: "toolResult", content: "tool result" },
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "The fix is complete." }],
+        },
+      ],
+    });
+
     await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
-      "Mapped the code path.",
+      "The fix is complete.",
     );
   });
 
@@ -558,13 +578,13 @@ describe("buildChildCompletionFindings", () => {
     expect(findings).toContain("ANNOUNCE_SKIP");
   });
 
-  it("uses frozen child completion text when normalized completion is absent", () => {
+  it("uses the canonical captured child completion text", () => {
     const findings = buildChildCompletionFindings([
       {
         childSessionKey: "agent:main:subagent:child",
         task: "child task",
         createdAt: 1,
-        frozenResultText: "final child output",
+        completion: { resultText: "final child output" },
         execution: { outcome: { status: "ok" } },
       },
     ]);
@@ -604,6 +624,72 @@ describe("buildChildCompletionFindings", () => {
     expect(findings).toContain("findings captured before the wake");
     expect(findings).not.toContain("NO_REPLY");
   });
+
+  it.each([
+    {
+      name: "visible",
+      terminalReply: { disposition: "visible", text: "authoritative final output" } as const,
+      resultText: "older captured output",
+      expected: "authoritative final output",
+    },
+    {
+      name: "silent",
+      terminalReply: { disposition: "silent" } as const,
+      resultText: "NO_REPLY",
+      expected: undefined,
+    },
+    {
+      name: "empty",
+      terminalReply: { disposition: "empty" } as const,
+      resultText: null,
+      expected: undefined,
+    },
+  ])(
+    "keeps producer-owned $name terminal evidence authoritative over older fallback",
+    ({ terminalReply, resultText, expected }) => {
+      const findings = buildChildCompletionFindings([
+        {
+          childSessionKey: "agent:main:subagent:child",
+          task: "child task",
+          createdAt: 1,
+          completion: {
+            required: true,
+            resultText,
+            fallbackResultText: "older captured fallback",
+            terminalReply,
+          },
+          execution: { outcome: { status: "ok" } },
+        },
+      ]);
+
+      if (expected === undefined) {
+        expect(findings).toBeUndefined();
+      } else {
+        expect(findings).toContain(expected);
+        expect(findings).not.toContain("older captured output");
+      }
+    },
+  );
+
+  it.each(["silent", "empty"] as const)(
+    "treats %s terminal evidence without retained text as an intentional non-result",
+    (disposition) => {
+      const findings = buildChildCompletionFindings([
+        {
+          childSessionKey: "agent:main:subagent:child",
+          task: "child task",
+          createdAt: 1,
+          completion: {
+            resultText: disposition === "silent" ? "NO_REPLY" : null,
+            terminalReply: { disposition },
+          },
+          execution: { outcome: { status: "ok" } },
+        },
+      ]);
+
+      expect(findings).toBeUndefined();
+    },
+  );
 
   it.each(["ANNOUNCE_SKIP", "REPLY_SKIP", "HEARTBEAT_OK"])(
     "does not override an intentional %s completion with fallback output",

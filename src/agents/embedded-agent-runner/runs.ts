@@ -56,7 +56,6 @@ import {
   ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
   EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS,
   EMBEDDED_RUN_WAITERS,
-  getActiveEmbeddedRunCount,
   RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS,
   setActiveEmbeddedRunLifecycleGeneration,
   type ActiveEmbeddedRunSnapshot,
@@ -859,44 +858,6 @@ export function getActiveEmbeddedRunSnapshot(
   sessionId: string,
 ): ActiveEmbeddedRunSnapshot | undefined {
   return ACTIVE_EMBEDDED_RUN_SNAPSHOTS.get(sessionId);
-}
-
-/**
- * Wait for active embedded runs to drain.
- *
- * Used during restarts so in-flight runs can finish transcript writes before the
- * next lifecycle starts. If no timeout is passed, waits indefinitely.
- */
-export async function waitForActiveEmbeddedRuns(
-  timeoutMs?: number,
-  opts?: { pollMs?: number },
-): Promise<{ drained: boolean }> {
-  const pollMsRaw = opts?.pollMs ?? 250;
-  const pollMs = resolveTimerTimeoutMs(pollMsRaw, 250, 10);
-  if (timeoutMs !== undefined && timeoutMs <= 0) {
-    return { drained: getActiveEmbeddedRunCount() === 0 };
-  }
-  const maxWaitMs =
-    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-      ? Math.max(pollMs, Math.floor(timeoutMs))
-      : undefined;
-
-  const startedAt = Date.now();
-  while (true) {
-    if (getActiveEmbeddedRunCount() === 0) {
-      return { drained: true };
-    }
-    const elapsedMs = Date.now() - startedAt;
-    if (maxWaitMs !== undefined && elapsedMs >= maxWaitMs) {
-      diag.warn(
-        `wait for active embedded runs timed out: activeRuns=${getActiveEmbeddedRunCount()} timeoutMs=${maxWaitMs}`,
-      );
-      return { drained: false };
-    }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, pollMs);
-    });
-  }
 }
 
 function waitForCurrentEmbeddedAgentRunEnd(

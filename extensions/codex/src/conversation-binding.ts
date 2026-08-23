@@ -59,6 +59,7 @@ import {
   buildDisabledAppsConfigPatch,
   mergeCodexThreadConfigs,
 } from "./app-server/plugin-thread-config.js";
+import { buildCodexProjectDocThreadConfig } from "./app-server/project-doc-thread-config.js";
 import { assertCodexThreadStartResponse } from "./app-server/protocol-validators.js";
 import type {
   CodexServiceTier,
@@ -591,12 +592,10 @@ function codexConversationSandboxOrPermissions(
   const disabledApps = mergeCodexThreadConfigs(buildDisabledAppsConfigPatch(), {
     "features.apps": false,
   })!;
-  if (networkProxy) {
-    return {
-      config: mergeCodexThreadConfigs(networkProxy.configPatch, disabledApps),
-    };
-  }
-  return { sandbox, config: disabledApps };
+  const config = buildCodexProjectDocThreadConfig(
+    mergeCodexThreadConfigs(networkProxy?.configPatch, disabledApps),
+  );
+  return networkProxy ? { config } : { sandbox, config };
 }
 
 async function requestNewConversationBindingThread(
