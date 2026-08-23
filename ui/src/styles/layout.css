@@ -3556,7 +3556,7 @@ openclaw-sidebar-attention {
 .sidebar-issues-panel {
   position: fixed;
   z-index: 121;
-  width: min(360px, calc(100vw - 16px));
+  width: min(390px, calc(100vw - 16px));
   block-size: min(
     500px,
     calc(
