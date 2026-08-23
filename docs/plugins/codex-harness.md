@@ -249,9 +249,10 @@ Move Session after selecting a Codex model. Profile placement requires
 Enable the Codex plugin and explicitly allow
 `codex.exec-server.stdio.v1` on the Gateway, as shown in
 [Run Codex on a paired device](/plugins/codex-harness#run-codex-on-a-paired-device).
-The profile setup or cloud image must also install the exact trusted official
-Codex plugin matching the Gateway and its pinned platform-native Codex binary.
-Crabbox validates that prepared installation and activates it in the disposable
+The cloud image may include the exact-version bundled Codex plugin; otherwise,
+the profile setup or image must install the matching trusted official npm Codex
+plugin and its pinned platform-native Codex binary. Crabbox validates the
+bundled or prepared installation and preserves its provenance in the disposable
 node's isolated state without installing a plugin during enrollment. The Gateway
 checks the cloud node's current pairing and
 effectively invocable command before starting a Codex process; approve the
