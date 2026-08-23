@@ -423,22 +423,7 @@ jobs:
       - name: Validate pinned ClawHub trusted publisher CLI support
         env:
           CLAWHUB_CLI: ${{ steps.clawhub_cli.outputs.cli }}
-        run: |
-          set -euo pipefail
-          help_output="$(
-            "${CLAWHUB_CLI}" package trusted-publisher set --help 2>&1 || true
-          )"
-          printf '%s\n' "${help_output}"
-          if ! grep -Fq "Usage: clawhub package trusted-publisher set" <<<"${help_output}"; then
-            echo "::error::CLAW-277 03 - Split OpenClaw plugin ClawHub publishing into OIDC release and token bootstrap workflows requires locked clawhub@0.23.1 to expose 'package trusted-publisher set' before token bootstrap publish can run. The pinned CLI returned parent help or no set command, so this workflow is stopping before creating a ClawHub package row."
-            exit 1
-          fi
-          for required_flag in --repository --workflow-filename; do
-            if ! grep -Fq -- "${required_flag}" <<<"${help_output}"; then
-              echo "::error::CLAW-277 03 - Split OpenClaw plugin ClawHub publishing into OIDC release and token bootstrap workflows requires locked clawhub@0.23.1 trusted-publisher set help to include ${required_flag}."
-              exit 1
-            fi
-          done
+        run: bash scripts/verify-clawhub-cli-contract.sh "${CLAWHUB_CLI}"
 
   pack_bootstrap_plugins:
     name: Pack immutable ClawHub bootstrap artifacts

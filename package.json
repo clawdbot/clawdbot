@@ -1593,6 +1593,8 @@
     "deadcode:unused-files": "node --import tsx scripts/check-deadcode-unused-files.mts",
     "deps:root-ownership": "node --import tsx scripts/root-dependency-ownership-audit.mts",
     "deps:root-ownership:check": "node --import tsx scripts/root-dependency-ownership-audit.mts --check",
+    "deps:clawhub-cli-pins:check": "node --import tsx scripts/sync-clawhub-cli-pins.mts --check",
+    "deps:clawhub-cli-pins:sync": "node --import tsx scripts/sync-clawhub-cli-pins.mts --write",
     "deps:changes:report": "node --import tsx scripts/dependency-changes-report.mts",
     "deps:patches:check": "node --import tsx scripts/check-package-patches.mts",
     "deps:pins:check": "node --import tsx scripts/check-dependency-pins.mts",

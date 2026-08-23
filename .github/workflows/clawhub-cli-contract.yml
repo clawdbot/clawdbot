@@ -1,0 +1,70 @@
+name: ClawHub CLI Contract
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.15.0"
+
+jobs:
+  verify:
+    name: Verify trusted ClawHub CLI contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Detect trusted ClawHub CLI changes
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_EVENT_NAME}" != "pull_request" ]]; then
+            echo "required=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          git fetch --no-tags --depth=1 origin "${BASE_SHA}"
+          if git diff --quiet "${BASE_SHA}" HEAD -- \
+            .github/dependabot.yml \
+            .github/release/clawhub-cli \
+            .github/workflows/clawhub-cli-contract.yml \
+            .github/workflows/plugin-clawhub-new.yml \
+            scripts/materialize-clawhub-cli.sh \
+            scripts/sync-clawhub-cli-pins.mts \
+            scripts/verify-clawhub-cli-contract.sh; then
+            echo "required=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "required=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Setup trusted Node runtime
+        if: steps.scope.outputs.required == 'true'
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Materialize locked ClawHub CLI
+        if: steps.scope.outputs.required == 'true'
+        id: clawhub_cli
+        run: |
+          set -euo pipefail
+          bash scripts/materialize-clawhub-cli.sh \
+            .github/release/clawhub-cli \
+            "${RUNNER_TEMP}/clawhub-cli" \
+            "${GITHUB_OUTPUT}"
+
+      - name: Verify trusted publisher command contract
+        if: steps.scope.outputs.required == 'true'
+        env:
+          CLAWHUB_CLI: ${{ steps.clawhub_cli.outputs.cli }}
+        run: bash scripts/verify-clawhub-cli-contract.sh "${CLAWHUB_CLI}"

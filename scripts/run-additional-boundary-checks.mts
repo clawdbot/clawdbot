@@ -94,6 +94,7 @@ export const BOUNDARY_CHECKS = (
       ["run", "lint:plugins:plugin-sdk-subpaths-exported"],
     ],
     ["deps:root-ownership:check", "pnpm", ["deps:root-ownership:check"]],
+    ["deps:clawhub-cli-pins:check", "pnpm", ["deps:clawhub-cli-pins:check"]],
     ["web-fetch-provider-boundary", "pnpm", ["run", "lint:web-fetch-provider-boundaries"]],
     [
       "extension-src-outside-plugin-sdk-boundary",

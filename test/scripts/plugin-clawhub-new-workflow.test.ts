@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -31,6 +32,7 @@ type Workflow = {
 };
 
 const source = readFileSync(".github/workflows/plugin-clawhub-new.yml", "utf8");
+const contractWorkflowSource = readFileSync(".github/workflows/clawhub-cli-contract.yml", "utf8");
 const workflow = parse(source) as Workflow;
 const jobs = workflow.jobs ?? {};
 const materializerSource = readFileSync("scripts/materialize-clawhub-cli.sh", "utf8");
@@ -42,6 +44,7 @@ const clawhubCliLock = JSON.parse(
 ) as {
   packages?: Record<string, { integrity?: string; version?: string }>;
 };
+const clawhubCliLockBytes = readFileSync(".github/release/clawhub-cli/package-lock.json");
 
 function job(name: string): Job {
   const value = jobs[name];
@@ -327,20 +330,22 @@ describe("Plugin ClawHub New workflow", () => {
   });
 
   it("uses one lockfile-only ClawHub CLI graph and absolute binary path", () => {
-    expect(clawhubCliPackage.dependencies).toEqual({ clawhub: "0.23.1" });
-    expect(clawhubCliLock.packages?.["node_modules/clawhub"]).toMatchObject({
-      integrity:
-        "sha512-YvUImhsVaM90BUAv3uP7lfABziwR5XL3ch2Owa+GvNxwQ2xzZFmZC0yVjAtQbvep+dDDS16nUGRwKx7jqnTOEA==",
-      version: "0.23.1",
-    });
+    const lockedClawHub = clawhubCliLock.packages?.["node_modules/clawhub"];
+    if (!lockedClawHub?.integrity || !lockedClawHub.version) {
+      throw new Error("trusted ClawHub CLI lock identity is incomplete");
+    }
+    expect(lockedClawHub.version).toBe(clawhubCliPackage.dependencies?.clawhub);
+    expect(lockedClawHub.integrity).toMatch(/^sha512-/u);
     expect(materializerSource).toContain("npm ci");
     expect(materializerSource).toContain('cd "${destination}"');
     expect(materializerSource).not.toContain('--prefix "${destination}"');
     expect(materializerSource).toContain("--ignore-scripts");
     expect(materializerSource).toContain("--omit=dev");
     expect(materializerSource).toContain(
-      "f44f670d70f13a8cde566a174cae5be682ad98456ec7a85aafd497f7d8c71816",
+      createHash("sha256").update(clawhubCliLockBytes).digest("hex"),
     );
+    expect(materializerSource).toContain(lockedClawHub.integrity);
+    expect(materializerSource).toContain(`== "${lockedClawHub.version}"`);
     expect(materializerSource).toContain("lock_sha256=");
     expect(materializerSource).toContain("integrity=${clawhub_integrity}");
     expect(materializerSource).toContain("cli=${clawhub_cli}");
@@ -349,6 +354,21 @@ describe("Plugin ClawHub New workflow", () => {
     expect(source).not.toContain("CLAWHUB_CLI_PACKAGE");
     expect(source).toContain("OPENCLAW_CLAWHUB_CLI: ${{ steps.clawhub_cli.outputs.cli }}");
     expect(source).toContain('"${OPENCLAW_CLAWHUB_CLI}" package trusted-publisher set');
+  });
+
+  it("uses the same no-secret command-contract proof for updates and releases", () => {
+    expect(
+      step(
+        job("validate_bootstrap_trusted_publisher_cli"),
+        "Validate pinned ClawHub trusted publisher CLI support",
+      ).run,
+    ).toBe('bash scripts/verify-clawhub-cli-contract.sh "${CLAWHUB_CLI}"');
+    expect(contractWorkflowSource).toContain("pull_request:");
+    expect(contractWorkflowSource).toContain("scripts/materialize-clawhub-cli.sh");
+    expect(contractWorkflowSource).toContain(
+      'bash scripts/verify-clawhub-cli-contract.sh "${CLAWHUB_CLI}"',
+    );
+    expect(contractWorkflowSource).not.toContain("secrets.");
   });
 
   it("bounds every job and keeps secretless validation active in dry-run mode", () => {
