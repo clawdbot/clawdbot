@@ -3,7 +3,6 @@ import path from "node:path";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 // Slack helper module supports monitor helpers behavior.
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
@@ -26,8 +25,6 @@ type SlackProviderMonitor = (params: {
   setStatus?: (next: Record<string, unknown>) => void;
 }) => Promise<unknown>;
 type SlackStartupAuthClientFactory = typeof import("./client.js").createSlackStartupAuthClient;
-type SlackChannelInboundDispatch =
-  typeof import("openclaw/plugin-sdk/channel-inbound").dispatchChannelInboundTurn;
 
 const SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY = "openclawIngressLifecycle";
 
@@ -80,7 +77,6 @@ type SlackTestState = {
   >;
   socketModeLogger?: { error: (...args: unknown[]) => void };
   createSlackStartupAuthClientMock: Mock<SlackStartupAuthClientFactory>;
-  channelInboundDispatchOnce?: SlackChannelInboundDispatch;
 };
 
 // globalThis-backed singleton: with isolate=false, a vi.resetModules() in any
@@ -107,7 +103,6 @@ const slackTestState: SlackTestState = vi.hoisted(() => {
     resolveSlackUserAllowlistMock: vi.fn(),
     socketModeLogger: undefined,
     createSlackStartupAuthClientMock: vi.fn(),
-    channelInboundDispatchOnce: undefined,
   } as SlackTestState;
   return globalState["__slackTestState"];
 });
@@ -118,45 +113,11 @@ export function useSlackStartupAuthClientOnce(factory: SlackStartupAuthClientFac
   slackTestState.createSlackStartupAuthClientMock.mockImplementationOnce(factory);
 }
 
-export function useSlackReplyDeliveryOnce(
-  onContext?: (ctxPayload: Record<string, unknown>) => void,
+export async function runSlackHandlerWithDispatch(
+  handler: SlackHandler,
+  args: unknown,
 ): Promise<void> {
-  if (slackTestState.channelInboundDispatchOnce) {
-    throw new Error("Slack reply delivery is already armed");
-  }
-  const settled = createDeferred<void>();
-  slackTestState.channelInboundDispatchOnce = async (params) => {
-    try {
-      onContext?.(params.ctxPayload);
-      const deliver = params.delivery?.deliver;
-      if (!deliver) {
-        throw new Error("expected Slack reply delivery callback");
-      }
-      const reply = await params.replyResolver?.(
-        params.ctxPayload,
-        params.replyOptions,
-        params.cfg,
-      );
-      for (const payload of Array.isArray(reply) ? reply : reply ? [reply] : []) {
-        await deliver(payload, { kind: "final" });
-      }
-      settled.resolve();
-      return {
-        admission: { kind: "dispatch" },
-        dispatched: true,
-        ctxPayload: params.ctxPayload,
-        routeSessionKey: params.route.sessionKey,
-        dispatchResult: {
-          queuedFinal: Boolean(reply),
-          counts: { tool: 0, block: 0, final: reply ? 1 : 0 },
-        },
-      };
-    } catch (error) {
-      settled.reject(error instanceof Error ? error : new Error(String(error)));
-      throw error;
-    }
-  };
-  return settled.promise;
+  await handler(withSlackDispatchLifecycle(args));
 }
 
 type SlackClient = {
@@ -317,9 +278,12 @@ async function runSlackEventOnce(
   const handler = await getSlackHandlerOrThrow(name);
   // Normal Bolt handlers return after queue admission. Terminal-state tests use the
   // durable-ingress lifecycle so this helper can await the actual dispatch boundary.
-  const handlerArgs = opts?.awaitDispatch ? withSlackDispatchLifecycle(args) : args;
   try {
-    await handler(handlerArgs);
+    if (opts?.awaitDispatch) {
+      await runSlackHandlerWithDispatch(handler, args);
+    } else {
+      await handler(args);
+    }
   } finally {
     await stopSlackMonitor({ controller, run });
   }
@@ -386,7 +350,6 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
   slackTestState.config = config;
   slackTestState.appConstructorArgs = undefined;
   slackTestState.socketModeLogger = undefined;
-  slackTestState.channelInboundDispatchOnce = undefined;
   slackTestState.appStartMock.mockReset().mockResolvedValue(undefined);
   slackTestState.appStopMock.mockReset().mockResolvedValue(undefined);
   slackTestState.interactionRegistrations.length = 0;
@@ -451,15 +414,8 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
     slackTestState.replyMock(...args) as ReturnType<ReplyResolver>;
   return {
     ...actual,
-    dispatchChannelInboundTurn: (params: DispatchParams) => {
-      const enrichedParams = { ...params, replyResolver };
-      const dispatchOnce = slackTestState.channelInboundDispatchOnce;
-      if (dispatchOnce) {
-        slackTestState.channelInboundDispatchOnce = undefined;
-        return dispatchOnce(enrichedParams);
-      }
-      return actual.dispatchChannelInboundTurn(enrichedParams);
-    },
+    dispatchChannelInboundTurn: (params: DispatchParams) =>
+      actual.dispatchChannelInboundTurn({ ...params, replyResolver }),
   };
 });
 

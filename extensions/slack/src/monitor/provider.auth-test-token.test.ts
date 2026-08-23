@@ -16,9 +16,9 @@ import {
   getSlackHandlers,
   getSlackTestState,
   resetSlackTestState,
+  runSlackHandlerWithDispatch,
   startSlackMonitor as startSlackMonitorUntracked,
   stopSlackMonitor,
-  useSlackReplyDeliveryOnce,
   useSlackStartupAuthClientOnce,
 } from "../monitor.test-helpers.js";
 import { getSlackRuntime } from "../runtime.js";
@@ -361,10 +361,6 @@ describe("auth.test boot call", () => {
     });
     const { replyMock, sendMock } = getSlackTestState();
     replyMock.mockResolvedValue({ text: "identity preserved" });
-    let dispatchedContext: Record<string, unknown> | undefined;
-    const deliverySettled = useSlackReplyDeliveryOnce((ctxPayload) => {
-      dispatchedContext = ctxPayload;
-    });
 
     const monitor = startSlackMonitor(monitorSlackProvider, {
       appToken: "xapp-1-A1-opaque",
@@ -380,7 +376,7 @@ describe("auth.test boot call", () => {
     expect(getSlackInstallationKind("default")).toBe("enterprise");
 
     const handler = await getSlackHandlerOrThrow("message");
-    await handler({
+    await runSlackHandlerWithDispatch(handler, {
       event: {
         type: "message",
         user: "UOTHER123",
@@ -399,7 +395,7 @@ describe("auth.test boot call", () => {
     });
 
     expect(replyMock).toHaveBeenCalledTimes(1);
-    await deliverySettled;
+    const dispatchedContext = replyMock.mock.calls[0]?.[0];
     expect(dispatchedContext).toMatchObject({
       Body: expect.stringMatching(/<@UENTERPRISE>.*status/u),
       ChatType: "channel",
@@ -494,10 +490,6 @@ describe("presence polling transport", () => {
       });
     const { replyMock, sendMock } = getSlackTestState();
     replyMock.mockResolvedValue({ text: "ok" });
-    let dispatchedContext: Record<string, unknown> | undefined;
-    const deliverySettled = useSlackReplyDeliveryOnce((ctxPayload) => {
-      dispatchedContext = ctxPayload;
-    });
 
     const nativeSetInterval = globalThis.setInterval;
     let triggerPresencePoll: (() => void) | undefined;
@@ -516,7 +508,7 @@ describe("presence polling transport", () => {
     const monitor = startSlackMonitor(monitorSlackProvider);
     try {
       const handler = await getSlackHandlerOrThrow("message");
-      await handler({
+      await runSlackHandlerWithDispatch(handler, {
         event: {
           type: "message",
           user: "U_STALLED",
@@ -528,7 +520,7 @@ describe("presence polling transport", () => {
         context: { botUserId: "bot-user" },
         body: {},
       });
-      await deliverySettled;
+      const dispatchedContext = replyMock.mock.calls[0]?.[0];
       expect(dispatchedContext).toMatchObject({
         Body: expect.stringMatching(
           /Ada: hello\n\[slack message id: 100\.000 channel: D_STALLED\]$/u,
@@ -647,14 +639,10 @@ describe("user identity provider transport", () => {
     });
     const { replyMock, sendMock } = getSlackTestState();
     replyMock.mockResolvedValue({ text: "acknowledged" });
-    let dispatchedContext: Record<string, unknown> | undefined;
-    const deliverySettled = useSlackReplyDeliveryOnce((ctxPayload) => {
-      dispatchedContext = ctxPayload;
-    });
     const monitor = await startWithoutBotToken(config);
     const handler = await getSlackHandlerOrThrow("message");
 
-    await handler({
+    await runSlackHandlerWithDispatch(handler, {
       event: {
         type: "message",
         user: "U_OTHER",
@@ -667,7 +655,7 @@ describe("user identity provider transport", () => {
       body: {},
     });
 
-    await deliverySettled;
+    const dispatchedContext = replyMock.mock.calls[0]?.[0];
     expect(dispatchedContext).toMatchObject({
       Body: expect.stringMatching(/<@U_SELF>.*status/u),
       ChatType: "channel",
@@ -688,10 +676,6 @@ describe("user identity provider transport", () => {
     });
     const { replyMock, sendMock } = getSlackTestState();
     replyMock.mockResolvedValue({ text: "hello back" });
-    let dispatchedContext: Record<string, unknown> | undefined;
-    const deliverySettled = useSlackReplyDeliveryOnce((ctxPayload) => {
-      dispatchedContext = ctxPayload;
-    });
     const monitor = await startWithoutBotToken(config);
     const handler = await getSlackHandlerOrThrow("message");
     const baseEvent = {
@@ -701,12 +685,12 @@ describe("user identity provider transport", () => {
       text: "hello",
     };
 
-    await handler({
+    await runSlackHandlerWithDispatch(handler, {
       event: { ...baseEvent, user: "U_OTHER", ts: "100.000" },
       context: { botUserId: "U_SELF" },
       body: {},
     });
-    await deliverySettled;
+    const dispatchedContext = replyMock.mock.calls[0]?.[0];
     expect(dispatchedContext).toMatchObject({
       Body: expect.stringMatching(/Ada: hello\n\[slack message id: 100\.000 channel: D1\]$/u),
       ChatType: "direct",
