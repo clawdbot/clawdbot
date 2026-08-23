@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getPreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
   getCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
@@ -68,16 +69,20 @@ describe("runPreparedReply prepared metadata", () => {
     }));
     let admissionSnapshot: unknown;
     let admissionRegistry: unknown;
+    let admissionPluginGeneration: unknown;
     mocks.prepareAdmission.mockImplementation(async () => {
       admissionSnapshot = getCurrentPluginMetadataSnapshot({ config, workspaceDir });
       admissionRegistry = getPluginRuntimeGenerationRegistry();
+      admissionPluginGeneration = getPreparedModelRuntimePluginGeneration();
       return { kind: "run" };
     });
     let executionSnapshot: unknown;
     let executionRegistry: unknown;
+    let executionPluginGeneration: unknown;
     mocks.execute.mockImplementation(async () => {
       executionSnapshot = getCurrentPluginMetadataSnapshot({ config, workspaceDir });
       executionRegistry = getPluginRuntimeGenerationRegistry();
+      executionPluginGeneration = getPreparedModelRuntimePluginGeneration();
       return { text: "ok" };
     });
 
@@ -106,8 +111,11 @@ describe("runPreparedReply prepared metadata", () => {
     expect(executionSnapshot).toBe(metadataSnapshot);
     expect(admissionRegistry).toBe(pluginRegistry);
     expect(executionRegistry).toBe(pluginRegistry);
+    expect(admissionPluginGeneration).toBe(pluginGeneration);
+    expect(executionPluginGeneration).toBe(pluginGeneration);
     expect(release).toHaveBeenCalledOnce();
     expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBeUndefined();
     expect(getPluginRuntimeGenerationRegistry()).toBeUndefined();
+    expect(getPreparedModelRuntimePluginGeneration()).toBeUndefined();
   });
 });

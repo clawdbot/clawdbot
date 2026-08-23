@@ -256,7 +256,7 @@ describe("chat transcript rendering", () => {
         {
           role: "assistant",
           content: "Preview\n...(truncated)...",
-          __openclaw: { id: "assistant-full-1" },
+          __openclaw: { id: "assistant-full-1", truncated: true },
           timestamp: 1_000,
         },
       ]),
@@ -274,7 +274,6 @@ describe("chat transcript rendering", () => {
       sessionKey: "agent:work:main",
       agentId: "work",
       messageId: "assistant-full-1",
-      kind: "assistant_message",
     });
 
     expect(container.querySelector(".chat-message-disclosure__toggle")).toBeNull();
@@ -296,7 +295,7 @@ describe("chat transcript rendering", () => {
         {
           role: "assistant",
           content: "Preview\n...(truncated)...",
-          __openclaw: { id: "assistant-retry-1" },
+          __openclaw: { id: "assistant-retry-1", truncated: true },
           timestamp: 1_000,
         },
       ]),

@@ -10,6 +10,7 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -176,6 +177,68 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     }
   });
 
+  it("anchors desktop chat access status in the active header actions", async () => {
+    const context = await createContext();
+    await context.addInitScript(
+      ({ settingsKey }) => {
+        localStorage.setItem(settingsKey, JSON.stringify({ navCollapsed: true }));
+      },
+      { settingsKey: controlUiBundledSettingsStorageKey(server.baseUrl) },
+    );
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": chatSessionListResponse([
+          {
+            key: "agent:main:session-a",
+            kind: "direct",
+            label: "Dashboard sessions: bulk messaging support",
+            spawnedCwd: "/repo/openclaw",
+            updatedAt: 1,
+          },
+        ]),
+      },
+      operatorScopes: LIMITED_SCOPES,
+      sessionKey: "agent:main:session-a",
+    });
+    await page.goto(`${server.baseUrl}chat`);
+
+    const header = page.locator(".chat-pane__header").first();
+    const status = page.getByRole("button", { name: "Show limited access details" });
+    await header.waitFor();
+    await status.waitFor();
+    await captureProof(page, "desktop-chat-header.png");
+
+    expect(await page.locator(".scope-upgrade-shell-status").count()).toBe(0);
+    expect(
+      await header
+        .locator(".chat-pane__actions")
+        .getByRole("button", { name: "Show limited access details" })
+        .count(),
+    ).toBe(1);
+    const geometry = await header.evaluate((root) => {
+      const rect = (selector: string) => {
+        const box = root.querySelector(selector)?.getBoundingClientRect();
+        if (!box) {
+          throw new Error(`Missing desktop header element: ${selector}`);
+        }
+        return { left: box.left, right: box.right };
+      };
+      return {
+        actions: rect(".chat-pane__actions"),
+        status: rect(".scope-upgrade-status-trigger"),
+        title: rect(".chat-pane__crumbs"),
+      };
+    });
+    expect(geometry.status.left).toBeGreaterThanOrEqual(geometry.title.right);
+    expect(geometry.status.right).toBeLessThanOrEqual(geometry.actions.right);
+
+    await status.click();
+    await page.getByText("This browser has limited access.", { exact: true }).waitFor();
+    await page.locator(".scope-upgrade-details-popover").waitFor();
+    await captureProof(page, "desktop-chat-access-details.png");
+  });
+
   it("keeps Automations access status in shell chrome without moving routed content", async () => {
     const mobile = await createProofContext({ width: 555, height: 1000 }, "automations-mobile");
     try {
@@ -321,6 +384,7 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       .toBe(true);
     const browse = page.getByRole("button", { name: "Browse folders" });
     await expect.poll(() => browse.isDisabled()).toBe(true);
+    await page.keyboard.press("Tab");
     await browse.focus();
     await expect
       .poll(() => browse.evaluate((element) => element === document.activeElement))
@@ -420,7 +484,7 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
   );
 
   it.each(HIDDEN_WEB_CHROME_HOSTS)(
-    "keeps manual guidance reachable from shell status with $label",
+    "keeps manual guidance reachable from active header status with $label",
     async ({ collapsed, rootClass }) => {
       const context = await createContext();
       await context.addInitScript(
@@ -459,12 +523,16 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
       }
       const status = page.getByRole("button", { name: "Show limited access details" });
       await status.waitFor();
-      expect(await status.evaluate((element) => getComputedStyle(element).position)).toBe("fixed");
+      expect(await status.evaluate((element) => getComputedStyle(element).position)).toBe("static");
+      expect(
+        await page
+          .locator(".chat-pane-cache__pane--active .chat-pane__actions")
+          .getByRole("button", { name: "Show limited access details" })
+          .count(),
+      ).toBe(1);
       if (rootClass === "openclaw-native-web-chrome") {
         await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
-        expect((await status.boundingBox())?.x).toBe(252);
       } else {
-        expect((await status.boundingBox())?.x).toBe(10);
         expect(await page.locator(".shell-chrome-controls__search").isVisible()).toBe(false);
       }
       await status.click();
@@ -633,7 +701,10 @@ describeControlUiE2e("Control UI live device scope upgrade", () => {
     const gateway = await installMockGateway(page, { operatorScopes: LIMITED_SCOPES });
 
     await page.goto(`${server.baseUrl}chat`);
-    await page.getByRole("button", { name: "Show limited access details" }).click();
+    const status = page.getByRole("button", { name: "Show limited access details" });
+    await status.waitFor();
+    expect(await page.locator(".scope-upgrade-shell-status").count()).toBe(1);
+    await status.click();
     await page.getByText(MANUAL_UPGRADE_GUIDANCE, { exact: true }).waitFor();
 
     expect(await page.getByRole("button", { name: "Request admin" }).count()).toBe(0);

@@ -113,7 +113,30 @@ If the private parent token was unavailable, the child remains inspectable but
 the missing parent context, execution, and run evidence is explicit. ACP spawn
 itself is observable. Actions performed wholly inside an external ACP runtime
 without a callback are reported as unsupported evidence, never inferred from
-task or transcript text.
+task or transcript text. After admission, the ACP lifecycle owner records that
+receipt when the prompt is submitted, using the exact admitted execution token.
+It does not claim that a native side effect occurred; adapter authors must add
+an authoritative native-action callback to provide stronger evidence.
+
+Registered plugin runtime calls add bounded facts only after exact run
+admission. A `before_tool_call` hook records its own allow or block as an
+enforced plugin gate; fail-closed hook errors are denials, while a configured
+fail-open error remains unknown. Separate owner-native approval rows remain the
+authority when a hook requests approval.
+
+Plugin-owned node actions distinguish the Gateway gate from the action result.
+Pairing, live connection, command capability, plugin policy, and active
+authority checks are enforced. A node-reported success is attribution-only. If
+the plugin policy returns without calling the supplied node callback, the
+action is unknown with `node.action_callback` missing; OpenClaw does not infer a
+send from the plugin result.
+
+An attached worker records its current credential, bundle/version/features,
+owner epoch, and turn-claim admission as one enforced gate. The existing
+placement and worker-operation rows stay authoritative; their hashes,
+credentials, tokens, environment ids, and session ids are not copied into the
+generic receipt. Admission success proves only that the worker may connect, not
+that a later worker action succeeded.
 
 The foundation records direct local CLI ingress, Gateway boot-system ingress,
 and admitted channel participants at their authoritative producers. For a

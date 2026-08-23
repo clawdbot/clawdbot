@@ -113,6 +113,9 @@ import { selectContextEngineForTranscriptHost } from "../harness/context-engine-
 import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
+import { findModelCatalogEntry, loadManifestModelCatalog } from "../model-catalog.js";
+import type { ModelCatalogEntry } from "../model-catalog.types.js";
+import { resolveModelContextWindowProfile } from "../model-context-window.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
@@ -199,8 +202,25 @@ const defaultPrepareDeps = {
   getClaudeGeneration,
   readExternalCliBootstrapCredential,
   resolveApiKeyForProfile,
+  loadManifestModelCatalog,
 };
 const prepareDeps = { ...defaultPrepareDeps };
+
+function findSelectableContextWindowEntry(params: {
+  catalog: ModelCatalogEntry[];
+  providers: string[];
+  models: string[];
+}): ModelCatalogEntry | undefined {
+  for (const provider of params.providers) {
+    for (const model of params.models) {
+      const entry = findModelCatalogEntry(params.catalog, { provider, modelId: model });
+      if (entry?.contextWindows?.length) {
+        return entry;
+      }
+    }
+  }
+  return undefined;
+}
 
 function resolveReusableCliSessionId(reusableCliSession: CliReusableSession): string | undefined {
   return reusableCliSession.mode === "reuse" || reusableCliSession.mode === "reuse-with-drift"
@@ -772,7 +792,12 @@ export async function prepareCliRunContext(
     normalizeOptionalMcpContextValue(params.modelProvider) ??
     normalizeOptionalMcpContextValue(params.provider) ??
     params.provider;
-  const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
+  const normalizedCatalogModel = normalizeCliModel(modelId, backendResolved.config);
+  const normalizedModel =
+    backendResolved.resolveModelId?.({
+      modelId: normalizedCatalogModel,
+      contextWindow: params.contextWindow,
+    }) ?? normalizedCatalogModel;
   const modelDisplay = `${params.provider}/${modelId}`;
   let openClawHistoryMessages: unknown[] | undefined;
   const loadOpenClawHistoryMessages = async () => {
@@ -829,8 +854,8 @@ export async function prepareCliRunContext(
   const isClaudeCli = isClaudeCliBackendId(params.provider);
   const requestedContextModelId = isClaudeCli ? resolveClaudeCliContextModelId(modelId) : modelId;
   const normalizedContextModelId = isClaudeCli
-    ? resolveClaudeCliContextModelId(normalizedModel)
-    : normalizedModel;
+    ? resolveClaudeCliContextModelId(normalizedCatalogModel)
+    : normalizedCatalogModel;
   // Aliases can map a canonical id to a CLI shorthand or a user shorthand to
   // a canonical id. Resolve both identities and keep the safest owned limit.
   const contextModelIds = [
@@ -869,6 +894,33 @@ export async function prepareCliRunContext(
     }
   }
   modelContextTokens ??= DEFAULT_CONTEXT_TOKENS;
+  // Session-selectable context windows (catalog `contextWindows`, e.g. Claude
+  // CLI 200k/1m) cap the resolved window here: the fixed provider contract in
+  // resolveAnthropicFixedContextWindow deliberately ignores catalog scalars,
+  // so the selected (or default) option must apply after it or a 200k session
+  // would auto-compact against a 1M budget.
+  const selectableContextEntry = findSelectableContextWindowEntry({
+    catalog: params.config
+      ? prepareDeps.loadManifestModelCatalog({ config: params.config, workspaceDir })
+      : [],
+    providers: uniqueStrings(
+      [params.provider, backendResolved.modelProvider].filter(
+        (provider): provider is string => typeof provider === "string" && provider.length > 0,
+      ),
+    ),
+    models: uniqueStrings([modelId, normalizedCatalogModel]),
+  });
+  if (selectableContextEntry) {
+    const contextWindowProfile = resolveModelContextWindowProfile({
+      catalogEntry: selectableContextEntry,
+      selected: params.contextWindow,
+    });
+    // Only an effective option caps the window; the bare catalog scalar stays
+    // subordinate to the fixed provider contract above.
+    if (contextWindowProfile.contextWindow && contextWindowProfile.contextTokens !== undefined) {
+      modelContextTokens = Math.min(modelContextTokens, contextWindowProfile.contextTokens);
+    }
+  }
   const resolvedContextWindowInfo = resolveContextWindowInfo({
     cfg: params.config,
     provider: params.provider,
@@ -1283,6 +1335,7 @@ export async function prepareCliRunContext(
       agentDir,
       provider: params.provider,
       modelId,
+      ...(params.contextWindow ? { contextWindow: params.contextWindow } : {}),
       contextTokenBudget: contextWindowInfo.tokens,
       thinkingLevel: params.thinkLevel === "ultra" ? "max" : params.thinkLevel,
       authProfileId: effectiveAuthProfileId,

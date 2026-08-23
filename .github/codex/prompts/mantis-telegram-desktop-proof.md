@@ -106,6 +106,9 @@ from `responseEvents` in `scripts/e2e/mock-openai-server.mjs`, and use
 `packages/ai/src/transports/openai-responses-stream-parity.test.ts` for reasoning
 event examples. These harness sources are safe to read; prepared proof worktrees
 remain off limits.
+The SUT agent runs Code Mode. Script catalog-tool turns as an `exec` function
+call whose JavaScript invokes the catalog tool, such as `pdf(...)`. See
+`mantis-recipes/staged-media-provider-proof.md` for the complete event script.
 For normal group turns, address the current bot with `@{sut}`; the harness
 expands it to the live SUT username. Omit it only when an unmentioned message
 is intentionally part of the scenario.

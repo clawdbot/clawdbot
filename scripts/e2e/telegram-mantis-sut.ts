@@ -209,6 +209,9 @@ export function writeSutConfig(params: {
         models: {
           "openai/gpt-5.6-luna": { params: { openaiWsWarmup: false, transport: "sse" } },
         },
+        // Keep the pdf tool on the one catalog model instead of walking fallback
+        // candidates the mock never scripted.
+        pdfModel: { primary: "openai/gpt-5.6-luna" },
       },
       entries: {
         main: {

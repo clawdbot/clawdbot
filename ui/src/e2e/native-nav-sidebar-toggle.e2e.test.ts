@@ -61,6 +61,7 @@ suite.define(() => {
 
   async function openPage(options: {
     colorScheme?: "dark" | "light";
+    hasTouch?: boolean;
     height?: number;
     nativeNav?: boolean;
     scenario?: ControlUiMockGatewayScenario;
@@ -69,6 +70,7 @@ suite.define(() => {
   }) {
     context = await suite.browser.newContext({
       colorScheme: options.colorScheme,
+      hasTouch: options.hasTouch,
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: options.height ?? 900, width: options.width ?? 1280 },
@@ -152,6 +154,28 @@ suite.define(() => {
     await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Expand sidebar");
     await toggle.click();
     await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
+  });
+
+  it("keeps pointer-triggered sidebar focus from opening its tooltip", async () => {
+    const page = await openPage({ hasTouch: true, nativeNav: false });
+    const toggle = page.locator(".shell-chrome-controls__nav-toggle");
+    const tooltip = toggle.locator("xpath=..").locator("wa-tooltip");
+    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
+
+    // Safari does not focus buttons on tap. Reproduce that ordering so the
+    // shell's post-collapse focus, rather than the pointer itself, owns focus.
+    await toggle.evaluate((element) => {
+      for (const type of ["pointerdown", "pointerup"]) {
+        element.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerType: "touch" }));
+      }
+      (element as HTMLElement).click();
+    });
+
+    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Expand sidebar");
+    await expect
+      .poll(() => toggle.evaluate((element) => element === document.activeElement))
+      .toBe(true);
+    await expect.poll(() => tooltip.getAttribute("open")).toBeNull();
   });
 
   it("hides the web chrome cluster when the native titlebar toggle is present", async () => {

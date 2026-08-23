@@ -111,6 +111,8 @@ export type CliBackendPrepareExecutionContext = {
   agentDir?: string;
   provider: string;
   modelId: string;
+  /** Effective catalog context-window option selected for this run. */
+  contextWindow?: string;
   /** Effective OpenClaw context budget selected for this run. */
   contextTokenBudget?: number;
   /** Effective OpenClaw thinking level selected for this run. */
@@ -176,6 +178,11 @@ export type CliBackendResolveExecutionArgsContext = {
 export type CliBackendResolveExecutionArgs = (
   ctx: CliBackendResolveExecutionArgsContext,
 ) => readonly string[] | null | undefined;
+
+type CliBackendResolveModelIdContext = {
+  modelId: string;
+  contextWindow?: string;
+};
 
 export type CliBackendJsonlUsage = {
   input?: number;
@@ -408,6 +415,8 @@ type CliBackendPluginBase = {
    * native effort flag.
    */
   resolveExecutionArgs?: CliBackendResolveExecutionArgs;
+  /** Backend-owned native model id selected from validated session metadata. */
+  resolveModelId?: (ctx: CliBackendResolveModelIdContext) => string;
   /** How this backend enforces an exact per-run `toolAvailability` contract. */
   toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
   /**

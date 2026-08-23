@@ -38,6 +38,10 @@ import { buildToolLifecycleErrorResult } from "./embedded-agent-tool-results.js"
 import { stripDowngradedToolCallText } from "./embedded-agent-utils.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
+import {
+  consumeTrustedToolNoStartError,
+  registerTrustedToolNoStartError,
+} from "./tool-result-error.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const embeddedLog = createSubsystemLogger("agent/embedded");
@@ -607,7 +611,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       args: unknown;
       replaySafe?: boolean;
       hideFromChannelProgress?: boolean;
-      execute: () => Promise<T>;
+      execute: (onImplementationStart: () => void) => Promise<T>;
     }): Promise<T> => {
       await handleToolExecutionStart(ctx, {
         type: "tool_execution_start",
@@ -617,28 +621,36 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         replaySafe: toolParams.replaySafe,
         hideFromChannelProgress: toolParams.hideFromChannelProgress,
       } as never);
+      let executionStarted = false;
+      const onImplementationStart = () => {
+        executionStarted = true;
+      };
       try {
-        const result = await toolParams.execute();
+        const result = await toolParams.execute(onImplementationStart);
         await handleToolExecutionEnd(ctx, {
           type: "tool_execution_end",
           toolName: toolParams.toolName,
           toolCallId: toolParams.toolCallId,
           isError: false,
-          executionStarted: true,
+          executionStarted,
           result,
           hideFromChannelProgress: toolParams.hideFromChannelProgress,
         } as never);
         return result;
       } catch (error) {
-        await handleToolExecutionEnd(ctx, {
+        const trustedNoStart = consumeTrustedToolNoStartError(error);
+        const terminal = await handleToolExecutionEnd(ctx, {
           type: "tool_execution_end",
           toolName: toolParams.toolName,
           toolCallId: toolParams.toolCallId,
           isError: true,
-          executionStarted: true,
+          executionStarted,
           result: buildToolLifecycleErrorResult(error),
           hideFromChannelProgress: toolParams.hideFromChannelProgress,
         } as never);
+        if (trustedNoStart && !terminal.executionStarted) {
+          registerTrustedToolNoStartError(error);
+        }
         throw error;
       }
     },

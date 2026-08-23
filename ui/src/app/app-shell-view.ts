@@ -201,6 +201,7 @@ export function renderApplicationShell(host: ShellViewHost) {
     </main>`;
   }
   const gatewaySnapshot = context.gateway.snapshot;
+  const config = context.config.current;
   const gatewayConnected = gatewaySnapshot.phase === "connected";
   const operatorAccess = readGatewayOperatorAccess(gatewaySnapshot);
   const canUpdate = canCallGatewayMethod(gatewaySnapshot, "update.run", "operator.admin");
@@ -208,12 +209,8 @@ export function renderApplicationShell(host: ShellViewHost) {
     canUpdate && canCallGatewayMethod(gatewaySnapshot, "update.hold", "operator.admin");
   const outboxScopeHost = host.storedOutboxScopeHost(context);
   const outboxStoreRuntime = host.outboxStoreRuntime;
-  const storedOutboxes = outboxStoreRuntime
-    ? outboxStoreRuntime.summarizeStoredChatOutboxes(outboxScopeHost)
-    : null;
-  const storedDraftScopeKeys = outboxStoreRuntime
-    ? outboxStoreRuntime.listStoredDraftScopes(outboxScopeHost)
-    : null;
+  const storedOutboxes = outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost) ?? null;
+  const storedDraftScopeKeys = outboxStoreRuntime?.listStoredDraftScopes(outboxScopeHost) ?? null;
   const outboxAttentionCountForSession = outboxStoreRuntime
     ? (sessionKey: string) => {
         const scope = outboxStoreRuntime.resolveStoredChatOutboxScope(outboxScopeHost, sessionKey);
@@ -235,16 +232,14 @@ export function renderApplicationShell(host: ShellViewHost) {
   // — not the request — decides how long the update surfaces stay busy.
   const updateBusy = overlaySnapshot.updateRunning || overlaySnapshot.updateReconciliationPending;
   const watchUpdateProgress = createUpdateProgressWatcher(context);
-  const terminalAvailable = isTerminalAvailable(
-    gatewaySnapshot,
-    context.config.current.terminalEnabled ?? false,
-  );
+  const terminalAvailable = isTerminalAvailable(gatewaySnapshot, config.terminalEnabled ?? false);
   const browserPanelAvailable = isBrowserPanelAvailable(gatewaySnapshot);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const custodianPanelAvailable =
     // Scope-aware to match the store: admin-only, never advertisement alone.
     canCallGatewayMethod(gatewaySnapshot, "openclaw.chat", "operator.admin");
   const activeRoute = host.routeState.routeId ?? "chat";
+  const sessionRoute = isSessionRouteId(activeRoute);
   // Chat has an offline outbox, New Session keeps a local draft, and Appearance
   // persists local preference intent for replay. Their server actions are
   // independently gated; other pages cannot submit useful disconnected work.
@@ -299,7 +294,10 @@ export function renderApplicationShell(host: ShellViewHost) {
         .props=${{
           snapshot: gatewaySnapshot,
           mobile: mobileNavLayout,
-          showTrigger: !mergedChatChrome,
+          // Device-less clients may not reach a session pane, so the shell
+          // retains the manual-repair entry until the header can own it.
+          showTrigger:
+            !sessionRoute || onboarding || gatewaySnapshot.client?.scopeUpgradeReady !== true,
         }}
       ></openclaw-device-scope-upgrade-banner>`
     : null;
@@ -347,7 +345,6 @@ export function renderApplicationShell(host: ShellViewHost) {
   const uiSettings = loadSettings();
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
-  const sessionRoute = isSessionRouteId(activeRoute);
   const chatLikeRoute = sessionRoute || activeRoute === "new-session";
   const custodianRoute = activeRoute === "custodian";
   if (!settingsTakeover) {
@@ -376,9 +373,8 @@ export function renderApplicationShell(host: ShellViewHost) {
       themeMode: context.theme.mode,
       lobsterPetVisits: uiSettings.lobsterPetVisits !== false,
       lobsterPetSounds: uiSettings.lobsterPetSounds === true,
-      gatewayVersion:
-        context.config.current.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? null,
-      devGitBranch: context.config.current.devGitBranch,
+      gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? null,
+      devGitBranch: config.devGitBranch,
       updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
       updateSchedule: navigationSurfaceHidden ? null : overlaySnapshot.updateSchedule,
       heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
@@ -414,8 +410,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         offline: gatewaySnapshot.offlineStable,
         queuedOutboxCount: storedOutboxes?.total ?? 0,
         lastError: gatewaySnapshot.lastError,
-        gatewayVersion:
-          context.config.current.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
+        gatewayVersion: config.serverVersion ?? gatewaySnapshot.hello?.server?.version ?? "",
         updateAvailable: navigationSurfaceHidden ? null : overlaySnapshot.updateAvailable,
         updateSchedule: navigationSurfaceHidden ? null : overlaySnapshot.updateSchedule,
         heldUpdateCampaignId: overlaySnapshot.heldUpdateCampaignId,
@@ -502,6 +497,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         : nothing}
       <openclaw-app-topbar
         .resourceBasePath=${context.resourceBasePath}
+        .environment=${config.environment}
         .navDrawerOpen=${navDrawerOpen}
         .trailingActions=${mobileNavLayout && !onboarding && !mergedChatChrome
           ? scopeUpgradeSurface
@@ -520,6 +516,9 @@ export function renderApplicationShell(host: ShellViewHost) {
                   class="shell-chrome-controls__button shell-chrome-controls__nav-toggle"
                   aria-label=${t(navCollapsed ? "nav.expand" : "nav.collapse")}
                   aria-expanded=${navCollapsed ? "false" : "true"}
+                  data-env-avatar=${navCollapsed && config.environment
+                    ? config.assistantIdentity.name.charAt(0)
+                    : nothing}
                   @click=${() => host.toggleNavigationSurface()}
                 >
                   ${navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose}
@@ -684,7 +683,6 @@ export function renderApplicationShell(host: ShellViewHost) {
               busy: overlaySnapshot.approvalBusy,
               canGrant: overlaySnapshot.approvalCanGrant,
               errors: overlaySnapshot.approvalErrors,
-              nowMs: overlaySnapshot.approvalNowMs,
               onDecision: (
                 approvalId: string,
                 decision: Parameters<typeof context.overlays.decideApproval>[0],

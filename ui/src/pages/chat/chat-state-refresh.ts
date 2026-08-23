@@ -192,6 +192,7 @@ export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promi
   try {
     const models = await loadModels(client, {
       agentId,
+      refreshIfDue: true,
       rejectOnFailure: true,
     });
     if (ownsRequest()) {

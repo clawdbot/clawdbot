@@ -24,6 +24,7 @@ import {
   isHiddenAssistantStreamText,
   loadChatBranches,
   loadChatHistory,
+  retireChatBranchRequests,
   shouldHideAssistantChatMessage,
 } from "./chat-history.ts";
 import {
@@ -54,6 +55,7 @@ import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
 import { handleAgentEvent, handleSessionOperationEvent } from "./tool-stream.ts";
 
 const BRANCH_TOPOLOGY_REASONS = new Set(["rewind", "branch-switch", "fork", "reset", "new"]);
+type ChatPanePresentation = () => boolean;
 
 function sessionMessageMatchesChat(
   state: ChatPageHost,
@@ -102,6 +104,7 @@ function finishSessionMessageRunReconcile(
   sessionKey: string,
   runId: string | null,
   row: SessionChangedResult["row"] | undefined,
+  presentation: ChatPanePresentation,
 ): boolean {
   const cleared = row
     ? reconcileChatRunFromSessionRow(state, row, { publishRunStatus: true })
@@ -110,7 +113,7 @@ function finishSessionMessageRunReconcile(
     return false;
   }
   clearPendingQueueItemsForRun(state, runId ?? undefined);
-  void loadChatHistory(state)
+  void loadChatHistory(state, { deferBranches: !presentation() })
     .finally(() => {
       if (!areUiSessionKeysEquivalent(state.sessionKey, sessionKey)) {
         return;
@@ -122,7 +125,11 @@ function finishSessionMessageRunReconcile(
   return true;
 }
 
-function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
+function handleSessionMessageEvent(
+  state: ChatPageHost,
+  payload: unknown,
+  presentation: ChatPanePresentation,
+) {
   const event = readSessionChangedEvent(payload);
   if (!event || !globalSessionEventMatchesChat(state, event)) {
     return;
@@ -149,7 +156,7 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
     if (event.hasActiveRun === true) {
       return;
     }
-    if (finishSessionMessageRunReconcile(state, event.key, runId, result.row)) {
+    if (finishSessionMessageRunReconcile(state, event.key, runId, result.row, presentation)) {
       state.pendingSessionMessageReloadSessionKey = null;
       return;
     }
@@ -163,6 +170,7 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
           state.pendingSessionMessageReloadSessionKey,
           runId,
           undefined,
+          presentation,
         )
       ) {
         state.pendingSessionMessageReloadSessionKey = null;
@@ -172,13 +180,16 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
   }
   if (matchesChat) {
     state.pendingSessionMessageReloadSessionKey = null;
-    void loadChatHistory(state).finally(() => state.requestUpdate?.());
+    void loadChatHistory(state, { deferBranches: !presentation() }).finally(() =>
+      state.requestUpdate?.(),
+    );
   }
 }
 
 function replayPendingSessionMessageReload(
   state: ChatPageHost,
   payload: ChatEventPayload | undefined,
+  presentation: ChatPanePresentation,
 ) {
   const pendingSessionKey = state.pendingSessionMessageReloadSessionKey;
   const payloadSessionKey = payload?.sessionKey?.trim();
@@ -192,10 +203,17 @@ function replayPendingSessionMessageReload(
     return;
   }
   state.pendingSessionMessageReloadSessionKey = null;
-  void loadChatHistory(state).finally(() => state.requestUpdate?.());
+  void loadChatHistory(state, { deferBranches: !presentation() }).finally(() =>
+    state.requestUpdate?.(),
+  );
 }
 
-function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
+function handleSessionsChangedEvent(
+  state: ChatPageHost,
+  payload: unknown,
+  presentation: ChatPanePresentation,
+) {
+  const presented = presentation();
   const runIdBeforeApply = state.chatRunId;
   const event = readSessionChangedEvent(payload);
   const matchesChat = Boolean(
@@ -218,18 +236,23 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
     typeof source?.reason === "string" &&
     BRANCH_TOPOLOGY_REASONS.has(source.reason)
   ) {
+    retireChatBranchRequests(state);
     state.chatBranches = [];
     state.chatBranchesSessionKey = null;
     state.chatBranchesConnectionEpoch = null;
-    retireSessionWorkspaceCheckout(state);
-    void loadChatBranches(state);
+    retireSessionWorkspaceCheckout(state, presented);
+    if (presented) {
+      void loadChatBranches(state);
+    }
   }
   if (event && matchesChat && event.archived !== null) {
     state.selectedChatSessionArchived = event.archived;
   }
   const result = reconcileSessionEvent(state, payload);
   if (resetsSelectedSession) {
-    void loadChatHistory(state).finally(() => state.requestUpdate?.());
+    void loadChatHistory(state, { deferBranches: !presented }).finally(() =>
+      state.requestUpdate?.(),
+    );
     return;
   }
   if (
@@ -241,7 +264,9 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
   ) {
     // Legacy multi-message writes cannot prove individual message cursors.
     // One scoped authoritative snapshot recovers them without ending a run.
-    void loadChatHistory(state).finally(() => state.requestUpdate?.());
+    void loadChatHistory(state, { deferBranches: !presented }).finally(() =>
+      state.requestUpdate?.(),
+    );
     return;
   }
   if (
@@ -254,6 +279,7 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
       event.key,
       event.clientRunId ?? event.runId ?? runIdBeforeApply,
       result.row,
+      presentation,
     )
   ) {
     return;
@@ -392,7 +418,11 @@ function observerDigestMatchesAuthoritativeRun(
   );
 }
 
-export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventFrame) {
+export function handlePageGatewayEvent(
+  state: ChatPageHost,
+  event: GatewayEventFrame,
+  isPresented: ChatPanePresentation = () => true,
+) {
   if (event.event === "chat") {
     const payload = event.payload as ChatEventPayload | undefined;
     if (
@@ -434,12 +464,16 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
     if (shouldRefreshPullRequests) {
       void state.refreshSessionPullRequests?.({ refresh: true });
     }
-    replayPendingSessionMessageReload(state, payload);
+    replayPendingSessionMessageReload(state, payload, isPresented);
     if (terminal) {
       removeDeliveredQueuedChatSendForRun(state, payload?.runId);
       void resumeStoredChatOutboxes(state);
       if (chatScopedEventSessionMatches(state, payload?.sessionKey, payload?.agentId)) {
-        refreshSessionWorkspace(state);
+        if (isPresented()) {
+          refreshSessionWorkspace(state);
+        } else {
+          retireSessionWorkspaceCheckout(state, false);
+        }
       }
     }
     requestChatPageUpdate(state, payload?.state === "delta" ? "animation-frame" : "immediate");
@@ -467,13 +501,13 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
   }
   if (event.event === "agent" || event.event === "session.tool") {
     if (handleAgentEvent(state as never, event.payload as never)) {
-      requestChatPageUpdate(state);
+      requestChatPageUpdate(state, "animation-frame");
     }
     return;
   }
   if (event.event === "session.operation") {
     handleSessionOperationEvent(state as never, event.payload as never);
-    requestChatPageUpdate(state);
+    requestChatPageUpdate(state, "animation-frame");
     return;
   }
   if (event.event === "chat.send_timing") {
@@ -481,19 +515,19 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
     return;
   }
   if (event.event === "session.message") {
-    handleSessionMessageEvent(state, event.payload);
+    handleSessionMessageEvent(state, event.payload, isPresented);
     void resumeStoredChatOutboxes(state);
-    requestChatPageUpdate(state);
+    requestChatPageUpdate(state, "animation-frame");
     return;
   }
   if (event.event === "sessions.changed") {
-    handleSessionsChangedEvent(state, event.payload);
+    handleSessionsChangedEvent(state, event.payload, isPresented);
     void resumeStoredChatOutboxes(state);
-    requestChatPageUpdate(state);
+    requestChatPageUpdate(state, "animation-frame");
     return;
   }
   if (event.event === "task") {
-    handleBackgroundTasksEvent(state, event.payload);
+    handleBackgroundTasksEvent(state, event.payload, isPresented());
   }
 }
 

@@ -605,7 +605,7 @@ readonly build_command='
   }
   trap cleanup EXIT INT TERM
   corepack pnpm install --frozen-lockfile --store-dir "$store"
-  corepack pnpm build
+  OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 corepack pnpm build
 '
 
 run_network_probe() {

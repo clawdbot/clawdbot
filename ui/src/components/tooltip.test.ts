@@ -5,6 +5,7 @@ import { installNativeTitleGuard } from "./tooltip.ts";
 
 type TooltipElement = HTMLElement & {
   content: string;
+  openOnClick: boolean;
   readonly updateComplete: Promise<boolean>;
 };
 
@@ -44,6 +45,12 @@ function focusTrigger(trigger: HTMLElement) {
 function dispatchMousePointer(target: EventTarget, type: "pointerenter" | "pointerleave") {
   const event = new MouseEvent(type, { bubbles: true, buttons: 0 });
   Object.defineProperty(event, "pointerType", { value: "mouse" });
+  target.dispatchEvent(event);
+}
+
+function dispatchTouchPointer(target: EventTarget, type: "pointerdown" | "pointerup") {
+  const event = new MouseEvent(type, { bubbles: true });
+  Object.defineProperty(event, "pointerType", { value: "touch" });
   target.dispatchEvent(event);
 }
 
@@ -250,7 +257,7 @@ describe("openclaw-tooltip", () => {
     expectOpenCount(1);
   });
 
-  it("does not reopen from pointer-origin focus", async () => {
+  it("does not reopen from pointer-origin focus after activation settles", async () => {
     const provider = createProvider();
     const { tooltip, trigger } = createTooltip("Pointer tooltip");
     provider.append(tooltip);
@@ -262,9 +269,34 @@ describe("openclaw-tooltip", () => {
     const pointerDown = new MouseEvent("pointerdown", { bubbles: true });
     Object.defineProperty(pointerDown, "pointerType", { value: "mouse" });
     trigger.dispatchEvent(pointerDown);
+    trigger.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
+    trigger.click();
     focusTrigger(trigger);
 
     expectOpenCount(0);
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Tab" }));
+    focusTrigger(trigger);
+    expectOpenCount(1);
+  });
+
+  it("keeps touch hints explicit through open-on-click", async () => {
+    const provider = createProvider();
+    const action = createTooltip("Action tooltip");
+    const reveal = createTooltip("Reveal tooltip");
+    reveal.tooltip.openOnClick = true;
+    provider.append(action.tooltip, reveal.tooltip);
+    document.body.append(provider);
+    await Promise.all([action.tooltip.updateComplete, reveal.tooltip.updateComplete]);
+
+    dispatchTouchPointer(action.trigger, "pointerdown");
+    vi.advanceTimersByTime(450);
+    expectOpenCount(0);
+
+    dispatchTouchPointer(reveal.trigger, "pointerdown");
+    dispatchTouchPointer(reveal.trigger, "pointerup");
+    reveal.trigger.click();
+    expectOpenCount(1);
   });
 
   it("keeps the accessible description in the trigger document tree", async () => {

@@ -192,13 +192,6 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
     environmentId: active.environmentId,
     ownerEpoch: active.activeOwnerEpoch,
   };
-  const bindingFor = (runId: string) => ({
-    sessionId: SESSION.sessionId,
-    environmentId: owner.environmentId,
-    ownerEpoch: owner.ownerEpoch,
-    runId,
-  });
-
   const placementClosedClaim = store.claimTurn({
     ...SESSION,
     owner,
@@ -214,14 +207,17 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
     placementClosedRun,
     { agentId: SESSION.agentId, sessionKey: SESSION.sessionKey },
   );
-  const placementCapability = getWorkerTurnExecutionIdentityCapability(
-    store,
-    bindingFor(placementClosedClaim.runId),
-  );
+  const placementCapability = getWorkerTurnExecutionIdentityCapability(store, placementClosedClaim);
   if (!placementCapability) {
     throw new Error("expected placement-bound lineage capability");
   }
+  let placementReceiptAuthority: (() => void) | undefined;
+  await placementCapability.run((identity) => {
+    placementReceiptAuthority = identity.receiptAuthority;
+    identity.receiptAuthority();
+  });
   store.releaseTurn(placementClosedClaim);
+  expect(() => placementReceiptAuthority?.()).toThrow("worker turn authority changed");
   await expect(placementCapability.run(async () => "stale")).rejects.toThrow(
     "worker turn authority changed",
   );
@@ -242,10 +238,7 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
     runClosedOperational,
     { agentId: SESSION.agentId, sessionKey: SESSION.sessionKey },
   );
-  const runCapability = getWorkerTurnExecutionIdentityCapability(
-    store,
-    bindingFor(runClosedClaim.runId),
-  );
+  const runCapability = getWorkerTurnExecutionIdentityCapability(store, runClosedClaim);
   if (!runCapability) {
     throw new Error("expected run-bound lineage capability");
   }

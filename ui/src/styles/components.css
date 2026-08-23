@@ -70,7 +70,7 @@ openclaw-session-owner-chip {
 .session-owner-stack {
   position: relative;
   display: inline-flex;
-  width: 24px;
+  width: 28px;
   height: 20px;
   align-items: center;
   justify-content: flex-end;
@@ -81,17 +81,15 @@ openclaw-session-owner-chip {
   z-index: 0;
   left: 0;
   display: inline-flex;
-  width: 14px;
-  height: 14px;
 }
 
 .session-owner-stack__back .viewer-avatar,
 .session-owner-stack__overflow {
-  width: 14px;
-  height: 14px;
+  width: 18px;
+  height: 18px;
   border: 1px solid var(--sidebar-bg, var(--bg));
   border-radius: var(--radius-full);
-  font-size: 7px;
+  font-size: 8px;
 }
 
 .session-owner-stack__overflow {
@@ -107,6 +105,8 @@ openclaw-session-owner-chip {
 .session-owner-stack__front {
   position: relative;
   z-index: 1;
+  width: 18px;
+  height: 18px;
 }
 
 /* Leading slot shared by every sidebar row: the row's own artwork plus a run
@@ -319,6 +319,19 @@ openclaw-session-owner-chip {
   padding-left: 18px;
   font-size: 12px;
   line-height: 1.55;
+}
+
+.login-gate__failure-steps .login-gate__command {
+  display: inline-flex;
+  box-sizing: border-box;
+  max-width: 100%;
+  margin: 2px 3px;
+  vertical-align: middle;
+}
+
+.login-gate__failure-steps .login-gate__command code {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .login-gate__failure-steps li + li {
@@ -1094,7 +1107,7 @@ openclaw-session-progress-hovercard-provider {
   border-color: transparent;
 }
 
-.btn:disabled {
+.btn:is(:disabled, [aria-disabled="true"]) {
   opacity: 0.5;
   cursor: not-allowed;
 }

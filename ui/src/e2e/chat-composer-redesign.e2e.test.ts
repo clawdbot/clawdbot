@@ -79,7 +79,7 @@ suite.define(() => {
       await model.click();
       await model.click();
       const retry = await gateway.waitForRequest("models.list", { after: beforeRetry });
-      expect(retry.params).toEqual({ agentId: "main", view: "configured" });
+      expect(retry.params).toEqual({ agentId: "main", view: "configured", refresh: true });
       await expect.poll(() => textarea.isEnabled()).toBe(true);
       await expect.poll(() => composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       await expect

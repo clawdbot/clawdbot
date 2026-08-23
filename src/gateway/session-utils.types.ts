@@ -28,6 +28,7 @@ import type { FastModeSource } from "../shared/fast-mode.js";
 import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
+  GatewayContextWindowOption,
   GatewayThinkingLevelOption,
   SessionBoardFace,
   SessionsListResultBase,
@@ -41,6 +42,9 @@ export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
+  contextWindow?: string;
+  contextWindows?: GatewayContextWindowOption[];
+  contextWindowDefault?: string;
   agentRuntime?: GatewayAgentRuntime;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
@@ -135,6 +139,9 @@ export type GatewaySessionRow = {
   abortedLastRun?: boolean;
   restartRecoveryStatus?: "tombstoned";
   thinkingLevel?: string;
+  contextWindow?: string;
+  contextWindows?: GatewayContextWindowOption[];
+  contextWindowDefault?: string;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
@@ -237,6 +244,8 @@ export type SessionsPatchResult = SessionsPatchResultBase<SessionEntry> & {
     modelProvider?: string;
     model?: string;
     agentRuntime?: GatewayAgentRuntime;
+    contextWindow?: string;
+    contextWindows?: GatewayContextWindowOption[];
     thinkingLevel?: string;
     thinkingLevels?: GatewayThinkingLevelOption[];
   };
