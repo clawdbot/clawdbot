@@ -460,7 +460,7 @@ suite.define(() => {
   });
 
   it.each(["dark", "light"] as const)(
-    "keeps the toast above the mobile drawer in %s mode",
+    "positions the drawer toast responsively in %s mode",
     async (colorScheme) => {
       const page = await openPage({
         colorScheme,
@@ -487,12 +487,21 @@ suite.define(() => {
       await expect.poll(() => toast.textContent()).toContain("Codex hidden");
       const dismiss = toast.getByRole("button", { name: "Dismiss" });
       await dismiss.click({ trial: true });
+      const drawerToastBounds = await toast.boundingBox();
+      if (!drawerToastBounds) {
+        throw new Error("expected the drawer toast to have a layout box");
+      }
+      expect(Math.round(drawerToastBounds.y)).toBe(20);
 
       await page.screenshot({
         animations: "disabled",
         path: path.join(TOAST_PROOF_DIR, `mobile-drawer-toast-${colorScheme}.png`),
       });
-      if (colorScheme === "dark") {
+      // The two runs split the modal-to-shell handoff routes: dismissing the drawer
+      // keeps phone width, while growing the viewport unmounts it. Only the dismissal
+      // route still sits at phone width afterwards, so it owns the narrow assertions.
+      const handsOffAtPhoneWidth = colorScheme === "dark";
+      if (handsOffAtPhoneWidth) {
         await page.keyboard.press("Escape");
         await expect.poll(() => dialog.isVisible()).toBe(false);
       } else {
@@ -501,15 +510,29 @@ suite.define(() => {
       }
       const handedOffToast = page.locator(".shell > openclaw-toast-host .app-toast");
       await expect.poll(() => handedOffToast.textContent()).toContain("Codex hidden");
-      const [toastBounds, composerBounds] = await Promise.all([
-        handedOffToast.boundingBox(),
-        page.locator(".agent-chat__composer-shell").boundingBox(),
-      ]);
-      if (!toastBounds || !composerBounds) {
-        throw new Error("expected the handed-off toast and chat composer to have layout boxes");
+      if (handsOffAtPhoneWidth) {
+        const [mobileToastBounds, composerBounds] = await Promise.all([
+          handedOffToast.boundingBox(),
+          page.locator(".agent-chat__composer-shell").boundingBox(),
+        ]);
+        if (!mobileToastBounds || !composerBounds) {
+          throw new Error("expected the handed-off toast and chat composer to have layout boxes");
+        }
+        expect(Math.round(mobileToastBounds.y)).toBe(20);
+        expect(mobileToastBounds.y + mobileToastBounds.height).toBeLessThan(composerBounds.y);
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await expect.poll(() => drawer.count()).toBe(0);
       }
-      expect(Math.round(toastBounds.y)).toBe(20);
-      expect(toastBounds.y + toastBounds.height).toBeLessThan(composerBounds.y);
+      const desktopToastBounds = await handedOffToast.boundingBox();
+      if (!desktopToastBounds) {
+        throw new Error("expected the desktop toast to have a layout box");
+      }
+      await page.screenshot({
+        animations: "disabled",
+        path: path.join(TOAST_PROOF_DIR, `desktop-toast-${colorScheme}.png`),
+      });
+      expect(Math.round(1280 - desktopToastBounds.x - desktopToastBounds.width)).toBe(20);
+      expect(Math.round(900 - desktopToastBounds.y - desktopToastBounds.height)).toBe(20);
       await handedOffToast.getByRole("button", { name: "Dismiss" }).click();
       await expect.poll(() => handedOffToast.isVisible()).toBe(false);
     },
