@@ -317,7 +317,12 @@ function runBlockSpacingHtml() {
           <div class="chat-group-messages">
             <div class="chat-bubble"><div class="chat-text">Next turn</div></div>
           </div>
-          <div class="chat-group-footer"><span class="chat-sender-name">You</span></div>
+          <div class="chat-group-footer">
+            <span class="chat-sender-name">You</span>
+            <div class="chat-group-footer-actions">
+              <button class="chat-copy-btn" type="button" aria-label="Copy">${iconSvg()}</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
