@@ -352,6 +352,7 @@ private func makeViewModel(
     requestHistoryHook: (@Sendable (String) async throws -> Void)? = nil,
     fetchProgressCardHook: (@Sendable (String) async throws -> ProgressCard?)? = nil,
     progressCardStoreAvailable: Bool? = nil,
+    advertisedMethodHook: (@Sendable (String) -> Bool?)? = nil,
     historyResponseHook: (@Sendable (String, Int, [String]) async throws -> OpenClawChatHistoryPayload?)? = nil,
     setActiveSessionHook: (@Sendable (String) async throws -> Void)? = nil,
     createSessionHook: (@Sendable (String, String?) async throws -> Void)? = nil,
@@ -372,6 +373,7 @@ private func makeViewModel(
     acquireSessionSettingsRouteLeaseHook: (@Sendable () async -> Void)? = nil,
     swarmEnabledHook: (@Sendable (String) async throws -> Bool)? = nil,
     listChildSessionsHook: (@Sendable (String) async throws -> [OpenClawChatSessionEntry])? = nil,
+    listQuestionsHook: (@Sendable () async throws -> [QuestionRecord])? = nil,
     healthResponses: [Bool] = [true],
     initialThinkingLevel: String? = nil,
     initialVerboseLevel: String? = nil,
@@ -403,7 +405,8 @@ private func makeViewModel(
         commandResponses: commandResponses,
         requestHistoryHook: requestHistoryHook,
         fetchProgressCardHook: fetchProgressCardHook,
-        progressCardStoreAvailable: progressCardStoreAvailable,
+        advertisedMethodHook: advertisedMethodHook ?? progressCardStoreAvailable
+            .map { available in { @Sendable method in method == "progressCard.get" ? available : nil } },
         historyResponseHook: historyResponseHook,
         setActiveSessionHook: setActiveSessionHook,
         createSessionHook: createSessionHook,
@@ -422,6 +425,7 @@ private func makeViewModel(
         acquireSessionSettingsRouteLeaseHook: acquireSessionSettingsRouteLeaseHook,
         swarmEnabledHook: swarmEnabledHook,
         listChildSessionsHook: listChildSessionsHook,
+        listQuestionsHook: listQuestionsHook,
         healthResponses: healthResponses)
     let vm = OpenClawChatViewModel(
         sessionKey: sessionKey,
@@ -737,7 +741,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let commandResponses: [[OpenClawChatCommandChoice]]
     private let requestHistoryHook: (@Sendable (String) async throws -> Void)?
     private let fetchProgressCardHook: (@Sendable (String) async throws -> ProgressCard?)?
-    private let progressCardStoreAvailable: Bool?
+    private let advertisedMethodHook: (@Sendable (String) -> Bool?)?
     private let historyResponseHook:
         (@Sendable (String, Int, [String]) async throws -> OpenClawChatHistoryPayload?)?
     private let setActiveSessionHook: (@Sendable (String) async throws -> Void)?
@@ -778,7 +782,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         commandResponses: [[OpenClawChatCommandChoice]] = [],
         requestHistoryHook: (@Sendable (String) async throws -> Void)? = nil,
         fetchProgressCardHook: (@Sendable (String) async throws -> ProgressCard?)? = nil,
-        progressCardStoreAvailable: Bool? = nil,
+        advertisedMethodHook: (@Sendable (String) -> Bool?)? = nil,
         historyResponseHook: (@Sendable (String, Int, [String]) async throws -> OpenClawChatHistoryPayload?)? = nil,
         setActiveSessionHook: (@Sendable (String) async throws -> Void)? = nil,
         createSessionHook: (@Sendable (String, String?) async throws -> Void)? = nil,
@@ -813,7 +817,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.commandResponses = commandResponses
         self.requestHistoryHook = requestHistoryHook
         self.fetchProgressCardHook = fetchProgressCardHook
-        self.progressCardStoreAvailable = progressCardStoreAvailable
+        self.advertisedMethodHook = advertisedMethodHook
         self.historyResponseHook = historyResponseHook
         self.setActiveSessionHook = setActiveSessionHook
         self.createSessionHook = createSessionHook
@@ -894,8 +898,8 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         try await self.fetchProgressCardHook?(sessionKey)
     }
 
-    func gatewayAdvertisesProgressCardStore() async -> Bool? {
-        self.progressCardStoreAvailable
+    func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
+        self.advertisedMethodHook?(method)
     }
 
     func sendMessage(
@@ -1605,17 +1609,47 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.progressCardStoreAvailable == nil })
     }
 
+    @Test func `unadvertised progress card store skips durable fetch`() async throws {
+        let fetchCalls = AsyncCounter()
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            fetchProgressCardHook: { _ in
+                _ = await fetchCalls.increment()
+                return progressCard(revision: 1)
+            },
+            progressCardStoreAvailable: false)
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        try await waitUntil("progress card capability resolves unavailable") {
+            await MainActor.run { vm.progressCardStoreAvailable == false }
+        }
+
+        await MainActor.run {
+            vm.progressCardStoreAvailable = nil
+            vm.handleTransportEvent(.progressCardChanged(ProgressCardChangedEvent(
+                sessionkey: "main",
+                revision: AnyCodable(1))))
+        }
+        try await waitUntil("progress card change rechecks unavailable capability") {
+            await MainActor.run { vm.progressCardStoreAvailable == false }
+        }
+
+        #expect(await fetchCalls.current() == 0)
+        #expect(await MainActor.run { vm.progressCard == nil })
+    }
+
     @Test func `empty legacy plan clears progress card`() async throws {
         let (_, vm) = await makeViewModel(
             historyResponses: [historyPayload()],
-            fetchProgressCardHook: { _ in progressCard(revision: 9, markdown: "Existing") },
             progressCardStoreAvailable: false)
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
-        try await waitUntil("initial progress card and legacy capability apply") {
-            await MainActor.run {
-                vm.progressCard?.revision == 9 && vm.progressCardStoreAvailable == false
-            }
+        try await waitUntil("progress card capability resolves unavailable") {
+            await MainActor.run { vm.progressCardStoreAvailable == false }
         }
+        await MainActor.run {
+            vm.handleTransportEvent(legacyPlanEvent(
+                steps: [legacyPlanStep("Existing", status: "in_progress")]))
+        }
+        #expect(await MainActor.run { vm.progressCard != nil })
 
         await MainActor.run {
             vm.handleTransportEvent(legacyPlanEvent(steps: []))
@@ -2108,6 +2142,29 @@ struct ChatViewModelTests {
         await viewModel.refreshQuestions()
 
         #expect(viewModel.questionCards.isEmpty)
+    }
+
+    @Test @MainActor func `unadvertised question.list clears stale pending cards without requesting`() async throws {
+        let listCalls = AsyncCounter()
+        let (_, viewModel) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            advertisedMethodHook: { $0 == "question.list" ? false : nil },
+            listQuestionsHook: {
+                _ = await listCalls.increment()
+                throw GatewayResponseError(
+                    method: "question.list",
+                    code: "INVALID_REQUEST",
+                    message: "missing scope: operator.admin",
+                    details: nil)
+            })
+        try await loadAndWaitBootstrap(vm: viewModel)
+        viewModel.upsertQuestion(chatQuestionRecord(id: "ask_stale"))
+
+        await viewModel.refreshQuestions()
+
+        #expect(viewModel.visibleQuestionCards.isEmpty)
+        #expect(viewModel.questionCards.isEmpty)
+        #expect(await listCalls.current() == 0)
     }
 
     @Test @MainActor func `structured missing question scope clears stale cards`() async {

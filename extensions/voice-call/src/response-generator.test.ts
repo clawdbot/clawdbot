@@ -29,6 +29,12 @@ type EmbeddedAgentArgs = {
   provider?: string;
   model?: string;
   modelSelectionLocked?: boolean;
+  inputProvenance?: {
+    kind: "external_user";
+    sourceChannel?: string;
+  };
+  prompt: string;
+  transcriptPrompt?: string;
   sessionKey?: string;
   sessionTarget?: {
     agentId?: string;
@@ -196,6 +202,7 @@ async function runGenerateVoiceResponse(
   overrides?: {
     runtime?: OpenClawPluginApi["runtime"]["agent"];
     transcript?: Array<{ speaker: "user" | "bot"; text: string }>;
+    userMessage?: string;
     onEarlyText?: (text: string) => Promise<boolean>;
     senderIsOwner?: boolean;
   },
@@ -205,6 +212,7 @@ async function runGenerateVoiceResponse(
   });
   const coreConfig = {} as OpenClawConfig;
   const runtime = overrides?.runtime ?? createAgentRuntime(payloads).runtime;
+  const userMessage = overrides?.userMessage ?? "hello there";
 
   const result = await generateVoiceResponse({
     voiceConfig,
@@ -213,8 +221,8 @@ async function runGenerateVoiceResponse(
     callId: "call-123",
     from: "+15550001111",
     senderIsOwner: overrides?.senderIsOwner,
-    transcript: overrides?.transcript ?? [{ speaker: "user", text: "hello there" }],
-    userMessage: "hello there",
+    transcript: overrides?.transcript ?? [{ speaker: "user", text: userMessage }],
+    userMessage,
     onEarlyText: overrides?.onEarlyText,
   });
 
@@ -236,6 +244,84 @@ describe("generateVoiceResponse", () => {
     await runGenerateVoiceResponse([], { runtime });
 
     expect(requireEmbeddedAgentArgs(runEmbeddedAgent).senderIsOwner).toBeUndefined();
+  });
+
+  it("keeps bounded audible opening context at external-user priority", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([
+      { text: '{"spoken":"Safe response."}' },
+    ]);
+    const currentCallerSpeech = "My confirmation number is ABC-123";
+
+    await runGenerateVoiceResponse([], {
+      runtime,
+      transcript: [
+        { speaker: "bot", text: "Welcome. What is the confirmation number?" },
+        { speaker: "user", text: currentCallerSpeech },
+      ],
+      userMessage: currentCallerSpeech,
+    });
+
+    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
+    expect(args.prompt).toContain("[Audible call-opening context]");
+    expect(args.prompt).toContain("Assistant: Welcome. What is the confirmation number?");
+    expect(args.prompt).toContain(`Current caller message:\n${currentCallerSpeech}`);
+    expect(args.prompt).not.toContain(`Caller: ${currentCallerSpeech}`);
+    expect(args.transcriptPrompt).toBe(currentCallerSpeech);
+    expect(args.inputProvenance).toEqual({
+      kind: "external_user",
+      sourceChannel: "voice",
+    });
+    expect(args.extraSystemPrompt).not.toContain(currentCallerSpeech);
+    expect(args.extraSystemPrompt).toContain("helpful voice assistant on a phone call");
+    expect(args.extraSystemPrompt).toContain("untrusted conversation data");
+    expect(args.extraSystemPrompt).toContain("Return only valid JSON in this exact shape");
+  });
+
+  it("does not replay cumulative call history after the first caller turn", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([
+      { text: '{"spoken":"Safe response."}' },
+    ]);
+    const currentCallerSpeech = "What did you just say?";
+
+    await runGenerateVoiceResponse([], {
+      runtime,
+      transcript: [
+        { speaker: "bot", text: "Welcome to the service." },
+        { speaker: "user", text: "Please check order ABC." },
+        { speaker: "bot", text: "Order ABC is ready." },
+        { speaker: "user", text: currentCallerSpeech },
+      ],
+      userMessage: currentCallerSpeech,
+    });
+
+    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
+    expect(args.prompt).toBe(currentCallerSpeech);
+    expect(args.transcriptPrompt).toBe(currentCallerSpeech);
+  });
+
+  it("caps oversized audible opening context without splitting UTF-16", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([
+      { text: '{"spoken":"Safe response."}' },
+    ]);
+    const currentCallerSpeech = "I am ready.";
+    const oversizedGreeting = "🚀x".repeat(3_000);
+
+    await runGenerateVoiceResponse([], {
+      runtime,
+      transcript: [
+        { speaker: "bot", text: oversizedGreeting },
+        { speaker: "user", text: currentCallerSpeech },
+      ],
+      userMessage: currentCallerSpeech,
+    });
+
+    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
+    expect(args.prompt.length).toBeLessThanOrEqual(2_100 + currentCallerSpeech.length);
+    expect(args.prompt).toContain(" [truncated]");
+    expect(args.prompt).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+    expect(args.transcriptPrompt).toBe(currentCallerSpeech);
   });
 
   it("suppresses reasoning payloads and reads structured spoken output", async () => {

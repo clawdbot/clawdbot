@@ -293,6 +293,9 @@ export function renderAppearanceSection(
                       ? html`<div
                           class="settings-theme-import__message settings-theme-import__message--${props
                             .customThemeImportMessage.kind}"
+                          role=${props.customThemeImportMessage.kind === "error"
+                            ? "alert"
+                            : "status"}
                         >
                           ${props.customThemeImportMessage.text}
                         </div>`

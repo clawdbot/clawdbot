@@ -18,6 +18,7 @@ import {
   executeConfigExternalMutation,
   loadConfig,
   patchConfig,
+  refreshDraft,
   saveConfig,
   teardownFlushConfigDraft,
   type ConfigPatchBuildResult,
@@ -391,10 +392,9 @@ export function createConfigWriteCoordinator({
   };
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
-    const connected = snapshot.phase === "connected";
-    const connectionChanged = state.connected !== connected;
+    const connectionChanged = state.connected !== (snapshot.phase === "connected");
     state.client = snapshot.client;
-    state.connected = connected;
+    state.connected = snapshot.phase === "connected";
     state.applySessionKey = snapshot.sessionKey;
     if (clientChanged || connectionChanged) {
       const draftBelongsToPreviousConnection =
@@ -518,7 +518,7 @@ export function createConfigWriteCoordinator({
             reconcileAppliedRefresh();
           });
         } else {
-          void refreshConnectionState().then(() => reconcileAppliedRefresh());
+          void refreshDraft(state, refreshConnectionState, publish, reconcileAppliedRefresh);
         }
       }
     }

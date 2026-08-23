@@ -6,6 +6,7 @@ import type {
   QuestionRequestQuestion,
   QuestionWaitAnswerResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { isReplyDispatchDeliveryError } from "../../auto-reply/reply/reply-dispatch-outcome.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { registerPendingAgentQuestion } from "../harness/gateway-question.js";
 import { ASK_USER_TOOL_DISPLAY_SUMMARY, describeAskUserTool } from "../tool-description-presets.js";
@@ -654,6 +655,19 @@ export function createAskUserTool(params: {
             const answered = await cancelPendingQuestion("prompt-delivery-failed");
             if (answered) {
               return answeredResult(normalized.questions, answered.answers);
+            }
+            if (
+              isReplyDispatchDeliveryError(deliveryResult.error) &&
+              deliveryResult.error.outcome === "failed-deliver"
+            ) {
+              const details = { status: "delivery_failed" as const };
+              return {
+                ...textResult(
+                  `The prompt became visible, but its controls failed to deliver. The question was cancelled; no retry/fallback should be sent.\n\n${JSON.stringify(details, null, 2)}`,
+                  details,
+                ),
+                terminate: true,
+              };
             }
             throw new Error("ask_user prompt delivery failed", { cause: deliveryResult.error });
           }

@@ -10,6 +10,7 @@ import type {
   HeaderMenuAction,
   HeaderMenuActionKind,
   HeaderMenuQuickAction,
+  HeaderMenuStatusAction,
 } from "./chat-header-session-menu.ts";
 
 type HeaderMenuElement = HTMLElement & { updateComplete: Promise<boolean> };
@@ -50,6 +51,7 @@ async function mountMenu(
     settings?: UiSettings;
     panelActions?: HeaderMenuQuickAction[];
     layoutActions?: HeaderMenuQuickAction[];
+    statusActions?: HeaderMenuStatusAction[];
     ownerOptions?: SessionOwnerOption[];
     selfOwner?: SessionOwnerOption | null;
     currentOwnerId?: string | null;
@@ -59,6 +61,7 @@ async function mountMenu(
     archiveAllowed?: boolean;
     deleteAllowed?: boolean;
     onOpen?: () => void;
+    onOpenCommandPalette?: () => void;
     onSettingsChange?: (patch: Partial<UiSettings>) => void;
     onAction?: (action: HeaderMenuAction) => void;
   } = {},
@@ -77,6 +80,7 @@ async function mountMenu(
       .settings=${options.settings ?? settings()}
       .panelActions=${options.panelActions ?? []}
       .layoutActions=${options.layoutActions ?? []}
+      .statusActions=${options.statusActions ?? []}
       .ownerOptions=${options.ownerOptions ?? []}
       .selfOwner=${options.selfOwner ?? null}
       .currentOwnerId=${options.currentOwnerId ?? null}
@@ -86,6 +90,7 @@ async function mountMenu(
       .archiveAllowed=${options.archiveAllowed ?? true}
       .deleteAllowed=${options.deleteAllowed ?? true}
       .onOpen=${options.onOpen ?? (() => {})}
+      .onOpenCommandPalette=${options.onOpenCommandPalette ?? (() => {})}
       .onSettingsChange=${options.onSettingsChange ?? (() => {})}
       .onAction=${options.onAction ?? (() => {})}
     ></openclaw-chat-header-session-menu>`,
@@ -275,6 +280,8 @@ describe("chat header session menu", () => {
 
   it("drills into compact menu groups without rendering side flyouts", async () => {
     const showTasks = vi.fn();
+    const showAccess = vi.fn();
+    const onOpenCommandPalette = vi.fn();
     const onSettingsChange = vi.fn<(patch: Partial<UiSettings>) => void>();
     const onAction = vi.fn<(action: HeaderMenuAction) => void>();
     const ada = { type: "human", id: "profile-ada", label: "Ada" } as const;
@@ -299,9 +306,19 @@ describe("chat header session menu", () => {
           onActivate: vi.fn(),
         },
       ],
+      statusActions: [
+        {
+          id: "access",
+          label: "Limited access",
+          icon: icons.shieldQuestion,
+          tone: "warn",
+          onActivate: showAccess,
+        },
+      ],
       ownerOptions: [ada, research],
       selfOwner: ada,
       currentOwnerId: research.id,
+      onOpenCommandPalette,
       onSettingsChange,
       onAction,
     });
@@ -310,6 +327,8 @@ describe("chat header session menu", () => {
       menu.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"),
     ).map(itemLabel);
     expect(rootLabels).toEqual([
+      "Open command palette",
+      "Limited access",
       "Open in",
       "Panels",
       "Layout",
@@ -322,6 +341,19 @@ describe("chat header session menu", () => {
       "Delete…",
     ]);
     expect(menu.querySelector("[slot='submenu']")).toBeNull();
+    expect(
+      menu.querySelector('.chat-header-session-menu__status-dot[data-tone="warn"]'),
+    ).not.toBeNull();
+
+    select(menu, "open-command-palette");
+    expect(onOpenCommandPalette).toHaveBeenCalledOnce();
+    const dropdown = menu.querySelector<HTMLElement & { open: boolean }>("wa-dropdown");
+    if (dropdown) {
+      dropdown.open = true;
+    }
+    select(menu, "status:access");
+    expect(showAccess).toHaveBeenCalledOnce();
+    expect(dropdown?.open).toBe(false);
 
     select(menu, "compact:open-view");
     await menu.updateComplete;

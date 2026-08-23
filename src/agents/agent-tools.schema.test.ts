@@ -50,7 +50,8 @@ describe("direct exec tool schema", () => {
     const descriptions = Object.values(fields).map((field) => field.description ?? "");
 
     expect(descriptions.join("").length).toBeLessThan(550);
-    expect(describeField("workdir")).toContain("Blank/whitespace");
+    expect(describeField("workdir")).toContain("empty string");
+    expect(describeField("workdir")).toContain("whitespace-only");
     expect(describeField("yieldMs")).toContain("Milliseconds");
     expect(describeField("timeoutSeconds")).toContain("seconds");
     expect(describeField("pty")).toContain("PTY");

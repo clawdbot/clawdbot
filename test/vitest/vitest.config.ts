@@ -25,6 +25,7 @@ const rootVitestProjects = [
   "test/vitest/vitest.gateway-client.config.ts",
   "test/vitest/vitest.gateway-methods.config.ts",
   "test/vitest/vitest.gateway-server.config.ts",
+  "test/vitest/vitest.gateway-server-isolated.config.ts",
   "test/vitest/vitest.hooks.config.ts",
   "test/vitest/vitest.acp.config.ts",
   "test/vitest/vitest.runtime-config.config.ts",

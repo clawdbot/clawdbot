@@ -255,7 +255,11 @@ because of its version string.
 
 `prepareExecution(ctx)` receives `ctx.contextTokenBudget`, the effective token
 limit selected for the run. Backends that own native compaction can map that
-budget into their CLI-specific launch contract.
+budget into their CLI-specific launch contract. It also receives the optional
+effective `ctx.thinkingLevel`: `off`, `minimal`, `low`, `medium`, `high`,
+`xhigh`, `adaptive`, or `max`. Use that field when the selected level must be
+applied through launch environment or staged configuration; the same field is
+available to `resolveExecutionArgs(ctx)` for native CLI flags.
 
 `runtimeArtifact` is plugin-owned. It is consulted
 only when a live inference turn mints or revalidates verified setup authority;

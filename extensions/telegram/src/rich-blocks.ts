@@ -29,6 +29,7 @@ import {
   renderMarkdownRichListSource,
   type MarkdownRichListSource,
 } from "./rich-blocks-list.js";
+import { renderTelegramMonospaceGrid } from "./text-width.js";
 
 const TELEGRAM_RICH_TEXT_TABLE_COLUMN_LIMIT = 20;
 
@@ -411,18 +412,9 @@ function emitGapBlocks(ir: MarkdownIR, start: number, end: number): InputRichBlo
 }
 
 function renderAsciiTableGrid(table: MarkdownTableMeta): string {
-  const rows = [table.headers, ...table.rows];
-  const columnCount = Math.max(...rows.map((row) => row.length), 0);
-  const widths = Array.from({ length: columnCount }, () => 3);
-  for (const row of rows) {
-    for (let index = 0; index < columnCount; index += 1) {
-      widths[index] = Math.max(widths[index] ?? 3, row[index]?.length ?? 0);
-    }
-  }
-  const renderRow = (row: readonly string[]) =>
-    `| ${widths.map((width, index) => (row[index] ?? "").padEnd(width)).join(" | ")} |`;
-  const divider = `| ${widths.map((width) => "-".repeat(width)).join(" | ")} |`;
-  return [renderRow(table.headers), divider, ...table.rows.map(renderRow)].join("\n");
+  return renderTelegramMonospaceGrid([table.headers, ...table.rows], {
+    headerSeparator: true,
+  });
 }
 
 function cellToRichText(cell: MarkdownTableCell | undefined): RichText | undefined {

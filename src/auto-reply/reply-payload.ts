@@ -168,7 +168,10 @@ export function appendReplyMediaFailureWarning(text: string | undefined): string
 }
 
 function hasReplyPayloadMedia(payload: Pick<ReplyPayload, "mediaUrl" | "mediaUrls">): boolean {
-  return Boolean(payload.mediaUrl?.trim() || payload.mediaUrls?.some((url) => url.trim()));
+  return Boolean(
+    readNonBlankString(payload.mediaUrl) ||
+    (Array.isArray(payload.mediaUrls) && payload.mediaUrls.some(readNonBlankString)),
+  );
 }
 
 /** Returns normalized TTS supplement metadata only when the payload has media to carry it. */
@@ -291,6 +294,8 @@ export type ReplyPayloadMetadata = {
     expectedSessionId?: string;
     /** Delivery stays live, but neither side may be appended to a transcript. */
     transcriptWriteBlocked?: boolean;
+    /** The visible reply already owns its durable transcript row. */
+    transcriptOwner?: boolean;
     text?: string;
     mediaUrls?: string[];
     idempotencyKey?: string;

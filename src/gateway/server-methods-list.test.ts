@@ -21,6 +21,7 @@ describe("GATEWAY_EVENTS", () => {
   it("advertises node topology updates", () => {
     expect(GATEWAY_EVENTS).toContain("node.presence");
     expect(GATEWAY_EVENTS).toContain("device.pair.setup.completed");
+    expect(GATEWAY_EVENTS).toContain("device.pair.changed");
     expect(GATEWAY_EVENTS).toContain("node.runnerInventory.changed");
   });
 
@@ -72,7 +73,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("appends new methods after model probing without shifting older method indices", () => {
-    expect(listGatewayMethods().slice(-60)).toEqual([
+    expect(listGatewayMethods().slice(-64)).toEqual([
       "models.probe",
       "migrations.memory.plan",
       "migrations.memory.apply",
@@ -132,6 +133,10 @@ describe("listGatewayMethods", () => {
       "progressCard.put",
       "tools.github.status",
       "tools.github.configure",
+      "tools.github.authorize.start",
+      "tools.github.authorize.poll",
+      "tools.github.authorize.cancel",
+      "sessions.github.publish",
       "diagnostics.lanes",
     ]);
     const methods = listGatewayMethods();
@@ -198,6 +203,23 @@ describe("listGatewayMethods", () => {
     expect(descriptor?.controlPlaneWrite).toBeUndefined();
   });
 
+  it("classifies cron mutations as control-plane writes", () => {
+    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
+
+    for (const method of ["cron.add", "cron.update", "cron.remove", "cron.run"]) {
+      expect(descriptors.find((descriptor) => descriptor.name === method)).toMatchObject({
+        name: method,
+        scope: "operator.admin",
+        controlPlaneWrite: true,
+      });
+    }
+    for (const method of ["cron.get", "cron.list", "cron.status", "cron.runs"]) {
+      expect(
+        descriptors.find((descriptor) => descriptor.name === method)?.controlPlaneWrite,
+      ).toBeUndefined();
+    }
+  });
+
   it("does not advertise hidden core handlers", () => {
     const methods = listGatewayMethods();
     expect(methods).not.toContain("node.runnerInventory.update");
@@ -238,7 +260,7 @@ describe("listGatewayMethods", () => {
       "exec.approval.get",
     ]);
     expect(methods).toContain("tts.speak");
-    expect(coreMethods.slice(-67)).toEqual([
+    expect(coreMethods.slice(-71)).toEqual([
       "sessions.catalog.continue",
       "sessions.catalog.archive",
       "approval.get",
@@ -305,6 +327,10 @@ describe("listGatewayMethods", () => {
       "progressCard.put",
       "tools.github.status",
       "tools.github.configure",
+      "tools.github.authorize.start",
+      "tools.github.authorize.poll",
+      "tools.github.authorize.cancel",
+      "sessions.github.publish",
       "diagnostics.lanes",
     ]);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));

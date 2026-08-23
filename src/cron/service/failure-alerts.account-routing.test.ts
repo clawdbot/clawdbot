@@ -51,6 +51,12 @@ describe("cron failure alert account routing", () => {
           stripTestTargetPrefix(raw, ["googlechat", "google-chat", "gchat"]),
       },
       {
+        id: "msteams",
+        aliases: ["teams"],
+        targetPrefixes: ["msteams", "teams"],
+        normalizeTarget: (raw: string) => stripTestTargetPrefix(raw, ["msteams", "teams"]),
+      },
+      {
         id: "discord",
         aliases: [],
         targetPrefixes: ["discord"],
@@ -300,6 +306,107 @@ describe("cron failure alert account routing", () => {
     };
 
     expect(resolveFailureAlert(state, job)).toMatchObject(expected);
+  });
+
+  it.each([
+    {
+      name: "failure destination channel alias",
+      channel: "googlechat",
+      globalChannel: "googlechat",
+      failureDestination: { channel: "gchat" },
+      failureAlert: undefined,
+    },
+    {
+      name: "job alert channel alias",
+      channel: "googlechat",
+      globalChannel: "googlechat",
+      failureDestination: undefined,
+      failureAlert: { channel: "google-chat" },
+    },
+    {
+      name: "both independently aliased overrides",
+      channel: "googlechat",
+      globalChannel: "googlechat",
+      failureDestination: { channel: "gchat" },
+      failureAlert: { channel: "google-chat" },
+    },
+    {
+      name: "prefixed target with an inherited last channel",
+      channel: "googlechat",
+      globalChannel: "last",
+      targetPrefix: "gchat",
+      failureDestination: { channel: "gchat" },
+      failureAlert: undefined,
+    },
+    {
+      name: "Teams channel alias",
+      channel: "msteams",
+      globalChannel: "msteams",
+      failureDestination: undefined,
+      failureAlert: { channel: "teams" },
+    },
+  ])("delivers the inherited failure route through $name", (testCase) => {
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const recipient = `${"targetPrefix" in testCase ? testCase.targetPrefix : testCase.channel}:alerts`;
+    const state = createCronServiceState({
+      storePath: "/tmp/openclaw-cron-failure-alert-aliased-routing.json",
+      cronEnabled: true,
+      cronConfig: {
+        failureAlert: {
+          enabled: true,
+          after: 1,
+          mode: "announce",
+          channel: testCase.globalChannel,
+          to: recipient,
+          accountId: `${testCase.channel}-bot`,
+        },
+      },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      nowMs: () => 2_000,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      sendCronFailureAlert,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    const job: CronJob = {
+      id: "aliased-failure-route",
+      name: "Aliased failure route",
+      enabled: true,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "report" },
+      delivery: {
+        mode: "none",
+        ...(testCase.failureDestination ? { failureDestination: testCase.failureDestination } : {}),
+      },
+      ...(testCase.failureAlert ? { failureAlert: testCase.failureAlert } : {}),
+      state: {},
+    };
+    const deferredNotifications: DeferredCronNotifications = [];
+
+    applyJobResult(
+      state,
+      job,
+      {
+        status: "error",
+        error: "provider unavailable",
+        startedAt: 1_000,
+        endedAt: 2_000,
+      },
+      { deferredNotifications },
+    );
+    deferredNotifications[0]?.();
+
+    expect(sendCronFailureAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: testCase.channel,
+        to: recipient,
+        accountId: `${testCase.channel}-bot`,
+      }),
+    );
   });
 
   it("carries run start time without using it for alert cooldown", () => {

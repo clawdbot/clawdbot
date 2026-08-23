@@ -2,13 +2,19 @@
 import { existsSync, realpathSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 const runFfmpegMock = vi.hoisted(() => vi.fn());
+const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./ffmpeg-exec.js", () => ({
   runFfmpeg: runFfmpegMock,
+}));
+
+vi.mock("../process/exec.js", () => ({
+  runCommandWithTimeout: runCommandWithTimeoutMock,
 }));
 
 let transcodeAudioBuffer: typeof import("./audio-transcode.js").transcodeAudioBuffer;
@@ -189,7 +195,36 @@ describe("transcodeAudioBufferToOpus", () => {
 
 describe("transcodeAudioBuffer", () => {
   afterEach(() => {
+    __setFsSafeTestHooksForTest(undefined);
+    vi.restoreAllMocks();
+    runCommandWithTimeoutMock.mockReset();
     runFfmpegMock.mockReset();
+  });
+
+  it("returns a failure and cleans its workspace when input staging fails", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    let workspaceDir: string | undefined;
+    __setFsSafeTestHooksForTest({
+      beforeFileStoreSyncPrivateWrite: (filePath) => {
+        workspaceDir = path.dirname(filePath);
+        throw Object.assign(new Error("input exceeds bounded staging limit"), { code: "EFBIG" });
+      },
+    });
+
+    const result = await transcodeAudioBuffer({
+      audioBuffer: Buffer.from("payload"),
+      sourceExtension: "mp3",
+      targetExtension: "caf",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "transcoder-failed",
+      detail: "input exceeds bounded staging limit",
+    });
+    expect(workspaceDir).toBeDefined();
+    expect(workspaceDir ? existsSync(workspaceDir) : true).toBe(false);
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
   });
 
   it("returns noop-same-container when source and target containers match", async () => {

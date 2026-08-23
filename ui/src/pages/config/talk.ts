@@ -110,7 +110,7 @@ export function talkProviderConfigKeys(
 }
 
 /** Effective model/voice: top-level override, else the provider entry value. */
-function effectiveTalkValues(
+export function effectiveTalkValues(
   selection: TalkRealtimeSelection,
   option: TalkRealtimeProviderOption | undefined,
 ): { model: string | null; speakerVoice: string | null } {

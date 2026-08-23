@@ -70,7 +70,7 @@ function createHarness(
   let pluginRegistryVersion = 1;
   let authStore: AuthProfileStore | undefined = { version: 1, profiles: {} };
   let authStoreRevision = 1;
-  const getPreparedOwner = vi.fn(() => owner);
+  const getPreparedOwner = vi.fn((): PreparedModelRuntimeSnapshot | undefined => owner);
   const getPreparedAuthStore = vi.fn(() => authStore);
   const getAuthStoreRevision = vi.fn(() => authStoreRevision);
   const getSkillsVersion = vi.fn(() => skillsVersion);
@@ -433,7 +433,7 @@ describe("gateway chat metadata runtime", () => {
       const harness = createHarness(undefined, { useDefaultProjection: true });
       harness.setAuthStore({ version: 1, profiles: {} });
       const preparedOwner = createOwner(
-        harness.getPreparedOwner().config,
+        harness.getPreparedOwner()!.config,
         "gpt-5.4",
         {
           openai: {
@@ -699,6 +699,30 @@ describe("gateway chat metadata runtime", () => {
       }),
     ]);
     expect(result).not.toBe(timedOut);
+  });
+
+  test("retries an unavailable owner on the next read once it is published again", async () => {
+    const harness = createHarness();
+    await harness.runtime.refresh();
+
+    harness.getPreparedOwner.mockReturnValue(undefined);
+    await expect(harness.runtime.refresh()).rejects.toThrow(
+      'prepared chat metadata owner is unavailable for agent "main"',
+    );
+    await expect(harness.runtime.read({ agentId: "main" })).rejects.toThrow(
+      'prepared chat metadata owner is unavailable for agent "main"',
+    );
+
+    const recovered = createOwner(
+      { agents: { list: [{ id: "main", default: true }] } },
+      "recovered",
+    );
+    harness.setOwner(recovered);
+    harness.getPreparedOwner.mockReturnValue(recovered);
+
+    await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+      models: [expect.objectContaining({ id: "recovered" })],
+    });
   });
 
   test("rejects replacement waiters on failure and recovers on a later generation", async () => {
