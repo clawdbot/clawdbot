@@ -108,6 +108,41 @@ describe("Gemini embedding provider", () => {
     ).rejects.toThrow(/memory\.search\.remote\.apiKey/);
   });
 
+  it("rejects an unavailable memory SecretRef before provider fallback or egress", async () => {
+    const apiKeyRef = {
+      source: "env" as const,
+      provider: "default",
+      id: "MISSING_GOOGLE_MEMORY_KEY",
+    };
+    const fetchMock = installFetchMock(() => ({ embedding: { values: [1, 0] } }));
+
+    await expect(
+      createGeminiEmbeddingProvider({
+        config: {
+          models: {
+            providers: {
+              google: {
+                baseUrl: "https://new.example.invalid/v1beta",
+                apiKey: "provider-fallback-key",
+                headers: { "X-Tenant": "new" },
+                models: [],
+              },
+            },
+          },
+        } as never,
+        provider: "gemini",
+        remote: { apiKey: apiKeyRef },
+        model: "gemini-embedding-001",
+        fallback: "none",
+      }).then(({ provider }) => provider.embedQuery("must not leave the process")),
+    ).rejects.toMatchObject({
+      name: "UnresolvedSecretInputError",
+      path: "memory.search.remote.apiKey",
+      ref: apiKeyRef,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("does not reinterpret a resolved literal as an ambient env name", async () => {
     vi.stubEnv("GOOGLE_API_KEY", "ambient-key");
 

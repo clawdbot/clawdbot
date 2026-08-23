@@ -1,5 +1,8 @@
 /** Collects per-agent memory search secret refs from runtime config. */
-import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   hasAgentRosterProperty,
@@ -7,6 +10,7 @@ import {
   listAgentEntriesWithSource,
 } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveConfiguredGenericEmbeddingProviderId } from "../plugins/embedding-provider-config.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { runtimeMemorySecretOwnerId } from "./runtime-memory-secret-owner.js";
 import {
@@ -21,6 +25,7 @@ const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 
 function resolveMemoryEmbeddingProviderContract(params: {
   config: OpenClawConfig;
+  context: ResolverContext;
   defaults: Record<string, unknown> | undefined;
   override: Record<string, unknown> | undefined;
 }) {
@@ -31,22 +36,54 @@ function resolveMemoryEmbeddingProviderContract(params: {
     !configuredProvider || configuredProvider === "auto"
       ? DEFAULT_MEMORY_EMBEDDING_PROVIDER
       : configuredProvider;
-  const providerConfig = findNormalizedProviderValue(params.config.models?.providers, providerId);
+  const lookupIds = new Set(
+    [providerId, resolveConfiguredGenericEmbeddingProviderId(providerId, params.config)]
+      .filter((id): id is string => Boolean(id))
+      .map(normalizeProviderId),
+  );
+  // Manifest ownership is available before provider registration and stays
+  // unchanged afterward, so runtime activation cannot perturb owner digests.
+  const credentialOwnerIds = (params.context.manifestRegistry?.plugins ?? []).flatMap((plugin) =>
+    plugin.contracts?.embeddingProviders?.some((id) => lookupIds.has(normalizeProviderId(id)))
+      ? plugin.providers
+      : [],
+  );
+  const contractProviderIds = new Set(
+    [
+      providerId,
+      ...(credentialOwnerIds.length > 0
+        ? credentialOwnerIds
+        : Object.keys(params.config.models?.providers ?? {})),
+    ].map(normalizeProviderId),
+  );
+  const providerConfigs = new Map<string, Record<string, unknown>>();
+  for (const candidateId of contractProviderIds) {
+    const providerConfig = findNormalizedProviderValue(
+      params.config.models?.providers,
+      candidateId,
+    );
+    if (providerConfig) {
+      providerConfigs.set(candidateId, {
+        baseUrl: providerConfig.baseUrl,
+        apiKey: providerConfig.apiKey,
+        auth: providerConfig.auth,
+        authHeader: providerConfig.authHeader,
+        headers: providerConfig.headers,
+        request: providerConfig.request,
+        params: providerConfig.params,
+        region: providerConfig.region,
+        localService: providerConfig.localService,
+      });
+    }
+  }
   return {
     id: providerId,
-    config: providerConfig
-      ? {
-          baseUrl: providerConfig.baseUrl,
-          apiKey: providerConfig.apiKey,
-          auth: providerConfig.auth,
-          authHeader: providerConfig.authHeader,
-          headers: providerConfig.headers,
-          request: providerConfig.request,
-          params: providerConfig.params,
-          region: providerConfig.region,
-          localService: providerConfig.localService,
-        }
-      : undefined,
+    config:
+      providerConfigs.size === 1
+        ? providerConfigs.values().next().value
+        : providerConfigs.size > 1
+          ? Object.fromEntries(providerConfigs)
+          : undefined,
   };
 }
 
@@ -100,6 +137,7 @@ export function collectAgentMemorySearchAssignments(params: {
         agentEnabled: rawAgentRecord["enabled"],
         provider: resolveMemoryEmbeddingProviderContract({
           config: params.config,
+          context: params.context,
           defaults: defaultsMemorySearch,
           override: memorySearch,
         }),
