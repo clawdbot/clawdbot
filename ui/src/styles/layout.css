@@ -1052,7 +1052,7 @@ openclaw-settings-save-indicator:empty {
   /* 9px top pad centers the brand row's 30px icons on the app's shared
      24px chrome centerline (pane-header actions, floating toggles). The
      macOS app overrides this with its 50px titlebar clearance. */
-  padding: 9px var(--sidebar-pad-x) 12px;
+  padding: 9px var(--sidebar-pad-x) 8px;
   border: none;
   border-radius: 0;
   background: transparent;
@@ -1165,7 +1165,9 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-shell__footer {
   flex-shrink: 0;
-  padding: 4px 0 0;
+  margin-inline: calc(-1 * var(--sidebar-pad-x));
+  padding: 4px var(--sidebar-pad-x) 0;
+  border-block-start: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 }
 
 .sidebar-update-card {
