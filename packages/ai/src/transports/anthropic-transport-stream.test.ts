@@ -2152,7 +2152,10 @@ describe("anthropic transport stream", () => {
     // deltas overwrite the state an earlier snapshot wants to capture.
     const gates: Array<() => void> = [];
     const deltaObservedGates = chunks.map(
-      () => new Promise<void>((resolve) => gates.push(resolve)),
+      () =>
+        new Promise<void>((resolve) => {
+          gates.push(resolve);
+        }),
     );
     const encoder = new TextEncoder();
     const frames: Array<{ encoded: Uint8Array; waitFor?: Promise<void> }> = [
@@ -2246,10 +2249,12 @@ describe("anthropic transport stream", () => {
     }
     expect(previews[5]).not.toEqual({});
     expect(result.stopReason).toBe("toolUse");
-    const toolCall = result.content.find(
-      (block) => block.type === "toolCall" && block.name === "write",
-    );
-    expect(toolCall?.arguments).toEqual({ content: "x".repeat(1150) });
+    const toolCall = result.content.find((block) => block.type === "toolCall");
+    expect(toolCall).toMatchObject({
+      type: "toolCall",
+      name: "write",
+      arguments: { content: "x".repeat(1150) },
+    });
   });
 
   it("uses seeded Anthropic tool input when no argument deltas arrive", async () => {

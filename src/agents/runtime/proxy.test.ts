@@ -49,7 +49,9 @@ function responseFromSseFrames(frames: unknown[]): Response {
   const chunks = frames.map((frame) => encoder.encode(`data: ${JSON.stringify(frame)}\n\n`));
   const reader = {
     read: vi.fn(async () => {
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       const value = chunks.shift();
       return value ? { done: false, value } : { done: true, value: undefined };
     }),
@@ -222,6 +224,29 @@ describe("streamProxy", () => {
     expect(terminalArguments).toEqual(exactArguments);
     await expect(stream.result()).resolves.toMatchObject({
       content: [{ type: "toolCall", arguments: exactArguments }],
+    });
+  });
+
+  it("preserves empty arguments for terminal-only tool calls", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        responseFromSseFrames([
+          { type: "toolcall_start", contentIndex: 0, id: "call-1", toolName: "list" },
+          { type: "toolcall_end", contentIndex: 0 },
+          { type: "done", reason: "toolUse", usage },
+        ]),
+      ),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+
+    await expect(stream.result()).resolves.toMatchObject({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "call-1", name: "list", arguments: {} }],
     });
   });
 

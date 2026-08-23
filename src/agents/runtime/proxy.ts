@@ -558,7 +558,9 @@ function processProxyEvent(
       const content = partial.content[proxyEvent.contentIndex];
       if (content?.type === "toolCall") {
         const streamingContent = content as StreamingToolCall;
-        content.arguments = parseTerminalToolCallArguments(streamingContent.partialJson);
+        content.arguments = streamingContent.partialJson
+          ? parseTerminalToolCallArguments(streamingContent.partialJson)
+          : {};
         toolArgumentPreviewSchedules.delete(proxyEvent.contentIndex);
         delete (content as Partial<StreamingToolCall>).partialJson;
         return {

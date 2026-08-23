@@ -26,7 +26,7 @@ it("delays worker tool argument previews while preserving exact terminal argumen
     content: initialContent + checkpointContent,
     terminal: "exact",
   };
-  const start: WorkerInferenceProxyClient["start"] = async (request, handlers = {}) => {
+  const start: WorkerInferenceProxyClient["start"] = async (request, handlers) => {
     const identity = {
       runEpoch: request.runEpoch,
       sessionId: request.sessionId,
@@ -39,8 +39,10 @@ it("delays worker tool argument previews while preserving exact terminal argumen
       { type: "toolcall_end", contentIndex: 0 },
     ];
     for (const [index, event] of streamEvents.entries()) {
-      handlers.onEvent?.({ ...identity, seq: index + 1, event });
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      handlers?.onEvent?.({ ...identity, seq: index + 1, event });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     }
     return {
       type: "done",
