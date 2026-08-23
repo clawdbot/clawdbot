@@ -812,7 +812,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
         stream: AsyncStream<EventFrame>,
         timeoutSeconds: Int = 120) async throws -> String
     {
-        return try await withThrowingTaskGroup(of: String.self) { group in
+        try await withThrowingTaskGroup(of: String.self) { group in
             group.addTask { [run] in
                 for await evt in stream {
                     guard evt.event == "chat", let payload = evt.payload else { continue }

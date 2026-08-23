@@ -118,7 +118,10 @@ enum TalkRealtimeAgentWaitResultError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .finalReplyUnavailable:
-            "OpenClaw completed the request, but the Gateway did not return its authoritative final reply. Update OpenClaw and try again."
+            """
+            OpenClaw completed the request, but the Gateway did not return its authoritative final reply. \
+            Update OpenClaw and try again.
+            """
         }
     }
 }

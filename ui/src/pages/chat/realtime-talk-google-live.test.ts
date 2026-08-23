@@ -28,6 +28,22 @@ import {
 } from "./realtime-talk-shared.ts";
 import type { RealtimeTalkTransportContext } from "./realtime-talk-shared.ts";
 
+function currentGatewayToolCallResult(runId = "run-1") {
+  return {
+    runId,
+    agentId: "main",
+    agentSessionKey: "agent:main:main",
+  };
+}
+
+function currentGatewayAbortParams(runId = "run-1") {
+  return {
+    sessionKey: "agent:main:main",
+    runId,
+    agentId: "main",
+  };
+}
+
 describe("GoogleLiveRealtimeTalkTransport", () => {
   installGoogleLiveTestFixture();
 
@@ -487,13 +503,13 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       }),
       request: vi.fn(async (method: string, params: Record<string, unknown>) => {
         if (method === "chat.abort") {
-          expect(params).toEqual({ sessionKey: "main", runId });
+          expect(params).toEqual(currentGatewayAbortParams(runId));
           return { ok: true, aborted: true };
         }
         expect(method).toBe("talk.client.toolCall");
         expect(params.callId).toBe("call-1");
         expect(params.name).toBe(REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME);
-        return { runId };
+        return currentGatewayToolCallResult(runId);
       }),
     } as unknown as RealtimeTalkTransportContext["client"];
     const transport = createTransport({ onStatus }, client);
@@ -522,7 +538,10 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     }
 
     await waitForFast(() => {
-      expect(client["request"]).toHaveBeenCalledWith("chat.abort", { sessionKey: "main", runId });
+      expect(client["request"]).toHaveBeenCalledWith(
+        "chat.abort",
+        currentGatewayAbortParams(runId),
+      );
     });
     expect(onStatus).not.toHaveBeenCalledWith("listening");
   });
@@ -536,7 +555,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       }),
       request: vi.fn(async (method: string) => {
         expect(method).toBe("talk.client.toolCall");
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }),
     } as unknown as RealtimeTalkTransportContext["client"];
     const transport = createTransport({}, client);
@@ -581,7 +600,15 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
 
   it("does not retain browser tool arguments while a consult is pending", async () => {
     const client = createClient();
-    vi.mocked(client["request"]).mockResolvedValue({ runId: "run-1" });
+    vi.mocked(client["request"]).mockImplementation(async (method) => {
+      if (method === "talk.client.toolCall") {
+        return currentGatewayToolCallResult();
+      }
+      if (method === "chat.abort") {
+        return { ok: true, aborted: true };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
     const transport = createTransport({}, client);
     const ws = await startTransport(transport);
 
@@ -691,7 +718,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
         return { ok: true, aborted: true };
       }
       expect(method).toBe("talk.client.toolCall");
-      return { runId: `run-${String(params.callId)}` };
+      return currentGatewayToolCallResult(`run-${String(params.callId)}`);
     });
     const client = {
       addEventListener: vi.fn((listener: (event: { event: string; payload?: unknown }) => void) => {
@@ -732,15 +759,15 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     );
 
     await waitForFast(() =>
-      expect(client["request"]).toHaveBeenCalledWith("chat.abort", {
-        sessionKey: "main",
-        runId: "run-call-1",
-      }),
+      expect(client["request"]).toHaveBeenCalledWith(
+        "chat.abort",
+        currentGatewayAbortParams("run-call-1"),
+      ),
     );
-    expect(client["request"]).not.toHaveBeenCalledWith("chat.abort", {
-      sessionKey: "main",
-      runId: "run-call-2",
-    });
+    expect(client["request"]).not.toHaveBeenCalledWith(
+      "chat.abort",
+      currentGatewayAbortParams("run-call-2"),
+    );
     await waitForFast(() =>
       expect(getGoogleLiveToolOwnerState(transport).pendingCalls.has("call-1")).toBe(false),
     );
@@ -758,20 +785,23 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       }),
     );
     await waitForFast(() =>
-      expect(client["request"]).toHaveBeenCalledWith("chat.abort", {
-        sessionKey: "main",
-        runId: "run-call-2",
-      }),
+      expect(client["request"]).toHaveBeenCalledWith(
+        "chat.abort",
+        currentGatewayAbortParams("run-call-2"),
+      ),
     );
     await waitForFast(() => expect(onStatus).toHaveBeenCalledWith("listening"));
     transport.stop();
   });
 
   it("aborts an initial consult request and ignores a replay of its cancelled call id", async () => {
-    let resolveToolCall: (value: { runId: string }) => void = () => undefined;
-    const pendingToolCall = new Promise<{ runId: string }>((resolve) => {
-      resolveToolCall = resolve;
-    });
+    let resolveToolCall: (value: ReturnType<typeof currentGatewayToolCallResult>) => void = () =>
+      undefined;
+    const pendingToolCall = new Promise<ReturnType<typeof currentGatewayToolCallResult>>(
+      (resolve) => {
+        resolveToolCall = resolve;
+      },
+    );
     const request = vi.fn((method: string): Promise<unknown> => {
       if (method === "talk.client.toolCall") {
         return pendingToolCall;
@@ -800,12 +830,9 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
         true,
       ),
     );
-    resolveToolCall({ runId: "run-1" });
+    resolveToolCall(currentGatewayToolCallResult());
     await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith("chat.abort", {
-        sessionKey: "main",
-        runId: "run-1",
-      }),
+      expect(request).toHaveBeenCalledWith("chat.abort", currentGatewayAbortParams()),
     );
     await waitForFast(() =>
       expect(getGoogleLiveToolOwnerState(transport).pendingCalls.has("call-1")).toBe(false),
@@ -829,8 +856,13 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     const pendingControl = new Promise<{ ok: boolean; mode: string }>((resolve) => {
       resolveControl = resolve;
     });
-    const request = vi.fn((method: string): Promise<unknown> => {
+    const request = vi.fn((method: string, params: Record<string, unknown>): Promise<unknown> => {
       expect(method).toBe("talk.client.steer");
+      expect(params).toEqual({
+        sessionKey: "main",
+        text: "status",
+        mode: "status",
+      });
       return pendingControl;
     });
     const client = {

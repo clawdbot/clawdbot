@@ -14,6 +14,22 @@ import {
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
 } from "./realtime-talk-shared.ts";
 
+function currentGatewayToolCallResult(runId = "run-1") {
+  return {
+    runId,
+    agentId: "main",
+    agentSessionKey: "agent:main:main",
+  };
+}
+
+function currentGatewayAbortParams(runId = "run-1") {
+  return {
+    sessionKey: "agent:main:main",
+    runId,
+    agentId: "main",
+  };
+}
+
 describe("GoogleLiveRealtimeTalkTransport control results", () => {
   installGoogleLiveTestFixture();
 
@@ -21,8 +37,13 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
     const onStatus = vi.fn();
     const onTalkEvent = vi.fn();
     const client = createClient();
-    vi.mocked(client["request"]).mockImplementation(async (method) => {
+    vi.mocked(client["request"]).mockImplementation(async (method, params) => {
       if (method === "talk.client.steer") {
+        expect(params).toEqual({
+          sessionKey: "main",
+          text: "status",
+          mode: "status",
+        });
         return {
           ok: true,
           mode: "status",
@@ -68,9 +89,9 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
 
   it("sends spoken active-control acknowledgements through Google Live", async () => {
     const client = createClient();
-    vi.mocked(client["request"]).mockImplementation(async (method) => {
+    vi.mocked(client["request"]).mockImplementation(async (method, params) => {
       if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       if (method === "talk.client.steer") {
         return {
@@ -83,6 +104,10 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
           show: true,
           suppress: false,
         };
+      }
+      if (method === "chat.abort") {
+        expect(params).toEqual(currentGatewayAbortParams());
+        return { ok: true, aborted: true };
       }
       throw new Error(`unexpected request: ${method}`);
     });
@@ -124,7 +149,10 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
     );
 
     await waitForFast(() =>
-      expect(client["request"]).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
+      expect(client["request"]).toHaveBeenCalledWith("talk.client.steer", {
+        sessionKey: "main",
+        text: "status",
+      }),
     );
     expect(createdSources[0]?.stop).toHaveBeenCalledTimes(1);
     const sent = ws.sent.map((payload) => JSON.parse(payload));
@@ -138,9 +166,9 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
 
   it("replaces queued output with a spoken active-control steering acknowledgement in Google Live", async () => {
     const client = createClient();
-    vi.mocked(client["request"]).mockImplementation(async (method) => {
+    vi.mocked(client["request"]).mockImplementation(async (method, params) => {
       if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       if (method === "talk.client.steer") {
         return {
@@ -154,6 +182,10 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
           show: true,
           suppress: false,
         };
+      }
+      if (method === "chat.abort") {
+        expect(params).toEqual(currentGatewayAbortParams());
+        return { ok: true, aborted: true };
       }
       throw new Error(`unexpected request: ${method}`);
     });
@@ -195,7 +227,10 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
     );
 
     await waitForFast(() =>
-      expect(client["request"]).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
+      expect(client["request"]).toHaveBeenCalledWith("talk.client.steer", {
+        sessionKey: "main",
+        text: "actually focus on WebUI",
+      }),
     );
     expect(createdSources[0]?.stop).toHaveBeenCalledTimes(1);
     const sent = ws.sent.map((payload) => JSON.parse(payload));
@@ -209,9 +244,9 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
 
   it("interrupts queued output when active-control cancel is suppressed in Google Live", async () => {
     const client = createClient();
-    vi.mocked(client["request"]).mockImplementation(async (method) => {
+    vi.mocked(client["request"]).mockImplementation(async (method, params) => {
       if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       if (method === "talk.client.steer") {
         return {
@@ -225,6 +260,10 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
           show: true,
           suppress: false,
         };
+      }
+      if (method === "chat.abort") {
+        expect(params).toEqual(currentGatewayAbortParams());
+        return { ok: true, aborted: true };
       }
       throw new Error(`unexpected request: ${method}`);
     });
@@ -266,7 +305,10 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
     );
 
     await waitForFast(() =>
-      expect(client["request"]).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
+      expect(client["request"]).toHaveBeenCalledWith("talk.client.steer", {
+        sessionKey: "main",
+        text: "cancel that",
+      }),
     );
     expect(createdSources[0]?.stop).toHaveBeenCalledTimes(1);
     const sent = ws.sent.map((payload) => JSON.parse(payload));

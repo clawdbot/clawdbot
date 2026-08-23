@@ -2462,6 +2462,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(context.dedupe.get("chat:idem-steer-reject")?.payload).toEqual({
         runId: "idem-steer-reject",
         status: "ok",
+        terminalReply: {
+          disposition: "visible",
+          text: "fallback reply",
+        },
       });
     });
     expect(queueMessage).toHaveBeenCalledOnce();

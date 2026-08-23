@@ -78,6 +78,47 @@ function stubAnswerSdpFetch(): void {
   vi.stubGlobal("fetch", vi.fn(async () => new Response("answer-sdp")) as unknown as typeof fetch);
 }
 
+function currentGatewayToolCallResult(runId = "run-1") {
+  return {
+    runId,
+    agentId: "main",
+    agentSessionKey: "agent:main:main",
+  };
+}
+
+function currentGatewayAbortParams(runId = "run-1") {
+  return {
+    sessionKey: "agent:main:main",
+    runId,
+    agentId: "main",
+  };
+}
+
+function createCurrentGatewayRequest(controlResult?: unknown) {
+  return vi.fn(async (method: string, params: Record<string, unknown>) => {
+    if (method === "talk.client.toolCall") {
+      return currentGatewayToolCallResult();
+    }
+    if (method === "talk.client.steer" && controlResult !== undefined) {
+      return controlResult;
+    }
+    if (method === "chat.abort") {
+      expect(params).toEqual(currentGatewayAbortParams());
+      return { ok: true, aborted: true };
+    }
+    throw new Error(`unexpected request: ${method}`);
+  });
+}
+
+async function expectCurrentGatewaySteer(
+  request: ReturnType<typeof vi.fn>,
+  text: string,
+): Promise<void> {
+  await waitForFast(() =>
+    expect(request).toHaveBeenCalledWith("talk.client.steer", { sessionKey: "main", text }),
+  );
+}
+
 function createOpenAiTransport(
   client: Record<string, unknown> = {},
   callbacks: Record<string, unknown> = {},
@@ -850,16 +891,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       vi.fn(async () => new Response("answer-sdp")) as unknown as typeof fetch,
     );
     const listeners = new Set<(event: { event: string; payload?: unknown }) => void>();
-    const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
-      if (method === "chat.abort") {
-        expect(params).toEqual({ sessionKey: "main", runId: "run-1" });
-        return { ok: true, aborted: true };
-      }
-      expect(method).toBe("talk.client.toolCall");
-      expect(params.callId).toBe("call-1");
-      expect(params.name).toBe(REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME);
-      return { runId: "run-1" };
-    });
+    const request = createCurrentGatewayRequest();
     const transport = new WebRtcSdpRealtimeTalkTransport(
       {
         provider: "openai",
@@ -895,38 +927,28 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     transport.stop();
 
     await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith("chat.abort", { sessionKey: "main", runId: "run-1" }),
+      expect(request).toHaveBeenCalledWith("chat.abort", currentGatewayAbortParams()),
     );
     expect(listeners.size).toBe(0);
   });
 
   it("sends spoken active-control acknowledgements through the OpenAI data channel", async () => {
     stubAnswerSdpFetch();
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
-      }
-      if (method === "talk.client.steer") {
-        return {
-          ok: true,
-          mode: "status",
-          sessionKey: "main",
-          active: true,
-          message: "OpenClaw is working in read (running).",
-          speak: true,
-          show: true,
-          suppress: false,
-        };
-      }
-      throw new Error(`unexpected request: ${method}`);
+    const request = createCurrentGatewayRequest({
+      ok: true,
+      mode: "status",
+      sessionKey: "main",
+      active: true,
+      message: "OpenClaw is working in read (running).",
+      speak: true,
+      show: true,
+      suppress: false,
     });
     const { transport, peer } = await startActiveConsult(request);
 
     dispatchTranscription(peer, "status");
 
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
-    );
+    await expectCurrentGatewaySteer(request, "status");
     const sent = sentRealtimeEvents(peer);
     expectSpokenStatusMessage(sent, "OpenClaw is working in read (running).");
     expect(sent).toContainEqual({ type: "response.create" });
@@ -935,23 +957,15 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
   it("defers spoken active-control response creation until the active OpenAI response ends", async () => {
     stubAnswerSdpFetch();
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
-      }
-      if (method === "talk.client.steer") {
-        return {
-          ok: true,
-          mode: "status",
-          sessionKey: "main",
-          active: true,
-          message: "OpenClaw is working in read (running).",
-          speak: true,
-          show: true,
-          suppress: false,
-        };
-      }
-      throw new Error(`unexpected request: ${method}`);
+    const request = createCurrentGatewayRequest({
+      ok: true,
+      mode: "status",
+      sessionKey: "main",
+      active: true,
+      message: "OpenClaw is working in read (running).",
+      speak: true,
+      show: true,
+      suppress: false,
     });
     const { transport, peer } = await startActiveConsult(request, {
       responseAlreadyActive: true,
@@ -959,9 +973,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
     dispatchTranscription(peer, "status");
 
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
-    );
+    await expectCurrentGatewaySteer(request, "status");
     let sent = sentRealtimeEvents(peer);
     expect(sent).toContainEqual({ type: "response.cancel" });
     expectSpokenStatusMessage(sent, "OpenClaw is working in read (running).");
@@ -976,24 +988,16 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
   it("replaces stale OpenAI output with a spoken active-control steering acknowledgement", async () => {
     stubAnswerSdpFetch();
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
-      }
-      if (method === "talk.client.steer") {
-        return {
-          ok: true,
-          mode: "steer",
-          sessionKey: "main",
-          active: true,
-          queued: true,
-          message: "Got it. I steered the active run.",
-          speak: true,
-          show: true,
-          suppress: false,
-        };
-      }
-      throw new Error(`unexpected request: ${method}`);
+    const request = createCurrentGatewayRequest({
+      ok: true,
+      mode: "steer",
+      sessionKey: "main",
+      active: true,
+      queued: true,
+      message: "Got it. I steered the active run.",
+      speak: true,
+      show: true,
+      suppress: false,
     });
     const { transport, peer } = await startActiveConsult(request, {
       responseAlreadyActive: true,
@@ -1001,9 +1005,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
     dispatchTranscription(peer, "actually focus on WebUI");
 
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
-    );
+    await expectCurrentGatewaySteer(request, "actually focus on WebUI");
     const sent = sentRealtimeEvents(peer);
     expect(sent).toContainEqual({ type: "response.cancel" });
     expectSpokenStatusMessage(sent, "Got it. I steered the active run.");
@@ -1013,24 +1015,16 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
   it("interrupts stale OpenAI output when active-control cancel is suppressed", async () => {
     stubAnswerSdpFetch();
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
-      }
-      if (method === "talk.client.steer") {
-        return {
-          ok: true,
-          mode: "cancel",
-          sessionKey: "main",
-          active: true,
-          aborted: true,
-          message: "Cancelled the active OpenClaw run.",
-          speak: true,
-          show: true,
-          suppress: false,
-        };
-      }
-      throw new Error(`unexpected request: ${method}`);
+    const request = createCurrentGatewayRequest({
+      ok: true,
+      mode: "cancel",
+      sessionKey: "main",
+      active: true,
+      aborted: true,
+      message: "Cancelled the active OpenClaw run.",
+      speak: true,
+      show: true,
+      suppress: false,
     });
     const { transport, peer } = await startActiveConsult(request, {
       responseAlreadyActive: true,
@@ -1038,9 +1032,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
     dispatchTranscription(peer, "cancel that");
 
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
-    );
+    await expectCurrentGatewaySteer(request, "cancel that");
     const sent = sentRealtimeEvents(peer);
     expect(sent).toContainEqual({ type: "response.cancel" });
     expect(
@@ -1056,12 +1048,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       "fetch",
       vi.fn(async () => new Response("answer-sdp")) as unknown as typeof fetch,
     );
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
+    const request = createCurrentGatewayRequest();
     const transport = new WebRtcSdpRealtimeTalkTransport(
       {
         provider: "openai",

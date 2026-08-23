@@ -121,6 +121,22 @@ function createClient(): RealtimeTalkTransportContext["client"] {
   } as unknown as RealtimeTalkTransportContext["client"];
 }
 
+function currentGatewayToolCallResult(runId = "run-1") {
+  return {
+    runId,
+    agentId: "main",
+    agentSessionKey: "agent:main:main",
+  };
+}
+
+function currentGatewayAbortParams(runId = "run-1") {
+  return {
+    sessionKey: "agent:main:main",
+    runId,
+    agentId: "main",
+  };
+}
+
 function createTransport(overrides: Partial<RealtimeTalkTransportContext> = {}) {
   return new GatewayRelayRealtimeTalkTransport(createSession(), {
     callbacks: {},
@@ -920,7 +936,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     const client = createClient();
     vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       return {};
     });
@@ -972,7 +988,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     const client = createClient();
     vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       if (method === "talk.session.submitToolResult") {
         await submission;
@@ -1021,7 +1037,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     const client = createClient();
     vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       if (method === "talk.session.submitToolResult") {
         throw new Error("Provider rejected the tool result");
@@ -1063,7 +1079,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     const client = createClient();
     vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       return {};
     });
@@ -1100,7 +1116,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     const client = createClient();
     vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       return {};
     });
@@ -1145,7 +1161,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     const client = createClient();
     vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       return {};
     });
@@ -1227,7 +1243,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     const resolveCancellations: Array<(result: unknown) => void> = [];
     vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       if (method === "talk.session.cancelOutput") {
         return await new Promise<unknown>((resolve) => {
@@ -1347,7 +1363,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       const client = createClient();
       vi.mocked(client["request"]).mockImplementation(async (method) => {
         if (method === "talk.client.toolCall") {
-          return { runId: "run-1" };
+          return currentGatewayToolCallResult();
         }
         if (method === "talk.session.cancelOutput") {
           return { ok: true, status };
@@ -1407,7 +1423,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       const client = createClient();
       vi.mocked(client["request"]).mockImplementation(async (method) => {
         if (method === "talk.client.toolCall") {
-          return { runId: "run-1" };
+          return currentGatewayToolCallResult();
         }
         if (method === "talk.session.cancelOutput") {
           return cancellationResult;
@@ -1462,7 +1478,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     const client = createClient();
     vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       if (method === "talk.session.cancelOutput") {
         throw new Error("cancel failed");
@@ -1511,7 +1527,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     const client = createClient();
     vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       return {};
     });
@@ -1562,10 +1578,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     });
 
     await waitForFast(() =>
-      expect(client["request"]).toHaveBeenCalledWith("chat.abort", {
-        sessionKey: "main",
-        runId: "run-1",
-      }),
+      expect(client["request"]).toHaveBeenCalledWith("chat.abort", currentGatewayAbortParams()),
     );
     expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
     transport.stop();
@@ -1575,7 +1588,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     const client = createClient();
     vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       return {};
     });
@@ -1600,10 +1613,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     });
 
     await waitForFast(() =>
-      expect(client["request"]).toHaveBeenCalledWith("chat.abort", {
-        sessionKey: "main",
-        runId: "run-1",
-      }),
+      expect(client["request"]).toHaveBeenCalledWith("chat.abort", currentGatewayAbortParams()),
     );
     emitGatewayFrame({
       event: "chat",
@@ -1637,7 +1647,19 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       name: REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
       args: { mode: "status", text: "status" },
     });
-    await waitForFast(() => expect(requestCallsFor(client, "talk.session.steer")).toHaveLength(1));
+    await waitForFast(() =>
+      expect(requestCallsFor(client, "talk.session.steer")).toEqual([
+        [
+          "talk.session.steer",
+          {
+            sessionId: "relay-1",
+            sessionKey: "main",
+            text: "status",
+            mode: "status",
+          },
+        ],
+      ]),
+    );
 
     emitTalkEvent({
       relaySessionId: "relay-1",
@@ -1663,7 +1685,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     const client = createClient();
     vi.mocked(client["request"]).mockImplementation(async (method) => {
       if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       return {};
     });
@@ -1706,11 +1728,11 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     const client = createClient();
     vi.mocked(client["request"]).mockImplementation(async (method, params) => {
       if (method === "chat.abort") {
-        expect(params).toEqual({ sessionKey: "main", runId: "run-1" });
+        expect(params).toEqual(currentGatewayAbortParams());
         return { ok: true, aborted: true };
       }
       if (method === "talk.client.toolCall") {
-        return { runId: "run-1" };
+        return currentGatewayToolCallResult();
       }
       return {};
     });
@@ -1744,10 +1766,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
 
     transport.stop();
     await waitForFast(() =>
-      expect(client["request"]).toHaveBeenCalledWith("chat.abort", {
-        sessionKey: "main",
-        runId: "run-1",
-      }),
+      expect(client["request"]).toHaveBeenCalledWith("chat.abort", currentGatewayAbortParams()),
     );
     emitGatewayFrame({
       event: "chat",
