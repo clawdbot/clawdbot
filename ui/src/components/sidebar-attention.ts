@@ -466,7 +466,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     }
   };
 
-  private selectTab(tab: IssueTab, focusTab = false) {
+  private selectTab(tab: IssueTab) {
     this.selectedTab = tab;
     void this.updateComplete.then(() => {
       if (!this.panelOpen || this.selectedTab !== tab) {
@@ -477,9 +477,6 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
         list.scrollTop = 0;
       }
       this.syncOverflowCue();
-      if (focusTab) {
-        this.querySelector<HTMLElement>(`#sidebar-issues-tab-${tab}`)?.focus();
-      }
     });
   }
 
