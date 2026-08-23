@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
+  GatewayErrorDetailCodes,
   errorShape,
   validateMessageActionParams,
   validatePollParams,
@@ -29,6 +30,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import { validateExplicitMessageAccountSelection } from "../../infra/outbound/message-account-selection.js";
 import {
   hydrateAttachmentParamsForAction,
@@ -837,7 +839,13 @@ function createGatewayInflightUnavailableFailure(params: {
   channel: string;
   err: unknown;
 }): InflightResult {
-  const error = errorShape(ErrorCodes.UNAVAILABLE, String(params.err));
+  const error = errorShape(
+    ErrorCodes.UNAVAILABLE,
+    String(params.err),
+    params.err instanceof OutboundDeliveryError && params.err.recoveryOwnedRetry === true
+      ? { details: { code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED } }
+      : undefined,
+  );
   return createGatewayInflightResult({
     ...params,
     result: { ok: false, error },

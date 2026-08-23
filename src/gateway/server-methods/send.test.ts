@@ -9,7 +9,10 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  GatewayErrorDetailCodes,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { jsonResult } from "../../agents/tools/common.js";
@@ -19,6 +22,7 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -1455,6 +1459,40 @@ describe("gateway send mirroring", () => {
       expect(lastDispatchChannelMessageActionCall()?.deliveryRetryOwner).toBe(expected);
     },
   );
+
+  it.each([
+    ["queue-owned retry", true],
+    ["ordinary failure", false],
+  ])("reports structured details for %s", async (_label, recoveryOwnedRetry) => {
+    const dispatchError = new OutboundDeliveryError("connect ECONNREFUSED", {
+      cause: new Error("connect ECONNREFUSED"),
+      stage: "platform_send",
+    });
+    if (recoveryOwnedRetry) {
+      dispatchError.recoveryOwnedRetry = true;
+    }
+    mocks.dispatchChannelMessageAction.mockRejectedValueOnce(dispatchError);
+
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "slack",
+        action: "send",
+        params: { channelId: "C1", message: "hi" },
+        idempotencyKey: `idem-queued-detail-${recoveryOwnedRetry}`,
+      },
+      directCliClient(),
+    );
+
+    const error = firstRespondCall(respond)[2];
+    expect(error).toMatchObject({ code: ErrorCodes.UNAVAILABLE });
+    if (recoveryOwnedRetry) {
+      expect(error?.details).toEqual({
+        code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED,
+      });
+    } else {
+      expect(error).not.toHaveProperty("details");
+    }
+  });
 
   it("does not send after delegated authority closes during session preparation", async () => {
     const preparation = createDeferred<null>();
