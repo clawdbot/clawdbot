@@ -22,57 +22,19 @@ import {
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import { extractRawText } from "../../../lib/chat/message-extract.ts";
 import {
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
-import { formatUiError } from "../../../lib/format-error.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
-import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
 import "./session-diff-panel.ts";
 
-type DetailUnavailableReason = NonNullable<
-  Extract<SidebarContent, { kind: "markdown" }>["unavailableReason"]
->;
-type SidebarFullMessageRequest = Parameters<SidebarFullMessageLoader>[0];
-
 type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "task" }>;
-
-function hasFullMessageRequest(
-  content: ChatDetailPanelContent,
-): content is ChatDetailPanelContent & {
-  fullMessageRequest: SidebarFullMessageRequest;
-} {
-  return Boolean(
-    content.fullMessageRequest && (content.kind === "markdown" || content.kind === "canvas"),
-  );
-}
-
-function formatUnavailableReason(reason: DetailUnavailableReason | null | undefined): string {
-  switch (reason) {
-    case "oversized":
-      return t("chat.detailPanel.fullContentOversized");
-    case "not_visible":
-      return t("chat.detailPanel.fullContentNotVisible");
-    default:
-      return t("chat.detailPanel.fullContentUnavailable");
-  }
-}
-
-function extractMessageText(message: unknown): string | null {
-  if (!message || typeof message !== "object") {
-    return null;
-  }
-  if ("text" in message && typeof message.text === "string") {
-    return message.text;
-  }
-  return extractRawText(message);
-}
 
 function toPlainTextCodeFence(value: string, language = ""): string {
   const fenceHeader = language ? `\`\`\`${language}` : "```";
@@ -91,7 +53,6 @@ export function buildRawContent(
       kind: "markdown",
       content: toPlainTextCodeFence(rawText),
       rawText,
-      ...(content.unavailableReason ? { unavailableReason: content.unavailableReason } : {}),
     };
   }
   if (content.kind === "file") {
@@ -100,7 +61,6 @@ export function buildRawContent(
       kind: "markdown",
       content: toPlainTextCodeFence(rawText, content.language),
       rawText,
-      ...(content.unavailableReason ? { unavailableReason: content.unavailableReason } : {}),
     };
   }
   if (content.rawText?.trim()) {
@@ -108,7 +68,6 @@ export function buildRawContent(
       kind: "markdown",
       content: toPlainTextCodeFence(content.rawText, "json"),
       rawText: content.rawText,
-      ...(content.unavailableReason ? { unavailableReason: content.unavailableReason } : {}),
     };
   }
   return null;
@@ -343,58 +302,6 @@ export function renderSidebarPanel(
       ${renderMarkdownSidebar(props)}
     </div>
   `;
-}
-
-export async function upgradeSidebarMessage(
-  content: ChatDetailPanelContent,
-  loadFullMessage: SidebarFullMessageLoader | null | undefined,
-): Promise<{ content: ChatDetailPanelContent; error: string | null } | { error: string } | null> {
-  if (!hasFullMessageRequest(content) || !loadFullMessage) {
-    return null;
-  }
-  const request = content.fullMessageRequest;
-  try {
-    const result = await loadFullMessage(request);
-    if (!result?.ok || !result.message || typeof result.message !== "object") {
-      return {
-        content: {
-          ...content,
-          unavailableReason: result?.unavailableReason ?? "not_found",
-        },
-        error: formatUnavailableReason(result?.unavailableReason ?? "not_found"),
-      };
-    }
-    const fetchedText = extractMessageText(result.message);
-    const rawText =
-      fetchedText ??
-      (typeof content.rawText === "string"
-        ? content.rawText
-        : content.kind === "markdown"
-          ? content.content
-          : null);
-    return {
-      content:
-        content.kind === "markdown"
-          ? {
-              ...content,
-              content: rawText || content.content,
-              rawText: rawText || content.rawText || content.content,
-              unavailableReason: null,
-            }
-          : {
-              ...content,
-              rawText: rawText || content.rawText || null,
-              unavailableReason: null,
-            },
-      error: null,
-    };
-  } catch (error) {
-    return {
-      error: t("chat.detailPanel.fullContentLoadFailed", {
-        error: formatUiError(error),
-      }),
-    };
-  }
 }
 
 type SidebarNavigationCallbacks = {

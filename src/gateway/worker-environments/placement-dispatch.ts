@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import * as device from "./device-provider.js";
+import { getRuntimeConfig } from "../../config/config.js";
+import { resolveDevicePlacementEligibility } from "./device-placement-eligibility.js";
 import {
   createPlacementFailureActions,
   type WorkerActivationBarrier,
@@ -11,6 +12,7 @@ import {
 import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js";
 import {
   createWorkerPlacementDispatchStartup,
+  type WorkerDevicePlacementRequirementResolver,
   type WorkerPlacementRecoveryBarrier,
 } from "./placement-dispatch-startup.js";
 import { createWorkerPlacementMoveAbandonment } from "./placement-move-abandon.js";
@@ -124,6 +126,7 @@ type WorkerPlacementDispatchOptions = WorkerPlacementReclaimBarriers & {
     claim: import("./placement-store.js").WorkerSessionTurnClaim,
   ) => Promise<void>;
   resolveGitAuthor?: (agentId: string) => { name?: string; email?: string } | undefined;
+  resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
 };
 
 function isExactAttachedEnvironment(
@@ -164,6 +167,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     runActivationBarrier: options.runActivationBarrier,
     onActivated: options.onActivated,
     resolveGitAuthor: options.resolveGitAuthor,
+    resolveDevicePlacementRequirement: options.resolveDevicePlacementRequirement,
     reportTransition,
   });
 
@@ -190,6 +194,20 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     authorize?: WorkerPlacementAuthorization,
   ): Promise<WorkerActiveDispatchPlacement> => {
     let placement: WorkerDispatchPlacement | undefined;
+    const validateDevicePlacement = async () => {
+      if (!request.deviceId) {
+        return;
+      }
+      const eligibility = await resolveDevicePlacementEligibility({
+        environmentService: environments,
+        deviceId: request.deviceId,
+        requirement: request.devicePlacement,
+        config: getRuntimeConfig(),
+      });
+      if (!eligibility.ok) {
+        throw new Error(eligibility.error);
+      }
+    };
     try {
       placement = await options.runLocalBarrier({
         sessionId: request.sessionId,
@@ -208,16 +226,10 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           return placement;
         },
       });
-      if (request.deviceId) {
-        const availability = await device.resolveDeviceWorkerAvailability(
-          environments,
-          request.deviceId,
-        );
-        if (!availability.available) {
-          throw new Error(device.deviceUnavailableText(request.deviceId, availability));
-        }
-      }
+      await validateDevicePlacement();
       const localPath = await options.resolveWorkspacePath(request);
+      // Workspace preparation yields; fence the current paired node again before durable provision.
+      await validateDevicePlacement();
       const idempotencyKey =
         request.idempotencyKey ?? `session-dispatch:${request.sessionId}:${placement.generation}`;
       const expectedEnvironmentId = deriveEnvironmentIntent(idempotencyKey).environmentId;
@@ -536,6 +548,18 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           await cancelUnstagedFailedReclaim(
             error instanceof WorkerWorkspaceFinalFenceError && error.reclaimDisposition === "retry",
           ).catch(() => undefined);
+          const pendingReclaimResult = placements
+            .listPendingWorkspaceResults()
+            .find(
+              (pending) =>
+                pending.sessionId === reclaimClaim.sessionId &&
+                pending.claimId === reclaimClaim.claimId &&
+                pending.runId === reclaimClaim.runId,
+            );
+          if (pendingReclaimResult && pendingReclaimResult.workspaceAcceptedAtMs !== null) {
+            placements.handoffWorkspaceResultRecovery(reclaimClaim);
+            await recovery.reconcileActive(current.environmentId).catch(() => undefined);
+          }
           throw error;
         }
       },

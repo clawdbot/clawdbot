@@ -108,12 +108,22 @@ export function buildWidgetDocument(
   // This bridge precedes widget code and snapshots every authority-bearing
   // primitive. Inline chat keeps its private prompt port; board hosting adopts
   // the view ticket and routes every host API over one request channel.
+  // The activation listeners are that channel's navigation half: the frame
+  // sandbox grants no popups, so only a trusted new-tab activation on a
+  // ticketed board widget's http(s) anchor reaches the host. Widening the
+  // trusted/ticketed/http(s) gates hands ungranted widgets an outbound channel
+  // that the `connect-src` CSP in board-sandbox.ts otherwise denies. The
+  // activation predicate mirrors ui/src/app/native-link-routing.ts so widget
+  // links honor the same primary-click and middle-button contract; listening on
+  // bubble rather than capture keeps a widget's own preventDefault effective.
   const widgetBridge =
     '<script>(()=>{if(!window.parent||window.parent===window||Object.prototype.hasOwnProperty.call(window,"openclaw"))return;' +
     "const parent=window.parent;const post=parent.postMessage.bind(parent);" +
     "const P=Promise;const then=P.prototype.then;const ErrorCtor=Error;" +
     "const stringify=String;const freeze=Object.freeze;const define=Object.defineProperty;" +
     "const push=Array.prototype.push;const shift=Array.prototype.shift;" +
+    "const listen=window.addEventListener.bind(window);const path=Event.prototype.composedPath;" +
+    "const prevent=Event.prototype.preventDefault;const test=RegExp.prototype.test;" +
     "const later=setTimeout.bind(window);const cancel=clearTimeout.bind(window);" +
     "const c=new MessageChannel();" +
     "const promptPost=c.port1.postMessage.bind(c.port1);" +
@@ -127,11 +137,12 @@ export function buildWidgetDocument(
     "if(d&&d.get)act=d.get.bind(ua);}catch{}" +
     'post({type:"openclaw:widget-prompt-offer"},"*",[c.port2]);' +
     'post({type:"openclaw:widget-bridge-port-offer"},"*",[b.port2]);' +
-    "let ticket=null;let sequence=0;let hostInitExpired=false;const pending=new Map();const waiting=[];" +
+    "let ticket=null;let controlUiBaseUrl=null;let sequence=0;let hostInitExpired=false;const pending=new Map();const waiting=[];" +
     'const initTimer=later(()=>{hostInitExpired=true;while(waiting.length){const entry=shift.call(waiting);if(entry)entry.reject(new ErrorCtor("widget host capabilities unavailable"));}' +
     'while(promptWaiting.length){const entry=shift.call(promptWaiting);if(entry)entry.reject(new ErrorCtor("widget prompt host unavailable"));}},5000);' +
     'b.port1.addEventListener("message",event=>{const data=event.data;' +
     'if(data?.type==="openclaw:widget-host-init"&&typeof data.ticket==="string"){ticket=data.ticket;' +
+    'const base=data.controlUiBaseUrl;controlUiBaseUrl=typeof base==="string"&&/^https?:\\/\\//.test(base)?base:null;' +
     'bridgePost({type:"openclaw:widget-host-init-ack",ticket});cancel(initTimer);' +
     "while(waiting.length){const entry=shift.call(waiting);if(entry)entry.send();}" +
     "while(promptWaiting.length){const entry=shift.call(promptWaiting);if(entry)entry.send();}return;}" +
@@ -144,15 +155,25 @@ export function buildWidgetDocument(
     "catch(error){pending.delete(id);reject(error);}};" +
     'if(ticket)send();else if(hostInitExpired)reject(new ErrorCtor("widget host capabilities unavailable"));' +
     "else push.call(waiting,{send,reject});});" +
+    "const activate=event=>{if(event.isTrusted!==true||!ticket||event.defaultPrevented||event.shiftKey||event.altKey)return;" +
+    'const auxiliary=event.type==="auxclick"&&event.button===1;' +
+    'if(!auxiliary&&!(event.type==="click"&&event.button===0))return;' +
+    'for(let index=0,entries=path.call(event);index<entries.length;index++){const anchor=entries[index];if(anchor?.tagName!=="A")continue;' +
+    'const url=anchor.href;if(!url)continue;if(!auxiliary&&anchor.target!=="_blank")return;' +
+    "if(!test.call(/^https?:\\/\\//i,url))return;" +
+    'prevent.call(event);then.call(request("host.open",{url}),()=>{},()=>{});return;}};' +
+    'listen("click",activate);listen("auxclick",activate);' +
     "const sendPrompt=text=>{if(!act||act()!==true)return P.resolve(false);const value=stringify(text);" +
     'if(ticket)return request("prompt.send",{text:value});return new P((resolve,reject)=>{' +
     'const send=()=>{const result=request("prompt.send",{text:value});then.call(result,resolve,reject);};' +
     'const inline=()=>{promptPost({type:"openclaw:widget-prompt",prompt:value});resolve(true);};' +
     'if(inlinePromptReady)inline();else if(hostInitExpired)reject(new ErrorCtor("widget prompt host unavailable"));' +
     "else push.call(promptWaiting,{send,inline,reject});});};" +
-    "const api=freeze({" +
+    'const host={};define(host,"controlUiBaseUrl",{enumerable:true,get:()=>controlUiBaseUrl});freeze(host);' +
+    "const api=freeze({host," +
     'prompt:freeze({send:sendPrompt}),state:freeze({emit:payload=>request("state.emit",{payload})}),' +
     'data:freeze({read:(bindingId,params)=>request("data.read",{bindingId:stringify(bindingId),params})}),' +
+    'action:freeze({run:(action,params)=>request("action.run",{action:stringify(action),params:params===undefined?{}:params})}),' +
     'cron:freeze({trigger:jobId=>request("cron.trigger",{jobId:stringify(jobId)})})});' +
     'define(window,"openclaw",{value:api,writable:false,configurable:false});' +
     "window.sendPrompt=text=>{void sendPrompt(text);};" +

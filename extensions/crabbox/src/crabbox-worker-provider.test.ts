@@ -1956,20 +1956,25 @@ describe("Crabbox worker provider", () => {
   });
 
   it.each([
-    { idleTimeout: "1s", idleTimeoutMs: 1_000, intervalMs: 500 },
-    { idleTimeout: "2s", idleTimeoutMs: 2_000, intervalMs: 1_000 },
-    { idleTimeout: "5s", idleTimeoutMs: 5_000, intervalMs: 2_500 },
-    { idleTimeout: "12s", idleTimeoutMs: 12_000, intervalMs: 5_000 },
-    { idleTimeout: "30s", idleTimeoutMs: 30_000, intervalMs: 10_000 },
-    { idleTimeout: "6m", idleTimeoutMs: 360_000, intervalMs: 60_000 },
+    { idleTimeout: "1s", idleTimeoutMs: 1_000, intervalMs: 500, timeoutMs: 500 },
+    { idleTimeout: "2s", idleTimeoutMs: 2_000, intervalMs: 1_000, timeoutMs: 1_000 },
+    { idleTimeout: "5s", idleTimeoutMs: 5_000, intervalMs: 2_500, timeoutMs: 2_500 },
+    { idleTimeout: "12s", idleTimeoutMs: 12_000, intervalMs: 5_000, timeoutMs: 6_000 },
+    { idleTimeout: "30s", idleTimeoutMs: 30_000, intervalMs: 10_000, timeoutMs: 15_000 },
+    { idleTimeout: "6m", idleTimeoutMs: 360_000, intervalMs: 60_000, timeoutMs: 150_000 },
+    { idleTimeout: "45m", idleTimeoutMs: 2_700_000, intervalMs: 60_000, timeoutMs: 150_000 },
   ])(
     "heartbeats an active lease every $intervalMs ms for idleTimeout=$idleTimeout",
-    async ({ idleTimeout, idleTimeoutMs, intervalMs }) => {
+    async ({ idleTimeout, idleTimeoutMs, intervalMs, timeoutMs }) => {
       vi.useFakeTimers();
       const calls: string[][] = [];
+      const heartbeatTimeouts: number[] = [];
       const profile = { ...PROFILE, idleTimeout };
-      const provider = providerWithRunner(async (argv) => {
+      const provider = providerWithRunner(async (argv, options) => {
         calls.push(argv);
+        if (argv[1] === "heartbeat") {
+          heartbeatTimeouts.push(options.timeoutMs);
+        }
         return argv[1] === "inspect"
           ? commandResult({ stdout: inspectJson({ sshHostKey: HOST_KEY }) })
           : commandResult();
@@ -1994,6 +1999,7 @@ describe("Crabbox worker provider", () => {
             "--json",
           ],
         ]);
+        expect(heartbeatTimeouts).toEqual([timeoutMs]);
 
         await vi.advanceTimersByTimeAsync(intervalMs - 1);
         expect(heartbeatCalls()).toHaveLength(1);
@@ -2083,7 +2089,7 @@ describe("Crabbox worker provider", () => {
 
       expect(calls.filter((argv) => argv[1] === "heartbeat")).toHaveLength(1);
       expect(warnings).toEqual([
-        `Crabbox heartbeat is unavailable for worker lease ${LEASE_ID}; upgrade Crabbox to a release that includes \`crabbox heartbeat\` (added after v0.43.0); cloud worker machines may be reaped after 60m of coordinator-idle time`,
+        `Crabbox heartbeat is unavailable for worker lease ${LEASE_ID}; upgrade Crabbox to v0.44.0 or newer for \`crabbox heartbeat\`; cloud worker machines may be reaped after 60m of coordinator-idle time`,
       ]);
     } finally {
       await provider.destroy(lease);

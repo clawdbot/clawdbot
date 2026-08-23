@@ -48,6 +48,7 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramGetChat } from "./bot/types.js";
 import {
+  buildTelegramConversationRouteContext,
   resolveTelegramConversationRoute,
   resolveTelegramTargetSession,
 } from "./conversation-route.js";
@@ -545,6 +546,7 @@ export async function dispatchTelegramBuiltinTurn(params: {
       : `telegram:${dispatch.chatId}`,
     To: `slash:${dispatch.senderId || dispatch.chatId}`,
     ChatType: dispatch.isGroup ? "group" : "direct",
+    ...buildTelegramConversationRouteContext(dispatch),
     ConversationToolPolicy: dispatch.isGroup
       ? undefined
       : resolveTelegramDirectToolPolicy({

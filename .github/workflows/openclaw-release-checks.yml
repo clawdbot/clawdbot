@@ -1745,6 +1745,7 @@ jobs:
           summary=".artifacts/qa-e2e/${output_dir}/qa-suite-summary.json"
           validator_args=(
             --summary "$summary"
+            --candidate-suite-outcome "$CANDIDATE_SUITE_OUTCOME"
             --target-sha "$RELEASE_CHECK_TARGET_SHA"
             --lane "$RUNTIME_PAIR_LANE"
           )
@@ -1806,6 +1807,7 @@ jobs:
         if: always()
         env:
           CANDIDATE_REPORT_OUTCOME: ${{ steps.candidate_runtime_parity_report.outcome }}
+          CANDIDATE_SUITE_OUTCOME: ${{ steps.candidate_runtime_pair.outcome }}
           RELEASE_CHECK_TARGET_SHA: ${{ needs.resolve_target.outputs.revision }}
           RUNTIME_PAIR_LANE: ${{ matrix.lane }}
         run: |
@@ -1817,6 +1819,7 @@ jobs:
             --summary "$summary"
             --report-summary "$report_dir/qa-runtime-parity-summary.json"
             --report-markdown "$report_dir/qa-runtime-parity-report.md"
+            --candidate-suite-outcome "$CANDIDATE_SUITE_OUTCOME"
             --target-sha "$RELEASE_CHECK_TARGET_SHA"
             --lane "$RUNTIME_PAIR_LANE"
           )

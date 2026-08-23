@@ -1033,25 +1033,6 @@
   }
 }
 
-/* Match the .btn--sm dropdown triggers beside it instead of the native look. */
-.cron-run-sort {
-  flex: 0 0 auto;
-  width: auto;
-  padding: 6px 10px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  cursor: var(--cursor-action);
-}
-
-.cron-run-sort:hover {
-  background: var(--bg-hover);
-  border-color: var(--border-strong);
-}
-
 .cron-runs__empty {
   font-size: 13px;
 }

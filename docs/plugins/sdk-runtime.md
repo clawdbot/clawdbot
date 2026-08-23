@@ -536,12 +536,18 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
     `openDuplex` accepts the same node, command, parameters, timeout,
     idempotency key, session key, caller signal, and requested scopes as
-    `nodes.invoke`, plus an optional `maxMessageBytes`. The limit defaults to
-    100 MiB and can be reduced, but never increased beyond 100 MiB. OpenClaw
-    splits each binary message into ordered 8 KiB payload fragments that fit the
-    existing 16 KiB transport-frame limit; callers always send and receive
-    complete `Uint8Array` messages. Concurrent sends preserve message
-    boundaries.
+    `nodes.invoke`, plus optional `maxMessageBytes` and
+    `maxOutstandingDeliveryBytes` limits. The per-message limit defaults to
+    100 MiB and can be reduced, but never increased beyond 100 MiB.
+    `maxOutstandingDeliveryBytes` bounds the combined size of complete messages
+    whose asynchronous listener callbacks have not settled; it defaults to
+    `maxMessageBytes`, cannot be smaller than that limit, and cannot exceed
+    100 MiB. A protocol that can follow a maximum-sized response with a bounded
+    asynchronous notification may request a larger outstanding-delivery budget
+    without raising its per-message ceiling. OpenClaw splits each binary message
+    into ordered 8 KiB payload fragments that fit the existing 16 KiB
+    transport-frame limit; callers always send and receive complete
+    `Uint8Array` messages. Concurrent sends preserve message boundaries.
 
     Register the channel's single message listener immediately after
     `openDuplex` resolves. Before a listener is registered, OpenClaw buffers at
@@ -603,6 +609,12 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
     `node.pluginTools.update` after local plugin/MCP inventory changes.
 
     Inside the Gateway this runtime is in-process. In plugin CLI commands it calls the configured Gateway over RPC, so commands such as `openclaw googlemeet recover-tab` can inspect paired nodes from the terminal. Node commands still go through normal Gateway node pairing, command allowlists, plugin node-invoke policies, and node-local command handling.
+
+    When execution identity auditing is enabled for an admitted run, those
+    Gateway gates appear as enforced decision receipts. A successful node
+    result is attribution-only. A policy that returns without calling its
+    supplied `invokeNode` callback leaves the action unknown; returning a
+    successful plugin result does not prove that the node action occurred.
 
     Plugins that expose node-hosted agent tools can set `agentTool.defaultPlatforms` for non-dangerous commands that should be allowlisted by default. Omit it when operators must opt in with `gateway.nodes.commands.allow`. Dangerous node-host commands should register a node-invoke policy with `api.registerNodeInvokePolicy(...)`; the policy runs in the Gateway after command allowlist checks and before the command is forwarded to the node, so direct `node.invoke` calls, node-hosted plugin tools, and higher-level plugin tools share the same enforcement path.
 

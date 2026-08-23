@@ -222,7 +222,14 @@ describeControlUiE2e("Control UI chat message actions", () => {
           role: "assistant",
           content: [{ type: "text", text: truncatedPreview }],
           timestamp: Date.now() + 4,
-          __openclaw: { id: "assistant-full-message", seq: 5 },
+          // The Gateway records a display-cap structurally; the sentinel alone is
+          // ordinary Markdown to the UI.
+          __openclaw: {
+            id: "assistant-full-message",
+            seq: 5,
+            truncated: true,
+            reason: "display-cap",
+          },
         },
       ],
       methodResponses: {
@@ -358,7 +365,26 @@ describeControlUiE2e("Control UI chat message actions", () => {
         "Reply",
         "Copy as markdown",
       ]);
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            window.setTimeout(resolve, 0);
+          }),
+      );
+      expect(await page.locator(".chat-selection-popup").count()).toBe(0);
       await screenshot(page, "04-selected-text-context-menu.png");
+      await bubble.dispatchEvent("pointerup", {
+        button: 0,
+        ctrlKey: true,
+        pointerType: "mouse",
+      });
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            window.setTimeout(resolve, 0);
+          }),
+      );
+      expect(await page.locator(".chat-selection-popup").count()).toBe(0);
       await menu.getByRole("menuitem", { name: "Copy", exact: true }).click();
       await expect
         .poll(() => page.evaluate(() => navigator.clipboard.readText()))

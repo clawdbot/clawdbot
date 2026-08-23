@@ -393,6 +393,7 @@ export async function handleTelegramAction(
     sessionKey?: string | null;
     inboundEventKind?: string;
     gatewayClientScopes?: readonly string[];
+    deliveryRetryOwner?: ChannelMessageActionContext["deliveryRetryOwner"];
     conversationReadOrigin?: ConversationReadInvocationOrigin;
     requesterAccountId?: string | null;
     reply?: ChannelMessageActionContext["reply"];
@@ -646,6 +647,7 @@ export async function handleTelegramAction(
       silent: sendOptions.silent,
       durability: "required",
       gatewayClientScopes: options?.gatewayClientScopes,
+      deliveryRetryOwner: options?.deliveryRetryOwner,
       ...(mediaAccess ? { mediaAccess } : {}),
       ...(outboundSession ? { session: outboundSession } : {}),
     });

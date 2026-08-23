@@ -300,6 +300,19 @@ describe("node duplex message framing", () => {
     },
   );
 
+  it.each([0, 15, 16.5, Number.NaN, MAX_MESSAGE_BYTES + 1])(
+    "rejects an unsafe outstanding delivery limit of %s bytes",
+    (maxOutstandingDeliveryBytes) => {
+      expect(() =>
+        createNodeDuplexEndpoint({
+          sendFrame: () => {},
+          maxMessageBytes: 16,
+          maxOutstandingDeliveryBytes,
+        }),
+      ).toThrow(/outstanding delivery/i);
+    },
+  );
+
   it("rejects accumulated message overflow and excessive fragment counts", () => {
     const fragment = Buffer.alloc(FRAGMENT_BYTES).toString("base64");
     const overflow = createNodeDuplexEndpoint({
@@ -403,6 +416,79 @@ describe("node duplex message framing", () => {
     ).toThrow(/pending|in.flight/i);
     expect(listener).toHaveBeenCalledOnce();
     expect(onError).toHaveBeenCalledOnce();
+  });
+
+  it("enforces an expanded aggregate delivery budget independently of the message ceiling", () => {
+    const onError = vi.fn();
+    const listener = vi.fn(() => new Promise<void>(() => {}));
+    const endpoint = createNodeDuplexEndpoint({
+      sendFrame: () => {},
+      onError,
+      maxMessageBytes: 16,
+      maxOutstandingDeliveryBytes: 24,
+    });
+    endpoint.onMessage(listener);
+    endpoint.receive(dataFrame({ data: Buffer.alloc(16).toString("base64") }));
+    endpoint.receive(dataFrame({ message: 1, data: Buffer.alloc(8).toString("base64") }));
+
+    expect(() => endpoint.receive(dataFrame({ message: 2, data: "eA==" }))).toThrow(/pending/i);
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenCalledOnce();
+  });
+
+  it("delivers an exact-limit response and bounded following notification before either delivery settles", async () => {
+    const maxMessageBytes = 64 * 1024 * 1024;
+    const maxOutstandingDeliveryBytes = maxMessageBytes + 2 * 1024 * 1024;
+    const received: Uint8Array[] = [];
+    let finishDeliveries: (() => void) | undefined;
+    const deliveriesFinished = new Promise<void>((resolve) => {
+      finishDeliveries = resolve;
+    });
+    const receiver = createNodeDuplexEndpoint({
+      sendFrame: () => {},
+      maxMessageBytes,
+      maxOutstandingDeliveryBytes,
+    });
+    receiver.onMessage((message) => {
+      received.push(message);
+      return deliveriesFinished;
+    });
+    const sender = createNodeDuplexEndpoint({
+      sendFrame: (frame) => receiver.receive(frame),
+      maxMessageBytes,
+      maxOutstandingDeliveryBytes,
+    });
+    const response = Buffer.alloc(maxMessageBytes, 0x78);
+    const responseStart = Buffer.from('{"jsonrpc":"2.0","id":1,"result":"');
+    const responseEnd = Buffer.from('"}');
+    responseStart.copy(response);
+    responseEnd.copy(response, response.length - responseEnd.length);
+    const notification = Buffer.from(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "http/request/bodyDelta",
+        params: {
+          requestId: "response-at-limit",
+          seq: 1,
+          deltaBase64: Buffer.alloc(1024 * 1024).toString("base64"),
+          done: false,
+        },
+      }),
+    );
+
+    try {
+      await sender.send(response);
+      await sender.send(notification);
+      expect(received.map((message) => message.byteLength)).toEqual([
+        maxMessageBytes,
+        notification.byteLength,
+      ]);
+      await expect(sender.send(new Uint8Array(maxMessageBytes + 1))).rejects.toThrow(/maximum/i);
+    } finally {
+      finishDeliveries?.();
+    }
+
+    await receiver.drain();
   });
 
   it.each(["immediate", "buffered"] as const)(

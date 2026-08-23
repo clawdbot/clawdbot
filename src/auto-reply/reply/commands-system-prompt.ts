@@ -2,7 +2,7 @@
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
-import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
+import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import type { EmbeddedContextFile } from "../../agents/embedded-agent-helpers.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
 import {
@@ -20,6 +20,7 @@ import {
 import { buildConfiguredAgentSystemPrompt } from "../../agents/system-prompt-config.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
@@ -28,6 +29,8 @@ import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/sess
 import type { SkillEligibilityContext } from "../../skills/types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
+
+const log = createSubsystemLogger("auto-reply/commands-system-prompt");
 
 type CommandsSystemPromptBundle = {
   systemPrompt: string;
@@ -176,6 +179,11 @@ export async function resolveCommandsSystemPromptBundle(
     sessionId: targetSessionEntry?.sessionId,
     chatType: targetSessionEntry?.chatType,
     agentId: sessionAgentId,
+    warn: makeBootstrapWarn({
+      sessionLabel: params.sessionKey,
+      workspaceDir,
+      warn: (message) => log.warn(message),
+    }),
   });
   const toolPolicySessionKey = resolveRuntimePolicySessionKey({
     agentId: sessionAgentId,

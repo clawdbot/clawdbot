@@ -72,7 +72,7 @@ function resolveTelegramMessageActionName(action: ChannelMessageActionName) {
   return TELEGRAM_MESSAGE_ACTION_MAP[action as keyof typeof TELEGRAM_MESSAGE_ACTION_MAP];
 }
 
-function prepareTelegramSendPayload({
+async function prepareTelegramSendPayload({
   ctx,
   payload,
 }: Parameters<NonNullable<ChannelMessageActionAdapter["prepareSendPayload"]>>[0]) {
@@ -217,6 +217,7 @@ function describeTelegramMessageTool({
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeTelegramMessageTool,
+  providerOwnedReadGates: ["react", "edit", "delete"],
   resolveExecutionMode: () => "gateway",
   messageActionTargetAliases: {
     react: { aliases: ["messageId"], deliveryTargetAliases: [] },
@@ -257,6 +258,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     conversationReadOrigin,
     requesterAccountId,
     gatewayClientScopes,
+    deliveryRetryOwner,
   }) => {
     const telegramAction = resolveTelegramMessageActionName(action);
     if (!telegramAction) {
@@ -291,6 +293,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         sessionKey,
         inboundEventKind,
         gatewayClientScopes,
+        deliveryRetryOwner,
         ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
         ...(requesterAccountId ? { requesterAccountId } : {}),
         ...(reply ? { reply } : {}),

@@ -410,11 +410,13 @@ The bundled Crabbox provider now boots the box and runs
 directory. The Gateway persists one replay-safe setup identity, atomically
 binds the authenticated device identity to the worker environment, pushes the
 current bundle through the node channel, and removes the node role after
-provider teardown. `destroy` = release lease plus pairing cleanup. Codex
-remote-exec fails before allocation because it still requires an SSH-backed
-provider. The replaced reverse-tunnel/rsync cloud carrier has been deleted.
-Distinct stable SSH, OpenShell, Claude, and exec-host contracts remain until
-the missing node exec-server carrier supplies and proves equivalent behavior.
+provider teardown. `destroy` = release lease plus pairing cleanup. Codex now
+supports paired-device `remote-exec` over the approved duplex node carrier;
+disconnect ends the attempt, and reconnect starts a fresh attempt without
+resume. Crabbox cloud profiles remain `worker-turn` only. The replaced
+reverse-tunnel/rsync cloud carrier has been deleted. Distinct stable SSH,
+OpenShell, Claude, and exec-host contracts remain intact; broader replacement
+and reconnect or resume are later work.
 
 ## What the adversarial reviews killed or reshaped
 

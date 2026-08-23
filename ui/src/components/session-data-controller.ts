@@ -48,6 +48,7 @@ import {
 import {
   publishSidebarSessionList,
   refreshSidebarSessionList,
+  subscribeSidebarAgentSessionCaches,
   subscribeFilteredSidebarSessions,
   subscribeSessionDataGatewayEvents,
 } from "./session-data-controller-events.ts";
@@ -141,7 +142,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       )
       .watch(
         () => this.context?.agents,
-        (agents, notify) => agents.subscribe(notify),
+        (agents, notify) => subscribeSidebarAgentSessionCaches(agents, this, notify),
       )
       .watch(
         () => this.context?.agentSelection,
@@ -201,10 +202,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.gatewayConnected = false;
     this.retireSessionCatalogData();
     this.scroll.dispose();
-    if (this.activeSessionLineageRetryTimer) {
-      globalThis.clearTimeout(this.activeSessionLineageRetryTimer);
-      this.activeSessionLineageRetryTimer = null;
-    }
+    this.clearActiveSessionLineageRetry();
     this.subscriptions.hostDisconnected();
   }
 
@@ -365,6 +363,13 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     return this.scroll.state;
   }
 
+  private clearActiveSessionLineageRetry(): void {
+    if (this.activeSessionLineageRetryTimer) {
+      globalThis.clearTimeout(this.activeSessionLineageRetryTimer);
+      this.activeSessionLineageRetryTimer = null;
+    }
+  }
+
   updateSessionsScrollState(element: HTMLElement): void {
     this.scroll.update(element);
   }
@@ -387,10 +392,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     }
     this.activeSessionLineageLoaded = false;
     this.activeSessionLineageRequest = null;
-    if (this.activeSessionLineageRetryTimer) {
-      globalThis.clearTimeout(this.activeSessionLineageRetryTimer);
-      this.activeSessionLineageRetryTimer = null;
-    }
+    this.clearActiveSessionLineageRetry();
   }
 
   private readonly updateSessions = (sessions: SessionCapability) => {
@@ -624,10 +626,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       this.activeSessionLineageRequest = null;
       this.activeSessionLineageRoot = null;
       this.activeSessionLineageSelectedRow = null;
-      if (this.activeSessionLineageRetryTimer) {
-        globalThis.clearTimeout(this.activeSessionLineageRetryTimer);
-        this.activeSessionLineageRetryTimer = null;
-      }
+      this.clearActiveSessionLineageRetry();
       this.notify();
     }
     const { gateway, sessions } = this.context ?? {};

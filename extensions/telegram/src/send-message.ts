@@ -73,12 +73,18 @@ async function sendMessageTelegramWithContext(
   const {
     chatId,
     threadSpec,
+    threadParams: preparedThreadParams,
     request: requestWithChatNotFound,
   } = await prepareTelegramOutbound({
     to,
     context: apiContext,
     opts,
-    thread: { messageThreadId: opts.messageThreadId },
+    thread: {
+      messageThreadId: opts.messageThreadId,
+      replyToMessageId: opts.replyToMessageId,
+      replyQuoteText: opts.quoteText,
+      useReplyIdAsQuoteSource: true,
+    },
     request: { kind: "nonIdempotent" },
   });
   const reportDelivery = async (
@@ -136,17 +142,14 @@ async function sendMessageTelegramWithContext(
     opts.replyToIdSource === "implicit" &&
     opts.replyToMode !== undefined &&
     isSingleUseReplyToMode(opts.replyToMode);
-  const buildThreadParams = (includeReplyTo: boolean) =>
-    buildTelegramThreadReplyParams({
-      thread: threadSpec,
-      ...(includeReplyTo
-        ? {
-            replyToMessageId: opts.replyToMessageId,
-            replyQuoteText: opts.quoteText,
-            useReplyIdAsQuoteSource: true,
-          }
-        : {}),
-    });
+  let threadParamsWithoutReply: ReturnType<typeof buildTelegramThreadReplyParams> | undefined;
+  const buildThreadParams = (includeReplyTo: boolean) => {
+    if (includeReplyTo) {
+      return preparedThreadParams;
+    }
+    threadParamsWithoutReply ??= buildTelegramThreadReplyParams({ thread: threadSpec });
+    return threadParamsWithoutReply;
+  };
   const textMode = opts.textMode ?? "markdown";
   // Caller-authored HTML keeps legacy parse_mode HTML semantics (literal
   // newlines, 4096 chunking) even on rich accounts; blocks are markdown-only.
@@ -255,7 +258,7 @@ async function sendMessageTelegramWithContext(
     const needsSeparateText = Boolean(followUpText);
     // When splitting, put reply_markup only on the follow-up text (the "main" content),
     // not on the media message.
-    const mediaThreadParams = buildThreadParams(true);
+    const mediaThreadParams = preparedThreadParams;
     const mediaUsedReplyTo = resolveAcceptedReplyToMessageId(mediaThreadParams) !== undefined;
     const baseMediaParams = {
       ...mediaThreadParams,

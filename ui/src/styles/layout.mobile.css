@@ -176,7 +176,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 
 .shell--mobile-nav .topnav-shell {
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  grid-template-columns: minmax(40px, 1fr) auto minmax(40px, 1fr);
   gap: 10px;
 }
 

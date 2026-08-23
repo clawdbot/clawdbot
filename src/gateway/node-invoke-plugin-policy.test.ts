@@ -136,9 +136,9 @@ function createApprovalClientLookup(clients: GatewayClient[]): ApprovalClientLoo
     );
 }
 
-function createOperatorClient(): GatewayClient {
+function createOperatorClient(connId = "conn-requester"): GatewayClient {
   return createApprovalClient({
-    connId: "conn-requester",
+    connId,
     clientId: "client-owner",
     deviceId: "device-owner",
   });
@@ -168,6 +168,7 @@ function createApprovalRequestPolicy(params?: {
   description?: string;
   toolName?: string;
   agentId?: string;
+  allowedDecisions?: readonly ("allow-once" | "allow-always" | "deny")[];
 }): NodeInvokePolicyRegistration {
   return createDemoPolicy(async (ctx: OpenClawPluginNodeInvokePolicyContext) => {
     const approval = await ctx.approvals?.request({
@@ -175,6 +176,9 @@ function createApprovalRequestPolicy(params?: {
       description: params?.description ?? "Needs approval",
       ...(params?.toolName === undefined ? {} : { toolName: params.toolName }),
       ...(params?.agentId === undefined ? {} : { agentId: params.agentId }),
+      ...(params?.allowedDecisions === undefined
+        ? {}
+        : { allowedDecisions: params.allowedDecisions }),
       ...(params?.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
     });
     return { ok: true, payload: approval ?? null };
@@ -289,12 +293,11 @@ describe("applyPluginNodeInvokePolicy", () => {
     });
   });
 
-  it("streams approved dangerous commands through the existing scoped policy transport", async () => {
+  it("preserves session identity through approved dangerous streaming transport", async () => {
     const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
     const nodeSession = createNodeSession();
     nodeSession.pairingGeneration = "paired-generation-1";
-    const reviewer = createOperatorClient();
-    reviewer.connId = "conn-owner-approval";
+    const reviewer = createOperatorClient("conn-owner-approval");
     setDangerousDemoCommandRegistry([
       createDemoPolicy(async (policyContext) => {
         expect(policyContext.client?.scopes).toEqual(["operator.approvals"]);
@@ -338,6 +341,7 @@ describe("applyPluginNodeInvokePolicy", () => {
       nodeSession,
       command: DEMO_COMMAND,
       params: DEMO_PARAMS,
+      sessionKey: "agent:main:paired",
       nodeInvokeStream: stream,
     });
 
@@ -352,6 +356,7 @@ describe("applyPluginNodeInvokePolicy", () => {
       expect.objectContaining({
         expectedConnId: "conn-1",
         expectedPairingGeneration: "paired-generation-1",
+        sessionKey: "agent:main:paired",
         idleTimeoutMs: 5_000,
       }),
     );
@@ -733,11 +738,7 @@ describe("applyPluginNodeInvokePolicy", () => {
     const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
     const visibleConnIds = new Set(["conn-owner-approval"]);
     const getApprovalClientConnIds = createApprovalClientLookup([
-      createApprovalClient({
-        connId: "conn-owner-approval",
-        clientId: "client-owner",
-        deviceId: "device-owner",
-      }),
+      createOperatorClient("conn-owner-approval"),
       createApprovalClient({
         connId: "conn-other-approval",
         clientId: "client-other",
@@ -769,11 +770,7 @@ describe("applyPluginNodeInvokePolicy", () => {
   it("sanitizes node-policy approval titles at creation like the RPC ingress", async () => {
     const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
     const getApprovalClientConnIds = createApprovalClientLookup([
-      createApprovalClient({
-        connId: "conn-owner-approval",
-        clientId: "client-owner",
-        deviceId: "device-owner",
-      }),
+      createOperatorClient("conn-owner-approval"),
     ]);
     setDangerousDemoCommandRegistry([
       // Bidi override + zero-width space: reviewer-spoofing characters.
@@ -793,6 +790,29 @@ describe("applyPluginNodeInvokePolicy", () => {
     // Metadata is interpolated into channel approval text lines.
     expect(record.request.toolName).toBe("tool\\u{202E}run");
     expect(record.request.agentId).toBe("agent\\u{200B}x");
+
+    await expectApprovalResolution(resultPromise, manager, record);
+  });
+
+  it("limits explicitly one-shot node-policy approvals to allow-once or deny", async () => {
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
+      resolveAllowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions,
+    });
+    setDangerousDemoCommandRegistry([
+      createApprovalRequestPolicy({ allowedDecisions: ["allow-once"] }),
+    ]);
+    const { context } = createContext({
+      pluginApprovalManager: manager,
+      getApprovalClientConnIds: createApprovalClientLookup([
+        createOperatorClient("conn-owner-approval"),
+      ]),
+    });
+    const resultPromise = invokeDemoPolicy(context, createOperatorClient());
+
+    const record = await expectSinglePendingApproval(manager);
+    expect(record.request.allowedDecisions).toEqual(["allow-once", "deny"]);
+    expect(manager.resolve(record.id, "allow-always")).toBe(false);
+    expect(manager.listPendingRecords()).toHaveLength(1);
 
     await expectApprovalResolution(resultPromise, manager, record);
   });
@@ -983,11 +1003,7 @@ describe("applyPluginNodeInvokePolicy", () => {
     const { context } = createContext({
       pluginApprovalManager: manager,
       getApprovalClientConnIds: createApprovalClientLookup([
-        createApprovalClient({
-          connId: "conn-owner-approval",
-          clientId: "client-owner",
-          deviceId: "device-owner",
-        }),
+        createOperatorClient("conn-owner-approval"),
       ]),
     });
     const resultPromise = invokeDemoPolicy(context, createOperatorClient());
@@ -1005,11 +1021,7 @@ describe("applyPluginNodeInvokePolicy", () => {
     const { context } = createContext({
       pluginApprovalManager: manager,
       getApprovalClientConnIds: createApprovalClientLookup([
-        createApprovalClient({
-          connId: "conn-owner-approval",
-          clientId: "client-owner",
-          deviceId: "device-owner",
-        }),
+        createOperatorClient("conn-owner-approval"),
       ]),
     });
     const resultPromise = invokeDemoPolicy(context, createOperatorClient());
@@ -1038,11 +1050,7 @@ describe("applyPluginNodeInvokePolicy", () => {
     const { context, invoke } = createContext({
       pluginApprovalManager: manager,
       getApprovalClientConnIds: createApprovalClientLookup([
-        createApprovalClient({
-          connId: "conn-owner-approval",
-          clientId: "client-owner",
-          deviceId: "device-owner",
-        }),
+        createOperatorClient("conn-owner-approval"),
       ]),
     });
 
@@ -1082,11 +1090,7 @@ describe("applyPluginNodeInvokePolicy", () => {
     const { context } = createContext({
       pluginApprovalManager: manager,
       getApprovalClientConnIds: createApprovalClientLookup([
-        createApprovalClient({
-          connId: "conn-owner-approval",
-          clientId: "client-owner",
-          deviceId: "device-owner",
-        }),
+        createOperatorClient("conn-owner-approval"),
       ]),
     });
     const resultPromise = invokeDemoPolicy(context, createOperatorClient());

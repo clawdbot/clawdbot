@@ -45,12 +45,16 @@ first-failure path is preferable; Release Decision then cancels only the exact
 still-active child that owns the blocking failure.
 
 After dispatch, the parent writes one immutable
-`full-release-execution-plan-<run-id>` artifact. It records selected and
+`full-release-execution-plan-<run-id>` artifact and preserves the same bytes in
+an exact run-ID Actions cache. It records selected and
 required coverage, gate results, reuse identity, the original parent attempt,
 and every exact child run ID, attempt, title, workflow ref, and Tooling SHA.
 Decision, Drain, manifest generation, evidence verification, and the final
-verifier consume this artifact. Collector retries restore it and adopt the
-same children; they never rebuild the plan or redispatch tests.
+verifier consume the artifact for their current attempt. Collector retries
+restore the immutable cached copy, validate it, and upload the artifact again
+for the retry; they never rebuild the plan or redispatch tests. A missing or
+evicted cache fails closed, so start a new validation instead of retrying that
+stale parent.
 Release Decision also repeats canonical reuse-chain validation before a reused
 run can pass. The sealed target SHA, evidence SHA, policy, changed-path set,
 selected run, root run, source manifest, trusted tooling identity, and child

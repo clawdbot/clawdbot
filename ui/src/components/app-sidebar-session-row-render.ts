@@ -76,6 +76,7 @@ export interface SessionListHost {
   >;
   readonly sidebarMenus: Pick<
     SidebarMenusController,
+    | "catalogMenu"
     | "catalogViewMenuPosition"
     | "openCatalogViewMenu"
     | "openSessionGroupMenu"
@@ -220,11 +221,13 @@ export function renderRecentSession(params: {
       channelAvatarAuth,
     );
   const trailingDescription = session.isChild
-    ? ""
+    ? running && session.unread
+      ? t("sessionsView.unread")
+      : ""
     : describeSessionTrailingState(session, pullRequestState);
   const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
   const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
-  const stateId = trailingIndicator === nothing ? undefined : sidebarSessionStateId(session.key);
+  const stateId = trailingDescription ? sidebarSessionStateId(session.key) : undefined;
   const openMenuFromEvent = (event: MouseEvent | KeyboardEvent) =>
     handleContextMenuEvent(
       event,
@@ -358,7 +361,9 @@ export function renderRecentSession(params: {
                 ),
               })}
               ${trailingIndicator === nothing
-                ? nothing
+                ? trailingDescription
+                  ? html`<span class="sr-only" id=${stateId}>${trailingDescription}</span>`
+                  : nothing
                 : html`<span class="session-row-aside">
                     <span
                       class="session-row-state"

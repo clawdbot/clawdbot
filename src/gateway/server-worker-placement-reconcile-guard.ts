@@ -29,7 +29,11 @@ export function installWorkerPlacementReconcileGuard(params: {
         owner &&
         (environment?.state === "requested" ||
           environment?.state === "provisioning" ||
-          environment?.state === "bootstrapping")
+          environment?.state === "bootstrapping") &&
+        (owner.state !== "failed" ||
+          owner.turnClaim !== null ||
+          owner.activeOwnerEpoch !== null ||
+          environment.destroyRequestedAtMs === null)
       ) {
         throw new Error(`Worker environment ${environmentId} provisioning owner is ${owner.state}`);
       }

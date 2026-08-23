@@ -602,6 +602,7 @@ export function createAgentEventHandler({
                   updatedAt: row.updatedAt ?? undefined,
                   status: row.status,
                   lastRunError: row.lastRunError,
+                  lastRunId: row.lastRunId,
                   startedAt: row.startedAt,
                   endedAt: row.endedAt,
                   runtimeMs: row.runtimeMs,
@@ -629,6 +630,8 @@ export function createAgentEventHandler({
       : {};
     const clearsLastRunError =
       Object.hasOwn(lifecyclePatch, "lastRunError") && lifecyclePatch.lastRunError === undefined;
+    const clearsLastRunId =
+      Object.hasOwn(lifecyclePatch, "lastRunId") && lifecyclePatch.lastRunId === undefined;
     const projectedRow = row
       ? lifecycleProjection
         ? buildGatewaySessionEventRow(row, { lifecycle: true })
@@ -639,9 +642,10 @@ export function createAgentEventHandler({
           ...projectedRow,
           ...lifecyclePatch,
           ...activeRunFields,
-          // JSON drops undefined values, so a start/success must send null to
-          // evict a prior failure reason from the subscribed client row.
+          // JSON drops undefined values, so starts/successes need tombstones
+          // for terminal fields retained in the subscribed client row.
           ...(clearsLastRunError ? { lastRunError: null } : {}),
+          ...(clearsLastRunId ? { lastRunId: null } : {}),
         }
       : undefined;
     if (session && omitUnscopedGlobalGoal) {
@@ -897,7 +901,10 @@ export function createAgentEventHandler({
         const persistence = persistGatewaySessionLifecycleEventForEvent({
           sessionKey,
           agentId: sessionAgentId,
-          event: evt,
+          event: {
+            ...evt,
+            ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
+          },
         });
         trackTrackedRunTerminalPersistence?.({
           runId: evt.runId,
@@ -1770,7 +1777,10 @@ export function createAgentEventHandler({
       void persistGatewaySessionLifecycleEventForEvent({
         sessionKey,
         agentId: sessionAgentId,
-        event: evt,
+        event: {
+          ...evt,
+          ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
+        },
       }).catch((err: unknown) => {
         // Surface the swallowed start-phase persistence failure: a silent write
         // failure drops the run's start marker from restart-recovery accounting

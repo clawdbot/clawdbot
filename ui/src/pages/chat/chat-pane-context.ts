@@ -40,7 +40,7 @@ import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.t
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import { retireSessionWorkspaceCheckout } from "./components/chat-session-workspace.ts";
 import {
-  reconcileStaleChatRunAfterSessionStatePublication,
+  reconcileChatRunAfterSessionStatePublication,
   replayPendingChatAbort,
 } from "./run-lifecycle.ts";
 import { cancelChatScroll } from "./scroll.ts";
@@ -167,9 +167,11 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       );
       return;
     }
-    const reconciledLocalCompletion = reconcileStaleChatRunAfterSessionStatePublication(state);
+    const reconciledLocalCompletion = reconcileChatRunAfterSessionStatePublication(state);
     this.reconcileWaitingApprovalSnapshot();
-    if (!reconciledLocalCompletion) {
+    if (reconciledLocalCompletion) {
+      void retryReconnectableQueuedChatSends(state);
+    } else {
       state.requestUpdate?.();
     }
   }
@@ -301,7 +303,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.connectionEpoch = this.connectionGeneration;
     state.hello = snapshot.hello;
     if (sourceChanged) {
-      retireSessionWorkspaceCheckout(state);
+      retireSessionWorkspaceCheckout(state, this.presented);
     }
     if (!sourceChanged && previousMediaAuthToken !== resolveAssistantAttachmentAuthToken(state)) {
       releaseChatMediaResourceSubscriber(state.requestUpdate);

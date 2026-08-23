@@ -237,6 +237,8 @@ export class BoardWidgetFrameLifecycle {
     this.lastFrameUrl = src;
     const sandboxSrc = this.resolveSandboxFrameUrl(widget);
     if (sandboxSrc) {
+      // Never grant popups: host.open handles user-clicked links so ungranted
+      // widgets cannot escape network containment through navigation.
       return html`
         <iframe
           class="board-widget__frame"
@@ -402,6 +404,7 @@ export class BoardWidgetFrameLifecycle {
         this.host.context()?.gateway.connection.gatewayUrl ?? "",
         window.location.origin,
       ),
+      controlUiBaseUrl: `${window.location.origin}${this.host.context()?.basePath ?? ""}`,
       client: this.host.context()?.gateway.snapshot.client ?? undefined,
       resolveFrameUrl,
       confirmPrompt: (prompt) => window.confirm(`${t("common.confirm")}:\n\n${prompt}`),

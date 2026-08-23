@@ -339,7 +339,8 @@ function handle(message) {
     }
     void (async () => {
       await waitForPath(callToolReleasePath);
-      setTimeout(() => {
+      log("delay tools/call " + callToolDelayMs);
+      pendingTimer = setTimeout(() => {
         send({
           jsonrpc: "2.0",
           id: message.id,
@@ -1186,6 +1187,79 @@ describe("session MCP runtime", () => {
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the configured request timeout instead of the connection timeout for delayed MCP tools/list", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-configured-listtools-");
+    const serverPath = path.join(tempDir, "configured-list-tools.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      delayMs: 2_000,
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-configured-listtools-timeout",
+      sessionKey: "agent:test:session-configured-listtools-timeout",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            configuredListTools: {
+              command: process.execPath,
+              args: [serverPath],
+              connectionTimeoutMs: 1_000,
+              requestTimeoutMs: 4_000,
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["slow_tool"]);
+      await expect(fs.readFile(logPath, "utf8")).resolves.toContain("delay tools/list 2000");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("rejects delayed MCP tools/call responses that exceed the configured request timeout", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-call-timeout-");
+    const serverPath = path.join(tempDir, "slow-tool-call.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      callToolDelayMs: 1_500,
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-tool-call-timeout",
+      sessionKey: "agent:test:session-tool-call-timeout",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            slowToolCall: {
+              command: process.execPath,
+              args: [serverPath],
+              requestTimeoutMs: 250,
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      await runtime.getCatalog();
+      await expect(runtime.callTool("slowToolCall", "slow_tool", {})).rejects.toThrow(/timed out/i);
+      await waitForFileText(logPath, "delay tools/call 1500", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+    } finally {
+      await runtime.dispose();
     }
   });
 

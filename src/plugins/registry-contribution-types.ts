@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import type {
   LegacyMemoryReadResult,
+  MemoryOriginClass,
   MemoryReadResult,
   MemorySearchManager,
   MemorySearchResult,
@@ -279,6 +280,12 @@ export type MemoryPluginRuntime = {
     sandboxed: boolean;
     hits: MemorySearchResult[];
   }): Promise<MemorySearchResult[]>;
+  classifyWorkspaceMemoryPaths?(params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    workspaceDir: string;
+    relativePaths: string[];
+  }): Promise<Array<{ relativePath: string; originClass: MemoryOriginClass }>>;
   closeMemorySearchManager?(params: { cfg: OpenClawConfig; agentId: string }): Promise<void>;
   closeAllMemorySearchManagers?(): Promise<void>;
 };

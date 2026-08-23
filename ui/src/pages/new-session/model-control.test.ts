@@ -64,6 +64,41 @@ describe("new-session model runtime", () => {
     expect(control.cloudRuntimeUnsupportedReason(profile)).toBe(expected);
   });
 
+  it.each([
+    {
+      name: "allows opted-in remote execution",
+      runtimeId: "codex",
+      devicePlacement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+    },
+    {
+      name: "allows embedded execution",
+      runtimeId: "openclaw",
+      devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+    },
+    { name: "rejects a cloud-only runtime", runtimeId: "cloud-only" },
+    {
+      name: "rejects a stale support flag without an owner requirement",
+      runtimeId: "stale",
+      devicePlacementSupported: true,
+    },
+  ])("$name on paired devices", ({ runtimeId, devicePlacement, devicePlacementSupported }) => {
+    const control = new NewSessionModelControl(() => undefined);
+    vi.spyOn(control, "resolveAgentRuntime").mockReturnValue({
+      id: runtimeId,
+      cloudPlacementSupported: true,
+      devicePlacementSupported: devicePlacementSupported ?? Boolean(devicePlacement),
+      ...(devicePlacement ? { devicePlacement } : {}),
+      source: "model",
+    });
+
+    expect(control.devicePlacementUnsupportedReason()).toBe(
+      devicePlacement ? undefined : "This runtime does not support paired devices",
+    );
+  });
+
   it("keeps CLI agents hidden and undiscovered while the Labs gate is off", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },

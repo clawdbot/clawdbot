@@ -4237,7 +4237,7 @@ describe("runCli exit behavior", () => {
     expectBoundTui({ url, password: "configured-remote-password" });
   });
 
-  it("falls back to gateway env auth when configured remote SecretRefs are unresolved", async () => {
+  it("does not replace unresolved remote SecretRefs with gateway env auth", async () => {
     const url = "ws://127.0.0.1:18789";
     primeBareRootConfig({
       gateway: {
@@ -4270,17 +4270,9 @@ describe("runCli exit behavior", () => {
       },
     );
 
-    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
-      url,
-      token: "shell-fallback-auth-value",
-      password: "env-remote-password",
-    });
+    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({ url });
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expectBoundTui({
-      url,
-      token: "shell-fallback-auth-value",
-      password: "env-remote-password",
-    });
+    expectBoundTui({ url });
   });
 
   it("probes an explicitly allowed plaintext private remote gateway", async () => {

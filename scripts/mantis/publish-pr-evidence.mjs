@@ -9,7 +9,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 
-/** @typedef {Record<string, unknown> & { expected?: string, fixed?: boolean, ref?: string, sha?: string, status?: string }} EvidenceLane */
+/** @typedef {{ mode: "absent" | "contains", target: "botApiRequests" | "observationEvents" | "providerRequests", value: string }} EvidenceAssertion */
+/** @typedef {Record<string, unknown> & { assertion?: EvidenceAssertion, assertionOccurrences?: number, detail?: string, digest?: string, expectationMet: boolean, expected?: string, fixed?: boolean, ref?: string, sha?: string, status?: string }} EvidenceLane */
 /**
  * @typedef {{
  *   alt?: string,
@@ -27,7 +28,7 @@ import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 /**
  * @typedef {{
  *   artifacts: EvidenceArtifact[],
- *   comparison: { baseline?: EvidenceLane, candidate: EvidenceLane, outcome?: "blocked" | "fail" | "pass", pass?: boolean },
+ *   comparison: { baseline?: EvidenceLane, candidate: EvidenceLane, differential?: string, outcome: "blocked" | "fail" | "pass", pass: boolean, verdictNote?: string },
  *   id: string,
  *   manifestDir: string,
  *   scenario: string,
@@ -70,6 +71,37 @@ import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 const MANTIS_ARTIFACT_UPLOAD_TIMEOUT_MS = 300_000;
 // Untrusted storage error bodies are for diagnostics only; keep them small.
 const MANTIS_UPLOAD_ERROR_BODY_MAX_BYTES = 64 * 1024;
+const COMMENT_GRAPHEME_SEGMENTER = new Intl.Segmenter("en", { granularity: "grapheme" });
+const MANTIS_EVIDENCE_SCHEMA_VERSION = 2;
+const TELEGRAM_ASSERTION_FACT_PATHS = {
+  botApiRequests: ["botApiRequests"],
+  observationEvents: ["observation", "events"],
+  providerRequests: ["providerRequests"],
+};
+
+/**
+ * @param {string | undefined} value
+ * @param {number} maxLength
+ * @returns {string | undefined}
+ */
+export function sanitizeCommentText(value, maxLength) {
+  const escaped = value
+    ?.trim()
+    .replace(/\s+/gu, " ")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("`", "&#96;");
+  if (!escaped) {
+    return undefined;
+  }
+  const graphemes = Array.from(
+    COMMENT_GRAPHEME_SEGMENTER.segment(escaped),
+    ({ segment }) => segment,
+  );
+  return graphemes.length > maxLength ? `${graphemes.slice(0, maxLength - 1).join("")}…` : escaped;
+}
+
 function parseArgs(argv) {
   const args = {};
   for (let index = 0; index < argv.length; index += 1) {
@@ -156,6 +188,128 @@ function resolveArtifact(manifestDir, artifact) {
     targetPath: normalizeTargetPath(artifact.targetPath ?? path.basename(artifact.path)),
   };
 }
+
+function requireExpectationMet(comparison, laneName) {
+  const lane = comparison[laneName];
+  if (!lane || typeof lane !== "object") {
+    throw new Error(`Mantis evidence comparison requires a ${laneName} lane.`);
+  }
+  if (typeof lane.expectationMet !== "boolean") {
+    throw new Error(`Mantis evidence comparison.${laneName}.expectationMet must be a boolean.`);
+  }
+  return lane.expectationMet;
+}
+
+function evaluateTelegramAssertion(manifest, manifestDir, laneName) {
+  const lane = manifest.comparison[laneName];
+  const assertion = lane?.assertion;
+  const validAssertion =
+    assertion &&
+    typeof assertion === "object" &&
+    !Array.isArray(assertion) &&
+    Object.keys(assertion).toSorted().join(",") === "mode,target,value" &&
+    Object.hasOwn(TELEGRAM_ASSERTION_FACT_PATHS, assertion.target) &&
+    (assertion.mode === "contains" || assertion.mode === "absent") &&
+    typeof assertion.value === "string" &&
+    assertion.value.length >= 1 &&
+    assertion.value.length <= 200;
+  if (!validAssertion) {
+    throw new Error(
+      `Telegram Desktop comparison.${laneName}.assertion must be exactly {target: providerRequests|botApiRequests|observationEvents, mode: contains|absent, value: 1..200 character literal}.`,
+    );
+  }
+  const factsPath = `${laneName}/mantis-lane-facts.json`;
+  const factsArtifact = (manifest.artifacts ?? []).find(
+    (artifact) => artifact?.lane === laneName && artifact?.path === factsPath,
+  );
+  if (!factsArtifact) {
+    throw new Error(`Telegram Desktop ${laneName} lane must list ${factsPath} as its artifact.`);
+  }
+  const factsSource = resolveArtifact(manifestDir, { ...factsArtifact, required: true }).source;
+  const facts = JSON.parse(readFileSync(factsSource, "utf8"));
+  const selectedFacts = TELEGRAM_ASSERTION_FACT_PATHS[assertion.target].reduce(
+    (value, key) => value?.[key],
+    facts,
+  );
+  if (!Array.isArray(selectedFacts)) {
+    throw new Error(
+      `Telegram Desktop ${laneName} facts target ${assertion.target} is not an array.`,
+    );
+  }
+  const assertionOccurrences = JSON.stringify(selectedFacts).split(assertion.value).length - 1;
+  const expectationMet =
+    assertion.mode === "contains" ? assertionOccurrences > 0 : assertionOccurrences === 0;
+  return { assertion, assertionOccurrences, expectationMet };
+}
+
+/**
+ * @param {EvidenceManifestFile} manifest
+ * @param {string} manifestDir
+ */
+function reconcileEvidenceVerdict(manifest, manifestDir) {
+  if (!manifest.comparison || typeof manifest.comparison !== "object") {
+    throw new Error("Mantis evidence manifest requires a comparison.");
+  }
+  const laneNames = manifest.comparison.baseline ? ["baseline", "candidate"] : ["candidate"];
+  // Telegram Desktop judgments are agent-authored, so trusted code derives them from lane facts.
+  // Other scenario builders and jq producers are trusted and supply the boolean directly.
+  const comparison = { ...manifest.comparison };
+  if (isTelegramDesktopProof(manifest)) {
+    for (const laneName of laneNames) {
+      comparison[laneName] = {
+        ...comparison[laneName],
+        ...evaluateTelegramAssertion(manifest, manifestDir, laneName),
+      };
+    }
+  }
+  const unmetLanes = laneNames.filter((laneName) => !requireExpectationMet(comparison, laneName));
+  const claimedPass = comparison.pass || comparison.outcome === "pass";
+  const pass = comparison.pass && unmetLanes.length === 0;
+  const outcome = pass ? "pass" : comparison.outcome === "blocked" ? "blocked" : "fail";
+  const downgradeNote = `verdict downgraded: ${unmetLanes.join(" and ")} expectation${unmetLanes.length === 1 ? "" : "s"} not met`;
+  const verdictNote =
+    unmetLanes.length > 0 && (claimedPass || comparison.verdictNote === downgradeNote)
+      ? downgradeNote
+      : undefined;
+  const { verdictNote: _untrustedVerdictNote, ...rest } = comparison;
+  return {
+    ...manifest,
+    comparison: {
+      ...rest,
+      outcome,
+      pass,
+      ...(verdictNote ? { verdictNote } : {}),
+    },
+  };
+}
+
+/** @param {string} manifestPath */
+export function validateEvidenceManifestFile(manifestPath) {
+  const resolvedManifest = path.resolve(manifestPath);
+  const manifestDir = path.dirname(resolvedManifest);
+  const manifest = validateEvidenceManifest(readJson(resolvedManifest), manifestDir);
+  for (const artifact of manifest.artifacts ?? []) {
+    resolveArtifact(manifestDir, artifact);
+  }
+  writeFileSync(resolvedManifest, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  return manifest;
+}
+
+/**
+ * @param {EvidenceManifestFile} manifest
+ * @param {string} manifestDir
+ */
+function validateEvidenceManifest(manifest, manifestDir) {
+  if (manifest.schemaVersion !== MANTIS_EVIDENCE_SCHEMA_VERSION) {
+    throw new Error(
+      `Unsupported Mantis evidence manifest schema: ${manifest.schemaVersion}. ${isTelegramDesktopProof(manifest) ? "Rerun the Mantis Telegram Desktop Proof workflow; saved version-1 artifacts are not migrated." : "Rerun the proof to create schema version 2 evidence."}`,
+    );
+  }
+  if (!manifest.id || !manifest.title || !manifest.scenario) {
+    throw new Error("Mantis evidence manifest requires id, title, and scenario.");
+  }
+  return reconcileEvidenceVerdict(manifest, manifestDir);
+}
 /**
  * Loads and validates an evidence manifest from disk.
  *
@@ -165,13 +319,7 @@ function resolveArtifact(manifestDir, artifact) {
 export function loadEvidenceManifest(manifestPath) {
   const resolvedManifest = path.resolve(manifestPath);
   const manifestDir = path.dirname(resolvedManifest);
-  const manifest = readJson(resolvedManifest);
-  if (manifest.schemaVersion !== 1) {
-    throw new Error(`Unsupported Mantis evidence manifest schema: ${manifest.schemaVersion}`);
-  }
-  if (!manifest.id || !manifest.title || !manifest.scenario) {
-    throw new Error("Mantis evidence manifest requires id, title, and scenario.");
-  }
+  const manifest = validateEvidenceManifestFile(resolvedManifest);
   const artifacts = (manifest.artifacts ?? [])
     .map((artifact) => resolveArtifact(manifestDir, artifact))
     .filter((artifact) => artifact !== null);
@@ -366,10 +514,25 @@ function laneLine(label, lane) {
   } else if (lane.ref) {
     pieces.push(` at \`${lane.ref}\``);
   }
-  if (lane.expected) {
+  if (lane.digest) {
+    const judgment = lane.detail ?? sanitizeCommentText(lane.expected, 1_000);
+    if (judgment) {
+      pieces.push(` — ${judgment}`);
+    }
+    pieces.push(` · facts: ${lane.digest}`);
+  } else if (lane.detail) {
+    pieces.push(` — ${lane.detail}`);
+  } else if (lane.expected) {
     pieces.push(`, expected ${lane.expected}`);
   }
   return pieces.join("");
+}
+function laneAssertionLine(label, lane) {
+  if (!lane?.assertion || typeof lane.assertionOccurrences !== "number") {
+    return "";
+  }
+  const value = sanitizeCommentText(lane.assertion.value, 200);
+  return `- ${label} assertion: \`${lane.assertion.target}\` \`${lane.assertion.mode}\` "${value}" · occurrences: ${lane.assertionOccurrences} · ${lane.expectationMet ? "met" : "unmet"}`;
 }
 function hasVisibleProofArtifacts(manifest) {
   return manifest.artifacts.some((artifact) =>
@@ -406,7 +569,7 @@ export function shouldPublishPrComment(manifest, { requestSource } = {}) {
   if (requestSource === "pull_request_target") {
     return false;
   }
-  return manifest.comparison?.pass === true;
+  return manifest.comparison.pass;
 }
 /** @param {RenderEvidenceCommentOptions} options */
 export function renderEvidenceComment({
@@ -447,13 +610,23 @@ export function renderEvidenceComment({
   if (actionsArtifactUrl) {
     lines.push(`- Artifact: ${actionsArtifactUrl}`);
   }
-  const baselineLine = laneLine("Baseline", baseline);
-  if (baselineLine) {
-    lines.push(baselineLine);
+  for (const { assertionLabel, lane, laneLabel } of [
+    { assertionLabel: "Baseline", lane: baseline, laneLabel: "Baseline" },
+    {
+      assertionLabel: "Candidate",
+      lane: candidate,
+      laneLabel: "Candidate (PR merged onto main)",
+    },
+  ]) {
+    const laneSummary = laneLine(laneLabel, lane);
+    const assertionSummary = laneAssertionLine(assertionLabel, lane);
+    lines.push(...[laneSummary, assertionSummary].filter(Boolean));
   }
-  const candidateLine = laneLine("Candidate", candidate);
-  if (candidateLine) {
-    lines.push(candidateLine);
+  if (comparison.differential) {
+    lines.push(`- Differential (trusted facts): ${comparison.differential}`);
+  }
+  if (comparison.verdictNote) {
+    lines.push(`- Note: ${comparison.verdictNote}`);
   }
   const overall = overallStatus(manifest);
   if (overall) {
@@ -631,7 +804,7 @@ function upsertPrComment({ body, createMissing, marker, prNumber, repo }) {
       } catch {
         if (!createMissing) {
           console.log(
-            "Skipped stale Mantis QA evidence comment because its status is no longer active.",
+            `Could not update existing Mantis QA evidence comment ${commentId}; create-missing is false.`,
           );
           return;
         }
@@ -641,9 +814,7 @@ function upsertPrComment({ body, createMissing, marker, prNumber, repo }) {
       }
     }
     if (!createMissing) {
-      console.log(
-        "Skipped stale Mantis QA evidence comment because its status is no longer active.",
-      );
+      console.log("No existing Mantis QA evidence comment found and create-missing is false.");
       return;
     }
     run("gh", ["pr", "comment", prNumber, "--body-file", bodyFile], { stdio: "inherit" });
@@ -656,6 +827,11 @@ function upsertPrComment({ body, createMissing, marker, prNumber, repo }) {
 export async function publishEvidence(rawArgs = process.argv.slice(2)) {
   const args = parseArgs(rawArgs);
   const manifestPath = requireArg(args, "manifest");
+  if (args.validate_only === "true") {
+    validateEvidenceManifestFile(manifestPath);
+    console.log(`Validated Mantis evidence manifest: ${manifestPath}`);
+    return;
+  }
   const targetPr = requireArg(args, "target_pr");
   const artifactRoot = requireArg(args, "artifact_root");
   const marker = requireArg(args, "marker");

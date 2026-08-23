@@ -337,6 +337,24 @@ remove_container_or_fail() {
   fi
 }
 
+wait_for_mock_openai() {
+  local container_name="$1"
+  local log_path="$2"
+  local attempt=0
+  until grep -q "mock-openai listening" "$log_path" 2>/dev/null; do
+    if [[ "$("$docker_bin" inspect --format '{{.State.Running}}' "$container_name" 2>/dev/null)" != "true" ]]; then
+      tail -n 20 "$log_path" >&2 || true
+      die "mock OpenAI container exited before readiness"
+    fi
+    attempt=$((attempt + 1))
+    if ((attempt >= 100)); then
+      tail -n 20 "$log_path" >&2 || true
+      die "mock OpenAI container did not become ready within 10 seconds"
+    fi
+    /bin/sleep 0.1
+  done
+}
+
 create_bounded_filesystem() {
   local name="$1"
   local size="$2"
@@ -537,8 +555,10 @@ lock_runtime_root() {
     destroy_bounded_filesystem "$safe_runtime" "$image_path"
     die "failed to remove the quarantined runtime input"
   fi
-  chown root:root "$safe_runtime"
-  chmod 0755 "$safe_runtime"
+  chown root:mantis-proof "$safe_runtime"
+  # The agent may stage developer files at runtime; sticky ownership keeps
+  # root-owned attestation files from being replaced or removed.
+  chmod 1770 "$safe_runtime"
   if ! ln -s "$safe_runtime" "$runtime_source"; then
     destroy_bounded_filesystem "$safe_runtime" "$image_path"
     die "failed to publish locked runtime root"
@@ -580,12 +600,14 @@ readonly network_probe_script='
 readonly build_command='
   set -eu
   store=.mantis-pnpm-store
+  test -d "$store"
+  test -n "$(find "$store" -type f -print -quit)"
   cleanup() {
     rm -rf "$store"
   }
   trap cleanup EXIT INT TERM
   corepack pnpm install --frozen-lockfile --store-dir "$store"
-  corepack pnpm build
+  OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=1 corepack pnpm build
 '
 
 run_network_probe() {
@@ -619,29 +641,70 @@ run_network_probe() {
 # shellcheck disable=SC2016
 readonly sut_command='
   set -eu
-  mock_pid=""
+  runtime_source="${OPENCLAW_CONFIG_PATH%/*}"
+  gateway_pid_file="$runtime_source/gateway.pid"
+  restart_request="$runtime_source/gateway-restart.request"
   gateway_pid=""
-  cleanup() {
-    exit_code=$?
-    trap - EXIT INT TERM
-    if [ -n "$gateway_pid" ]; then kill "$gateway_pid" 2>/dev/null || true; fi
-    if [ -n "$mock_pid" ]; then kill "$mock_pid" 2>/dev/null || true; fi
-    wait 2>/dev/null || true
-    exit "$exit_code"
+  stopping=0
+  stop_gateway() {
+    stopping=1
+    if [ -n "$gateway_pid" ]; then
+      kill -TERM "$gateway_pid" 2>/dev/null || true
+    fi
   }
-  trap cleanup EXIT INT TERM
-  node /opt/mantis/mock-openai-server.mjs >"$MOCK_LOG" 2>&1 &
-  mock_pid=$!
-  attempt=0
-  until grep -q "mock-openai listening" "$MOCK_LOG" 2>/dev/null; do
-    kill -0 "$mock_pid" 2>/dev/null || exit 1
-    attempt=$((attempt + 1))
-    [ "$attempt" -lt 100 ] || exit 1
-    sleep 0.1
+  cleanup_gateway_pid() {
+    rm -f "$gateway_pid_file"
+  }
+  trap stop_gateway TERM INT
+  trap cleanup_gateway_pid EXIT
+  : >"$GATEWAY_LOG"
+  while :; do
+    node openclaw.mjs gateway --port "$OPENCLAW_GATEWAY_PORT" >>"$GATEWAY_LOG" 2>&1 &
+    gateway_pid=$!
+    printf "%s\n" "$gateway_pid" >"$gateway_pid_file"
+    gateway_status=0
+    wait "$gateway_pid" || gateway_status=$?
+    gateway_pid=""
+    rm -f "$gateway_pid_file"
+    if [ "$stopping" -eq 1 ]; then
+      exit "$gateway_status"
+    fi
+    if [ -f "$restart_request" ]; then
+      rm -f "$restart_request"
+      printf "\n[mantis] restarting gateway\n" >>"$GATEWAY_LOG"
+      continue
+    fi
+    exit "$gateway_status"
   done
-  node openclaw.mjs gateway --port "$OPENCLAW_GATEWAY_PORT" >"$GATEWAY_LOG" 2>&1 &
-  gateway_pid=$!
-  wait "$gateway_pid"
+'
+
+require_active_sut() {
+  local container_name="$1"
+  local runtime_source="$2"
+  require_container_name "$container_name"
+  [[ "$runtime_source" =~ ^/tmp/openclaw-tg-crabbox-sut-[A-Za-z0-9]+$ ]] \
+    || die "invalid runtime source"
+  read_runtime_claim "$container_name" || die "missing or invalid runtime claim"
+  [[ "$claimed_runtime" == "$runtime_source" ]] || die "runtime claim path mismatch"
+  claim_process_is_active || die "runtime claim is not active"
+  require_runtime_claim_active "$container_name"
+}
+
+# shellcheck disable=SC2016
+readonly restart_command='
+  set -eu
+  request=gateway-restart.request
+  pid_file=gateway.pid
+  gateway_pid="$(cat "$pid_file")"
+  case "$gateway_pid" in
+    ""|*[!0-9]*) echo "invalid gateway pid" >&2; exit 65 ;;
+  esac
+  kill -0 "$gateway_pid"
+  : >"$request"
+  if ! kill -TERM "$gateway_pid"; then
+    rm -f "$request"
+    exit 1
+  fi
 '
 
 command="${1:-}"
@@ -649,10 +712,14 @@ shift || true
 case "$command" in
   build)
     [[ "${SUDO_USER:-}" == "runner" ]] || die "build is restricted to the workflow runner"
-    [[ $# -eq 1 ]] || die "build expects the candidate worktree"
+    [[ $# -eq 2 ]] || die "build expects the candidate worktree and host pnpm store"
     worktree_root="$(realpath -e "$(<"$worktree_root_file")")"
     candidate_root="$(realpath -e "$1")"
+    host_pnpm_store="$(realpath -e "$2")"
     [[ "$candidate_root" == "$worktree_root/candidate" ]] || die "unexpected candidate worktree"
+    [[ -d "$host_pnpm_store" ]] || die "host pnpm store is not a directory"
+    [[ "$host_pnpm_store" != "$candidate_root" && "$host_pnpm_store" != "$candidate_root/"* ]] \
+      || die "host pnpm store must be outside the candidate worktree"
     [[ "$(stat -c %u "$candidate_root")" == "$(id -u mantis-builder)" ]] || die "candidate owner mismatch"
     [[ -f "$candidate_root/.git" && ! -L "$candidate_root/.git" ]] \
       || die "candidate Git link is not a regular file"
@@ -685,10 +752,21 @@ case "$command" in
     # `set -e` preserves a failed probe/container status through this EXIT trap.
     # The explicit cleanup below is reached only after the protected command succeeds.
     trap cleanup_build EXIT INT TERM
-    create_bounded_filesystem "${container_name}-fs" 10G >/dev/null
+    # 16G bounds worktree + full pnpm-store copy + build output together; the image
+    # is sparse so unused capacity costs nothing, and the post-build 8 GiB check
+    # below still bounds what leaves the container.
+    create_bounded_filesystem "${container_name}-fs" 16G >/dev/null
     isolated_root="$build_mount/repo"
     mkdir "$isolated_root"
     /bin/cp -a "$candidate_root/." "$isolated_root/"
+    store_copy_start=$SECONDS
+    mkdir "$isolated_root/.mantis-pnpm-store"
+    # Host disk -> loop image crosses filesystems, so reflink falls back to a full
+    # byte copy on CI; keep --reflink=auto for same-filesystem hosts. Never bind or
+    # hard-link the host store: candidate lifecycle scripts may rewrite their store.
+    /bin/cp -a --reflink=auto "$host_pnpm_store/." "$isolated_root/.mantis-pnpm-store/"
+    test -n "$(find "$isolated_root/.mantis-pnpm-store" -type f -print -quit)"
+    echo "Copied disposable pnpm store in $((SECONDS - store_copy_start))s."
     chown -R mantis-builder:mantis-builder "$isolated_root"
     create_public_only_network "$network_name"
     run_network_probe "$network_name"
@@ -777,14 +855,36 @@ case "$command" in
     [[ "$(stat -c %a "$response_control_dir")" == "700" ]] \
       || die "mock response control directory mode mismatch"
     response_control="$response_control_dir/response.json"
-    [[ -f "$response_control" && ! -L "$response_control" ]] || die "invalid mock response control"
-    [[ "$(stat -c %u "$response_control")" == "$(id -u mantis-sut)" ]] \
-      || die "mock response control owner mismatch"
-    [[ "$(stat -c %a "$response_control")" == "600" ]] \
-      || die "mock response control mode mismatch"
-    [[ "$(stat -c %h "$response_control")" == "1" ]] \
-      || die "mock response control must not be hard-linked"
-    for name in gateway.log mock-openai.log mock-openai-requests.ndjson sut-attestation.json; do
+    request_log="$response_control_dir/mock-openai-requests.ndjson"
+    mock_log="$response_control_dir/mock-openai.log"
+    for file in "$response_control" "$request_log" "$mock_log"; do
+      [[ -f "$file" && ! -L "$file" ]] || die "invalid mock control or evidence file"
+      [[ "$(stat -c %u "$file")" == "$(id -u mantis-sut)" ]] \
+        || die "mock control or evidence file owner mismatch"
+      [[ "$(stat -c %a "$file")" == "600" ]] \
+        || die "mock control or evidence file mode mismatch"
+      [[ "$(stat -c %h "$file")" == "1" ]] \
+        || die "mock control or evidence file must not be hard-linked"
+    done
+    proxy_control_dir="$safe_runtime/proxy-control"
+    [[ -d "$proxy_control_dir" && ! -L "$proxy_control_dir" ]] \
+      || die "invalid Telegram proxy control directory"
+    [[ "$(stat -c %u "$proxy_control_dir")" == "$(id -u mantis-sut)" ]] \
+      || die "Telegram proxy control directory owner mismatch"
+    [[ "$(stat -c %a "$proxy_control_dir")" == "700" ]] \
+      || die "Telegram proxy control directory mode mismatch"
+    proxy_control="$proxy_control_dir/control.json"
+    proxy_record="$proxy_control_dir/requests.ndjson"
+    for file in "$proxy_control" "$proxy_record"; do
+      [[ -f "$file" && ! -L "$file" ]] || die "invalid Telegram proxy control file"
+      [[ "$(stat -c %u "$file")" == "$(id -u mantis-sut)" ]] \
+        || die "Telegram proxy control file owner mismatch"
+      [[ "$(stat -c %a "$file")" == "600" ]] \
+        || die "Telegram proxy control file mode mismatch"
+      [[ "$(stat -c %h "$file")" == "1" ]] \
+        || die "Telegram proxy control file must not be hard-linked"
+    done
+    for name in gateway.log sut-attestation.json; do
       [[ ! -e "$safe_runtime/$name" && ! -L "$safe_runtime/$name" ]] \
         || die "runtime output was pre-created"
     done
@@ -796,7 +896,6 @@ case "$command" in
     telegram_bot_id="${telegram_bot_token%%:*}"
     [[ "$telegram_bot_id" =~ ^[1-9][0-9]*$ ]] || die "invalid Telegram bot token"
     telegram_alias_token="${telegram_bot_id}:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-    export SUCCESS_MARKER="$success_marker"
     export TELEGRAM_BOT_TOKEN="$telegram_alias_token"
     mock_response_chunk_delay_ms="$(jq -r '.mockResponseChunkDelayMs // ""' "$input_file")"
     gateway_password="$(jq -r '.gatewayPassword // ""' "$input_file")"
@@ -804,19 +903,11 @@ case "$command" in
     trap - EXIT
 
     gateway_log="$runtime_source/gateway.log"
-    mock_log="$runtime_source/mock-openai.log"
-    request_log="$runtime_source/mock-openai-requests.ndjson"
     install -T -o mantis-sut -g mantis-proof -m 0600 /dev/null "$safe_runtime/gateway.log"
-    install -T -o mantis-sut -g mantis-proof -m 0600 /dev/null "$safe_runtime/mock-openai.log"
-    install -T -o mantis-sut -g mantis-proof -m 0600 /dev/null "$safe_runtime/mock-openai-requests.ndjson"
     export CI=1
     export GATEWAY_LOG="$gateway_log"
     export GIT_COMMIT="$attested_sha"
     export HOME="$runtime_source/container-home"
-    export MOCK_LOG="$mock_log"
-    export MOCK_PORT="$mock_port"
-    export MOCK_REQUEST_LOG="$request_log"
-    export MOCK_RESPONSE_CONTROL="$runtime_source/mock-control/response.json"
     export NODE_DISABLE_COMPILE_CACHE=1
     export OPENAI_API_KEY=sk-openclaw-e2e-mock
     export OPENCLAW_BUILD_PRIVATE_QA=1
@@ -826,19 +917,17 @@ case "$command" in
     export OPENCLAW_STATE_DIR="$runtime_source/state"
     if [[ -n "$mock_response_chunk_delay_ms" ]]; then
       require_positive_integer "$mock_response_chunk_delay_ms"
-      export MOCK_RESPONSE_CHUNK_DELAY_MS="$mock_response_chunk_delay_ms"
     fi
     if [[ -n "$gateway_password" ]]; then
       export OPENCLAW_GATEWAY_PASSWORD="$gateway_password"
     fi
 
     forwarded_env=(
-      CI GATEWAY_LOG GIT_COMMIT HOME MOCK_LOG MOCK_PORT MOCK_REQUEST_LOG MOCK_RESPONSE_CONTROL NODE_DISABLE_COMPILE_CACHE
+      CI GATEWAY_LOG GIT_COMMIT HOME NODE_DISABLE_COMPILE_CACHE
       OPENAI_API_KEY OPENCLAW_BUILD_PRIVATE_QA OPENCLAW_CONFIG_PATH
       OPENCLAW_ENABLE_PRIVATE_QA_CLI OPENCLAW_GATEWAY_PORT OPENCLAW_STATE_DIR
-      SUCCESS_MARKER TELEGRAM_BOT_TOKEN
+      TELEGRAM_BOT_TOKEN
     )
-    [[ -z "${MOCK_RESPONSE_CHUNK_DELAY_MS:-}" ]] || forwarded_env+=(MOCK_RESPONSE_CHUNK_DELAY_MS)
     [[ -z "${OPENCLAW_GATEWAY_PASSWORD:-}" ]] || forwarded_env+=(OPENCLAW_GATEWAY_PASSWORD)
     docker_env=()
     for name in "${forwarded_env[@]}"; do
@@ -847,6 +936,7 @@ case "$command" in
 
     network_name="${container_name}-net"
     egress_network_name="${container_name}-egress"
+    mock_container_name="${container_name}-mock-openai"
     proxy_container_name="${container_name}-telegram-proxy"
     [[ -f "$telegram_proxy_script" && ! -L "$telegram_proxy_script" ]] \
       || die "missing trusted Telegram Bot API proxy"
@@ -864,6 +954,7 @@ case "$command" in
     cleanup_run() {
       local result=0
       remove_container_or_fail "$container_name" || result=$?
+      remove_container_or_fail "$mock_container_name" || result=$?
       remove_container_or_fail "$proxy_container_name" || result=$?
       cleanup_network "$network_name" || result=$?
       cleanup_network "$egress_network_name" || result=$?
@@ -877,25 +968,91 @@ case "$command" in
     "$docker_bin" run --detach --name "$proxy_container_name" --network "$egress_network_name" \
       "${container_security_args[@]}" "${proxy_resource_args[@]}" \
       --mount "type=bind,src=$telegram_proxy_script,dst=/opt/mantis/telegram-bot-api-proxy.mjs,readonly" \
+      --mount "type=bind,src=$proxy_control_dir,dst=/opt/mantis/proxy-control" \
       --user "$(id -u mantis-sut):$(id -g mantis-sut)" \
       --env TELEGRAM_PROXY_ALIAS_TOKEN="$telegram_alias_token" \
+      --env TELEGRAM_PROXY_CONTROL=/opt/mantis/proxy-control/control.json \
+      --env TELEGRAM_PROXY_RECORD_FILE=/opt/mantis/proxy-control/requests.ndjson \
       --env TELEGRAM_PROXY_UPSTREAM_TOKEN="$telegram_bot_token" \
       "$image" node /opt/mantis/telegram-bot-api-proxy.mjs >/dev/null
     "$docker_bin" network connect --alias telegram-api-proxy "$network_name" "$proxy_container_name"
     require_runtime_claim_active "$container_name"
+    mock_env=(
+      --env MOCK_BIND_HOST=0.0.0.0
+      --env MOCK_PORT="$mock_port"
+      --env MOCK_REQUEST_LOG=/opt/mantis/mock-control/mock-openai-requests.ndjson
+      --env MOCK_RESPONSE_CONTROL=/opt/mantis/mock-control/response.json
+      --env SUCCESS_MARKER="$success_marker"
+    )
+    if [[ -n "$mock_response_chunk_delay_ms" ]]; then
+      mock_env+=(--env MOCK_RESPONSE_CHUNK_DELAY_MS="$mock_response_chunk_delay_ms")
+    fi
+    "$docker_bin" run --detach --name "$mock_container_name" --network "$network_name" \
+      --network-alias mock-openai \
+      "${container_security_args[@]}" "${proxy_resource_args[@]}" \
+      --mount "type=bind,src=$mock_server_script,dst=/opt/mantis/mock-openai-server.mjs,readonly" \
+      --mount "type=bind,src=$response_control_dir,dst=/opt/mantis/mock-control" \
+      --user "$(id -u mantis-sut):$(id -g mantis-sut)" \
+      "${mock_env[@]}" \
+      "$image" sh -c 'exec node /opt/mantis/mock-openai-server.mjs >/opt/mantis/mock-control/mock-openai.log 2>&1' \
+      >/dev/null
+    wait_for_mock_openai "$mock_container_name" "$mock_log"
+    require_runtime_claim_active "$container_name"
+    # proxy-control holds the proxy's fault rules and recorded Bot API facts.
+    # The SUT runs untrusted candidate code as the same mantis-sut UID, so an
+    # inaccessible tmpfs must shadow the directory inside the runtime mount;
+    # without it the lane under test could rewrite its own trusted evidence.
+    # mock-control holds provider controls and evidence. Shadow it inside the SUT
+    # so candidate code cannot read controls or forge provider evidence.
     "$docker_bin" run --rm --init --name "$container_name" --network "$network_name" \
       "${container_security_args[@]}" "${runtime_resource_args[@]}" \
       --mount "type=bind,src=$repo_root,dst=$repo_root,readonly" \
-      --mount "type=bind,src=$mock_server_script,dst=/opt/mantis/mock-openai-server.mjs,readonly" \
       --mount "type=bind,src=$safe_runtime,dst=$runtime_source" \
+      --mount "type=tmpfs,dst=$runtime_source/mock-control,tmpfs-size=65536,tmpfs-mode=0000" \
+      --mount "type=tmpfs,dst=$runtime_source/proxy-control,tmpfs-size=65536,tmpfs-mode=0000" \
       --workdir "$repo_root" \
       --user "$(id -u mantis-sut):$(id -g mantis-sut)" \
       "${docker_env[@]}" \
       "$image" sh -c "$sut_command"
+    remove_container_or_fail "$mock_container_name"
     remove_container_or_fail "$proxy_container_name"
     cleanup_network "$network_name"
     cleanup_network "$egress_network_name"
     trap - EXIT INT TERM
+    ;;
+  exec)
+    [[ $# -ge 4 ]] || die "exec expects a container name, runtime root, and shell command"
+    container_name="$1"
+    runtime_source="$2"
+    shift 2
+    timeout_seconds=120
+    if [[ "${1:-}" == "--timeout-seconds" ]]; then
+      [[ $# -ge 3 ]] || die "exec --timeout-seconds needs a value"
+      timeout_seconds="$2"
+      shift 2
+    fi
+    require_positive_integer "$timeout_seconds"
+    ((timeout_seconds <= 1800)) || die "exec timeout exceeds 1800 seconds"
+    [[ "${1:-}" == "--" ]] || die "exec shell command must follow --"
+    shift
+    [[ $# -eq 1 ]] || die "exec expects one shell command"
+    require_active_sut "$container_name" "$runtime_source"
+    "$docker_bin" exec \
+      --user "$(id -u mantis-sut):$(id -g mantis-sut)" \
+      --workdir "$runtime_source" \
+      "$container_name" \
+      /usr/bin/timeout --signal=TERM --kill-after=5s "${timeout_seconds}s" \
+      sh -c "$1"
+    ;;
+  restart)
+    [[ $# -eq 2 ]] || die "restart expects a container name and runtime root"
+    container_name="$1"
+    runtime_source="$2"
+    require_active_sut "$container_name" "$runtime_source"
+    "$docker_bin" exec \
+      --user "$(id -u mantis-sut):$(id -g mantis-sut)" \
+      --workdir "$runtime_source" \
+      "$container_name" sh -c "$restart_command"
     ;;
   stop)
     run_cleanup_with_deadline stop "$@"
@@ -913,6 +1070,7 @@ case "$command" in
     terminate_runtime_claim
     stop_result=0
     remove_container_or_fail "$1" || stop_result=1
+    remove_container_or_fail "${1}-mock-openai" || stop_result=1
     remove_container_or_fail "${1}-telegram-proxy" || stop_result=1
     cleanup_network "${1}-net" || stop_result=1
     cleanup_network "${1}-egress" || stop_result=1
@@ -946,6 +1104,12 @@ case "$command" in
       exists_result=$?
       ((exists_result == 1)) || exit "$exists_result"
     fi
+    if container_exists "${1}-mock-openai"; then
+      die "refusing to destroy a running mock OpenAI container"
+    else
+      exists_result=$?
+      ((exists_result == 1)) || exit "$exists_result"
+    fi
     for network_name in "${1}-net" "${1}-egress"; do
       if network_exists "$network_name"; then
         die "refusing to destroy an active SUT network"
@@ -970,5 +1134,5 @@ case "$command" in
     fi
     rm -f "$(runtime_cancel_path "$1")" "$(runtime_claim_path "$1")"
     ;;
-  *) die "expected build, check, run, stop, or destroy" ;;
+  *) die "expected build, check, run, exec, restart, stop, or destroy" ;;
 esac

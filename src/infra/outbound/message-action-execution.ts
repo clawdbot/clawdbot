@@ -1,5 +1,6 @@
 import { asOptionalRecord as asResultRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import {
@@ -211,6 +212,21 @@ function isConfirmedGatewayMessageActionRejection(error: unknown): boolean {
     typeof details === "object" &&
     (details as { method?: unknown }).method === "message.action"
   );
+}
+
+export function projectGatewayQueuedDeliveryResult(error: unknown) {
+  if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
+    return undefined;
+  }
+  const details = asResultRecord(asResultRecord(error)?.details);
+  if (details?.code !== GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED) {
+    return undefined;
+  }
+  return {
+    status: "delivery_queued",
+    delivered: false as const,
+    message: `Message not delivered: ${error.message}. The gateway queued it and will retry automatically. Do not resend it.`,
+  };
 }
 
 async function resolveGatewayActionIdempotencyKey(idempotencyKey?: string): Promise<string> {

@@ -600,6 +600,42 @@ suite.define(() => {
     }
   });
 
+  it("announces a failed custom-theme import", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configResponse({}, "custom-theme-invalid-1"),
+          },
+        });
+        await page.route("https://tweakcn.com/r/themes/network-failure", async (route) => {
+          await route.fulfill({ status: 503 });
+        });
+
+        const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
+        expect(response?.status()).toBe(200);
+        await waitForControlUiSettingsTakeover(page);
+        await gateway.waitForRequest("config.get");
+
+        await page.locator(".settings-theme-card--custom").click();
+        const importer = page.locator(".settings-theme-import");
+        await importer.locator("input").fill("https://tweakcn.com/themes/network-failure");
+        await importer.locator("button.primary").click();
+
+        await expect
+          .poll(async () => (await importer.getByRole("alert").textContent())?.trim())
+          .toBe("tweakcn import failed (503).");
+        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+        await captureViewport(page, "07-custom-theme-import-error-announced.png");
+      },
+    );
+  });
+
   it("keeps Clear authoritative after a delayed custom-theme replacement", async () => {
     const existingTheme = await importCustomThemeFromUrl(
       "existing",
@@ -693,6 +729,7 @@ suite.define(() => {
       await expect
         .poll(() => importer.locator(".settings-theme-import__message").textContent())
         .toContain("removed");
+      await expect.poll(() => importer.getByRole("status").count()).toBe(1);
       const afterDelayedResponse = await readThemeImportRaceState(page);
       expect(beforeReplace).toMatchObject({
         clawSelected: false,
@@ -797,6 +834,7 @@ suite.define(() => {
       await expect
         .poll(() => importer.locator(".settings-theme-import__message").textContent())
         .toContain("Imported");
+      await expect.poll(() => importer.getByRole("status").count()).toBe(1);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
     } finally {
       releaseImport();

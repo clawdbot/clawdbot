@@ -129,13 +129,16 @@ export function resolveMessageActionDetails(params: {
   const normalizedMessage = normalizeMessage(message);
   const role = normalizeRoleForGrouping(normalizedMessage.role);
   const previewMarkdown = resolveMessageReplyText(message);
-  // Loaded text must not erase the preview's truncation fact or collapse its disclosure.
+  // The Gateway records every display-cap truncation as __openclaw.truncated, so
+  // that marker is the whole contract: sniffing the in-band sentinel would fetch
+  // for any reply that merely contains the text. Assistant-only because the
+  // expander renders loaded content for assistant rows alone.
   const shouldFetchFullMessage = Boolean(
+    role === "assistant" &&
     canFetchFullMessage &&
     messageId &&
     !record.openclawMessageToolMirror &&
-    (transcriptMeta?.truncated === true ||
-      (role === "assistant" && previewMarkdown.includes("\n...(truncated)..."))),
+    transcriptMeta?.truncated === true,
   );
   const expansion =
     role === "assistant" && shouldFetchFullMessage && messageId
@@ -198,8 +201,9 @@ export function renderReplyButton(
   `;
 }
 
-const USER_MESSAGE_COLLAPSED_LINE_LIMIT = 5;
-const USER_MESSAGE_COLLAPSED_CHAR_LIMIT = 700;
+// Character length owns normal disclosure; this high line cap only bounds newline-heavy prompts.
+const USER_MESSAGE_COLLAPSED_CHAR_LIMIT = 1_200;
+const USER_MESSAGE_COLLAPSED_LINE_LIMIT = 40;
 
 function shouldCollapseUserMessage(markdown: string): boolean {
   return (
@@ -250,28 +254,21 @@ export function renderUserMessageMarkdown(
   markdownRenderOptions: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
 ) {
-  if (!opts.onToggleUserMessageExpanded) {
+  if (!opts.onToggleUserMessageExpanded || !shouldCollapseUserMessage(markdown)) {
     return renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions, duplicateSuffix);
   }
 
   const disclosureId = `user-message:${messageKey}`;
   const expanded = opts.isUserMessageExpanded?.(disclosureId) ?? false;
-  const likelyOverflow = shouldCollapseUserMessage(markdown);
   return html`
-    <div
-      class="chat-message-disclosure ${expanded
-        ? "is-expanded has-overflow"
-        : likelyOverflow
-          ? "has-overflow"
-          : ""}"
-    >
+    <div class="chat-message-disclosure ${expanded ? "is-expanded has-overflow" : ""}">
       <div class="chat-message-disclosure__content" ${ref(userMessageOverflowRef(expanded))}>
         ${renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions, duplicateSuffix)}
       </div>
       <button
         class="chat-message-disclosure__toggle"
         type="button"
-        ?hidden=${!expanded && !likelyOverflow}
+        ?hidden=${!expanded}
         aria-label=${t(expanded ? "chat.messages.showLess" : "chat.messages.showMore")}
         aria-expanded=${String(expanded)}
         @click=${() => opts.onToggleUserMessageExpanded?.(disclosureId)}
@@ -295,6 +292,7 @@ export function renderAssistantMessageMarkdown(
   disclosure: AssistantMessageDisclosure | undefined,
   markdownRenderOptions: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
+  streamKey?: string,
 ) {
   const markdown = disclosure?.expanded
     ? (disclosure.markdown ?? previewMarkdown)
@@ -302,7 +300,7 @@ export function renderAssistantMessageMarkdown(
   const renderOptions = disclosure?.expanded
     ? { ...markdownRenderOptions, mode: "document" as const }
     : markdownRenderOptions;
-  const text = renderMarkdownText(markdown, isStreaming, renderOptions, duplicateSuffix);
+  const text = renderMarkdownText(markdown, isStreaming, renderOptions, duplicateSuffix, streamKey);
   if (!disclosure?.onRetryFullMessage) {
     return text;
   }
@@ -328,9 +326,10 @@ export function renderMarkdownText(
   isStreaming: boolean,
   markdownRenderOptions?: MarkdownRenderOptions,
   duplicateSuffix?: DuplicateSuffix,
+  streamKey?: string,
 ) {
   const rendered = isStreaming
-    ? toStreamingMarkdownHtml(markdown, markdownRenderOptions)
+    ? toStreamingMarkdownHtml(markdown, markdownRenderOptions, streamKey)
     : toSanitizedMarkdownHtml(markdown, markdownRenderOptions);
   const content = duplicateSuffix ? appendDuplicateSuffix(rendered, duplicateSuffix) : rendered;
   return html`

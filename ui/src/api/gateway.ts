@@ -296,7 +296,24 @@ export class GatewayBrowserClient {
 
   constructor(private opts: GatewayBrowserClientOptions) {
     this.client = new GatewayProtocolClient<ConnectPlan>({
-      createSocket: (handlers) => createBrowserGatewaySocket(this.opts.url, handlers),
+      createSocket: (handlers) => {
+        this.maxPayloadBytes = undefined;
+        const socket = createBrowserGatewaySocket(this.opts.url, handlers);
+        return {
+          ...socket,
+          send: (data) => {
+            if (
+              this.maxPayloadBytes !== undefined &&
+              new TextEncoder().encode(data).byteLength > this.maxPayloadBytes
+            ) {
+              throw new Error(
+                "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
+              );
+            }
+            socket.send(data);
+          },
+        };
+      },
       createRequestId: generateUUID,
       createRequestError: (error) =>
         new GatewayRequestError({
@@ -654,15 +671,6 @@ export class GatewayBrowserClient {
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
-    // The UUID request envelope adds 75 bytes with params, 61 when params is omitted.
-    const requestBytes =
-      new TextEncoder().encode(JSON.stringify([method, params])).byteLength +
-      (params === undefined ? 61 : 75);
-    if (this.maxPayloadBytes !== undefined && requestBytes > this.maxPayloadBytes) {
-      throw new Error(
-        "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.",
-      );
-    }
     return await this.client.request<T>(method, params, options);
   }
 

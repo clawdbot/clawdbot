@@ -28,6 +28,11 @@ import type { PreparedOutboundBatch } from "./prepared-batch.js";
 import type { OutboundSendDeps } from "./send-deps.js";
 import type { OutboundSessionContext } from "./session-context.js";
 
+type ConversationDeliveryAttemptAuthority = Omit<
+  Extract<DurableDeliveryCompletion, { kind: "conversation" }>,
+  "kind"
+>;
+
 export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
 
 export type OutboundDeliveryIntent = {
@@ -196,6 +201,12 @@ export type DeliverOutboundPayloadsCoreParams = {
   reusePendingDeliveryIntent?: boolean;
   /** @internal Serializable owner state finalized after live or recovered delivery. */
   deliveryCompletion?: DurableDeliveryCompletion;
+  /** @internal The caller resends proven-not-sent payloads itself, so recovery must not. */
+  deliveryRetryOwner?: "caller";
+  /** @internal Ephemeral route authority for a recovered attempt; never owns completion. */
+  conversationDeliveryAttemptAuthority?: ConversationDeliveryAttemptAuthority;
+  /** @internal Revalidates authority once per durable queue execution, before adapter fanout. */
+  onDeliveryAttempt?: () => Promise<void>;
   /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
   preparedMessageId?: string;
   /** @internal Recheck the concrete post-hook send shape before platform I/O. */

@@ -598,9 +598,13 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       requireQueuePersistence: input.requireQueuePersistence,
       deliveryIntentId: input.deliveryIntentId,
       deliveryCompletion: input.deliveryCompletion,
+      // Model-authored sends get the failure back and resend it themselves; every
+      // other caller only reports the error, so recovery keeps its replay right.
+      deliveryRetryOwner: input.actionOrigin === "message-tool" ? "caller" : undefined,
       onDeliveryIntent: input.onDeliveryIntent,
       onPlatformSendDispatch: input.onPlatformSendDispatch,
       skipQueue: input.skipQueue,
+      onDeliveryAttempt: input.onDeliveryAttempt,
       // Identified platform evidence is the first success proof on the core
       // path; commit the route here so the transcript mirror (which runs later
       // in the same delivery) can resolve a just-created session entry.

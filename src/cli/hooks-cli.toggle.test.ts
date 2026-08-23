@@ -285,8 +285,73 @@ describe("hooks CLI metadata config keys", () => {
       }),
     ).rejects.toThrow("__exit__:1");
 
-    expect(capture.runtimeErrors.at(-1)).toContain(
-      `Hook "${testCase.identifier}" is ambiguous; use a unique hook name or hook key`,
+    expect(capture.runtimeErrors.at(-1)).toBe(
+      `Error: Hook "${testCase.identifier}" is ambiguous; matches: ${testCase.hooks
+        .map((candidate) => `${candidate.name} (${candidate.hookKey})`)
+        .join(", ")}. Use a unique hook name or hook key.`,
+    );
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("bounds ambiguous hook candidates", async () => {
+    const hooks = Array.from({ length: 7 }, (_, index) => ({
+      ...hook,
+      name: "shared-name",
+      hookKey: `key-${index + 1}`,
+    }));
+    mocks.buildWorkspaceHookStatus.mockReturnValue({ ...report, hooks });
+
+    await expect(
+      createHooksProgram().parseAsync(["hooks", "disable", "shared-name"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(capture.runtimeErrors.at(-1)).toBe(
+      'Error: Hook "shared-name" is ambiguous; matches: shared-name (key-1), shared-name (key-2), shared-name (key-3), shared-name (key-4), shared-name (key-5) (+2). Use a unique hook name or hook key.',
+    );
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it.each(["enable", "disable"])(
+    "gives the recovery command for an unknown hook on %s",
+    async (action) => {
+      mocks.buildWorkspaceHookStatus.mockReturnValue({ ...report, hooks: [] });
+
+      await expect(
+        createHooksProgram().parseAsync(["hooks", action, "missing-hook"], { from: "user" }),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(capture.runtimeErrors.at(-1)).toBe(
+        'Error: Hook "missing-hook" not found. Run `openclaw hooks list` to see available hooks.',
+      );
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it("names missing requirements and the available install route", async () => {
+    const ineligibleHook: HookStatusEntry = {
+      ...hook,
+      requirementsSatisfied: false,
+      loadable: false,
+      blockedReason: "missing requirements",
+      missing: {
+        bins: ["missing-bin"],
+        anyBins: ["missing-any-a", "missing-any-b"],
+        env: ["MISSING_ENV"],
+        config: ["hooks.demo.enabled"],
+        os: ["linux"],
+      },
+      install: [
+        { id: "demo-npm", kind: "npm", label: "Install @openclaw/demo-hook (npm)", bins: [] },
+      ],
+    };
+    mocks.buildWorkspaceHookStatus.mockReturnValue({ ...report, hooks: [ineligibleHook] });
+
+    await expect(
+      createHooksProgram().parseAsync(["hooks", "enable", "display-name"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(capture.runtimeErrors.at(-1)).toBe(
+      'Error: Hook "display-name" is not eligible; missing bins: missing-bin; anyBins: missing-any-a, missing-any-b; env: MISSING_ENV; config: hooks.demo.enabled; os: linux. Install options: Install @openclaw/demo-hook (npm). Run `openclaw hooks info display-name` for details.',
     );
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });

@@ -293,6 +293,7 @@ describe("readBestEffortConfig", () => {
 
       const snapshot = await readBestEffortConfigSnapshot({ observe: false });
 
+      expect(snapshot.configDiagnostics).toBeNull();
       expect(snapshot.sourceConfig.agents?.defaults?.contextPruning?.mode).toBeUndefined();
       expect(snapshot.config.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
       expect(snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
@@ -304,6 +305,26 @@ describe("readBestEffortConfig", () => {
       expect(readConfigHealthRow({ ...process.env, HOME: home }, configPath)).toMatchObject({
         config_path: configPath,
         last_known_good_json: expect.any(String),
+      });
+    });
+  });
+
+  it("returns invalid config diagnostics with the best-effort fallback", async () => {
+    await withTempHome(async (home) => {
+      const configPath = await writeOpenClawConfig(home, {
+        gateway: { port: "abc" },
+      } as never);
+
+      const snapshot = await readBestEffortConfigSnapshot({ observe: false });
+
+      expect(snapshot.configDiagnostics).toEqual({
+        path: configPath,
+        issues: [
+          {
+            path: "gateway.port",
+            message: "Invalid input: expected number, received string",
+          },
+        ],
       });
     });
   });

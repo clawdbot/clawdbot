@@ -1,5 +1,5 @@
 import { consume } from "@lit/context";
-import { initialState, Task } from "@lit/task";
+import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -305,15 +305,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     };
     if (!this.observedConnection) {
       this.observedConnection = connection;
-      if (
-        connection.connected &&
-        this.routeData &&
-        (this.routeData.connection.client !== connection.client ||
-          this.routeData.connection.hello !== connection.hello ||
-          this.routeData.connection.agentId !== connection.agentId)
-      ) {
-        void this.detect();
-      }
+      this.ensureRouteSettledDetection();
       return;
     }
     if (
@@ -322,6 +314,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       connection.agentId === this.observedConnection.agentId &&
       connection.connected === this.observedConnection.connected
     ) {
+      this.ensureRouteSettledDetection();
       return;
     }
     this.observedConnection = connection;
@@ -340,6 +333,24 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       return;
     }
     if (this.canUseSetup(connection.client)) {
+      void this.detect();
+    }
+  }
+
+  // Route data can settle after mount and be discarded as another
+  // connection's result. Nothing else re-arms detection then, so a loading
+  // page with a connected, capable Gateway self-heals here instead of
+  // dead-ending silently.
+  private ensureRouteSettledDetection(): void {
+    if (
+      !this.hasUpdated ||
+      !this.routeData ||
+      this.pageState.phase !== "loading" ||
+      this.detectTask.status !== TaskStatus.INITIAL
+    ) {
+      return;
+    }
+    if (this.canUseSetup(this.context.gateway.snapshot.client)) {
       void this.detect();
     }
   }

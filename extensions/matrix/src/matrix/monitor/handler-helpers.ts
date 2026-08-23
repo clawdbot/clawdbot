@@ -5,8 +5,6 @@ import {
   formatMatrixMediaTooLargeText,
   formatMatrixMediaUnavailableText,
   formatMatrixMessageText,
-  resolveMatrixMessageAttachment,
-  resolveMatrixMessageBody,
 } from "../media-text.js";
 import { formatPollAsText, isPollStartType, parsePollStartContent } from "../poll-types.js";
 import { resolveMatrixStoredSessionMeta } from "../session-store-metadata.js";
@@ -152,16 +150,11 @@ export function resolveMatrixPendingHistoryText(params: {
   if (!params.mediaUrl) {
     return "";
   }
-  const body = typeof params.content.body === "string" ? params.content.body.trim() : undefined;
+  const body = typeof params.content.body === "string" ? params.content.body : undefined;
   const filename =
-    typeof params.content.filename === "string" ? params.content.filename.trim() : undefined;
+    typeof params.content.filename === "string" ? params.content.filename : undefined;
   const msgtype = typeof params.content.msgtype === "string" ? params.content.msgtype : undefined;
-  return (
-    formatMatrixMessageText({
-      body: resolveMatrixMessageBody({ body, filename, msgtype }),
-      attachment: resolveMatrixMessageAttachment({ body, filename, msgtype }),
-    }) ?? ""
-  );
+  return formatMatrixMessageText({ body, filename, msgtype }) ?? "";
 }
 
 export function isMatrixAudioMediaEnabled(cfg: CoreConfig): boolean {

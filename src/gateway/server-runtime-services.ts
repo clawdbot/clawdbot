@@ -10,6 +10,7 @@ import {
   runHeartbeatOnce,
 } from "../infra/heartbeat-runner.js";
 import { resolveHeartbeatIntervalMs } from "../infra/heartbeat-summary.js";
+import type { DeliverOutboundPayloadsParams } from "../infra/outbound/deliver.js";
 import {
   schedulePendingSessionDeliveries,
   startSessionDeliveryRuntime,
@@ -19,6 +20,8 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { startSessionUpstreamMonitor } from "../sessions/session-upstream-monitor.js";
+import { assertQueuedConversationDeliveryAttemptAuthorized } from "./conversation-route-ownership.js";
+import { resolveGatewayPluginConfig } from "./runtime-plugin-config.js";
 import {
   fenceScheduledGatewayContextResolver,
   runWithScheduledGatewayContext,
@@ -215,6 +218,34 @@ function startPendingOutboundDeliveryRecovery(params: {
       if (stopped) {
         return;
       }
+      const deliverWithCurrentConversationAuthority = async (
+        deliveryParams: DeliverOutboundPayloadsParams,
+      ) => {
+        const completion = deliveryParams.deliveryCompletion;
+        const attemptAuthority =
+          completion?.kind === "conversation"
+            ? completion
+            : deliveryParams.conversationDeliveryAttemptAuthority;
+        if (!attemptAuthority) {
+          return await deliverOutboundPayloadsInternal(deliveryParams);
+        }
+        return await deliverOutboundPayloadsInternal({
+          ...deliveryParams,
+          onDeliveryAttempt: async () => {
+            await deliveryParams.onDeliveryAttempt?.();
+            if (!attemptAuthority.routeFingerprint) {
+              return;
+            }
+            assertQueuedConversationDeliveryAttemptAuthorized({
+              config: resolveGatewayPluginConfig({ config: getRuntimeConfig() }),
+              agentId: attemptAuthority.agentId,
+              operationId: attemptAuthority.operationId,
+              ...(attemptAuthority.storePath ? { storePath: attemptAuthority.storePath } : {}),
+              routeFingerprint: attemptAuthority.routeFingerprint,
+            });
+          },
+        });
+      };
       logRecovery ??= params.log.child("delivery-recovery");
       if (migrationPending) {
         const cfg = initialPass ? params.cfg : getRuntimeConfig();
@@ -229,7 +260,7 @@ function startPendingOutboundDeliveryRecovery(params: {
         // one pass neither skipped ownership nor left retired rows behind.
         migrationPending = migration.skipped > 0 || migration.remaining > 0;
         await recoverPendingDeliveries({
-          deliver: deliverOutboundPayloadsInternal,
+          deliver: deliverWithCurrentConversationAuthority,
           log: logRecovery,
           cfg,
         });
@@ -242,7 +273,7 @@ function startPendingOutboundDeliveryRecovery(params: {
         logLabel: "Outbound delivery retry",
         cfg: getRuntimeConfig(),
         log: logRecovery,
-        deliver: deliverOutboundPayloadsInternal,
+        deliver: deliverWithCurrentConversationAuthority,
         selectEntry: () => ({ match: true, bypassBackoff: false }),
       });
     }).catch((err: unknown) => params.log.error(`Delivery recovery failed: ${String(err)}`));

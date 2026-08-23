@@ -38,6 +38,12 @@ operator's explicit offline-device abandonment decision so restart recovery
 cannot accidentally resume remote reconciliation. Older readers ignore the
 column and can reopen the same database safely.
 
+Conversation associations use the same rule for the nullable bare
+`route_context_json TEXT` column. The database-open repair ensures the column
+for updated binaries. Older readers ignore it and can reopen and update the
+same database safely; their association update invalidates context captured by
+a newer writer so it cannot be replayed after re-upgrade.
+
 Installing OpenClaw manually through npm bypasses the updater guard. Database open checks still refuse an incompatible build.
 
 ## Preflight a target release

@@ -7,7 +7,7 @@ import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramCallbackMessageActions } from "./bot-handlers.callback-actions.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 import { telegramPlugin } from "./channel.js";
@@ -22,6 +22,21 @@ import type { TelegramRuntime } from "./runtime.types.js";
 import { sendTypingTelegram } from "./send-actions.js";
 import { sendMessageTelegram } from "./send-message.js";
 import { sendPollTelegram } from "./send-special.js";
+
+const richMarkdownProjection = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock("./rich-blocks.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./rich-blocks.js")>();
+  return {
+    ...actual,
+    markdownToTelegramRichBlocks: (
+      ...args: Parameters<typeof actual.markdownToTelegramRichBlocks>
+    ) => {
+      richMarkdownProjection.count += 1;
+      return actual.markdownToTelegramRichBlocks(...args);
+    },
+  };
+});
 
 type CapturedRequest = {
   body: Buffer;
@@ -151,6 +166,7 @@ describe("Telegram topic transport payloads", () => {
 
   beforeEach(() => {
     requests.length = 0;
+    richMarkdownProjection.count = 0;
     resetPluginStateStoreForTests();
     resetTelegramMessageCacheForTest();
     installTelegramStateRuntimeForTest();
@@ -259,6 +275,7 @@ describe("Telegram topic transport payloads", () => {
       direct_messages_topic_id: DIRECT_TOPIC_ID,
     });
     expect(request && parseJsonBody(request)).not.toHaveProperty("message_thread_id");
+    expect(richMarkdownProjection.count).toBe(1);
   });
 
   it("rejects poll and typing for channel Direct Messages without transport", async () => {
