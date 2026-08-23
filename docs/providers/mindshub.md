@@ -56,9 +56,9 @@ plugin; configure it like any other custom OpenAI/Anthropic-compatible endpoint 
 This is the more thoroughly exercised custom-provider path in OpenClaw and the one to reach for
 first:
 
-```json5 validate=false
+```json5
 {
-  env: { MINDSHUB_API_KEY: "mdb_..." },
+  env: { vars: { MINDSHUB_API_KEY: "mdb_..." } },
   agents: {
     defaults: { model: { primary: "mindshub/sonnet" } },
   },
@@ -109,9 +109,9 @@ endpoint. `GET /v1/models` is the authoritative live catalog; see
 MindsHub also speaks the Anthropic Messages API, so Claude-specific request/response shapes
 (`cache_control` prompt-cache breakpoints, `tool_use`/`tool_result` blocks) round-trip natively:
 
-```json5 validate=false
+```json5
 {
-  env: { MINDSHUB_API_KEY: "mdb_..." },
+  env: { vars: { MINDSHUB_API_KEY: "mdb_..." } },
   agents: {
     defaults: { model: { primary: "mindshub-anthropic/sonnet" } },
   },
@@ -143,9 +143,12 @@ provider. If you still see `401`s on this path, use the OpenAI-compatible config
 </Warning>
 
 <Warning>
-The Anthropic base URL is the **host only**, no `/v1`. OpenClaw's Anthropic client appends
-`/v1/messages` itself, so `https://api.mindshub.ai/v1` here would resolve to
-`/v1/v1/messages`.
+Use the **host only** for the Anthropic base URL, no `/v1` — OpenClaw's Anthropic client appends
+`/v1/messages` itself. If you do include a trailing `/v1` or `/v1/`, OpenClaw's model-compat
+normalization strips it from `anthropic-messages` base URLs before building the request, so a
+value like `https://api.mindshub.ai/v1` is normalized back down to `https://api.mindshub.ai`
+rather than producing a double-appended `/v1/v1/messages`. The host-only form above is still the
+one to use; don't rely on the normalization as a substitute for setting it correctly.
 </Warning>
 
 ## Model catalog
