@@ -34,13 +34,13 @@ jobs:
 
       - name: Checkout source repo
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Checkout ClawHub docs source
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: openclaw/clawhub
           ref: main
@@ -51,7 +51,7 @@ jobs:
 
       - name: Setup Node
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.x"
 
@@ -88,7 +88,7 @@ jobs:
       - name: Install docs MDX checker dependency
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
         working-directory: publish
-        run: npm install --no-save --package-lock=false @mdx-js/mdx@3.1.1 tsx@4.23.1
+        run: npm install --no-save --package-lock=false @mdx-js/mdx@3.1.1 tsx@4.23.12
 
       - name: Check publish docs MDX
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''

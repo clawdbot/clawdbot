@@ -23,11 +23,11 @@ import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 import { SUPPORTED_LOCALES } from "../../ui/src/i18n/lib/registry.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
-const CACHE_V5 = "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae";
-const CACHE_SAVE_V5 = "actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae";
+const CHECKOUT_V6 = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
+const CACHE_V5 = "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9";
+const CACHE_SAVE_V5 = "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9";
 const SETUP_GRADLE_V6 = "gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb";
-const SETUP_GO_V6 = "actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c";
+const SETUP_GO_V6 = "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e";
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const DOWNLOAD_ARTIFACT_V8 = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const CREATE_GITHUB_APP_TOKEN_V3 =
@@ -38,7 +38,7 @@ const MANTIS_MANUAL_ONLY_WORKFLOWS = [
   ".github/workflows/mantis-discord-thread-attachment.yml",
   ".github/workflows/mantis-telegram-live.yml",
 ] as const;
-const TRUFFLEHOG_V3_95_9 = "trufflesecurity/trufflehog@27b0417c16317ca9a472a9a8092acce143b49c55";
+const TRUFFLEHOG_V3_95_9 = "trufflesecurity/trufflehog@bcfcf73aaf4759d4dadc2783177c245a02792318";
 const MANTIS_GITHUB_APP_CLIENT_ID = "Iv23liPJCozR0uHm6P7G";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
 const OPENGREP_FULL_WORKFLOW = ".github/workflows/opengrep-precise-full.yml";
@@ -2758,9 +2758,9 @@ NODE
       const run = expectDefined(installStep.run, `Install opengrep script in ${workflowPath}`);
 
       expect(installStep.env, workflowPath).toMatchObject({
-        OPENGREP_VERSION: "v1.25.0",
+        OPENGREP_VERSION: "v1.27.1",
         OPENGREP_LINUX_X64_SHA256:
-          "9ac4aebb47ba3f7b0d8fc641ac8749cb6c2f253f616131a67d9631e00d4bea33",
+          "58053da76672bbeb5b0a5441021c58338707052e10f81d777140ca879bd491ce",
       });
       expect(run, workflowPath).toContain('binary="$(mktemp "${RUNNER_TEMP}/opengrep.XXXXXX")"');
       expect(run, workflowPath).toContain("trap 'rm -f \"$binary\"' EXIT");
@@ -2994,7 +2994,7 @@ NODE
       "Android SDK package install step",
     );
 
-    expect(javaStep.uses).toBe("actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287");
+    expect(javaStep.uses).toBe("actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961");
     expect(javaStep.with).toMatchObject({
       distribution: "temurin",
       "java-version": 17,
@@ -3086,6 +3086,35 @@ NODE
     }
   });
 
+  it("pins Swift 6.3 workflow jobs to Xcode 26.6-capable runners", () => {
+    const codeql = parse(
+      readFileSync(".github/workflows/codeql-macos-critical-security.yml", "utf8"),
+    );
+    const codeqlJob = codeql.jobs.macos;
+    const codeqlSelect = expectDefined(
+      codeqlJob.steps.find((step: WorkflowStep) => step.name === "Select Xcode"),
+      "CodeQL macOS Xcode selection",
+    );
+
+    expect(codeqlJob["runs-on"]).toBe("blacksmith-12vcpu-macos-26");
+    expect(codeqlSelect.run).toContain("/Applications/Xcode_26.6.app/Contents/Developer");
+    expect(codeqlSelect.run).toContain('if [[ "$xcode_version" != 26.6* ]]; then');
+
+    for (const [workflowPath, selectorCount] of [
+      [".github/workflows/ci.yml", 1],
+      [".github/workflows/ios-periphery.yml", 1],
+      [".github/workflows/macos-periphery.yml", 1],
+      [".github/workflows/shared-openclawkit-periphery.yml", 2],
+    ] as const) {
+      const source = readFileSync(workflowPath, "utf8");
+      expect(source.match(/\/Applications\/Xcode_26\.6\.app/gu), workflowPath).toHaveLength(
+        selectorCount,
+      );
+      expect(source.match(/expected Xcode 26\.6/gu), workflowPath).toHaveLength(selectorCount);
+      expect(source, workflowPath).not.toContain("Xcode_26.5.app");
+    }
+  });
+
   it("loads Android CI setup from the workflow revision for frozen targets", () => {
     const steps = readCiWorkflow().jobs.android.steps as WorkflowStep[];
     const checkoutIndex = steps.findIndex((step) => step.name === "Checkout");
@@ -3115,7 +3144,12 @@ NODE
       "Android SDK setup step",
     );
 
+    expect(setupStep.run).toContain('CMDLINE_TOOLS_VERSION="15859902"');
+    expect(setupStep.run).toContain(
+      'CMDLINE_TOOLS_SHA1="040d3996a65543d22ec4bf73e4c37aa37a8d4af4"',
+    );
     expect(setupStep.run).toContain("curl -fsSL --connect-timeout 10 --max-time 300");
+    expect(setupStep.run).toContain("sha1sum --check -");
   });
 
   it("covers Android app variants, lint, and benchmark compilation", () => {
@@ -3567,7 +3601,7 @@ NODE
     expect(scanStep.with).toEqual({
       base: "${{ steps.diff_base.outputs.sha }}",
       head: "${{ github.sha }}",
-      version: "3.95.9@sha256:59b244249d1a1aef4baa24fe73d3c931616264482580d806d77f6c74d26b3e42",
+      version: "3.97.0@sha256:ff4c95e9df7d645daf2140e3ca1039031c63106268d5fbb25feb43ceca1bcc33",
       extra_args: "--results=verified,unknown --fail-on-scan-errors",
     });
   });
@@ -3868,13 +3902,14 @@ NODE
         ).toBe("false");
       }
     }
-    for (const { jobName, step: setup } of Object.entries(workflow.jobs).flatMap(([jobName, job]) =>
-      ((job as { steps?: WorkflowStep[] }).steps ?? [])
-        .filter((candidate) => candidate.uses?.endsWith("/.github/actions/setup-node-env"))
-        .map((candidate) => ({ jobName, step: candidate })),
+    for (const { jobName: setupJobName, step: setup } of Object.entries(workflow.jobs).flatMap(
+      ([jobName, job]) =>
+        ((job as { steps?: WorkflowStep[] }).steps ?? [])
+          .filter((candidate) => candidate.uses?.endsWith("/.github/actions/setup-node-env"))
+          .map((candidate) => ({ jobName, step: candidate })),
     )) {
-      expect(setup.with, jobName).not.toHaveProperty("sticky-disk");
-      expect(setup.with, jobName).not.toHaveProperty("save-sticky-disk");
+      expect(setup.with, setupJobName).not.toHaveProperty("sticky-disk");
+      expect(setup.with, setupJobName).not.toHaveProperty("save-sticky-disk");
       expect(
         [
           "off",
@@ -3883,7 +3918,7 @@ NODE
           "${{ needs.preflight.outputs.cache_mode }}",
           "${{ steps.candidate_trust.outputs.cache_mode }}",
         ],
-        jobName,
+        setupJobName,
       ).toContain(setup.with?.["cache-mode"]);
     }
 
@@ -3892,7 +3927,7 @@ NODE
       (candidate: WorkflowStep) => candidate.name === "Save exact dependency cache",
     );
     expect(dependencySave).toMatchObject({
-      uses: "actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae",
+      uses: "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
       with: {
         key: "${{ steps.setup-node-env.outputs.dependency-cache-key }}",
         path: cachePaths,
@@ -4111,7 +4146,7 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
       (step: WorkflowStep) => step.name === "Save build-all cache",
     );
     expect(buildSave).toMatchObject({
-      uses: "actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae",
+      uses: "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
       with: {
         key: "${{ steps.setup-node-env.outputs.build-all-cache-key }}",
         path: ".artifacts/build-all-cache",
@@ -7427,7 +7462,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(stepNames).not.toContain("Save dist build cache");
     expect(restoreStep.uses).toBe(CACHE_V5);
     expect(buildDistStep.if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
-    expect(saveStep.uses).toBe("actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae");
+    expect(saveStep.uses).toBe("actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9");
     expect(saveStep.if).toContain("steps.setup-node-env.outputs.cache-mode == 'read-write'");
     expect(saveStep.with?.key).toBe("${{ runner.os }}-dist-build-v3-${{ github.sha }}");
     expect(restoreStep.with.path).toContain("dist/");
@@ -7541,7 +7576,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       uses: SETUP_GO_V6,
       with: {
         cache: false,
-        "go-version": "1.25.12",
+        "go-version": "1.26.6",
       },
     });
     expect(setupGoStep.with).not.toHaveProperty("go-version-file");
@@ -7564,12 +7599,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
     expect(verifyGoStep).toMatchObject({
       if: "matrix.requires_go == true",
-      run: 'test "$(go env GOVERSION)" = "go1.25.12"',
+      run: 'test "$(go env GOVERSION)" = "go1.26.6"',
     });
 
     const goMod = readTrackedText("scripts/docs-i18n/go.mod");
-    expect(goMod).toMatch(/^go 1\.25\.0$/mu);
-    expect(goMod).toMatch(/^toolchain go1\.25\.12$/mu);
+    expect(goMod).toMatch(/^go 1\.26\.0$/mu);
+    expect(goMod).toMatch(/^toolchain go1\.26\.6$/mu);
   });
 
   it("fails and retries quiet Node test shard stalls quickly", () => {

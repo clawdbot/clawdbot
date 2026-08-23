@@ -1298,11 +1298,10 @@ describe("qa cli runtime", () => {
       transportId: "qa-channel",
       channelDriver: "crabline",
       channelDriverSelection: {
-        capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+        capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
         channel: "telegram",
         channelDriver: "crabline",
-        providerReadinessArtifactPath: "crabline-fake-provider-smoke.json",
-        smokeArtifactPath: "crabline-fake-provider-smoke.json",
+        providerReadinessArtifactPath: "crabline-provider-readiness.json",
       },
       evidenceMode: undefined,
       providerMode: "mock-openai",
@@ -1377,11 +1376,10 @@ describe("qa cli runtime", () => {
     expect(runQaMultipass).toHaveBeenCalledWith(
       expect.objectContaining({
         channelDriverSelection: {
-          capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+          capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
           channel: "telegram",
           channelDriver: "crabline",
-          providerReadinessArtifactPath: "crabline-fake-provider-smoke.json",
-          smokeArtifactPath: "crabline-fake-provider-smoke.json",
+          providerReadinessArtifactPath: "crabline-provider-readiness.json",
         },
       }),
     );

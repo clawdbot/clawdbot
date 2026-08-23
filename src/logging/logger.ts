@@ -59,6 +59,39 @@ const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_MAX_LOG_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
 
 type LogObj = { date?: Date } & Record<string, unknown>;
+type LogMethodResult = ReturnType<TsLogger<LogObj>["log"]>;
+type SubLoggerSettings = NonNullable<Parameters<TsLogger<LogObj>["getSubLogger"]>[0]>;
+
+class OpenClawTsLogger extends TsLogger<LogObj> {
+  override trace(...args: unknown[]): LogMethodResult {
+    return this.log(levelToMinLevel("trace"), "TRACE", ...args);
+  }
+  override debug(...args: unknown[]): LogMethodResult {
+    return this.log(levelToMinLevel("debug"), "DEBUG", ...args);
+  }
+  override info(...args: unknown[]): LogMethodResult {
+    return this.log(levelToMinLevel("info"), "INFO", ...args);
+  }
+  override warn(...args: unknown[]): LogMethodResult {
+    return this.log(levelToMinLevel("warn"), "WARN", ...args);
+  }
+  override error(...args: unknown[]): LogMethodResult {
+    return this.log(levelToMinLevel("error"), "ERROR", ...args);
+  }
+  override fatal(...args: unknown[]): LogMethodResult {
+    return this.log(levelToMinLevel("fatal"), "FATAL", ...args);
+  }
+  override getSubLogger(settings?: SubLoggerSettings, logObj?: LogObj): OpenClawTsLogger {
+    // tslog constructs children through `new this.constructor(...)`; preserve that
+    // exact subclass contract without relying on constructor identity across reloads.
+    return super.getSubLogger(settings, logObj) as OpenClawTsLogger;
+  }
+  override child(settings?: SubLoggerSettings, logObj?: LogObj): OpenClawTsLogger {
+    return this.getSubLogger(settings, logObj);
+  }
+}
+
+export type OpenClawLogger = OpenClawTsLogger;
 
 type ResolvedSettings = {
   level: LogLevel;
@@ -589,11 +622,12 @@ export function isFileLogLevelEnabled(level: LogLevel): boolean {
   return levelToMinLevel(level) >= levelToMinLevel(settings.level);
 }
 
-function buildLogger(settings: ResolvedRuntimeSettings): TsLogger<LogObj> {
+function buildLogger(settings: ResolvedRuntimeSettings): OpenClawLogger {
   const silent = settings.level === "silent";
-  const logger = new TsLogger<LogObj>({
+  const logger = new OpenClawTsLogger({
     name: "openclaw",
-    maskValuesOfKeys: [],
+    mask: { keys: [] },
+    meta: { property: "_meta" },
     // tslog reports Infinity as an out-of-range setting even though its runtime filter supports it.
     minLevel: levelToMinLevel(silent ? "fatal" : settings.level),
     type: "hidden", // no ansi formatting
@@ -660,8 +694,8 @@ function resolveMaxLogFileBytes(raw: unknown): number {
   return DEFAULT_MAX_LOG_FILE_BYTES;
 }
 
-export function getLogger(): TsLogger<LogObj> {
-  const cachedLogger = loggingState.cachedLogger as TsLogger<LogObj> | null;
+export function getLogger(): OpenClawLogger {
+  const cachedLogger = loggingState.cachedLogger as OpenClawLogger | null;
   const cachedSettings = loggingState.cachedSettings as ResolvedRuntimeSettings | null;
   if (cachedLogger && cachedSettings) {
     return cachedLogger;
@@ -670,16 +704,14 @@ export function getLogger(): TsLogger<LogObj> {
   const logger = buildLogger(settings);
   loggingState.cachedLogger = logger;
   loggingState.cachedSettings = settings;
-  return loggingState.cachedLogger as TsLogger<LogObj>;
+  return logger;
 }
 
-type SubLoggerSettings = NonNullable<Parameters<TsLogger<LogObj>["getSubLogger"]>[0]>;
-
 function getSubLoggerWithResolvedMinLevel(
-  logger: TsLogger<LogObj>,
+  logger: OpenClawLogger,
   settings: SubLoggerSettings,
   minLevel: number,
-): TsLogger<LogObj> {
+): OpenClawLogger {
   const silent = minLevel === levelToMinLevel("silent");
   const child = logger.getSubLogger({
     ...settings,
@@ -694,7 +726,7 @@ function getSubLoggerWithResolvedMinLevel(
 export function getChildLogger(
   bindings?: Record<string, unknown>,
   opts?: { level?: LogLevel },
-): TsLogger<LogObj> {
+): OpenClawLogger {
   const base = getLogger();
   const minLevel = opts?.level ? levelToMinLevel(opts.level) : base.settings.minLevel;
   const name = bindings ? JSON.stringify(bindings) : undefined;
@@ -709,7 +741,7 @@ export function getChildLogger(
 }
 
 // Baileys expects a pino-like logger shape. Provide a lightweight adapter.
-export function toPinoLikeLogger(logger: TsLogger<LogObj>, level: LogLevel): PinoLikeLogger {
+export function toPinoLikeLogger(logger: OpenClawLogger, level: LogLevel): PinoLikeLogger {
   const buildChild = (bindings?: Record<string, unknown>) =>
     toPinoLikeLogger(
       getSubLoggerWithResolvedMinLevel(
@@ -719,16 +751,20 @@ export function toPinoLikeLogger(logger: TsLogger<LogObj>, level: LogLevel): Pin
       ),
       level,
     );
+  const forwardLevel =
+    (name: Exclude<LogLevel, "silent">) =>
+    (...args: unknown[]) =>
+      logger.log(levelToMinLevel(name), name.toUpperCase(), ...args);
 
   return {
     level,
     child: buildChild,
-    trace: (...args: unknown[]) => logger.trace(...args),
-    debug: (...args: unknown[]) => logger.debug(...args),
-    info: (...args: unknown[]) => logger.info(...args),
-    warn: (...args: unknown[]) => logger.warn(...args),
-    error: (...args: unknown[]) => logger.error(...args),
-    fatal: (...args: unknown[]) => logger.fatal(...args),
+    trace: forwardLevel("trace"),
+    debug: forwardLevel("debug"),
+    info: forwardLevel("info"),
+    warn: forwardLevel("warn"),
+    error: forwardLevel("error"),
+    fatal: forwardLevel("fatal"),
   };
 }
 
