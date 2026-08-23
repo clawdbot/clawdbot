@@ -3273,7 +3273,7 @@ describe("package acceptance workflow", () => {
     expect(drain.if).toBe("always()");
     expect(decisionStep.run).toBe(drainStep.run);
     expect(decisionStep.env).toMatchObject({
-      FAIL_FAST: "${{ inputs.fail_fast }}",
+      FAIL_FAST: "${{ inputs.continuation_plan_json == '' && inputs.fail_fast }}",
       FULL_RELEASE_STATE_MODE: "decision",
     });
     expect(drainStep.env).toMatchObject({
