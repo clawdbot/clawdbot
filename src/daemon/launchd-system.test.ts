@@ -173,7 +173,7 @@ describe("system LaunchDaemon ownership", () => {
       status: "loaded",
       serviceTarget: "system/ai.openclaw.gateway",
     });
-    expect(execLaunchctl).toHaveBeenCalledWith(["print", "system/ai.openclaw.gateway"]);
+    expect(execLaunchctl).toHaveBeenCalledWith(["print", "system/ai.openclaw.gateway"], undefined);
   });
 
   it("fails closed when launchctl cannot classify system ownership", async () => {

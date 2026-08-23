@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -31,6 +32,14 @@ async function assertDoctorDatabaseSchemasCompatible(): Promise<void> {
     throw new databasePreflight.OpenClawDatabaseSchemaPreflightError(databaseSchemas.incompatible, {
       operation: "doctor",
     });
+  }
+  const unreadableStateDatabase = databaseSchemas.indeterminate.find(
+    (database) => database.kind === "state",
+  );
+  if (unreadableStateDatabase) {
+    throw new Error(
+      `Doctor cannot continue because the shared state database is unreadable: ${unreadableStateDatabase.path}: ${unreadableStateDatabase.reason}. The database was left unchanged; doctor will not recreate it because that could discard persistent operator data. Stop the Gateway and other OpenClaw processes, then restore this file from a verified backup or repair it manually. After recovery, run ${formatCliCommand("openclaw doctor --fix")} again. See ${stateDatabase.OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
+    );
   }
 }
 

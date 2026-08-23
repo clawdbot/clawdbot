@@ -722,7 +722,11 @@ describe("startGatewayEventSubscriptions", () => {
         )
         .map((payload) => [payload.task.id, payload.task]),
     );
-    expect(broadcast).toHaveBeenCalledWith("task", expect.anything(), { dropIfSlow: true });
+    expect(broadcast).toHaveBeenCalledWith("task", expect.anything(), {
+      dropIfSlow: true,
+      sessionKeys: ["agent:main:main"],
+      agentId: "main",
+    });
     // Runtime registry statuses translate to the public ledger vocabulary.
     expect(taskUpsertsById.get(completed.taskId)?.status).toBe("completed");
     expect(taskUpsertsById.get(lost.taskId)?.status).toBe("failed");
@@ -1088,11 +1092,7 @@ describe("startGatewayEventSubscriptions", () => {
       deliveryStatus: "not_applicable",
       notifyPolicy: "silent",
     });
-    expect(replacementBroadcast).toHaveBeenCalledWith("task", expect.anything(), {
-      dropIfSlow: true,
-    });
-    expect(staleBroadcast).not.toHaveBeenCalledWith("task", expect.anything(), {
-      dropIfSlow: true,
-    });
+    expect(replacementBroadcast.mock.calls.some(([event]) => event === "task")).toBe(true);
+    expect(staleBroadcast.mock.calls.some(([event]) => event === "task")).toBe(false);
   });
 });

@@ -12,11 +12,33 @@ const PROCESS_GROUP_POLL_MS = 25;
 const TASKKILL_TIMEOUT_MS = 10_000;
 type ProcessTreeState = "indeterminate" | "live" | "signaled" | "terminated";
 type ManagedChildTermination = { processTreeState: Exclude<ProcessTreeState, "live"> };
+type ManagedProcessGroupErrorPolicy = "alive-on-eperm" | "indeterminate" | "verify-leader";
+type ManagedProcessGroupChild = {
+  exitCode?: number | null;
+  pid?: number;
+  signalCode?: string | null;
+};
+type ManagedProcessGroupOptions = {
+  errorPolicy: ManagedProcessGroupErrorPolicy;
+  inspectLeaderWhenNoGroup?: boolean;
+  platform?: NodeJS.Platform;
+  useProcessGroup?: boolean;
+};
 type TaskkillRunner = (
   command: string,
   args: string[],
   options: { killSignal?: NodeJS.Signals; stdio?: StdioOptions; timeout?: number },
 ) => { error?: Error; status: number | null } | undefined;
+type ManagedChildTerminationOptions = {
+  onChildSignalError?: (error: unknown) => void;
+  onProcessGroupSignalError?: (error: unknown) => void;
+  platform?: NodeJS.Platform;
+  processGroupFallback?: "always" | "never" | "nonmissing";
+  runTaskkill?: TaskkillRunner;
+  taskkillTimeoutMs?: number | null;
+  useProcessGroup?: boolean;
+  useWindowsTaskkill?: boolean;
+};
 
 type ManagedCommandOptions = {
   bin: string;
@@ -60,28 +82,22 @@ export function signalExitCode(signal: NodeJS.Signals) {
 /**
  * @param {import("node:child_process").ChildProcess} child
  * @param {NodeJS.Signals} [signal]
- * @param {{
- *   onProcessGroupSignalError?: (error: unknown) => void;
- *   platform?: NodeJS.Platform;
- *   runTaskkill?: typeof spawnSync;
- *   useProcessGroup?: boolean;
- * }} [options]
+ * @param {ManagedChildTerminationOptions} [options]
  * @returns {{ processTreeState: "indeterminate" | "signaled" | "terminated" } | undefined}
  */
 export function terminateManagedChild(
-  child: { kill(signal?: NodeJS.Signals): unknown; pid?: number },
+  child: { kill(signal: NodeJS.Signals): unknown; pid?: number },
   signal: NodeJS.Signals = "SIGTERM",
   {
+    onChildSignalError,
     onProcessGroupSignalError,
     platform = process.platform,
+    processGroupFallback = "always",
     runTaskkill = spawnSync,
+    taskkillTimeoutMs = TASKKILL_TIMEOUT_MS,
     useProcessGroup = platform !== "win32",
-  }: {
-    onProcessGroupSignalError?: (error: unknown) => void;
-    platform?: NodeJS.Platform;
-    runTaskkill?: TaskkillRunner;
-    useProcessGroup?: boolean;
-  } = {},
+    useWindowsTaskkill = true,
+  }: ManagedChildTerminationOptions = {},
 ): ManagedChildTermination | undefined {
   if (!child.pid) {
     try {
@@ -89,7 +105,8 @@ export function terminateManagedChild(
       if (platform !== "win32") {
         return { processTreeState: delivered === false ? "terminated" : "signaled" };
       }
-    } catch {
+    } catch (error) {
+      onChildSignalError?.(error);
       // A child that never acquired a PID may already have failed to spawn.
     }
     return platform === "win32" ? { processTreeState: "indeterminate" } : undefined;
@@ -101,49 +118,130 @@ export function terminateManagedChild(
       return { processTreeState: "signaled" };
     }
   } catch (error) {
-    if (!isMissingProcessError(error)) {
+    const processGroupIsMissing = isMissingProcessError(error);
+    if (!processGroupIsMissing) {
       onProcessGroupSignalError?.(error);
+    }
+    if (
+      processGroupFallback === "never" ||
+      (processGroupFallback === "nonmissing" && processGroupIsMissing)
+    ) {
+      return processGroupIsMissing ? { processTreeState: "terminated" } : undefined;
     }
   }
 
-  if (platform !== "win32") {
+  if (platform !== "win32" || !useWindowsTaskkill) {
     try {
       const delivered = child.kill(signal);
       return { processTreeState: delivered === false ? "terminated" : "signaled" };
     } catch (error) {
+      onChildSignalError?.(error);
       return isMissingProcessError(error) ? { processTreeState: "terminated" } : undefined;
     }
   }
 
-  if (platform === "win32") {
-    const taskkillPath = resolveWindowsTaskkillPath();
-    const args = ["/PID", String(child.pid), "/T"];
-    if (signal === "SIGKILL") {
-      args.push("/F");
-    }
-    const taskkillOptions = {
-      killSignal: "SIGKILL",
-      stdio: "ignore",
-      timeout: TASKKILL_TIMEOUT_MS,
-    } satisfies Parameters<TaskkillRunner>[2];
-    const result = runTaskkill(taskkillPath, args, taskkillOptions);
-    if (!result?.error && result?.status === 0) {
+  const taskkillPath = resolveWindowsTaskkillPath();
+  const args = ["/PID", String(child.pid), "/T"];
+  if (signal === "SIGKILL") {
+    args.push("/F");
+  }
+  const taskkillOptions: Parameters<TaskkillRunner>[2] =
+    taskkillTimeoutMs === null
+      ? { stdio: "ignore" }
+      : { killSignal: "SIGKILL", stdio: "ignore", timeout: taskkillTimeoutMs };
+  const result = runTaskkill(taskkillPath, args, taskkillOptions);
+  if (!result?.error && result?.status === 0) {
+    return { processTreeState: "terminated" };
+  }
+  if (signal !== "SIGKILL") {
+    const forceResult = runTaskkill(taskkillPath, [...args, "/F"], taskkillOptions);
+    if (!forceResult?.error && forceResult?.status === 0) {
       return { processTreeState: "terminated" };
     }
-    if (signal !== "SIGKILL") {
-      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], taskkillOptions);
-      if (!forceResult?.error && forceResult?.status === 0) {
-        return { processTreeState: "terminated" };
-      }
+  }
+  try {
+    child.kill(signal);
+  } catch (error) {
+    onChildSignalError?.(error);
+    // The leader may already be gone, but failed taskkill leaves descendants unverified.
+  }
+  return { processTreeState: "indeterminate" };
+}
+
+export function inspectManagedProcessGroup(
+  child: ManagedProcessGroupChild,
+  {
+    errorPolicy,
+    inspectLeaderWhenNoGroup = false,
+    platform = process.platform,
+    useProcessGroup = platform !== "win32",
+  }: ManagedProcessGroupOptions,
+): "dead" | "indeterminate" | "live" {
+  if (!useProcessGroup) {
+    return inspectLeaderWhenNoGroup &&
+      child.pid &&
+      child.exitCode === null &&
+      child.signalCode === null
+      ? "live"
+      : "dead";
+  }
+  const { pid } = child;
+  if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 1 || pid > 0x7fffffff) {
+    return "indeterminate";
+  }
+  try {
+    process.kill(-pid, 0);
+    return "live";
+  } catch (error) {
+    if (isMissingProcessError(error)) {
+      return "dead";
+    }
+    if (errorPolicy === "indeterminate") {
+      return "indeterminate";
+    }
+    if (!hasProcessErrorCode(error, "EPERM")) {
+      return "dead";
+    }
+    if (errorPolicy === "alive-on-eperm") {
+      return "live";
+    }
+    if (child.exitCode != null || child.signalCode != null) {
+      return "dead";
     }
     try {
-      child.kill(signal);
+      process.kill(pid, 0);
+      return "live";
     } catch {
-      // The leader may already be gone, but failed taskkill leaves descendants unverified.
+      return "dead";
     }
-    return { processTreeState: "indeterminate" };
   }
-  return undefined;
+}
+
+export async function waitForManagedProcessGroupExit(
+  child: ManagedProcessGroupChild,
+  timeoutMs: number,
+  {
+    clampPollToDeadline = false,
+    pollIntervalMs = PROCESS_GROUP_POLL_MS,
+    ...groupOptions
+  }: ManagedProcessGroupOptions & {
+    clampPollToDeadline?: boolean;
+    pollIntervalMs?: number;
+  },
+): Promise<boolean> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (inspectManagedProcessGroup(child, groupOptions) !== "live") {
+      return true;
+    }
+    const waitMs = clampPollToDeadline
+      ? Math.min(pollIntervalMs, deadlineAt - Date.now())
+      : pollIntervalMs;
+    await new Promise((resolve) => {
+      setTimeout(resolve, waitMs);
+    });
+  }
+  return inspectManagedProcessGroup(child, groupOptions) !== "live";
 }
 
 /**
@@ -318,18 +416,6 @@ function createManagedCommandSetupCleanupError(error: unknown, cleanupError: unk
   );
 }
 
-function processGroupStatus(pid: number | undefined): "dead" | "indeterminate" | "live" {
-  if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 1 || pid > 0x7fffffff) {
-    return "indeterminate";
-  }
-  try {
-    process.kill(-pid, 0);
-    return "live";
-  } catch (error) {
-    return isMissingProcessError(error) ? "dead" : "indeterminate";
-  }
-}
-
 async function ensureManagedProcessTreeExit(
   child: ChildProcess,
   platform: NodeJS.Platform,
@@ -349,11 +435,14 @@ async function ensureManagedProcessTreeExit(
     }
     return;
   }
-  const initialStatus = processGroupStatus(child.pid);
+  const initialStatus = inspectManagedProcessGroup(child, {
+    errorPolicy: "indeterminate",
+    platform,
+  });
   if (initialStatus === "dead") {
     return;
   }
-  let status: ReturnType<typeof processGroupStatus> = initialStatus;
+  let status: ReturnType<typeof inspectManagedProcessGroup> = initialStatus;
   // A missing group at signal time supersedes the earlier racy liveness probe.
   const termination = terminateIfLive
     ? terminateManagedChild(child, "SIGKILL", { platform })
@@ -363,7 +452,7 @@ async function ensureManagedProcessTreeExit(
     await new Promise((resolve) => {
       setTimeout(resolve, PROCESS_GROUP_POLL_MS);
     });
-    status = processGroupStatus(child.pid);
+    status = inspectManagedProcessGroup(child, { errorPolicy: "indeterminate", platform });
     if (status === "dead") {
       if (terminateIfLive && termination?.processTreeState !== "terminated") {
         throw createManagedCommandCleanupError(
@@ -568,5 +657,9 @@ function signalNumberFor(signal: NodeJS.Signals) {
 }
 
 function isMissingProcessError(error: unknown) {
-  return Boolean(error && typeof error === "object" && "code" in error && error.code === "ESRCH");
+  return hasProcessErrorCode(error, "ESRCH");
+}
+
+function hasProcessErrorCode(error: unknown, code: string) {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === code);
 }

@@ -48,6 +48,7 @@ async function runCompactionPlan<TInput extends CompactionPlanningWorkerInput, T
     messages: AgentMessage[],
   ) => TResult;
 }): Promise<TResult> {
+  params.signal?.throwIfAborted();
   const messages = sanitizeCompactionMessages(params.input.messages);
   if (messages.length < COMPACTION_PLANNING_WORKER_MIN_MESSAGES) {
     return params.fallback(params.input.messages);
@@ -61,6 +62,7 @@ async function runCompactionPlan<TInput extends CompactionPlanningWorkerInput, T
       },
       signal: params.signal,
     });
+    params.signal?.throwIfAborted();
     if (value.kind !== params.input.kind) {
       throw new CompactionPlanningWorkerError(
         "unexpected compaction planning worker result",
@@ -73,6 +75,7 @@ async function runCompactionPlan<TInput extends CompactionPlanningWorkerInput, T
     );
   } catch (error) {
     if (error instanceof CompactionPlanningWorkerError && error.code === "unavailable") {
+      params.signal?.throwIfAborted();
       return params.fallback(messages);
     }
     throw error;

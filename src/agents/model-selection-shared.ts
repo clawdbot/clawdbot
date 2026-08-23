@@ -654,6 +654,7 @@ function applyModelCatalogMetadata(params: {
   const nextContextWindow = configuredEntry?.contextWindow ?? params.entry.contextWindow;
   const nextContextTokens = configuredEntry?.contextTokens ?? params.entry.contextTokens;
   const nextReasoning = configuredEntry?.reasoning ?? params.entry.reasoning;
+  const configuredReasoning = configuredEntry?.configuredReasoning;
   const nextInput = configuredEntry?.input ?? params.entry.input;
   const nextParams =
     params.entry.params || configuredEntry?.params
@@ -673,6 +674,7 @@ function applyModelCatalogMetadata(params: {
     ...(nextContextWindow !== undefined ? { contextWindow: nextContextWindow } : {}),
     ...(nextContextTokens !== undefined ? { contextTokens: nextContextTokens } : {}),
     ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
+    ...(configuredReasoning !== undefined ? { configuredReasoning } : {}),
     ...(nextInput ? { input: nextInput } : {}),
     ...(nextParams ? { params: nextParams } : {}),
     ...(nextCompat ? { compat: nextCompat } : {}),
@@ -689,6 +691,7 @@ function buildSyntheticAllowedCatalogEntry(params: {
   const nextContextWindow = configuredEntry?.contextWindow;
   const nextContextTokens = configuredEntry?.contextTokens;
   const nextReasoning = configuredEntry?.reasoning;
+  const configuredReasoning = configuredEntry?.configuredReasoning;
   const nextInput = configuredEntry?.input;
   const nextParams = configuredEntry?.params;
   const nextCompat = configuredEntry?.compat;
@@ -701,6 +704,7 @@ function buildSyntheticAllowedCatalogEntry(params: {
     ...(nextContextWindow !== undefined ? { contextWindow: nextContextWindow } : {}),
     ...(nextContextTokens !== undefined ? { contextTokens: nextContextTokens } : {}),
     ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
+    ...(configuredReasoning !== undefined ? { configuredReasoning } : {}),
     ...(nextInput ? { input: nextInput } : {}),
     ...(nextParams ? { params: nextParams } : {}),
     ...(nextCompat ? { compat: nextCompat } : {}),
@@ -1453,6 +1457,7 @@ export function buildConfiguredModelCatalog(params: {
         contextWindow,
         contextTokens,
         reasoning,
+        ...(typeof model?.reasoning === "boolean" ? { configuredReasoning: model.reasoning } : {}),
         input,
         ...(modelParams ? { params: modelParams } : {}),
         compat,

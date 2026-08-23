@@ -322,7 +322,7 @@ describe("OpenAI-compatible completions params", () => {
     const result = await streamOpenAICompletions(
       {
         ...model,
-        provider: "llama-server",
+        provider: "llama-cpp",
         headers: { Authorization: "Bearer proxy-key" },
       },
       context,

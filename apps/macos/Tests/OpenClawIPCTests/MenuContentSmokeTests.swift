@@ -158,12 +158,11 @@ struct MenuContentSmokeTests {
     }
 
     @Test func `delayed first run presentation is cancelled by later completion`() {
-        #expect(!AppDelegate.shouldPresentScheduledFirstRunOnboarding(
-            expectedConnectionMode: .remote,
-            currentConnectionMode: .remote,
-            expectedRouteIdentity: "remote:id:gateway-a",
-            currentRouteIdentity: "remote:id:gateway-a",
-            onboardingSeen: true))
+        #expect(!AppDelegate.shouldPresentScheduledFirstRunOnboarding(onboardingSeen: true))
+    }
+
+    @Test func `delayed first run presentation remains pending until completion`() {
+        #expect(AppDelegate.shouldPresentScheduledFirstRunOnboarding(onboardingSeen: false))
     }
 }
 

@@ -29,7 +29,7 @@ export type ProviderRuntimeHooks = {
   ) => string | undefined;
   prepareProviderDynamicModel: (
     params: Parameters<typeof prepareProviderDynamicModel>[0],
-  ) => Promise<void>;
+  ) => ReturnType<typeof prepareProviderDynamicModel>;
   runProviderDynamicModel: (params: Parameters<typeof runProviderDynamicModel>[0]) => unknown;
   shouldPreferProviderRuntimeResolvedModel?: (
     params: Parameters<typeof shouldPreferProviderRuntimeResolvedModel>[0],

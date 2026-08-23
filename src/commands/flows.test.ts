@@ -318,6 +318,28 @@ describe("flows commands", () => {
     });
   });
 
+  it("keeps terminal reset bytes off stdout for JSON lookup failures", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const runtime = createRuntime();
+
+      await flowsShowCommand({ lookup: "missing-flow", json: true }, runtime);
+
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.writeJson).toHaveBeenCalledWith(
+        {
+          ok: false,
+          error: {
+            type: "cli_error",
+            message:
+              "TaskFlow not found: missing-flow. Run openclaw tasks flow list to see recent flow ids.",
+          },
+        },
+        2,
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
+    });
+  });
+
   it("shows one TaskFlow with linked task details in text mode", async () => {
     await withTaskFlowCommandStateDir(async () => {
       const flow = createManagedTaskFlow({

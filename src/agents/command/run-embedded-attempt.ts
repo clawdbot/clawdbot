@@ -30,7 +30,7 @@ import { resolveFastModeState } from "../fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch.js";
-import { findModelInCatalog, modelSupportsInput } from "../model-catalog-lookup.js";
+import { prepareModelRunCapabilities } from "../model-catalog-lookup.js";
 import { modelKey, resolveThinkingDefault } from "../model-selection.js";
 import { resolveConfiguredThinkingDefault } from "../model-thinking-default.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
@@ -43,10 +43,10 @@ import {
 import { resolveSessionRuntimeOverrideForProvider } from "../session-runtime-compat.js";
 import { measureAgentStartup } from "../startup-timing.js";
 import {
-  hasResolvedThinkingCatalogEntry,
   normalizeThinkingCatalogProviders,
   resolveCandidateThinkingLevel,
   resolveEffectiveAgentRuntime,
+  needsThinkHydration,
 } from "../thinking-runtime.js";
 import {
   createAgentAttemptLifecycleCallbacks,
@@ -120,8 +120,7 @@ export async function runEmbeddedAgentAttempt(params: {
     storedModelOverrideSource,
     effectiveTurnThinkLevel,
   } = params.modelSelection;
-  let thinkingCatalog = params.modelSelection.thinkingCatalog;
-  let attemptedThinkingCatalogHydration = false;
+  const thinkingCatalog = params.modelSelection.thinkingCatalog;
   let sessionEntry = params.sessionEntry;
   let lifecycleGeneration = params.lifecycleGeneration;
 
@@ -388,17 +387,12 @@ export async function runEmbeddedAgentAttempt(params: {
               provider: providerOverride,
               model: modelOverride,
             });
+          let candidateThinkingCatalog = thinkingCatalog;
           if (
             pluginsEnabled &&
             candidateConfiguredThinkLevel !== "off" &&
-            !attemptedThinkingCatalogHydration &&
-            !hasResolvedThinkingCatalogEntry({
-              catalog: thinkingCatalog,
-              provider: providerOverride,
-              model: modelOverride,
-            })
+            needsThinkHydration(thinkingCatalog, providerOverride, modelOverride, candidateRuntime)
           ) {
-            attemptedThinkingCatalogHydration = true;
             const { loadProviderScopedThinkingCatalog } =
               await import("../model-catalog.runtime.js");
             const runtimeCatalog = normalizeThinkingCatalogProviders(
@@ -421,7 +415,7 @@ export async function runEmbeddedAgentAttempt(params: {
               ...modelManifestContext,
             }).allowedCatalog;
             if (allowedRuntimeCatalog.length > 0) {
-              thinkingCatalog = allowedRuntimeCatalog;
+              candidateThinkingCatalog = allowedRuntimeCatalog;
             }
           }
           const candidateRequestedThinkLevel =
@@ -430,7 +424,7 @@ export async function runEmbeddedAgentAttempt(params: {
               cfg,
               provider: providerOverride,
               model: modelOverride,
-              catalog: thinkingCatalog,
+              catalog: candidateThinkingCatalog,
               agentRuntime: candidateRuntime,
             });
           const candidateThinkLevel =
@@ -439,7 +433,7 @@ export async function runEmbeddedAgentAttempt(params: {
               provider: providerOverride,
               modelId: modelOverride,
               level: candidateRequestedThinkLevel,
-              catalog: thinkingCatalog,
+              catalog: candidateThinkingCatalog,
               agentId: sessionAgentId,
               sessionKey,
               sessionEntry: attemptSessionEntry,
@@ -450,9 +444,9 @@ export async function runEmbeddedAgentAttempt(params: {
             preparedRunAdmission: params.preparedRunAdmission,
             providerOverride,
             modelOverride,
-            modelHasVision: modelSupportsInput(
-              findModelInCatalog(thinkingCatalog ?? [], providerOverride, modelOverride),
-              "image",
+            ...prepareModelRunCapabilities(
+              [candidateThinkingCatalog, params.prepared.configuredThinkingCatalog],
+              [providerOverride, modelOverride, candidateRuntime],
             ),
             configuredAuthProfileId,
             modelFallbacksOverride: effectiveFallbacksOverride,

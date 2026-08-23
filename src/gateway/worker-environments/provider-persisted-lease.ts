@@ -20,11 +20,11 @@ export function requestStaleWorkerDestroy(
 
 export async function retireMismatchedWorkerLease(
   record: WorkerEnvironmentRecord,
-  provider: WorkerProvider,
+  provider: WorkerProvider<"internal">,
   store: WorkerEnvironmentStore,
   finishDestroy: (
     record: WorkerEnvironmentRecord,
-    provider: WorkerProvider,
+    provider: WorkerProvider<"internal">,
   ) => Promise<WorkerEnvironmentRecord>,
 ): Promise<boolean> {
   const transportMode = record.nodeDeviceId

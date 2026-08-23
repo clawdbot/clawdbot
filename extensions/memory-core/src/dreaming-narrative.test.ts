@@ -438,6 +438,7 @@ describe("runDreamNarrative", () => {
     expect(runOptions.lane).toBe(`dreaming-narrative:${expectedSessionKey}`);
     expect(runOptions.lightContext).toBe(true);
     expect(runOptions.deliver).toBe(false);
+    expect(runOptions.disableTools).toBe(true);
     expect(runOptions.model).toBe("anthropic/claude-sonnet-4-6");
     expect(subagent.waitForRun).toHaveBeenCalledOnce();
     expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
@@ -564,6 +565,139 @@ describe("runDreamNarrative", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("writes the terminal reply text without polling the session store", async () => {
+    vi.useFakeTimers();
+    try {
+      const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+      const subagent = createMockSubagent("");
+      subagent.waitForRun.mockResolvedValue({
+        status: "ok",
+        terminalReply: {
+          disposition: "visible",
+          text: "The terminal reply carried the diary safely.",
+        },
+      });
+      // Simulate the sibling-cleanup race from #123360: the store never shows the
+      // completed run's text within the settle window.
+      subagent.getSessionMessages.mockResolvedValue({ messages: [] });
+      const logger = createMockLogger();
+
+      const operation = runDreamNarrative({
+        agentId: "main",
+        subagent,
+        workspaceDir,
+        data: {
+          phase: "light",
+          snippets: ["The narrative raced a sibling phase's cleanup."],
+        },
+        nowMs: Date.parse("2026-04-05T03:00:00Z"),
+        timezone: "UTC",
+        logger,
+      });
+      await flushNarrativeSettleTimers(operation);
+
+      expect(subagent.getSessionMessages).not.toHaveBeenCalled();
+      const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+      expect(content).toContain("The terminal reply carried the diary safely.");
+      expect(content).not.toContain("A memory trace surfaced");
+      expectLogExcludes(logger.warn, "produced no text");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { label: "empty", reply: { disposition: "empty" } },
+    { label: "silent", reply: { disposition: "silent" } },
+    // `message-tool-not-called` is an explicit no-text fact too; history must
+    // not resurface a transcript for it.
+    {
+      label: "empty (message-tool-not-called)",
+      reply: { disposition: "empty", code: "message-tool-not-called" },
+    },
+  ] as const)(
+    "treats an explicit $label terminal reply as authoritative no-text and never reads history",
+    async ({ reply }) => {
+      vi.useFakeTimers();
+      try {
+        const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+        const subagent = createMockSubagent("");
+        subagent.waitForRun.mockResolvedValue({
+          status: "ok",
+          // Any `text` beside a non-visible disposition must be ignored.
+          terminalReply: { ...reply, text: "text that must be ignored" },
+        });
+        // The store holds an OLD narrative from a previous run; reading it would
+        // resurface stale text over the authoritative no-text result.
+        subagent.getSessionMessages.mockResolvedValue({
+          messages: [
+            { role: "user", content: "prompt" },
+            { role: "assistant", content: "A stale narrative from a previous run." },
+          ],
+        });
+        const logger = createMockLogger();
+
+        const operation = runDreamNarrative({
+          agentId: "main",
+          subagent,
+          workspaceDir,
+          data: {
+            phase: "rem",
+            snippets: ["The run was silent, so history must not speak for it."],
+          },
+          nowMs: Date.parse("2026-04-05T03:00:00Z"),
+          timezone: "UTC",
+          logger,
+        });
+        await flushNarrativeSettleTimers(operation);
+
+        expect(subagent.getSessionMessages).not.toHaveBeenCalled();
+        const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+        expect(content).toContain("A memory trace surfaced");
+        expect(content).not.toContain("A stale narrative from a previous run.");
+        expect(content).not.toContain("text that must be ignored");
+        expectLogIncludes(logger.warn, "produced no text");
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("treats a visible terminal reply with only whitespace as no-text", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("");
+    subagent.waitForRun.mockResolvedValue({
+      status: "ok",
+      terminalReply: { disposition: "visible", text: "   \n  " },
+    });
+    subagent.getSessionMessages.mockResolvedValue({
+      messages: [
+        { role: "user", content: "prompt" },
+        { role: "assistant", content: "A stale narrative from a previous run." },
+      ],
+    });
+    const logger = createMockLogger();
+
+    await runDreamNarrative({
+      agentId: "main",
+      subagent,
+      workspaceDir,
+      data: {
+        phase: "light",
+        snippets: ["A blank diary page must not borrow yesterday's words."],
+      },
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+      logger,
+    });
+
+    expect(subagent.getSessionMessages).not.toHaveBeenCalled();
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content).toContain("A memory trace surfaced");
+    expect(content).not.toContain("A stale narrative from a previous run.");
+    expectLogIncludes(logger.warn, "produced no text");
   });
 
   it("falls back after settled assistant text never appears", async () => {

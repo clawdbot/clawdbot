@@ -993,6 +993,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         resolveToolPolicy: resolveFeishuGroupToolPolicy,
       },
       conversationBindings: {
+        bindingStore: "adapter",
         defaultTopLevelPlacement: "current",
         buildModelOverrideParentCandidates: ({ parentConversationId }) =>
           buildFeishuModelOverrideParentCandidates(parentConversationId),

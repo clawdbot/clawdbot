@@ -16,7 +16,12 @@ import {
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import { getConfigResolutionFacts, setConfigResolutionFacts } from "../config/resolution-facts.js";
+import {
+  createConfigResolutionFacts,
+  getAuthoredConfigSecretRef,
+  getConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
 import {
   getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSourceSnapshot,
@@ -26,6 +31,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { captureEnv } from "../test-utils/env.js";
+import {
+  listActiveDegradedSecretOwners,
+  setActiveCredentialDegradedOwner,
+} from "./runtime-degraded-state.js";
 import {
   activateSecretsRuntimeSnapshotState,
   activateSecretsRuntimeSnapshotStateIfCurrent,
@@ -216,6 +225,47 @@ describe("secrets runtime state", () => {
     expect(configSnapshot?.sourceConfig).toEqual(snapshot.sourceConfig);
   });
 
+  it("preserves independent credential owners through snapshot replacement and rollback until teardown", () => {
+    const previous = preparedSnapshot({
+      degradedOwners: [
+        {
+          ownerKind: "provider",
+          ownerId: "openai",
+          state: "unavailable",
+          degradationState: "stale",
+          paths: ["models.providers.openai.apiKey"],
+          refKeys: ["env:default:OPENAI_API_KEY"],
+          reason: "secret provider failed",
+        },
+      ],
+    });
+    activateSnapshot(previous);
+    setActiveCredentialDegradedOwner({
+      ownerKind: "account",
+      ownerId: "telegram:work",
+      state: "unavailable",
+      paths: ["channels.telegram.accounts.work.tokenFile"],
+      refKeys: [],
+      reason: "credential file is unavailable",
+    });
+    const candidate = preparedSnapshot({ config: { gateway: { port: 19_041 } } });
+
+    activateSnapshot(candidate);
+
+    expect(listActiveDegradedSecretOwners()).toMatchObject([
+      { ownerKind: "account", ownerId: "telegram:work" },
+    ]);
+    expect(restoreSnapshotIfCurrent(previous, candidate)).toBe(true);
+    expect(listActiveDegradedSecretOwners()).toMatchObject([
+      { ownerKind: "provider", ownerId: "openai", degradationState: "stale" },
+      { ownerKind: "account", ownerId: "telegram:work" },
+    ]);
+
+    clearSecretsRuntimeSnapshotState();
+
+    expect(listActiveDegradedSecretOwners()).toEqual([]);
+  });
+
   it("publishes distinct raw and overlay source snapshots without changing runtime auth", () => {
     const secretRef = {
       source: "env" as const,
@@ -279,8 +329,14 @@ describe("secrets runtime state", () => {
   it("restores source-only ownership through a scoped descendant", () => {
     const initialSource = { logging: { level: "info" as const } };
     const nextSource = { logging: { level: "debug" as const } };
-    setConfigResolutionFacts(initialSource, new Set(["gateway.auth.token"]));
-    setConfigResolutionFacts(nextSource, new Set());
+    setConfigResolutionFacts(
+      initialSource,
+      createConfigResolutionFacts(
+        [{ configPath: "gateway.auth.token", varName: "GATEWAY_TOKEN" }],
+        new Map([["gateway.auth.token", "GATEWAY_TOKEN"]]),
+      ),
+    );
+    setConfigResolutionFacts(nextSource, createConfigResolutionFacts([]));
     const runtimeConfig = {
       models: {
         providers: {
@@ -334,6 +390,12 @@ describe("secrets runtime state", () => {
         "gateway.auth.token",
       ),
     ).toBe(true);
+    expect(
+      getAuthoredConfigSecretRef(
+        getActiveSecretsRuntimeConfigSnapshot()?.config,
+        "gateway.auth.token",
+      )?.id,
+    ).toBe("GATEWAY_TOKEN");
     expect(getActiveSecretsRuntimeSnapshotState()?.sourceConfig).toEqual(initialSource);
     expect(getActiveSecretsRuntimeSnapshotState()?.config.models?.providers?.openai?.baseUrl).toBe(
       "https://refreshed.example.invalid/v1",

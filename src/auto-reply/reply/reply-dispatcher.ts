@@ -67,7 +67,7 @@ type ReplyDispatchCancelHandler = (
   info: ReplyDispatchRuntimeInfo,
 ) => Promise<void> | void;
 
-export { isReplyDispatchProvenInvisible, type ReplyDispatchDeliveryOutcome };
+export type { ReplyDispatchDeliveryOutcome };
 
 function isRetryableNoSendFailure(error: unknown): boolean {
   return (

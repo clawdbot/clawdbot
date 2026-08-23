@@ -273,6 +273,21 @@ export function sessionMatchesArchivedFilter(
   return (row.archived === true) === (archivedFilter === "archived");
 }
 
+export function sessionMatchesVisibleSessionScope(
+  row: GatewaySessionRow,
+  options: VisibleSessionRowOptions,
+): boolean {
+  return (
+    sessionMatchesArchivedFilter(row, options.archivedFilter) &&
+    row.kind !== "global" &&
+    row.kind !== "unknown" &&
+    (options.showCron === true || !isCronSessionKey(row.key)) &&
+    (options.showSystem === true || !isSystemCreatedSessionRow(row)) &&
+    (!options.filterByAgent ||
+      isSessionKeyTiedToAgent(row.key, options.agentId, options.defaultAgentId))
+  );
+}
+
 export function filterVisibleSessionRows(
   rows: readonly GatewaySessionRow[],
   options: VisibleSessionRowOptions,
@@ -286,15 +301,9 @@ export function filterVisibleSessionRows(
       return true;
     }
     return (
-      sessionMatchesArchivedFilter(row, options.archivedFilter) &&
-      row.kind !== "global" &&
-      row.kind !== "unknown" &&
-      (options.showCron === true || !isCronSessionKey(row.key)) &&
-      (options.showSystem === true || !isSystemCreatedSessionRow(row)) &&
+      sessionMatchesVisibleSessionScope(row, options) &&
       !isSubagentSessionKey(row.key) &&
-      !row.spawnedBy &&
-      (!options.filterByAgent ||
-        isSessionKeyTiedToAgent(row.key, options.agentId, options.defaultAgentId))
+      !row.spawnedBy
     );
   });
 }

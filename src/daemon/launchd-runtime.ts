@@ -7,6 +7,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { sleep } from "../utils.js";
+import { GATEWAY_SERVICE_KIND } from "./constants.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import {
   execLaunchctl,
@@ -36,6 +37,10 @@ export async function resolveLaunchAgentGatewayContext(env: GatewayServiceEnv): 
   port: number | null;
   probeHosts: readonly string[];
 }> {
+  const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim();
+  if (serviceKind && serviceKind !== GATEWAY_SERVICE_KIND) {
+    return { port: null, probeHosts: [] };
+  }
   const command = await readLaunchAgentProgramArguments(env).catch(() => null);
   const fromArgs = parseTcpPortFromArgs(command?.programArguments);
   if (fromArgs !== null) {
@@ -208,7 +213,7 @@ export async function isLaunchAgentEnabled(args: GatewayServiceEnvArgs): Promise
 export async function isLaunchAgentLoaded(args: GatewayServiceEnvArgs): Promise<boolean> {
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(args.env);
-  const probe = await probeLaunchAgentState(`${domain}/${label}`);
+  const probe = await probeLaunchAgentState(`${domain}/${label}`, args.timeoutMs);
   if (probe.state === "running" || probe.state === "stopped") {
     return true;
   }
@@ -230,12 +235,13 @@ export async function launchAgentPlistExists(env: GatewayServiceEnv): Promise<bo
 
 export async function readLaunchAgentRuntime(
   env: Record<string, string | undefined>,
+  opts?: Pick<GatewayServiceEnvArgs, "timeoutMs">,
 ): Promise<GatewayServiceRuntime> {
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(env);
   const [probe, systemOwnership] = await Promise.all([
-    probeLaunchAgentState(`${domain}/${label}`),
-    inspectSystemLaunchDaemonOwnership(label, { scanInstalledPlists: false }),
+    probeLaunchAgentState(`${domain}/${label}`, opts?.timeoutMs),
+    inspectSystemLaunchDaemonOwnership(label, { ...opts, scanInstalledPlists: false }),
   ]);
   if (systemOwnership.status !== "absent") {
     return {
@@ -329,10 +335,11 @@ type LaunchAgentProbeResult =
 
 export async function probeLaunchAgentState(
   serviceTarget: string,
+  timeoutMs?: number,
 ): Promise<LaunchAgentProbeResult> {
   // `launchctl print` output is not a stable API. Keep expected absence and
   // unexpected failures distinct so every caller applies one classification.
-  const probe = await execLaunchctl(["print", serviceTarget]);
+  const probe = await execLaunchctl(["print", serviceTarget], timeoutMs);
   if (probe.code !== 0) {
     if (isLaunchctlNotLoaded(probe)) {
       return { state: "not-loaded" };

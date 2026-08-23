@@ -229,6 +229,7 @@ describe("repairIMessageConversationAnchor", () => {
 
     const { imessageTo, ctxPayload } = await buildIMessageInboundContext({
       cfg: {} as never,
+      accountService: undefined,
       decision,
       message: repaired!,
       historyLimit: 0,
@@ -293,6 +294,7 @@ describe("repairIMessageConversationAnchor", () => {
 
     const { imessageTo, ctxPayload } = await buildIMessageInboundContext({
       cfg: {} as never,
+      accountService: undefined,
       decision,
       message: repaired!,
       historyLimit: 0,

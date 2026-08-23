@@ -5,6 +5,7 @@ import {
   resetPreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
@@ -47,6 +48,76 @@ describe("prepared model runtime snapshots", () => {
       pluginGeneration: expect.any(Object),
     });
     await expect(build.completion).resolves.toBeUndefined();
+  });
+
+  it("materializes Claude CLI thinking capabilities on the prepared logical row", async () => {
+    const modelIds = ["claude-opus-5", "claude-sonnet-5"];
+    mocks.resolveStaticCatalogModel.mockImplementation(({ modelId, provider }) =>
+      provider === "claude-cli"
+        ? {
+            provider,
+            id: modelId,
+            name: `${modelId} (Claude CLI)`,
+            api: "anthropic-messages",
+            baseUrl: "https://api.anthropic.com",
+            reasoning: true,
+            input: ["text" as const],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 1_000_000,
+            maxTokens: 128_000,
+          }
+        : undefined,
+    );
+    mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
+      entries: modelIds.map((id) => ({ provider: "anthropic", id, name: id, reasoning: false })),
+      routeVariants: modelIds.map((id) => ({
+        provider: "anthropic",
+        id,
+        name: id,
+        reasoning: false,
+      })),
+    });
+    // Raw user config permits sparse provider model overrides. This omission is
+    // the contract under test: it must not become an explicit reasoning opt-out.
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: `anthropic/${modelIds[0]}` },
+          models: Object.fromEntries(
+            modelIds.map((modelId) => [
+              `anthropic/${modelId}`,
+              {
+                agentRuntime: { id: "claude-cli" },
+                params: { thinking: "medium" },
+              },
+            ]),
+          ),
+        },
+      },
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            models: modelIds.map((id) => ({ id, name: id })),
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const snapshot = await publishPreparedModelRuntimeSnapshot({
+      agentId: "main",
+      config,
+      agentDir: "/tmp/prepared-model-runtime-claude-cli-capabilities",
+    });
+    for (const modelId of modelIds) {
+      expect(
+        snapshot.modelCatalog.entries.find(
+          (entry) => entry.provider === "anthropic" && entry.id === modelId,
+        ),
+      ).toMatchObject({ reasoning: true });
+      expect(snapshot.modelCatalog.entries).not.toContainEqual(
+        expect.objectContaining({ provider: "claude-cli", id: modelId }),
+      );
+    }
   });
 
   it("publishes a run owner from the caller-selected metadata generation", async () => {
@@ -319,6 +390,11 @@ describe("prepared model runtime snapshots", () => {
       input: ["text" as const, "image" as const],
       cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
       contextWindow: 1_050_000,
+      contextWindows: [
+        { id: "250k", label: "250K", contextWindow: 250_000 },
+        { id: "1050k", label: "1.05M", contextWindow: 1_050_000 },
+      ],
+      contextWindowDefault: "1050k",
       maxTokens: 128_000,
     };
     mocks.resolveStaticCatalogModel.mockReturnValueOnce(runtimeModel);
@@ -359,7 +435,7 @@ describe("prepared model runtime snapshots", () => {
         workspaceDir: "/tmp/prepared-model-runtime-manifest-workspace",
       }),
     );
-    expect(mocks.resolveStaticCatalogModel).toHaveBeenCalledOnce();
+    expect(mocks.resolveStaticCatalogModel).toHaveBeenCalledTimes(2);
     expect(snapshot.agentId).toBe("qa");
     expect(snapshot.configuredRuntimeModels).toEqual([
       { provider: "openai", modelId: "gpt-5.4", model: runtimeModel },
@@ -373,6 +449,11 @@ describe("prepared model runtime snapshots", () => {
         api: "openai-responses",
         baseUrl: "https://api.openai.com/v1",
         contextWindow: 1_050_000,
+        contextWindows: [
+          { id: "250k", label: "250K", contextWindow: 250_000 },
+          { id: "1050k", label: "1.05M", contextWindow: 1_050_000 },
+        ],
+        contextWindowDefault: "1050k",
         reasoning: true,
         input: ["text", "image"],
       },

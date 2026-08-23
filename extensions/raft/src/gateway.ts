@@ -4,11 +4,13 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { EventEmitter } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
+import process from "node:process";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { keepHttpServerTaskAlive, waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
+import { killProcessTree } from "openclaw/plugin-sdk/process-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   readJsonBodyWithLimit,
@@ -45,7 +47,7 @@ const WAKE_EVENT_ID_FIELDS = [
   "id",
 ] as const;
 
-type RaftBridgeProcess = Pick<ChildProcess, "kill"> & Pick<EventEmitter, "once">;
+type RaftBridgeProcess = Pick<ChildProcess, "pid"> & Pick<EventEmitter, "once">;
 
 type RaftWakeReplayEvent = { accountId: string; key: string };
 
@@ -114,6 +116,7 @@ function spawnRaftBridge(params: {
         ...process.env,
         RAFT_CHANNEL_TOKEN: params.token,
       },
+      detached: process.platform !== "win32",
       stdio: "ignore",
       windowsHide: true,
     },
@@ -205,10 +208,13 @@ function closeServer(server: Server, sockets: Set<Socket>) {
 }
 
 function stopBridge(child: RaftBridgeProcess) {
-  child.kill("SIGTERM");
-  const forceKill = setTimeout(() => child.kill("SIGKILL"), 5_000);
-  forceKill.unref();
-  child.once("exit", () => clearTimeout(forceKill));
+  if (typeof child.pid !== "number") {
+    return;
+  }
+  killProcessTree(child.pid, {
+    graceMs: 5_000,
+    detached: process.platform !== "win32",
+  });
 }
 
 async function listenLoopback(server: Server): Promise<number> {

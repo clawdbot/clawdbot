@@ -8,6 +8,7 @@ import {
   getMemorySearchManager,
 } from "./memory/index.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
+import { classifyWorkspaceMemoryPaths } from "./workspace-path-classifier.js";
 
 export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}): MemoryPluginRuntime {
   if (host.openKeyedStore) {
@@ -34,6 +35,7 @@ export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}): MemoryPlu
         await import("./session-search-visibility.js");
       return await filterMemorySearchHitsBySessionVisibility(params);
     },
+    classifyWorkspaceMemoryPaths,
     async closeAllMemorySearchManagers() {
       await closeAllMemorySearchManagers();
     },

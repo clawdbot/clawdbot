@@ -49,6 +49,7 @@ suite.define(() => {
       await expect(page.locator(".callout.danger").textContent()).resolves.toContain(
         "source repository is unavailable",
       );
+      await expect(page.getByRole("alert").count()).resolves.toBe(1);
       await expect(page.getByRole("button", { name: "Restore" }).count()).resolves.toBe(1);
     });
   });

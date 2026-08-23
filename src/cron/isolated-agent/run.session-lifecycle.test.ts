@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import * as diagnostic from "../../logging/diagnostic.js";
 import {
   interruptSessionWorkAdmissions,
   isSessionWorkAdmissionActive,
@@ -255,6 +256,40 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       }),
     );
     expect(mutationCommitted).toBe(true);
+  });
+
+  it("releases admission when final lifecycle marking fails", async () => {
+    const sessionKey = "agent:main:cron:final-lifecycle-failure";
+    const sessionId = "final-lifecycle-session";
+    const initialSessionEntry = makeCronSessionEntry({ sessionId });
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        storePath: inMemoryStorePath,
+        store: { [sessionKey]: { ...initialSessionEntry } },
+        initialSessionEntry,
+        isNewSession: false,
+        sessionEntry: { ...initialSessionEntry },
+      }),
+    );
+    loadSessionEntryMock.mockReturnValue({ ...initialSessionEntry });
+    const originalLogSessionStateChange = diagnostic.logSessionStateChange;
+    const logSessionStateChangeSpy = vi
+      .spyOn(diagnostic, "logSessionStateChange")
+      .mockImplementation((params) => {
+        if (params.state === "idle") {
+          throw new Error("simulated final lifecycle failure");
+        }
+        return originalLogSessionStateChange(params);
+      });
+
+    try {
+      await expect(runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey))).rejects.toThrow(
+        "simulated final lifecycle failure",
+      );
+      expect(isSessionWorkAdmissionActive(inMemoryStorePath, [sessionKey, sessionId])).toBe(false);
+    } finally {
+      logSessionStateChangeSpy.mockRestore();
+    }
   });
 
   it("releases an isolated run lease before delete-after-run cleanup", async () => {

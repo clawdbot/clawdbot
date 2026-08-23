@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import Testing
+@testable import OpenClaw
 
 enum TestProcessSupport {
     static func pollPID(in file: URL) -> pid_t? {
@@ -32,6 +33,15 @@ enum TestProcessSupport {
             try? await Task.sleep(for: .milliseconds(10))
         }
         return self.processIsGone(pid)
+    }
+
+    /// SIGPIPE from a write whose reader already exited kills the entire test
+    /// process (swiftpm-testing-helper dies with signal 13, blaming whatever
+    /// test happens to be running). Mirror the production F_SETNOSIGPIPE guard
+    /// (MacNodeHostWorker) so a racing reader exit surfaces as a thrown EPIPE
+    /// on that one write instead.
+    static func suppressSIGPIPE(_ writeEnd: FileHandle) throws {
+        try #require(writeEnd.disableSIGPIPE())
     }
 
     static func killLeakedProcesses(in files: [URL]) {

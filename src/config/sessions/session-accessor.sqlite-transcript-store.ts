@@ -241,7 +241,6 @@ export function ensureTranscriptHeader(
   database: OpenClawAgentDatabase,
   scope: ResolvedTranscriptScope,
   cwd: string | undefined,
-  now: number,
 ): void {
   const db = getSessionKysely(database.db);
   const existing = executeSqliteQueryTakeFirstSync(
@@ -260,7 +259,6 @@ export function ensureTranscriptHeader(
     scope,
     createSessionTranscriptHeader({ cwd, sessionId: scope.sessionId }),
   );
-  ensureTranscriptSessionRoot(database, scope, now);
 }
 
 export function readActiveTranscriptAppendParentId(

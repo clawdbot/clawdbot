@@ -1,14 +1,15 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { validateWorkerAdmissionHandshake } from "../../packages/gateway-protocol/src/index.js";
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 
 export const NODE_RUNNER_INVENTORY_UPDATE_METHOD = "node.runnerInventory.update";
-export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v5";
-export const NODE_WORKER_SUPERVISOR_BINARY_CAPACITY_PROTOCOL_FEATURE = "node-worker-supervisor-v4";
-export const NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE =
-  "node-worker-supervisor-v3";
-export const NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE = "node-worker-supervisor-v2";
-export const NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE = "node-worker-supervisor-v1";
+export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v6";
+const RETIRED_NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURES = [
+  "node-worker-supervisor-v1",
+  "node-worker-supervisor-v2",
+  "node-worker-supervisor-v3",
+  "node-worker-supervisor-v4",
+  "node-worker-supervisor-v5",
+] as const;
 export const NODE_WORKER_BUNDLE_RETENTION_VERSION = 1;
 export const NODE_WORKER_BUNDLE_STATUS_VERSION = 1;
 export const NODE_WORKER_CAPACITY_MAX = 1_024;
@@ -40,10 +41,7 @@ export type NodeRunnerInventoryDeclaration =
   | { protocolFeatures: readonly [] }
   | {
       protocolFeatures: readonly [
-        | typeof NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE
-        | typeof NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE
-        | typeof NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE
-        | typeof NODE_WORKER_SUPERVISOR_BINARY_CAPACITY_PROTOCOL_FEATURE,
+        (typeof RETIRED_NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURES)[number],
       ];
     }
   | {
@@ -120,37 +118,6 @@ function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration |
   };
 }
 
-function isBinaryCapacityWorkerHostDeclaration(value: unknown): boolean {
-  if (!isRecord(value) || typeof value.enabled !== "boolean") {
-    return false;
-  }
-  const keys = Object.keys(value);
-  if (!value.enabled) {
-    return keys.length === 1 && keys[0] === "enabled";
-  }
-  return (
-    keys.length >= 2 &&
-    keys.length <= 5 &&
-    keys.includes("enabled") &&
-    keys.includes("capacity") &&
-    keys.every(
-      (key) =>
-        key === "enabled" ||
-        key === "capacity" ||
-        key === "bundlePrewarm" ||
-        key === "bundleRetention" ||
-        key === "bundleStatus",
-    ) &&
-    (value.capacity === "available" || value.capacity === "full") &&
-    (value.bundlePrewarm === undefined || value.bundlePrewarm === WORKER_BUNDLE_PREWARM_VERSION) &&
-    (value.bundleRetention === undefined ||
-      value.bundleRetention === NODE_WORKER_BUNDLE_RETENTION_VERSION) &&
-    (value.bundleStatus === undefined ||
-      value.bundleStatus === NODE_WORKER_BUNDLE_STATUS_VERSION) &&
-    (value.bundleStatus === undefined || value.bundleRetention !== undefined)
-  );
-}
-
 /** Parses the closed reconnect-scoped node-host runner declaration. */
 export function parseNodeRunnerInventoryDeclaration(
   value: unknown,
@@ -166,28 +133,16 @@ export function parseNodeRunnerInventoryDeclaration(
     return null;
   }
   const feature = value.protocolFeatures[0];
-  if (
-    feature === NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE ||
-    feature === NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE
-  ) {
-    if (
-      keys.length < 1 ||
-      keys.length > 2 ||
-      keys.some((key) => key !== "protocolFeatures" && key !== "workerRuns") ||
-      (value.workerRuns !== undefined && !validateWorkerAdmissionHandshake(value.workerRuns))
-    ) {
-      return null;
-    }
-    // v1/v2 carried the node-local package build in inventory. Keep wire
-    // validation only so shipped nodes receive the explicit update path.
-    return { protocolFeatures: [feature] };
-  }
-  if (
-    feature === NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE ||
-    feature === NODE_WORKER_SUPERVISOR_BINARY_CAPACITY_PROTOCOL_FEATURE
-  ) {
-    return keys.length === 2 && isBinaryCapacityWorkerHostDeclaration(value.workerHost)
-      ? { protocolFeatures: [feature] }
+  const retiredFeature = RETIRED_NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURES.find(
+    (candidate) => candidate === feature,
+  );
+  if (retiredFeature) {
+    // Retired payloads never become consent or launch authority; only their marker drives recovery.
+    return keys.length <= 2 &&
+      keys.every(
+        (key) => key === "protocolFeatures" || key === "workerRuns" || key === "workerHost",
+      )
+      ? { protocolFeatures: [retiredFeature] }
       : null;
   }
   if (feature !== NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE || keys.length !== 2) {

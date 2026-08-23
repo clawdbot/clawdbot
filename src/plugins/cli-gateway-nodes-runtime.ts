@@ -81,5 +81,8 @@ export function createPluginCliGatewayNodesRuntime(): PluginRuntime["nodes"] {
         ...(params.signal ? { signal: params.signal } : {}),
       });
     },
+    async openDuplex() {
+      throw new Error("Node duplex is unavailable in the CLI; run this plugin inside the Gateway.");
+    },
   };
 }

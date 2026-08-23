@@ -108,11 +108,10 @@ export async function sendDiscordOutboundPayload(params: {
   const sendContext = await createDiscordPayloadSendContext(ctx);
 
   if (payload.audioAsVoice && mediaUrls.length > 0) {
-    // audioAsVoice emits one logical Discord reply across voice/text/media sends.
-    // Capture before helper calls consume implicit single-use reply targets.
+    // Defer voice failure until independent remainder sends finish while preserving progress.
     const voiceReply = sendContext.resolveReply();
-    let deliveredVoice = false;
-    let lastResult: Awaited<ReturnType<DiscordPayloadSendContext["send"]>>;
+    let voiceFailure: { error: unknown } | undefined;
+    let lastResult = createDiscordUnknownPayloadResult(sendContext.target);
     try {
       const voiceUrl = expectDefined(mediaUrls.at(0), "non-empty Discord voice media URLs");
       lastResult = await sendContext.sendVoice(sendContext.target, voiceUrl, {
@@ -121,7 +120,6 @@ export async function sendDiscordOutboundPayload(params: {
         mediaLocalRoots: ctx.mediaLocalRoots,
         mediaReadFile: ctx.mediaReadFile,
       });
-      deliveredVoice = true;
     } catch (err) {
       // A lost create response can hide a committed voice; a text retry has a different nonce.
       if (hasDiscordMessageCreateAmbiguity(err)) {
@@ -137,34 +135,45 @@ export async function sendDiscordOutboundPayload(params: {
         throw err;
       }
       log.warn("discord voice send failed; continuing without voice", { error: err });
-      if (!fallbackText) {
-        lastResult = createDiscordUnknownPayloadResult(sendContext.target);
-      } else {
-        lastResult = await sendContext.send(sendContext.target, fallbackText, {
+      if (fallbackText) {
+        await sendContext.send(sendContext.target, fallbackText, {
           verbose: false,
           ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext, voiceReply),
           onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
         });
       }
+      voiceFailure = { error: err };
     }
-    if (deliveredVoice) {
+    if (!voiceFailure) {
       await ctx.onDeliveryResult?.(
         attachChannelToResult("discord", toDiscordOutboundDeliveryResult(lastResult)),
       );
-    }
-    if (deliveredVoice && payload.text?.trim()) {
-      lastResult = await sendContext.send(sendContext.target, payload.text, {
-        verbose: false,
-        ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
-        onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
-      });
+      if (payload.text?.trim()) {
+        lastResult = await sendContext.send(sendContext.target, payload.text, {
+          verbose: false,
+          ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
+          onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
+        });
+      }
     }
     for (const mediaUrl of mediaUrls.slice(1)) {
-      lastResult = await sendContext.send(sendContext.target, "", {
-        verbose: false,
-        ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
-        onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
-      });
+      try {
+        lastResult = await sendContext.send(sendContext.target, "", {
+          verbose: false,
+          ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
+          onDeliveryResult: resolveDiscordDeliveryProgress(ctx),
+        });
+      } catch (err) {
+        if (!voiceFailure) {
+          throw err;
+        }
+        // Keep the requested voice failure as the durable outcome while allowing the
+        // remaining media loop to finish; later errors must not hide the primary failure.
+        log.warn("discord remaining media send failed after voice failure", { error: err });
+      }
+    }
+    if (voiceFailure) {
+      throw voiceFailure.error;
     }
     return attachChannelToResult("discord", toDiscordOutboundDeliveryResult(lastResult));
   }
