@@ -48,40 +48,42 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
 
 ## Code Mode Loop
 
-When `tools.codeMode` is enabled, call the Browser tool from exec cells:
+When `tools.codeMode` is enabled, call the Browser tool from exec cells as the async global `browser(...)`:
 
 ```javascript
-const browserTool = "openclaw:browser:browser";
-let previousSnapshot = "";
-const callBrowser = async (input) => await tools.call(browserTool, input);
+let previous = { url: undefined, newElements: undefined };
 ```
 
 Keep the same labeled tab through the loop, and alternate reads with actions:
 
 ```javascript
-const snapshotCall = await callBrowser({
+const details = await browser({
   action: "snapshot",
+  snapshotFormat: "ai",
   targetId: "task",
   refs: "aria",
   interactive: true,
 });
-const details = snapshotCall?.result?.details ?? {};
-const snapshot = (snapshotCall?.result?.content ?? []).map((block) => block?.text ?? "").join("\n");
-const relevant = snapshot
-  .split("\n")
-  .filter((line) => /submit|dialog|error|\[new\]/i.test(line))
-  .slice(0, 12);
-const changed = snapshot !== previousSnapshot;
-previousSnapshot = snapshot;
-return { targetId: details.targetId, url: details.url, relevant, changed };
+const changed =
+  details?.url !== previous.url ||
+  (details?.newElements ?? 0) > 0 ||
+  details?.blockedByDialog === true;
+previous = { url: details?.url, newElements: details?.newElements };
+return {
+  targetId: details?.targetId,
+  url: details?.url,
+  newElements: details?.newElements,
+  stats: details?.stats,
+  changed,
+};
 ```
 
-- Request interactive-only snapshots and filter them in code before returning.
-- Return only the handful of relevant elements; never return the full tree.
-- Keep `previousSnapshot` between cells when a local diff helps explain a change.
+- Code-mode calls return the tool's structured `details` directly (`targetId`, `url`, `newElements`, `stats`, `blockedByDialog`); rendered page text is not available to code cells, so take a normal snapshot turn when you must read the page.
+- Return only the fields the next step needs; never return the whole details object.
+- Keep `previous` between cells when a url change or new-element count helps explain a change.
 - Interleave each act with a URL or tabs check before the next dependent act.
 - If a batch returns `aborted`, take a fresh snapshot before continuing.
-- If `[new]` markers appear, inspect those elements first, then update the saved snapshot.
+- If `newElements` is positive, inspect those elements first, then update the saved state.
 - Use separate act calls when navigation is expected between steps.
 
 ## Tab Hygiene
