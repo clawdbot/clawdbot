@@ -14,6 +14,7 @@ import {
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { deriveLastRoutePatch, deriveSessionMetaPatch } from "./metadata.js";
+import { retainPendingResetMarker } from "./reset.js";
 import type {
   ExactSessionEntry,
   SessionAccessScope,
@@ -625,6 +626,10 @@ async function patchSqliteSessionEntrySnapshot<TSnapshot>(
           ];
           previousIdentity = createSessionIdentitySnapshot(snapshotRows);
           const selectedPreviousEntry = params.existingEntry(fresh) ?? writeBase;
+          // Canonical replacement boundary: replaceEntry writers stamp their own
+          // timestamps; keep the legacy updatedAt=0 pending-reset marker through
+          // same-identity replacements (merge modes already preserve it).
+          retainPendingResetMarker(selectedPreviousEntry, next);
           writeSessionEntry(writeDatabase, sessionKey, next, {
             previousEntry: selectedPreviousEntry,
           });

@@ -145,6 +145,34 @@ export function resolveBookkeepingUpdatedAt(
   return currentUpdatedAt === 0 ? 0 : now;
 }
 
+type PendingResetMarkerIdentity = {
+  lifecycleRevision?: string | undefined;
+  sessionId?: string | undefined;
+  updatedAt?: number | undefined;
+};
+
+/**
+ * Retains the legacy `updatedAt === 0` pending-reset marker (see
+ * resolveBookkeepingUpdatedAt) through a same-identity canonical replacement.
+ * Replacement choke points call this before persisting so any writer — present
+ * or future — cannot consume the marker by stamping a fresh timestamp. A
+ * rollover that performs the pending reset rotates `sessionId` or
+ * `lifecycleRevision` and therefore still mints a fresh `updatedAt`.
+ */
+export function retainPendingResetMarker(
+  previous: PendingResetMarkerIdentity | undefined,
+  next: PendingResetMarkerIdentity,
+): void {
+  if (
+    previous?.updatedAt === 0 &&
+    next.updatedAt !== 0 &&
+    next.sessionId === previous.sessionId &&
+    next.lifecycleRevision === previous.lifecycleRevision
+  ) {
+    next.updatedAt = 0;
+  }
+}
+
 function normalizeResetAtHour(value: number | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return DEFAULT_RESET_AT_HOUR;

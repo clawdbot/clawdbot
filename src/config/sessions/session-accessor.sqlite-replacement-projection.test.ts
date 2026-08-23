@@ -129,3 +129,101 @@ describe("session entry replacement compare-and-swap", () => {
     });
   });
 });
+
+describe("pending-reset marker retention through canonical replacements", () => {
+  const tempDirs: string[] = [];
+  let storePath: string;
+  let scope: { sessionKey: string; storePath: string };
+
+  beforeEach(async () => {
+    readExactSessionEntryRowMock.mockImplementation(
+      actualSessionEntryStore.readExactSessionEntryRow,
+    );
+    storePath = `${makeTempDir(tempDirs, "marker-retention")}/openclaw-agent.sqlite`;
+    scope = { sessionKey: "agent:main:marker-row", storePath };
+    await upsertSessionEntryCore(scope, {
+      model: "base",
+      sessionId: "marker-row",
+      updatedAt: 0,
+    });
+  });
+
+  afterEach(() => {
+    readExactSessionEntryRowMock.mockReset();
+    cleanupTempDirs(tempDirs);
+  });
+
+  it("keeps the legacy updatedAt=0 marker through same-identity replacements", async () => {
+    await applySessionEntryReplacements({
+      sessionKeys: [scope.sessionKey],
+      storePath,
+      update: (entries) => ({
+        replacements: entries.map(({ entry, sessionKey }) => ({
+          entry: { ...entry, label: "renamed", updatedAt: Date.now() },
+          sessionKey,
+        })),
+        result: undefined,
+      }),
+    });
+
+    expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toMatchObject({
+      label: "renamed",
+      sessionId: "marker-row",
+      updatedAt: 0,
+    });
+  });
+
+  it("mints a fresh updatedAt when the replacement rotates identity", async () => {
+    const rotatedAt = Date.now();
+    await applySessionEntryReplacements({
+      sessionKeys: [scope.sessionKey],
+      storePath,
+      update: (entries) => ({
+        replacements: entries.map(({ entry, sessionKey }) => ({
+          entry: { ...entry, lifecycleRevision: "rotated", updatedAt: rotatedAt },
+          sessionKey,
+        })),
+        result: undefined,
+      }),
+    });
+
+    expect(loadSessionEntry({ ...scope, readConsistency: "latest" })?.updatedAt).toBe(rotatedAt);
+  });
+
+  it("keeps the marker through patchSessionEntryCore replaceEntry", async () => {
+    const { patchSessionEntryCore } = await import("./session-accessor.js");
+    await patchSessionEntryCore(
+      scope,
+      (current) => ({ ...current, label: "patched", updatedAt: Date.now() }),
+      { replaceEntry: true, skipMaintenance: true },
+    );
+
+    expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toMatchObject({
+      label: "patched",
+      updatedAt: 0,
+    });
+  });
+
+  it("keeps the marker through applySessionPatchProjection", async () => {
+    const { applySessionPatchProjection } = await import("./session-accessor.js");
+    const result = await applySessionPatchProjection<{ ok: false; error: string }>({
+      storePath,
+      resolveTarget: () => ({ primaryKey: scope.sessionKey, candidateKeys: [scope.sessionKey] }),
+      project: ({ existingEntry }) => {
+        if (!existingEntry) {
+          return { ok: false, error: "missing" };
+        }
+        return {
+          ok: true,
+          entry: { ...existingEntry, label: "projected", updatedAt: Date.now() },
+        };
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toMatchObject({
+      label: "projected",
+      updatedAt: 0,
+    });
+  });
+});

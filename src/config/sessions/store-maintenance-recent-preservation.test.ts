@@ -84,6 +84,21 @@ describe("recent session maintenance preservation", () => {
     },
   );
 
+  it("keeps the legacy updatedAt=0 pending-reset marker entry through prune", () => {
+    const now = Date.now();
+    const markerKey = "agent:main:web:legacy-pending-reset";
+    const staleKey = "agent:main:dashboard:stale";
+    const store: Record<string, SessionEntry> = {
+      [markerKey]: { sessionId: "legacy", updatedAt: 0 },
+      [staleKey]: { sessionId: "stale", updatedAt: now - 60 * DAY_MS },
+    };
+
+    expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(1);
+    expect(store).toHaveProperty(markerKey);
+    expect(store[markerKey]?.updatedAt).toBe(0);
+    expect(store).not.toHaveProperty(staleKey);
+  });
+
   it("is opt-in and keeps recent interactive sessions through prune and cap pressure", () => {
     const now = Date.now();
     const recentKey = "agent:main:dashboard:recent";

@@ -481,7 +481,9 @@ describe("doctor state integrity oauth dir checks", () => {
       { abortedLastRun?: boolean; updatedAt?: number }
     >;
     expect(persisted[sessionKey]?.abortedLastRun).toBe(false);
-    expect(persisted[sessionKey]?.updatedAt).toBeGreaterThan(0);
+    // The repair is bookkeeping: it preserves the legacy updatedAt=0
+    // pending-reset marker instead of stamping a fresh timestamp.
+    expect(persisted[sessionKey]?.updatedAt).toBe(0);
     expect(doctorChangesText()).toContain("Cleared aborted restart-recovery flags");
   });
 

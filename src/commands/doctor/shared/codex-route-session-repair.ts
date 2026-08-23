@@ -11,6 +11,7 @@ import {
   loadPersistedSharedAuthProfileStore,
   parseLegacyCredentialEntry,
 } from "../../../agents/auth-profiles/persisted.js";
+import { resolveBookkeepingUpdatedAt } from "../../../config/sessions/reset-policy.js";
 import {
   applySessionEntryReplacements,
   iterateDoctorSessionKeyBatches,
@@ -245,7 +246,7 @@ function repairCodexSessionStoreRoutes(params: {
     ) {
       continue;
     }
-    entry.updatedAt = now;
+    entry.updatedAt = resolveBookkeepingUpdatedAt(entry.updatedAt, now);
     sessionKeys.push(sessionKey);
   }
   return {

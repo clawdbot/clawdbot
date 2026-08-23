@@ -1,3 +1,4 @@
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset-policy.js";
 import {
   loadSessionEntryReadOnly,
   updateSessionEntry,
@@ -43,7 +44,10 @@ async function acknowledgePendingDeliveryNotice(params: {
     (current) =>
       current.sessionId === params.sessionId &&
       current.pendingDeliveryNotice?.intentId === params.intentId
-        ? { pendingDeliveryNotice: undefined, updatedAt: Date.now() }
+        ? {
+            pendingDeliveryNotice: undefined,
+            updatedAt: resolveBookkeepingUpdatedAt(current.updatedAt),
+          }
         : null,
     { skipMaintenance: true, takeCacheOwnership: true },
   );
@@ -91,7 +95,7 @@ export async function deliverPendingDeliveryNotice(
         current.pendingDeliveryNotice?.intentId === notice.intentId
           ? {
               pendingDeliveryNotice: { ...notice, state: "unresolved" as const },
-              updatedAt: Date.now(),
+              updatedAt: resolveBookkeepingUpdatedAt(current.updatedAt),
             }
           : null,
       );
@@ -113,7 +117,7 @@ export async function deliverPendingDeliveryNotice(
         current.pendingDeliveryNotice?.intentId === notice.intentId
           ? {
               pendingDeliveryNotice: { ...notice, state: "unresolved" as const },
-              updatedAt: Date.now(),
+              updatedAt: resolveBookkeepingUpdatedAt(current.updatedAt),
             }
           : null,
       );

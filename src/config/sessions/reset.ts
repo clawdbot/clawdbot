@@ -12,6 +12,7 @@ export {
   evaluateSessionFreshness,
   resolveBookkeepingUpdatedAt,
   resolveSessionResetPolicy,
+  retainPendingResetMarker,
   type SessionFreshness,
   type SessionResetMode,
   type SessionResetPolicy,

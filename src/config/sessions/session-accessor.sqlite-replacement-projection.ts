@@ -1,6 +1,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
+import { retainPendingResetMarker } from "./reset.js";
 import type {
   SessionEntryReplacementSnapshot,
   SessionEntryReplacementUpdate,
@@ -201,19 +202,20 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
               for (const { entry, sessionKey } of sourceEntries) {
                 previous.set(sessionKey, entry);
               }
-              writeSessionEntry(
-                transactionDb,
-                replacement.sessionKey,
-                cloneSessionEntry(replacement.entry),
-                { previousEntry: selectedBefore ?? null },
-              );
+              const nextEntry = cloneSessionEntry(replacement.entry);
+              // Canonical replacement boundary: keep the legacy updatedAt=0
+              // pending-reset marker through same-identity replacements.
+              retainPendingResetMarker(selectedBefore, nextEntry);
+              writeSessionEntry(transactionDb, replacement.sessionKey, nextEntry, {
+                previousEntry: selectedBefore ?? null,
+              });
               deleteLegacySessionEntryRows(
                 transactionDb,
                 [...(replacement.previousSessionKeys ?? [])],
                 replacement.sessionKey,
                 { rehomeMembers: selectedBefore?.sessionId === replacement.entry.sessionId },
               );
-              current.set(replacement.sessionKey, replacement.entry);
+              current.set(replacement.sessionKey, nextEntry);
             }
             maintenancePlans.push(
               applySessionEntryMaintenance(transactionDb, {

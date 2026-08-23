@@ -8,7 +8,7 @@ import {
   shouldSkipPluginHostCleanupStore,
   type PluginHostSessionCleanupStoreParams,
 } from "./plugin-host-cleanup.js";
-import { resolveBookkeepingUpdatedAt } from "./reset.js";
+import { resolveBookkeepingUpdatedAt, retainPendingResetMarker } from "./reset.js";
 import {
   resolveAccessStorePath,
   loadSessionEntry,
@@ -252,6 +252,10 @@ export async function applySessionPatchProjections<
           const previousSessionKeys = candidateKeys.filter(
             (sessionKey) => sessionKey !== target.primaryKey && workingStore[sessionKey],
           );
+          // Canonical replacement boundary: a same-identity projection must not
+          // consume the legacy updatedAt=0 pending-reset marker, regardless of
+          // what the projecting caller stamped.
+          retainPendingResetMarker(existingEntry, projected.entry);
           mutations.push({
             entry: projected.entry,
             ...(previousSessionKeys.length > 0 ? { previousSessionKeys } : {}),

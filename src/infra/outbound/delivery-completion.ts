@@ -7,6 +7,7 @@ import {
   markConversationDeliveryUnknown,
   type ConversationDeliveryRecord,
 } from "../../config/sessions/conversation-delivery-store.js";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset-policy.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
@@ -141,7 +142,7 @@ export async function settlePendingFinalDelivery(
           deliveries: deliveries.with(index, { id: completion.deliveryId, state: settled }),
         },
         ...(clearsNotice ? { pendingDeliveryNotice: undefined } : owedNotice),
-        updatedAt: Date.now(),
+        updatedAt: resolveBookkeepingUpdatedAt(internalEntry.updatedAt),
       };
     },
     { skipMaintenance: true, takeCacheOwnership: true },

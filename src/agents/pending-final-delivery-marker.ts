@@ -6,6 +6,7 @@ import {
   normalizePendingFinalDeliveryPayloads,
   normalizePendingFinalRecoveryPayloads,
 } from "../auto-reply/reply/pending-final-delivery.js";
+import { resolveBookkeepingUpdatedAt } from "../config/sessions/reset-policy.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
@@ -89,7 +90,7 @@ export async function persistPendingFinalDeliveryMarker(
         createdAt: now,
         context: params.deliveryContext,
       },
-      updatedAt: now,
+      updatedAt: resolveBookkeepingUpdatedAt(entry.updatedAt, now),
     },
     shouldPersist: (current) =>
       current?.sessionId === params.runOwnedSessionId && current.abortedLastRun !== true,

@@ -1,5 +1,6 @@
 /** Session-lifecycle mutation and persistence for subagent kills. */
 import type { ClearSessionQueueResult } from "../../../auto-reply/reply/queue.js";
+import { resolveBookkeepingUpdatedAt } from "../../../config/sessions/reset-policy.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -153,7 +154,7 @@ export async function persistSubagentAbortedLastRun(params: {
           : {
               ...current,
               abortedLastRun: params.abortedLastRun,
-              updatedAt: Date.now(),
+              updatedAt: resolveBookkeepingUpdatedAt(current.updatedAt),
             },
       {
         assertCommitAllowed: params.assertCommitAllowed,

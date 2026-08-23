@@ -284,7 +284,10 @@ function isGatewayModelRunSessionKey(sessionKey: string): boolean {
 
 /**
  * Remove entries whose `updatedAt` is older than the configured threshold.
- * Entries without `updatedAt` are kept (cannot determine staleness).
+ * Entries without `updatedAt` are kept (cannot determine staleness). The
+ * legacy `updatedAt === 0` pending-reset marker (see evaluateSessionFreshness)
+ * is not a real timestamp either: it carries no staleness signal, so the entry
+ * is kept until the pending reset performs its one-time rollover.
  * Mutates `store` in-place.
  */
 export function pruneStaleEntries(
@@ -314,7 +317,7 @@ export function pruneStaleEntries(
     ) {
       continue;
     }
-    if (entry?.updatedAt != null && entry.updatedAt < cutoffMs) {
+    if (entry?.updatedAt != null && entry.updatedAt !== 0 && entry.updatedAt < cutoffMs) {
       opts.onPruned?.({ key, entry });
       delete store[key];
       pruned++;

@@ -96,7 +96,9 @@ describe("doctor main-session recovery integrity", () => {
       | InternalSessionEntry
       | undefined;
     expect(persisted?.abortedLastRun).toBe(false);
-    expect(persisted?.updatedAt).toBeGreaterThan(0);
+    // The repair is bookkeeping: it preserves the legacy updatedAt=0
+    // pending-reset marker instead of stamping a fresh timestamp.
+    expect(persisted?.updatedAt).toBe(0);
     expect(persisted?.mainRestartRecovery?.tombstone?.reason).toBe(reason);
     expect(changes).toEqual([
       "- Cleared aborted restart-recovery flags for 1 wedged main session.",
