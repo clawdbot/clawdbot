@@ -40,6 +40,7 @@ async function setupHarness(
   const proxyControl = path.join(root, "proxy-control.json");
   const proxyRequestLog = path.join(root, "proxy-requests.ndjson");
   const requestLog = path.join(root, "requests.ndjson");
+  const gatewayLog = path.join(root, "gateway.log");
   fs.mkdirSync(outputRoot);
   fs.mkdirSync(sessionRoot);
   fs.mkdirSync(path.join(sessionRoot, "attempt"));
@@ -53,6 +54,7 @@ async function setupHarness(
   writeJson(proxyControl, { rules: [] });
   fs.writeFileSync(proxyRequestLog, "");
   fs.writeFileSync(requestLog, "");
+  fs.writeFileSync(gatewayLog, "");
   fs.writeFileSync(
     screenshot,
     Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.alloc(10_001)]),
@@ -65,7 +67,25 @@ async function setupHarness(
     { mode: 0o755 },
   );
   fs.writeFileSync(userDriverCommand, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-  fs.writeFileSync(path.join(binDir, "sudo"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  fs.writeFileSync(
+    path.join(binDir, "sudo"),
+    `#!/bin/sh
+case "$3" in
+  exec)
+    printf '123456:secret-sut-token 123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA '
+    head -c 70000 /dev/zero | tr '\\0' x
+    printf '123456:secret-sut-token 123456:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA ' >&2
+    head -c 70000 /dev/zero | tr '\\0' y >&2
+    exit 17
+    ;;
+  restart)
+    printf 'restart requested\\n[gateway] ready\\n' >> ${JSON.stringify(gatewayLog)}
+    ;;
+esac
+exit 0
+`,
+    { mode: 0o755 },
+  );
   writeJson(path.join(sessionRoot, "candidate.active.json"), {
     attempt: 1,
     config: { mockResponse: "visible result" },
@@ -84,7 +104,7 @@ async function setupHarness(
     startedAt: new Date().toISOString(),
     sut: {
       containerName: "openclaw-telegram-sut-test",
-      gatewayLog: path.join(root, "gateway.log"),
+      gatewayLog,
       mockLog: path.join(root, "mock.log"),
       mockResponseControl: path.join(root, "mock-response.json"),
       proxyControl,
@@ -528,6 +548,121 @@ exit 1
         args: { actionsFile: "click-picker.json", timeoutSeconds: 90 },
         command: "desktop",
       });
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("runs bounded developer shell commands and records redacted results", async () => {
+    const harness = await setupHarness();
+    const aliasToken = `123456:${"A".repeat(35)}`;
+    const commandFile = path.join(harness.outputRoot, "inspect-state.sh");
+    fs.writeFileSync(commandFile, "sqlite3 state/openclaw.sqlite '.tables'");
+    try {
+      const result = JSON.parse(
+        (
+          await runLane(harness.env, [
+            "exec",
+            "--lane",
+            "candidate",
+            "--timeout-seconds",
+            "300",
+            "--command",
+            `printf '%s' '123456:secret-sut-token ${aliasToken}'`,
+          ])
+        ).stdout,
+      );
+      expect(result).toMatchObject({ exitCode: 17, truncated: true });
+      expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(64 * 1024);
+      expect(Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(64 * 1024);
+      expect(JSON.stringify(result)).not.toContain("secret-sut-token");
+      expect(JSON.stringify(result)).not.toContain(aliasToken);
+
+      await runLane(harness.env, ["exec", "--lane", "candidate", "--command-file", commandFile]);
+      const state = JSON.parse(
+        fs.readFileSync(path.join(harness.sessionRoot, "candidate.active.json"), "utf8"),
+      );
+      expect(state.invocations.at(-2)).toMatchObject({
+        args: { command: "printf '%s' '[redacted] [redacted]'", timeoutSeconds: 300 },
+        command: "exec",
+        exitCode: 17,
+        stderrBytes: expect.any(Number),
+        stdoutBytes: expect.any(Number),
+      });
+      expect(state.invocations.at(-2).stdoutBytes).toBeGreaterThan(64 * 1024);
+      expect(state.invocations.at(-2).stderrBytes).toBeGreaterThan(64 * 1024);
+      expect(state.invocations.at(-1)).toMatchObject({
+        args: { command: "sqlite3 state/openclaw.sqlite '.tables'", timeoutSeconds: 120 },
+        command: "exec",
+        exitCode: 17,
+      });
+      expect(JSON.stringify(state.invocations)).not.toContain("secret-sut-token");
+      expect(JSON.stringify(state.invocations)).not.toContain(aliasToken);
+
+      await expect(
+        runLane(harness.env, [
+          "exec",
+          "--lane",
+          "candidate",
+          "--command",
+          "true",
+          "--command-file",
+          commandFile,
+        ]),
+      ).rejects.toThrow("exec needs exactly one of --command or --command-file");
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("restarts the gateway and waits for a fresh readiness marker", async () => {
+    const harness = await setupHarness();
+    const gatewayLog = path.join(path.dirname(harness.outputRoot), "gateway.log");
+    fs.writeFileSync(gatewayLog, "[gateway] ready\nold marker\n");
+    try {
+      const result = JSON.parse(
+        (
+          await runLane(harness.env, [
+            "restart",
+            "--lane",
+            "candidate",
+            "--ready-timeout-seconds",
+            "5",
+          ])
+        ).stdout,
+      );
+      expect(result).toMatchObject({
+        readyAfterMs: expect.any(Number),
+        restartedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/u),
+        status: "ready",
+      });
+      const state = JSON.parse(
+        fs.readFileSync(path.join(harness.sessionRoot, "candidate.active.json"), "utf8"),
+      );
+      expect(state.invocations.at(-1)).toMatchObject({
+        args: { readyAfterMs: expect.any(Number), readyTimeoutSeconds: 5 },
+        command: "restart",
+      });
+      expect(fs.readFileSync(gatewayLog, "utf8")).toContain("restart requested");
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("advertises developer shell commands and keeps the send cap as flood safety", async () => {
+    const harness = await setupHarness();
+    const active = path.join(harness.sessionRoot, "candidate.active.json");
+    const state = JSON.parse(fs.readFileSync(active, "utf8"));
+    state.sendCount = 39;
+    writeJson(active, state);
+    try {
+      const help = await runLane(harness.env, ["--help"]);
+      expect(help.stdout).toContain("exec");
+      expect(help.stdout).toContain("restart");
+      await runLane(harness.env, ["send", "--lane", "candidate", "--text", "send forty"]);
+      await expect(
+        runLane(harness.env, ["send", "--lane", "candidate", "--text", "send forty-one"]),
+      ).rejects.toThrow("The 40-message session budget is exhausted");
     } finally {
       await harness.close();
     }
