@@ -119,6 +119,22 @@ describe("resolveMcpTransportConfig", () => {
     );
   });
 
+  it("warns once per blocked stdio env key and server", () => {
+    for (let index = 0; index < 3; index += 1) {
+      resolveMcpTransportConfig("repeat-server", {
+        command: "node",
+        env: {
+          PYTHONPATH: "/tmp/workspace",
+        },
+      });
+    }
+
+    expect(logWarn).toHaveBeenCalledTimes(1);
+    expect(logWarn).toHaveBeenCalledWith(
+      'bundle-mcp: server "repeat-server": env "PYTHONPATH" is blocked for stdio startup safety and was ignored.',
+    );
+  });
+
   it("uses an explicit empty stdio env when all configured env keys are blocked", () => {
     const resolved = resolveMcpTransportConfig("probe", {
       command: "node",
