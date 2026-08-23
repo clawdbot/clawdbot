@@ -50,6 +50,13 @@ describe("runEmbeddedAgent Code Mode reconciliation", () => {
 
     await runEmbeddedAgent({
       ...overflowBaseRunParams,
+      config: {
+        agents: {
+          defaults: {
+            models: { "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } } },
+          },
+        },
+      },
       provider: "openai",
       model: "gpt-5.5",
       runId: "run-code-mode-reconciliation",

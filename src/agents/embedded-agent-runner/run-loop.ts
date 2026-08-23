@@ -526,6 +526,7 @@ export async function runPreparedEmbeddedLoop(
       if (
         activateCodeModeReconciliation({
           attempt,
+          hostOwnsToolSurface: !pluginHarnessOwnsTransport,
           retryState: terminalRetryState,
           activateInternalPrompt: sessionPromptState.activateInternalPrompt,
         })

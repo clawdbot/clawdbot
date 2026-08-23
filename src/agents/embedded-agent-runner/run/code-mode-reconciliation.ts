@@ -14,6 +14,7 @@ export function isCodeModeReconciliationTool(tool: { name?: string }): boolean {
 
 function shouldRetryCodeModeReconciliation(params: {
   attempt: EmbeddedRunAttemptResult;
+  hostOwnsToolSurface: boolean;
   aborted: boolean;
   timedOut: boolean;
   promptError: unknown;
@@ -21,6 +22,7 @@ function shouldRetryCodeModeReconciliation(params: {
   const { attempt } = params;
   return (
     attempt.codeModeReconciliationCandidate === true &&
+    params.hostOwnsToolSurface &&
     !params.aborted &&
     !params.timedOut &&
     !params.promptError &&
@@ -39,13 +41,18 @@ function shouldRetryCodeModeReconciliation(params: {
 
 export function activateCodeModeReconciliation(params: {
   attempt: EmbeddedRunAttemptResult;
+  hostOwnsToolSurface: boolean;
   retryState: EmbeddedRunTerminalRetryState;
   activateInternalPrompt: (prompt: string) => void;
 }): boolean {
   const terminal = projectAgentRunAttemptTerminal(params.attempt.terminal);
   if (
     params.retryState.codeModeReconciliationAttempts >= 1 ||
-    !shouldRetryCodeModeReconciliation({ attempt: params.attempt, ...terminal })
+    !shouldRetryCodeModeReconciliation({
+      attempt: params.attempt,
+      hostOwnsToolSurface: params.hostOwnsToolSurface,
+      ...terminal,
+    })
   ) {
     return false;
   }

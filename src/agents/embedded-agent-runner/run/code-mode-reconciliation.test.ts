@@ -13,9 +13,10 @@ function eligibleAttempt() {
   });
 }
 
-function activates(overrides = {}) {
+function activates(overrides = {}, hostOwnsToolSurface = true) {
   return activateCodeModeReconciliation({
     attempt: { ...eligibleAttempt(), ...overrides } as ReturnType<typeof eligibleAttempt>,
+    hostOwnsToolSurface,
     retryState: createEmbeddedRunTerminalRetryState(),
     activateInternalPrompt: () => undefined,
   });
@@ -33,8 +34,9 @@ describe("Code Mode reconciliation", () => {
     ["child session", { acceptedSessionSpawns: [{ runId: "child" }] }],
     ["approval", { didSendDeterministicApprovalPrompt: true }],
     ["yield", { yieldDetected: true }],
-  ])("rejects a candidate with %s", (_label, overrides) => {
-    expect(activates(overrides)).toBe(false);
+    ["plugin-owned transport", {}, false],
+  ])("rejects a candidate with %s", (_label, overrides, hostOwnsToolSurface = true) => {
+    expect(activates(overrides, hostOwnsToolSurface)).toBe(false);
   });
 
   it("exposes only the audited core observation tool", () => {

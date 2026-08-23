@@ -234,9 +234,13 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   if (input.clientToolPreparation.codeModeControlsEnabledForRun) {
     installCodeModeRepairHook({
       agent: activeSession.agent,
-      onReconciliationCandidate: () => {
-        codeModeReconciliationCandidate = true;
-      },
+      ...(clientToolRuntime.coreBuiltinToolNames.has("read")
+        ? {
+            onReconciliationCandidate: () => {
+              codeModeReconciliationCandidate = true;
+            },
+          }
+        : {}),
     });
   }
   input.markStage("agent-session");
