@@ -175,7 +175,7 @@ describe("chat pane composer controls", () => {
     );
   });
 
-  it("uses the configured server-cache policy when the picker opens", async () => {
+  it("refreshes the configured model catalog when the picker opens", async () => {
     const container = document.createElement("div");
     const request = vi.fn(async () => ({ models: [] }));
     const state = {
@@ -215,6 +215,7 @@ describe("chat pane composer controls", () => {
     expect(request).toHaveBeenCalledWith("models.list", {
       view: "configured",
       agentId: "main",
+      refresh: true,
     });
   });
 });

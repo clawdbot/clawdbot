@@ -90,6 +90,8 @@ export type SessionsProps = {
   sortColumn: "key" | "kind" | "updated" | "tokens";
   sortDir: "asc" | "desc";
   groupBy: SessionsGroupBy;
+  /** Multi-identity gateways only; hides the Person mode elsewhere. */
+  personGroupingAvailable: boolean;
   knownCategories: string[];
   page: number;
   pageSize: number;
@@ -780,6 +782,7 @@ function sessionsTableColumnCount(props: SessionsProps): number {
 const SESSION_GROUP_MODE_LABELS = {
   none: "sessionsView.groupByNone",
   category: "sessionsView.groupByCategory",
+  person: "sessionsView.groupByPerson",
   channel: "sessionsView.groupByChannel",
   kind: "sessionsView.groupByKind",
   agent: "sessionsView.groupByAgent",
@@ -790,7 +793,8 @@ function groupModeLabel(mode: SessionsGroupBy): string {
   return t(SESSION_GROUP_MODE_LABELS[mode] ?? SESSION_GROUP_MODE_LABELS.none);
 }
 
-function sessionGroupLabel(id: string, props: SessionsProps): string {
+function sessionGroupLabel(group: SessionRowGroup, props: SessionsProps): string {
+  const { id } = group;
   if (props.groupBy === "date") {
     const labels: Record<string, string> = {
       today: "sessionsView.dateToday",
@@ -810,6 +814,9 @@ function sessionGroupLabel(id: string, props: SessionsProps): string {
       const emoji = normalizeOptionalString(identity?.emoji);
       return emoji ? `${emoji} ${name}` : name;
     }
+  }
+  if (props.groupBy === "person") {
+    return group.rows[0]?.owner?.actor.label?.trim() || id;
   }
   return id;
 }
@@ -856,7 +863,7 @@ function categoryDropHandlers(props: SessionsProps, category: string | null) {
 }
 
 function renderGroupHeaderRow(group: SessionRowGroup, props: SessionsProps) {
-  const label = sessionGroupLabel(group.id, props);
+  const label = sessionGroupLabel(group, props);
   const count =
     group.rows.length === 1
       ? t("sessionsView.groupRowCountOne", { count: "1" })
@@ -1215,7 +1222,9 @@ function renderSessionsTable(props: SessionsProps, ctx: SessionsTableContext) {
           @change=${(e: Event) =>
             props.onGroupByChange((e.target as HTMLSelectElement).value as SessionsGroupBy)}
         >
-          ${SESSION_GROUP_MODES.map(
+          ${SESSION_GROUP_MODES.filter(
+            (mode) => mode !== "person" || props.personGroupingAvailable,
+          ).map(
             (mode) =>
               html`<option value=${mode} ?selected=${props.groupBy === mode}>
                 ${groupModeLabel(mode)}

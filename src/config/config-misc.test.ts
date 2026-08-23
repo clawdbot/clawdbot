@@ -570,6 +570,42 @@ describe("gateway.controlUi.embedSandbox", () => {
   });
 });
 
+describe("gateway.controlUi.environment", () => {
+  it("accepts named environment colors and trims the label", () => {
+    for (const color of [
+      "teal",
+      "amber",
+      "purple",
+      "coral",
+      "pink",
+      "blue",
+      "green",
+      "red",
+      "gray",
+    ]) {
+      const result = OpenClawSchema.safeParse({
+        gateway: { controlUi: { environment: { label: " edge ", color } } },
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.gateway?.controlUi?.environment?.label).toBe("edge");
+      }
+    }
+  });
+
+  it.each([
+    { label: "edge", color: "orange" },
+    { label: " ", color: "amber" },
+    { label: "a".repeat(25), color: "amber" },
+    { label: "edge" },
+    { color: "amber" },
+  ])("rejects invalid environment configuration %#", (environment) => {
+    expect(OpenClawSchema.safeParse({ gateway: { controlUi: { environment } } }).success).toBe(
+      false,
+    );
+  });
+});
+
 describe("gateway.controlUi.allowExternalEmbedUrls", () => {
   it("accepts boolean values", () => {
     for (const value of [true, false]) {

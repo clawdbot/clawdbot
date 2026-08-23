@@ -1,4 +1,5 @@
 /** Prepares and runs auto-reply agent turns, including prompt context and session policy. */
+import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import type { ReplyPayload } from "../types.js";
 import { prepareReplyRunAdmission } from "./get-reply-run-admission.js";
@@ -44,8 +45,12 @@ export async function runPreparedReply(
     { pluginGeneration: dispatchRuntime.pluginGeneration },
   );
   try {
-    return await withPluginRuntimeGenerationScope(lease.snapshot, () =>
-      executePreparedReplyContext(context),
+    return await withPreparedModelRuntimePluginGenerationScope(
+      dispatchRuntime.pluginGeneration,
+      () =>
+        withPluginRuntimeGenerationScope(lease.snapshot, () =>
+          executePreparedReplyContext(context),
+        ),
     );
   } finally {
     lease.release();

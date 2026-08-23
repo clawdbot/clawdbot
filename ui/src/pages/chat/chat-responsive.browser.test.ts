@@ -1273,8 +1273,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   ])("balances completed-work spacing on $label", async ({ width, hasTouch, expectedGap }) => {
     const page = await openBrowserPage(width, 720, { hasTouch, isolated: true });
     try {
+      // Isolate the final-layout contract from the 200ms settle-in transform.
       await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${completedWorkSpacingHtml()}</body></html>`,
+        `<!doctype html><html><head><style>${readUiCss()}</style><style>.chat-group--work { animation: none; }</style></head><body>${completedWorkSpacingHtml()}</body></html>`,
       );
       await waitForLayoutSettled(page, "[data-spacing-row], .chat-group--work");
 
@@ -1299,9 +1300,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         };
       });
 
-      // Browser font metrics can shift subpixel geometry; one CSS pixel is the layout boundary.
-      expect(Math.abs(gaps.before - expectedGap)).toBeLessThan(1);
-      expect(Math.abs(gaps.after - expectedGap)).toBeLessThan(1);
+      expect(gaps.before).toBeCloseTo(expectedGap, 0);
+      expect(gaps.after).toBeCloseTo(expectedGap, 0);
     } finally {
       await closeBrowserPage(page);
     }
@@ -2067,6 +2067,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
   it.each([
     [393, 852],
+    [900, 500],
     [1366, 900],
     [1920, 1080],
   ] as const)("uses compact radii and optical chat-box insets at %sx%s", async (width, height) => {
@@ -2118,14 +2119,17 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(geometry.assistantBubble?.paddingRight).toBe(0);
       expect(geometry.composer?.borderRadius).toBe(mediumRadius);
 
-      const composerInset = width <= 768 ? 4 : 8;
-      const textareaBlockInset = width <= 768 ? 10 : composerInset;
+      const usesCompactComposer = width <= 768 || (width <= 932 && height <= 500 && width > height);
+      const composerInset = usesCompactComposer ? 4 : 8;
+      const textareaBlockInset = usesCompactComposer ? 10 : composerInset;
       expect(geometry.textarea?.paddingTop).toBe(textareaBlockInset);
       expect(geometry.textarea?.paddingRight).toBe(composerInset);
       expect(geometry.textarea?.paddingBottom).toBe(textareaBlockInset);
-      expect(geometry.textarea?.paddingLeft).toBe(composerInset - 4);
-      expect(geometry.footer?.paddingLeft).toBe(composerInset);
-      expect(geometry.footer?.paddingRight).toBe(composerInset);
+      expect(geometry.textarea?.paddingLeft).toBe(
+        usesCompactComposer ? composerInset : composerInset - 4,
+      );
+      expect(geometry.footer?.paddingLeft).toBe(8);
+      expect(geometry.footer?.paddingRight).toBe(8);
       // #105866 splits the block inset evenly around the footer so the
       // settings chip centers between the divider and the card edge.
       expect(geometry.footer?.paddingTop).toBe(composerInset / 2);

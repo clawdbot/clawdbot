@@ -259,7 +259,6 @@ export function projectChatTranscript(
       sessionKey: props.sessionKey,
       ...(props.fullMessageAgentId ? { agentId: props.fullMessageAgentId } : {}),
       messageId,
-      kind: "assistant_message",
     }).then(
       (result) => {
         const pending = expandedAssistantMessages.get(messageId);

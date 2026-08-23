@@ -1,15 +1,7 @@
 // Runs the interactive TUI loop and coordinates backend, input, and rendering.
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
-import {
-  CombinedAutocompleteProvider,
-  Container,
-  Loader,
-  matchesKey,
-  ProcessTerminal,
-  Text,
-  TUI,
-} from "@earendil-works/pi-tui";
+import { Container, Loader, matchesKey, ProcessTerminal, Text, TUI } from "@earendil-works/pi-tui";
 import { classifyGatewayConnectFailure } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -50,7 +42,7 @@ import { CustomEditor } from "./components/custom-editor.js";
 import { resolveLocalRunShutdownGraceMs } from "./local-run-shutdown.js";
 import { editorTheme, tuiTheme as theme } from "./theme/theme.js";
 import { createTuiAuthChildOwner } from "./tui-auth-child.js";
-import { sanitizeAutocompleteProvider } from "./tui-autocomplete.js";
+import { createTuiAutocompleteProvider } from "./tui-autocomplete.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
@@ -504,6 +496,7 @@ type TuiProcessExitTimeout = (callback: () => void, delayMs: number) => TuiProce
 type TuiShutdownTask = () => void | Promise<void>;
 
 export function beginTuiShutdown(params: {
+  stopCommandScopes?: TuiShutdownTask;
   stopClient: TuiShutdownTask;
   stopTui: TuiShutdownTask;
   disposeStatus: () => void;
@@ -525,10 +518,13 @@ export function beginTuiShutdown(params: {
   void Promise.resolve()
     .then(async () => {
       const errors: unknown[] = [];
-      try {
-        await params.stopClient();
-      } catch (error) {
-        errors.push(error);
+      const runtimeTasks = [params.stopCommandScopes, params.stopClient].map(async (task) =>
+        task?.(),
+      );
+      for (const result of await Promise.allSettled(runtimeTasks)) {
+        if (result.status === "rejected") {
+          errors.push(result.reason);
+        }
       }
       // Terminal ownership must be released even when transport teardown fails.
       try {
@@ -936,6 +932,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
 
   const resolveDynamicSlashCommandsKey = () => state.currentAgentId;
 
+  let autocompleteFdPath: string | undefined;
   const applyAutocompleteProvider = () => {
     const dynamicKey = resolveDynamicSlashCommandsKey();
     const slashCommands = getSlashCommands({
@@ -950,11 +947,18 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     editor.shouldSubmitAutocomplete = (text) =>
       shouldSubmitExactArgumentCompletion(text, slashCommands);
     editor.setAutocompleteProvider(
-      sanitizeAutocompleteProvider(
-        new CombinedAutocompleteProvider(slashCommands, resolveUsableCwd()),
-      ),
+      createTuiAutocompleteProvider(slashCommands, resolveUsableCwd(), autocompleteFdPath),
     );
   };
+
+  void import("../agents/utils/tools-manager.js")
+    .then(({ ensureTool }) => ensureTool("fd", true))
+    .then((fdPath) => {
+      if (fdPath) {
+        autocompleteFdPath = fdPath;
+        applyAutocompleteProvider();
+      }
+    });
 
   const clearDynamicSlashCommandsRefreshTimer = () => {
     if (!dynamicSlashCommandsRefreshTimer) {
@@ -1496,6 +1500,12 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     clearLocalBtwRunIds: localBtwRunIds.clear,
   });
   reconcileReconnectRun = reconnectStreamingWatchdog;
+  const localShell = createLocalShellRunner({
+    chatLog,
+    tui,
+    openOverlay,
+    closeOverlay,
+  });
   invalidateSessionRunOwnership = () => {
     disposeEventHandlers();
     state.activeChatRunId = null;
@@ -1531,6 +1541,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     pluginApprovals?.dispose();
     taskSuggestions?.dispose();
     beginTuiShutdown({
+      stopCommandScopes: () => localShell.shutdown(),
       stopClient: () => client.stop(),
       stopTui: () => drainAndStopTuiSafely(tui),
       disposeStatus,
@@ -1592,12 +1603,6 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     requestExit,
   });
 
-  const { runLocalShellLine } = createLocalShellRunner({
-    chatLog,
-    tui,
-    openOverlay,
-    closeOverlay,
-  });
   updateAutocompleteProvider();
   const notifySubmitError = (action: TuiSubmitAction, error: unknown) => {
     const message = formatTuiErrorMessage(error);
@@ -1608,7 +1613,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     editor,
     handleCommand,
     sendMessage,
-    handleBangLine: runLocalShellLine,
+    handleBangLine: localShell.runLocalShellLine,
     onSubmitError: notifySubmitError,
     admitMessage: resolveMessageAdmission,
     onBlockedMessageSubmit: reportBlockedMessageSubmit,

@@ -131,14 +131,11 @@ function openDatabase(): Promise<IDBDatabase> {
           database.close();
           databasePromise = null;
         });
-        void sweepExpiredRecords(database).then(
-          () => resolve(database),
-          (error: unknown) => {
-            database.close();
-            databasePromise = null;
-            reject(error instanceof Error ? error : new Error("IndexedDB maintenance failed"));
-          },
-        );
+        resolve(database);
+        // Expiry cleanup spans every owner and must not hold foreground draft reads
+        // behind a database-wide cursor scan. Start it in the next task so the
+        // operation that opened the database registers its transaction first.
+        globalThis.setTimeout(() => void sweepExpiredRecords(database).catch(() => undefined), 0);
       },
       { once: true },
     );

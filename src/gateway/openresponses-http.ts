@@ -9,13 +9,14 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/embedded-agent-runner/run/params.js";
 import { toOpenAiResponsesUsage } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { agentCommandFromIngress } from "../commands/agent.js";
+import { agentCommandFromGatewayIngress } from "../commands/agent.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
@@ -34,6 +35,7 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -77,7 +79,7 @@ import {
   type Usage,
 } from "./open-responses.schema.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
-import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
+import { isFailedOpenAiAgentRun, resolveOpenAiCompatError } from "./openai-compat-errors.js";
 import {
   isToolChoiceConstraintSatisfied,
   resolveUnsatisfiedToolChoiceMessage,
@@ -87,6 +89,7 @@ import {
 import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 
 type OpenResponsesHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -95,6 +98,7 @@ type OpenResponsesHttpOptions = {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
+  resolveGatewayContext?: GatewayContextResolver;
 };
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
@@ -391,9 +395,10 @@ async function runResponsesAgentCommand(params: {
   messageChannel: string;
   senderIsOwner: boolean;
   deps: CliDeps;
+  resolveGatewayContext?: GatewayContextResolver;
   abortSignal?: AbortSignal;
 }) {
-  return agentCommandFromIngress(
+  return agentCommandFromGatewayIngress(
     {
       message: params.message,
       images: params.images.length > 0 ? params.images : undefined,
@@ -409,9 +414,16 @@ async function runResponsesAgentCommand(params: {
       bestEffortDeliver: false,
       allowModelOverride: params.modelOverride !== undefined,
       abortSignal: params.abortSignal,
+      ...(params.resolveGatewayContext
+        ? {
+            onAdmittedRunContext: (context: AdmittedRunContext) =>
+              bindGatewayContextResolver(context, params.resolveGatewayContext),
+          }
+        : {}),
     },
     defaultRuntime,
     params.deps,
+    {},
   );
 }
 
@@ -712,6 +724,7 @@ export async function handleOpenResponsesHttpRequest(
         messageChannel,
         senderIsOwner,
         deps,
+        resolveGatewayContext: opts.resolveGatewayContext,
         abortSignal: abortController.signal,
       });
 
@@ -720,7 +733,7 @@ export async function handleOpenResponsesHttpRequest(
       }
 
       const meta = (result as { meta?: { error?: unknown; stopReason?: unknown } } | null)?.meta;
-      if (meta?.error || meta?.stopReason === "error") {
+      if (isFailedOpenAiAgentRun(result)) {
         throw new Error("agent run failed");
       }
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
@@ -1178,12 +1191,30 @@ export async function handleOpenResponsesHttpRequest(
         messageChannel,
         senderIsOwner,
         deps,
+        resolveGatewayContext: opts.resolveGatewayContext,
         abortSignal: abortController.signal,
       });
 
       if (closed) {
         return;
       }
+
+      if (isFailedOpenAiAgentRun(result)) {
+        terminalLifecyclePhase = "error";
+        rememberResponseSession();
+        finalizeFailedResponse(
+          createResponseResource({
+            id: responseId,
+            model,
+            status: "failed",
+            output: [],
+            error: { code: "api_error", message: "internal error" },
+            usage: extractUsageFromResult(result),
+          }),
+        );
+        return;
+      }
+
       finalUsage = extractUsageFromResult(result);
 
       if (unrepresentableAssistantReplacement) {

@@ -261,6 +261,7 @@ const baseRoute = {
 function callProcessMessage(
   overrides: {
     cfg?: unknown;
+    dispatchReplyFromConfig?: Parameters<typeof processMessage>[0]["dispatchReplyFromConfig"];
     groupHistories?: Map<string, unknown[]>;
     msg?: unknown;
   } = {},
@@ -275,6 +276,7 @@ function callProcessMessage(
     connectionId: "conn-1",
     verbose: false,
     maxMediaBytes: 1024,
+    dispatchReplyFromConfig: overrides.dispatchReplyFromConfig,
     replyResolver: (async () => undefined) as never,
     replyLogger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never,
     backgroundTasks: new Set(),
@@ -576,7 +578,7 @@ describe("processMessage group system prompt wiring", () => {
     );
   });
 
-  it("passes one lifecycle identity through the portable boundary and reply plan", async () => {
+  it("passes one lifecycle and owning dispatcher through the portable turn boundary", async () => {
     resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
     buildContextMock.mockImplementationOnce(() => ({
       Body: "hi",
@@ -592,9 +594,13 @@ describe("processMessage group system prompt wiring", () => {
       onDeferred: vi.fn(),
       onAbandoned: vi.fn(async () => undefined),
     };
+    const dispatchReplyFromConfig = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    }));
     const msg = attachWhatsAppIngressLifecycle(makeBaseMsg(), lifecycle as never);
 
-    await callProcessMessage({ msg });
+    await callProcessMessage({ msg, dispatchReplyFromConfig });
 
     const runParams = mockCallArg(runChannelInboundEventParamsMock, "runChannelInboundEvent") as {
       raw?: unknown;
@@ -604,6 +610,7 @@ describe("processMessage group system prompt wiring", () => {
       turnAdoptionLifecycle?: unknown;
     };
     expect(runParams.turnAdoptionLifecycle).toBe(replyPlanParams.turnAdoptionLifecycle);
+    expect(dispatchReplyFromConfig).toHaveBeenCalledOnce();
     expect(runParams.raw).not.toHaveProperty("platform");
     expect(runParams.raw).not.toHaveProperty("admission");
   });

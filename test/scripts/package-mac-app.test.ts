@@ -1217,11 +1217,17 @@ describe("package-mac-app plist stamping", () => {
     const helperBlock = getPackageManagerHelperBlock();
     const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
     const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
+    // Hosts with a system corepack in /usr/bin (plus a cached pnpm) would satisfy
+    // the detection this test needs to fail; an empty cache with network disabled
+    // keeps "corepack pnpm is unavailable" true everywhere.
+    const corepackHome = tempDirs.make("openclaw-package-corepack-home-");
 
     const result = runHelper(`
       set -euo pipefail
       ROOT_DIR=${JSON.stringify(tempRoot)}
       PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      export COREPACK_HOME=${JSON.stringify(corepackHome)}
+      export COREPACK_ENABLE_NETWORK=0
       ${helperBlock}
       run_pnpm build
     `);

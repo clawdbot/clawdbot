@@ -93,6 +93,36 @@ describe("prewarmed plugin cache resolver", () => {
     ).toMatchObject({ status: "invalid" });
   });
 
+  it("treats paired archive and manifest replacement as mutable cache content", () => {
+    const fixture = createFixture();
+    const archivePath = path.join(fixture.cacheDir, fixture.archiveFile);
+    const manifestPath = path.join(fixture.cacheDir, "manifest.json");
+    fs.writeFileSync(archivePath, "replacement archive\n");
+    const replacementSHA256 = crypto
+      .createHash("sha256")
+      .update(fs.readFileSync(archivePath))
+      .digest("hex");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+      plugins: Array<{ archiveSHA256: string }>;
+    };
+    manifest.plugins[0]!.archiveSHA256 = replacementSHA256;
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`);
+
+    expect(
+      resolvePrewarmedPluginCache({
+        pluginId: "codex",
+        catalogNpmSpec: "@openclaw/codex",
+        effectiveNpmSpec: "@openclaw/codex",
+        packageRoot: fixture.packageRoot,
+        stateDir: fixture.prefix,
+        buildInfo: { version: "2026.8.1", commit: fixture.commit },
+      }),
+    ).toMatchObject({
+      status: "hit",
+      archiveSHA256: replacementSHA256,
+    });
+  });
+
   it("misses selectors that do not request the cached stable version", () => {
     const fixture = createFixture();
     for (const effectiveNpmSpec of [

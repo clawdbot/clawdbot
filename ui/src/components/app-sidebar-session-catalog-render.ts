@@ -11,6 +11,7 @@ import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { isSessionRunActive } from "../lib/session-run-state.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import {
@@ -140,7 +141,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
       const row = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
       return row ? [row] : [];
     });
-    const hasActiveRun = liveRows.some((row) => row.hasActiveRun === true);
+    const hasActiveRun = liveRows.some(isSessionRunActive);
     const hasUnread = liveRows.some((row) => row.unread === true);
     const hasBrandIcon = hasProviderBrandIcon(catalog.id);
     const loadingMore = params.loadingMoreCatalogIds.has(catalog.id);

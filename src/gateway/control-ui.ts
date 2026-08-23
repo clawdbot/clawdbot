@@ -49,11 +49,13 @@ import {
   buildControlUiRootAssetPath,
   CONTROL_UI_BASE_PATH_ATTRIBUTE,
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  CONTROL_UI_ENVIRONMENT_ATTRIBUTE,
   CONTROL_UI_ROOT_PUBLIC_ASSETS,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   isControlUiRootPublicAsset,
   parseControlUiResourcePath,
   type ControlUiBootstrapConfig,
+  type ControlUiEnvironment,
   type ControlUiPluginFrameGrantAck,
 } from "./control-ui-contract.js";
 import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
@@ -659,17 +661,21 @@ async function serveResolvedIndexHtml(
   body: string,
   basePath?: string,
   allowWasm?: boolean,
+  environment?: ControlUiEnvironment,
 ) {
   const normalizedBasePath = normalizeControlUiBasePath(basePath);
   const withBasePath = rewriteControlUiIndexHtmlAssetHrefs(body, normalizedBasePath);
   // An empty base path is authoritative for Gateway resources even when the
   // router infers a namespace. Always emit it so resources stay root-mounted.
   const basePathAttribute = ` ${CONTROL_UI_BASE_PATH_ATTRIBUTE}="${escapeHtmlAttribute(normalizedBasePath)}"`;
+  const environmentAttributes = environment
+    ? ` ${CONTROL_UI_ENVIRONMENT_ATTRIBUTE}="${escapeHtmlAttribute(JSON.stringify(environment))}"`
+    : "";
   // Let the app initialize fail-closed without guessing whether this document
   // was served with the terminal's WASM CSP allowance.
   const prepared = withBasePath.replace(
     /<html\b/i,
-    `<html${basePathAttribute} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"`,
+    `<html${basePathAttribute} ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"${environmentAttributes}`,
   );
   const hashes = computeInlineScriptHashes(prepared);
   // Always set the document CSP here (the index carries inline scripts) so the
@@ -895,6 +901,7 @@ export async function handleControlUiHttpRequest(
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
       automaticallyFetchFavicons: config?.gateway?.controlUi?.automaticallyFetchFavicons !== false,
       seamColor: config?.ui?.seamColor,
+      environment: config?.gateway?.controlUi?.environment,
       terminalEnabled,
       cliAgentsEnabled: config?.gateway?.cliAgents?.enabled === true,
       pluginFrameGrants: pluginFrameGrants.map(({ pluginId, path: grantPath, match }) => ({
@@ -1019,7 +1026,14 @@ export async function handleControlUiHttpRequest(
         }
       }
       const body = await readAndCloseControlUiFileText(safeFile.fd);
-      await serveResolvedIndexHtml(req, res, body, basePath, terminalEnabled);
+      await serveResolvedIndexHtml(
+        req,
+        res,
+        body,
+        basePath,
+        terminalEnabled,
+        opts?.config?.gateway?.controlUi?.environment,
+      );
       return true;
     }
     const representation = resolveOpenedControlUiRepresentation({
@@ -1087,7 +1101,14 @@ export async function handleControlUiHttpRequest(
       }
     }
     const body = await readAndCloseControlUiFileText(safeIndex.fd);
-    await serveResolvedIndexHtml(req, res, body, basePath, terminalEnabled);
+    await serveResolvedIndexHtml(
+      req,
+      res,
+      body,
+      basePath,
+      terminalEnabled,
+      opts?.config?.gateway?.controlUi?.environment,
+    );
     return true;
   }
 

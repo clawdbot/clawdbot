@@ -36,7 +36,7 @@ describe("prepared model runtime plugin metadata ownership", () => {
       inlineProviderModels: [],
       pluginMetadataSnapshot: gatewaySnapshot,
     };
-    const resolveMetadata = vi.spyOn(pluginMetadata, "loadPluginMetadataSnapshot");
+    const resolveMetadata = vi.spyOn(pluginMetadata, "resolvePluginMetadataSnapshot");
     const getCurrentMetadata = vi.spyOn(currentPluginMetadata, "getCurrentPluginMetadataSnapshot");
 
     try {
@@ -70,7 +70,7 @@ describe("prepared model runtime plugin metadata ownership", () => {
       workspaceDir,
     });
     const resolveMetadata = vi
-      .spyOn(pluginMetadata, "loadPluginMetadataSnapshot")
+      .spyOn(pluginMetadata, "resolvePluginMetadataSnapshot")
       .mockReturnValue(directSnapshot);
     const registry = createEmptyPluginRegistry();
 
@@ -94,6 +94,7 @@ describe("prepared model runtime plugin metadata ownership", () => {
         config,
         env: process.env,
         workspaceDir,
+        allowWorkspaceScopedCurrent: true,
       });
     } finally {
       resolveMetadata.mockRestore();
@@ -109,7 +110,7 @@ describe("prepared model runtime plugin metadata ownership", () => {
       workspaceDir,
     });
     const resolveMetadata = vi
-      .spyOn(pluginMetadata, "loadPluginMetadataSnapshot")
+      .spyOn(pluginMetadata, "resolvePluginMetadataSnapshot")
       .mockReturnValue(directSnapshot);
 
     try {
@@ -129,6 +130,7 @@ describe("prepared model runtime plugin metadata ownership", () => {
         config,
         env: process.env,
         workspaceDir,
+        allowWorkspaceScopedCurrent: true,
         pluginIdScope: expect.objectContaining({ key: expect.any(String) }),
       });
     } finally {

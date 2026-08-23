@@ -365,7 +365,7 @@ openclaw config set channels.discord.token \
     - `checks.resolvabilityComplete`: whether resolvability checks ran to completion (false when exec refs are skipped)
     - `refsChecked`: number of refs actually resolved during dry-run
     - `skippedExecRefs`: number of exec refs skipped because `--allow-exec` was not set
-    - `errors`: structured missing-path, schema, or resolvability failures when `ok=false`
+    - `errors`: structured failures when `ok=false`; each carries a `kind` of `missing-path`, `schema`, `resolvability`, `model`, or `conflict` (`conflict` means the config file changed while the command was writing, so nothing was changed — re-run to pick up the new file)
 
   </Accordion>
 </AccordionGroup>

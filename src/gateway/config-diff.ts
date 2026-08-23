@@ -1,5 +1,6 @@
 // Config path diff helper used by gateway mutation diagnostics.
 import { isDeepStrictEqual } from "node:util";
+import * as talk from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPlainObject } from "../utils.js";
 
@@ -46,6 +47,10 @@ function projectGatewayReloadBoundaries(config: OpenClawConfig) {
     session: {
       scope: config.session?.scope,
       store: config.session?.store,
+    },
+    talk: {
+      provider: talk.resolveConfiguredTalkSpeechProviderId(config),
+      realtime: { provider: talk.resolveConfiguredTalkRealtimeProviderId(config) },
     },
   };
 }

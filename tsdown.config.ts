@@ -362,6 +362,7 @@ function buildCoreDistEntries(): Record<string, string> {
       "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
     "config/sessions/session-transcript-reconcile.worker":
       "src/config/sessions/session-transcript-reconcile.worker.ts",
+    "infra/sqlite-readonly-location.worker": "src/infra/sqlite-readonly-location.worker.ts",
     "state/openclaw-database-verify.worker": "src/state/openclaw-database-verify.worker.ts",
     "infra/tailscale-route-owner.worker": "src/infra/tailscale-route-owner.worker.ts",
     "system-agent/setup-inference-detection.worker":
@@ -394,6 +395,8 @@ function buildCoreDistEntries(): Record<string, string> {
     "process/supervisor/service-child-relay": "src/process/supervisor/service-child-relay.ts",
     "process/supervisor/service-child-group-anchor":
       "src/process/supervisor/service-child-group-anchor.ts",
+    "process/supervisor/service-child-windows-job-anchor":
+      "src/process/supervisor/service-child-windows-job-anchor.ts",
     "telegram-ingress-worker.runtime": bundledPluginFile(
       "telegram",
       "src/telegram-ingress-worker.runtime.ts",

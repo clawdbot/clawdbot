@@ -3,7 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
+  getCurrentPluginMetadataSnapshot: vi.fn(),
   getActivePluginRegistry: vi.fn(),
+  getActivePluginRegistryWorkspaceDir: vi.fn(),
+  getActivePluginRuntimeSubagentMode: vi.fn(),
   loadPluginRegistryHandle: vi.fn(),
   adoptRuntimeContextEngineRegistrations: vi.fn((target: unknown) => target),
   adoptRuntimeWidgetPresenterRegistrations: vi.fn((target: unknown) => target),
@@ -19,6 +22,8 @@ vi.mock("../context-engine/registry.js", () => ({
 
 vi.mock("../plugins/runtime.js", () => ({
   getActivePluginRegistry: hoisted.getActivePluginRegistry,
+  getActivePluginRegistryWorkspaceDir: hoisted.getActivePluginRegistryWorkspaceDir,
+  getActivePluginRuntimeSubagentMode: hoisted.getActivePluginRuntimeSubagentMode,
 }));
 
 vi.mock("../plugins/widget-presenters.js", () => ({
@@ -27,6 +32,10 @@ vi.mock("../plugins/widget-presenters.js", () => ({
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: hoisted.loadPluginMetadataSnapshot,
+}));
+
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: hoisted.getCurrentPluginMetadataSnapshot,
 }));
 
 vi.mock("../plugins/loader.js", () => ({
@@ -42,6 +51,10 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  createPreparedInboundRegistryLoader,
+  prepareWorkspacePluginRegistries,
+} from "./prepared-model-runtime.inbound-registry.js";
 import {
   loadAgentRuntimePluginRegistryHandle,
   withAgentPluginRegistry,
@@ -68,7 +81,10 @@ describe("agent runtime plugin registries", () => {
         ...createMetadataSnapshot(params.workspaceDir),
         pluginIds: undefined,
       }));
+    hoisted.getCurrentPluginMetadataSnapshot.mockReset().mockReturnValue(undefined);
     hoisted.getActivePluginRegistry.mockReset().mockReturnValue(undefined);
+    hoisted.getActivePluginRegistryWorkspaceDir.mockReset().mockReturnValue(undefined);
+    hoisted.getActivePluginRuntimeSubagentMode.mockReset().mockReturnValue("default");
     hoisted.loadPluginRegistryHandle.mockReset().mockReturnValue({ handle: true });
     hoisted.adoptRuntimeContextEngineRegistrations
       .mockReset()
@@ -104,6 +120,126 @@ describe("agent runtime plugin registries", () => {
       contextEnginesAdopted,
       activeRegistry,
     );
+  });
+
+  it("reuses the current Gateway generation and loads only the imported-plugin delta", () => {
+    const config = {} as never;
+    const workspaceDir = "/tmp/default-workspace";
+    const activeRegistry = {
+      plugins: [
+        { id: "gateway-owned", origin: "bundled", status: "loaded" },
+        {
+          id: "deferred",
+          origin: "bundled",
+          status: "loaded",
+          format: "openclaw",
+          imported: false,
+        },
+      ],
+    };
+    const metadataSnapshot = {
+      ...createMetadataSnapshot(workspaceDir, undefined),
+      manifestRegistry: {
+        diagnostics: [],
+        plugins: [
+          { id: "gateway-owned", origin: "bundled" },
+          { id: "deferred", origin: "bundled" },
+        ],
+      },
+    };
+    const selectedRegistry = { plugins: [...activeRegistry.plugins, { id: "selected-provider" }] };
+    hoisted.getActivePluginRegistry.mockReturnValue(activeRegistry);
+    hoisted.getActivePluginRegistryWorkspaceDir.mockReturnValue(workspaceDir);
+    hoisted.getActivePluginRuntimeSubagentMode.mockReturnValue("gateway-bindable");
+    hoisted.getCurrentPluginMetadataSnapshot.mockReturnValue(metadataSnapshot);
+    hoisted.loadPluginRegistryHandle.mockReturnValue(selectedRegistry);
+    hoisted.resolveAgentRuntimePluginLoadPlan.mockImplementation(({ basePluginIds }) => ({
+      config,
+      pluginIds: [...(basePluginIds ?? []), "selected-provider"],
+    }));
+
+    const prepared = prepareWorkspacePluginRegistries(
+      {
+        agentDir: "/tmp/agent",
+        allowGatewaySubagentBinding: true,
+        config,
+        runtimePluginSelections: [{ provider: "selected", modelId: "model" }],
+        workspaceDir,
+      },
+      metadataSnapshot as never,
+      createPreparedInboundRegistryLoader(),
+      true,
+    );
+
+    expect(prepared.inboundPluginRegistry).toBe(activeRegistry);
+    expect(prepared.runtimePluginRegistry).toBe(selectedRegistry);
+    expect(hoisted.resolveAgentRuntimePluginLoadPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ basePluginIds: ["gateway-owned"] }),
+    );
+    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledOnce();
+    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["gateway-owned", "selected-provider"],
+        preferBuiltPluginArtifacts: true,
+      }),
+    );
+  });
+
+  it.each([
+    {
+      name: "custom environment",
+      input: { env: { OPENCLAW_STATE_DIR: "/tmp/custom-state" } },
+    },
+    {
+      name: "non-bindable mode",
+      setup: () => hoisted.getActivePluginRuntimeSubagentMode.mockReturnValue("default"),
+    },
+    {
+      name: "different workspace",
+      setup: () => hoisted.getActivePluginRegistryWorkspaceDir.mockReturnValue("/tmp/other"),
+    },
+    {
+      name: "stale metadata generation",
+      setup: () => hoisted.getCurrentPluginMetadataSnapshot.mockReturnValue({}),
+    },
+    {
+      name: "manifest mismatch",
+      setup: (activeRegistry: { plugins: Array<{ origin: string }> }) => {
+        activeRegistry.plugins[0]!.origin = "external";
+      },
+    },
+  ])("refuses Gateway registry reuse for $name", ({ input, setup }) => {
+    const config = {} as never;
+    const workspaceDir = "/tmp/default-workspace";
+    const activeRegistry = {
+      plugins: [{ id: "gateway-owned", origin: "bundled", status: "loaded" }],
+    };
+    const metadataSnapshot = {
+      ...createMetadataSnapshot(workspaceDir, undefined),
+      manifestRegistry: {
+        diagnostics: [],
+        plugins: [{ id: "gateway-owned", origin: "bundled" }],
+      },
+    };
+    hoisted.getActivePluginRegistry.mockReturnValue(activeRegistry);
+    hoisted.getActivePluginRegistryWorkspaceDir.mockReturnValue(workspaceDir);
+    hoisted.getActivePluginRuntimeSubagentMode.mockReturnValue("gateway-bindable");
+    hoisted.getCurrentPluginMetadataSnapshot.mockReturnValue(metadataSnapshot);
+    setup?.(activeRegistry);
+
+    const inbound = createPreparedInboundRegistryLoader()(
+      {
+        agentDir: "/tmp/agent",
+        allowGatewaySubagentBinding: true,
+        config,
+        workspaceDir,
+        ...input,
+      },
+      metadataSnapshot as never,
+    );
+
+    expect(inbound).not.toBe(activeRegistry);
+    expect(hoisted.loadPluginRegistryHandle).toHaveBeenCalledOnce();
   });
 
   it("keeps direct no-current loads on the requested workspace", () => {

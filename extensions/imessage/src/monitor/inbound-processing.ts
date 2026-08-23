@@ -36,7 +36,6 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { resolveIMessageAccount } from "../accounts.js";
 import { resolveIMessageDirectChatService } from "../chat-context.js";
 import { resolveIMessageConversationRoute } from "../conversation-route.js";
 import {
@@ -48,6 +47,7 @@ import {
   isAllowedIMessageReplyContextSender,
   normalizeIMessageHandle,
   parseIMessageAllowTarget,
+  type IMessageService,
 } from "../targets.js";
 import type { IMessageDmHistoryContext } from "./dm-history.js";
 import {
@@ -895,6 +895,7 @@ export async function resolveIMessageInboundDecision(params: {
 
 export async function buildIMessageInboundContext(params: {
   cfg: OpenClawConfig;
+  accountService: IMessageService | undefined;
   decision: IMessageInboundDispatchDecision;
   message: IMessagePayload;
   envelopeOptions?: EnvelopeFormatOptions;
@@ -989,11 +990,7 @@ export async function buildIMessageInboundContext(params: {
   }
 
   const directService =
-    resolveIMessageDirectChatService(
-      resolveIMessageAccount({ cfg: params.cfg, accountId: decision.route.accountId }).config
-        .service,
-      decision.chatGuid,
-    ) ?? "auto";
+    resolveIMessageDirectChatService(params.accountService, decision.chatGuid) ?? "auto";
   const imessageTo = decision.isGroup
     ? chatTarget || `imessage:${decision.sender}`
     : `${directService}:${decision.sender}`;
@@ -1039,6 +1036,14 @@ export async function buildIMessageInboundContext(params: {
     conversation: {
       kind: decision.isGroup ? "group" : "direct",
       id: chatId != null ? String(chatId) : decision.sender,
+      ...(decision.isGroup && chatId == null
+        ? {}
+        : {
+            routePeer: {
+              kind: decision.isGroup ? ("group" as const) : ("direct" as const),
+              id: decision.isGroup ? String(chatId) : decision.senderNormalized,
+            },
+          }),
       label: fromLabel,
     },
     route: {

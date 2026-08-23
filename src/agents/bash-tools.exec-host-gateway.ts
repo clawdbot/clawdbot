@@ -984,6 +984,7 @@ export async function processGatewayAllowlist(
         sessionId: params.sessionId,
         runId: params.runId,
         toolCallId: params.toolCallId,
+        trigger: params.trigger,
         approvalReviewerDeviceIds: params.approvalReviewerDeviceId
           ? [params.approvalReviewerDeviceId]
           : undefined,

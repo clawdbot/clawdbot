@@ -12,6 +12,7 @@ import {
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
+  redactExecApprovals,
   resolveAllowAlwaysPatternCoverage,
   resolveExecApprovalsFromFile,
   updateExecApprovals,
@@ -272,14 +273,6 @@ function truncateOutput(raw: string, maxChars: number): { text: string; truncate
     return { text: raw, truncated: false };
   }
   return { text: `... (truncated) ${sliceUtf16Safe(raw, raw.length - maxChars)}`, truncated: true };
-}
-
-function redactExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
-  const socketPath = file.socket?.path?.trim();
-  return {
-    ...file,
-    socket: socketPath ? { path: socketPath } : undefined,
-  };
 }
 
 function requireExecApprovalsBaseHash(
@@ -692,10 +685,7 @@ async function dispatchInvoke(
     try {
       const snapshot = await ensureExecApprovalsSnapshot();
       const payload = {
-        path: snapshot.path,
-        exists: snapshot.exists,
-        hash: snapshot.hash,
-        file: redactExecApprovals(snapshot.file),
+        ...redactExecApprovals(snapshot),
         ...(includeResolvedDefaults
           ? { resolvedDefaults: resolveExecApprovalsFromFile({ file: snapshot.file }).defaults }
           : {}),
@@ -758,12 +748,7 @@ async function dispatchInvoke(
       return;
     }
 
-    const payload: ExecApprovalsSnapshot = {
-      path: nextSnapshot.path,
-      exists: nextSnapshot.exists,
-      hash: nextSnapshot.hash,
-      file: redactExecApprovals(nextSnapshot.file),
-    };
+    const payload: ExecApprovalsSnapshot = redactExecApprovals(nextSnapshot);
     await sendJsonPayloadResult(client, frame, payload);
     return;
   }
@@ -820,15 +805,39 @@ async function dispatchInvoke(
   }
   try {
     const { pluginCommandIo: io, pluginCommandContext: context } = runtime;
+    const acquireManagedWorkspace = context?.acquireManagedWorkspace;
+    let pluginInvocationActive = true;
     const invokeContext =
-      context && (frame.sessionKey || runtime.signal)
+      context && (frame.sessionKey || runtime.signal || acquireManagedWorkspace)
         ? {
             ...context,
             ...(frame.sessionKey ? { sessionKey: frame.sessionKey } : {}),
             ...(runtime.signal ? { signal: runtime.signal } : {}),
+            ...(acquireManagedWorkspace
+              ? {
+                  acquireManagedWorkspace: (
+                    request: Parameters<typeof acquireManagedWorkspace>[0],
+                  ) => {
+                    if (
+                      !pluginInvocationActive ||
+                      runtime.signal?.aborted ||
+                      !frame.sessionKey ||
+                      request.sessionKey !== frame.sessionKey
+                    ) {
+                      throw new Error("node placement workspace invocation authority is closed");
+                    }
+                    return acquireManagedWorkspace(request);
+                  },
+                }
+              : {}),
           }
         : context;
-    const pluginResult = await invokePlugin(command, frame.paramsJSON, io, invokeContext);
+    let pluginResult: string | null;
+    try {
+      pluginResult = await invokePlugin(command, frame.paramsJSON, io, invokeContext);
+    } finally {
+      pluginInvocationActive = false;
+    }
     if (pluginResult !== null) {
       await runtime.flushPluginCommandIo?.();
       await sendRawPayloadResult(client, frame, pluginResult);

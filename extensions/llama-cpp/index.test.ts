@@ -18,6 +18,7 @@ import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  discoverServer: vi.fn(),
   ensureModel: vi.fn(),
   prepareServer: vi.fn(),
   inspectRuntime: vi.fn(),
@@ -36,6 +37,11 @@ vi.mock("./src/managed-server.js", async (importOriginal) => ({
   inspectLlamaServerRuntime: mocks.inspectRuntime,
 }));
 
+vi.mock("./src/external-server/discovery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./src/external-server/discovery.js")>()),
+  discoverLlamaServer: mocks.discoverServer,
+}));
+
 import llamaCppPlugin from "./index.js";
 import {
   DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE,
@@ -52,6 +58,7 @@ let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
 
 beforeEach(() => {
   previousPluginRegistry = getActivePluginRegistry();
+  mocks.discoverServer.mockReset();
   mocks.ensureModel.mockResolvedValue("/models/model.gguf");
   mocks.prepareServer.mockResolvedValue({});
   mocks.inspectRuntime.mockResolvedValue({
@@ -169,6 +176,23 @@ describe("llama.cpp provider plugin", () => {
       "llama-cpp-existing-server",
     ]);
     expect(provider).not.toHaveProperty("createStreamFn");
+  });
+
+  it("never discovers external models for a managed local service", async () => {
+    const provider = registerTextProvider();
+    const prepareDynamicModel = expectDefined(provider.prepareDynamicModel, "dynamic model hook");
+    const { config } = configuredOptions();
+
+    await expect(
+      prepareDynamicModel({
+        config,
+        provider: LLAMA_CPP_PROVIDER_ID,
+        modelId: "gemma-4-e4b-it-q4_k_m",
+        modelRegistry: {} as never,
+        providerConfig: config.models.providers[LLAMA_CPP_PROVIDER_ID],
+      }),
+    ).resolves.toBeUndefined();
+    expect(mocks.discoverServer).not.toHaveBeenCalled();
   });
 
   it("registers local embeddings through the generic provider contract", () => {

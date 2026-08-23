@@ -16,6 +16,7 @@ import {
   reconcileStaleChatRunAfterSessionStatePublication,
   replayPendingChatAbort,
 } from "./run-lifecycle.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 
 type ReconcileHost = Parameters<typeof reconcileChatRunFromCurrentSessionRow>[0];
 type TestRow = {
@@ -346,6 +347,79 @@ describe("reconcileChatRunLifecycle indicators", () => {
     });
 
     expect(host.waitingApprovalStatuses?.has("approval-1")).toBe(true);
+  });
+});
+
+describe("reconcileChatRunFromSessionRow transient projections", () => {
+  it("clears only the terminal run's tool stream", () => {
+    const runId = "r1";
+    const siblingRunId = "r2";
+    const toolIdentity = buildToolStreamIdentity(runId, "tool-1");
+    const siblingToolIdentity = buildToolStreamIdentity(siblingRunId, "tool-2");
+    const toolMessage = { role: "assistant", runId, toolCallId: "tool-1" };
+    const siblingToolMessage = {
+      role: "assistant",
+      runId: siblingRunId,
+      toolCallId: "tool-2",
+    };
+    const host = makeHost({
+      chatRunId: runId,
+      chatStream: "Final reply",
+      chatStreamSegments: [
+        { text: "run one", ts: 1, runId },
+        { text: "run two", ts: 2, runId: siblingRunId },
+      ],
+      chatToolMessages: [toolMessage, siblingToolMessage],
+      toolStreamById: new Map([
+        [
+          toolIdentity,
+          {
+            message: toolMessage,
+            name: "exec",
+            receivedAt: 1,
+            runId,
+            startedAt: 1,
+            toolCallId: "tool-1",
+          },
+        ],
+        [
+          siblingToolIdentity,
+          {
+            message: siblingToolMessage,
+            name: "read",
+            receivedAt: 2,
+            runId: siblingRunId,
+            startedAt: 2,
+            toolCallId: "tool-2",
+          },
+        ],
+      ]),
+      toolStreamOrder: [toolIdentity, siblingToolIdentity],
+      toolStreamSyncTimer: null,
+      knownAgentRunIds: new Set([runId, siblingRunId]),
+      waitingApprovalStatuses: new Map([
+        ["approval-1", { approvalId: "approval-1", toolCallId: "tool-1", runId }],
+        ["approval-2", { approvalId: "approval-2", toolCallId: "tool-2", runId: siblingRunId }],
+      ]),
+    });
+
+    expect(
+      reconcileChatRunFromSessionRow(host, {
+        key: "s1",
+        kind: "direct",
+        updatedAt: 2,
+        hasActiveRun: false,
+        status: "done",
+      }),
+    ).toBe(true);
+
+    expect(host.chatStreamSegments).toEqual([{ text: "run two", ts: 2, runId: siblingRunId }]);
+    expect(host.chatToolMessages).toEqual([siblingToolMessage]);
+    expect(host.toolStreamById?.has(toolIdentity)).toBe(false);
+    expect(host.toolStreamById?.has(siblingToolIdentity)).toBe(true);
+    expect(host.toolStreamOrder).toEqual([siblingToolIdentity]);
+    expect(host.knownAgentRunIds).toEqual(new Set([siblingRunId]));
+    expect([...host.waitingApprovalStatuses!.keys()]).toEqual(["approval-2"]);
   });
 });
 

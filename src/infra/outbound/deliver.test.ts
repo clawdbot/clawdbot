@@ -880,7 +880,9 @@ describe("deliverOutboundPayloads", () => {
         kind: "conversation",
         agentId: "main",
         operationId: "operation-1",
+        routeFingerprint: "route-1",
       },
+      onDeliveryAttempt: async () => {},
     });
 
     expect(order).toEqual([
@@ -965,6 +967,33 @@ describe("deliverOutboundPayloads", () => {
     resumePreflight.resolve();
 
     await expect(delivery).rejects.toThrow("turn authority closed");
+    expect(messageSendText).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for an unfinished conversation intent without route authority", async () => {
+    const messageSendText = vi.fn(async () => ({
+      messageId: "should-not-send",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "matrix", messageId: "should-not-send" }],
+        kind: "text",
+      }),
+    }));
+    setMatrixMessageAdapter({
+      id: "matrix",
+      durableFinal: { capabilities: { text: true } },
+      send: { text: messageSendText },
+    });
+
+    await expect(
+      deliverMatrix({
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId: "legacy-operation",
+        },
+        onDeliveryAttempt: async () => {},
+      }),
+    ).rejects.toMatchObject({ retryable: false });
     expect(messageSendText).not.toHaveBeenCalled();
   });
 
@@ -1096,11 +1125,48 @@ describe("deliverOutboundPayloads", () => {
     expect(hookMocks.runner.runMessageSending).not.toHaveBeenCalled();
   });
 
+  it("revalidates conversation authority after queue admission and before the adapter", async () => {
+    const order: string[] = [];
+    queueMocks.enqueueDelivery.mockImplementationOnce(async () => {
+      order.push("queue");
+      return "queue-route-authorization";
+    });
+    const sendMatrix = vi.fn(async () => {
+      order.push("send");
+      return { messageId: "message-1" };
+    });
+
+    await expect(
+      deliverMatrix({
+        payloads: [{ text: "hello" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId: "operation-revoked",
+          routeFingerprint: "route-revoked",
+        },
+        onDeliveryAttempt: async () => {
+          order.push("authorize");
+          throw new PlatformMessageNotDispatchedError("route was revoked", {
+            cause: undefined,
+            retryable: false,
+          });
+        },
+      }),
+    ).rejects.toThrow("route was revoked");
+
+    expect(order).toEqual(["queue", "authorize"]);
+    expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
   it("finalizes owner state only after a chunked batch completes", async () => {
     const sendMatrix = vi
       .fn()
       .mockResolvedValueOnce({ messageId: "chunk-1" })
       .mockResolvedValueOnce({ messageId: "chunk-2" });
+    const onDeliveryAttempt = vi.fn(async () => {});
 
     await deliverMatrix({
       cfg: { channels: { matrix: { textChunkLimit: 2 } } } as OpenClawConfig,
@@ -1111,9 +1177,12 @@ describe("deliverOutboundPayloads", () => {
         kind: "conversation",
         agentId: "main",
         operationId: "operation-chunked",
+        routeFingerprint: "route-chunked",
       },
+      onDeliveryAttempt,
     });
 
+    expect(onDeliveryAttempt).toHaveBeenCalledOnce();
     expect(sendMatrix).toHaveBeenCalledTimes(2);
     expect(completionMocks.completeDurableDelivery).toHaveBeenCalledOnce();
     expect(completionMocks.completeDurableDelivery).toHaveBeenCalledWith(
@@ -1158,7 +1227,9 @@ describe("deliverOutboundPayloads", () => {
         kind: "conversation",
         agentId: "main",
         operationId: "operation-suppressed",
+        routeFingerprint: "route-suppressed",
       },
+      onDeliveryAttempt: async () => {},
     });
 
     expect(results).toEqual([]);
@@ -1634,7 +1705,9 @@ describe("deliverOutboundPayloads", () => {
           kind: "conversation",
           agentId: "main",
           operationId: "suppressed-metadata",
+          routeFingerprint: "route-suppressed-metadata",
         },
+        onDeliveryAttempt: async () => {},
         onPayloadDeliveryOutcome: (outcome) => outcomes.push(outcome),
       }),
     ).resolves.toEqual([]);
@@ -2254,7 +2327,9 @@ describe("deliverOutboundPayloads", () => {
           kind: "conversation",
           agentId: "main",
           operationId: "operation-rejected",
+          routeFingerprint: "route-rejected",
         },
+        onDeliveryAttempt: async () => {},
       }),
     ).rejects.toThrow("atomic message limit");
 
@@ -2293,7 +2368,9 @@ describe("deliverOutboundPayloads", () => {
           kind: "conversation",
           agentId: "main",
           operationId: "operation-empty-rejection",
+          routeFingerprint: "route-empty-rejection",
         },
+        onDeliveryAttempt: async () => {},
       }),
     ).rejects.toThrow("Platform rejected the message before dispatch");
 

@@ -156,9 +156,13 @@ function scenarioWithCoverage(params: {
 }
 
 describe("qa coverage report", () => {
+  let catalogInventory: ReturnType<typeof buildQaCoverageInventory> | undefined;
+  const readCatalogInventory = () =>
+    (catalogInventory ??= buildQaCoverageInventory(readQaScenarioPack().scenarios));
+
   it("groups scenario coverage metadata by theme and surface", () => {
     const scenarios = readQaScenarioPack().scenarios;
-    const inventory = buildQaCoverageInventory(scenarios);
+    const inventory = readCatalogInventory();
 
     expect(inventory.scenarioCount).toBeGreaterThan(0);
     expect(inventory.coverageIdCount).toBeGreaterThan(0);
@@ -312,7 +316,7 @@ describe("qa coverage report", () => {
       { assert: { expr: expect.stringContaining("config.blockedMarker") } },
     ]);
 
-    const inventory = buildQaCoverageInventory(scenarios);
+    const inventory = readCatalogInventory();
     const coverage = expectDefined(
       inventory.coverageIds.find((candidate) => candidate.id === coverageId),
       "session turn ordering coverage inventory",
@@ -368,9 +372,7 @@ describe("qa coverage report", () => {
   });
 
   it("renders a compact markdown inventory", () => {
-    const report = renderQaCoverageMarkdownReport(
-      buildQaCoverageInventory(readQaScenarioPack().scenarios),
-    );
+    const report = renderQaCoverageMarkdownReport(readCatalogInventory());
 
     expect(report).toContain("# QA Coverage Inventory");
     expect(report).toContain("- Missing coverage metadata: 0");
@@ -454,13 +456,16 @@ describe("qa coverage report", () => {
 
   it("finds every cataloged native scenario by its authoritative execution path", () => {
     const scenarios = readQaScenarioPack().scenarios;
+    const matchesByExecutionPath = new Map<string, string[]>();
     for (const scenario of scenarios) {
-      if (scenario.execution.kind !== "flow") {
-        expect(
-          findQaScenarioMatches(scenarios, scenario.execution.path).map(({ id }) => id),
-          scenario.id,
-        ).toContain(scenario.id);
+      if (scenario.execution.kind === "flow") {
+        continue;
       }
+      const matchedIds =
+        matchesByExecutionPath.get(scenario.execution.path) ??
+        findQaScenarioMatches(scenarios, scenario.execution.path).map(({ id }) => id);
+      matchesByExecutionPath.set(scenario.execution.path, matchedIds);
+      expect(matchedIds, scenario.id).toContain(scenario.id);
     }
   });
 

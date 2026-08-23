@@ -291,6 +291,7 @@ actor GatewayConnection {
         do {
             return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
         } catch {
+            try Task.checkCancellation()
             if allowTLSRepair,
                let tlsError = error as? GatewayTLSValidationError,
                await GatewayTLSRepairCoordinator.shared.repair(

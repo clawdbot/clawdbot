@@ -520,6 +520,65 @@ describe("stuck session recovery", () => {
     },
   );
 
+  it.each(
+    (["preflight_compacting", "memory_flushing"] as const)
+      .flatMap((phase) =>
+        [false, true].flatMap((hasEmbeddedHandle) =>
+          [false, true].map((allowActiveAbort) => ({
+            phase,
+            hasEmbeddedHandle,
+            allowActiveAbort,
+            ageMs: 720_000,
+          })),
+        ),
+      )
+      .concat([
+        {
+          phase: "preflight_compacting",
+          hasEmbeddedHandle: false,
+          allowActiveAbort: false,
+          ageMs: 915_000,
+        },
+        {
+          phase: "memory_flushing",
+          hasEmbeddedHandle: true,
+          allowActiveAbort: true,
+          ageMs: 915_000,
+        },
+      ]),
+  )(
+    "honors the configured $phase timeout with queued work (handle=$hasEmbeddedHandle, abort=$allowActiveAbort, age=$ageMs)",
+    async ({ phase, hasEmbeddedHandle, allowActiveAbort, ageMs }) => {
+      const sessionId = "maintenance-reply-session";
+      mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(sessionId);
+      mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(
+        hasEmbeddedHandle ? sessionId : undefined,
+      );
+      mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+      mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(hasEmbeddedHandle);
+      mocks.resolveEmbeddedAgentReplyRunPhase.mockReturnValue(phase);
+      mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({ lastProgressAgeMs: ageMs });
+      mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+      mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
+
+      const outcome = await recoverStuckDiagnosticSession({
+        sessionId,
+        sessionKey: "agent:main:main",
+        ageMs,
+        queueDepth: 1,
+        allowActiveAbort,
+        staleActiveProgressAbortMs: 360_000,
+        compactionSafetyTimeoutMs: 900_000,
+      });
+
+      const withinCompactionSafetyWindow = ageMs < 915_000;
+      expect(outcome.status).toBe(withinCompactionSafetyWindow ? "skipped" : "aborted");
+      expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledTimes(
+        withinCompactionSafetyWindow ? 0 : 1,
+      );
+    },
+  );
+
   it("keeps reply-only ownership with recent progress even with zero queued backlog", async () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("live-reply-session");
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);

@@ -888,7 +888,12 @@ describe("sanitizeChatHistoryMessages", () => {
     );
 
     expect(result).toEqual([
-      assistantHistoryMessage(`${prefix}\n...(truncated)...`, { timestamp: 1 }),
+      assistantHistoryMessage(`${prefix}\n...(truncated)...`, {
+        timestamp: 1,
+        // The display cap is recorded structurally so consumers need not sniff
+        // the in-band sentinel to know the row is a bounded preview.
+        __openclaw: { truncated: true, reason: "display-cap" },
+      }),
     ]);
   });
 
@@ -2074,6 +2079,7 @@ describe("projectRecentChatDisplayMessages", () => {
       assistantAudioAttachmentHistoryMessage(
         `${projectedVisibleText.slice(0, 24)}\n...(truncated)...`,
         1,
+        { __openclaw: { truncated: true, reason: "display-cap" } },
       ),
     ]);
   });
@@ -4375,7 +4381,7 @@ describe("gateway healthHandlers.status scope handling", () => {
         includeSensitive,
         includeChannelSummary: true,
       });
-      expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
     },
   );
 
@@ -4398,7 +4404,7 @@ describe("gateway healthHandlers.status scope handling", () => {
       includeSensitive: false,
       includeChannelSummary: false,
     });
-    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
   });
 });
 

@@ -7,13 +7,12 @@ import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
-import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import {
   buildRawContent,
   handleSidebarClick,
   handleSidebarKeydown,
   renderSidebarPanel,
-  upgradeSidebarMessage,
 } from "./chat-sidebar-content.ts";
 import {
   absoluteFilePath,
@@ -30,7 +29,6 @@ type ChatDetailPanelContent = Exclude<SidebarContent, { kind: "task" }>;
 
 class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) content: ChatDetailPanelContent | null = null;
-  @property({ attribute: false }) loadFullMessage?: SidebarFullMessageLoader | null = null;
   @property() basePath = "";
   @property() canvasPluginSurfaceUrl: string | null = null;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
@@ -61,7 +59,6 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     | { kind: "error"; message: string }
     | null = null;
 
-  private requestVersion = 0;
   private fileOperationVersion = 0;
   private showingRawText = false;
   private fileEditor: FileEditorViewHandle | null = null;
@@ -92,7 +89,6 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     if (!changed.has("content")) {
       return;
     }
-    this.requestVersion += 1;
     this.visibleContent = this.content;
     this.error = null;
     this.showingRawText = false;
@@ -149,23 +145,6 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         }
       });
     }
-    if (!changed.has("content") && !changed.has("loadFullMessage")) {
-      return;
-    }
-    const content = this.content;
-    if (!content || this.showingRawText) {
-      return;
-    }
-    const version = ++this.requestVersion;
-    void upgradeSidebarMessage(content, this.loadFullMessage).then((result) => {
-      if (!result || version !== this.requestVersion || this.content !== content) {
-        return;
-      }
-      if ("content" in result) {
-        this.visibleContent = result.content;
-      }
-      this.error = result.error;
-    });
   }
 
   private scrollToFileLine(content: FileSidebarContent) {
@@ -589,7 +568,6 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     if (!rawContent) {
       return;
     }
-    this.requestVersion += 1;
     this.showingRawText = true;
     this.visibleContent = rawContent;
     this.error = null;

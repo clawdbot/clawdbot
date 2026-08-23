@@ -196,8 +196,12 @@ export function logNonInteractiveOnboardingFailure(params: {
     detail: params.detail,
     diagnostics: params.diagnostics,
   });
-  const recoveryHint = recoveryHintForGatewayHealthFailure(classification);
-  const hints = [...(recoveryHint ? [recoveryHint] : []), ...(params.hints?.filter(Boolean) ?? [])];
+  const callerHints = params.hints?.filter(Boolean) ?? [];
+  // A caller-supplied Fix has phase context that the generic classification cannot know.
+  const recoveryHint = callerHints.some((hint) => hint.startsWith("Fix:"))
+    ? undefined
+    : recoveryHintForGatewayHealthFailure(classification);
+  const hints = [...(recoveryHint ? [recoveryHint] : []), ...callerHints];
   const output = redactSecrets({
     message: params.message,
     detail: params.detail,

@@ -102,6 +102,12 @@ function createEnvironmentSummarySchema() {
     lastSeenReason: Type.Optional(NonEmptyString),
     trust: Type.Optional(EnvironmentTrustSchema),
     capabilities: Type.Optional(Type.Array(NonEmptyString)),
+    invocableCommands: Type.Optional(
+      Type.Array(Type.String({ minLength: 1, maxLength: 128 }), {
+        maxItems: 128,
+        uniqueItems: true,
+      }),
+    ),
     desktop: Type.Optional(Type.Boolean()),
     issues: Type.Optional(Type.Array(RuntimeTargetIssueSchema, { minItems: 1, maxItems: 8 })),
     worker: Type.Optional(WorkerEnvironmentMetadataSchema),

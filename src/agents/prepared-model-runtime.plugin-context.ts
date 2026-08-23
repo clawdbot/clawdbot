@@ -1,6 +1,6 @@
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
@@ -74,10 +74,14 @@ function resolveColdMetadataSnapshot(
   input: PreparedModelRuntimeInput,
   env: NodeJS.ProcessEnv,
 ): PluginMetadataSnapshot {
-  const resolvedMetadataSnapshot = loadPluginMetadataSnapshot({
+  // Slot probing preserves the published Gateway generation identity; cold callers
+  // still fall through to a fresh metadata load.
+  const resolvedMetadataSnapshot = resolvePluginMetadataSnapshot({
     config: input.config,
     env,
-    ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+    ...(input.workspaceDir
+      ? { workspaceDir: input.workspaceDir, allowWorkspaceScopedCurrent: true }
+      : {}),
     ...(input.loadRuntimePlugins && input.runtimePluginSelections && input.workspaceDir
       ? {
           pluginIdScope: createAgentRuntimeMetadataPluginIdScope({

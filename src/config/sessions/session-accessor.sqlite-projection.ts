@@ -339,6 +339,7 @@ export async function applySessionEntryLifecycleMutation(params: {
         sessionKey,
         entry,
         expectedEntry,
+        routeContext,
         resetBoundaryPlan,
       } of projected.upsertedEntries) {
         const sameKeyRemoval = validatedRemovals.find(
@@ -377,6 +378,7 @@ export async function applySessionEntryLifecycleMutation(params: {
           allowStoredAliases: params.allowCanonicalRepair === true,
           preserveNodeSuggestions: params.allowCanonicalRepair === true,
           previousEntry: expectedCurrentEntry ?? null,
+          ...(routeContext !== undefined ? { routeContext } : {}),
         });
         const relatedRemovalKeys = validatedRemovals.flatMap((removal) => {
           const removedSessionId = removal.expectedEntry.sessionId;

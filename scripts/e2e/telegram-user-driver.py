@@ -34,6 +34,22 @@ def read_json(path):
         return {}
 
 
+def open_contained_file(root, relative):
+    """Opens a file under root, descending one component at a time from an open directory
+    descriptor so no symlink can be traversed and no directory can be swapped mid-walk.
+    Anchoring on descriptors is what keeps containment true without Linux-only /proc paths."""
+    parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        *directories, name = relative.parts
+        for directory in directories:
+            child = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            os.close(parent)
+            parent = child
+        return os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+    finally:
+        os.close(parent)
+
+
 def write_json_private(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.parent.chmod(stat.S_IRWXU)
@@ -764,24 +780,18 @@ class UserObserver:
 
     def resolve_media(self, value):
         relative = Path(value)
-        if relative.is_absolute() or ".." in relative.parts:
+        if relative.is_absolute() or not relative.parts or ".." in relative.parts:
             raise DriverError("Media must be inside the Mantis output directory.")
-        media = self.media_root / relative
         try:
-            descriptor = os.open(media, os.O_RDONLY | os.O_NOFOLLOW)
+            descriptor = open_contained_file(self.media_root, relative)
         except OSError as error:
             raise DriverError("Media must be a regular file inside the Mantis output directory.") from error
         try:
-            opened = Path(os.path.realpath(f"/proc/self/fd/{descriptor}"))
-            try:
-                opened.relative_to(self.media_root)
-            except ValueError as error:
-                raise DriverError("Media must be inside the Mantis output directory.") from error
             if not stat.S_ISREG(os.fstat(descriptor).st_mode):
                 raise DriverError("Media must be a regular file no larger than 20 MiB.")
             staging_dir = self.media_staging / f"upload-{secrets.token_hex(8)}"
             staging_dir.mkdir(mode=0o700)
-            target = staging_dir / opened.name
+            target = staging_dir / relative.name
             target_descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             try:
                 copied = 0
@@ -972,6 +982,22 @@ def command_serve(args):
         pid_path.unlink(missing_ok=True)
 
 
+def running_process_command_line(pid):
+    """Returns the argv pid is running under, or None once it is gone, so pid reuse cannot
+    redirect cleanup at an unrelated process group. Zombies hold their table entry until
+    they are reaped, so their pid cannot be reused and they count as already gone."""
+    result = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "state=", "-o", "args="],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    state, _, command_line = result.stdout.strip().partition(" ")
+    if result.returncode != 0 or not state or state.startswith("Z"):
+        return None
+    return command_line.strip()
+
+
 def command_terminate_observer(args):
     pid_path = Path(args.pid_file)
     try:
@@ -990,32 +1016,20 @@ def command_terminate_observer(args):
     pgid = int(value.get("pgid") or 0)
     if value.get("socket") != args.socket or pid <= 0 or pgid <= 0 or pgid == os.getpgrp():
         raise DriverError("Telegram observer pid file is invalid.")
-    process_stat = Path(f"/proc/{pid}/stat")
-
-    def running():
-        try:
-            return process_stat.read_text().rsplit(")", 1)[1].split()[0] not in {"X", "Z"}
-        except FileNotFoundError:
-            return False
-
-    try:
-        command_line = Path(f"/proc/{pid}/cmdline").read_bytes()
-    except FileNotFoundError:
-        command_line = b""
-    # Zombies retain their proc entry with an empty command line; they are not reused PIDs.
-    if not running():
+    command_line = running_process_command_line(pid)
+    if command_line is None:
         pid_path.unlink(missing_ok=True)
         return
-    if b"telegram-user-driver" not in command_line or args.socket.encode() not in command_line or b"serve" not in command_line:
+    if "telegram-user-driver" not in command_line or args.socket not in command_line or "serve" not in command_line:
         raise DriverError("Telegram observer process identity changed before cleanup.")
     try:
         os.killpg(pgid, signal.SIGTERM)
     except ProcessLookupError:
         pass
     deadline = time.monotonic() + 2
-    while running() and time.monotonic() < deadline:
+    while running_process_command_line(pid) is not None and time.monotonic() < deadline:
         time.sleep(0.05)
-    if running():
+    if running_process_command_line(pid) is not None:
         try:
             os.killpg(pgid, signal.SIGKILL)
         except ProcessLookupError:

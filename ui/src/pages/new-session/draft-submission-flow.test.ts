@@ -320,7 +320,7 @@ describe("DraftSubmissionFlow submit gates", () => {
           workspaceGit: false,
           model: { primary: "openai/gpt-5.6-sol" },
           agentRuntime: {
-            id: "codex",
+            id: "cloud-only",
             cloudPlacementSupported: true,
             devicePlacementSupported: false,
             source: "model",
@@ -351,10 +351,12 @@ describe("DraftSubmissionFlow submit gates", () => {
 
     expect(fixture.flow.submitBlock()).toEqual({
       gate: "device-runtime",
-      reason: "Needs the embedded runtime",
+      reason: "This runtime does not support paired devices",
     });
     expect(fixture.flow.canSubmit()).toBe(false);
-    expect(fixture.flow.submitDisabledReason()).toBe("Needs the embedded runtime");
+    expect(fixture.flow.submitDisabledReason()).toBe(
+      "This runtime does not support paired devices",
+    );
     expect(fixture.request).not.toHaveBeenCalledWith("node.list", expect.anything());
   });
 });

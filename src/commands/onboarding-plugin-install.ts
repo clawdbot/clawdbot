@@ -1286,7 +1286,6 @@ export async function ensureOnboardingPluginInstalled(params: {
             archivePath: cacheResolution.archivePath,
             prompter,
             runtime,
-            trustedSourceLinkedOfficialInstall: true,
             expectedArchiveSha256: cacheResolution.archiveSHA256,
           })
         : await installPluginFromNpmSpecWithProgress({

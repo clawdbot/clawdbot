@@ -443,7 +443,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     );
   });
 
-  it("installs a trusted official plugin from the exact prewarmed cache", async () => {
+  it("keeps an exact prewarmed cache hit on the ordinary archive security path", async () => {
     const archivePath = "/tmp/prewarmed/codex.tgz";
     const archiveSHA256 = "a".repeat(64);
     resolvePrewarmedPluginCache.mockReturnValue({
@@ -497,8 +497,8 @@ describe("ensureOnboardingPluginInstalled", () => {
       archivePath,
       expectedPluginId: "codex",
       expectedArchiveSha256: archiveSHA256,
-      trustedSourceLinkedOfficialInstall: true,
     });
+    expect(packCall).not.toHaveProperty("trustedSourceLinkedOfficialInstall");
     const [, recordUpdate] = readFirstMockCall(recordPluginInstall, "recordPluginInstall") as [
       OpenClawConfig,
       PluginInstallRecord,

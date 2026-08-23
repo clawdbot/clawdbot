@@ -474,7 +474,11 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
           isError: true,
         })
       : false;
-    commitInboundDedupeIfClaimed();
+    if (state.turnAdoptionState && !state.turnAdoptionState.adopted) {
+      releaseInboundDedupeIfClaimed();
+    } else {
+      commitInboundDedupeIfClaimed();
+    }
     recordProcessed("completed", { reason: "reply_operation_aborted" });
     markIdle("message_completed");
     state.completeDispatchReplyOperation();

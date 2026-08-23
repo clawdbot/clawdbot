@@ -12,6 +12,7 @@ import {
   getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntry,
   terminalizePendingDeliveryQueueEntry,
+  upsertDeliveryQueueEntry,
 } from "../infra/delivery-queue-sqlite.js";
 import {
   executeSqliteQuerySync,
@@ -44,6 +45,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   repairOpenClawStateDatabaseSchema,
   repairOpenClawStateDatabaseSchemaIfNeeded,
+  runWithOpenClawStateBusyTimeout,
   runOpenClawStateWriteTransaction,
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "./openclaw-state-db.js";
@@ -67,6 +69,12 @@ let canonicalStateDatabaseTemplatePath: string | undefined;
 
 function createTempStateDir(): string {
   return makeTempDir(stateDbTempDirs, "openclaw-state-db-");
+}
+
+function markStateDatabaseAsPreviousAppVersion(database: DatabaseSync): void {
+  database
+    .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
+    .run("2026.7.0");
 }
 
 function createInitialStateSchemaShape() {
@@ -1472,6 +1480,39 @@ afterEach(() => {
 });
 
 describe("openclaw state database", () => {
+  it.runIf(process.platform === "linux")(
+    "evicts a detached WAL family before reopening the shared state database",
+    () => {
+      vi.useFakeTimers();
+      try {
+        const stateDir = createTempStateDir();
+        const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+        const opened = openOpenClawStateDatabase(options);
+        expect(opened.walMaintenance.checkpoint()).toBe(true);
+        fs.unlinkSync(`${opened.path}-wal`);
+        fs.unlinkSync(`${opened.path}-shm`);
+
+        vi.advanceTimersByTime(30 * 60 * 1000);
+
+        expect(opened.db.isOpen).toBe(false);
+        expect(() => opened.db.prepare("PRAGMA schema_version").get()).toThrow();
+        const reopened = openOpenClawStateDatabase(options);
+        expect(reopened).not.toBe(opened);
+        expect(reopened.db.isOpen).toBe(true);
+        expect(() =>
+          reopened.db
+            .prepare(
+              "UPDATE schema_meta SET updated_at = updated_at + 1 WHERE meta_key = 'primary'",
+            )
+            .run(),
+        ).not.toThrow();
+      } finally {
+        closeOpenClawStateDatabaseForTest();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("resolves under the shared state database directory", () => {
     const stateDir = createTempStateDir();
 
@@ -2243,6 +2284,7 @@ describe("openclaw state database", () => {
     const { DatabaseSync } = requireNodeSqlite();
     const legacy = new DatabaseSync(databasePath);
     legacy.exec(`CREATE TABLE ${transientHistoryTable} (path TEXT PRIMARY KEY) STRICT;`);
+    markStateDatabaseAsPreviousAppVersion(legacy);
     legacy.close();
 
     const reopened = openOpenClawStateDatabase(options);
@@ -5119,6 +5161,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
             100,
           );
         }
+        markStateDatabaseAsPreviousAppVersion(database);
         database.close();
 
         const readStatuses = () =>
@@ -5928,6 +5971,35 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       | { journal_mode?: string }
       | undefined;
     expect(journalMode?.journal_mode?.toLowerCase()).toBe("wal");
+  });
+
+  it("reopens a canonical current schema while another connection holds the writer lock", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    upsertDeliveryQueueEntry({
+      queueName: "outbound",
+      entry: {
+        id: "pending-telegram-delivery",
+        enqueuedAt: 1,
+        retryCount: 0,
+      },
+      metadata: { channel: "telegram", target: "chat-1" },
+      stateDir,
+    });
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const writer = new DatabaseSync(databasePath);
+    writer.exec("PRAGMA journal_mode = WAL; BEGIN IMMEDIATE;");
+    try {
+      expect(runWithOpenClawStateBusyTimeout((database) => database.db.isOpen, options, 0)).toBe(
+        true,
+      );
+    } finally {
+      writer.exec("ROLLBACK;");
+      writer.close();
+    }
   });
 
   it("configures the busy timeout before a doctor schema repair transaction", () => {

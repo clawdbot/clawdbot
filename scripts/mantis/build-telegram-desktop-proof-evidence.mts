@@ -7,6 +7,10 @@ import { fileURLToPath } from "node:url";
 type CliArgs = Record<string, string>;
 type LaneName = "baseline" | "candidate";
 type LaneStatus = "blocked" | "fail" | "pass";
+type LaneFacts = {
+  blocked?: { reason?: string };
+  error?: string;
+};
 type SessionSummary = {
   artifacts?: Partial<
     Record<
@@ -19,6 +23,8 @@ type SessionSummary = {
   sutAttestation?: { lane?: string; sha?: string };
 };
 type LoadedLane = {
+  facts: LaneFacts;
+  factsPath: string;
   outputDir: string;
   repoRoot: string;
   status: string;
@@ -30,7 +36,7 @@ type EvidenceArtifact = {
   inline?: boolean;
   kind: string;
   label: string;
-  lane: LaneName;
+  lane: LaneName | "run";
   path: string;
   required?: boolean;
   targetPath: string;
@@ -43,13 +49,20 @@ type TelegramDesktopProofManifest = {
   summary: string;
   scenario: string;
   comparison: {
-    baseline: { expected: string; status: string; ref?: string; sha?: string };
-    candidate: { expected: string; status: string; ref?: string; sha?: string };
+    baseline: { detail?: string; expected: string; status: string; ref?: string; sha?: string };
+    candidate: { detail?: string; expected: string; status: string; ref?: string; sha?: string };
     outcome: LaneStatus;
     pass: boolean;
   };
   artifacts: EvidenceArtifact[];
 };
+
+const MAX_LANE_DETAIL_LENGTH = 300;
+const GRAPHEME_SEGMENTER = new Intl.Segmenter("en", { granularity: "grapheme" });
+const PASS_SUMMARY =
+  "Mantis captured native Telegram Desktop before/after GIF evidence with Convex-leased Telegram credentials.";
+const INCOMPLETE_SUMMARY =
+  "Mantis did not capture native Telegram Desktop before/after GIF proof. See the Baseline and Candidate lane details below.";
 
 const LANES = [
   {
@@ -59,7 +72,7 @@ const LANES = [
   },
   {
     altPrefix: "Candidate",
-    label: "This PR",
+    label: "This PR merged onto main",
     lane: "candidate",
   },
 ] satisfies ReadonlyArray<{
@@ -94,7 +107,11 @@ function requireArg(args: CliArgs, name: string): string {
   return value;
 }
 
-function readJson(filePath: string): SessionSummary {
+function readSessionSummary(filePath: string): SessionSummary {
+  return JSON.parse(readFileSync(filePath, "utf8"));
+}
+
+function readLaneFacts(filePath: string): LaneFacts {
   return JSON.parse(readFileSync(filePath, "utf8"));
 }
 
@@ -117,7 +134,9 @@ function copyArtifact({
   }
   const target = path.join(outputDir, targetPath);
   mkdirSync(path.dirname(target), { recursive: true });
-  copyFileSync(source, target);
+  if (path.resolve(source) !== path.resolve(target)) {
+    copyFileSync(source, target);
+  }
   return true;
 }
 
@@ -139,8 +158,11 @@ function loadLane({
   status?: string;
 }): LoadedLane {
   const summaryPath = path.join(outputDir, "telegram-user-crabbox-session-summary.json");
-  const summary = readJson(summaryPath);
+  const factsPath = path.join(outputDir, "mantis-lane-facts.json");
+  const summary = readSessionSummary(summaryPath);
   return {
+    facts: readLaneFacts(factsPath),
+    factsPath,
     outputDir,
     repoRoot,
     status: status || summary.status || "unknown",
@@ -188,6 +210,11 @@ function copyLaneArtifacts({
   });
   copyArtifact({
     outputDir,
+    source: lane.factsPath,
+    targetPath: `${prefix}/mantis-lane-facts.json`,
+  });
+  copyArtifact({
+    outputDir,
     required: false,
     source:
       typeof lane.summary.report === "string"
@@ -199,6 +226,30 @@ function copyLaneArtifacts({
 
 function laneStatus(lane: LoadedLane): LaneStatus {
   return lane.status === "pass" || lane.status === "blocked" ? lane.status : "fail";
+}
+
+function sanitizeLaneDetail(value: string | undefined): string | undefined {
+  const escaped = value
+    ?.trim()
+    .replace(/\s+/gu, " ")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("`", "&#96;");
+  if (!escaped) {
+    return undefined;
+  }
+  const characters = Array.from(GRAPHEME_SEGMENTER.segment(escaped), ({ segment }) => segment);
+  return characters.length > MAX_LANE_DETAIL_LENGTH
+    ? `${characters.slice(0, MAX_LANE_DETAIL_LENGTH - 1).join("")}…`
+    : escaped;
+}
+
+function laneDetail(lane: LoadedLane, status: LaneStatus): string | undefined {
+  if (status === "blocked") {
+    return sanitizeLaneDetail(lane.facts.blocked?.reason);
+  }
+  return status === "fail" ? sanitizeLaneDetail(lane.facts.error) : undefined;
 }
 
 function requireLaneAttestation(lane: LoadedLane, expectedLane: LaneName, expectedSha: string) {
@@ -257,6 +308,13 @@ function laneArtifactEntries(statuses: Record<LaneName, LaneStatus>): EvidenceAr
       targetPath: `${lane}/summary.json`,
     },
     {
+      kind: "metadata",
+      label: `${label} lane facts`,
+      lane,
+      path: `${lane}/mantis-lane-facts.json`,
+      targetPath: `${lane}/mantis-lane-facts.json`,
+    },
+    {
       kind: "report",
       label: `${label} session report`,
       lane,
@@ -289,6 +347,8 @@ function buildTelegramDesktopProofManifest({
 }): TelegramDesktopProofManifest {
   const baselineStatus = laneStatus(baseline);
   const candidateStatus = laneStatus(candidate);
+  const baselineDetail = laneDetail(baseline, baselineStatus);
+  const candidateDetail = laneDetail(candidate, candidateStatus);
   const outcome =
     baselineStatus === "fail" || candidateStatus === "fail"
       ? "fail"
@@ -299,17 +359,18 @@ function buildTelegramDesktopProofManifest({
     schemaVersion: 1,
     id: "telegram-desktop-proof",
     title: "Mantis Telegram Desktop Proof",
-    summary:
-      "Mantis captured native Telegram Desktop before/after GIF evidence with Convex-leased Telegram credentials.",
+    summary: outcome === "pass" ? PASS_SUMMARY : INCOMPLETE_SUMMARY,
     scenario: scenarioLabel || "telegram-desktop-proof",
     comparison: {
       baseline: {
+        ...(baselineDetail ? { detail: baselineDetail } : {}),
         ...(baselineSha ? { sha: baselineSha } : {}),
         ...(baselineRef ? { ref: baselineRef } : {}),
         expected: "baseline visual proof captured",
         status: baselineStatus,
       },
       candidate: {
+        ...(candidateDetail ? { detail: candidateDetail } : {}),
         ...(candidateSha ? { sha: candidateSha } : {}),
         ...(candidateRef ? { ref: candidateRef } : {}),
         expected: "candidate visual proof captured",
@@ -318,7 +379,18 @@ function buildTelegramDesktopProofManifest({
       outcome,
       pass: outcome === "pass",
     },
-    artifacts: laneArtifactEntries({ baseline: baselineStatus, candidate: candidateStatus }),
+    artifacts: [
+      ...laneArtifactEntries({ baseline: baselineStatus, candidate: candidateStatus }),
+      {
+        inline: false,
+        kind: "attachment",
+        label: "Recipe suggestion",
+        lane: "run",
+        path: "recipe-suggestion.md",
+        required: false,
+        targetPath: "recipe-suggestion.md",
+      },
+    ],
   };
 }
 
@@ -351,6 +423,12 @@ export function writeTelegramDesktopProofEvidence(rawArgs: string[] = process.ar
   requireLaneAttestation(candidate, "candidate", candidateSha);
   copyLaneArtifacts({ lane: baseline, laneName: "baseline", outputDir });
   copyLaneArtifacts({ lane: candidate, laneName: "candidate", outputDir });
+  copyArtifact({
+    outputDir,
+    required: false,
+    source: path.join(outputDir, "recipe-suggestion.md"),
+    targetPath: "recipe-suggestion.md",
+  });
   const manifest = buildTelegramDesktopProofManifest({
     baseline,
     baselineRef: args.baseline_ref,

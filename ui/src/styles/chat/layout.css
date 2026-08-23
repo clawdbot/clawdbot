@@ -3098,7 +3098,7 @@ button.chat-pr__diff {
   border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
   /* Split the inset evenly so the settings chip sits centered between the
      divider and the card edge instead of hugging the divider. */
-  padding: calc(var(--chat-box-inset) / 2) var(--chat-box-inset);
+  padding: calc(var(--chat-box-inset) / 2) max(var(--chat-box-inset), 8px);
 }
 
 .agent-chat__composer-meta,
@@ -4120,6 +4120,7 @@ button.chat-pr__diff {
     max-height: calc(7em + var(--chat-box-inset) + var(--chat-box-inset));
     padding-top: 10px;
     padding-bottom: 10px;
+    padding-left: var(--chat-box-inset);
     font-size: var(--control-ui-input-text-size);
   }
 
@@ -5529,6 +5530,10 @@ button.chat-pr__diff {
   stroke: currentColor;
 }
 
+.chat-controls__context-window-icon svg {
+  fill: none;
+}
+
 .chat-controls__fast-mode-copy {
   display: grid;
   gap: 1px;
@@ -5549,6 +5554,18 @@ button.chat-pr__diff {
   line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-controls__context-window-options {
+  --settings-control-height: 24px;
+
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}
+
+.chat-controls__context-window-options .settings-segmented__btn {
+  padding: 0 6px;
+  font-size: 10px;
 }
 
 .chat-controls__speed-toggle {

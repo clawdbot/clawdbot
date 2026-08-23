@@ -322,7 +322,7 @@ describe("ModelSetupPage catalog icons", () => {
       expect(request).toHaveBeenCalledWith(
         "openclaw.setup.prepare.start",
         { sessionId: expect.any(String), agentId: "main", authChoice: "llama-cpp" },
-        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        { timeoutMs: null },
       );
       expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
       expect(page.textContent).toContain("Downloading model: 25%");

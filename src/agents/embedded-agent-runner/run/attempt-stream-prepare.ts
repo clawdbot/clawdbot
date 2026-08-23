@@ -30,6 +30,7 @@ import {
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import {
@@ -349,14 +350,37 @@ export function prepareEmbeddedAttemptStream(input: {
         hideFromChannelProgress:
           "hideFromChannelProgress" in toolParams.tool &&
           toolParams.tool.hideFromChannelProgress === true,
-        execute: async () =>
-          await toolParams.tool.execute(
-            toolParams.toolCallId,
-            toolParams.input,
-            toolParams.signal ?? input.runAbortController.signal,
-            toolParams.onUpdate,
-            undefined as never,
-          ),
+        execute: async (onImplementationStart) => {
+          const signal = toolParams.signal ?? input.runAbortController.signal;
+          const preparer = getInternalToolExecutionPreparer(toolParams.tool);
+          if (!preparer) {
+            onImplementationStart();
+            return await toolParams.tool.execute(
+              toolParams.toolCallId,
+              toolParams.input,
+              signal,
+              toolParams.onUpdate,
+              undefined as never,
+            );
+          }
+          const prepared = await preparer({
+            toolCallId: toolParams.toolCallId,
+            args: toolParams.input,
+            signal,
+            onUpdate: toolParams.onUpdate,
+          });
+          try {
+            if (prepared.kind === "immediate") {
+              if (prepared.outcome.kind === "error") {
+                throw prepared.outcome.error;
+              }
+              return prepared.outcome.result;
+            }
+            return await prepared.execute(onImplementationStart);
+          } finally {
+            prepared.dispose();
+          }
+        },
       });
       // Settlement persists every queued projection. Validate the final result
       // first so a rejected hidden-tool value never enters session history.

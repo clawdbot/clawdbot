@@ -132,6 +132,11 @@ describe("renderIdentitySection", () => {
     expect(input?.accept).toBe("image/png,image/jpeg,image/webp");
     expect(input?.value).toBe("");
     expect(onAvatarSelect).toHaveBeenCalledWith(file);
+
+    render(renderIdentitySection(createProps({ busy: "display-name" })), container);
+    const chooser = container.querySelector<HTMLElement>(".identity-avatar-control .btn");
+    expect(chooser?.getAttribute("aria-disabled")).toBe("true");
+    expect(container.querySelector<HTMLInputElement>('input[type="file"]')?.disabled).toBe(true);
   });
 
   it("shows verified GitHub identity and explicit co-author credit", () => {

@@ -1200,7 +1200,6 @@ extensions/slack/src/monitor/message-handler/dispatch-helpers.ts	2
 extensions/slack/src/monitor/message-handler/dispatch-streaming.ts	6
 extensions/slack/src/monitor/message-handler/dispatch.ts	2
 extensions/slack/src/monitor/message-handler/prepare-dm-history.ts	1
-extensions/slack/src/monitor/message-handler/prepare-routing.ts	1
 extensions/slack/src/monitor/message-handler/prepare-thread-context.ts	1
 extensions/slack/src/monitor/message-handler/prepare.ts	3
 extensions/slack/src/monitor/message-handler/preview-finalize.ts	3
@@ -1298,7 +1297,7 @@ extensions/telegram/src/message-cache.ts	10
 extensions/telegram/src/miniapp/command.ts	1
 extensions/telegram/src/miniapp/init-data.ts	1
 extensions/telegram/src/miniapp/routes.ts	1
-extensions/telegram/src/monitor.ts	4
+extensions/telegram/src/monitor.ts	3
 extensions/telegram/src/network-config.ts	1
 extensions/telegram/src/network-errors.ts	8
 extensions/telegram/src/outbound-adapter.ts	5
@@ -1417,8 +1416,8 @@ extensions/whatsapp/src/inbound/extract.ts	10
 extensions/whatsapp/src/inbound/group-metadata-cache.ts	7
 extensions/whatsapp/src/inbound/ingress-lifecycle.ts	2
 extensions/whatsapp/src/inbound/media.ts	4
-extensions/whatsapp/src/inbound/message-delivery.ts	2
-extensions/whatsapp/src/inbound/message-enrichment.ts	4
+extensions/whatsapp/src/inbound/message-delivery.ts	1
+extensions/whatsapp/src/inbound/message-enrichment.ts	3
 extensions/whatsapp/src/inbound/outbound-mentions.ts	1
 extensions/whatsapp/src/inbound/send-api.ts	5
 extensions/whatsapp/src/inbound/socket-session.ts	5
@@ -2127,7 +2126,7 @@ src/agents/tools/image-tool.helpers.ts	2
 src/agents/tools/image-tool.ts	3
 src/agents/tools/in-process-gateway.ts	1
 src/agents/tools/media-generate-tool-actions-shared.ts	1
-src/agents/tools/media-tool-shared.ts	4
+src/agents/tools/media-tool-shared.ts	2
 src/agents/tools/message-tool-discovery.ts	3
 src/agents/tools/message-tool-execution.ts	4
 src/agents/tools/message-tool-visible-content.ts	9
@@ -3128,7 +3127,6 @@ src/gateway/worker-environments/node-worker-tunnel.ts	6
 src/gateway/worker-environments/node-worker-workspace-fallback.ts	2
 src/gateway/worker-environments/node-workspace-transfer-service.ts	1
 src/gateway/worker-environments/node-workspace-transfer-snapshot.ts	1
-src/gateway/worker-environments/placement-session-runtime.ts	1
 src/gateway/worker-environments/placement-state.ts	3
 src/gateway/worker-environments/placement-store.ts	1
 src/gateway/worker-environments/provider-lifecycle.ts	1
@@ -3456,7 +3454,7 @@ src/model-picker/apply-session-model-selection.ts	1
 src/node-host/config.ts	1
 src/node-host/desktop-stream-command.ts	2
 src/node-host/invoke-agent-cli-claude-params.ts	4
-src/node-host/invoke-agent-cli-claude.ts	2
+src/node-host/invoke-agent-cli-claude.ts	1
 src/node-host/invoke-file-commands.ts	1
 src/node-host/invoke-payload.ts	5
 src/node-host/invoke.ts	7
@@ -3708,7 +3706,7 @@ src/process/exec-spawn.ts	4
 src/process/exec.ts	3
 src/process/spawn-secret-input.ts	1
 src/process/spawn-utils.ts	1
-src/process/supervisor/adapters/child.ts	3
+src/process/supervisor/adapters/child.ts	2
 src/process/supervisor/adapters/pty.ts	1
 src/process/terminal-pty.ts	1
 src/process/windows-command.ts	1
@@ -3998,7 +3996,7 @@ ui/src/app/update-success-notice.ts	1
 ui/src/app/user-profile.ts	2
 ui/src/app/web-push.runtime.ts	3
 ui/src/components/agent-select.ts	3
-ui/src/components/app-sidebar-agent-menu.ts	4
+ui/src/components/app-sidebar-agent-menu.ts	2
 ui/src/components/app-sidebar-nav-menus.ts	6
 ui/src/components/app-sidebar-render.ts	4
 ui/src/components/app-sidebar-session-catalog-render.ts	4
@@ -4065,7 +4063,6 @@ ui/src/components/session-menu.ts	1
 ui/src/components/session-organizer-controller.ts	5
 ui/src/components/settings-sidebar.ts	3
 ui/src/components/settings-ui.ts	7
-ui/src/components/sidebar-agent-card.ts	1
 ui/src/components/sidebar-attention-dismissals.ts	1
 ui/src/components/sidebar-attention.ts	4
 ui/src/components/terminal/terminal-connection.ts	2
@@ -4235,7 +4232,7 @@ ui/src/pages/config/view-schema.ts	2
 ui/src/pages/config/view.ts	5
 ui/src/pages/connection/connection-page.ts	1
 ui/src/pages/connection/view.ts	3
-ui/src/pages/cron/view-runs.ts	5
+ui/src/pages/cron/view-runs.ts	3
 ui/src/pages/cron/view.ts	9
 ui/src/pages/custodian/custodian-session-store.ts	1
 ui/src/pages/custodian/custodian-surface.ts	2
@@ -4249,7 +4246,6 @@ ui/src/pages/logs/log-lines.ts	1
 ui/src/pages/logs/view.ts	2
 ui/src/pages/memory-import/view.ts	3
 ui/src/pages/model-providers/default-models-view.ts	1
-ui/src/pages/model-providers/model-providers-page.ts	1
 ui/src/pages/model-providers/view.ts	3
 ui/src/pages/model-setup/provider-picker.ts	3
 ui/src/pages/model-setup/view.ts	2

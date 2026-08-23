@@ -13,7 +13,7 @@ import {
 } from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
 import { enrollForeignReceipt } from "./foreign-receipt-monitor.js";
-import { hasScheduledNextRunAtMs, nextWakeAtMs } from "./jobs-scheduling.js";
+import { summarizeCronJobSchedule } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
 import {
   cleanupQueuedCronRunReservations,
@@ -60,13 +60,11 @@ export function armTimer(state: CronServiceState) {
     state.deps.log.debug({}, "cron: armTimer skipped - scheduler disabled");
     return;
   }
-  const nextAt = nextWakeAtMs(state);
+  const { nextWakeAtMs: nextAt, jobCount, enabledCount } = summarizeCronJobSchedule(state);
   if (!nextAt) {
-    const jobCount = state.store?.jobs.length ?? 0;
-    const enabledCount = state.store?.jobs.filter((j) => j.enabled).length ?? 0;
-    const withNextRun =
-      state.store?.jobs.filter((j) => j.enabled && hasScheduledNextRunAtMs(j.state.nextRunAtMs))
-        .length ?? 0;
+    // The summary uses the same scheduled-timestamp predicate as this branch,
+    // so no explicitly enabled job can have a next run here.
+    const withNextRun = 0;
     if (enabledCount > 0) {
       armRunningRecheckTimer(state);
       state.deps.log.debug(

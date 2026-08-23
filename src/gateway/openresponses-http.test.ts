@@ -6,13 +6,23 @@ import path from "node:path";
 import OpenAI from "openai";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  buildAgentRunTerminalOutcome,
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+} from "../agents/agent-run-terminal-outcome.js";
 import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
+import { createAgentCommandLifecycle } from "../agents/command/lifecycle.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  getAgentEventLifecycleGeneration,
+  onAgentEvent,
+} from "../infra/agent-events.js";
+import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -326,6 +336,28 @@ async function expectInvalidRequest(
 }
 
 describe("OpenResponses HTTP API (e2e)", () => {
+  it("binds the Gateway lifecycle resolver to response runs", async () => {
+    let resolveGatewayContext: ReturnType<typeof getGatewayContextResolver>;
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce(async (opts: unknown) => {
+      const admittedRunContext = {};
+      const onAdmittedRunContext = (
+        opts as { onAdmittedRunContext?: (context: object) => void | Promise<void> }
+      ).onAdmittedRunContext;
+      expect(onAdmittedRunContext).toBeTypeOf("function");
+      await onAdmittedRunContext?.(admittedRunContext);
+      resolveGatewayContext = getGatewayContextResolver(admittedRunContext);
+      return { payloads: [{ text: "hello" }] } as never;
+    });
+
+    const res = await postResponses(enabledPort, { model: "openclaw", input: "hi" });
+
+    expect(res.status).toBe(200);
+    await res.text();
+    const context = resolveGatewayContext?.();
+    expect(context?.resolveGatewayContext).toBe(resolveGatewayContext);
+  });
+
   it("returns a typed selection error unless an ownerless fleet request selects an agent", async () => {
     try {
       testState.agentsConfig = {
@@ -1831,6 +1863,116 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const res = await postResponses(enabledPort, { model: "openclaw", input: "hi" });
     expect(res.status).toBe(500);
   });
+
+  it.each(
+    [
+      {
+        label: "terminal metadata",
+        meta: { error: { kind: "incomplete_turn" as const, message: "private provider failure" } },
+        expectedPhase: "error" as const,
+      },
+      {
+        label: "an error stop reason",
+        meta: { stopReason: "error" },
+        expectedPhase: "end" as const,
+      },
+    ].flatMap((failure) =>
+      [false, true].map((producerTerminal) => ({
+        meta: failure.meta,
+        expectedPhase: failure.expectedPhase,
+        producerTerminal,
+        label: `${failure.label} ${producerTerminal ? "after" : "without"} a producer terminal`,
+      })),
+    ),
+  )(
+    "fails resolved streaming agent failures from $label",
+    async ({ meta, expectedPhase, producerTerminal }) => {
+      let runId: string | undefined;
+      const terminals: Array<{ phase: "end" | "error"; status: string }> = [];
+      const unsubscribe = onAgentEvent((event) => {
+        if (event.runId === runId && event.stream === "lifecycle") {
+          const phase = event.data?.phase;
+          if (phase === "end" || phase === "error") {
+            terminals.push({
+              phase,
+              status: buildAgentRunTerminalOutcomeFromLifecycleEvent({ phase, data: event.data })
+                .status,
+            });
+          }
+        }
+      });
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (options: unknown) => {
+        runId = (options as { runId?: string }).runId;
+        if (!runId) {
+          throw new Error("expected a streaming response run ID");
+        }
+        const result = {
+          payloads: [{ text: "Command may have changed state", isError: true }],
+          meta: {
+            durationMs: 0,
+            agentMeta: {
+              sessionId: "failed-stream-session",
+              provider: "openai",
+              model: "test-model",
+              usage: { input: 11, output: 7, total: 18 },
+            },
+            ...meta,
+          },
+        };
+        if (producerTerminal) {
+          const lifecycle = createAgentCommandLifecycle({
+            runId,
+            lifecycleGeneration: getAgentEventLifecycleGeneration,
+            startedAt: Date.now(),
+            state: {
+              currentTurnUserMessagePersisted: true,
+              lifecycleFinishing: false,
+              lifecycleEnded: false,
+            },
+          });
+          const terminal = {
+            metadata: {},
+            outcome: buildAgentRunTerminalOutcome({ status: "error", stopReason: "error" }),
+          };
+          if (lifecycle.resolveResultError(result, false)) {
+            lifecycle.emitResultError(result, false, terminal);
+          } else {
+            lifecycle.emitEnd(terminal);
+          }
+        }
+        return result;
+      }) as never);
+
+      try {
+        const client = new OpenAI({
+          apiKey: "test",
+          baseURL: `http://127.0.0.1:${enabledPort}/v1`,
+          defaultHeaders: { "x-openclaw-scopes": "operator.write" },
+          maxRetries: 0,
+        });
+        const stream = client.responses.stream({ model: "openclaw", input: "hi" });
+        const terminalEvents: string[] = [];
+        stream.on("response.completed", () => terminalEvents.push("response.completed"));
+        stream.on("response.failed", () => terminalEvents.push("response.failed"));
+
+        const response = await stream.finalResponse();
+        expect(response.status).toBe("failed");
+        expect(response.error).toEqual({ code: "api_error", message: "internal error" });
+        expect(response.usage).toMatchObject({
+          input_tokens: 11,
+          output_tokens: 7,
+          total_tokens: 18,
+        });
+        expect(terminalEvents).toEqual(["response.failed"]);
+        expect(terminals).toEqual([
+          { phase: producerTerminal ? expectedPhase : "error", status: "error" },
+        ]);
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
 
   it.each(
     STREAM_FAILURE_CASES.flatMap((failure) =>

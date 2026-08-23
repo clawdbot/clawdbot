@@ -975,6 +975,7 @@ describe("skills cli commands", () => {
   });
 
   it.each([
+    { flag: "--force", option: "force" },
     { flag: "--force-install", option: "forceInstall" },
     { flag: "--acknowledge-clawhub-risk", option: "acknowledgeClawHubRisk" },
   ])("passes $flag through for ClawHub skill updates", async ({ flag, option }) => {
@@ -988,6 +989,24 @@ describe("skills cli commands", () => {
         ...(option === "forceInstall" ? { slug: undefined } : {}),
         [option]: true,
       }),
+    );
+  });
+
+  it("prints --force retry guidance for blocked ClawHub skill updates", async () => {
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: false,
+        code: "force_required",
+        error:
+          'Skill "calendar" has local file changes. Updating replaces the installed skill directory.',
+      },
+    ]);
+
+    await expect(runCommand(["skills", "update", "calendar"])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain(
+      'Skill "calendar" has local file changes. Updating replaces the installed skill directory. Re-run with --force to update it anyway.',
     );
   });
 

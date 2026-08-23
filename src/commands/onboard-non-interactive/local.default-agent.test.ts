@@ -198,7 +198,6 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
               robby: {
                 name: "robby",
                 workspace,
-                agentDir: "/tmp/robby-agent",
               },
             },
           },
@@ -215,7 +214,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
         mode: "local",
         agentName: "robby",
         workspace,
-        authChoice: "skip",
+        authChoice: "demo-api-key",
         skipHooks: true,
         skipSkills: true,
         skipHealth: true,
@@ -225,6 +224,18 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       baseConfig: {},
     });
 
+    expect(mocks.applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: expect.objectContaining({
+          agentId: "robby",
+          agentDir: expect.stringMatching(/[/\\]agents[/\\]robby[/\\]agent$/),
+          workspaceDir: workspace,
+        }),
+      }),
+    );
+    expect(mocks.applyAuthChoice.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.ensureOnboardingAgent.mock.invocationCallOrder[0]!,
+    );
     expect(mocks.ensureOnboardingAgent).toHaveBeenCalledOnce();
     expect(mocks.ensureOnboardingAgent).toHaveBeenCalledWith(
       expect.objectContaining({ firstAgent: { name: "robby" } }),
@@ -306,8 +317,9 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       opts: {
         nonInteractive: true,
         mode: "local",
+        agentName: "robby",
         workspace: "/tmp/global-workspace",
-        authChoice: "skip",
+        authChoice: "demo-api-key",
         skipHooks: true,
         skipSkills: true,
         skipHealth: true,
@@ -318,6 +330,15 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       baseConfig,
     });
 
+    expect(mocks.applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: expect.objectContaining({
+          agentId: "ops",
+          agentDir: "/tmp/ops-agent",
+          workspaceDir: "/tmp/ops-workspace",
+        }),
+      }),
+    );
     expect(mocks.commitConfig).toHaveBeenCalledWith(
       expect.objectContaining({
         nextConfig: expect.objectContaining({

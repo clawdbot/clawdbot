@@ -586,7 +586,10 @@ function createConfigTransformHarness(
     });
     state.sourceConfig = withoutPluginInstallRecords(transformed.nextConfig);
     state.runtimeConfig = materializeRuntimeAgentListForTest(state.sourceConfig);
-    return { nextConfig: state.sourceConfig };
+    return {
+      nextConfig: state.sourceConfig,
+      followUp: { mode: "auto", requiresRestart: false },
+    };
   });
   const readSnapshot = vi.fn(async () => ({
     exists: true as const,
@@ -1345,7 +1348,10 @@ async function runCodexSetupWithFinalConfig(params: {
     });
     persistedConfig = withoutPluginInstallRecords(transformed.nextConfig);
     committed = true;
-    return { nextConfig: persistedConfig };
+    return {
+      nextConfig: persistedConfig,
+      followUp: { mode: "auto", requiresRestart: false },
+    };
   });
   const readConfigFileSnapshot = vi.fn(async () => {
     const runtimeConfig = committed ? persistedConfig : initialConfig;
@@ -4185,7 +4191,10 @@ describe("activateSetupInference", () => {
         pendingCodexInstalls.push(transformed.plugins?.installs?.codex);
         persistedConfig = withoutPluginInstallRecords(transformed);
         activationCommitted = true;
-        return { nextConfig: persistedConfig };
+        return {
+          nextConfig: persistedConfig,
+          followUp: { mode: "restart", reason: "plugin source changed", requiresRestart: true },
+        };
       },
     );
     const refreshPluginRegistry = vi.fn(async () => {
@@ -4232,7 +4241,7 @@ describe("activateSetupInference", () => {
         ensurePluginRegistryLoaded: ensureRegistryLoaded,
       },
     });
-    expect(result.ok).toBe(true);
+    expect(result).toMatchObject({ ok: true, gatewayRestartRequired: true });
     expect(runtimeLog).not.toHaveBeenCalled();
     expect(ensureCodex).toHaveBeenCalledOnce();
     expect(ensureCodex).toHaveBeenCalledWith(
@@ -4301,9 +4310,7 @@ describe("activateSetupInference", () => {
       "reload-active-registry",
     ]);
     expect(transformConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        afterWrite: { mode: "auto" },
-      }),
+      expect.not.objectContaining({ afterWrite: expect.anything() }),
     );
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: persistedConfig,
@@ -4668,7 +4675,10 @@ describe("activateSetupInference", () => {
         pendingInstallRecords.push(pending);
         installIndex = { ...installIndex, ...pending };
         persistedConfig = withoutPluginInstallRecords(transformed);
-        return { nextConfig: persistedConfig };
+        return {
+          nextConfig: persistedConfig,
+          followUp: { mode: "auto", requiresRestart: false },
+        };
       },
     );
 
@@ -5040,7 +5050,10 @@ describe("activateSetupInference", () => {
           committedInstallRecords.push(record);
         }
         currentConfig = withoutPluginInstallRecords(transformed.nextConfig);
-        return { nextConfig: currentConfig };
+        return {
+          nextConfig: currentConfig,
+          followUp: { mode: "auto", requiresRestart: false },
+        };
       },
     );
     const readConfigFileSnapshot = vi.fn(async () => {

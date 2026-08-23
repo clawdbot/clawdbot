@@ -523,6 +523,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           accountId: route.accountId,
           route: { agentId: route.agentId, sessionKey: route.sessionKey },
           ctxPayload,
+          // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
+          dispatchReplyFromConfig: deps.channelRuntime?.reply?.dispatchReplyFromConfig,
           record: {
             updateLastRoute: !entry.isGroup
               ? {
@@ -946,17 +948,20 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   return async (
     event: { event?: string; data?: string },
     turnAdoptionLifecycle?: SignalIngressLifecycle,
+    preparedPayload?: SignalReceivePayload,
   ): Promise<{ kind: "deferred" } | { kind: "failed-retryable"; error: unknown } | void> => {
     if (event.event !== "receive" || !event.data) {
       return;
     }
 
-    let payload: SignalReceivePayload | null;
-    try {
-      payload = JSON.parse(event.data) as SignalReceivePayload;
-    } catch (err) {
-      deps.runtime.error?.(`failed to parse event: ${String(err)}`);
-      return;
+    let payload: SignalReceivePayload | null = preparedPayload ?? null;
+    if (!preparedPayload) {
+      try {
+        payload = JSON.parse(event.data) as SignalReceivePayload;
+      } catch (err) {
+        deps.runtime.error?.(`failed to parse event: ${String(err)}`);
+        return;
+      }
     }
     if (payload?.exception?.message) {
       deps.runtime.error?.(`receive exception: ${payload.exception.message}`);

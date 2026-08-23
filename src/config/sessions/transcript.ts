@@ -391,6 +391,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   mediaUrls?: string[];
   content?: SessionTranscriptAssistantMessage["content"];
   idempotencyKey?: string;
+  runId?: string;
   deliveryMirror?: InternalSessionTranscriptDeliveryMirror;
   /** Optional override for store path (mostly for tests). */
   storePath?: string;
@@ -429,6 +430,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
       : {}),
     storePath: params.storePath,
     idempotencyKey: params.idempotencyKey,
+    runId: params.runId,
     updateMode: params.updateMode,
     config: params.config,
     ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
@@ -469,6 +471,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   message: SessionTranscriptAssistantMessage;
   idempotencyKey?: string;
+  runId?: string;
   storePath?: string;
   updateMode?: SessionTranscriptUpdateMode;
   config?: OpenClawConfig;
@@ -589,6 +592,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
           ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
           : {}),
         ...(params.config ? { config: params.config } : {}),
+        ...(params.runId ? { runId: params.runId } : {}),
         updateMode: params.updateMode ?? "inline",
         touchSessionEntry: true,
         messages: [

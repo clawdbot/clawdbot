@@ -204,20 +204,20 @@ export function renderConfig(props: ConfigProps) {
   function renderAccordionNav() {
     return html`
       <div class="config-accordion-nav">
-        ${allCategories.map(
-          (category) => html`
+        ${allCategories.map((category) => {
+          const expanded = category.sections.some((section) => section.key === props.activeSection);
+          const panelId = `config-accordion-panel-${category.id}`;
+          return html`
             <div class="config-accordion-group">
               <button
-                class="config-accordion-group__header ${props.activeSection != null &&
-                category.sections.some((section) => section.key === props.activeSection)
+                class="config-accordion-group__header ${expanded
                   ? "config-accordion-group__header--active"
                   : ""}"
+                aria-expanded=${expanded ? "true" : "false"}
+                aria-controls=${panelId}
                 @click=${(event: Event) => {
                   const firstKey = category.sections[0]?.key ?? null;
-                  const isCurrentlyInGroup = category.sections.some(
-                    (section) => section.key === props.activeSection,
-                  );
-                  props.onSectionChange(isCurrentlyInGroup ? null : firstKey);
+                  props.onSectionChange(expanded ? null : firstKey);
                   resetContentScroll(event.currentTarget);
                 }}
               >
@@ -226,9 +226,7 @@ export function renderConfig(props: ConfigProps) {
                 </span>
                 <span>${category.label}</span>
                 <svg
-                  class="config-accordion-group__chevron ${category.sections.some(
-                    (section) => section.key === props.activeSection,
-                  )
+                  class="config-accordion-group__chevron ${expanded
                     ? "config-accordion-group__chevron--open"
                     : ""}"
                   viewBox="0 0 24 24"
@@ -241,29 +239,27 @@ export function renderConfig(props: ConfigProps) {
                   <polyline points="6 9 12 15 18 9"></polyline>
                 </svg>
               </button>
-              ${category.sections.some((section) => section.key === props.activeSection)
-                ? html`<div class="config-accordion-group__items">
-                    ${category.sections.map(
-                      (section) => html`<button
-                        class="config-accordion-group__item ${props.activeSection === section.key
-                          ? "config-accordion-group__item--active"
-                          : ""}"
-                        @click=${(event: Event) => {
-                          props.onSectionChange(section.key);
-                          resetContentScroll(event.currentTarget);
-                        }}
-                      >
-                        <span class="config-accordion-group__item-icon">
-                          ${getSectionIcon(section.key)}
-                        </span>
-                        ${section.label}
-                      </button>`,
-                    )}
-                  </div>`
-                : nothing}
+              <div id=${panelId} class="config-accordion-group__items" ?hidden=${!expanded}>
+                ${category.sections.map(
+                  (section) => html`<button
+                    class="config-accordion-group__item ${props.activeSection === section.key
+                      ? "config-accordion-group__item--active"
+                      : ""}"
+                    @click=${(event: Event) => {
+                      props.onSectionChange(section.key);
+                      resetContentScroll(event.currentTarget);
+                    }}
+                  >
+                    <span class="config-accordion-group__item-icon">
+                      ${getSectionIcon(section.key)}
+                    </span>
+                    ${section.label}
+                  </button>`,
+                )}
+              </div>
             </div>
-          `,
-        )}
+          `;
+        })}
       </div>
     `;
   }

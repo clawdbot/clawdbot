@@ -1805,57 +1805,65 @@ describe("stuck session diagnostics threshold", () => {
     expect(s2Call!.allowActiveAbort).toBeUndefined();
   });
 
-  it("preserves queued idle work when abort reset releases active lane work", async () => {
-    const events: DiagnosticEventPayload[] = [];
-    const recoverStuckSession = vi.fn().mockResolvedValue({
+  it.each([
+    {
       status: "aborted",
       action: "abort_embedded_run",
-      sessionId: "s1",
-      sessionKey: "main",
-      activeSessionId: "s1",
-      activeWorkKind: "embedded_run",
       aborted: true,
       drained: false,
       forceCleared: true,
-      released: 1,
-      queuedCount: 1,
-    });
-    const unsubscribe = onDiagnosticEvent((event) => {
-      events.push(event);
-    });
-    try {
-      startDiagnosticHeartbeat(
-        {
-          diagnostics: {
-            enabled: true,
+    },
+    { status: "released", action: "release_lane", reason: "stale_lane_task" },
+  ] as const)(
+    "preserves queued idle work when $status recovery releases active lane work",
+    async (outcome) => {
+      const events: DiagnosticEventPayload[] = [];
+      const recoverStuckSession = vi.fn().mockResolvedValue({
+        sessionId: "s1",
+        sessionKey: "main",
+        activeSessionId: "s1",
+        activeWorkKind: "embedded_run",
+        released: 1,
+        queuedCount: 1,
+        ...outcome,
+      });
+      const unsubscribe = onDiagnosticEvent((event) => {
+        events.push(event);
+      });
+      try {
+        startDiagnosticHeartbeat(
+          {
+            diagnostics: {
+              enabled: true,
+            },
           },
+          { recoverStuckSession },
+        );
+        logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+        markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+        logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "idle" });
+
+        vi.advanceTimersByTime(59_000);
+        logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test-followup" });
+        vi.advanceTimersByTime(1_000);
+        await Promise.resolve();
+      } finally {
+        unsubscribe();
+      }
+
+      requireMatchingRecord(
+        events,
+        {
+          type: "session.state",
+          state: "idle",
+          reason: `stuck_recovery:${outcome.status}`,
+          queueDepth: 1,
         },
-        { recoverStuckSession },
+        `idle ${outcome.status} preserves queued work`,
       );
-      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
-      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
-      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "idle" });
-
-      vi.advanceTimersByTime(59_000);
-      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test-followup" });
-      vi.advanceTimersByTime(1_000);
-      await Promise.resolve();
-    } finally {
-      unsubscribe();
-    }
-
-    requireMatchingRecord(
-      events,
-      {
-        type: "session.state",
-        state: "idle",
-        reason: "stuck_recovery:aborted",
-        queueDepth: 1,
-      },
-      "idle abort preserves queued work",
-    );
-    expect(getDiagnosticSessionState({ sessionId: "s1", sessionKey: "main" }).queueDepth).toBe(1);
-  });
+      expect(getDiagnosticSessionState({ sessionId: "s1", sessionKey: "main" }).queueDepth).toBe(1);
+    },
+  );
 
   it("marks diagnostic session state idle only after a mutating recovery outcome", async () => {
     const events: DiagnosticEventPayload[] = [];
