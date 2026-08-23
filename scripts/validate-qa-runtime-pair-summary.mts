@@ -62,17 +62,16 @@ const FROZEN_RUNTIME_PAIR_MANIFESTS = new Map([
   ["311047822ecdde24e824d839ab105ef08f17be00:core", FROZEN_CORE_RUNTIME_PAIR_MANIFEST],
   ["c37af96b18776fecc9e24268f27fc89b563481bf:core", FROZEN_CORE_RUNTIME_PAIR_MANIFEST],
 ]);
+const FROZEN_STATUSLESS_CORE_RUNTIME_PAIR_PROFILE = {
+  allowMissingRunStatus: true,
+  scenarioIds: FROZEN_CORE_RUNTIME_PAIR_MANIFEST.scenarioIds.filter(
+    (scenarioId) =>
+      scenarioId !== "codex-plugin-pinned-new" && scenarioId !== "codex-plugin-pinned-old",
+  ),
+};
 const FROZEN_RUNTIME_PAIR_COMPATIBILITY_PROFILES = new Map([
-  [
-    "ee5ead24b1b46a3560f28f8d57e0afcd911acacb:core",
-    {
-      allowMissingRunStatus: true,
-      scenarioIds: FROZEN_CORE_RUNTIME_PAIR_MANIFEST.scenarioIds.filter(
-        (scenarioId) =>
-          scenarioId !== "codex-plugin-pinned-new" && scenarioId !== "codex-plugin-pinned-old",
-      ),
-    },
-  ],
+  ["ee5ead24b1b46a3560f28f8d57e0afcd911acacb:core", FROZEN_STATUSLESS_CORE_RUNTIME_PAIR_PROFILE],
+  ["9a83cbf29d8f637cbe566d809811cb6a13c93664:core", FROZEN_STATUSLESS_CORE_RUNTIME_PAIR_PROFILE],
 ]);
 
 type RuntimePairValidationOptions = {
