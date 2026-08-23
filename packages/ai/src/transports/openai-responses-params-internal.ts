@@ -17,6 +17,7 @@ import {
   type OpenAIToolProjection,
 } from "../providers/openai-tool-projection.js";
 import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-schema.js";
+import { clampMaxTokensToModel } from "../providers/simple-options.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { resolveOpenAIStrictToolSetting } from "./host-policy.js";
 import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-replay.js";
@@ -290,7 +291,9 @@ export function buildOpenAIResponsesParams(
       : {}),
     ...(metadata ? { metadata } : {}),
   };
-  const effectiveMaxTokens = options?.maxTokens || model.maxTokens;
+  // The model catalog owns output capacity; an authored request cap above it
+  // would make strict endpoints deterministically reject the whole turn.
+  const effectiveMaxTokens = clampMaxTokensToModel(model, options?.maxTokens || model.maxTokens);
   if (effectiveMaxTokens) {
     params.max_output_tokens = effectiveMaxTokens;
   }
