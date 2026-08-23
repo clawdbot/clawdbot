@@ -639,6 +639,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
         <span class="sidebar-issues-panel__icon" aria-hidden="true">${icons[item.icon]}</span>
         <span class="sidebar-issues-panel__content">
           <span class="sidebar-issues-panel__entity" title=${item.label}>${item.label}</span>
+          <span class="sidebar-issues-panel__state" title=${item.detail}>${item.detail}</span>
         </span>
         <span class="sidebar-issues-panel__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </summary>

@@ -15,7 +15,7 @@ import {
 } from "../app/update-overlay-helpers.ts";
 import { t } from "../i18n/index.ts";
 import { isCronJobActiveFailure, isCronJobRunning } from "../lib/cron-status.ts";
-import { clampText, formatDurationHuman } from "../lib/format.ts";
+import { clampText, formatDurationHuman, formatTimeAgo } from "../lib/format.ts";
 import { isMonitoredAuthProvider, listEffectiveModelAuthProviders } from "../lib/model-auth.ts";
 import type { CustodianAlert } from "./custodian-alert-contract.ts";
 import type { IconName } from "./icons.ts";
@@ -38,6 +38,7 @@ export type SidebarAttentionItem = {
   severity: "error" | "warning";
   icon: IconName;
   label: string;
+  detail: string;
   action: SidebarAttentionAction;
   /** Pending approvals stay attached to their canonical overlay queue so the
    * Inbox panel can render the real decision/details surface inline. */
@@ -67,6 +68,10 @@ export function buildSidebarAttentionItems(params: {
   const items: SidebarAttentionItem[] = [];
   const signatureOf = (ids: readonly string[]) => ids.toSorted().join("\n");
   const cronJobName = (job: CronJob) => job.name?.trim() || job.id;
+  const incidentContext = (origin: string | undefined, timestampMs: number) =>
+    [origin?.trim(), formatTimeAgo(Math.max(0, params.now - timestampMs))]
+      .filter(Boolean)
+      .join(" · ");
   const boundedQuestion = (question: string) => clampText(question, ALERT_QUESTION_MAX_LENGTH);
   const explainedItem = (
     item: Omit<SidebarAttentionItem, "action">,
@@ -116,6 +121,7 @@ export function buildSidebarAttentionItems(params: {
           severity: "warning",
           icon: "download",
           label: targetLabel ?? update.latestVersion,
+          detail: `${update.channel} · ${t("updates.sidebar.availableSummary")}`,
           signature,
         },
         {
@@ -137,6 +143,9 @@ export function buildSidebarAttentionItems(params: {
       label: t(count === 1 ? "attention.pendingApproval" : "attention.pendingApprovals", {
         count: String(count),
       }),
+      detail: formatTimeAgo(
+        Math.max(0, params.now - Math.max(...params.approvalQueue.map((item) => item.createdAtMs))),
+      ),
       action: { kind: "openApprovals" },
       approvalQueue: params.approvalQueue,
       signature: signatureOf(params.approvalQueue.map((approval) => approval.id)),
@@ -156,7 +165,17 @@ export function buildSidebarAttentionItems(params: {
     const label = t("attention.cronFailed", { job: jobName });
     items.push(
       explainedItem(
-        { kind: "cronFailed", severity: "error", icon: "clock", label, signature: job.id },
+        {
+          kind: "cronFailed",
+          severity: "error",
+          icon: "clock",
+          label,
+          detail: incidentContext(
+            job.agentId ?? job.owner?.agentId,
+            job.state?.lastRunAtMs ?? job.updatedAtMs,
+          ),
+          signature: job.id,
+        },
         {
           title: label,
           facts: [fact],
@@ -184,7 +203,17 @@ export function buildSidebarAttentionItems(params: {
     const label = t("attention.cronOverdue", { job: jobName });
     items.push(
       explainedItem(
-        { kind: "cronOverdue", severity: "warning", icon: "clock", label, signature },
+        {
+          kind: "cronOverdue",
+          severity: "warning",
+          icon: "clock",
+          label,
+          detail: incidentContext(
+            job.agentId ?? job.owner?.agentId,
+            job.state?.nextRunAtMs ?? job.updatedAtMs,
+          ),
+          signature,
+        },
         {
           title: label,
           facts: [fact],
@@ -211,9 +240,21 @@ export function buildSidebarAttentionItems(params: {
     const label = t("attention.modelAuthExpired", {
       providers: expired.map((provider) => provider.displayName).join(", "),
     });
+    const detail = [
+      expired.map((provider) => provider.displayName).join(", "),
+      params.modelAuthAgentId?.trim() ||
+        formatTimeAgo(Math.max(0, params.now - (params.modelAuthStatus?.ts ?? params.now))),
+    ].join(" · ");
     items.push(
       explainedItem(
-        { kind: "modelAuthExpired", severity: "error", icon: "plug", label, signature },
+        {
+          kind: "modelAuthExpired",
+          severity: "error",
+          icon: "plug",
+          label,
+          detail,
+          signature,
+        },
         {
           title: label,
           facts,
