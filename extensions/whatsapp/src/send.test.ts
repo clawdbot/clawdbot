@@ -17,6 +17,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 const loadWebMediaMock = vi.fn();
 let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
+let sendWhatsAppUploadFile: typeof import("./send.js").sendWhatsAppUploadFile;
 let sendPollWhatsApp: typeof import("./send.js").sendPollWhatsApp;
 let sendReactionWhatsApp: typeof import("./send.js").sendReactionWhatsApp;
 let sendTypingWhatsApp: typeof import("./send.js").sendTypingWhatsApp;
@@ -81,8 +82,13 @@ describe("web outbound", () => {
   );
 
   beforeAll(async () => {
-    ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp, sendTypingWhatsApp } =
-      await import("./send.js"));
+    ({
+      sendMessageWhatsApp,
+      sendWhatsAppUploadFile,
+      sendPollWhatsApp,
+      sendReactionWhatsApp,
+      sendTypingWhatsApp,
+    } = await import("./send.js"));
     const { resetLogger: loadedResetLogger, setLoggerOverride: loadedSetLoggerOverride } =
       await import("openclaw/plugin-sdk/runtime-env");
     resetLogger = loadedResetLogger;
@@ -592,6 +598,179 @@ describe("web outbound", () => {
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "application/pdf", {
       fileName: "file.pdf",
     });
+  });
+
+  it.each([
+    {
+      name: "a loaded document",
+      source: "/tmp/generated-attachment.bin",
+      loadedMedia: {
+        contentType: "application/pdf",
+        kind: "document",
+        fileName: "generated-attachment.bin",
+      },
+      requestedFileName: "Quarterly Report.pdf",
+      expectedFileName: "Quarterly Report.pdf",
+      expectedMimeType: "application/pdf",
+      forceDocument: false,
+    },
+    {
+      name: "a forced image document",
+      source: "https://example.com/download?id=42",
+      loadedMedia: {
+        contentType: "image/png",
+        kind: "image",
+        fileName: "download",
+      },
+      requestedFileName: "Photo.png",
+      expectedFileName: "Photo.png",
+      expectedMimeType: "image/png",
+      forceDocument: true,
+    },
+    {
+      name: "an opaque image inferred from its requested filename",
+      source: "https://example.com/blob",
+      loadedMedia: {
+        contentType: "application/octet-stream",
+        kind: "document",
+        fileName: "blob",
+      },
+      requestedFileName: "Receipt.png",
+      expectedFileName: "Receipt.png",
+      expectedMimeType: "image/png",
+      forceDocument: true,
+    },
+    {
+      name: "a requested document filename with control characters",
+      source: "/tmp/generated-attachment.bin",
+      loadedMedia: {
+        contentType: "application/pdf",
+        kind: "document",
+        fileName: "generated-attachment.bin",
+      },
+      requestedFileName: "Quarterly\r\nReport.pdf",
+      expectedFileName: "QuarterlyReport.pdf",
+      expectedMimeType: "application/pdf",
+      forceDocument: false,
+    },
+  ])(
+    "preserves the requested upload filename for $name",
+    async ({
+      source,
+      loadedMedia,
+      requestedFileName,
+      expectedFileName,
+      expectedMimeType,
+      forceDocument,
+    }) => {
+      const buffer = Buffer.from("attachment");
+      const mediaReadFile = vi.fn(async () => buffer);
+      loadWebMediaMock.mockResolvedValueOnce({ buffer, ...loadedMedia });
+
+      await sendWhatsAppUploadFile("+1555", "attachment", {
+        verbose: false,
+        cfg: WHATSAPP_TEST_CFG,
+        mediaUrl: source,
+        fileName: requestedFileName,
+        forceDocument,
+        mediaLocalRoots: ["/tmp/approved"],
+        mediaReadFile,
+      });
+
+      expect(loadWebMediaMock).toHaveBeenCalledWith(source, {
+        maxBytes: 50 * 1024 * 1024,
+        localRoots: ["/tmp/approved"],
+        readFile: mediaReadFile,
+        hostReadCapability: true,
+      });
+      expect(sendMessage).toHaveBeenLastCalledWith(
+        "+1555",
+        "attachment",
+        buffer,
+        expectedMimeType,
+        {
+          ...(forceDocument ? { asDocument: true } : {}),
+          fileName: expectedFileName,
+        },
+      );
+    },
+  );
+
+  it.each([
+    {
+      name: "a local image despite a misleading document filename",
+      source: "/tmp/upload.bin",
+      contentType: "image/png",
+      fileName: "misleading.pdf",
+      expectedSendOptions: undefined,
+    },
+    {
+      name: "a remote video despite its generic loader classification",
+      source: "https://example.com/opaque-video",
+      contentType: "video/mp4",
+      fileName: "video.bin",
+      expectedSendOptions: undefined,
+    },
+    {
+      name: "a remote PDF as a document",
+      source: "https://example.com/opaque-document",
+      contentType: "application/pdf",
+      fileName: "report.pdf",
+      expectedSendOptions: { fileName: "report.pdf" },
+    },
+    {
+      name: "a forced local image document",
+      source: "/tmp/upload.bin",
+      contentType: "image/png",
+      fileName: "photo.png",
+      forceDocument: true,
+      expectedSendOptions: { asDocument: true, fileName: "photo.png" },
+    },
+  ])(
+    "uses explicit upload MIME metadata to deliver $name",
+    async ({ source, contentType, fileName, forceDocument, expectedSendOptions }) => {
+      const buffer = Buffer.from("attachment");
+      loadWebMediaMock.mockResolvedValueOnce({
+        buffer,
+        contentType: "application/octet-stream",
+        kind: "document",
+        fileName: "download.bin",
+      });
+
+      await sendWhatsAppUploadFile("+1555", "attachment", {
+        verbose: false,
+        cfg: WHATSAPP_TEST_CFG,
+        mediaUrl: source,
+        contentType,
+        fileName,
+        forceDocument,
+      });
+
+      if (expectedSendOptions) {
+        expect(sendMessage).toHaveBeenLastCalledWith(
+          "+1555",
+          "attachment",
+          buffer,
+          contentType,
+          expectedSendOptions,
+        );
+      } else {
+        expect(sendMessage).toHaveBeenLastCalledWith("+1555", "attachment", buffer, contentType);
+      }
+    },
+  );
+
+  it("keeps data-URL image bytes on the native image transport", async () => {
+    const buffer = Buffer.from("image");
+
+    await sendWhatsAppUploadFile("+1555", "image caption", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaPayload: { buffer, contentType: "image/png" },
+    });
+
+    expect(hoisted.loadOutboundMediaFromUrl).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "image caption", buffer, "image/png");
   });
 
   it.each([
