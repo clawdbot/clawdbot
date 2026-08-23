@@ -239,6 +239,8 @@ function sameChatItemsStructuralInput(
 ): boolean {
   return (
     previous.sessionKey === next.sessionKey &&
+    previous.archiveNotice?.key === next.archiveNotice?.key &&
+    previous.archiveNotice?.label === next.archiveNotice?.label &&
     previous.runId === next.runId &&
     previous.locale === next.locale &&
     previous.messages === next.messages &&

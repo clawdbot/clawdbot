@@ -73,6 +73,7 @@ import {
 export type BuildChatItemsProps = {
   paneId: string;
   sessionKey: string;
+  archiveNotice?: Extract<ChatItem, { kind: "notice" }>;
   runId?: string | null;
   /** Invalidates cached display copy when the active UI language changes. */
   locale?: string;
@@ -416,6 +417,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
   };
   if (!searchFiltering) {
+    if (props.archiveNotice) {
+      timestampedProjectionItems.push(props.archiveNotice);
+    }
     for (const notice of props.guardianNotices ?? []) {
       const item = buildGuardianNoticeItem(notice);
       timestampedProjectionItems.push(item);

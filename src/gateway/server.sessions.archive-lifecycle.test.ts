@@ -710,10 +710,10 @@ test("sessions.patch fails closed when active worker inference has no archive dr
   expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
 });
 
-test("sessions.patch retains the archive drain through the ordered audit append", async () => {
+test("sessions.patch releases the archive drain without appending a transcript message", async () => {
   const { storePath } = await createSessionStoreDir();
-  const sessionKey = "agent:main:archive-drain-audit";
-  const sessionId = "session-archive-drain-audit";
+  const sessionKey = "agent:main:archive-drain-no-transcript";
+  const sessionId = "session-archive-drain-no-transcript";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
   const release = vi.fn();
   const append = vi.spyOn(SessionManager, "appendMessageToTranscript");
@@ -739,9 +739,8 @@ test("sessions.patch retains the archive drain through the ordered audit append"
     );
 
     expect(archived.ok).toBe(true);
-    expect(append).toHaveBeenCalledOnce();
+    expect(append).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledOnce();
-    expect(append.mock.invocationCallOrder[0]).toBeLessThan(release.mock.invocationCallOrder[0]!);
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
   } finally {
     append.mockRestore();
