@@ -1,9 +1,11 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
+import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
+import { syncTabGroupLabel } from "../../../components/web-awesome-tabs.ts";
 import { t } from "../../../i18n/index.ts";
 import type { EditorId } from "../../../lib/editor-links.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
@@ -298,26 +300,36 @@ export function renderSidebarFile(
         : nothing}
       ${markdownFile && controls
         ? html`
-            <div class="sidebar-file-view__tabs" role="tablist" aria-label=${content.name}>
-              <button
+            <wa-tab-group
+              class="sidebar-file-view__tabs"
+              aria-label=${content.name}
+              .active=${previewing ? "preview" : "source"}
+              activation="manual"
+              without-scroll-controls
+              @wa-tab-show=${(event: CustomEvent<{ name: string }>) => {
+                if (event.detail.name === "source" || event.detail.name === "preview") {
+                  controls.onViewModeChange(event.detail.name);
+                }
+              }}
+              ${ref((element) => syncTabGroupLabel(element, content.name))}
+            >
+              <wa-tab
+                slot="nav"
                 class="sidebar-file-view__tab"
-                type="button"
-                role="tab"
-                aria-selected=${String(!previewing)}
-                @click=${() => controls.onViewModeChange("source")}
+                panel="source"
+                ?active=${!previewing}
               >
                 ${t("chat.detailPanel.source")}
-              </button>
-              <button
+              </wa-tab>
+              <wa-tab
+                slot="nav"
                 class="sidebar-file-view__tab"
-                type="button"
-                role="tab"
-                aria-selected=${String(previewing)}
-                @click=${() => controls.onViewModeChange("preview")}
+                panel="preview"
+                ?active=${previewing}
               >
                 ${t("chat.detailPanel.preview")}
-              </button>
-            </div>
+              </wa-tab>
+            </wa-tab-group>
           `
         : nothing}
       ${controls?.searchOpen && !previewing

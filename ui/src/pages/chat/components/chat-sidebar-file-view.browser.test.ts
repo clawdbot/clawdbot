@@ -67,6 +67,16 @@ function button(panel: DetailPanel, label: string): HTMLButtonElement {
   return match;
 }
 
+function tab(panel: DetailPanel, label: string): HTMLElement {
+  const match = Array.from(panel.querySelectorAll<HTMLElement>("wa-tab")).find(
+    (candidate) => candidate.textContent?.trim() === label,
+  );
+  if (!match) {
+    throw new Error(`Missing ${label} tab`);
+  }
+  return match;
+}
+
 afterEach(() => {
   for (const panel of mounted.splice(0)) {
     panel.remove();
@@ -106,17 +116,16 @@ This-is-a-single-unbroken-line-${"x".repeat(180)}
     panel.style.width = "320px";
     panel.style.height = "480px";
 
-    const sourceTab = button(panel, "Source");
-    const previewTab = button(panel, "Preview");
-    expect(sourceTab.getAttribute("aria-selected")).toBe("true");
-    expect(previewTab.getAttribute("aria-selected")).toBe("false");
-    expect(sourceTab.tabIndex).toBe(0);
-    expect(previewTab.tabIndex).toBe(0);
+    const sourceTab = tab(panel, "Source");
+    const previewTab = tab(panel, "Preview");
+    expect(sourceTab.hasAttribute("active")).toBe(true);
+    expect(previewTab.hasAttribute("active")).toBe(false);
     const openWorkspaceFile = vi.fn();
     panel.onOpenWorkspaceFile = openWorkspaceFile;
 
-    await userEvent.click(previewTab);
-    await panel.updateComplete;
+    sourceTab.focus();
+    await userEvent.keyboard("{ArrowRight}{Enter}");
+    await expect.poll(() => previewTab.hasAttribute("active")).toBe(true);
 
     const preview = panel.querySelector<HTMLElement>(".sidebar-file-preview");
     const reader = panel.querySelector<HTMLElement>(".sidebar-file-preview__content");
@@ -135,7 +144,7 @@ This-is-a-single-unbroken-line-${"x".repeat(180)}
     expect(previewReader.scrollWidth).toBeLessThanOrEqual(previewReader.clientWidth + 1);
 
     await userEvent.click(sourceTab);
-    await panel.updateComplete;
+    await expect.poll(() => sourceTab.hasAttribute("active")).toBe(true);
 
     expect(panel.querySelector<HTMLElement>(".file-view")?.hidden).toBe(false);
     expect(panel.querySelector(".cm-content")?.textContent).toContain("# Audit");

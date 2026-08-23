@@ -1628,36 +1628,34 @@ openclaw-session-discussion {
   white-space: nowrap;
 }
 
-.sidebar-file-view__tabs {
-  display: flex;
+wa-tab-group.sidebar-file-view__tabs {
+  --indicator-color: var(--accent);
+  --track-color: transparent;
+
+  display: block;
   flex: 0 0 auto;
-  gap: 14px;
   min-width: 0;
-  padding: 0 12px;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--secondary) 54%, transparent);
 }
 
-.sidebar-file-view__tab {
-  padding: 9px 2px 8px;
-  border: 0;
-  border-bottom: 2px solid transparent;
+wa-tab-group.sidebar-file-view__tabs::part(tabs) {
+  gap: 14px;
+  padding: 0 12px;
+}
+
+wa-tab.sidebar-file-view__tab {
   color: var(--muted);
-  background: transparent;
-  font: inherit;
   font-size: var(--control-ui-text-sm);
   font-weight: 600;
 }
 
-.sidebar-file-view__tab[aria-selected="true"] {
-  border-bottom-color: var(--accent);
-  color: var(--text);
+wa-tab.sidebar-file-view__tab::part(base) {
+  padding: 9px 2px 8px;
 }
 
-.sidebar-file-view__tab:focus-visible {
-  border-radius: var(--radius-sm);
-  outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
-  outline-offset: -2px;
+wa-tab.sidebar-file-view__tab[active] {
+  color: var(--text);
 }
 
 .sidebar-file-view__actions {
