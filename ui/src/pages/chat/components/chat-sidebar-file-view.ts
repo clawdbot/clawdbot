@@ -69,11 +69,64 @@ export function absoluteFilePath(content: FileSidebarContent): string | null {
   return `${content.root.replace(/[\\/]+$/, "")}/${content.path.replace(/^[\\/]+/, "")}`;
 }
 
-export function isMarkdownFile(content: FileSidebarContent): boolean {
+function isMarkdownFile(content: FileSidebarContent): boolean {
   if (content.language?.toLocaleLowerCase() === "markdown") {
     return true;
   }
   return /\.(?:md|markdown|mdown|mkd|mkdn)$/i.test(content.path || content.name);
+}
+
+function isAbsoluteFilePath(path: string): boolean {
+  return (
+    path.startsWith("/") ||
+    path.startsWith("\\") ||
+    path.startsWith("~/") ||
+    path.startsWith("~\\") ||
+    /^[a-z]:[\\/]/i.test(path)
+  );
+}
+
+export function resolveMarkdownPreviewFilePath(sourcePath: string, targetPath: string): string {
+  if (isAbsoluteFilePath(targetPath)) {
+    return targetPath;
+  }
+
+  const normalizedSource = sourcePath.replaceAll("\\", "/");
+  const normalizedTarget = targetPath.replaceAll("\\", "/");
+  const separator = normalizedSource.lastIndexOf("/");
+  let sourceDirectory = separator >= 0 ? normalizedSource.slice(0, separator) : "";
+  let prefix = "";
+
+  const drive = /^[a-z]:/i.exec(sourceDirectory)?.[0];
+  if (drive) {
+    prefix = drive;
+    sourceDirectory = sourceDirectory.slice(drive.length).replace(/^\/+/, "");
+  } else if (sourceDirectory.startsWith("/")) {
+    prefix = "/";
+    sourceDirectory = sourceDirectory.replace(/^\/+/, "");
+  }
+
+  const segments: string[] = [];
+  for (const segment of `${sourceDirectory}/${normalizedTarget}`.split("/")) {
+    if (!segment || segment === ".") {
+      continue;
+    }
+    if (segment === "..") {
+      if (segments.length > 0 && segments.at(-1) !== "..") {
+        segments.pop();
+      } else if (!prefix) {
+        segments.push(segment);
+      }
+      continue;
+    }
+    segments.push(segment);
+  }
+
+  const resolved = segments.join("/");
+  if (prefix === "/") {
+    return `/${resolved}`;
+  }
+  return prefix ? `${prefix}/${resolved}` : resolved;
 }
 
 export type FileCopyAction = "path" | "contents";
@@ -251,7 +304,6 @@ export function renderSidebarFile(
                 type="button"
                 role="tab"
                 aria-selected=${String(!previewing)}
-                tabindex=${previewing ? -1 : 0}
                 @click=${() => controls.onViewModeChange("source")}
               >
                 ${t("chat.detailPanel.source")}
@@ -261,7 +313,6 @@ export function renderSidebarFile(
                 type="button"
                 role="tab"
                 aria-selected=${String(previewing)}
-                tabindex=${previewing ? 0 : -1}
                 @click=${() => controls.onViewModeChange("preview")}
               >
                 ${t("chat.detailPanel.preview")}

@@ -40,6 +40,7 @@ beforeAll(async () => {
 
 type DetailPanel = HTMLElement & {
   content: FileSidebarContent;
+  onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   updateComplete: Promise<unknown>;
 };
 
@@ -97,6 +98,8 @@ describe.runIf(browserMode)("chat file editor", () => {
 
 This-is-a-single-unbroken-line-${"x".repeat(180)}
 
+[Guide](guide.md)
+
 - First item
 - Second item`,
     });
@@ -107,6 +110,10 @@ This-is-a-single-unbroken-line-${"x".repeat(180)}
     const previewTab = button(panel, "Preview");
     expect(sourceTab.getAttribute("aria-selected")).toBe("true");
     expect(previewTab.getAttribute("aria-selected")).toBe("false");
+    expect(sourceTab.tabIndex).toBe(0);
+    expect(previewTab.tabIndex).toBe(0);
+    const openWorkspaceFile = vi.fn();
+    panel.onOpenWorkspaceFile = openWorkspaceFile;
 
     await userEvent.click(previewTab);
     await panel.updateComplete;
@@ -117,6 +124,12 @@ This-is-a-single-unbroken-line-${"x".repeat(180)}
     expect(panel.querySelector<HTMLElement>(".file-view")?.hidden).toBe(true);
     expect(reader?.querySelector("h1")?.textContent).toBe("Audit");
     expect(reader?.querySelectorAll("li")).toHaveLength(2);
+    const guideLink = expectDefined(
+      reader?.querySelector<HTMLAnchorElement>('a[data-file-path="guide.md"]'),
+      "relative Markdown link",
+    );
+    await userEvent.click(guideLink);
+    expect(openWorkspaceFile).toHaveBeenCalledWith({ path: "notes/guide.md", line: null });
     const previewReader = expectDefined(reader, "Markdown preview content");
     expect(getComputedStyle(previewReader).overflowWrap).toBe("anywhere");
     expect(previewReader.scrollWidth).toBeLessThanOrEqual(previewReader.clientWidth + 1);

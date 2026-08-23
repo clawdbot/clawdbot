@@ -19,6 +19,7 @@ import {
   computeFileMatches,
   emptyCopyFeedback,
   readFileDraft,
+  resolveMarkdownPreviewFilePath,
   setFileDraft,
   type FileCopyAction,
   type FileViewMode,
@@ -597,12 +598,33 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     this.fileViewMode = mode;
   };
 
+  private readonly openWorkspaceFileFromPanel = (target: {
+    path: string;
+    line?: number | null;
+  }) => {
+    const content = this.visibleContent;
+    const path =
+      content?.kind === "file" && this.fileViewMode === "preview"
+        ? resolveMarkdownPreviewFilePath(content.path, target.path)
+        : target.path;
+    this.onOpenWorkspaceFile?.({ ...target, path });
+  };
+
+  private sidebarNavigationCallbacks() {
+    return {
+      basePath: this.basePath,
+      onOpenImage: this.onOpenImage,
+      onOpenSessionLink: this.onOpenSessionLink,
+      onOpenWorkspaceFile: this.openWorkspaceFileFromPanel,
+    };
+  }
+
   private readonly handlePanelClick = (event: MouseEvent) => {
-    handleSidebarClick(event, this);
+    handleSidebarClick(event, this.sidebarNavigationCallbacks());
   };
 
   private readonly handlePanelKeyDown = (event: KeyboardEvent) => {
-    handleSidebarKeydown(event, this);
+    handleSidebarKeydown(event, this.sidebarNavigationCallbacks());
   };
 
   override render() {
