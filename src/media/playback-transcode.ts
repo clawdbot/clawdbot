@@ -661,8 +661,9 @@ export async function resolvePlaybackTranscode(
     return { kind: "preparing" };
   }
   const failedAtMs = playbackFailures.get(operationKey);
-  if (failedAtMs !== undefined && failedAtMs <= Date.now()) {
-    if (Date.now() - failedAtMs < PLAYBACK_TRANSCODE_FAILURE_COOLDOWN_MS) {
+  if (failedAtMs !== undefined) {
+    const nowMs = Date.now();
+    if (failedAtMs <= nowMs && nowMs - failedAtMs < PLAYBACK_TRANSCODE_FAILURE_COOLDOWN_MS) {
       return { kind: "fallback" };
     }
   }
