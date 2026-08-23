@@ -20,6 +20,12 @@ type ShellNavigationState = {
   updated: () => void;
 };
 
+type ShellSettingsEscapeState = ShellKeyboardState & {
+  lastWorkspaceLocation: { routeId: "usage"; pathname: string; search: string };
+  navDrawerOpen: boolean;
+  routeState: { routeId: "appearance" };
+};
+
 type TestWebKitWindow = Window & {
   webkit?: {
     messageHandlers: {
@@ -105,6 +111,45 @@ describe("OpenClaw native shell", () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(navigate).toHaveBeenCalledWith("appearance", undefined);
+  });
+
+  it("clears a focused Settings input before Escape exits Settings", () => {
+    const navigate = vi.fn();
+    const shell = document.createElement(
+      "openclaw-app-shell",
+    ) as unknown as ShellSettingsEscapeState;
+    shell.runtime = {
+      context: {
+        navigate,
+        overlays: { snapshot: { devicePairSetupOpen: false } },
+      } as unknown as ApplicationContext,
+    };
+    shell.lastWorkspaceLocation = { routeId: "usage", pathname: "/usage", search: "" };
+    shell.navDrawerOpen = false;
+    shell.routeState = { routeId: "appearance" };
+    const input = document.body.appendChild(document.createElement("input"));
+    input.type = "search";
+    input.value = "search query";
+    input.focus();
+    input.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
+
+    try {
+      const clearEvent = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+      input.dispatchEvent(clearEvent);
+
+      expect(clearEvent.defaultPrevented).toBe(true);
+      expect(input.value).toBe("");
+      expect(document.activeElement).toBe(input);
+      expect(navigate).not.toHaveBeenCalled();
+
+      const exitEvent = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+      input.dispatchEvent(exitEvent);
+
+      expect(exitEvent.defaultPrevented).toBe(true);
+      expect(navigate).toHaveBeenCalledWith("usage", { pathname: "/usage" });
+    } finally {
+      input.remove();
+    }
   });
 
   it("toggles the navigation sidebar when the native macOS titlebar button fires", () => {
