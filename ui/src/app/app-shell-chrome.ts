@@ -420,9 +420,6 @@ export class ShellChromeOwner {
       if (this.shouldIgnoreSettingsEscape(event)) {
         return;
       }
-      if (this.clearSettingsTextInput(event)) {
-        return;
-      }
       event.preventDefault();
       host.exitSettings();
       return;
@@ -450,7 +447,7 @@ export class ShellChromeOwner {
     this.requestLazyElement(DEBUG_OVERLAY_ELEMENT, descriptor);
   };
 
-  /** Open overlays and rich controls own Escape before settings can exit. */
+  /** Open overlays and editable controls own Escape before settings can exit. */
   shouldIgnoreSettingsEscape(event: KeyboardEvent): boolean {
     const host = this.host;
     const overlaySnapshot = host.context?.overlays.snapshot;
@@ -466,24 +463,9 @@ export class ShellChromeOwner {
     return (
       target instanceof Element &&
       target.closest(
-        "select, [contenteditable], dialog, [role='dialog'], [role='menu'], [role='listbox']",
+        "input, textarea, select, [contenteditable], dialog, [role='dialog'], [role='menu'], [role='listbox']",
       ) !== null
     );
-  }
-
-  private clearSettingsTextInput(event: KeyboardEvent): boolean {
-    const target = event.target;
-    const isTextInput =
-      target instanceof HTMLTextAreaElement ||
-      (target instanceof HTMLInputElement &&
-        ["email", "number", "password", "search", "tel", "text", "url"].includes(target.type));
-    if (!isTextInput || target.disabled || target.readOnly || target.value.length === 0) {
-      return false;
-    }
-    event.preventDefault();
-    target.value = "";
-    target.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-    return true;
   }
 
   private readonly handleCommandPaletteOpen = (event: Event, replay?: () => void): void => {

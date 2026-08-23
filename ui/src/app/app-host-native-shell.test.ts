@@ -113,7 +113,7 @@ describe("OpenClaw native shell", () => {
     expect(navigate).toHaveBeenCalledWith("appearance", undefined);
   });
 
-  it("clears a focused Settings input before Escape exits Settings", () => {
+  it("keeps the raw config editor unchanged when Escape is pressed", () => {
     const navigate = vi.fn();
     const shell = document.createElement(
       "openclaw-app-shell",
@@ -127,28 +127,24 @@ describe("OpenClaw native shell", () => {
     shell.lastWorkspaceLocation = { routeId: "usage", pathname: "/usage", search: "" };
     shell.navDrawerOpen = false;
     shell.routeState = { routeId: "appearance" };
-    const input = document.body.appendChild(document.createElement("input"));
-    input.type = "search";
-    input.value = "search query";
-    input.focus();
-    input.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
+    const rawField = document.body.appendChild(document.createElement("label"));
+    rawField.className = "config-raw-field";
+    const rawEditor = rawField.appendChild(document.createElement("textarea"));
+    rawEditor.value = '{ "gateway": { "port": 18789 } }';
+    rawEditor.focus();
+    const onInput = vi.fn();
+    rawEditor.addEventListener("input", onInput);
+    rawEditor.addEventListener("keydown", (event) => shell.handleDocumentKeydown(event));
 
     try {
-      const clearEvent = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
-      input.dispatchEvent(clearEvent);
+      const event = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+      rawEditor.dispatchEvent(event);
 
-      expect(clearEvent.defaultPrevented).toBe(true);
-      expect(input.value).toBe("");
-      expect(document.activeElement).toBe(input);
+      expect(rawEditor.value).toBe('{ "gateway": { "port": 18789 } }');
+      expect(onInput).not.toHaveBeenCalled();
       expect(navigate).not.toHaveBeenCalled();
-
-      const exitEvent = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
-      input.dispatchEvent(exitEvent);
-
-      expect(exitEvent.defaultPrevented).toBe(true);
-      expect(navigate).toHaveBeenCalledWith("usage", { pathname: "/usage" });
     } finally {
-      input.remove();
+      rawField.remove();
     }
   });
 

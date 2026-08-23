@@ -272,11 +272,15 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           @input=${(event: Event) =>
             props.onSearchQueryChange((event.currentTarget as HTMLInputElement).value)}
           @keydown=${(event: KeyboardEvent) => {
-            if (event.key !== "Escape" || !props.searchQuery) {
+            if (event.key !== "Escape") {
               return;
             }
             event.preventDefault();
-            props.onSearchQueryChange("");
+            if (props.searchQuery) {
+              props.onSearchQueryChange("");
+              return;
+            }
+            props.onExit();
           }}
         />
         ${props.searchQuery
