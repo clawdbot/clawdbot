@@ -1632,3 +1632,22 @@ The freeze inventory and source-classifier receipt are under
 `.gate-out/continuation-drift-cure/freeze-2-28393d4bbd82327aefe7db8e2d5f41721bb77eab/`.
 No presentation, PR-head, deployment, live Gateway, or behavioral-proof
 surface moved.
+
+## 2026-08-23T11:04:00Z - Second frozen upstream merge
+
+Frozen upstream `28393d4bbd82327aefe7db8e2d5f41721bb77eab` was merged by
+exact object with `--no-ff`; no symbolic ref, rebase, or squash was used. The
+result is `1193406c2291a7c15eefaed37749366ffc5186b9` with exact parents:
+
+1. `7fb527865993af33068d12de8e99efbe4d87d60b`;
+2. `28393d4bbd82327aefe7db8e2d5f41721bb77eab`.
+
+The prospective conflict-free result was confirmed by Git's `ort` merge. The
+12-commit increment projected 99 paths, including the agent compaction guard,
+channel actions, outbound delivery, Gateway connection close handling,
+plugin ordering, CLI behavior, link transport cleanup, and Control UI work.
+No manual conflict decision was required.
+
+The candidate ref was pushed normally and the remote matched the local merge
+SHA exactly. Gates 2, 2.5, and 2.7 restart after the following journal-only
+checkpoint. Presentation and PR head remain untouched.
