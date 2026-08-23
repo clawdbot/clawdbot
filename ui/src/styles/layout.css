@@ -3977,7 +3977,7 @@ openclaw-sidebar-attention {
   flex: 0 0 28px;
   place-items: center;
   border-radius: var(--radius-sm);
-  color: var(--muted);
+  color: color-mix(in srgb, var(--muted) 72%, transparent);
 }
 
 .sidebar-issues-panel__icon svg,
