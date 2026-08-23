@@ -90,11 +90,23 @@ struct GatewayProtocolGeneratedModelsTests {
         #expect(params.expected.generation == 4)
         #expect(params.expected.environmentid == "environment-1")
         #expect(params.expected.ownerepoch == 7)
+        #expect(params.abandonsource == nil)
         guard case let .profile(profile) = params.target else {
             Issue.record("Expected the generated profile move target")
             return
         }
         #expect(profile.profileid == "development")
+
+        let abandonment = try JSONDecoder().decode(
+            SessionsMoveParams.self,
+            from: Data(
+                #"{"key":"agent:main:move","expected":{"generation":4,"environmentId":"environment-1","ownerEpoch":7},"target":{"kind":"gateway"},"abandonSource":true}"#
+                    .utf8))
+        #expect(abandonment.abandonsource == true)
+        guard case .gateway = abandonment.target else {
+            Issue.record("Expected the generated abandonment move to target the Gateway")
+            return
+        }
 
         let gateway = try JSONDecoder().decode(
             SessionMoveTarget.self,
@@ -144,12 +156,12 @@ struct GatewayProtocolGeneratedModelsTests {
         switch params {
         case let .managed(payload):
             #expect(expectedManaged)
-            #expect(payload.scope.value as? String == expectedScope)
+            #expect(payload.scope.rawValue == expectedScope)
             #expect(payload.agentid == "main")
             #expect(payload.secretname.hasPrefix("github-setup-"))
         case let .inherit(payload):
             #expect(!expectedManaged)
-            #expect(payload.scope.value as? String == expectedScope)
+            #expect(payload.scope.rawValue == expectedScope)
             #expect(payload.agentid == "main")
         }
 
@@ -157,5 +169,69 @@ struct GatewayProtocolGeneratedModelsTests {
             JSONSerialization.jsonObject(with: JSONEncoder().encode(params)) as? [String: Any])
         #expect(encoded["scope"] as? String == expectedScope)
         #expect(encoded["mode"] as? String == (expectedManaged ? "managed" : "inherit"))
+    }
+
+    @Test(arguments: [
+        (#"{"requestId":"request-1","status":"requested","message":"Accepted."}"#, "requested"),
+        (#"{"requestId":"request-1","status":"publishing","message":"Publishing."}"#, "publishing"),
+        (
+            #"{"requestId":"request-1","status":"published","url":"https://github.com/openclaw/openclaw/pull/1","repository":"openclaw/openclaw","branch":"openclaw/task","headCommit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
+            "published"),
+        (
+            #"{"requestId":"request-1","status":"failed","code":"push_rejected","message":"Failed.","nextAction":"Check access."}"#,
+            "failed"),
+    ])
+    func `GitHub publication results round trip as a typed union`(
+        json: String,
+        expectedStatus: String) throws
+    {
+        let result = try JSONDecoder().decode(
+            SessionGitHubPublicationResult.self,
+            from: Data(json.utf8))
+        switch result {
+        case .requested: #expect(expectedStatus == "requested")
+        case .publishing: #expect(expectedStatus == "publishing")
+        case .published: #expect(expectedStatus == "published")
+        case .failed: #expect(expectedStatus == "failed")
+        }
+
+        let encoded = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(result)) as? [String: Any])
+        #expect(encoded["status"] as? String == expectedStatus)
+    }
+
+    @Test(arguments: [
+        (#"{"status":"pending","retryAfterMs":5000}"#, "pending"),
+        (#"{"status":"slow_down","retryAfterMs":10000}"#, "slow_down"),
+        (#"{"status":"access_denied"}"#, "access_denied"),
+        (#"{"status":"expired"}"#, "expired"),
+        (#"{"status":"incorrect_device_code"}"#, "incorrect_device_code"),
+        (#"{"status":"network_error","retryAfterMs":5000}"#, "network_error"),
+        (#"{"status":"failed","reason":"identity_changed"}"#, "failed"),
+        (
+            #"{"status":"success","githubStatus":{"agentId":"main","selectedScope":"system","selected":{"scope":"system","configured":true,"identity":{"source":"system-configured","credentialKind":"managed-oauth","credentialState":"available","account":{"login":"octocat"},"gitAuthor":{"name":"octocat","email":"1+octocat@users.noreply.github.com"},"evidence":"github-api","accessExpiresAtMs":1800000000000,"refreshState":"available","oauthScopes":["repo"],"repositoryGrants":"unknown"}},"effective":{"source":"system-configured","credentialKind":"managed-oauth","credentialState":"available","account":{"login":"octocat"},"gitAuthor":{"name":"octocat","email":"1+octocat@users.noreply.github.com"},"evidence":"github-api","accessExpiresAtMs":1800000000000,"refreshState":"available","oauthScopes":["repo"],"repositoryGrants":"unknown"}}}"#,
+            "success"),
+    ])
+    func `GitHub device authorization results round trip every outcome`(
+        json: String,
+        expectedStatus: String) throws
+    {
+        let result = try JSONDecoder().decode(
+            ToolsGitHubAuthorizePollResult.self,
+            from: Data(json.utf8))
+        switch result {
+        case .pending: #expect(expectedStatus == "pending")
+        case .slowDown: #expect(expectedStatus == "slow_down")
+        case .accessDenied: #expect(expectedStatus == "access_denied")
+        case .expired: #expect(expectedStatus == "expired")
+        case .incorrectDeviceCode: #expect(expectedStatus == "incorrect_device_code")
+        case .networkError: #expect(expectedStatus == "network_error")
+        case .failed: #expect(expectedStatus == "failed")
+        case .success: #expect(expectedStatus == "success")
+        }
+
+        let encoded = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(result)) as? [String: Any])
+        #expect(encoded["status"] as? String == expectedStatus)
     }
 }

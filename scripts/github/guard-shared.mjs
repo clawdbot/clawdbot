@@ -157,7 +157,7 @@ export function createGuardApproverChecks({
   warn = console.warn,
 }) {
   const membershipCache = new Map();
-  const permissionCache = new Map();
+  const repositoryRoleCache = new Map();
   const isSecurityMember = async (login) => {
     const normalizedLogin = login.toLowerCase();
     if (explicitSecurityApprovers.has(normalizedLogin)) {
@@ -181,27 +181,28 @@ export function createGuardApproverChecks({
       return false;
     }
   };
-  const isRepositoryAdmin = async (login) => {
+  const getRepositoryRoleName = async (login) => {
     const normalizedLogin = login.toLowerCase();
-    if (permissionCache.has(normalizedLogin)) {
-      return permissionCache.get(normalizedLogin);
+    if (repositoryRoleCache.has(normalizedLogin)) {
+      return repositoryRoleCache.get(normalizedLogin);
     }
     try {
       const result = await api.request(
         `/repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
       );
-      const allowed = result?.permission === "admin";
-      permissionCache.set(normalizedLogin, allowed);
-      return allowed;
+      const roleName = typeof result?.role_name === "string" ? result.role_name : null;
+      repositoryRoleCache.set(normalizedLogin, roleName);
+      return roleName;
     } catch (error) {
       if (error?.status !== 404) {
         warn(`Could not verify repository permission for ${login}: ${error.message}`);
       }
-      permissionCache.set(normalizedLogin, false);
-      return false;
+      repositoryRoleCache.set(normalizedLogin, null);
+      return null;
     }
   };
-  return { isSecurityMember, isRepositoryAdmin };
+  const isRepositoryAdmin = async (login) => (await getRepositoryRoleName(login)) === "admin";
+  return { getRepositoryRoleName, isSecurityMember, isRepositoryAdmin };
 }
 
 function githubErrorBodyTooLarge(maxBytes) {

@@ -85,6 +85,7 @@ export async function resetReplyRunSession(params: {
     systemSent: false,
     abortedLastRun: false,
     lifecycleRunId: undefined,
+    lastRunId: undefined,
     modelProvider: undefined,
     model: undefined,
     inputTokens: undefined,

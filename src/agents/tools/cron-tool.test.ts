@@ -933,6 +933,15 @@ describe("cron tool", () => {
     expect(tool.description).toContain(
       "Inherited configured MCP authority includes only model-callable tools; interactive app-view-only capabilities are excluded from headless jobs.",
     );
+    expect(tool.description).toContain(
+      "the run stays detached, reads bounded chat context, then commits its final visible assistant result to this conversation's durable history",
+    );
+    expect(tool.description).toContain(
+      "current=>canonical session commit, plus one normal channel send for external chats",
+    );
+    expect(tool.description).toContain(
+      "WebChat observes that commit live and after reconnect without another user message",
+    );
   });
 
   it("documents the event-trigger authoring contract", () => {
@@ -952,7 +961,7 @@ describe("cron tool", () => {
     expect(tool.description).toContain("message is that run's entire context — self-contained");
     expect(tool.description).toContain('Silent watcher=>mode:"none"');
     expect(tool.description).toContain("once:true disables after first fire");
-    expect(tool.description).toContain('await tools.call("exec"');
+    expect(tool.description).toContain('await exec({command:"..."})');
   });
 
   it("documents due-by-default cron run mode", () => {

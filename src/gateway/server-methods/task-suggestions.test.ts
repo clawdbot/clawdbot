@@ -691,6 +691,7 @@ describe("task suggestion gateway methods", () => {
                   id: "preserved-worktree",
                   path: "/preserved-worktree",
                   branch: "openclaw/preserved-worktree",
+                  reason: "cleanup-failed",
                 },
               }
             : {}),

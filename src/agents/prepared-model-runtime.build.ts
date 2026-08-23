@@ -19,17 +19,19 @@ import {
   type PreparedModelRuntimeAuth,
   type PreparedModelRuntimeAuthScope,
 } from "./prepared-model-runtime-auth.js";
+import type {
+  PreparedModelRuntimeAgentFacts,
+  PreparedModelRuntimeCatalogFacts,
+  PreparedModelRuntimeCatalogSource,
+} from "./prepared-model-runtime.catalog-contract.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   fingerprintPreparedRuntimeFacts,
   prepareAgentCatalogSource,
   prepareConfiguredRuntimeFactsBatch,
-  prepareFullCatalogFacts,
   prepareWorkspaceBuildGroup,
-  type PreparedModelRuntimeAgentFacts,
-  type PreparedModelRuntimeCatalogFacts,
-  type PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.facts.js";
+import { prepareFullCatalogFacts } from "./prepared-model-runtime.full-catalog.js";
 import {
   createPreparedInboundRegistryLoader,
   preparedModelRuntimeWorkspaceFactsKey,
@@ -342,10 +344,12 @@ async function buildSnapshotBatch(
     const prepareInboundPluginRegistry = groupInputs.some((input) =>
       inboundPluginRegistryInputs.has(input),
     );
+    const preferBuiltPluginArtifacts =
+      pluginGeneration?.preferBuiltPluginArtifacts ?? prepareInboundPluginRegistry;
     const prepared = await prepareWorkspaceBuildGroup(
       groupInputs,
       catalogMode,
-      {},
+      { preferBuiltPluginArtifacts },
       prepareInboundPluginRegistry ? loadInboundPluginRegistry : undefined,
       pluginGeneration,
       pluginMetadataSnapshot,

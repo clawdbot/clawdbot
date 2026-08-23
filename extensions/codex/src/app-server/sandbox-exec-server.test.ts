@@ -66,21 +66,16 @@ async function readStartedPid(
 }
 
 describe("OpenClaw Codex sandbox exec-server", () => {
-  it("reports unavailable app-server remote environment support without exposing an environment", async () => {
+  it("rejects an incomplete sandbox environment before publishing an exec-server", async () => {
     const sandbox = createSandboxContext({});
-    const client = {
-      getServerVersion: vi.fn(() => CODEX_APP_SERVER_VERSION),
-      request: vi.fn(async () => {
-        throw new Error("unknown variant environment/add");
-      }),
-    };
+    sandbox.fsBridge = undefined;
+    const client = createClient();
 
     await expect(
-      ensureCodexSandboxExecServerEnvironment({
-        client: client as never,
-        sandbox,
-      }),
-    ).resolves.toBeUndefined();
+      ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox }),
+    ).rejects.toThrow("Sandbox filesystem bridge is unavailable.");
+    expect(client.request).not.toHaveBeenCalled();
+    expect(sandboxExecServerRegistry.servers.has(sandbox.runtimeId)).toBe(false);
   });
 
   it.each([

@@ -4,7 +4,6 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { WebSocket } from "ws";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const killProcessTreeMock = vi.hoisted(() => vi.fn());
@@ -26,9 +25,17 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { httpRequest } from "./sandbox-exec-server/http.js";
 import { startProcess, terminateProcess } from "./sandbox-exec-server/processes.js";
-import type { ManagedProcess, OpenClawExecServer } from "./sandbox-exec-server/types.js";
+import { CodexSandboxExecSession } from "./sandbox-exec-server/session.js";
+import type {
+  CodexSandboxExecSessionNotifications,
+  ManagedProcess,
+  OpenClawExecServer,
+} from "./sandbox-exec-server/types.js";
 
-type FakeSocket = WebSocket & { send: ReturnType<typeof vi.fn> };
+type FakeNotifications = CodexSandboxExecSessionNotifications & {
+  send: ReturnType<typeof vi.fn<CodexSandboxExecSessionNotifications["send"]>>;
+  close: () => void;
+};
 
 function createFakeChild(): ChildProcessWithoutNullStreams {
   return Object.assign(new EventEmitter(), {
@@ -40,15 +47,24 @@ function createFakeChild(): ChildProcessWithoutNullStreams {
   }) as unknown as ChildProcessWithoutNullStreams;
 }
 
-function createFakeSocket(): FakeSocket {
-  return Object.assign(new EventEmitter(), {
-    readyState: 1,
-    send: vi.fn(),
-  }) as unknown as FakeSocket;
+function createFakeNotifications(): FakeNotifications {
+  const controller = new AbortController();
+  return {
+    send: vi.fn<CodexSandboxExecSessionNotifications["send"]>(),
+    isOpen: () => !controller.signal.aborted,
+    signal: controller.signal,
+    close: () => controller.abort(),
+  };
 }
 
 function createExecServer(sandbox: SandboxContext): OpenClawExecServer {
-  return { sandbox, children: new Set(), cleanupTasks: new Set() } as OpenClawExecServer;
+  return {
+    sandbox,
+    backend: sandbox.backend,
+    fsBridge: sandbox.fsBridge,
+    children: new Set(),
+    cleanupTasks: new Set(),
+  } as OpenClawExecServer;
 }
 
 function processStartParams(processId: string) {
@@ -79,6 +95,76 @@ afterEach(() => {
 });
 
 describe("Codex sandbox exec-server lifecycle", () => {
+  it("owns JSON-RPC delivery, ordered process notifications, and idempotent session cleanup", async () => {
+    const child = createFakeChild();
+    spawnMock.mockReturnValue(child);
+    const finalizeExec = vi.fn(async () => undefined);
+    const sandbox = createSandboxContext({
+      buildExecSpec: async () => ({
+        argv: ["sandbox-child"],
+        env: {},
+        finalizeToken: "session-token",
+        stdinMode: "pipe-closed",
+      }),
+      finalizeExec,
+    });
+    const send = vi.fn();
+    const session = new CodexSandboxExecSession(createExecServer(sandbox), {
+      send,
+      isOpen: () => true,
+    });
+
+    await session.handleRequest({ id: 1, method: "initialize" });
+    await session.handleRequest({ id: 2, method: "environment/status" });
+    await session.handleRequest({ id: 3, method: "unsupported/method" });
+    await session.handleRequest({
+      id: 4,
+      method: "process/start",
+      params: processStartParams("direct-session"),
+    });
+    (child.stdout as PassThrough).write(Buffer.from("session-output"));
+    child.emit("close", 0, null);
+    await vi.waitFor(() => expect(finalizeExec).toHaveBeenCalledOnce());
+
+    expect(send.mock.calls.map(([message]) => message)).toEqual([
+      { jsonrpc: "2.0", id: 1, result: { sessionId: expect.any(String) } },
+      { jsonrpc: "2.0", id: 2, result: { status: "ready" } },
+      {
+        jsonrpc: "2.0",
+        id: 3,
+        error: {
+          code: -32601,
+          message: "Unsupported OpenClaw sandbox exec-server method: unsupported/method",
+        },
+      },
+      { jsonrpc: "2.0", id: 4, result: { processId: "direct-session" } },
+      {
+        jsonrpc: "2.0",
+        method: "process/output",
+        params: {
+          processId: "direct-session",
+          seq: 1,
+          stream: "stdout",
+          chunk: Buffer.from("session-output").toString("base64"),
+        },
+      },
+      {
+        jsonrpc: "2.0",
+        method: "process/exited",
+        params: { processId: "direct-session", seq: 2, exitCode: 0 },
+      },
+      {
+        jsonrpc: "2.0",
+        method: "process/closed",
+        params: { processId: "direct-session", seq: 3 },
+      },
+    ]);
+    const cleanup = session.close();
+    expect(session.close()).toBe(cleanup);
+    await cleanup;
+    expect(finalizeExec).toHaveBeenCalledOnce();
+  });
+
   it("reaps and finalizes a TERM-resistant child before acknowledging termination", async () => {
     vi.useFakeTimers();
     const child = createFakeChild();
@@ -103,7 +189,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
     await startProcess(
       createExecServer(sandbox),
       processes,
-      createFakeSocket(),
+      createFakeNotifications().send,
       processStartParams("process-resistant"),
     );
     killProcessTreeMock.mockImplementation(() => {
@@ -158,7 +244,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
         }),
       ),
       processes,
-      createFakeSocket(),
+      createFakeNotifications().send,
       processStartParams("process-cooperative"),
     );
 
@@ -197,7 +283,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
         }),
       ),
       processes,
-      createFakeSocket(),
+      createFakeNotifications().send,
       processStartParams("process-race"),
     );
 
@@ -233,7 +319,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
         }),
       ),
       processes,
-      createFakeSocket(),
+      createFakeNotifications().send,
       processStartParams("process-survivor"),
     );
 
@@ -255,7 +341,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
       setTimeout(() => child.emit("close", null, "SIGKILL"), 1_000);
     });
     const finalizeExec = vi.fn(async () => undefined);
-    const socket = createFakeSocket();
+    const notifications = createFakeNotifications();
     const request = httpRequest(
       createExecServer(
         createSandboxContext({
@@ -268,7 +354,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
           finalizeExec,
         }),
       ),
-      socket,
+      notifications,
       streamingHttpParams("http-resistant"),
     );
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
@@ -277,7 +363,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
     );
     await expect(request).resolves.toEqual({ status: 200, headers: [], bodyBase64: "" });
 
-    socket.emit("close");
+    notifications.close();
     await vi.runOnlyPendingTimersAsync();
 
     expect(killProcessTreeMock).toHaveBeenCalledOnce();
@@ -303,13 +389,13 @@ describe("Codex sandbox exec-server lifecycle", () => {
       }),
       finalizeExec,
     });
-    const socket = createFakeSocket();
+    const notifications = createFakeNotifications();
     const processes = new Map<string, ManagedProcess>();
 
     await startProcess(
       createExecServer(sandbox),
       processes,
-      socket,
+      notifications.send,
       processStartParams("process-error"),
     );
     child.emit("error", new Error("child transport failed"));
@@ -321,7 +407,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
       failure: "child transport failed",
     });
     expect(finalizeExec).not.toHaveBeenCalled();
-    expect(socket.send).not.toHaveBeenCalled();
+    expect(notifications.send).not.toHaveBeenCalled();
 
     child.emit("close", 23, null);
     await vi.waitFor(() => expect(finalizeExec).toHaveBeenCalledOnce());
@@ -337,7 +423,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
       timedOut: false,
       token: "process-token",
     });
-    expect(socket.send.mock.calls.map(([payload]) => JSON.parse(String(payload)).method)).toEqual([
+    expect(notifications.send.mock.calls.map(([method]) => method)).toEqual([
       "process/exited",
       "process/closed",
     ]);
@@ -367,7 +453,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
       startProcess(
         createExecServer(sandbox),
         new Map(),
-        createFakeSocket(),
+        createFakeNotifications().send,
         processStartParams("process-start-failure"),
       ),
     ).rejects.toThrow(spawnError ?? "did not provide a command");
@@ -395,7 +481,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
     });
     const request = httpRequest(
       createExecServer(sandbox),
-      createFakeSocket(),
+      createFakeNotifications(),
       streamingHttpParams("http-error"),
     );
     let settled = false;
@@ -455,7 +541,7 @@ describe("Codex sandbox exec-server lifecycle", () => {
     await expect(
       httpRequest(
         createExecServer(sandbox),
-        createFakeSocket(),
+        createFakeNotifications(),
         streamingHttpParams("http-start-failure"),
       ),
     ).rejects.toThrow(spawnError ?? "did not provide a command");

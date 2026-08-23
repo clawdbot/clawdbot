@@ -1415,7 +1415,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     });
   });
 
-  it("preserves an unresolved mutation across a later read failure", async () => {
+  it("records the latest failure regardless of mutation classification", async () => {
     const { ctx } = createTestContext();
 
     await executeTool(ctx, {
@@ -1435,9 +1435,9 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     });
 
     expect(ctx.state.lastToolError).toMatchObject({
-      toolName: "write",
-      error: "permission denied",
-      mutatingAction: true,
+      toolName: "read",
+      error: "file not found",
+      mutatingAction: false,
     });
   });
 
@@ -1466,46 +1466,6 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
         oldText: "beta",
         newText: "beta fixed",
       },
-      isError: false,
-      result: { ok: true },
-    });
-
-    expect(ctx.state.lastToolError).toBeUndefined();
-  });
-
-  it("clears a failed multi-file patch after every target is recovered", async () => {
-    const { ctx } = createTestContext();
-
-    await executeTool(ctx, {
-      toolName: "apply_patch",
-      toolCallId: "tool-patch-failed",
-      args: {
-        input: [
-          " *** Begin Patch",
-          " *** Add File: /tmp/day-1.md",
-          "+new",
-          " *** Add File: /tmp/day-2.md",
-          "+new",
-          " *** End Patch",
-        ].join("\n"),
-      },
-      isError: true,
-      result: { error: "Path escapes sandbox root" },
-    });
-
-    await executeTool(ctx, {
-      toolName: "write",
-      toolCallId: "tool-write-recovery",
-      args: { path: "/tmp/day-2.md", content: "new" },
-      isError: false,
-      result: { ok: true },
-    });
-    expect(ctx.state.lastToolError?.toolName).toBe("apply_patch");
-
-    await executeTool(ctx, {
-      toolName: "edit",
-      toolCallId: "tool-edit-recovery",
-      args: { path: "/tmp/day-1.md", edits: [{ oldText: "old", newText: "new" }] },
       isError: false,
       result: { ok: true },
     });
@@ -1765,6 +1725,64 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     });
 
     expect(ctx.state.currentSourceMessagingToolSentTextsNormalized).toEqual(["qa-msteams-dm-ok"]);
+  });
+
+  it.each([
+    {
+      label: "the exact source route",
+      accountId: "account-1",
+      target: "chat123",
+      threadId: "thread-1",
+      expected: true,
+    },
+    {
+      label: "the same target in another account",
+      accountId: "account-2",
+      target: "chat123",
+      threadId: "thread-1",
+      expected: false,
+    },
+    {
+      label: "the same target in another thread",
+      accountId: "account-1",
+      target: "chat123",
+      threadId: "thread-2",
+      expected: false,
+    },
+    {
+      label: "another target",
+      accountId: "account-1",
+      target: "chat456",
+      threadId: "thread-1",
+      expected: false,
+    },
+  ])("records explicit message sends only for $label", async (testCase) => {
+    const { ctx } = createTestContext();
+    Object.assign(ctx.params, {
+      config: {},
+      sourceReplyDeliveryMode: "message_tool_only",
+      messageChannel: "test-channel",
+      currentAccountId: "account-1",
+      currentChannelId: "chat123",
+      currentThreadId: "thread-1",
+    });
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: `tool-message-explicit-${testCase.label}`,
+      args: {
+        action: "send",
+        channel: "test-channel",
+        accountId: testCase.accountId,
+        target: testCase.target,
+        threadId: testCase.threadId,
+        message: "explicit reply",
+      },
+      isError: false,
+      result: { details: { ok: true } },
+    });
+
+    expect(ctx.state.messageToolOnlySourceReplyDelivered).toBe(testCase.expected);
   });
 
   it("records rich-content delivery when visible text is blank", async () => {
@@ -2058,9 +2076,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
 
     expect(ctx.state.lastToolError).toMatchObject({
       toolName: "memory_store",
-      ownerKey,
       mutatingAction: true,
-      actionFingerprint: expect.stringContaining(`owner=${ownerKey}|args=`),
     });
   });
 
@@ -2140,6 +2156,29 @@ describe("handleToolExecutionEnd timeout metadata", () => {
       { toolName: "write", isError: true },
     ]);
     expect(ctx.state.toolMetas[2]?.asyncStarted).toBe(true);
+  });
+
+  it("records intentional termination with its exact tool call id", async () => {
+    const { ctx } = createTestContext();
+
+    await endTool(ctx, {
+      toolName: "terminal_action",
+      toolCallId: "tool-terminal-current",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Done." }],
+        details: { status: "done" },
+        terminate: true,
+      },
+    });
+
+    expect(ctx.state.toolMetas).toEqual([
+      expect.objectContaining({
+        toolName: "terminal_action",
+        toolCallId: "tool-terminal-current",
+        terminate: true,
+      }),
+    ]);
   });
 
   it("retains every failed call after later successes change the last-error slot", async () => {

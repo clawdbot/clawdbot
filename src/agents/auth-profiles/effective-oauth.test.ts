@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./external-cli-sync.js", () => ({
+  listExternalCliSyncProviderIds: () => [],
   readExternalCliBootstrapCredential: mocks.readExternalCliBootstrapCredential,
 }));
 

@@ -385,6 +385,7 @@ export const ENUM_EXPECTATIONS: Record<string, string[]> = {
     '"adaptive"',
     '"max"',
     '"ultra"',
+    '"inherit"',
   ],
   "agents.defaults.compaction.identifierPolicy": ['"strict"', '"off"'],
 };

@@ -48,6 +48,12 @@ export async function publishQaSuiteArtifactFiles(params: {
   }
 }
 
+export async function invalidateQaSuiteArtifactGeneration(outputDir: string) {
+  for (const fileName of ["qa-suite-summary.json", QA_EVIDENCE_FILENAME, "qa-suite-report.md"]) {
+    await fs.rm(path.join(outputDir, fileName), { force: true });
+  }
+}
+
 export type QaSuiteSummaryJsonParams = {
   status?: QaSuiteSummaryJson["run"]["status"];
   scenarios: QaSuiteScenarioResult[];
@@ -290,7 +296,10 @@ export async function writeQaSuiteArtifacts(params: {
       "utf8",
     );
   }
-  const writeEvidenceFile = params.writeEvidenceFile ?? true;
+  const writeEvidenceFile = params.status !== "running" && (params.writeEvidenceFile ?? true);
+  if (!writeEvidenceFile) {
+    await fs.rm(evidencePath, { force: true });
+  }
   await publishQaSuiteArtifactFiles({
     outputDir: params.outputDir,
     files: [

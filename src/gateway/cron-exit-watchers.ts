@@ -1,6 +1,7 @@
 import type { CronJob } from "../cron/types.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import type { ManagedRun, ProcessSupervisor } from "../process/supervisor/index.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveExitWatchShell } from "./cron-exit-watch-shell.js";
 
 /**
@@ -31,7 +32,7 @@ export type CronExitResult = {
 type CronExitWatchers = {
   reconcile: (jobs: CronJob[]) => void;
   cancel: (jobId: string) => void;
-  cancelAll: () => void;
+  cancelAll: () => Promise<void>;
   activeJobIds: () => string[];
 };
 
@@ -75,6 +76,7 @@ export function createCronExitWatchers(params: {
     terminalPersisting: boolean;
     cancelled: boolean;
     lifecycleSettled: boolean;
+    settlement: ReturnType<typeof createDeferredCore>;
     command: string;
     cwd: string | undefined;
     consecutiveFailures: number;
@@ -128,6 +130,7 @@ export function createCronExitWatchers(params: {
       terminalPersisting: false,
       cancelled: false,
       lifecycleSettled: false,
+      settlement: createDeferredCore(),
       command,
       cwd,
       consecutiveFailures,
@@ -288,6 +291,7 @@ export function createCronExitWatchers(params: {
       if (slot.cancelled && active.get(job.id) === slot) {
         active.delete(job.id);
       }
+      slot.settlement.resolve(undefined);
     });
   };
 
@@ -318,10 +322,11 @@ export function createCronExitWatchers(params: {
     }
   };
 
-  const cancelAll = () => {
+  const cancelAll = async () => {
     for (const jobId of Array.from(active.keys())) {
       cancel(jobId);
     }
+    await Promise.all(Array.from(settlingCancelledSlots, (slot) => slot.settlement.promise));
   };
 
   return {

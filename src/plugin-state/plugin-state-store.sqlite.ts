@@ -32,6 +32,7 @@ import {
 // Plugin-wide fuse only; namespace maxEntries still owns normal cache eviction.
 export const MAX_PLUGIN_STATE_VALUE_BYTES = 65_536;
 export const MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN = 50_000;
+const PLUGIN_STATE_EXPIRY_BATCH_ROWS = 1_024;
 let maxPluginStateEntriesPerPluginForTests: number | undefined;
 
 type PluginStateEntriesTable = OpenClawStateKyselyDatabase["plugin_state_entries"];
@@ -265,19 +266,39 @@ function deletePluginStateEntry(
   return Number(result.numAffectedRows ?? 0);
 }
 
-function deleteExpiredPluginStateNamespaceEntries(
+function deleteExpiredPluginStateEntries(
   db: DatabaseSync,
-  params: { pluginId: string; namespace: string; now: number },
-): void {
-  executeSqliteQuerySync(
+  now: number,
+  scope?: { pluginId: string; namespace: string },
+): number {
+  const kysely = getPluginStateKysely(db);
+  let expiredEntries = kysely
+    .selectFrom("plugin_state_entries")
+    .select(["plugin_id", "namespace", "entry_key"])
+    .where("expires_at", "is not", null)
+    .where("expires_at", "<=", now);
+  // Global expiry ordering uses its index; namespace scans must stay unsorted
+  // so SQLite never builds an unbounded temporary sort under the write lock.
+  expiredEntries = scope
+    ? expiredEntries
+        .where("plugin_id", "=", scope.pluginId)
+        .where("namespace", "=", scope.namespace)
+    : expiredEntries.orderBy("expires_at", "asc");
+  const result = executeSqliteQuerySync(
     db,
-    getPluginStateKysely(db)
+    kysely
       .deleteFrom("plugin_state_entries")
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
-      .where("expires_at", "is not", null)
-      .where("expires_at", "<=", params.now),
+      .where((expression) =>
+        expression(
+          expression.refTuple("plugin_id", "namespace", "entry_key"),
+          "in",
+          expiredEntries
+            .limit(PLUGIN_STATE_EXPIRY_BATCH_ROWS)
+            .$asTuple("plugin_id", "namespace", "entry_key"),
+        ),
+      ),
   );
+  return Number(result.numAffectedRows ?? 0);
 }
 
 function countLivePluginStateNamespaceEntries(
@@ -355,17 +376,6 @@ function deleteOldestPluginStateNamespaceEntries(
       key: row.entry_key,
     });
   }
-}
-
-function sweepExpiredPluginStateEntriesFromDatabase(db: DatabaseSync, now: number): number {
-  const result = executeSqliteQuerySync(
-    db,
-    getPluginStateKysely(db)
-      .deleteFrom("plugin_state_entries")
-      .where("expires_at", "is not", null)
-      .where("expires_at", "<=", now),
-  );
-  return Number(result.numAffectedRows ?? 0);
 }
 
 function openPluginStateDatabase(
@@ -608,10 +618,9 @@ export function pluginStateRegister(params: {
           operation: "register",
           path: store.path,
         });
-        deleteExpiredPluginStateNamespaceEntries(store.db, {
+        deleteExpiredPluginStateEntries(store.db, now, {
           pluginId: params.pluginId,
           namespace: params.namespace,
-          now,
         });
         const existing = selectPluginStateEntry(store.db, {
           pluginId: params.pluginId,
@@ -683,15 +692,13 @@ export function pluginStateRegisterSequencedJournalEntry(params: {
       "register",
       (store) => {
         const now = Date.now();
-        deleteExpiredPluginStateNamespaceEntries(store.db, {
+        deleteExpiredPluginStateEntries(store.db, now, {
           pluginId: params.pluginId,
           namespace: params.cursorNamespace,
-          now,
         });
-        deleteExpiredPluginStateNamespaceEntries(store.db, {
+        deleteExpiredPluginStateEntries(store.db, now, {
           pluginId: params.pluginId,
           namespace: params.journalNamespace,
-          now,
         });
         const cursor = selectPluginStateEntry(store.db, {
           pluginId: params.pluginId,
@@ -818,10 +825,9 @@ export function pluginStateRegisterIfAbsent(params: {
           operation: "register",
           path: store.path,
         });
-        deleteExpiredPluginStateNamespaceEntries(store.db, {
+        deleteExpiredPluginStateEntries(store.db, now, {
           pluginId: params.pluginId,
           namespace: params.namespace,
-          now,
         });
         const existing = selectPluginStateEntry(store.db, {
           pluginId: params.pluginId,
@@ -832,6 +838,9 @@ export function pluginStateRegisterIfAbsent(params: {
         if (existing) {
           return false;
         }
+        // The exact expired key can lie beyond this namespace's cleanup batch.
+        // Reclaim it inside the same authoritative transaction before insertion.
+        deletePluginStateEntry(store.db, params);
         assertCanInsertPluginStateEntry({
           store,
           pluginId: params.pluginId,
@@ -891,10 +900,9 @@ export function pluginStateUpdate(params: {
       "register",
       (store) => {
         const now = Date.now();
-        deleteExpiredPluginStateNamespaceEntries(store.db, {
+        deleteExpiredPluginStateEntries(store.db, now, {
           pluginId: params.pluginId,
           namespace: params.namespace,
-          now,
         });
         const existing = selectPluginStateEntry(store.db, {
           pluginId: params.pluginId,
@@ -1199,7 +1207,7 @@ export function pluginStateClear(params: {
 export function sweepExpiredPluginStateEntries(): number {
   try {
     return runWriteTransaction("sweep", ({ db }) =>
-      sweepExpiredPluginStateEntriesFromDatabase(db, Date.now()),
+      deleteExpiredPluginStateEntries(db, Date.now()),
     );
   } catch (error) {
     throw wrapPluginStateError(

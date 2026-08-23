@@ -25,13 +25,21 @@ export type TestOptionalCustomElement = {
 
 let lazyElementSequence = 0;
 
-export function createLazyElementSpec(label: string): TestOptionalCustomElement {
+export function createLazyElementSpec(
+  label: string,
+  options: { firstError?: Error } = {},
+): TestOptionalCustomElement {
   lazyElementSequence += 1;
   const tagName = `openclaw-app-host-lazy-${lazyElementSequence}`;
+  let attempt = 0;
   return {
     tagName,
     label,
     loadModule: async () => {
+      attempt += 1;
+      if (attempt === 1 && options.firstError) {
+        throw options.firstError;
+      }
       customElements.define(tagName, class extends HTMLElement {});
     },
   };

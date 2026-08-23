@@ -107,6 +107,19 @@ export function pathForRoute(routeId: RouteId, basePath = ""): string {
   return normalizedBasePath ? `${normalizedBasePath}${path}` : path;
 }
 
+/** Query key the Activity feed reads to scope its session list to one person. */
+export const ACTIVITY_PERSON_PARAM = "person";
+
+/** Activity feed scoped to one person, for every surface that shows an identity. */
+export function activityPersonLocation(
+  personId: string,
+  basePath = "",
+): { pathname: string; search: string; href: string } {
+  const pathname = pathForRoute("activity", basePath);
+  const search = `?${new URLSearchParams({ [ACTIVITY_PERSON_PARAM]: personId }).toString()}`;
+  return { pathname, search, href: `${pathname}${search}` };
+}
+
 export function pathForWorkboardBoard(boardId: string, basePath = ""): string {
   if (!isValidWorkboardBoardId(boardId)) {
     throw new Error("Invalid Workboard board id.");

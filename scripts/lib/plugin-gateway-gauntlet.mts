@@ -621,6 +621,11 @@ function validateQaSuiteSummary(summary: unknown) {
   if (!isRecord(summary.run)) {
     throw new Error("QA suite summary missing run metadata");
   }
+  if (summary.run.status !== "completed") {
+    throw new Error(
+      `QA suite summary run.status must be completed, got ${String(summary.run.status)}`,
+    );
+  }
   const statusCounts = { failed: 0, passed: 0, skipped: 0 };
   for (const scenario of scenarios) {
     if (!isRecord(scenario)) {
