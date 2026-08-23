@@ -175,7 +175,7 @@ export function coordinateWorkerPlacementDispatch(
     },
     reclaim: async (request, authorize) =>
       await runExclusivePlacementOperation(() => service.reclaim(request, authorize)),
-    reconcile: () => runReconciliation(service.reconcile),
+    reconcile: (mode) => runReconciliation(() => service.reconcile(mode)),
     reconcileActive: (environmentId) =>
       environmentId === undefined
         ? runReconciliation(() => service.reconcileActive())

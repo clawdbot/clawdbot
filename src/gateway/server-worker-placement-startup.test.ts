@@ -212,6 +212,8 @@ describe("worker placement startup health lifetime", () => {
       });
 
       expect(sidecar).not.toBeNull();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reconcileActive).toHaveBeenCalledOnce();
       expect(diskSpace.sweep).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(60_000);
       expect(reconcileActive).toHaveBeenCalledOnce();
@@ -236,7 +238,84 @@ describe("worker placement startup health lifetime", () => {
     }
   });
 
-  it("drains deferred startup session evidence before stopping environments", async () => {
+  it.each(["provisioning", "active"] as const)(
+    "waits for %s placement authority recovery before exposing readiness",
+    async (state) => {
+      const releaseRecovery = createDeferredCore();
+      const reconcile = vi.fn(async () => await releaseRecovery.promise);
+      runtimeFactoryMocks.createDiskSpace.mockReturnValue({
+        read: vi.fn(),
+        version: vi.fn(() => 0),
+        sweep: vi.fn().mockResolvedValue(undefined),
+      });
+      runtimeFactoryMocks.createDispatch.mockReturnValue({
+        dispatch: vi.fn(),
+        forceDestroyEnvironment: vi.fn(),
+        reclaim: vi.fn(),
+        reconcile,
+        reconcileActive: vi.fn().mockResolvedValue(undefined),
+      });
+      runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValue(async () => "current");
+      const placement = {
+        sessionId: `session-startup-${state}`,
+        sessionKey: `agent:main:startup-${state}`,
+        agentId: "main",
+        state,
+        generation: 1,
+        environmentId: `worker-startup-${state}`,
+        activeOwnerEpoch: state === "active" ? 1 : null,
+        turnClaim: null,
+      };
+      const environments = {
+        installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
+        start: vi.fn(),
+        stop: vi.fn().mockResolvedValue(undefined),
+      };
+      const runtime = createGatewayWorkerPlacementRuntime({
+        placements: {
+          workspaceResultInstanceId: () => "gateway-test",
+          get: () => placement,
+          list: () => [placement],
+          retireSessionPlacement: vi.fn(),
+          pruneOrphanedWorkspaceReconciliations: () => [],
+          listWorkspaceReconciliationOwners: () => [],
+          listPendingWorkspaceResults: () => [],
+        } as never,
+        environments: environments as never,
+        gatewayNamespace: "gateway-test",
+        revokeSessionAuthority: vi.fn(),
+        warn: vi.fn(),
+      });
+      const starting = runtime.startRuntime({
+        isClosePreludeStarted: () => false,
+        registerSidecar: vi.fn(),
+        unregisterSidecar: vi.fn(),
+      });
+
+      try {
+        await vi.waitFor(() => expect(reconcile).toHaveBeenCalledWith("startup"));
+        expect(environments.start).not.toHaveBeenCalled();
+
+        let ready = false;
+        void starting.then(() => {
+          ready = true;
+        });
+        await Promise.resolve();
+        expect(ready).toBe(false);
+
+        releaseRecovery.resolve();
+        const sidecar = await starting;
+        expect(sidecar).not.toBeNull();
+        expect(environments.start).toHaveBeenCalledOnce();
+        await sidecar?.stop();
+      } finally {
+        releaseRecovery.resolve();
+        await starting.catch(() => undefined);
+      }
+    },
+  );
+
+  it("drains post-readiness session evidence before stopping environments", async () => {
     const evidence = createDeferredCore<"current">();
     runtimeFactoryMocks.resolveSessionEvidence.mockImplementation(async () => evidence.promise);
     runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValue(
@@ -307,6 +386,7 @@ describe("worker placement startup health lifetime", () => {
       unregisterSidecar,
     });
     await vi.waitFor(() => expect(runtimeFactoryMocks.resolveSessionEvidence).toHaveBeenCalled());
+    await expect(starting).resolves.toBe(sidecar);
     closeStarted = true;
     const stopping = sidecar?.stop();
     const repeatedStop = sidecar?.stop();
@@ -324,11 +404,9 @@ describe("worker placement startup health lifetime", () => {
     expect(environments.stopNodeEnrollmentWaits).toHaveBeenCalledOnce();
     expect(environments.stop).not.toHaveBeenCalled();
     evidence.resolve("current");
-    await expect(starting).resolves.toBeNull();
     await Promise.all([stopping, repeatedStop]);
     expect(environments.stop).toHaveBeenCalledOnce();
-    expect(unregisterSidecar).toHaveBeenCalledOnce();
-    expect(unregisterSidecar).toHaveBeenCalledWith(sidecar);
+    expect(unregisterSidecar).not.toHaveBeenCalled();
   });
 
   it("retries worker environment cleanup after a failed stop attempt", async () => {
@@ -492,6 +570,7 @@ describe("worker placement startup health lifetime", () => {
     const releaseRecovery = createDeferredCore();
     const environmentStopStarted = createDeferredCore();
     const events: string[] = [];
+    const reconcileActive = vi.fn().mockResolvedValue(undefined);
     let installedGuard: ReconcileGuard | undefined;
     const placement = {
       sessionId: "session-close-guard",
@@ -508,7 +587,7 @@ describe("worker placement startup health lifetime", () => {
       forceDestroyEnvironment: vi.fn(),
       reclaim: vi.fn(),
       reconcile: vi.fn().mockResolvedValue(undefined),
-      reconcileActive: vi.fn().mockResolvedValue(undefined),
+      reconcileActive,
       resumeProvisioning: vi.fn(async (_placement, reconcileCore) => {
         events.push("recovery:start");
         recoveryStarted.resolve();
@@ -557,6 +636,8 @@ describe("worker placement startup health lifetime", () => {
     if (!sidecar || !guard) {
       throw new Error("worker placement reconcile guard was not installed");
     }
+    await vi.waitFor(() => expect(reconcileActive).toHaveBeenCalledOnce());
+    await runtime.dispatchService.reconcileActive();
     const reconcileCore = vi.fn(async () => {
       events.push("reconcile:core");
     });

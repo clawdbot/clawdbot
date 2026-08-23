@@ -77,6 +77,7 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "createFromProfileSnapshot"
   | "destroy"
   | "get"
+  | "reconcileEnvironment"
   | "reconcileOnce"
   | "startTunnel"
   | "stopTunnel"
