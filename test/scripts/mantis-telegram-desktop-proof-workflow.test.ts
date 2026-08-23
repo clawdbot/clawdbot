@@ -391,14 +391,20 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(gate).toContain(
       '.summary = (if .comparison.outcome == "pass" then $judgment[0].summary else .summary end)',
     );
-    expect(gate).toContain("baselineExpectationMet: .comparison.baseline.expectationMet");
-    expect(gate).toContain("candidateExpectationMet: .comparison.candidate.expectationMet");
+    expect(gate).toContain("def valid_assertion:");
+    expect(gate).toContain('select((keys | sort) == ["mode", "target", "value"])');
     expect(gate).toContain(
-      ".comparison.baseline.expectationMet = $judgment[0].baselineExpectationMet",
+      '.target == "providerRequests" or .target == "botApiRequests" or .target == "observationEvents"',
     );
+    expect(gate).toContain('.mode == "contains" or .mode == "absent"');
+    expect(gate).toContain("(.value | length) >= 1 and (.value | length) <= 200");
+    expect(gate).toContain("baselineAssertion: (.comparison.baseline.assertion | valid_assertion)");
     expect(gate).toContain(
-      ".comparison.candidate.expectationMet = $judgment[0].candidateExpectationMet",
+      "candidateAssertion: (.comparison.candidate.assertion | valid_assertion)",
     );
+    expect(gate).toContain(".comparison.baseline.assertion = $judgment[0].baselineAssertion");
+    expect(gate).toContain(".comparison.candidate.assertion = $judgment[0].candidateAssertion");
+    expect(gate).not.toContain("ExpectationMet");
     expect(gate).toContain("scripts/mantis/publish-pr-evidence.mjs");
     expect(gate).toContain('--manifest "$manifest" --validate-only true');
     expect(gate).toContain('sudo mv "$trusted_manifest" "$manifest"');
@@ -418,8 +424,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(gate).toContain('recipe_suggestion="$quarantine/recipe-suggestion.md"');
     expect(gate).toContain("((recipe_bytes > 0 && recipe_bytes <= 65536))");
     expect(gate).toContain('"$trusted_output/recipe-suggestion.md"');
-    expect(gate).toContain("-name '*.json' -o -name '*.md'");
-    expect(gate).toContain('"$trusted_output/$analysis_name"');
+    expect(gate).not.toContain("analysis_file");
+    expect(gate).not.toContain("-name '*.json' -o -name '*.md'");
     expect(
       gate.indexOf(
         'sudo install -m 0400 -o root -g root "$agent_manifest" "$trusted_agent_manifest"',
@@ -856,9 +862,13 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("If `start` reports `desktop-unavailable`");
     expect(prompt).toMatch(/never\s+retry that lane/u);
     expect(prompt).toContain("Iterate as needed; all attempts remain recorded.");
-    expect(prompt).toContain("set `expectationMet` to a boolean for each");
+    expect(prompt).toContain(
+      '`{"target":"providerRequests|botApiRequests|observationEvents","mode":"contains|absent","value":"literal substring (1..200 chars)"}`',
+    );
+    expect(prompt).toContain("Trusted code evaluates it against that lane's recorded facts");
+    expect(prompt).toContain("never set\n`expectationMet`");
     expect(prompt).toMatch(
-      /unmet candidate expectation is `fail`, or `block` with\s+a stated reason.*never `pass`/u,
+      /expectation cannot be expressed as this fact predicate,\s+the lane is `blocked` with a concrete reason.*never `pass`/u,
     );
     expect(prompt).not.toContain("Two non-advancing repeats");
     expect(prompt).toContain("MANTIS_PR_CONTEXT");
@@ -1395,8 +1405,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     // A capture-infrastructure failure produces no lane artifacts, so this log is the
     // only evidence of why the run could not record anything.
     expect(uploadPaths).toContain("/capture-failure.log");
-    expect(uploadPaths).toContain("/*.json");
-    expect(uploadPaths).toContain("/*.md");
+    expect(uploadPaths).not.toContain("/*.json");
+    expect(uploadPaths).not.toContain("/*.md");
     expect(uploadPaths).toContain("/baseline");
     expect(uploadPaths).toContain("/candidate");
     expect(uploadPaths).not.toContain("session.json");

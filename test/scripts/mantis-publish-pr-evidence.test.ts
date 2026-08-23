@@ -81,6 +81,85 @@ function writeFixtureManifest() {
   return manifestPath;
 }
 
+type TelegramAssertion = {
+  mode: "absent" | "contains";
+  target: "botApiRequests" | "observationEvents" | "providerRequests";
+  value: string;
+};
+
+function writeLaneFacts(
+  dir: string,
+  lane: "baseline" | "candidate",
+  facts: {
+    botApiRequests?: readonly unknown[];
+    observationEvents?: readonly unknown[];
+    providerRequests?: readonly unknown[];
+  } = {},
+) {
+  const laneDir = path.join(dir, lane);
+  mkdirSync(laneDir, { recursive: true });
+  const factsPath = path.join(laneDir, "mantis-lane-facts.json");
+  writeFileSync(
+    factsPath,
+    JSON.stringify({
+      botApiRequests: facts.botApiRequests ?? [],
+      observation: { events: facts.observationEvents ?? [] },
+      providerRequests: facts.providerRequests ?? [],
+    }),
+  );
+  return {
+    kind: "metadata",
+    label: `${lane} lane facts`,
+    lane,
+    path: `${lane}/mantis-lane-facts.json`,
+    targetPath: `${lane}/mantis-lane-facts.json`,
+  };
+}
+
+function writeTelegramDesktopFixture({
+  baselineAssertion = { target: "providerRequests", mode: "absent", value: "was already sent" },
+  baselineFacts,
+  candidateAssertion = {
+    target: "providerRequests",
+    mode: "contains",
+    value: "was already sent",
+  },
+  candidateFacts,
+}: {
+  baselineAssertion?: TelegramAssertion;
+  baselineFacts?: Parameters<typeof writeLaneFacts>[2];
+  candidateAssertion?: TelegramAssertion;
+  candidateFacts?: Parameters<typeof writeLaneFacts>[2];
+} = {}) {
+  const manifestPath = writeFixtureManifest();
+  const dir = path.dirname(manifestPath);
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  manifest.id = "telegram-desktop-proof";
+  manifest.scenario = "telegram-desktop-proof";
+  manifest.comparison = {
+    baseline: {
+      assertion: baselineAssertion,
+      expected: "Baseline should retain the old delivery hint.",
+      expectationMet: true,
+      status: "pass",
+    },
+    candidate: {
+      assertion: candidateAssertion,
+      expected: "Candidate should record the delivered-reply acknowledgement.",
+      expectationMet: true,
+      status: "pass",
+    },
+    outcome: "pass",
+    pass: true,
+  };
+  manifest.artifacts.push(
+    writeLaneFacts(dir, "baseline", baselineFacts),
+    writeLaneFacts(dir, "candidate", candidateFacts),
+  );
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  return manifestPath;
+}
+
 describe("scripts/mantis/publish-pr-evidence", () => {
   it("selects only Mantis-owned status comments", () => {
     const source = readFileSync("scripts/mantis/publish-pr-evidence.mjs", "utf8");
@@ -88,7 +167,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     expect(source).toContain('.user.login == "openclaw-mantis[bot]"');
   });
 
-  it("rejects manifests without a recorded lane expectation judgment", () => {
+  it("keeps required booleans for sibling trusted evidence producers", () => {
     const manifestPath = writeFixtureManifest();
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     delete manifest.comparison.candidate.expectationMet;
@@ -99,28 +178,11 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     );
   });
 
-  it("downgrades run 32619081130's contradictory pass claim", () => {
-    const manifestPath = writeFixtureManifest();
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    manifest.id = "telegram-desktop-proof";
-    manifest.scenario = "telegram-desktop-proof";
-    manifest.comparison = {
-      baseline: {
-        expected: "Baseline should retain the old delivery hint.",
-        expectationMet: true,
-        status: "pass",
-      },
-      candidate: {
-        expected:
-          "Candidate should replace the old hint with the delivered-reply acknowledgement in the provider request containing the second user message; request 3 still had the old hint and no acknowledgement.",
-        expectationMet: false,
-        status: "pass",
-      },
-      outcome: "pass",
-      pass: true,
-    };
-    writeFileSync(manifestPath, JSON.stringify(manifest));
-
+  it("downgrades run 32619081130's contradictory pass claim from trusted lane facts", () => {
+    const manifestPath = writeTelegramDesktopFixture();
+    expect(JSON.parse(readFileSync(manifestPath, "utf8")).comparison.candidate.expectationMet).toBe(
+      true,
+    );
     validateEvidenceManifestFile(manifestPath);
     const validated = loadEvidenceManifest(manifestPath);
     const body = renderEvidenceComment({
@@ -130,20 +192,124 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     });
 
     expect(validated.comparison).toMatchObject({
+      candidate: {
+        assertionOccurrences: 0,
+        expectationMet: false,
+      },
       outcome: "fail",
       pass: false,
       verdictNote: "verdict downgraded: candidate expectation not met",
     });
     expect(body).toContain("- Note: verdict downgraded: candidate expectation not met");
+    expect(body).toContain(
+      '- Candidate assertion: `providerRequests` `contains` "was already sent" · occurrences: 0 · unmet',
+    );
     expect(body).toContain("- Overall: `fail`");
     expect(JSON.parse(readFileSync(manifestPath, "utf8")).comparison.pass).toBe(false);
   });
 
-  it("keeps a mechanically successful verdict when every expectation was observed", () => {
-    const manifest = loadEvidenceManifest(writeFixtureManifest());
+  it.each([
+    ["providerRequests", { providerRequests: [{ input: "reply was already sent" }] }],
+    ["botApiRequests", { botApiRequests: [{ payload: "reply was already sent" }] }],
+    ["observationEvents", { observationEvents: [{ text: "reply was already sent" }] }],
+  ] as const)(
+    "keeps a pass when trusted %s contain the asserted value",
+    (target, candidateFacts) => {
+      const manifest = loadEvidenceManifest(
+        writeTelegramDesktopFixture({
+          candidateAssertion: { target, mode: "contains", value: "was already sent" },
+          candidateFacts,
+        }),
+      );
 
-    expect(manifest.comparison).toMatchObject({ outcome: "pass", pass: true });
-    expect(manifest.comparison).not.toHaveProperty("verdictNote");
+      expect(manifest.comparison).toMatchObject({ outcome: "pass", pass: true });
+      expect(manifest.comparison.candidate).toMatchObject({
+        assertionOccurrences: 1,
+        expectationMet: true,
+      });
+      expect(manifest.comparison).not.toHaveProperty("verdictNote");
+    },
+  );
+
+  it("sanitizes the rendered assertion value", () => {
+    const manifest = loadEvidenceManifest(
+      writeTelegramDesktopFixture({
+        candidateAssertion: {
+          target: "providerRequests",
+          mode: "absent",
+          value: "<unsafe>` assertion",
+        },
+      }),
+    );
+    const body = renderEvidenceComment({
+      manifest,
+      marker: "<!-- mantis-telegram-desktop-proof -->",
+      rawBase: "https://artifacts.openclaw.ai/mantis/telegram-desktop/pr-1/run-1",
+    });
+
+    expect(body).toContain('"&lt;unsafe&gt;&#96; assertion"');
+  });
+
+  it.each([
+    { providerRequests: [], expectedMet: true },
+    { providerRequests: [{ input: "was already sent" }], expectedMet: false },
+  ])(
+    "evaluates absent mode from trusted facts: $expectedMet",
+    ({ providerRequests, expectedMet }) => {
+      const manifest = loadEvidenceManifest(
+        writeTelegramDesktopFixture({
+          candidateAssertion: {
+            target: "providerRequests",
+            mode: "absent",
+            value: "was already sent",
+          },
+          candidateFacts: { providerRequests },
+        }),
+      );
+
+      expect(manifest.comparison.candidate.expectationMet).toBe(expectedMet);
+      expect(manifest.comparison.pass).toBe(expectedMet);
+    },
+  );
+
+  it.each([
+    ["missing", undefined],
+    ["unknown target", { target: "requests", mode: "contains", value: "sent" }],
+    ["extra key", { target: "providerRequests", mode: "contains", value: "sent", regex: false }],
+    ["empty value", { target: "providerRequests", mode: "contains", value: "" }],
+  ])("rejects a %s Telegram assertion", (_name, assertion) => {
+    const manifestPath = writeTelegramDesktopFixture();
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    if (assertion === undefined) {
+      delete manifest.comparison.candidate.assertion;
+    } else {
+      manifest.comparison.candidate.assertion = assertion;
+    }
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    expect(() => loadEvidenceManifest(manifestPath)).toThrow(
+      /comparison\.candidate\.assertion must be exactly/u,
+    );
+  });
+
+  it("rejects a missing trusted lane-facts file", () => {
+    const manifestPath = writeTelegramDesktopFixture();
+    rmSync(path.join(path.dirname(manifestPath), "candidate", "mantis-lane-facts.json"));
+
+    expect(() => loadEvidenceManifest(manifestPath)).toThrow(
+      "Missing required artifact: candidate/mantis-lane-facts.json",
+    );
+  });
+
+  it("explains that saved schema-version 1 desktop proof must be rerun", () => {
+    const manifestPath = writeTelegramDesktopFixture();
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    manifest.schemaVersion = 1;
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    expect(() => loadEvidenceManifest(manifestPath)).toThrow(
+      /Rerun the Mantis Telegram Desktop Proof workflow; saved version-1 artifacts are not migrated/u,
+    );
   });
 
   it("renders a manifest-driven PR comment with inline screenshots and video links", () => {
@@ -498,19 +664,20 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "mantis-evidence-test-"));
     tempDirs.push(dir);
     const manifestPath = path.join(dir, "mantis-evidence.json");
+    const artifacts = [writeLaneFacts(dir, "baseline"), writeLaneFacts(dir, "candidate")];
     writeFileSync(
       manifestPath,
       JSON.stringify({
-        artifacts: [],
+        artifacts,
         comparison: {
           baseline: {
+            assertion: { target: "providerRequests", mode: "absent", value: "visible delta" },
             expected: "no visible Telegram Desktop delta",
-            expectationMet: true,
             status: "skipped",
           },
           candidate: {
+            assertion: { target: "providerRequests", mode: "absent", value: "visible delta" },
             expected: "no visible Telegram Desktop delta",
-            expectationMet: true,
             status: "skipped",
           },
           pass: true,
@@ -537,6 +704,8 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     });
 
     expect(manifest.artifacts.map((artifact) => artifact.targetPath)).toEqual([
+      "baseline/mantis-lane-facts.json",
+      "candidate/mantis-lane-facts.json",
       "mantis-evidence.json",
     ]);
     expect(body).toContain(
@@ -553,19 +722,20 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "mantis-evidence-test-"));
     tempDirs.push(dir);
     const manifestPath = path.join(dir, "mantis-evidence.json");
+    const artifacts = [writeLaneFacts(dir, "baseline"), writeLaneFacts(dir, "candidate")];
     writeFileSync(
       manifestPath,
       JSON.stringify({
-        artifacts: [],
+        artifacts,
         comparison: {
           baseline: {
+            assertion: { target: "providerRequests", mode: "absent", value: "visible proof" },
             expected: "no acceptable native Telegram Desktop visual artifact",
-            expectationMet: false,
             status: "skipped",
           },
           candidate: {
+            assertion: { target: "providerRequests", mode: "absent", value: "visible proof" },
             expected: "no acceptable native Telegram Desktop visual artifact",
-            expectationMet: false,
             status: "skipped",
           },
           pass: false,
@@ -601,19 +771,20 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "mantis-evidence-test-"));
     tempDirs.push(dir);
     const manifestPath = path.join(dir, "mantis-evidence.json");
+    const artifacts = [writeLaneFacts(dir, "baseline"), writeLaneFacts(dir, "candidate")];
     writeFileSync(
       manifestPath,
       JSON.stringify({
-        artifacts: [],
+        artifacts,
         comparison: {
           baseline: {
+            assertion: { target: "providerRequests", mode: "absent", value: "typed reasoning" },
             expected: "typed reasoning chunks",
-            expectationMet: false,
             status: "blocked",
           },
           candidate: {
+            assertion: { target: "providerRequests", mode: "absent", value: "typed reasoning" },
             expected: "typed reasoning chunks",
-            expectationMet: false,
             status: "blocked",
           },
           outcome: "blocked",

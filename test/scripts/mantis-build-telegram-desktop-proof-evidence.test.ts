@@ -86,13 +86,18 @@ function makeLane(
   return { outputDir, repo };
 }
 
-function recordExpectations(
+function recordAssertions(
   manifestPath: string,
   expectationMet: { baseline: boolean; candidate: boolean },
 ) {
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  manifest.comparison.baseline.expectationMet = expectationMet.baseline;
-  manifest.comparison.candidate.expectationMet = expectationMet.candidate;
+  for (const lane of ["baseline", "candidate"] as const) {
+    manifest.comparison[lane].assertion = {
+      target: "providerRequests",
+      mode: expectationMet[lane] ? "absent" : "contains",
+      value: "fixture assertion sentinel",
+    };
+  }
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
@@ -188,7 +193,7 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
     expect(result.manifest.schemaVersion).toBe(2);
     expect(result.manifest.comparison.baseline).not.toHaveProperty("expectationMet");
     expect(result.manifest.comparison.candidate).not.toHaveProperty("expectationMet");
-    recordExpectations(result.manifestPath, { baseline: true, candidate: true });
+    recordAssertions(result.manifestPath, { baseline: true, candidate: true });
     const manifest = loadEvidenceManifest(result.manifestPath);
     expect(manifest.comparison.pass).toBe(true);
     expect(manifest.comparison.candidate).toMatchObject({
@@ -386,7 +391,7 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
     expect(result.manifest.comparison.baseline.detail).toMatch(/…$/u);
     expect(result.manifest.comparison.baseline.detail).not.toMatch(/[<>`\n\r]/u);
 
-    recordExpectations(result.manifestPath, { baseline: false, candidate: false });
+    recordAssertions(result.manifestPath, { baseline: false, candidate: false });
     const manifest = loadEvidenceManifest(result.manifestPath);
     const body = renderEvidenceComment({
       manifest,
@@ -440,7 +445,7 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
     expect(
       JSON.parse(readFileSync(path.join(outputDir, "baseline", "summary.json"), "utf8")),
     ).toEqual({ artifacts: {}, status: "infra-error" });
-    recordExpectations(result.manifestPath, { baseline: false, candidate: true });
+    recordAssertions(result.manifestPath, { baseline: false, candidate: true });
     const manifest = loadEvidenceManifest(result.manifestPath);
     const body = renderEvidenceComment({
       manifest,
@@ -478,7 +483,7 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
       candidateSha,
     ]);
 
-    recordExpectations(result.manifestPath, { baseline: true, candidate: true });
+    recordAssertions(result.manifestPath, { baseline: true, candidate: true });
     const manifest = loadEvidenceManifest(result.manifestPath);
     expect(manifest.artifacts).toContainEqual(
       expect.objectContaining({
