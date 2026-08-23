@@ -2,7 +2,11 @@ import {
   parseStrictFiniteNumber,
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
-import { listAgentIds, resolveSystemAgentTargetAgentId } from "../../agents/agent-scope-config.js";
+import type { Command } from "commander";
+import {
+  resolveAgentOperationAgentId,
+  resolveConfiguredAgentId,
+} from "../../agents/agent-scope-config.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import {
   listProfilesForProvider,
@@ -17,6 +21,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { writeRuntimeJson, defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { resolveCommandConfigWithSecrets } from "../command-config-resolution.js";
+import { inheritOptionFromParent } from "../command-options.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
 
@@ -111,18 +116,21 @@ export function resolveCapabilityProviderAgentId(
   if (rawAgentId !== undefined && !requestedAgentId) {
     throw new Error("--agent must not be blank");
   }
-  const agentId = resolveSystemAgentTargetAgentId(cfg, requestedAgentId, {
+  const agentId = resolveAgentOperationAgentId(cfg, requestedAgentId, {
     surface,
     hint: "Pass --agent <id> or set agents.defaults.systemAgent.agentId.",
   });
-  if (!listAgentIds(cfg).includes(agentId)) {
-    throw new Error(
-      `Unknown agent id "${agentId}". Run \`openclaw agents list\` to see configured agents.`,
-    );
-  }
-  return agentId;
+  return resolveConfiguredAgentId(cfg, agentId);
 }
 
+export function resolveCapabilityAgentOption(
+  command: Command | undefined,
+  rawAgentId: unknown,
+): string | undefined {
+  return typeof rawAgentId === "string"
+    ? rawAgentId
+    : inheritOptionFromParent<string>(command, "agent");
+}
 function getAuthProfileIdsForProvider(
   cfg: OpenClawConfig,
   providerId: string,

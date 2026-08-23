@@ -25,7 +25,7 @@ import {
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import {
   deleteSessionEntryRows,
-  readExactSessionEntryJsonForCanonicalRepair,
+  readExactSessionEntryJson,
   readExactSessionEntryRow,
   readSessionEntryStore,
 } from "./session-accessor.sqlite-entry-store.js";
@@ -35,11 +35,9 @@ import type {
   SessionEntryRemovalPlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { coerceSqliteNumber } from "./session-accessor.sqlite-normalize.js";
-import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
-import { buildSessionResetBoundaryPlan } from "./session-reset-boundary-event.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import type { SessionEntry } from "./types.js";
 
@@ -54,7 +52,7 @@ export function shouldRemoveSessionEntry(
   }
   if (
     removal.expectedEntry !== undefined &&
-    JSON.stringify(entry) !== JSON.stringify(removal.expectedEntry)
+    !sqliteSessionEntriesEqual(entry, removal.expectedEntry)
   ) {
     return false;
   }
@@ -328,7 +326,7 @@ export async function projectSessionEntryLifecycleMutation(
     const sessionKey = removal.exactStoredKey ? removal.sessionKey : removal.sessionKey.trim();
     let entry = removal.exactStoredKey || sessionKey ? store[sessionKey] : undefined;
     if (removal.expectedRawEntryJson !== undefined) {
-      const currentRawEntryJson = readExactSessionEntryJsonForCanonicalRepair(database, sessionKey);
+      const currentRawEntryJson = readExactSessionEntryJson(database, sessionKey);
       if (currentRawEntryJson !== removal.expectedRawEntryJson) {
         throw new Error(
           `SQLite session entry changed before raw lifecycle removal for ${sessionKey}`,
@@ -394,18 +392,12 @@ export async function projectSessionEntryLifecycleMutation(
     const cloned = cloneSessionEntry(entry);
     store[sessionKey] = cloned;
     changedSessionKeys.add(sessionKey);
-    const resetBoundaryPlan =
-      upsert.resetBoundaryReason && expectedEntry?.sessionId
-        ? await buildSessionResetBoundaryPlan({
-            events: loadTranscriptEventsFromDatabase(database, expectedEntry.sessionId),
-            reason: upsert.resetBoundaryReason,
-          })
-        : undefined;
     upsertedEntries.push({
       expectedEntry,
       sessionKey,
       entry: cloned,
-      ...(resetBoundaryPlan ? { resetBoundaryPlan } : {}),
+      ...(upsert.routeContext !== undefined ? { routeContext: upsert.routeContext } : {}),
+      ...(upsert.resetBoundaryReason ? { resetBoundaryReason: upsert.resetBoundaryReason } : {}),
     });
   }
   const referencedSessionIds = collectProjectedReferencedSessionIds({
@@ -627,7 +619,7 @@ export function planSessionLifecycleArtifactCleanup(
     ) {
       continue;
     }
-    const entry = parseSessionEntryRow(row);
+    const entry = projectedStore[row.session_key];
     const sessionIds = uniqueStrings([
       row.current_session_id,
       ...(entry ? collectSessionStateIdsForEntry(entry) : []),

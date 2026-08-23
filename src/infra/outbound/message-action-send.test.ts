@@ -618,6 +618,55 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
 
+    it.each([
+      ["model-authored message-tool sends", "message-tool" as const, "caller"],
+      ["operator CLI and gateway sends", undefined, undefined],
+    ])("marks the delivery retry owner for %s", async (_label, actionOrigin, expected) => {
+      const presentation = {
+        blocks: [
+          {
+            type: "chart",
+            chartType: "line",
+            title: "Trend",
+            categories: ["Mon"],
+            series: [{ name: "Prod", values: [1] }],
+          },
+        ],
+      };
+      mocks.executeSendAction.mockResolvedValueOnce({ handledBy: "core", payload: { ok: true } });
+      setTestPlugin(
+        {
+          ...cardPlugin,
+          actions: { ...cardPlugin.actions, resolveExecutionMode: () => "local" },
+          outbound: {
+            deliveryMode: "direct",
+            sendText: async () => ({ channel: "cardchat", messageId: "msg-test" }),
+          },
+        },
+        "cardchat",
+      );
+
+      await runMessageAction({
+        cfg: { channels: { cardchat: { enabled: true } } } as OpenClawConfig,
+        action: "send",
+        ...(actionOrigin ? { actionOrigin } : {}),
+        params: {
+          channel: "cardchat",
+          target: "channel:test-card",
+          message: "Deployment trend",
+          presentation,
+        },
+        gateway: { clientName: "cli", mode: "cli" },
+        agentId: "main",
+        suppressTranscriptMirror: true,
+        dryRun: false,
+      });
+
+      const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
+      const executeContext = readRecordField(executeCall, "ctx", "execute send context");
+      expect(executeContext.deliveryRetryOwner).toBe(expected);
+    });
+
     it("keeps non-presentation sends on plugin-owned handling", async () => {
       const cardJson = JSON.stringify({
         body: {

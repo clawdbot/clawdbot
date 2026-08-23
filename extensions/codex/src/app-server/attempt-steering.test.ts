@@ -18,21 +18,12 @@ describe("Codex app-server steering queue", () => {
     vi.useRealTimers();
   });
 
-  function createQueue(
-    request: ReturnType<typeof vi.fn>,
-    options: {
-      signal?: AbortSignal;
-      claimPendingUserInput?: () =>
-        | { answer: (text: string) => boolean; cancel: () => boolean }
-        | undefined;
-    } = {},
-  ) {
+  function createQueue(request: ReturnType<typeof vi.fn>, options: { signal?: AbortSignal } = {}) {
     return createCodexSteeringQueue({
       client: { request } as never,
       threadId: "thread-1",
       turnId: "turn-1",
       requestTimeoutMs: 60_000,
-      claimPendingUserInput: options.claimPendingUserInput ?? (() => undefined),
       signal: options.signal ?? new AbortController().signal,
     });
   }
@@ -79,7 +70,6 @@ describe("Codex app-server steering queue", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       requestTimeoutMs: 1_000,
-      claimPendingUserInput: () => undefined,
       signal: new AbortController().signal,
     });
 
@@ -111,7 +101,6 @@ describe("Codex app-server steering queue", () => {
       threadId: "thread-1",
       turnId: "turn-1",
       requestTimeoutMs: 60_000,
-      claimPendingUserInput: () => undefined,
       signal: controller.signal,
     });
     const pendingRequests = (
@@ -385,191 +374,6 @@ describe("Codex app-server steering queue", () => {
     expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(false);
     acceptSteer?.();
     await vi.advanceTimersByTimeAsync(0);
-  });
-
-  it("answers pending user input only for an inbound user message", async () => {
-    const request = vi.fn(async () => ({ turnId: "turn-1" }));
-    const answerPendingUserInput = vi.fn(() => true);
-    const queue = createQueue(request, {
-      claimPendingUserInput: () => ({
-        answer: answerPendingUserInput,
-        cancel: vi.fn(() => true),
-      }),
-    });
-    const onQueueAccepted = vi.fn();
-
-    await queue.queue("answer locally", {
-      debounceMs: 0,
-      isInboundUserMessage: true,
-      onQueueAccepted,
-    });
-    expect(answerPendingUserInput).toHaveBeenCalledWith("answer locally");
-    expect(onQueueAccepted).toHaveBeenCalledWith(true);
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("steers internal completion messages without claiming pending user input", async () => {
-    const request = vi.fn(async () => ({ turnId: "turn-1" }));
-    const claimPendingUserInput = vi.fn(() => ({
-      answer: vi.fn(() => true),
-      cancel: vi.fn(() => true),
-    }));
-    const queue = createQueue(request, { claimPendingUserInput });
-
-    const queued = queue.queue("subagent completed", { debounceMs: 0 });
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(claimPendingUserInput).not.toHaveBeenCalled();
-    expect(request).toHaveBeenCalledWith(
-      "turn/steer",
-      expect.objectContaining({
-        input: [{ type: "text", text: "subagent completed", text_elements: [] }],
-      }),
-      steerRequestOptions,
-    );
-    expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
-    await queued;
-  });
-
-  it("rejects sealed inbound admission before claiming pending user input", async () => {
-    const request = vi.fn(async () => ({ turnId: "turn-1" }));
-    const claimPendingUserInput = vi.fn(() => ({
-      answer: vi.fn(() => true),
-      cancel: vi.fn(() => true),
-    }));
-    const queue = createQueue(request, { claimPendingUserInput });
-    const onQueueAccepted = vi.fn();
-
-    queue.sealAdmission();
-    await expect(
-      queue.queue("too late", {
-        debounceMs: 0,
-        isInboundUserMessage: true,
-        onQueueAccepted,
-      }),
-    ).rejects.toThrow("queue admission sealed");
-
-    expect(claimPendingUserInput).not.toHaveBeenCalled();
-    expect(onQueueAccepted).toHaveBeenCalledWith(false);
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("steers a complete image reply before releasing pending input", async () => {
-    const request = vi.fn(async () => ({ turnId: "turn-1" }));
-    const answerPendingUserInput = vi.fn(() => true);
-    const cancelPendingUserInput = vi.fn(() => true);
-    const queue = createQueue(request, {
-      claimPendingUserInput: () => ({
-        answer: answerPendingUserInput,
-        cancel: cancelPendingUserInput,
-      }),
-    });
-
-    const queued = queue.queue("compare these", {
-      isInboundUserMessage: true,
-      images: [
-        { type: "image", data: PNG_1X1, mimeType: "image/png" },
-        { type: "image", data: PNG_1X1, mimeType: "image/png" },
-      ],
-    });
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(answerPendingUserInput).not.toHaveBeenCalled();
-    expect(request).toHaveBeenCalledWith(
-      "turn/steer",
-      {
-        threadId: "thread-1",
-        expectedTurnId: "turn-1",
-        input: [
-          { type: "text", text: "compare these", text_elements: [] },
-          { type: "image", url: `data:image/png;base64,${PNG_1X1}` },
-          { type: "image", url: `data:image/png;base64,${PNG_1X1}` },
-        ],
-        clientUserMessageId: "openclaw:turn-1:steer:1",
-      },
-      steerRequestOptions,
-    );
-    expect(cancelPendingUserInput).toHaveBeenCalledOnce();
-    expect(request.mock.invocationCallOrder[0]!).toBeLessThan(
-      cancelPendingUserInput.mock.invocationCallOrder[0]!,
-    );
-    expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
-    await queued;
-  });
-
-  it("claims pending input before a later queued message can answer it", async () => {
-    let resolveImageSteer: (() => void) | undefined;
-    const request = vi
-      .fn()
-      .mockImplementationOnce(
-        () =>
-          new Promise<{ turnId: string }>((resolve) => {
-            resolveImageSteer = () => resolve({ turnId: "turn-1" });
-          }),
-      )
-      .mockResolvedValue({ turnId: "turn-1" });
-    const cancelPendingUserInput = vi.fn(() => true);
-    let pendingClaimed = false;
-    const queue = createQueue(request, {
-      claimPendingUserInput: () => {
-        if (pendingClaimed) {
-          return undefined;
-        }
-        pendingClaimed = true;
-        return { answer: vi.fn(() => true), cancel: cancelPendingUserInput };
-      },
-    });
-
-    const imageQueued = queue.queue("image reply", {
-      isInboundUserMessage: true,
-      images: [{ type: "image", data: PNG_1X1, mimeType: "image/png" }],
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    const laterQueued = queue.queue("later reply", { debounceMs: 0 });
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(request).toHaveBeenCalledTimes(1);
-    resolveImageSteer?.();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(cancelPendingUserInput).toHaveBeenCalledOnce();
-    expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
-    expect(queue.confirmConsumed("openclaw:turn-1:steer:2")).toBe(true);
-    await Promise.all([imageQueued, laterQueued]);
-    expect(request.mock.calls[0]?.[1]).toMatchObject({
-      input: [
-        { type: "text", text: "image reply" },
-        { type: "image", url: `data:image/png;base64,${PNG_1X1}` },
-      ],
-    });
-    expect(request.mock.calls[1]?.[1]).toMatchObject({
-      input: [{ type: "text", text: "later reply" }],
-    });
-  });
-
-  it("releases pending input when an atomic image steer is rejected", async () => {
-    const request = vi.fn(async () => {
-      throw new Error("cannot steer this turn");
-    });
-    const answerPendingUserInput = vi.fn(() => true);
-    const cancelPendingUserInput = vi.fn(() => true);
-    const queue = createQueue(request, {
-      claimPendingUserInput: () => ({
-        answer: answerPendingUserInput,
-        cancel: cancelPendingUserInput,
-      }),
-    });
-
-    const queued = queue.queue("compare this", {
-      isInboundUserMessage: true,
-      images: [{ type: "image", data: PNG_1X1, mimeType: "image/png" }],
-    });
-    const rejected = expect(queued).rejects.toThrow("cannot steer this turn");
-    await vi.advanceTimersByTimeAsync(0);
-    await rejected;
-
-    expect(answerPendingUserInput).not.toHaveBeenCalled();
-    expect(cancelPendingUserInput).toHaveBeenCalledOnce();
   });
 
   it("rejects before dispatch when the run is already aborted", async () => {

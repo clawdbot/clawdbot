@@ -64,6 +64,7 @@ import type { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 type PromptPhaseInput = Parameters<typeof runEmbeddedAttemptPromptPhase>[0];
 type PromptPhaseState = ReturnType<PromptPhaseInput["lifecycle"]["readState"]>;
 type AssemblyCall = {
+  applyPromptBuildToolsAllow: (toolsAllow: string[] | undefined) => string[];
   setLeasedSteering: (lease: { leaseId: string; runIds: string[] }) => void;
 };
 type PromptPreflightCall = Parameters<typeof prepareEmbeddedAttemptPromptPreflight>[0];
@@ -107,6 +108,7 @@ function createFixture() {
     prePromptMessageCount = count;
   });
   const setPromptCacheChangesForTurn = vi.fn();
+  const setCodeModeReconciliationReadAuthorized = vi.fn();
   const setFinalPromptText = vi.fn();
   const markBeforeAgentRunBlocked = vi.fn();
   const markYieldAborted = vi.fn(() => {
@@ -119,6 +121,7 @@ function createFixture() {
   mocks.preparePromptAssembly.mockImplementation(async (input: AssemblyCall) => {
     order.push("assembly");
     const lease = { leaseId: "lease-1", runIds: ["run-1"] };
+    input.applyPromptBuildToolsAllow(undefined);
     input.setLeasedSteering(lease);
     return {
       hookCtx: {},
@@ -237,6 +240,14 @@ function createFixture() {
       transport: "sse",
       uncompactedEffectiveTools: [],
     },
+    toolPolicy: {
+      baseline: { activeToolNames: ["read"], catalogEntries: [] },
+      effectiveTools: [{ name: "read" }],
+      uncompactedEffectiveTools: [{ name: "read" }],
+      tools: [{ name: "read" }],
+      codeModeControlsEnabled: false,
+      coreReadAuthorized: true,
+    },
     preflight: {
       contextEngineAssemblySucceeded: false,
       contextEnginePromptAuthority: "assembled",
@@ -258,9 +269,11 @@ function createFixture() {
       setPrePromptMessageCount,
       setCurrentUserTimestampOverride: vi.fn(),
       setPromptCacheChangesForTurn,
+      setCodeModeReconciliationReadAuthorized,
       setFinalPromptText,
       markBeforeAgentRunBlocked,
       markYieldAborted,
+      isRunBudgetTimeoutAbort: () => false,
       readYieldState: () => yieldState,
       stopAcceptingSteerMessages,
       takePendingMidTurnPrecheckRequest: () => undefined,
@@ -274,6 +287,7 @@ function createFixture() {
     setFinalPromptText,
     setPrePromptMessageCount,
     setPromptCacheChangesForTurn,
+    setCodeModeReconciliationReadAuthorized,
     state,
     yieldState,
   };
@@ -281,6 +295,13 @@ function createFixture() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.applyPromptToolsAllow.mockReturnValue({
+    activeToolNames: ["read"],
+    coreReadAuthorized: true,
+    effectiveTools: [{ name: "read" }],
+    uncompactedEffectiveTools: [{ name: "read" }],
+    tools: [{ name: "read" }],
+  });
 });
 
 describe("runEmbeddedAttemptPromptPhase", () => {
@@ -307,6 +328,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     ]);
     expect(fixture.setPrePromptMessageCount).toHaveBeenCalledWith(2);
     expect(fixture.setPromptCacheChangesForTurn).toHaveBeenCalledWith([]);
+    expect(fixture.setCodeModeReconciliationReadAuthorized).toHaveBeenCalledWith(true);
     expect(fixture.setFinalPromptText).toHaveBeenCalledWith("hello");
     expect(mocks.preparePromptExecution).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -332,6 +354,21 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       }),
     );
     expect(mocks.releasePendingSteering).not.toHaveBeenCalled();
+  });
+
+  it("records a final prompt policy that removes core read", async () => {
+    const fixture = createFixture();
+    mocks.applyPromptToolsAllow.mockReturnValueOnce({
+      activeToolNames: [],
+      coreReadAuthorized: false,
+      effectiveTools: [],
+      uncompactedEffectiveTools: [],
+      tools: [],
+    });
+
+    await runEmbeddedAttemptPromptPhase(fixture.input);
+
+    expect(fixture.setCodeModeReconciliationReadAuthorized).toHaveBeenCalledWith(false);
   });
 
   it("skips before_agent_run for settled-turn finalization", async () => {
@@ -407,6 +444,36 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     expect(mocks.releasePendingSteering).toHaveBeenCalledWith(
       expect.objectContaining({ leaseId: "lease-1", runIds: ["run-1"] }),
     );
+  });
+
+  it("keeps a run-budget timeout failure-free for partial-output salvage", async () => {
+    const fixture = createFixture();
+    const timeoutAbort = new Error("request timed out");
+    mocks.submitPrompt.mockRejectedValueOnce(timeoutAbort);
+    mocks.handlePromptError.mockResolvedValueOnce({
+      promptFailure: { error: timeoutAbort, source: "prompt" },
+    });
+    fixture.input.lifecycle.isRunBudgetTimeoutAbort = (error) => error === timeoutAbort;
+
+    await runEmbeddedAttemptPromptPhase(fixture.input);
+
+    expect(fixture.state.promptError).toBeNull();
+    expect(fixture.state.promptErrorSource).toBeNull();
+  });
+
+  it("records a provider failure that races a run-budget timeout", async () => {
+    const fixture = createFixture();
+    const providerError = new Error("provider failed");
+    mocks.submitPrompt.mockRejectedValueOnce(providerError);
+    mocks.handlePromptError.mockResolvedValueOnce({
+      promptFailure: { error: providerError, source: "prompt" },
+    });
+    fixture.input.lifecycle.isRunBudgetTimeoutAbort = () => false;
+
+    await runEmbeddedAttemptPromptPhase(fixture.input);
+
+    expect(fixture.state.promptError).toBe(providerError);
+    expect(fixture.state.promptErrorSource).toBe("prompt");
   });
 
   it("releases steering when preflight skips provider submission", async () => {

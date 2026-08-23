@@ -55,9 +55,21 @@ describe("formatErrorMessage", () => {
     expect(format(new Error("request failed", { cause: { status: 429 } }))).toBe(
       "request failed | status=429 code=unknown",
     );
+    // A non-Error cause carrying recognized status/code fields alongside extra
+    // keys used to be dropped entirely: formatStatusAndCode returns undefined
+    // for any object with keys beyond status/code, and the cause-chain branch
+    // had no stringifyUnknown fallback (unlike the top-level branch). The
+    // structured detail now survives instead of being swallowed.
     expect(format(new Error("request failed", { cause: { statusCode: 429 } }))).toBe(
-      "request failed",
+      'request failed | {"statusCode":429}',
     );
+    expect(
+      format(
+        new Error("request failed", {
+          cause: { status: 503, code: "UNAVAILABLE", requestId: "abc" },
+        }),
+      ),
+    ).toBe('request failed | {"status":503,"code":"UNAVAILABLE","requestId":"abc"}');
   });
 
   it("stringifies primitives and circular records without throwing", () => {

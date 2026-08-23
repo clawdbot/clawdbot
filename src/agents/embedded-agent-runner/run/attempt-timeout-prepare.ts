@@ -1,6 +1,7 @@
 /**
  * Owns the run deadline and compaction grace.
  */
+import { observeAgentRunApprovalWait } from "../../agent-run-approval-wait.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { log } from "../logger.js";
 import {
@@ -33,6 +34,8 @@ export function prepareEmbeddedAttemptTimeout(input: {
   let abortTimer: NodeJS.Timeout | undefined;
   let runAbortDeadlineAtMs = Date.now() + attempt.timeoutMs;
   let compactionGraceUsed = false;
+  let pausedRemainingMs = 0;
+  const approvalWait = observeAgentRunApprovalWait(attempt);
 
   const scheduleAbortTimer = (delayMs: number, reason: "initial" | "compaction-grace") => {
     runAbortDeadlineAtMs = Date.now() + Math.max(1, delayMs);
@@ -71,6 +74,8 @@ export function prepareEmbeddedAttemptTimeout(input: {
         ) {
           input.markTimedOutDuringCompaction();
         }
+        // Settlement owns partial-output publication because abort or failure
+        // can still supersede this timeout while queued events drain.
         input.markTimedOutByRunBudget();
         input.abortRun(true);
         if (!abortWarnTimer) {
@@ -90,12 +95,22 @@ export function prepareEmbeddedAttemptTimeout(input: {
     );
   };
 
+  approvalWait.onChange = (pending) => {
+    if (pending) {
+      // Human review consumes neither the run budget nor an active compaction grace window.
+      pausedRemainingMs = Math.max(1, runAbortDeadlineAtMs - Date.now());
+      clearTimeout(abortTimer);
+    } else {
+      scheduleAbortTimer(pausedRemainingMs, compactionGraceUsed ? "compaction-grace" : "initial");
+    }
+  };
   scheduleAbortTimer(attempt.timeoutMs, "initial");
   attempt.onAttemptTimeoutArmed?.();
 
   return {
     getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
     clearTimers: () => {
+      approvalWait.dispose();
       if (abortTimer) {
         clearTimeout(abortTimer);
       }

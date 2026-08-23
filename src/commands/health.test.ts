@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { ExitError } from "../runtime.js";
 import {
   buildCredentialsRequiredHealthDiagnostic,
   buildRateLimitedHealthDiagnostic,
@@ -16,6 +17,7 @@ import {
   formatContextEngineHealthLine,
   formatDeliveryQueueHealthLine,
   healthCommand,
+  healthCommandNonExiting,
 } from "./health.js";
 
 const runtime = {
@@ -714,6 +716,32 @@ describe("healthCommand", () => {
       [GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE],
     ]);
     expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("throws ExitError from healthCommandNonExiting instead of exiting the host runtime", async () => {
+    const error = new Error("gateway.auth.password is unavailable");
+    callGatewayMock.mockRejectedValueOnce(error);
+    isGatewaySecretRefUnavailableErrorMock.mockReturnValueOnce(true);
+    probeGatewayStatusMock.mockResolvedValueOnce({
+      ok: false,
+      kind: "connect",
+      error: TEST_AUTH_CLOSE_ERROR,
+    });
+
+    await expect(
+      healthCommandNonExiting(
+        { json: false, timeoutMs: 5000, config: {}, ignoreEnvUrlOverride: true },
+        runtime as never,
+      ),
+    ).rejects.toBeInstanceOf(ExitError);
+
+    // The embedded wizard/doctor host keeps running: its own exit is never invoked
+    // and the diagnostic was still printed through its log sink.
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(runtime.log.mock.calls).toEqual([
+      [GATEWAY_HEALTH_REACHABLE_LINE],
+      [GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE],
+    ]);
   });
 });
 

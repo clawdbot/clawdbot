@@ -1,13 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
+import {
+  readSessionTranscriptMessageEvents,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import {
   addSessionSuggestion,
   listSessionSuggestions,
   SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
 } from "../../config/sessions/session-suggestion-store.js";
+import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { resolveSessionSharingTarget } from "../session-sharing.js";
 import { getSessionSuggestionTestMocks } from "./sessions-suggestions.test-mocks.js";
 import {
   call,
@@ -136,7 +142,9 @@ describe("session suggestion handlers", () => {
         expect.objectContaining({ action: "added" }),
         expect.objectContaining({ sessionKeys: [sessionKey, "main"] }),
       );
-      expect(mocks.appendSessionAudit).not.toHaveBeenCalled();
+      expect(
+        readSessionTranscriptMessageEvents({ agentId: "main", sessionId: "session-main" }),
+      ).toEqual([]);
 
       await call(
         "session.suggestions.add",
@@ -461,44 +469,102 @@ describe("session suggestion handlers", () => {
       );
       expect(owner.responses[0]?.[0]).toBe(true);
       expect(mocks.handleChatSend).not.toHaveBeenCalled();
-      expect(mocks.appendSessionAudit).toHaveBeenCalledWith(
-        expect.objectContaining({ text: "Owner moved a suggestion into the composer." }),
-      );
-      expect(mocks.appendSessionAudit).not.toHaveBeenCalledWith(
-        expect.objectContaining({ text: expect.stringContaining("forged") }),
-      );
+      expect(
+        readSessionTranscriptMessageEvents({ agentId: "main", sessionId: "session-main" }),
+      ).toEqual([]);
     });
   });
 
-  it("publishes a fenced resolution before awaiting the transcript audit", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertDefaultSuggestionSession();
-      const added = await call(
-        "session.suggestions.add",
-        { sessionKey, text: "resolve before audit" },
-        client("alice", "Alice"),
-      );
-      const audit = createDeferred<undefined>();
-      mocks.appendSessionAudit.mockImplementationOnce(() => audit.promise);
-      const broadcast = vi.fn();
-      const pending = call(
-        "session.suggestions.resolve",
-        { sessionKey, id: responseSuggestionId(added), resolution: "edit" },
-        client("owner", "Owner"),
-        context(broadcast),
-      );
+  it.each([
+    ["send", "accepted", true],
+    ["queue", "accepted", true],
+    ["edit", "accepted", false],
+    ["dismiss", "dismissed", false],
+  ] as const)(
+    "finalizes and publishes %s without administrative transcript narration",
+    async (resolution, state, dispatchesConversation) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await upsertDefaultSuggestionSession();
+        const added = await call(
+          "session.suggestions.add",
+          { sessionKey, text: "Ship the focused change" },
+          client("alice", "Alice"),
+        );
+        const id = responseSuggestionId(added);
+        const broadcast = vi.fn();
+        const transcriptScope = { agentId: "main", sessionId: "session-main" };
+        const target = resolveSessionSharingTarget({ cfg: {}, sessionKey, agentId: "main" });
+        if (!target) {
+          throw new Error("Default suggestion session target was not found");
+        }
+        expect(readSessionTranscriptMessageEvents(transcriptScope)).toEqual([]);
 
-      await vi.waitFor(() => expect(mocks.appendSessionAudit).toHaveBeenCalledOnce());
-      expect(broadcast).toHaveBeenCalledWith(
-        "session.suggestion",
-        expect.objectContaining({ action: "resolved" }),
-        expect.any(Object),
-      );
+        if (dispatchesConversation) {
+          mocks.handleChatSend.mockImplementationOnce(
+            ({
+              params,
+              client: attributedClient,
+              respond,
+            }: {
+              params: { message: string; idempotencyKey: string };
+              client: { internal?: { senderAttribution?: { id?: string; name?: string } } };
+              respond: RespondFn;
+            }) => {
+              SessionManager.appendMessageToTranscript(
+                { ...transcriptScope, sessionKey, storePath: target.storePath },
+                buildPersistedUserTurnMessage({
+                  text: params.message,
+                  idempotencyKey: params.idempotencyKey,
+                  sender: attributedClient.internal?.senderAttribution,
+                }),
+              );
+              respond(true, { runId: "suggestion-run", status: "started" });
+            },
+          );
+        }
 
-      audit.resolve(undefined);
-      expect((await pending).responses[0]?.[0]).toBe(true);
-    });
-  });
+        const resolved = await call(
+          "session.suggestions.resolve",
+          { sessionKey, id, resolution },
+          client("owner", "Owner"),
+          context(broadcast),
+        );
+
+        expect(resolved.responses[0]).toMatchObject([
+          true,
+          { suggestion: { id, state, text: "Ship the focused change" } },
+        ]);
+        expect(listSessionSuggestions({ agentId: "main", sessionKey })).toMatchObject([
+          { id, state, text: "Ship the focused change" },
+        ]);
+        expect(broadcast).toHaveBeenCalledWith(
+          "session.suggestion",
+          expect.objectContaining({
+            action: "resolved",
+            suggestion: expect.objectContaining({ id, state }),
+          }),
+          expect.objectContaining({ sessionKeys: [sessionKey] }),
+        );
+
+        const events = readSessionTranscriptMessageEvents(transcriptScope);
+        if (dispatchesConversation) {
+          expect(events).toHaveLength(1);
+          expect(events[0]?.event).toMatchObject({
+            message: {
+              role: "user",
+              content: "Ship the focused change",
+              idempotencyKey: `session-suggestion:${id}`,
+              __openclaw: { senderId: "alice", senderName: "Suggested by Alice" },
+            },
+          });
+          expect(mocks.handleChatSend).toHaveBeenCalledOnce();
+        } else {
+          expect(events).toEqual([]);
+          expect(mocks.handleChatSend).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
 
   it("keeps typing dormant for one identity and broadcasts for two live viewers", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {

@@ -307,8 +307,7 @@ function prepackPreparationRestoreError(error: unknown, restoreError: unknown): 
 async function main(): Promise<void> {
   ensureSupportedSourcePack();
   const buildEnv = resolvePrepackBuildEnvironment();
-  runPnpm(["build"], buildEnv);
-  runPnpm(["ui:build"], buildEnv);
+  runPnpm(["build:package"], buildEnv);
   await preparePrepackArtifacts(buildEnv);
 }
 

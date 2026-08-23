@@ -137,15 +137,21 @@ export async function finalizeCodexAttempt(
   const effectiveTimedOut = state.timedOut && !recoveredTurnWatchTimeout;
   const effectiveTurnCompletionIdleTimedOut =
     state.turnCompletionIdleTimedOut && !recoveredTurnWatchTimeout;
+  // Transport loss aborts in-flight work mechanically, but its terminal outcome
+  // must remain a failure unless the operator explicitly canceled the attempt.
   const isFinalAborted = () =>
-    projectedTerminal.aborted ||
     terminalState.explicitCancellationObserved ||
-    (runAbortController.signal.aborted && !state.clientClosedAbort && !recoveredTurnWatchTimeout);
+    (!resourceState.executionDisconnectError &&
+      (projectedTerminal.aborted ||
+        (runAbortController.signal.aborted &&
+          !state.clientClosedAbort &&
+          !recoveredTurnWatchTimeout)));
   const clientClosedPromptErrorForFinal =
     state.clientClosedPromptError && hasRecoverableCompletedAssistant
       ? undefined
       : state.clientClosedPromptError;
   let finalPromptError =
+    resourceState.executionDisconnectError ??
     clientClosedPromptErrorForFinal ??
     (effectiveTurnCompletionIdleTimedOut
       ? state.turnCompletionIdleTimeoutMessage
@@ -213,6 +219,9 @@ export async function finalizeCodexAttempt(
       rateLimits: readRecentCodexRateLimits(resourceState.client),
     });
   }
+  // Device loss can arrive during asynchronous failure enrichment. Re-read its
+  // owner before freezing derived success, cancellation, and terminal state.
+  finalPromptError = resourceState.executionDisconnectError ?? finalPromptError;
   const finalPromptErrorSource =
     effectiveTimedOut || clientClosedPromptErrorForFinal
       ? "prompt"

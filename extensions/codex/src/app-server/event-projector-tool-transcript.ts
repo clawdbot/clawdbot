@@ -23,7 +23,6 @@ import {
   itemToolError,
   itemToolResult,
   itemTranscriptResultText,
-  nativeToolActionFingerprint,
 } from "./event-projector-tool-items.js";
 import {
   collectDynamicToolContentText,
@@ -644,13 +643,11 @@ export class CodexToolTranscriptProjection {
     const meta = item
       ? itemMeta(item, this.progress.toolProgressDetailMode())
       : this.progress.getToolMeta(firstMissingId)?.meta;
-    const actionFingerprint = item ? nativeToolActionFingerprint(item) : undefined;
     this.progress.setLastToolError({
       toolName: name,
       ...(meta ? { meta } : {}),
       error: formatMissingToolResultError({ id: firstMissingId, name }),
       ...(item && isMutatingNativeToolItem(item) ? { mutatingAction: true } : {}),
-      ...(actionFingerprint ? { actionFingerprint } : {}),
     });
   }
 

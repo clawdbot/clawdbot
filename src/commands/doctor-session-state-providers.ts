@@ -134,13 +134,6 @@ function entryMayContainPluginSessionRouteState(sessionKey: string, entry: Sessi
   );
 }
 
-/** Fast prefilter for session stores that might contain plugin-owned routing state. */
-function storeMayContainPluginSessionRouteState(store: Record<string, SessionEntry>): boolean {
-  return Object.entries(store).some(([sessionKey, entry]) =>
-    entryMayContainPluginSessionRouteState(sessionKey, entry),
-  );
-}
-
 type DoctorSessionRouteState = {
   defaultProvider: string;
   configuredModelRefs: string[];
@@ -342,29 +335,57 @@ function scanEntryForOwner(params: {
   };
 }
 
-/** Scans session entries for state owned by plugins that no longer match the configured route. */
-function scanSessionRouteStateOwners(params: {
-  owners: readonly DoctorSessionRouteStateOwner[];
-  store: Record<string, Record<string, unknown>>;
-  routes: Record<string, DoctorSessionRouteState>;
-}): DoctorSessionRouteStateScan {
+/** Streams session entries into compact plugin-owned route-state findings. */
+export function createPluginSessionStateDoctorScanner(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}) {
   const repairs: DoctorSessionRouteStateRepair[] = [];
   const manualReview: DoctorSessionRouteStateManualReview[] = [];
-  for (const [key, entry] of Object.entries(params.store)) {
-    if (!entry || typeof entry !== "object" || isValidAgentHarnessSessionStoreEntry(key, entry)) {
-      continue;
-    }
-    for (const owner of params.owners) {
-      const scan = scanEntryForOwner({ key, entry, owner, route: params.routes[key] });
-      if (scan.repair) {
-        repairs.push(scan.repair);
+  let owners: DoctorSessionRouteStateOwner[] | undefined;
+  const routeByAgentId = new Map<string, DoctorSessionRouteState>();
+  return {
+    scanEntry(key: string, entry: SessionEntry) {
+      if (!entryMayContainPluginSessionRouteState(key, entry)) {
+        return;
       }
-      if (scan.manualReview) {
-        manualReview.push(scan.manualReview);
+      if (!isRecord(entry)) {
+        return;
       }
-    }
-  }
-  return { repairs, manualReview };
+      owners ??= resolvePluginDoctorSessionRouteStateOwners(params);
+      if (owners.length === 0) {
+        return;
+      }
+      const agentId = resolveSessionAgentId(params.cfg, key);
+      if (!agentId) {
+        return;
+      }
+      let route = routeByAgentId.get(agentId);
+      if (!route) {
+        route = resolveConfiguredDoctorSessionStateRoute({
+          cfg: params.cfg,
+          sessionKey: key,
+          env: params.env,
+        });
+        if (!route) {
+          return;
+        }
+        routeByAgentId.set(agentId, route);
+      }
+      for (const owner of owners) {
+        const scan = scanEntryForOwner({ key, entry, owner, route });
+        if (scan.repair) {
+          repairs.push(scan.repair);
+        }
+        if (scan.manualReview) {
+          manualReview.push(scan.manualReview);
+        }
+      }
+    },
+    result(): DoctorSessionRouteStateScan {
+      return { repairs, manualReview };
+    },
+  };
 }
 
 function clearEntryKey(entry: Record<string, unknown>, key: string): boolean {
@@ -465,65 +486,13 @@ function groupRepairsByOwner(
 
 /** Prompts for and applies plugin-owned session route state repairs to the session store. */
 export async function runPluginSessionStateDoctorRepairs(params: {
-  cfg: OpenClawConfig;
-  store: Record<string, SessionEntry>;
+  scan: DoctorSessionRouteStateScan;
   absoluteStorePath: string;
   prompter: DoctorPrompterLike;
-  env?: NodeJS.ProcessEnv;
   warnings: string[];
   changes: string[];
 }): Promise<void> {
-  if (!storeMayContainPluginSessionRouteState(params.store)) {
-    return;
-  }
-  const owners = resolvePluginDoctorSessionRouteStateOwners({ cfg: params.cfg, env: params.env });
-  if (owners.length === 0) {
-    return;
-  }
-  // Only entries that may carry plugin session route state can produce repairs
-  // or manual-review findings (see scanEntryForOwner — every code path reads at
-  // least one of the fields checked by entryMayContainPluginSessionRouteState).
-  // Skipping the rest avoids resolving routes for trivially-empty session rows.
-  //
-  // Within that filtered set, resolveConfiguredDoctorSessionStateRoute is a
-  // pure function of agentId (sessionKey is only used to derive agentId), so we
-  // memoize by agentId to avoid recomputing the same route for every session
-  // belonging to the same agent.
-  const scanStore: Record<string, Record<string, unknown>> = {};
-  const routes: Record<string, DoctorSessionRouteState> = {};
-  const routeByAgentId = new Map<string, DoctorSessionRouteState>();
-  for (const [sessionKey, entry] of Object.entries(params.store)) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
-    if (!entryMayContainPluginSessionRouteState(sessionKey, entry)) {
-      continue;
-    }
-    const agentId = resolveSessionAgentId(params.cfg, sessionKey);
-    if (!agentId) {
-      continue;
-    }
-    let route = routeByAgentId.get(agentId);
-    if (!route) {
-      route = resolveConfiguredDoctorSessionStateRoute({
-        cfg: params.cfg,
-        sessionKey,
-        env: params.env,
-      });
-      if (!route) {
-        continue;
-      }
-      routeByAgentId.set(agentId, route);
-    }
-    if (isRecord(entry)) {
-      scanStore[sessionKey] = entry;
-    }
-    routes[sessionKey] = route;
-  }
-  if (Object.keys(scanStore).length === 0) {
-    return;
-  }
-  const scan = scanSessionRouteStateOwners({ owners, store: scanStore, routes });
+  const { scan } = params;
   if (scan.repairs.length > 0) {
     for (const [ownerLabel, repairs] of groupRepairsByOwner(scan.repairs)) {
       const staleCount = countSessionLabel(repairs.length);

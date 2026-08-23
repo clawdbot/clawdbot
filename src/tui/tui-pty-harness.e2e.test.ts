@@ -248,9 +248,9 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
-    "reconciles active and terminal runs after reconnect history",
-    () => exerciseTuiReconnectOutcomes(STARTUP_TIMEOUT_MS),
-    STARTUP_TEST_TIMEOUT_MS,
+    "reconciles active, replacement, and terminal runs after reconnect history",
+    () => exerciseTuiReconnectOutcomes(35_000),
+    45_000,
   );
 
   it.each([{ failures: 1 }, { failures: 2 }, { failures: 3 }, { failures: 4 }])(

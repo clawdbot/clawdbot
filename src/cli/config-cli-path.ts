@@ -320,6 +320,13 @@ function schemasAtPath(
   return schemas;
 }
 
+export function isConfigSchemaPath(
+  schema: JsonSchemaRecord | undefined,
+  path: readonly PathSegment[],
+): boolean {
+  return schemasAtPath(schema, path).length > 0;
+}
+
 function schemaPrefersArrayAtPath(
   schema: JsonSchemaRecord | undefined,
   path: readonly PathSegment[],

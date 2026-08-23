@@ -34,6 +34,11 @@ plugin, ClawHub, extra-root, managed, personal-agent, or system skills.
   critical findings block apply; warn-level findings remain visible but do not
   block it.
 - **Recoverable:** apply writes rollback metadata before touching live files.
+- **Revision atomic:** create and revise flush a complete immutable proposal
+  generation, publish it with an atomic rename, then sync its parent directory
+  where supported before publishing the SQLite record and event together.
+  Process interruption exposes either the complete previous generation or the
+  complete new one.
 - **Consistent surfaces:** chat, CLI, and Gateway all call the same service.
 
 ## Lifecycle
@@ -430,19 +435,34 @@ proposals.
 <OPENCLAW_STATE_DIR>/
   state/openclaw.sqlite
   skill-workshop/proposals/<proposal-id>/
-    PROPOSAL.md
-    assets/
-    examples/
-    references/
-    scripts/
-    templates/
+    generations/<generation-id>/
+      PROPOSAL.md
+      assets/
+      examples/
+      references/
+      scripts/
+      templates/
 ```
 
 Default state directory: `~/.openclaw`.
 
-- `state/openclaw.sqlite`: canonical proposal records, lifecycle status, origin attribution, and apply rollback metadata.
-- `PROPOSAL.md`: pending skill proposal.
-- Support files remain beside `PROPOSAL.md` so operators can review the proposed skill as a normal directory.
+- `state/openclaw.sqlite`: canonical proposal records, the active generation
+  reference, lifecycle status, origin attribution, and apply rollback metadata.
+- Each generation contains one `PROPOSAL.md` and all of that revision's support
+  files. Revision publication never overwrites the active generation in place.
+- Generation files are flushed before publication. After the complete bundle is
+  renamed into place, OpenClaw syncs the `generations/` parent directory where
+  the platform supports directory flushing, before committing SQLite state.
+  Platforms that report directory synchronization as unsupported retain atomic
+  rename and process-interruption safety, but do not claim power-loss durability
+  for that directory entry.
+- Support files remain beside their generation's `PROPOSAL.md` so operators can
+  review the proposed skill as a normal directory.
+
+Proposals created by older releases can still reference the earlier root-level
+`PROPOSAL.md` layout. The stored record identifies that bundle directly; the
+next successful revision moves the proposal onto the generation layout and
+retires the previous bundle.
 
 `openclaw doctor --fix` imports the previous `proposals.json`, `proposal.json`, and
 `rollback.json` metadata into SQLite after verifying each proposal, then removes

@@ -134,11 +134,15 @@ export function startManagedGatewayConfigReloader(
   } = createGatewayReloadHandlers({
     deps: params.deps,
     broadcast: params.broadcast,
+    ...(params.resolveGatewayContext
+      ? { resolveGatewayContext: params.resolveGatewayContext }
+      : {}),
     getState: params.getState,
     setState: params.setState,
     getPluginMetadataSnapshot: params.getPluginMetadataSnapshot,
     startChannel: params.startChannel,
     stopChannel: params.stopChannel,
+    pruneInactiveChannelAccountState: params.channelManager.pruneInactiveChannelAccountState,
     getChannelAutostartSuppression: params.getChannelAutostartSuppression,
     stopPostReadySidecars: params.stopPostReadySidecars,
     reloadPlugins: params.reloadPlugins,
@@ -338,7 +342,13 @@ export function startManagedGatewayConfigReloader(
       invalidateConfigGetResponseCache();
       params.broadcast(
         "config.changed",
-        { path: info.path, hash: info.persistedHash, ts: Date.now() },
+        {
+          path: info.path,
+          hash: info.persistedHash
+            ? params.configRevisionProjector.projectRawHash(info.persistedHash)
+            : null,
+          ts: Date.now(),
+        },
         { dropIfSlow: true },
       );
     },
