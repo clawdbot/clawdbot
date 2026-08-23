@@ -3,6 +3,7 @@ import { createApproverRestrictedNativeApprovalCapabilityFromForwardingRoutes } 
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { shouldSuppressLocalNativeExecApprovalPrompt } from "openclaw/plugin-sdk/approval-native-runtime";
+import { addApprovalReactionHintToText } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import {
   buildTypedExecApprovalPendingReplyPayload,
   buildTypedPluginApprovalPendingReplyPayload,
@@ -34,7 +35,6 @@ import {
   resolveIMessageAccount,
 } from "./accounts.js";
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
-import { addIMessageApprovalReactionHintToText } from "./approval-reactions.js";
 import { replaceApprovalIdPlaceholder } from "./approval-text.js";
 import { normalizeIMessageMessagingTarget } from "./normalize.js";
 import { inferIMessageTargetChatType } from "./targets.js";
@@ -204,7 +204,7 @@ function appendIMessageReactionHint(params: {
   text?: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 }): string {
-  return addIMessageApprovalReactionHintToText({
+  return addApprovalReactionHintToText({
     text: params.text ?? "",
     allowedDecisions: params.allowedDecisions,
   });

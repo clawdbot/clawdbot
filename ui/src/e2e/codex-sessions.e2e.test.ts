@@ -479,6 +479,7 @@ suite.define(() => {
         '[data-session-section="ungrouped"] .sidebar-recent-session, [data-session-section="catalog:codex"] .sidebar-recent-session--catalog-project-child',
       );
       await expect.poll(() => threadRows.count()).toBe(4);
+      expect(await threadRows.locator(".sidebar-recent-session__link[title]").count()).toBe(0);
       const threadRowMetrics = await threadRows.evaluateAll((rows) =>
         rows.map((row) => {
           const link = row.querySelector(".sidebar-recent-session__link");
@@ -492,39 +493,31 @@ suite.define(() => {
             nameFontSize: nameStyle?.fontSize ?? "",
             paddingBottom: linkStyle?.paddingBottom ?? "",
             paddingTop: linkStyle?.paddingTop ?? "",
+            singleLine: row.classList.contains("sidebar-recent-session--single-line"),
           };
         }),
       );
-      expect(threadRowMetrics).toEqual([
-        {
-          height: 30,
+      expect(threadRowMetrics).toHaveLength(4);
+      // Gateway threads and native catalog children must stay density-identical.
+      // Catalog children never carry preview text, so every subtitle-less row —
+      // whichever source it came from — collapses to the same one-line height
+      // instead of reserving a phantom second line.
+      for (const metric of threadRowMetrics) {
+        expect(metric.singleLine).toBe(true);
+      }
+      const singleLineHeights = new Set(threadRowMetrics.map((metric) => metric.height));
+      expect(singleLineHeights.size).toBe(1);
+      const [collapsedHeight] = [...singleLineHeights];
+      // Collapsed rows sit on the 30px min-height floor; renderer sub-pixels vary.
+      expect(collapsedHeight).toBeCloseTo(30, 1);
+      for (const metric of threadRowMetrics) {
+        expect(metric).toMatchObject({
           minHeight: "30px",
           nameFontSize: "13px",
-          paddingBottom: "3px",
-          paddingTop: "3px",
-        },
-        {
-          height: 30,
-          minHeight: "30px",
-          nameFontSize: "13px",
-          paddingBottom: "3px",
-          paddingTop: "3px",
-        },
-        {
-          height: 30,
-          minHeight: "30px",
-          nameFontSize: "13px",
-          paddingBottom: "3px",
-          paddingTop: "3px",
-        },
-        {
-          height: 30,
-          minHeight: "30px",
-          nameFontSize: "13px",
-          paddingBottom: "3px",
-          paddingTop: "3px",
-        },
-      ]);
+          paddingBottom: "4px",
+          paddingTop: "4px",
+        });
+      }
       const projectLabelTone = await openclawProject
         .locator(".sidebar-session-catalog-project__label")
         .evaluate((label) => {

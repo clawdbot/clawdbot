@@ -10,9 +10,9 @@ import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runti
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
-import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
+  registerUnhandledRejectionHandler,
+  getChildLogger,
   defaultRuntime,
   formatDurationPrecise,
   warn,
@@ -248,6 +248,10 @@ export async function monitorWebChannel(
             return meta?.participants?.length ? meta : undefined;
           },
           createListener: async ({ sock, connection: connectionLocal }) => {
+            // SAFETY: Gateway startup supplies the full plugin channel runtime; the surface type is the minimal external view.
+            const pluginChannelRuntime = tuning.channelRuntime as
+              | PluginRuntime["channel"]
+              | undefined;
             const onMessage = createWebOnMessageHandler({
               cfg,
               loadConfig: loadCurrentMonitorConfig,
@@ -262,8 +266,9 @@ export async function monitorWebChannel(
               replyLogger,
               baseMentionConfig,
               account,
-              buildContext: (tuning.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
-                .buildContext,
+              buildContext: pluginChannelRuntime?.inbound.buildContext,
+              // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
+              dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
             });
             return (await (listenerFactory ?? attachWebInboxToSocket)({
               cfg,

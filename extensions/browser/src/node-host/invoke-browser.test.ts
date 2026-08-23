@@ -4,7 +4,11 @@ import os from "node:os";
 import nodePath from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { BROWSER_PROXY_MAX_FILE_BYTES } from "../browser-proxy-envelope.js";
+import {
+  BROWSER_PROXY_ERROR_ENVELOPE,
+  BROWSER_PROXY_MAX_FILE_BYTES,
+  BROWSER_PROXY_OWNED_TAB_CLOSE_PATH,
+} from "../browser-proxy-envelope.js";
 import { toErrorObject } from "../infra/errors.js";
 
 const BROWSER_PROXY_MAX_FILES = 256;
@@ -12,7 +16,12 @@ const BROWSER_PROXY_MAX_TOTAL_FILE_BYTES = 16 * 1024 * 1024;
 
 const controlServiceMocks = vi.hoisted(() => ({
   createBrowserControlContext: vi.fn(() => ({ control: true })),
+  getBrowserControlState: vi.fn(() => null),
   startBrowserControlServiceFromConfig: vi.fn(async () => true),
+}));
+
+const cdpMocks = vi.hoisted(() => ({
+  closeTrackedCdpTarget: vi.fn(async () => ({ status: "closed" as const })),
 }));
 
 const dispatcherMocks = vi.hoisted(() => ({
@@ -34,7 +43,25 @@ const browserConfigMocks = vi.hoisted(() => ({
   resolveBrowserConfig: vi.fn((browser?: { defaultProfile?: string }) => ({
     enabled: true,
     defaultProfile: browser?.defaultProfile ?? "openclaw",
+    profiles: {
+      openclaw: {
+        name: "openclaw",
+        driver: "openclaw" as const,
+        cdpUrl: "http://127.0.0.1:9222",
+      },
+      user: {
+        name: "user",
+        driver: "existing-session" as const,
+        cdpUrl: "http://127.0.0.1:9333",
+      },
+    },
+    remoteCdpTimeoutMs: 20_000,
+    ssrfPolicy: undefined,
   })),
+  resolveProfile: vi.fn(
+    (resolved: { profiles?: Record<string, unknown> }, name: string) =>
+      resolved.profiles?.[name] ?? null,
+  ),
 }));
 
 const uploadMocks = vi.hoisted(() => ({
@@ -92,6 +119,7 @@ vi.mock("../sdk-setup-tools.js", () => ({
 }));
 
 vi.mock("../browser/cdp.helpers.js", () => ({
+  closeTrackedCdpTarget: cdpMocks.closeTrackedCdpTarget,
   redactCdpUrl: vi.fn((url: string) => {
     try {
       const parsed = new URL(url);
@@ -109,8 +137,13 @@ vi.mock("../browser/cdp.helpers.js", () => ({
   }),
 }));
 
+vi.mock("../browser/cdp-reachability-policy.js", () => ({
+  resolveCdpControlPolicy: vi.fn(() => undefined),
+}));
+
 vi.mock("../browser/config.js", () => ({
   resolveBrowserConfig: browserConfigMocks.resolveBrowserConfig,
+  resolveProfile: browserConfigMocks.resolveProfile,
 }));
 
 vi.mock("../browser-proxy-upload.js", () => uploadMocks);
@@ -158,6 +191,7 @@ vi.mock("../browser/routes/dispatcher.js", () => ({
 
 vi.mock("../control-service.js", () => ({
   createBrowserControlContext: controlServiceMocks.createBrowserControlContext,
+  getBrowserControlState: controlServiceMocks.getBrowserControlState,
   startBrowserControlServiceFromConfig: controlServiceMocks.startBrowserControlServiceFromConfig,
 }));
 
@@ -186,6 +220,7 @@ describe("runBrowserProxyCommand", () => {
       dispatch: dispatcherMocks.dispatch,
     }));
     controlServiceMocks.createBrowserControlContext.mockReset().mockReturnValue({ control: true });
+    controlServiceMocks.getBrowserControlState.mockReset().mockReturnValue(null);
     controlServiceMocks.startBrowserControlServiceFromConfig.mockReset().mockResolvedValue(true);
     configMocks.sourceConfig = null;
     configMocks.loadConfig.mockReset().mockReturnValue({
@@ -195,14 +230,26 @@ describe("runBrowserProxyCommand", () => {
     browserConfigMocks.resolveBrowserConfig.mockReset().mockReturnValue({
       enabled: true,
       defaultProfile: "openclaw",
+      profiles: {
+        openclaw: {
+          name: "openclaw",
+          driver: "openclaw",
+          cdpUrl: "http://127.0.0.1:9222",
+        },
+        user: {
+          name: "user",
+          driver: "existing-session",
+          cdpUrl: "http://127.0.0.1:9333",
+        },
+      },
+      remoteCdpTimeoutMs: 20_000,
+      ssrfPolicy: undefined,
     });
+    browserConfigMocks.resolveProfile.mockClear();
+    cdpMocks.closeTrackedCdpTarget.mockReset().mockResolvedValue({ status: "closed" });
     configMocks.loadConfig.mockReturnValue({
       browser: {},
       nodeHost: { browserProxy: { enabled: true, allowProfiles: [] as string[] } },
-    });
-    browserConfigMocks.resolveBrowserConfig.mockReturnValue({
-      enabled: true,
-      defaultProfile: "openclaw",
     });
     controlServiceMocks.startBrowserControlServiceFromConfig.mockResolvedValue(true);
     uploadMocks.stageBrowserProxyUploadRequest
@@ -228,6 +275,43 @@ describe("runBrowserProxyCommand", () => {
 
     expect(controlServiceMocks.startBrowserControlServiceFromConfig).toHaveBeenCalledTimes(2);
     expect(dispatcherMocks.dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("closes a rotated node handle through durable native ownership", async () => {
+    const ownership = {
+      status: "durable",
+      nativeTargetId: "NATIVE-7",
+      profileFingerprint: "sha256:profile",
+      browserInstanceFingerprint: "sha256:browser",
+    } as const;
+
+    const payload = JSON.parse(
+      await runBrowserProxyCommand(
+        JSON.stringify({
+          method: "POST",
+          path: BROWSER_PROXY_OWNED_TAB_CLOSE_PATH,
+          profile: "user",
+          body: { ownership },
+          errorEnvelope: BROWSER_PROXY_ERROR_ENVELOPE,
+        }),
+      ),
+    );
+
+    expect(payload).toMatchObject({
+      result: { status: "closed" },
+      route: { status: "resolved", profile: "user", driver: "existing-session" },
+    });
+    expect(cdpMocks.closeTrackedCdpTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileName: "user",
+        cdpUrl: "http://127.0.0.1:9333",
+        nativeTargetId: "NATIVE-7",
+        expectedProfileFingerprint: "sha256:profile",
+        expectedBrowserInstanceFingerprint: "sha256:browser",
+      }),
+    );
+    expect(dispatcherMocks.dispatch).not.toHaveBeenCalled();
+    expect(uploadMocks.stageBrowserProxyUploadRequest).not.toHaveBeenCalled();
   });
 
   it("retries browser control startup after the service returns disabled", async () => {
@@ -788,6 +872,7 @@ describe("runBrowserProxyCommand", () => {
           },
         },
       },
+      route: { status: "resolved", profile: "openclaw", driver: "openclaw" },
     });
   });
 
@@ -823,6 +908,25 @@ describe("runBrowserProxyCommand", () => {
       (browser?: { defaultProfile?: string }) => ({
         enabled: true,
         defaultProfile: browser?.defaultProfile ?? "openclaw",
+        profiles: {
+          openclaw: {
+            name: "openclaw",
+            driver: "openclaw" as const,
+            cdpUrl: "http://127.0.0.1:9222",
+          },
+          user: {
+            name: "user",
+            driver: "existing-session" as const,
+            cdpUrl: "http://127.0.0.1:9333",
+          },
+          work: {
+            name: "work",
+            driver: "openclaw" as const,
+            cdpUrl: "http://127.0.0.1:9444",
+          },
+        },
+        remoteCdpTimeoutMs: 20_000,
+        ssrfPolicy: undefined,
       }),
     );
     dispatcherMocks.dispatch.mockResolvedValue({

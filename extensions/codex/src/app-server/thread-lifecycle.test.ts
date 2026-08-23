@@ -5,6 +5,8 @@ import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { codexCatalogHomeId } from "../session-catalog-home-id.js";
+import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
@@ -12,6 +14,8 @@ import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolFunctionSpec,
+  type JsonObject,
+  isJsonObject,
 } from "./protocol.js";
 import {
   createCodexAppServerBindingStore,
@@ -44,6 +48,9 @@ type CodexThreadLifecycleTimingLogger = NonNullable<
   NonNullable<Parameters<typeof startOrResumeThreadImpl>[0]["timing"]>["log"]
 >;
 
+const PROGRESS_CARD_SYSTEM_PROMPT =
+  "During multi-step work, keep your progress card current with the progress_card tool; the user follows it instead of reading the transcript.";
+
 describe("Codex incognito thread persistence", () => {
   it("marks only incognito-shaped harness sessions ephemeral", () => {
     const appServer = createAppServerOptions() as never;
@@ -62,6 +69,195 @@ describe("Codex incognito thread persistence", () => {
     expect(build(persistent)).not.toHaveProperty("ephemeral");
     expect(build(incognito)).toMatchObject({ ephemeral: true });
   });
+});
+
+describe("Codex context window config", () => {
+  it("forwards only a prepared cap on thread start and resume (#124702)", () => {
+    const appServer = createAppServerOptions() as never;
+    const capped = createAttemptParams({ provider: "openai" });
+    capped.authoredContextTokenCap = 32_000;
+    const uncapped = createAttemptParams({ provider: "openai" });
+    const build = (params: EmbeddedRunAttemptParams) => [
+      buildThreadStartParams(params, {
+        appServer,
+        cwd: "/repo",
+        dynamicTools: [],
+      }),
+      buildThreadResumeParams(params, {
+        appServer,
+        threadId: "thread-1",
+      }),
+    ];
+
+    for (const request of build(capped)) {
+      expect(request.config?.model_context_window).toBe(32_000);
+    }
+    for (const request of build(uncapped)) {
+      expect(request.config).not.toHaveProperty("model_context_window");
+    }
+  });
+});
+
+describe("Codex managed shell environment", () => {
+  it.each([
+    { action: "start" as const, inherit: "none" },
+    { action: "resume" as const, inherit: "core" },
+  ])(
+    "applies the host environment last for thread/$action with inherit=$inherit",
+    ({ action, inherit }) => {
+      const options = {
+        appServer: createAppServerOptions() as never,
+        config: {
+          allow_login_shell: true,
+          shell_environment_policy: {
+            inherit,
+            experimental_use_profile: true,
+            exclude: ["GIT_*"],
+            set: { GH_CONFIG_DIR: "/user-selected", KEEP_ME: "yes" },
+            include_only: ["PATH"],
+          },
+        },
+        shellEnvironment: {
+          GH_CONFIG_DIR: "/host-selected",
+          GH_TOKEN: "",
+          GITHUB_TOKEN: "",
+          PREVIEW_SERVICE_TOKEN: "",
+        },
+        disableLoginShell: true,
+      };
+      const request =
+        action === "start"
+          ? buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+              ...options,
+              cwd: "/repo",
+              dynamicTools: [],
+            })
+          : buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+              ...options,
+              threadId: "thread-1",
+            });
+
+      const shellEnvironmentPolicy = request.config?.shell_environment_policy;
+      if (!isJsonObject(shellEnvironmentPolicy)) {
+        throw new Error("expected shell environment policy");
+      }
+      expect(shellEnvironmentPolicy).toMatchObject({
+        inherit,
+        experimental_use_profile: false,
+        exclude: ["GIT_*"],
+        set: {
+          GH_CONFIG_DIR: "/host-selected",
+          KEEP_ME: "yes",
+          GH_TOKEN: "",
+          GITHUB_TOKEN: "",
+          PREVIEW_SERVICE_TOKEN: "",
+        },
+      });
+      expect(request.config?.allow_login_shell).toBe(false);
+      const includeOnly = shellEnvironmentPolicy.include_only;
+      expect(includeOnly).toHaveLength(5);
+      expect(includeOnly).toEqual(
+        expect.arrayContaining([
+          "PATH",
+          "GH_CONFIG_DIR",
+          "GITHUB_TOKEN",
+          "GH_TOKEN",
+          "PREVIEW_SERVICE_TOKEN",
+        ]),
+      );
+      expect(shellEnvironmentPolicy.experimental_use_profile).toBe(false);
+      expect(shellEnvironmentPolicy).not.toHaveProperty("use_profile");
+    },
+  );
+
+  it.each(["start", "resume"] as const)(
+    "disables login profiles only for protected thread/%s environments",
+    (action) => {
+      const build = (
+        config: JsonObject,
+        shellEnvironment?: Readonly<Record<string, string>>,
+        disableLoginShell?: boolean,
+      ) => {
+        const options = {
+          appServer: createAppServerOptions() as never,
+          config,
+          shellEnvironment,
+          disableLoginShell,
+        };
+        return action === "start"
+          ? buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+              ...options,
+              cwd: "/repo",
+              dynamicTools: [],
+            })
+          : buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+              ...options,
+              threadId: "thread-1",
+            });
+      };
+
+      expect(build({ allow_login_shell: true }).config?.allow_login_shell).toBe(true);
+      expect(build({}).config).not.toHaveProperty("allow_login_shell");
+      expect(build({}, { GH_TOKEN: "", GITHUB_TOKEN: "" }).config).not.toHaveProperty(
+        "allow_login_shell",
+      );
+      expect(build({}, { GH_TOKEN: "", GITHUB_TOKEN: "" }, true).config?.allow_login_shell).toBe(
+        false,
+      );
+    },
+  );
+
+  it.each(["start", "resume"] as const)(
+    "admits host values through restrictive filters for thread/%s",
+    (action) => {
+      const options = {
+        appServer: createAppServerOptions() as never,
+        config: {
+          allow_login_shell: false,
+          shell_environment_policy: {
+            experimental_use_profile: true,
+            filters: { PATH: "include", "GIT_*": "exclude" },
+            set: { KEEP_ME: "yes" },
+          },
+        },
+        shellEnvironment: {
+          GH_CONFIG_DIR: "/host-selected",
+          GH_TOKEN: "",
+          PREVIEW_SERVICE_TOKEN: "",
+        },
+        disableLoginShell: true,
+      };
+      const request =
+        action === "start"
+          ? buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+              ...options,
+              cwd: "/repo",
+              dynamicTools: [],
+            })
+          : buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+              ...options,
+              threadId: "thread-1",
+            });
+
+      expect(request.config?.shell_environment_policy).toMatchObject({
+        experimental_use_profile: false,
+        set: {
+          KEEP_ME: "yes",
+          GH_CONFIG_DIR: "/host-selected",
+          GH_TOKEN: "",
+          PREVIEW_SERVICE_TOKEN: "",
+        },
+        filters: {
+          PATH: "include",
+          "GIT_*": "exclude",
+          GH_CONFIG_DIR: "include",
+          GH_TOKEN: "include",
+          PREVIEW_SERVICE_TOKEN: "include",
+        },
+      });
+      expect(request.config?.shell_environment_policy).not.toHaveProperty("include_only");
+    },
+  );
 });
 
 describe("Codex ring-zero thread config", () => {
@@ -159,24 +355,32 @@ describe("Codex ring-zero thread config", () => {
   it("applies the restriction to both thread start and resume", () => {
     const params = createAttemptParams({ provider: "openai" });
     params.toolsAllow = ["openclaw"];
+    params.pluginHarnessToolPolicyRestricted = true;
     const appServer = createAppServerOptions() as never;
+    const developerInstructions = "Host-authored ring-zero instructions.";
     const start = buildThreadStartParams(params, {
       appServer,
       cwd: "/repo",
       dynamicTools: [],
+      developerInstructions,
       hostSystemAgentActive: true,
       nativeCodeModeEnabled: false,
+      config: { project_doc_max_bytes: 64_000 },
     });
     const resume = buildThreadResumeParams(params, {
       appServer,
       dynamicTools: [],
+      developerInstructions,
       hostSystemAgentActive: true,
       nativeCodeModeEnabled: false,
       threadId: "thread-1",
+      config: { project_doc_max_bytes: 64_000 },
     });
 
     expect(start.environments).toEqual([]);
     expect(start.baseInstructions).toBe("");
+    expect(start.developerInstructions).toBe(developerInstructions);
+    expect(resume.developerInstructions).toBe(developerInstructions);
     for (const config of [start.config, resume.config]) {
       expect(config?.["agents.enabled"]).toBe(false);
       expect(config?.["tools.experimental_request_user_input.enabled"]).toBe(false);
@@ -203,6 +407,47 @@ describe("Codex ring-zero thread config", () => {
     });
     expect(normal.baseInstructions).toBeUndefined();
     expect(normal.config?.["features.goals"]).toBe(false);
+  });
+
+  it("preserves project documents for ordinary policy-restricted turns", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.pluginHarnessToolPolicyRestricted = true;
+    const appServer = createAppServerOptions() as never;
+    const start = buildThreadStartParams(params, {
+      appServer,
+      cwd: "/repo",
+      dynamicTools: [],
+      hostSystemAgentActive: false,
+      nativeCodeModeEnabled: false,
+    });
+    const resume = buildThreadResumeParams(params, {
+      appServer,
+      dynamicTools: [],
+      hostSystemAgentActive: false,
+      nativeCodeModeEnabled: false,
+      threadId: "thread-1",
+      config: { project_doc_max_bytes: 64_000 },
+    });
+
+    expect(start.config?.project_doc_max_bytes).toBe(131_072);
+    expect(resume.config?.project_doc_max_bytes).toBe(64_000);
+    for (const threadConfig of [start.config, resume.config]) {
+      expect(threadConfig?.["features.multi_agent"]).toBe(false);
+      expect(threadConfig?.["orchestrator.mcp.enabled"]).toBe(false);
+    }
+
+    const toolsDisabled = createAttemptParams({ provider: "openai" });
+    toolsDisabled.disableTools = true;
+    toolsDisabled.pluginHarnessToolPolicyRestricted = true;
+    const disabled = buildThreadStartParams(toolsDisabled, {
+      appServer,
+      cwd: "/repo",
+      dynamicTools: [],
+      hostSystemAgentActive: false,
+      nativeCodeModeEnabled: false,
+      config: { project_doc_max_bytes: 64_000 },
+    });
+    expect(disabled.config?.project_doc_max_bytes).toBe(0);
   });
 });
 
@@ -234,6 +479,36 @@ describe("Codex delegation capability", () => {
       expect(request.config?.["features.multi_agent"]).toBe(false);
       expect(request.config?.["features.multi_agent_v2"]).toBe(false);
       expect(request.config?.["features.goals"]).toBe(false);
+    }
+  });
+
+  it("disables only native image generation for an audited image_generate deny", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.pluginHarnessToolPolicySafeDeniedTools = ["image_generate"];
+    const appServer = createAppServerOptions() as never;
+    const config = {
+      "features.image_generation": true,
+      "features.multi_agent": true,
+      "features.multi_agent_v2": true,
+    };
+    const start = buildThreadStartParams(params, {
+      appServer,
+      cwd: "/repo",
+      dynamicTools: [],
+      config,
+    });
+    const resume = buildThreadResumeParams(params, {
+      appServer,
+      dynamicTools: [],
+      threadId: "thread-1",
+      config,
+    });
+
+    for (const request of [start, resume]) {
+      expect(request.config?.["features.image_generation"]).toBe(false);
+      expect(request.config?.["features.multi_agent"]).toBe(true);
+      expect(request.config?.["features.multi_agent_v2"]).toBe(true);
+      expect(request.config?.["agents.enabled"]).toBeUndefined();
     }
   });
 
@@ -312,20 +587,30 @@ describe("Codex delegation capability", () => {
     }
     expect(start.environments).toEqual([]);
 
-    const normal = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
-      appServer,
-      cwd: "/repo",
-      dynamicTools,
-      config,
-    });
-    expect(normal.config?.["features.apps"]).toBe(true);
-    expect(normal.config?.["features.image_generation"]).toBe(true);
-    expect(normal.config?.["features.multi_agent"]).toBe(true);
-    expect(normal.config?.["features.multi_agent_v2"]).toBe(true);
-    expect(normal.config?.["features.plugins"]).toBe(true);
-    expect(normal.config?.["tools.update_plan.enabled"]).toBe(true);
-    expect(normal.config?.mcp_servers).toEqual({ "local-example": { command: "example-mcp" } });
-    expect(normal.developerInstructions).toContain("`spawn_agent`");
+    const normalRequests = [
+      buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+        appServer,
+        cwd: "/repo",
+        dynamicTools,
+        config,
+      }),
+      buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+        appServer,
+        dynamicTools,
+        config,
+        threadId: "thread-normal",
+      }),
+    ];
+    for (const normal of normalRequests) {
+      expect(normal.config?.["features.apps"]).toBe(true);
+      expect(normal.config?.["features.image_generation"]).toBe(true);
+      expect(normal.config?.["features.multi_agent"]).toBe(true);
+      expect(normal.config?.["features.multi_agent_v2"]).toBe(true);
+      expect(normal.config?.["features.plugins"]).toBe(true);
+      expect(normal.config?.["tools.update_plan.enabled"]).toBe(false);
+      expect(normal.config?.mcp_servers).toEqual({ "local-example": { command: "example-mcp" } });
+      expect(normal.developerInstructions).toContain("`spawn_agent`");
+    }
   });
 });
 
@@ -646,7 +931,7 @@ function threadStartResult(threadId = "thread-1") {
       status: { type: "idle" },
       path: null,
       cwd: tempDir,
-      cliVersion: "0.147.0",
+      cliVersion: "0.148.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -799,7 +1084,7 @@ describe("Codex app-server native code mode config", () => {
     );
     expect(instructions).toContain("call the matching entry through `tools`");
     expect(instructions).toContain(
-      "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.",
+      "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork.",
     );
   });
 
@@ -1165,6 +1450,22 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).not.toContain("<available_skills>");
   });
 
+  it.each([
+    { name: "available", extraSystemPrompt: PROGRESS_CARD_SYSTEM_PROMPT, expected: true },
+    { name: "denied", extraSystemPrompt: undefined, expected: false },
+  ])(
+    "$name progress-card nudge propagation into thread developer instructions",
+    ({ extraSystemPrompt, expected }) => {
+      const params = createAttemptParams({ provider: "openai" });
+      params.toolsAllow = expected ? ["progress_card"] : ["read"];
+      params.extraSystemPrompt = extraSystemPrompt;
+
+      expect(buildDeveloperInstructions(params).includes(PROGRESS_CARD_SYSTEM_PROMPT)).toBe(
+        expected,
+      );
+    },
+  );
+
   it("enables Codex code mode on thread/start without clobbering other config", () => {
     const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
       cwd: "/repo",
@@ -1184,6 +1485,7 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(request.config).toEqual({
+      project_doc_max_bytes: 131_072,
       "features.hooks": true,
       apps: { _default: { enabled: false } },
       mcp_servers: {
@@ -1195,6 +1497,7 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1337,9 +1640,11 @@ describe("Codex app-server native code mode config", () => {
     );
 
     expect(request.config).toEqual({
+      project_doc_max_bytes: 131_072,
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
       "features.multi_agent": false,
       "features.standalone_web_search": false,
@@ -1465,9 +1770,11 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(request.config).toEqual({
+      project_doc_max_bytes: 131_072,
       "features.code_mode": true,
       "features.code_mode_only": true,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1487,9 +1794,11 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(request.config).toEqual({
+      project_doc_max_bytes: 131_072,
       "features.code_mode": true,
       "features.code_mode_only": true,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1545,9 +1854,11 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(request.config).toEqual({
+      project_doc_max_bytes: 131_072,
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1570,9 +1881,11 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(request.config).toEqual({
+      project_doc_max_bytes: 131_072,
       "features.code_mode": false,
       "features.code_mode_only": false,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.standalone_web_search": false,
       web_search: "disabled",
     });
@@ -1590,9 +1903,11 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(request.config).toEqual({
+      project_doc_max_bytes: 131_072,
       "features.code_mode": false,
       "features.code_mode_only": false,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.standalone_web_search": false,
       web_search: "disabled",
     });
@@ -1623,14 +1938,24 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
     });
   });
 
-  it("keeps native Codex project docs enabled when context is not lightweight", () => {
-    const request = buildThreadResumeParams(
+  it("defaults native Codex project docs to 128 KiB while honoring explicit overrides", () => {
+    const defaultRequest = buildThreadStartParams(
+      createAttemptParams({ provider: "openai", bootstrapContextRunKind: "cron" }),
+      {
+        cwd: "/repo",
+        dynamicTools: [],
+        appServer: createAppServerOptions() as never,
+        developerInstructions: "test instructions",
+      },
+    );
+    const overrideRequest = buildThreadResumeParams(
       createAttemptParams({ provider: "openai", bootstrapContextRunKind: "cron" }),
       {
         threadId: "thread-1",
@@ -1642,11 +1967,13 @@ describe("Codex app-server native code mode config", () => {
       },
     );
 
-    expect(request.config).toEqual({
+    expect(defaultRequest.config?.project_doc_max_bytes).toBe(131_072);
+    expect(overrideRequest.config).toEqual({
       project_doc_max_bytes: 64_000,
       "features.code_mode": true,
       "features.code_mode_only": false,
       "features.goals": false,
+      "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1846,9 +2173,11 @@ describe("Codex app-server turn params", () => {
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",
       config: {
+        project_doc_max_bytes: 131_072,
         "features.code_mode": true,
         "features.code_mode_only": false,
         "features.goals": false,
+        "tools.update_plan.enabled": false,
         "features.apply_patch_streaming_events": true,
         "features.standalone_web_search": false,
         web_search: "cached",
@@ -2115,6 +2444,137 @@ describe("Codex plugin binding recovery", () => {
   afterEach(async () => {
     await fs.rm(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
+  });
+
+  it("records ownership before committing a newly created durable thread", async () => {
+    const params = createThreadLifecycleParams(
+      path.join(tempDir, "session-managed.jsonl"),
+      path.join(tempDir, "workspace-managed"),
+    );
+    params.agentDir = path.join(tempDir, "agent");
+    const mark = vi.fn(async () => undefined);
+    const stateStore = createCodexTestBindingStateStore();
+    const bindingStore = Object.assign(createCodexAppServerBindingStore(stateStore), {
+      managedThreads: { mark, snapshot: vi.fn(async () => new Map()) },
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-managed");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThreadImpl({
+      client: {
+        request,
+        getRuntimeIdentity: () => ({ codexHome: path.join(tempDir, "agent", "codex-home") }),
+      } as never,
+      params,
+      cwd: params.workspaceDir!,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      bindingStore,
+    });
+
+    expect(mark).toHaveBeenCalledOnce();
+    expect(mark).toHaveBeenCalledWith({
+      sourceHomeId: expect.stringMatching(/^[a-f0-9]{64}$/),
+      threadId: "thread-managed",
+    });
+    expect(stateStore.entries().map((entry) => entry.value)).toContainEqual(
+      expect.objectContaining({
+        state: "active",
+        binding: expect.objectContaining({ threadId: "thread-managed" }),
+      }),
+    );
+  });
+
+  it.each([
+    ["a different remote home", "remote"],
+    ["a local-looking remote path", "local-looking"],
+  ])("keys remote ownership to the selected catalog home for %s", async (_label, pathKind) => {
+    const rolloutPath =
+      pathKind === "remote"
+        ? "/remote/codex/sessions/2026/08/thread-managed-remote.jsonl"
+        : path.join(tempDir, "poison", "sessions", "2026", "08", "thread-managed-remote.jsonl");
+    const params = createThreadLifecycleParams(
+      path.join(tempDir, "session-managed-remote.jsonl"),
+      path.join(tempDir, "workspace-managed-remote"),
+    );
+    params.agentDir = path.join(tempDir, "agent");
+    const mark = vi.fn(async () => undefined);
+    const bindingStore = Object.assign(
+      createCodexAppServerBindingStore(createCodexTestBindingStateStore()),
+      { managedThreads: { mark, snapshot: vi.fn(async () => new Map()) } },
+    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        const result = threadStartResult("thread-managed-remote");
+        return { ...result, thread: { ...result.thread, path: rolloutPath } };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const appServer = createThreadLifecycleAppServerOptions();
+    appServer.start = {
+      ...appServer.start,
+      transport: "websocket",
+      url: "wss://codex.example.test/app-server",
+    };
+    appServer.connectionClass = "remote";
+
+    await startOrResumeThreadImpl({
+      client: {
+        request,
+        getRuntimeIdentity: () => ({ codexHome: "/remote/codex" }),
+      } as never,
+      params,
+      cwd: params.workspaceDir!,
+      dynamicTools: [],
+      appServer,
+      bindingStore,
+    });
+
+    expect(mark).toHaveBeenCalledWith({
+      sourceHomeId: codexCatalogHomeId(resolveCodexAppServerHomeDir(params.agentDir)),
+      threadId: "thread-managed-remote",
+      rolloutPath,
+    });
+  });
+
+  it("starts a durable thread when catalog ownership bookkeeping fails", async () => {
+    const params = createThreadLifecycleParams(
+      path.join(tempDir, "session-managed-failure.jsonl"),
+      path.join(tempDir, "workspace-managed-failure"),
+    );
+    const stateStore = createCodexTestBindingStateStore();
+    const bindingStore = Object.assign(createCodexAppServerBindingStore(stateStore), {
+      managedThreads: {
+        mark: vi.fn(async () => {
+          throw new Error("managed ownership unavailable");
+        }),
+        snapshot: vi.fn(async () => new Map()),
+      },
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-managed-without-index");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThreadImpl({
+        client: {
+          request,
+          getRuntimeIdentity: () => ({ codexHome: path.join(tempDir, "codex-home") }),
+        } as never,
+        params,
+        cwd: params.workspaceDir!,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        bindingStore,
+      }),
+    ).resolves.toMatchObject({ threadId: "thread-managed-without-index" });
   });
 
   it("does not rebuild a binding whose configured plugin is a settled negative", async () => {
@@ -2932,11 +3392,12 @@ describe("Codex app-server supervised branch lifecycle", () => {
     vi.restoreAllMocks();
   });
 
-  it("materializes a model-locked canonical branch and injects the same visible snapshot once", async () => {
+  it("materializes a model-locked canonical branch with frozen agent instructions", async () => {
     const sourceThreadId = "thread-source";
     const probeThreadId = "thread-probe";
     const finalThreadId = "thread-final";
     const lastTurnId = "turn-terminal";
+    const agentWorkspaceDeveloperInstructions = "Follow the frozen supervised AGENTS guidance.";
     const workspaceDir = path.join(tempDir, "workspace");
     const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     attempt.modelId = "outer-global-default";
@@ -3003,7 +3464,11 @@ describe("Codex app-server supervised branch lifecycle", () => {
       params: attempt,
       cwd: workspaceDir,
       dynamicTools,
+      developerInstructions: agentWorkspaceDeveloperInstructions,
+      agentWorkspaceDeveloperInstructions,
       environmentSelection: [{ environmentId: "local", cwd: workspaceDir }],
+      shellEnvironment: { GH_TOKEN: "", GITHUB_TOKEN: "" },
+      disableLoginShell: true,
       appServer: createThreadLifecycleAppServerOptions(),
       appServerRuntimeFingerprint: "codex-runtime-v1",
     };
@@ -3026,6 +3491,15 @@ describe("Codex app-server supervised branch lifecycle", () => {
       threadId: sourceThreadId,
       lastTurnId,
       excludeTurns: true,
+      developerInstructions: agentWorkspaceDeveloperInstructions,
+      config: {
+        project_doc_max_bytes: 131_072,
+        allow_login_shell: false,
+        shell_environment_policy: {
+          experimental_use_profile: false,
+          set: { GH_TOKEN: "", GITHUB_TOKEN: "" },
+        },
+      },
     });
     expect(forkParams).not.toHaveProperty("model");
     expect(forkParams).not.toHaveProperty("modelProvider");
@@ -3035,8 +3509,17 @@ describe("Codex app-server supervised branch lifecycle", () => {
     expect(startParams).toMatchObject({
       model: "native-effective",
       modelProvider: "native-provider",
+      developerInstructions: agentWorkspaceDeveloperInstructions,
       dynamicTools,
       environments: [{ environmentId: "local", cwd: workspaceDir }],
+      config: {
+        project_doc_max_bytes: 131_072,
+        allow_login_shell: false,
+        shell_environment_policy: {
+          experimental_use_profile: false,
+          set: { GH_TOKEN: "", GITHUB_TOKEN: "" },
+        },
+      },
     });
     expect(startParams.model).not.toBe(attempt.modelId);
     expect(request.mock.calls[3]?.[1]).toEqual({
@@ -3063,6 +3546,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       model: "native-effective",
       modelProvider: "native-provider",
       preserveNativeModel: true,
+      agentWorkspaceDeveloperInstructions,
       conversationSourceTransferComplete: true,
       lifecycle: { action: "forked" },
     });
@@ -3073,6 +3557,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       model: "native-effective",
       modelProvider: "native-provider",
       preserveNativeModel: true,
+      agentWorkspaceDeveloperInstructions,
       conversationSourceTransferComplete: true,
       appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(commonParams.appServer),
     });
@@ -3087,6 +3572,9 @@ describe("Codex app-server supervised branch lifecycle", () => {
     expect(request.mock.calls[0]?.[1]).toEqual({ threadId: finalThreadId, includeTurns: false });
     expect(request.mock.calls[1]?.[1]).not.toHaveProperty("model");
     expect(request.mock.calls[1]?.[1]).not.toHaveProperty("modelProvider");
+    expect(request.mock.calls[1]?.[1]).toMatchObject({
+      developerInstructions: agentWorkspaceDeveloperInstructions,
+    });
     expect(resumed).toMatchObject({
       threadId: finalThreadId,
       preserveNativeModel: true,
@@ -3179,6 +3667,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         | { config?: Record<string, unknown> }
         | undefined;
       expect(threadRequest?.config).toMatchObject({
+        project_doc_max_bytes: 0,
         mcp_servers: {
           inherited: { enabled: false },
           "request-only": { enabled: false },

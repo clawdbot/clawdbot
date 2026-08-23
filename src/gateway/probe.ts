@@ -11,12 +11,22 @@ import {
   readMissingScopeError,
   type MissingScopeErrorDetails,
 } from "../../packages/gateway-protocol/src/gateway-error-details.js";
-import { loadDeviceAuthToken, loadOriginDeviceToken } from "../infra/device-auth-store.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  loadDeviceAuthTokenReadOnly,
+  loadOriginDeviceTokenReadOnly,
+} from "../infra/device-auth-store.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, GatewayClientRequestError } from "./client.js";
+import {
+  gatewayEdgeAuthValueForTarget,
+  normalizeEdgeAuthHeadersConfig,
+  resolveEdgeAuthHeaders,
+  type EdgeAuthHeadersConfig,
+} from "./edge-auth.js";
 import { READ_SCOPE } from "./method-scopes.js";
 import { isLoopbackHost } from "./net.js";
 
@@ -184,7 +194,7 @@ function makeDeviceRequiredShortCircuitResult(url: string): GatewayProbeResult {
   };
 }
 
-function resolveProbeAuthSummary(params: {
+export function resolveProbeAuthSummary(params: {
   role?: string | null;
   scopes?: string[];
   authMetadataPresent?: boolean;
@@ -251,6 +261,7 @@ export async function probeGateway(opts: {
   /** Disable persisted device auth when the transport does not identify a stable Gateway origin. */
   suppressStoredDeviceAuth?: boolean;
   auth?: GatewayProbeAuth;
+  config?: OpenClawConfig;
   timeoutMs: number;
   preauthHandshakeTimeoutMs?: number;
   includeDetails?: boolean;
@@ -291,13 +302,13 @@ export async function probeGateway(opts: {
       const cachedOperatorToken = opts.suppressStoredDeviceAuth
         ? null
         : deviceAuthScope
-          ? loadOriginDeviceToken({
+          ? loadOriginDeviceTokenReadOnly({
               gatewayScope: deviceAuthScope,
               deviceId: identity.deviceId,
               role: "operator",
               env: opts.env,
             })
-          : loadDeviceAuthToken({
+          : loadDeviceAuthTokenReadOnly({
               deviceId: identity.deviceId,
               role: "operator",
               env: opts.env,
@@ -315,6 +326,15 @@ export async function probeGateway(opts: {
     return makeDeviceRequiredShortCircuitResult(opts.url);
   }
   const initialProbeTimeoutMs = clampProbeTimeoutMs(opts.timeoutMs);
+  const edgeAuthConfig: EdgeAuthHeadersConfig | undefined = normalizeEdgeAuthHeadersConfig(
+    gatewayEdgeAuthValueForTarget({ config: opts.config ?? {}, targetUrl: opts.url }),
+  );
+  const edgeAuthHeaders = await resolveEdgeAuthHeaders({
+    config: opts.config ?? {},
+    value: edgeAuthConfig,
+    targetUrl: opts.url,
+    env: opts.env ?? process.env,
+  });
 
   return await new Promise<GatewayProbeResult>((resolve) => {
     let settled = false;
@@ -404,6 +424,7 @@ export async function probeGateway(opts: {
       ...(deviceAuthScope ? { deviceAuthScope } : {}),
       token: opts.auth?.token,
       password: opts.auth?.password,
+      edgeAuthHeaders,
       tlsFingerprint: opts.tlsFingerprint,
       preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
       env: opts.env,
@@ -411,6 +432,7 @@ export async function probeGateway(opts: {
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.PROBE,
+      sharedStateMode: "read-only",
       instanceId,
       deviceIdentity,
       onConnectError: (err) => {

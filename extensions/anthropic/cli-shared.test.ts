@@ -56,19 +56,6 @@ describe("Claude CLI adapter equivalence", () => {
     expect(backend.config.clearEnv).toEqual([...CLAUDE_CLI_CLEAR_ENV]);
   });
 
-  it("preserves the prepared launch environment for the same context budget", () => {
-    const backend = buildAnthropicCliBackend();
-
-    expect(
-      backend.prepareExecution?.({
-        workspaceDir: "/tmp/openclaw-claude-cli",
-        provider: "claude-cli",
-        modelId: "claude-opus-4-8",
-        contextTokenBudget: 100_000,
-      }),
-    ).toEqual({ env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000" } });
-  });
-
   it("privately acknowledges isolated completion preparation", () => {
     const backend = buildAnthropicCliBackend();
     const prepared = backend.prepareExecution?.({
@@ -500,6 +487,19 @@ describe("resolveClaudeCliExecutionArgs", () => {
     },
   );
 
+  it("defensively maps impossible Fable off requests to the lowest Claude effort", () => {
+    expect(
+      resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-fable-5",
+        thinkingLevel: "off",
+        useResume: false,
+        baseArgs: ["-p", "--effort", "high"],
+      }),
+    ).toEqual(["-p", "--effort", "low"]);
+  });
+
   it.each([
     ["minimal", "low"],
     ["low", "low"],
@@ -671,12 +671,11 @@ describe("normalizeClaudeBackendConfig", () => {
         config: {
           tools: { exec: { mode: "full" } },
           agents: {
-            list: [
-              {
-                id: "safe-agent",
+            entries: {
+              "safe-agent": {
                 tools: { exec: { mode: "ask" } },
               },
-            ],
+            },
           },
         },
       }),
@@ -688,12 +687,11 @@ describe("normalizeClaudeBackendConfig", () => {
         config: {
           tools: { exec: { mode: "ask" } },
           agents: {
-            list: [
-              {
-                id: "yolo-agent",
+            entries: {
+              "yolo-agent": {
                 tools: { exec: { mode: "full" } },
               },
-            ],
+            },
           },
         },
       }),

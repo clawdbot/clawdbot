@@ -1,22 +1,68 @@
 // Tests agent runner session reset cleanup and restart behavior.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
+import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
+  replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { createSessionDiffBaselineCaptureClaim } from "../../config/sessions/session-diff-baseline-capture.js";
+import { applySessionDiffBaseline, loadCheckoutDiff } from "../../sessions/session-diff.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
 import { setAgentRunnerSessionResetTestDeps } from "./agent-runner-session-reset.test-support.js";
 import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.test-fixtures.js";
 
+const sessionDiffCapture = vi.hoisted(() => ({
+  fail: false,
+  onStart: undefined as (() => void) | undefined,
+  wait: undefined as Promise<void> | undefined,
+}));
+
+vi.mock("../../sessions/session-diff.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../sessions/session-diff.js")>();
+  return {
+    ...actual,
+    captureSessionDiffBaseline: async (
+      params: Parameters<typeof actual.captureSessionDiffBaseline>[0],
+    ) => {
+      sessionDiffCapture.onStart?.();
+      await sessionDiffCapture.wait;
+      if (sessionDiffCapture.fail) {
+        throw new Error("git capture failed");
+      }
+      return await actual.captureSessionDiffBaseline(params);
+    },
+  };
+});
+
 const refreshQueuedFollowupSessionMock = vi.fn();
 const resetRegisteredAgentHarnessSessionsMock = vi.fn();
 const errorMock = vi.fn();
+
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+}
+
+async function initializeGitWorkspace(root: string): Promise<string> {
+  const workspace = path.join(root, "workspace");
+  await fs.mkdir(workspace);
+  git(workspace, "init", "-q", "-b", "main");
+  git(workspace, "config", "user.email", "test@openclaw.test");
+  git(workspace, "config", "user.name", "Test");
+  git(workspace, "config", "commit.gpgsign", "false");
+  await fs.writeFile(path.join(workspace, "tracked.txt"), "initial\n", "utf8");
+  git(workspace, "add", ".");
+  git(workspace, "commit", "-qm", "initial");
+  return await fs.realpath(workspace);
+}
 
 async function writeFileTranscript(filePath: string, sessionId: string): Promise<void> {
   await fs.writeFile(
@@ -56,6 +102,9 @@ describe("resetReplyRunSession", () => {
 
   beforeEach(async () => {
     rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reset-run-"));
+    sessionDiffCapture.fail = false;
+    sessionDiffCapture.onStart = undefined;
+    sessionDiffCapture.wait = undefined;
     refreshQueuedFollowupSessionMock.mockReset();
     resetRegisteredAgentHarnessSessionsMock.mockReset();
     errorMock.mockReset();
@@ -84,6 +133,7 @@ describe("resetReplyRunSession", () => {
       modelProvider: "qwencode",
       model: "qwen",
       contextTokens: 123,
+      contextTokensSource: "runtime",
       contextBudgetStatus: {
         schemaVersion: 1,
         source: "pre-prompt-estimate",
@@ -158,6 +208,7 @@ describe("resetReplyRunSession", () => {
     expect(activeSessionEntry?.claudeCliSessionId).toBeUndefined();
     expect(activeSessionEntry?.model).toBeUndefined();
     expect(activeSessionEntry?.contextTokens).toBeUndefined();
+    expect(activeSessionEntry?.contextTokensSource).toBeUndefined();
     expect(activeSessionEntry?.contextBudgetStatus).toBeUndefined();
     expect(activeSessionEntry?.fallbackNotice).toBeUndefined();
     expect(activeSessionEntry?.compactionCount).toBe(0);
@@ -182,10 +233,173 @@ describe("resetReplyRunSession", () => {
 
     const persisted = loadSessionEntry({ storePath, sessionKey });
     expect(persisted?.sessionId).toBe(activeSessionEntry?.sessionId);
+    expect(persisted?.contextTokensSource).toBeUndefined();
     expect(persisted?.contextBudgetStatus).toBeUndefined();
     expect(persisted?.fallbackNotice).toBeUndefined();
     expect(persisted?.compactionCount).toBe(0);
     expect(persisted?.memoryFlush).toBeUndefined();
+  });
+
+  it("settles a fresh checkout baseline before returning from a local reset", async () => {
+    const workspace = await initializeGitWorkspace(rootDir);
+    const storePath = path.join(rootDir, "sessions.json");
+    await fs.writeFile(path.join(workspace, "before-reset.txt"), "preexisting\n", "utf8");
+    const sessionEntry: SessionEntry = {
+      createdVia: "operator",
+      lifecycleRevision: "before-reset",
+      sessionId: "session",
+      updatedAt: 1,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+
+    let activeSessionEntry: SessionEntry | undefined = sessionEntry;
+    await resetReplyRunSession({
+      options: {
+        failureLabel: "memory flush exhaustion",
+        buildLogMessage: (next) => `reset ${next}`,
+      },
+      sessionKey,
+      queueKey: "main",
+      activeSessionEntry,
+      activeSessionStore: sessionStore,
+      storePath,
+      followupRun: createTestFollowupRun({ workspaceDir: workspace }),
+      onActiveSessionEntry: (entry) => {
+        activeSessionEntry = entry;
+      },
+      onNewSession: () => {},
+    });
+
+    expect(activeSessionEntry?.sessionDiffBaseline).toMatchObject({
+      sessionId: "session",
+      root: workspace,
+    });
+    expect(activeSessionEntry?.sessionDiffBaselineCapture).toBeUndefined();
+    await fs.writeFile(path.join(workspace, "after-reset.txt"), "resumed turn\n", "utf8");
+    const diff = await loadCheckoutDiff({ cwd: workspace, sessionKey });
+    const filtered = await applySessionDiffBaseline({
+      baseline: activeSessionEntry?.sessionDiffBaseline,
+      diff,
+      sessionId: "session",
+    });
+    expect(filtered.files.map((file) => file.path)).toEqual(["after-reset.txt"]);
+  });
+
+  it("continues with the authoritative unavailable marker after capture failure", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionEntry: SessionEntry = {
+      lifecycleRevision: "before-reset",
+      sessionId: "session",
+      updatedAt: 1,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+    sessionDiffCapture.fail = true;
+
+    let activeSessionEntry: SessionEntry | undefined = sessionEntry;
+    await expect(
+      resetReplyRunSession({
+        options: {
+          failureLabel: "memory flush exhaustion",
+          buildLogMessage: (next) => `reset ${next}`,
+        },
+        sessionKey,
+        queueKey: "main",
+        activeSessionEntry,
+        activeSessionStore: sessionStore,
+        storePath,
+        followupRun: createTestFollowupRun({ workspaceDir: rootDir }),
+        onActiveSessionEntry: (entry) => {
+          activeSessionEntry = entry;
+        },
+        onNewSession: () => {},
+      }),
+    ).resolves.toBe(true);
+
+    expect(activeSessionEntry?.sessionDiffBaselineCapture).toMatchObject({
+      status: "unavailable",
+    });
+    expect(sessionStore[sessionKey]).toEqual(activeSessionEntry);
+    expect(loadSessionEntry({ storePath, sessionKey })).toEqual(activeSessionEntry);
+  });
+
+  it("replaces a stale pending cache entry when capture loses its generation", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionEntry: SessionEntry = {
+      lifecycleRevision: "before-reset",
+      sessionId: "session",
+      updatedAt: 1,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+    const captureStarted = createDeferredCore();
+    const captureRelease = createDeferredCore();
+    sessionDiffCapture.onStart = () => captureStarted.resolve();
+    sessionDiffCapture.wait = captureRelease.promise;
+
+    const reset = resetReplyRunSession({
+      options: {
+        failureLabel: "memory flush exhaustion",
+        buildLogMessage: (next) => `reset ${next}`,
+      },
+      sessionKey,
+      queueKey: "main",
+      activeSessionEntry: sessionEntry,
+      activeSessionStore: sessionStore,
+      storePath,
+      followupRun: createTestFollowupRun({ workspaceDir: rootDir }),
+      onActiveSessionEntry: () => {},
+      onNewSession: () => {},
+    });
+    await captureStarted.promise;
+    const stalePending = sessionStore[sessionKey];
+    expect(stalePending.sessionDiffBaselineCapture).toMatchObject({ status: "pending" });
+    const replacement: SessionEntry = {
+      ...stalePending,
+      lifecycleRevision: "replacement-generation",
+      sessionDiffBaselineCapture: createSessionDiffBaselineCaptureClaim(),
+    };
+    await replaceSessionEntry({ storePath, sessionKey }, replacement);
+    const authoritativeReplacement = loadSessionEntry({ storePath, sessionKey });
+    captureRelease.resolve();
+
+    const rejection = await reset.catch((error: unknown) => error);
+    expect(isSessionWorkStartInvalidatedError(rejection)).toBe(true);
+    expect(sessionStore[sessionKey]).toEqual(authoritativeReplacement);
+    expect(sessionStore[sessionKey]).toEqual(loadSessionEntry({ storePath, sessionKey }));
+    expect(sessionStore[sessionKey]).not.toBe(stalePending);
+  });
+
+  it("does not arm a local checkout claim for an exec-node reset", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionEntry: SessionEntry = {
+      execNode: "worker-1",
+      lifecycleRevision: "before-reset",
+      sessionId: "session",
+      updatedAt: 1,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    await writeTestSessionStore(storePath, sessionKey, sessionEntry);
+
+    await resetReplyRunSession({
+      options: {
+        failureLabel: "memory flush exhaustion",
+        buildLogMessage: (next) => `reset ${next}`,
+      },
+      sessionKey,
+      queueKey: "main",
+      activeSessionEntry: sessionEntry,
+      activeSessionStore: sessionStore,
+      storePath,
+      followupRun: createTestFollowupRun({ workspaceDir: rootDir }),
+      onActiveSessionEntry: () => {},
+      onNewSession: () => {},
+    });
+
+    expect(loadSessionEntry({ storePath, sessionKey })).not.toHaveProperty(
+      "sessionDiffBaselineCapture",
+    );
   });
 
   it("rejects automatic recovery rotation for a model-locked session", async () => {
@@ -286,7 +500,6 @@ describe("resetReplyRunSession", () => {
     });
 
     // The boundary reset keeps both the logical id and transcript in place.
-    expect(rotatedSessionId).toBeDefined();
     expect(rotatedSessionId).toBe("old-session");
     await fs.access(oldTranscriptPath);
   });

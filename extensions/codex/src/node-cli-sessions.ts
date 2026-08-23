@@ -1,5 +1,4 @@
 // Codex plugin module implements node cli sessions behavior.
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +10,7 @@ import type {
   OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -56,18 +56,6 @@ type CodexCliSessionNodeInfo = {
   remoteIp?: string;
   connected?: boolean;
   commands?: string[];
-};
-
-type CodexCliResumeSpawnRuntime = {
-  platform: NodeJS.Platform;
-  env: NodeJS.ProcessEnv;
-  execPath: string;
-};
-
-const DEFAULT_RESUME_SPAWN_RUNTIME: CodexCliResumeSpawnRuntime = {
-  platform: process.platform,
-  env: process.env,
-  execPath: process.execPath,
 };
 
 export function createCodexCliSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
@@ -273,74 +261,42 @@ async function runCodexExecResume(params: {
       params.sessionId,
       "-",
     ];
-    const invocation = resolveCodexCliResumeSpawnInvocation(args, {
-      platform: process.platform,
-      env: process.env,
-      execPath: process.execPath,
-    });
-    const child = spawn(invocation.command, invocation.args, {
+    const invocation = materializeWindowsSpawnProgram(
+      resolveWindowsSpawnProgram({
+        command: "codex",
+        platform: process.platform,
+        env: process.env,
+        execPath: process.execPath,
+        packageName: "@openai/codex",
+      }),
+      args,
+    );
+    const result = await runCommandBuffered([invocation.command, ...invocation.argv], {
       cwd: params.cwd || process.cwd(),
-      stdio: ["pipe", "pipe", "pipe"],
+      input: params.prompt,
       env: process.env,
-      shell: invocation.shell,
-      windowsHide: invocation.windowsHide,
+      killGraceMs: 2_000,
+      killProcessTree: false,
+      terminateOnOutputError: true,
+      timeoutMs: params.timeoutMs,
     });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let timedOut = false;
-    let forceKillTimeout: NodeJS.Timeout | undefined;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-      forceKillTimeout = setTimeout(() => child.kill("SIGKILL"), 2_000);
-      forceKillTimeout.unref?.();
-    }, params.timeoutMs);
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.stdin.end(params.prompt);
-    const exitCode = await new Promise<number | null>((resolve, reject) => {
-      child.on("error", reject);
-      child.on("exit", (code) => resolve(code));
-    }).finally(() => {
-      clearTimeout(timeout);
-      if (forceKillTimeout) {
-        clearTimeout(forceKillTimeout);
-      }
-    });
-    if (timedOut) {
+    if (result.termination === "timeout") {
       throw new Error(`codex exec resume timed out after ${String(params.timeoutMs)}ms`);
     }
-    if (exitCode !== 0) {
+    if (result.termination === "error" && result.error) {
+      throw result.error;
+    }
+    if (result.code !== 0) {
       const message =
-        Buffer.concat(stderr).toString("utf8").trim() ||
-        Buffer.concat(stdout).toString("utf8").trim() ||
-        `codex exec resume exited with code ${String(exitCode)}`;
+        result.stderr.toString("utf8").trim() ||
+        result.stdout.toString("utf8").trim() ||
+        `codex exec resume exited with code ${String(result.code)}`;
       throw new Error(message);
     }
     return await fs.readFile(outputPath, "utf8");
   } finally {
     await fs.rm(path.dirname(outputPath), { recursive: true, force: true });
   }
-}
-
-function resolveCodexCliResumeSpawnInvocation(
-  args: string[],
-  runtime: CodexCliResumeSpawnRuntime = DEFAULT_RESUME_SPAWN_RUNTIME,
-): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {
-  const program = resolveWindowsSpawnProgram({
-    command: "codex",
-    platform: runtime.platform,
-    env: runtime.env,
-    execPath: runtime.execPath,
-    packageName: "@openai/codex",
-  });
-  const resolved = materializeWindowsSpawnProgram(program, args);
-  return {
-    command: resolved.command,
-    args: resolved.argv,
-    shell: resolved.shell,
-    windowsHide: resolved.windowsHide,
-  };
 }
 
 async function readHistorySessions(

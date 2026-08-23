@@ -1,6 +1,42 @@
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractCanvasFromDetails, extractCanvasFromText } from "../chat/canvas-render.js";
 import { truncateChatHistoryText } from "./chat-display-projection.helpers.js";
+
+const MAX_TOOL_APPROVAL_REVIEWS = 16;
+const TOOL_APPROVAL_REVIEW_STATUSES = new Set([
+  "in_progress",
+  "approved",
+  "denied",
+  "timed_out",
+  "aborted",
+]);
+
+function boundedReviewText(value: unknown, maxChars: number): string | undefined {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text ? truncateUtf16Safe(text, maxChars) : undefined;
+}
+
+function projectToolApprovalReview(value: unknown): Record<string, unknown> | undefined {
+  const review = readRecord(value);
+  const id = boundedReviewText(review?.id, 256);
+  const label = boundedReviewText(review?.label, 80);
+  const status = boundedReviewText(review?.status, 32);
+  if (!id || !label || !status || !TOOL_APPROVAL_REVIEW_STATUSES.has(status)) {
+    return undefined;
+  }
+  const riskLevel = boundedReviewText(review?.riskLevel, 40);
+  const userAuthorization = boundedReviewText(review?.userAuthorization, 40);
+  const rationale = boundedReviewText(review?.rationale, 2_000);
+  return {
+    id,
+    label,
+    status,
+    ...(riskLevel ? { riskLevel } : {}),
+    ...(userAuthorization ? { userAuthorization } : {}),
+    ...(rationale ? { rationale } : {}),
+  };
+}
 
 /** Return true for known tool-call/tool-result block type spellings in transcripts. */
 export function isToolHistoryBlockType(type: unknown): boolean {
@@ -29,19 +65,36 @@ export function isToolResultHistoryBlockType(type: unknown): boolean {
 export function projectToolResultDetails(
   details: unknown,
   maxChars: number,
-): Record<string, unknown> | undefined {
+): { details: Record<string, unknown> | undefined; truncated: boolean } {
   const record = readRecord(details);
   if (!record) {
-    return undefined;
+    return { details: undefined, truncated: false };
   }
   const projected: Record<string, unknown> = {};
+  // The diff is the one display-capped field here; surface the fact so the
+  // message-level marker covers capped tool-result details too.
+  let truncated = false;
   for (const key of ["changed", "created"] as const) {
     if (typeof record[key] === "boolean") {
       projected[key] = record[key];
     }
   }
   if (typeof record.diff === "string" && record.diff.trim()) {
-    projected.diff = truncateChatHistoryText(record.diff, maxChars).text;
+    const diff = truncateChatHistoryText(record.diff, maxChars);
+    projected.diff = diff.text;
+    truncated = diff.truncated;
+  }
+  if (Array.isArray(record.approvalReviews)) {
+    const reviews = record.approvalReviews
+      .slice(-MAX_TOOL_APPROVAL_REVIEWS)
+      .flatMap((review) => projectToolApprovalReview(review) ?? []);
+    if (reviews.length > 0) {
+      projected.approvalReviews = reviews;
+    }
+  }
+  const reviewOutcome = record.approvalReviewOutcome;
+  if (reviewOutcome === "approved" || reviewOutcome === "denied" || reviewOutcome === "reviewing") {
+    projected.approvalReviewOutcome = reviewOutcome;
   }
   const preview = extractCanvasFromDetails(record);
   if (preview?.mcpApp && preview.viewId) {
@@ -61,7 +114,7 @@ export function projectToolResultDetails(
       mcpApp: preview.mcpApp,
     };
   }
-  return Object.keys(projected).length > 0 ? projected : undefined;
+  return { details: Object.keys(projected).length > 0 ? projected : undefined, truncated };
 }
 
 export function messageHasToolResultShape(message: Record<string, unknown>): boolean {

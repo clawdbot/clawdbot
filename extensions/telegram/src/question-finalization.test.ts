@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   edit: vi.fn(),
+  editMarkup: vi.fn(),
   registration: undefined as
     | { finalize: (statusLine: string) => void | Promise<void>; deliveryId: string }
     | undefined,
@@ -20,12 +21,17 @@ vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) =
     },
   };
 });
-vi.mock("./send.js", () => ({ editMessageTelegram: hoisted.edit }));
+vi.mock("./send.js", () => ({
+  editMessageReplyMarkupTelegram: hoisted.editMarkup,
+  editMessageTelegram: hoisted.edit,
+}));
 
 import { createTelegramOutboundAdapter } from "./outbound-adapter.js";
 
 describe("Telegram question finalization", () => {
   it("removes buttons and appends terminal status", async () => {
+    const deliveredText = "x".repeat(5000);
+    const statusLine = `Answered: ${"y".repeat(600)}`;
     const outbound = createTelegramOutboundAdapter();
     await outbound.afterDeliverPayload?.({
       cfg: {},
@@ -40,24 +46,29 @@ describe("Telegram question finalization", () => {
         {
           channel: "telegram",
           messageId: "54",
-          chatId: "123",
+          target: { kind: "chat", id: "123" },
           meta: { telegramDeliveredText: "Long preface", telegramHasInlineKeyboard: false },
         },
         {
           channel: "telegram",
           messageId: "55",
-          chatId: "123",
-          meta: { telegramDeliveredText: "Pick one", telegramHasInlineKeyboard: true },
+          target: { kind: "chat", id: "123" },
+          meta: { telegramDeliveredText: deliveredText, telegramHasInlineKeyboard: true },
         },
       ],
     });
 
-    await hoisted.registration?.finalize("Answered: One");
-    expect(hoisted.edit).toHaveBeenCalledWith("123", "55", "Pick one\n\nAnswered: One", {
+    await hoisted.registration?.finalize(statusLine);
+    expect(hoisted.editMarkup).toHaveBeenCalledWith("123", "55", [], {
       cfg: {},
       accountId: "default",
-      buttons: [],
       verbose: false,
     });
+    const annotatedText = hoisted.edit.mock.calls[0]?.[2] as string;
+    expect(annotatedText.length).toBeLessThanOrEqual(4000);
+    expect(annotatedText).toContain("\n\nAnswered: ");
+    expect(hoisted.editMarkup.mock.invocationCallOrder[0]).toBeLessThan(
+      hoisted.edit.mock.invocationCallOrder[0] ?? Infinity,
+    );
   });
 });

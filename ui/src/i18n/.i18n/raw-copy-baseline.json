@@ -5,13 +5,6 @@
       "count": 1,
       "kind": "object-property",
       "name": "label",
-      "path": "ui/src/app/app-shell-view.ts",
-      "text": "device scope upgrade banner"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
       "text": "approval page"
     },
@@ -35,6 +28,13 @@
       "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
       "text": "custodian panel"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/lazy-custom-element.ts",
+      "text": "dashboard document"
     },
     {
       "count": 1,
@@ -186,167 +186,6 @@
     {
       "count": 1,
       "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "agents_list"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "apply_patch"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "browser"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "canvas"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "cron"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "edit"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "exec"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "gateway"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "image"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "memory_get"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "memory_search"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "message"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "nodes"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "process"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "read"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "session_status"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "sessions_history"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "sessions_list"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "sessions_send"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "sessions_spawn"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "web_fetch"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "web_search"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/lib/agents/display.ts",
-      "text": "write"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
       "name": "description",
       "path": "ui/src/lib/chat/commands.ts",
       "text": "Abort and restart with a new message"
@@ -378,6 +217,41 @@
       "name": "text",
       "path": "ui/src/pages/about/view.ts",
       "text": "v"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/github-identity-view.ts",
+      "text": "agentTools.githubStateConfiguredUnavailable"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/github-identity-view.ts",
+      "text": "agentTools.githubStateRateLimited"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/github-identity-view.ts",
+      "text": "agentTools.githubStateUnavailable"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/github-identity-view.ts",
+      "text": "agentTools.githubStateUnverified"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/github-identity-view.ts",
+      "text": "agentTools.githubStateVerified"
     },
     {
       "count": 1,
@@ -504,6 +378,13 @@
       "name": "text",
       "path": "ui/src/pages/config/mcp.ts",
       "text": "openclaw mcp status --verbose"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/config/updates.ts",
+      "text": "openclaw update status --json openclaw update"
     },
     {
       "count": 1,

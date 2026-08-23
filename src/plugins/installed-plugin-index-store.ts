@@ -1,7 +1,7 @@
 /** Persists, inspects, and refreshes the installed plugin index in the state database. */
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import { safeParseJson } from "@openclaw/normalization-core";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { z } from "zod";
 import {
   createPluginInstallRecordMap,
@@ -13,7 +13,8 @@ import {
   setPluginInstallRecordMapEntry,
 } from "../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
@@ -33,19 +34,15 @@ import {
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store-path.js";
 import {
-  diffInstalledPluginIndexInvalidationReasons,
   extractPluginInstallRecordsFromInstalledPluginIndex,
   hasInstalledPluginIndexWorkspaceScopeMismatch,
   hasMissingConfigPathActivationMetadata,
   INSTALLED_PLUGIN_INDEX_WARNING,
   INSTALLED_PLUGIN_INDEX_VERSION,
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
-  loadInstalledPluginIndex,
   resolveInstalledPluginIndexPolicyHash,
   refreshInstalledPluginIndex,
   type InstalledPluginIndex,
-  type InstalledPluginIndexRefreshReason,
-  type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
 import { hasMissingInstalledPluginOwnerMetadata } from "./installed-plugin-package-ownership.js";
@@ -55,16 +52,6 @@ export {
   resolveLegacyInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store-path.js";
-
-/** Freshness state for the persisted installed plugin index. */
-type InstalledPluginIndexStoreState = "missing" | "fresh" | "stale";
-
-export type InstalledPluginIndexStoreInspection = {
-  state: InstalledPluginIndexStoreState;
-  refreshReasons: readonly InstalledPluginIndexRefreshReason[];
-  persisted: InstalledPluginIndex | null;
-  current: InstalledPluginIndex;
-};
 
 export type InstalledPluginIndexWriteLease = {
   assertOwnedInTransaction(database: DatabaseSync): void;
@@ -362,15 +349,17 @@ function readPersistedInstalledPluginIndexFromSqlite(
   if (options.filePath?.endsWith(".json")) {
     return null;
   }
-  if (!existsSync(resolveInstalledPluginIndexStorePath(options))) {
-    return null;
-  }
   try {
-    return withOpenClawStateDatabaseReadOnly(
-      ({ db }) => parseInstalledPluginIndexSqliteRow(readInstalledPluginIndexRow(db)),
-      resolveInstalledPluginIndexStateDatabaseOptions(options),
+    return (
+      withExistingOpenClawStateDatabaseReadOnly(
+        ({ db }) => parseInstalledPluginIndexSqliteRow(readInstalledPluginIndexRow(db)),
+        resolveInstalledPluginIndexStateDatabaseOptions(options),
+      ) ?? null
     );
-  } catch {
+  } catch (error) {
+    if (isSqliteSchemaVersionError(error)) {
+      throw error;
+    }
     return null;
   }
 }
@@ -561,33 +550,6 @@ function refreshPersistedPolicyState(
         enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
       }).enabled,
     })),
-  };
-}
-
-export async function inspectPersistedInstalledPluginIndex(
-  params: LoadInstalledPluginIndexParams & InstalledPluginIndexStoreOptions = {},
-): Promise<InstalledPluginIndexStoreInspection> {
-  const persisted = await readPersistedInstalledPluginIndex(params);
-  const current = loadInstalledPluginIndex({
-    ...params,
-    installRecords:
-      params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted),
-  });
-  if (!persisted) {
-    return {
-      state: "missing",
-      refreshReasons: ["missing"],
-      persisted: null,
-      current,
-    };
-  }
-
-  const refreshReasons = diffInstalledPluginIndexInvalidationReasons(persisted, current);
-  return {
-    state: refreshReasons.length > 0 ? "stale" : "fresh",
-    refreshReasons,
-    persisted,
-    current,
   };
 }
 

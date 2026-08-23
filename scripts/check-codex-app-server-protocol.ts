@@ -456,21 +456,19 @@ const openClawThreadStartResponse: Omit<CodexThreadStartResponse, "thread"> =
 export {};
 `;
   await fs.writeFile(probePath, probe);
+  const probeConfigPath = path.join(sourceRoot, "openclaw-protocol-compatibility.tsconfig.json");
+  await fs.writeFile(
+    probeConfigPath,
+    JSON.stringify({
+      extends: path.resolve("tsconfig.json"),
+      compilerOptions: { rootDir: process.cwd() },
+      files: [probePath],
+      include: [],
+    }),
+  );
   const result = spawnSync(
     process.execPath,
-    [
-      "scripts/run-tsgo.mjs",
-      "--ignoreConfig",
-      "--noEmit",
-      "--allowImportingTsExtensions",
-      "--strict",
-      "--skipLibCheck",
-      "--module",
-      "nodenext",
-      "--moduleResolution",
-      "nodenext",
-      probePath,
-    ],
+    ["scripts/run-tsgo.mjs", "--project", probeConfigPath],
     { cwd: process.cwd(), encoding: "utf8" },
   );
   if (result.error) {

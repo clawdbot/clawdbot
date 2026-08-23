@@ -5,6 +5,7 @@ import path from "node:path";
 // Doctor cron index tests cover cron doctor checks and repair entrypoints.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parseCodeModeScriptSyntax } from "../../../agents/code-mode-script-syntax.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   loadCronJobsStoreWithConfigJobs,
@@ -339,6 +340,194 @@ describe("collectLegacyCronStoreHealthFindings", () => {
 });
 
 describe("maybeRepairLegacyCronStore", () => {
+  it("detects, repairs, reloads, and idempotently migrates the stable documented SQLite trigger script", async () => {
+    const storePath = await makeTempStorePath();
+    const stableScript =
+      "const res = await tools.call('exec', { command: 'gh pr checks 123 --json state -q \\'.[].state\\' | sort -u' }); const status = String(res?.result?.details?.aggregated ?? '').trim(); json({ fire: status !== trigger.state?.status, message: `PR 123 CI: ${trigger.state?.status ?? 'unknown'} -> ${status}`, state: { status } });";
+    const ignoredResultScript =
+      "// Preserve the trigger comment.\nawait tools.call(\"exec\", { command: 'echo done' });";
+    const betaOnlyPayloadScript =
+      "await tools.call('exec', { command: 'leave payload unchanged' })";
+    await writeCurrentCronStore(storePath, [
+      createCurrentCronJob({
+        id: "stable-pr-watcher",
+        name: "Stable PR watcher",
+        schedule: { kind: "every", everyMs: 30_000 },
+        trigger: { script: stableScript, once: false },
+      }),
+      createCurrentCronJob({
+        id: "ignored-result",
+        name: "Ignored result watcher",
+        trigger: { script: ignoredResultScript },
+      }),
+      createCurrentCronJob({
+        id: "beta-script-payload",
+        name: "Beta-only script payload",
+        payload: { kind: "script", script: betaOnlyPayloadScript },
+      }),
+    ]);
+    const cfg = createCronConfig(storePath);
+
+    expect(await collectLegacyCronStoreHealthFindings({ cfg })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          requirement: "legacy-cron-trigger-script",
+          message: expect.stringContaining("Stable PR watcher"),
+        }),
+        expect.objectContaining({
+          requirement: "legacy-cron-trigger-script",
+          message: expect.stringContaining("Ignored result watcher"),
+        }),
+      ]),
+    );
+    expect(
+      requireRecord(requirePersistedJob(await readPersistedJobs(storePath), 0).trigger, "trigger")
+        .script,
+    ).toBe(stableScript);
+
+    const declinePrompter = makePrompter(false);
+    await maybeRepairLegacyCronStore({ cfg, options: {}, prompter: declinePrompter });
+    expect(declinePrompter.confirm).toHaveBeenCalledTimes(1);
+    expectNoteContaining("Stable PR watcher", "Cron");
+    expect(
+      requireRecord(requirePersistedJob(await readPersistedJobs(storePath), 0).trigger, "trigger")
+        .script,
+    ).toBe(stableScript);
+
+    noteMock.mockClear();
+    const fixPrompter = makePrompter(true);
+    await maybeRepairLegacyCronStore({ cfg, options: { repair: true }, prompter: fixPrompter });
+
+    const expectedScript = stableScript
+      .replace("tools.call('exec', ", "exec(")
+      .replace("res?.result?.details", "res");
+    const reloaded = await loadCronJobsStoreWithConfigJobs(storePath);
+    expect(reloaded.store.jobs[0]?.trigger?.script).toBe(expectedScript);
+    expect(reloaded.store.jobs[1]?.trigger?.script).toBe(
+      "// Preserve the trigger comment.\nawait exec({ command: 'echo done' });",
+    );
+    expect(reloaded.store.jobs[2]?.payload).toMatchObject({
+      kind: "script",
+      script: betaOnlyPayloadScript,
+    });
+    expect(requireRecord(reloaded.configJobs[0]?.trigger, "trigger").script).toBe(expectedScript);
+    expect(parseCodeModeScriptSyntax(expectedScript).ok).toBe(true);
+    expect(fsSync.existsSync(storePath)).toBe(false);
+    expectNoteContaining("Stable PR watcher", "Doctor changes");
+    expectNoteContaining("2 legacy cron trigger scripts", "Doctor changes");
+
+    noteMock.mockClear();
+    const secondPrompter = makePrompter(true);
+    await maybeRepairLegacyCronStore({ cfg, options: { repair: true }, prompter: secondPrompter });
+    expect(secondPrompter.confirm).not.toHaveBeenCalled();
+    expectNoNoteContaining("legacy trigger script", "Cron");
+    expect(
+      requireRecord(requirePersistedJob(await readPersistedJobs(storePath), 0).trigger, "trigger")
+        .script,
+    ).toBe(expectedScript);
+  });
+
+  it("leaves unsupported legacy trigger scripts untouched and reports redacted per-job remediation", async () => {
+    const storePath = await makeTempStorePath();
+    const unsupportedScripts = [
+      { id: "dynamic-name", script: "await tools.call(toolName, { command: 'secret-token' })" },
+      { id: "dynamic-args", script: "await tools.call('exec', args)" },
+      {
+        id: "mixed-legacy",
+        script:
+          "const res = await tools.call('exec', { command: 'secret-token' }); tools.search('x')",
+      },
+      {
+        id: "envelope-result",
+        script: "const res = await tools.call('exec', { command: 'x' }); json(res.result)",
+      },
+      {
+        id: "envelope-tool",
+        script: "const res = await tools.call('exec', { command: 'x' }); json(res.tool)",
+      },
+      {
+        id: "destructured",
+        script: "const { result } = await tools.call('exec', { command: 'x' }); json(result)",
+      },
+      {
+        id: "reassigned",
+        script:
+          "let res = await tools.call('exec', { command: 'x' }); res = other; json(res.result.details)",
+      },
+      {
+        id: "shadowed",
+        script: "const tools = localTools; await tools.call('exec', { command: 'x' })",
+      },
+      { id: "catalog", script: "json(ALL_TOOLS)" },
+      { id: "global-tools", script: "await globalThis.tools.call('exec', { command: 'x' })" },
+      { id: "global-catalog", script: "json(globalThis.ALL_TOOLS)" },
+      { id: "computed-global-tools", script: 'json(globalThis["tools"])' },
+      { id: "top-level-this-tools", script: "json(this.tools)" },
+      { id: "describe", script: "json(await tools.describe('exec'))" },
+      { id: "safe-name", script: "await tools.exec({ command: 'x' })" },
+      { id: "computed-callee", script: "await tools['call']('exec', { command: 'x' })" },
+      { id: "spread-args", script: "await tools.call('exec', { ...args })" },
+      { id: "computed-args", script: "await tools.call('exec', { [key]: 'x' })" },
+      {
+        id: "commented-call",
+        script: "await tools.call('exec', /* preserve this */ { command: 'x' })",
+      },
+      {
+        id: "commented-envelope",
+        script:
+          "const res = await tools.call('exec', { command: 'x' }); json(res.result /* preserve this */ .details)",
+      },
+      {
+        id: "aliased-result",
+        script: "const res = await tools.call('exec', { command: 'x' }); const alias = res",
+      },
+      {
+        id: "shadowed-exec",
+        script: "const exec = localExec; await tools.call('exec', { command: 'x' })",
+      },
+      {
+        id: "ambiguous-scope",
+        script:
+          "const res = await tools.call('exec', { command: 'x' }); function inspect() { return res.result.details }",
+      },
+    ];
+    await writeCurrentCronStore(
+      storePath,
+      unsupportedScripts.map(({ id, script }) =>
+        createCurrentCronJob({ id, name: `Legacy ${id}`, trigger: { script } }),
+      ),
+    );
+    const cfg = createCronConfig(storePath);
+
+    const findings = await collectLegacyCronStoreHealthFindings({ cfg });
+    for (const { id } of unsupportedScripts) {
+      expect(findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            requirement: "unsupported-legacy-cron-trigger-script",
+            message: expect.stringContaining(`Legacy ${id}`),
+          }),
+        ]),
+      );
+    }
+
+    const prompter = makePrompter(true);
+    await maybeRepairLegacyCronStore({ cfg, options: { repair: true }, prompter });
+
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    for (const { id } of unsupportedScripts) {
+      expectNoteContaining(`Legacy ${id}`, "Cron");
+    }
+    expectNoteContaining("manually", "Cron");
+    expectNoNoteContaining("secret-token", "Cron");
+    expect(
+      (await readPersistedJobs(storePath)).map((job) => ({
+        id: job.id,
+        script: requireRecord(job.trigger, "trigger").script,
+      })),
+    ).toEqual(unsupportedScripts);
+  });
+
   it("keeps shared-workspace legacy MCP warnings scoped to each job agent", async () => {
     const storePath = await makeTempStorePath();
     const sharedWorkspace = path.join(path.dirname(storePath), "shared-workspace");
@@ -1504,7 +1693,6 @@ describe("maybeRepairLegacyCronStore", () => {
     });
 
     const jobs = await readPersistedJobs(storePath);
-    expect(jobs).toHaveLength(2);
     expect(jobs.map((job) => job.id)).toEqual(["legacy-job", "legacy-only"]);
     expect(requirePersistedJob(jobs, 0).name).toBe("SQLite wins");
     expect(requirePersistedJob(jobs, 1).name).toBe("Legacy only");

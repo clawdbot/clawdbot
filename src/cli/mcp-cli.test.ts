@@ -70,6 +70,8 @@ describe("mcp cli", () => {
         "--connect-timeout",
         "3",
         "--parallel",
+        "--approval",
+        "approve",
         "--no-probe",
       ]);
 
@@ -85,6 +87,32 @@ describe("mcp cli", () => {
         requestTimeoutMs: 12_000,
         connectionTimeoutMs: 3_000,
         supportsParallelToolCalls: true,
+        codex: { defaultToolsApprovalMode: "approve" },
+      });
+    });
+  });
+
+  it("updates approval mode without replacing saved Codex metadata", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      await runMcpCommand([
+        "mcp",
+        "set",
+        "docs",
+        JSON.stringify({
+          command: process.execPath,
+          codex: { agents: ["docs-agent"], defaultToolsApprovalMode: "auto" },
+        }),
+      ]);
+
+      await runMcpCommand(["mcp", "configure", "docs", "--approval", "approve"]);
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "show", "docs", "--json"]);
+      expect(JSON.parse(lastLogLine())).toEqual({
+        command: process.execPath,
+        codex: { agents: ["docs-agent"], defaultToolsApprovalMode: "approve" },
       });
     });
   });
@@ -266,6 +294,22 @@ describe("mcp cli", () => {
       expect(output).toContain("- context7");
       expect(output).toContain("OpenClaw-managed mcp.servers entries");
       expect(output).toContain("does not include mcporter servers from config/mcporter.json");
+    });
+  });
+
+  it("tells the operator how to add a server when probing with none configured", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      mockLog.mockClear();
+
+      await runMcpCommand(["mcp", "probe"]);
+
+      const output = mockLog.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(output).toContain("No MCP servers configured in");
+      expect(output).toContain("openclaw mcp add <name> --command <command>");
+      // A bare "MCP probe (<path>):" header was the whole output before this guard.
+      expect(output).not.toMatch(/^MCP probe \(.*\):$/m);
     });
   });
 
@@ -738,6 +782,60 @@ describe("mcp cli", () => {
     });
   });
 
+  it("warns when auto-approved Codex MCP tools have no safety annotations", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      await runMcpCommand(["mcp", "set", "memory", JSON.stringify({ command: process.execPath })]);
+      setCreateSessionMcpRuntimeOverride((params) => ({
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: "cli-probe-approval-hint",
+        createdAt: 0,
+        lastUsedAt: 0,
+        getCatalog: async () => ({
+          version: 1,
+          generatedAt: Date.now(),
+          servers: {
+            memory: {
+              serverName: "memory",
+              launchSummary: process.execPath,
+              toolCount: 1,
+              codexApprovalMode: "auto",
+            },
+          },
+          tools: [
+            {
+              serverName: "memory",
+              safeServerName: "memory",
+              toolName: "create_entities",
+              inputSchema: { type: "object" },
+              fallbackDescription: "Create entities",
+              codexAnnotations: {},
+            },
+          ],
+          diagnostics: [],
+        }),
+        peekCatalog: () => null,
+        markUsed: () => {},
+        callTool: async () => ({ content: [] }),
+        dispose: async () => {},
+      }));
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "probe", "memory"]);
+      expect(mockLog.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
+        "tools have no safety annotations; calls will require interactive approval",
+      );
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "doctor", "memory", "--probe"]);
+      expect(mockLog.mock.calls.map(([line]) => String(line)).join("\n")).toContain(
+        "tools have no safety annotations; calls will require interactive approval",
+      );
+    });
+  });
+
   it("fails when removing an unknown MCP server", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async (home) => {
       const workspaceDir = await createWorkspace();
@@ -777,6 +875,18 @@ describe("mcp cli", () => {
         claudeChannelMode: "on",
         verbose: true,
       });
+    });
+  });
+
+  it("points serve startup failures at the deep Gateway health diagnostic", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      serveOpenClawChannelMcp.mockRejectedValueOnce(new Error("gateway unavailable"));
+
+      await expect(runMcpCommand(["mcp", "serve"])).rejects.toThrow("__exit__:1");
+
+      expect(lastErrorLine()).toBe(
+        "MCP server failed to start: gateway unavailable. Run openclaw gateway status --deep --require-rpc to inspect Gateway health.",
+      );
     });
   });
 });

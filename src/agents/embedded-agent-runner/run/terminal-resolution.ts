@@ -26,6 +26,7 @@ import { resolveFinalAssistantVisibleText } from "./helpers.js";
 import {
   resolveEmptyResponseRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
+  resolveSettledToolBatchEvidence,
   resolveSettledToolTerminalContinuationInstruction,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn-recovery.js";
@@ -190,6 +191,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   agentMeta: EmbeddedAgentMeta;
   attemptToolSummary: EmbeddedAgentRunResult["meta"]["toolSummary"];
   failureSignal?: EmbeddedRunFailureSignal;
+  terminalToolFailure?: EmbeddedAgentRunResult["meta"]["terminalToolFailure"];
   maxReasoningOnlyRetryAttempts: number;
   maxEmptyResponseRetryAttempts: number;
   attemptCompactionCount: number;
@@ -249,6 +251,11 @@ export async function resolveEmbeddedRunTerminal(input: {
         ? [silentToolResultReplyPayload]
         : input.payloadsWithToolMedia;
   const payloadCount = payloadsForTerminalPath?.length ?? 0;
+  const intentionalTerminalCompletion =
+    !terminalAborted &&
+    !terminalTimedOut &&
+    payloadCount === 0 &&
+    resolveSettledToolBatchEvidence(attempt).intentionalTermination;
   // A failed isolated finalization is terminal for this user turn. Do not let
   // its settled side effects cascade into any ordinary retry family.
   const settledTurnFinalizationAttempted = input.settledTurnFinalizationOutcome !== "not-attempted";
@@ -348,6 +355,7 @@ export async function resolveEmbeddedRunTerminal(input: {
           externalAbort: externalAbort || signalOwnedInterruption,
           timedOut: terminalTimedOut,
           hadPotentialSideEffects: input.replayState.hadPotentialSideEffects,
+          hasIntentionalTerminalCompletion: intentionalTerminalCompletion,
           attempt,
         });
   const incompleteTurnFallbackSafe = Boolean(
@@ -464,6 +472,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     payloadCount,
     payloadsForTerminalPath,
     emptyAssistantReplyIsSilent,
+    intentionalTerminalCompletion,
   });
 }
 
@@ -522,6 +531,7 @@ async function surfaceIncompleteTurn(
         },
         toolSummary: input.attemptToolSummary,
         ...(input.failureSignal ? { failureSignal: input.failureSignal } : {}),
+        ...(input.terminalToolFailure ? { terminalToolFailure: input.terminalToolFailure } : {}),
         agentHarnessResultClassification: input.attempt.agentHarnessResultClassification,
       },
       ...copyAttemptDeliveryState(input.attempt),
@@ -534,6 +544,7 @@ function completeEmbeddedRun(
     payloadCount: number;
     payloadsForTerminalPath: EmbeddedAgentRunResult["payloads"];
     emptyAssistantReplyIsSilent: boolean;
+    intentionalTerminalCompletion: boolean;
   },
 ): TerminalResolution {
   const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
@@ -634,8 +645,14 @@ function completeEmbeddedRun(
         livenessState,
         agentHarnessResultClassification: input.attempt.agentHarnessResultClassification,
         ...(input.attempt.yieldDetected ? { yielded: true } : {}),
+        ...(input.attempt.yieldAcknowledgment
+          ? { yieldAcknowledgment: input.attempt.yieldAcknowledgment }
+          : {}),
         ...(input.emptyAssistantReplyIsSilent
           ? { terminalReplyKind: "silent-empty" as const }
+          : {}),
+        ...(input.intentionalTerminalCompletion
+          ? { intentionalTerminalCompletion: "tool-batch" as const }
           : {}),
         stopReason,
         pendingToolCalls: input.attempt.clientToolCalls?.map((call) => ({
@@ -674,6 +691,7 @@ function completeEmbeddedRun(
         },
         toolSummary: input.attemptToolSummary,
         ...(input.failureSignal ? { failureSignal: input.failureSignal } : {}),
+        ...(input.terminalToolFailure ? { terminalToolFailure: input.terminalToolFailure } : {}),
         completion: {
           ...(stopReason ? { stopReason } : {}),
           ...(stopReason ? { finishReason: stopReason } : {}),

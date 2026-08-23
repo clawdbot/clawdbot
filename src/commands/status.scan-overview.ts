@@ -1,12 +1,14 @@
 // Shared status scan overview used by compact status, status --json, and status --all.
 // It collects config, update, gateway, channel, and local agent state before specialized callers add details.
 
+import type { BestEffortConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { collectChannelStatusIssues as collectChannelStatusIssuesFn } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import type { StatusSummary } from "../status/types.js";
 import type { buildChannelsTable as buildChannelsTableFn } from "./status-all/channels.js";
 import type { getAgentLocalStatuses as getAgentLocalStatusesFn } from "./status.agent-local.js";
 import {
@@ -75,6 +77,7 @@ export type StatusScanOverviewResult = {
   skipColdStartNetworkChecks: boolean;
   cfg: OpenClawConfig;
   sourceConfig: OpenClawConfig;
+  configDiagnostics: BestEffortConfigSnapshot["configDiagnostics"];
   secretDiagnostics: string[];
   osSummary: ReturnType<typeof resolveOsSummary>;
   tailscaleMode: string;
@@ -94,6 +97,7 @@ export type StatusScanOverviewResult = {
     | "gatewaySelf"
     | "gatewayCallOverrides"
   >;
+  runtimeDegradation: Pick<StatusSummary, "degradedSecretOwners" | "degradedPlugins"> | null;
   channelsStatus: unknown;
   channelIssues: ReturnType<typeof collectChannelStatusIssuesFn>;
   channels: Awaited<ReturnType<typeof buildChannelsTableFn>>;
@@ -147,6 +151,7 @@ export async function collectStatusScanOverview(params: {
     coldStart,
     sourceConfig,
     resolvedConfig: cfg,
+    configDiagnostics,
     secretDiagnostics,
   } = await loadStatusScanCommandConfig({
     env,
@@ -236,6 +241,22 @@ export async function collectStatusScanOverview(params: {
   }
   const gatewaySnapshot = await bootstrap.gatewayProbePromise;
   params.progress?.tick();
+  let runtimeDegradation: StatusScanOverviewResult["runtimeDegradation"] = null;
+  if (gatewaySnapshot.gatewayReachable) {
+    const status = await gatewayCallModuleLoader.load().then(({ callGateway }) =>
+      callGateway<StatusSummary>({
+        config: cfg,
+        method: "status",
+        params: { includeChannelSummary: false },
+        timeoutMs: Math.min(5000, params.opts.timeoutMs ?? 10_000),
+        ...gatewaySnapshot.gatewayCallOverrides,
+      }).catch(() => null),
+    );
+    runtimeDegradation = status && {
+      degradedSecretOwners: status.degradedSecretOwners ?? [],
+      degradedPlugins: status.degradedPlugins ?? [],
+    };
+  }
 
   const tailscaleHttpsUrl = await bootstrap.resolveTailscaleHttpsUrl();
   const advertisedControlUiLinks =
@@ -308,6 +329,7 @@ export async function collectStatusScanOverview(params: {
     skipColdStartNetworkChecks: bootstrap.skipColdStartNetworkChecks,
     cfg,
     sourceConfig,
+    configDiagnostics,
     secretDiagnostics,
     osSummary,
     tailscaleMode: bootstrap.tailscaleMode,
@@ -316,6 +338,7 @@ export async function collectStatusScanOverview(params: {
     ...(advertisedControlUiLinks ? { advertisedControlUiLinks } : {}),
     update,
     gatewaySnapshot,
+    runtimeDegradation,
     channelsStatus,
     channelIssues,
     channels,
@@ -325,12 +348,15 @@ export async function collectStatusScanOverview(params: {
 
 /** Resolves the summary object from overview data, preserving cold-start fast-path behavior. */
 export async function resolveStatusSummaryFromOverview(params: {
-  overview: Pick<StatusScanOverviewResult, "skipColdStartNetworkChecks" | "cfg" | "sourceConfig">;
+  overview: Pick<
+    StatusScanOverviewResult,
+    "skipColdStartNetworkChecks" | "cfg" | "sourceConfig" | "runtimeDegradation"
+  >;
 }) {
   if (params.overview.skipColdStartNetworkChecks) {
     return buildColdStartStatusSummary();
   }
-  return await statusSummaryModuleLoader.load().then(({ getStatusSummary }) =>
+  const summary = await statusSummaryModuleLoader.load().then(({ getStatusSummary }) =>
     getStatusSummary({
       config: params.overview.cfg,
       sourceConfig: params.overview.sourceConfig,
@@ -338,4 +364,7 @@ export async function resolveStatusSummaryFromOverview(params: {
       includeChannelSummary: false,
     }),
   );
+  return params.overview.runtimeDegradation
+    ? { ...summary, ...params.overview.runtimeDegradation }
+    : summary;
 }

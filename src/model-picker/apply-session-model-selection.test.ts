@@ -70,7 +70,7 @@ function createParams(overrides: Partial<ApplySessionModelSelectionParams> = {})
   const sessionEntry = overrides.sessionEntry ?? createEntry();
   const sessionKey = overrides.sessionKey ?? "agent:main:dm:1";
   return {
-    cfg: { agents: { defaults: { contextTokens: 12_000 } } },
+    cfg: {},
     agentId: "main",
     sessionKey,
     sessionEntry,
@@ -135,7 +135,7 @@ describe("applySessionModelSelection", () => {
       model: "gpt-4o",
       effectiveModelRef: "openai/gpt-4o",
       changed: true,
-      contextTokens: 12_000,
+      contextTokens: 16_000,
       configuredDefaultUpdate: "requested",
     });
     expect(sessionEntry).toMatchObject({

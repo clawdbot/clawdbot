@@ -636,22 +636,17 @@ suite.define(() => {
         .toBe(2);
 
       // Group by "None" flattens the category sections into the plain list. The
-      // confirm left the pointer over the dialog rather than the sidebar, and
-      // section actions only surface on hover, so reveal this one first.
-      const sortSessionsButton = page.locator(
-        "button.sidebar-session-sort:not(.sidebar-session-new)",
-      );
-      await page
-        .locator('[data-session-section="ungrouped"] .sidebar-recent-sessions__head')
-        .hover();
-      await sortSessionsButton.click();
+      // confirm left the pointer over the dialog rather than the sidebar; the
+      // global toolbar remains available without revealing a section action.
+      const filterAndSortButton = page.getByRole("button", { name: "Filter & sort" });
+      await filterAndSortButton.click();
       const showAutomationSessions = page.getByRole("menuitemcheckbox", {
         name: "Show automation sessions",
       });
       await activateSelfRemovingControl(showAutomationSessions);
-      await expect.poll(() => sortSessionsButton.getAttribute("aria-expanded")).toBe("false");
+      await expect.poll(() => filterAndSortButton.getAttribute("aria-expanded")).toBe("false");
 
-      await sortSessionsButton.click();
+      await filterAndSortButton.click();
       await expect.poll(() => showAutomationSessions.getAttribute("aria-checked")).toBe("true");
       await page.getByRole("menuitemradio", { name: "None" }).waitFor({ state: "visible" });
       await captureUiProof(page, "sidebar-groupby-sort-menu.png");
@@ -677,12 +672,12 @@ suite.define(() => {
           return Math.abs(automationRight - groupingRight);
         })
         .toBeLessThanOrEqual(1);
-      await sortSessionsButton.click();
-      await expect.poll(() => sortSessionsButton.getAttribute("aria-expanded")).toBe("false");
+      await filterAndSortButton.click();
+      await expect.poll(() => filterAndSortButton.getAttribute("aria-expanded")).toBe("false");
       await expect.poll(() => page.getByRole("menuitemradio", { name: "None" }).count()).toBe(0);
       await captureUiProof(page, "sidebar-groupby-sort-menu-closed.png");
 
-      await sortSessionsButton.click();
+      await filterAndSortButton.click();
       await activateSelfRemovingControl(page.getByRole("menuitemradio", { name: "None" }));
       await expect.poll(() => groups.count()).toBe(1);
       await expect.poll(() => groups.first().locator(".sidebar-recent-session").count()).toBe(3);
@@ -855,9 +850,10 @@ suite.define(() => {
       await captureUiProof(page, "sidebar-session-dropped-into-group.png");
 
       const ungrouped = page.locator('[data-session-section="ungrouped"]');
+      const ungroupedHead = ungrouped.locator(":scope > .sidebar-recent-sessions__head");
       await gamma
         .locator('.sidebar-recent-session[data-session-key="agent:main:session-11"]')
-        .dragTo(ungrouped);
+        .dragTo(ungroupedHead, { targetPosition: { x: 4, y: 2 } });
       const ungroupedPatch = await waitForPatch(
         gateway,
         (params) => params.key === "agent:main:session-11" && params.category === null,
@@ -910,9 +906,8 @@ suite.define(() => {
       await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(11);
 
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
-      const sortSessionsButton = page.getByRole("button", { name: "Sort sessions" });
-      await sortSessionsButton.locator("..").hover();
-      await sortSessionsButton.click();
+      const filterAndSortButton = page.getByRole("button", { name: "Filter & sort" });
+      await filterAndSortButton.click();
       await activateSelfRemovingControl(page.getByRole("menuitemradio", { name: "None" }));
       const flatSection = page.locator('[data-session-section="ungrouped"]');
       await flatSection
@@ -968,7 +963,7 @@ suite.define(() => {
     }
   });
 
-  it("explains empty gateway groups for the selected agent", async () => {
+  it("keeps empty gateway groups compact for the selected agent", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -1016,22 +1011,40 @@ suite.define(() => {
 
       const emptyGroups = page.locator('[data-session-section^="category:"]');
       await expect.poll(() => emptyGroups.count()).toBe(2);
-      await captureUiProof(page, "sidebar-empty-cross-agent-groups.png");
+
+      for (const name of ["Email intake", "Customer replies"]) {
+        const group = page.locator(`[data-session-section="category:${name}"]`);
+        await group.waitFor({ state: "visible" });
+        await expect
+          .poll(() => group.locator(":scope > .sidebar-recent-sessions__head").count())
+          .toBe(1);
+        const toggle = group.getByRole("button", { name, exact: true });
+        await toggle.waitFor({ state: "visible" });
+        await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("true");
+      }
+
+      await expect.poll(() => emptyGroups.locator(".sidebar-session-empty-hint").count()).toBe(0);
       await expect
-        .poll(() => emptyGroups.locator(".sidebar-session-empty-placeholder").allTextContents())
-        .toEqual(["No sessions found for this agent", "No sessions found for this agent"]);
+        .poll(() => emptyGroups.locator(".sidebar-recent-sessions__list").count())
+        .toBe(0);
+
       const firstEmptyGroup = emptyGroups.first();
-      const textLeft = (selector: string) =>
-        firstEmptyGroup.locator(selector).evaluate((element) => {
-          const range = document.createRange();
-          range.selectNodeContents(element);
-          return range.getBoundingClientRect().x;
-        });
-      const [titleLeft, placeholderLeft] = await Promise.all([
-        textLeft(".sidebar-recent-sessions__label-text"),
-        textLeft(".sidebar-session-empty-placeholder"),
-      ]);
-      expect(placeholderLeft).toBeCloseTo(titleLeft, 0);
+      const groupHeight = () =>
+        firstEmptyGroup.evaluate((element) => element.getBoundingClientRect().height);
+      await expect.poll(groupHeight).toBeGreaterThan(0);
+      const expandedHeight = await groupHeight();
+      await captureUiProof(page, "sidebar-empty-cross-agent-groups.png");
+
+      const toggle = firstEmptyGroup.locator(".sidebar-session-group-toggle");
+      await toggle.click();
+      await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("false");
+      await expect.poll(groupHeight).toBe(expandedHeight);
+      await expect
+        .poll(() => firstEmptyGroup.locator(".sidebar-session-empty-hint").count())
+        .toBe(0);
+      await expect
+        .poll(() => firstEmptyGroup.locator(".sidebar-recent-sessions__list").count())
+        .toBe(0);
     } finally {
       await context.close();
     }

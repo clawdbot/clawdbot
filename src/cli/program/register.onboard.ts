@@ -1,5 +1,6 @@
 // Commander registration for onboard setup flags and lazy onboard runtime execution.
-import type { Command } from "commander";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
@@ -19,6 +20,7 @@ import { resolveProviderOnboardAuthFlags } from "../../plugins/provider-auth-cho
 import type { RuntimeEnv } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatCliCommand } from "../command-format.js";
+import { listExplicitOptionFlagsExcept } from "../command-options.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
 
 export function resolveInstallDaemonFlag(command: Command): boolean | undefined {
@@ -33,13 +35,6 @@ export function resolveInstallDaemonFlag(command: Command): boolean | undefined 
   return undefined;
 }
 
-export function resolveTailscaleResetOnExitFlag(command: Command): boolean | undefined {
-  if (command.getOptionValueSource("tailscaleResetOnExit") !== "cli") {
-    return undefined;
-  }
-  return Boolean(command.getOptionValue("tailscaleResetOnExit"));
-}
-
 const MODERN_ONBOARD_OPTION_KEYS = new Set([
   "modern",
   "workspace",
@@ -49,30 +44,28 @@ const MODERN_ONBOARD_OPTION_KEYS = new Set([
   "json",
 ]);
 
-function listUnsupportedModernOptions(command: Command): string[] {
-  const optionsByKey = new Map<string, (typeof command.options)[number]>();
-  for (const option of command.options) {
-    const key = option.attributeName();
-    if (MODERN_ONBOARD_OPTION_KEYS.has(key) || command.getOptionValueSource(key) !== "cli") {
-      continue;
-    }
-    const existing = optionsByKey.get(key);
-    const valueIsNegated = command.getOptionValue(key) === false;
-    if (!existing || option.negate === valueIsNegated) {
-      // Positive and --no-* forms can share one Commander attribute. Report
-      // only the spelling whose parsed value actually won.
-      optionsByKey.set(key, option);
-    }
+function validateRecommendationParentOptions(
+  command: Command,
+  runtime: RuntimeEnv,
+  allowJson = false,
+): boolean {
+  const unsupported = listExplicitOptionFlagsExcept(
+    command,
+    allowJson ? RECOMMENDATION_READ_PARENT_OPTIONS : NO_RECOMMENDATION_PARENT_OPTIONS,
+  );
+  if (unsupported.length === 0) {
+    return true;
   }
-  return [...optionsByKey.values()]
-    .map((option) => option.long ?? option.short ?? option.flags)
-    .toSorted();
+  runtime.error(
+    `This recommendations command does not support parent option(s): ${unsupported.join(", ")}.`,
+  );
+  runtime.exit(1);
+  return false;
 }
 
-const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({
-  includeLegacyAliases: true,
-  includeSkip: true,
-});
+const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({ includeSkip: true });
+const RECOMMENDATION_READ_PARENT_OPTIONS = new Set(["json"]);
+const NO_RECOMMENDATION_PARENT_OPTIONS = new Set<string>();
 
 type OnboardAuthFlag = {
   readonly cliOption: string;
@@ -132,7 +125,7 @@ export function registerOnboardAuthOptions(command: Command): Command {
     .option("--token-expires-in <duration>", "Optional token expiry duration (e.g. 365d, 12h)")
     .option(
       "--secret-input-mode <mode>",
-      "API key persistence mode: plaintext|ref (default: plaintext)",
+      "Credential persistence mode: plaintext|ref (default: plaintext)",
     )
     .option("--cloudflare-ai-gateway-account-id <id>", "Cloudflare Account ID")
     .option("--cloudflare-ai-gateway-gateway-id <id>", "Cloudflare AI Gateway ID");
@@ -238,9 +231,10 @@ export function registerOnboardCommand(program: Command): void {
     .option("--gateway-password <password>", "Gateway password (password auth)")
     .option("--remote-url <url>", "Remote Gateway WebSocket URL")
     .option("--remote-token <token>", "Remote Gateway token (optional)")
+    .option("--remote-password <password>", "Remote Gateway password (optional)")
     .option("--tailscale <mode>", "Tailscale: off|serve|funnel")
-    .option("--tailscale-reset-on-exit", "Reset tailscale serve/funnel on exit")
-    .option("--no-tailscale-reset-on-exit", "Keep tailscale serve/funnel after exit")
+    .addOption(new Option("--tailscale-reset-on-exit").hideHelp())
+    .addOption(new Option("--no-tailscale-reset-on-exit").hideHelp())
     .option("--install-daemon", "Install gateway service")
     .option("--no-install-daemon", "Skip gateway service install")
     .option("--skip-daemon", "Skip gateway service install")
@@ -251,7 +245,7 @@ export function registerOnboardCommand(program: Command): void {
     .option("--skip-search", "Skip search provider setup")
     .option("--skip-health", "Skip health check")
     .option("--skip-ui", "Skip Control UI/TUI prompts")
-    .option("--suppress-gateway-token-output", "Suppress token-bearing Gateway/UI output")
+    .option("--suppress-gateway-token-output", "Disable the guided Control UI handoff")
     .option("--skip-hooks", "Skip hook setup")
     .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun")
     .option("--import-from <provider>", "Migration provider to run during onboarding")
@@ -266,6 +260,9 @@ export function registerOnboardCommand(program: Command): void {
     .action(async (opts, recommendationsCommand: Command) => {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
+        if (!validateRecommendationParentOptions(command, defaultRuntime, true)) {
+          return;
+        }
         const { onboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
         onboardRecommendationsCommand(
@@ -284,6 +281,12 @@ export function registerOnboardCommand(program: Command): void {
     .action(async (opts: { retry?: string[] }) => {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
+        if (
+          !validateRecommendationParentOptions(command, defaultRuntime) ||
+          !validateRecommendationParentOptions(recommendations, defaultRuntime)
+        ) {
+          return;
+        }
         const { acknowledgeOnboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
         acknowledgeOnboardRecommendationsCommand({ retry: opts.retry }, defaultRuntime);
@@ -296,6 +299,12 @@ export function registerOnboardCommand(program: Command): void {
     .action(async () => {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
+        if (
+          !validateRecommendationParentOptions(command, defaultRuntime) ||
+          !validateRecommendationParentOptions(recommendations, defaultRuntime)
+        ) {
+          return;
+        }
         const { refreshOnboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
         refreshOnboardRecommendationsCommand(defaultRuntime);
@@ -306,7 +315,10 @@ export function registerOnboardCommand(program: Command): void {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
       if (opts.modern) {
-        const unsupportedOptions = listUnsupportedModernOptions(commandRuntime);
+        const unsupportedOptions = listExplicitOptionFlagsExcept(
+          commandRuntime,
+          MODERN_ONBOARD_OPTION_KEYS,
+        );
         if (unsupportedOptions.length > 0) {
           defaultRuntime.error(
             [
@@ -352,7 +364,6 @@ export function registerOnboardCommand(program: Command): void {
         return;
       }
       const installDaemon = resolveInstallDaemonFlag(commandRuntime);
-      const tailscaleResetOnExit = resolveTailscaleResetOnExitFlag(commandRuntime);
       const gatewayPort = parseGatewayPortOption(opts.gatewayPort, "--gateway-port");
       const { setupWizardCommand } = await import("../../commands/onboard.js");
       await setupWizardCommand(
@@ -374,8 +385,8 @@ export function registerOnboardCommand(program: Command): void {
           gatewayPassword: opts.gatewayPassword as string | undefined,
           remoteUrl: opts.remoteUrl as string | undefined,
           remoteToken: opts.remoteToken as string | undefined,
+          remotePassword: readStringValue(opts.remotePassword),
           tailscale: opts.tailscale as TailscaleMode | undefined,
-          tailscaleResetOnExit,
           reset: Boolean(opts.reset),
           resetScope: opts.resetScope as ResetScope | undefined,
           installDaemon,

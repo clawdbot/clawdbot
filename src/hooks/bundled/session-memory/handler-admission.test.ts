@@ -46,7 +46,11 @@ describe("session-memory gateway admission", () => {
         type: "message",
         id: "manual-reset-user",
         parentId: null,
-        message: { role: "user", content: "Keep a descriptive memory filename" },
+        message: {
+          role: "user",
+          content: "Keep a descriptive memory filename",
+          __openclaw: { senderIsOwner: true },
+        },
       },
       {
         type: "message",

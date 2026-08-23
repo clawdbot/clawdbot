@@ -4,6 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveConfigForRead } from "../config/io.read-helpers.js";
+import {
+  getAuthoredConfigSecretRef,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
+import { collectConfigAssignments as collectRuntimeConfigAssignments } from "../secrets/runtime-config-collectors.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -166,6 +172,9 @@ describe("resolveCommandSecretRefsViaGateway", () => {
   function setSingleSecretTargetDeps(params: {
     path: string;
     pathSegments: readonly string[];
+    collectConfigAssignments?: NonNullable<
+      Parameters<typeof commandSecretGatewayTesting.setDepsForTest>[0]["collectConfigAssignments"]
+    >;
     resolveManifestContractOwnerPluginId?: NonNullable<
       Parameters<
         typeof commandSecretGatewayTesting.setDepsForTest
@@ -207,9 +216,11 @@ describe("resolveCommandSecretRefsViaGateway", () => {
                 ],
         } as never;
       },
-      collectConfigAssignments: ({ context }) => {
-        context.assignments.push({ path: params.path } as never);
-      },
+      collectConfigAssignments:
+        params.collectConfigAssignments ??
+        (({ context }) => {
+          context.assignments.push({ path: params.path } as never);
+        }),
       discoverConfigSecretTargetsByIds: (config) =>
         [
           {
@@ -329,6 +340,99 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       targetIds: ["talk.providers.*.apiKey"],
     });
     expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("sk-live");
+  });
+
+  it.each(["$OTHER", "${OTHER}"])(
+    "preserves source provenance while gateway assignments materialize literal %s",
+    async (resolvedLiteral) => {
+      const read = resolveConfigForRead(buildTalkTestProviderConfig("$SOURCE"), {});
+      const config = read.resolvedConfigRaw as OpenClawConfig;
+      setConfigResolutionFacts(config, read.resolutionFacts);
+      callGateway.mockResolvedValueOnce({
+        assignments: [
+          {
+            path: TALK_TEST_PROVIDER_API_KEY_PATH,
+            pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+            value: resolvedLiteral,
+          },
+        ],
+      });
+
+      const result = await resolveCommandSecretRefsViaGateway({
+        config,
+        commandName: "memory status",
+        targetIds: new Set(["talk.providers.*.apiKey"]),
+      });
+
+      expect(readTalkProviderApiKey(result.resolvedConfig)).toBe(resolvedLiteral);
+      expect(getAuthoredConfigSecretRef(config, TALK_TEST_PROVIDER_API_KEY_PATH)?.id).toBe(
+        "SOURCE",
+      );
+      expect(
+        getAuthoredConfigSecretRef(result.resolvedConfig, TALK_TEST_PROVIDER_API_KEY_PATH),
+      ).toBeNull();
+      expect(result.hadUnresolvedTargets).toBe(false);
+    },
+  );
+
+  it("uses the explicit agent owner during channels resolve secret preflight", async () => {
+    const channelPath = "channels.telegram.botToken";
+    const channelPathSegments = ["channels", "telegram", "botToken"];
+    const config = {
+      agents: {
+        entries: {
+          ops: { sandbox: { backend: "docker" } },
+          research: { sandbox: { backend: "docker" } },
+        },
+        defaults: {
+          sandbox: {
+            backend: "ssh",
+            ssh: {
+              identityData: {
+                source: "env",
+                provider: "default",
+                id: "STALE_SANDBOX_IDENTITY",
+              },
+            },
+          },
+        },
+      },
+      channels: {
+        telegram: {
+          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const restoreDeps = setSingleSecretTargetDeps({
+      path: channelPath,
+      pathSegments: channelPathSegments,
+      collectConfigAssignments: (params) => collectRuntimeConfigAssignments(params),
+    });
+    callGateway.mockResolvedValueOnce({
+      assignments: [
+        {
+          path: channelPath,
+          pathSegments: channelPathSegments,
+          value: "resolved-telegram-token",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    try {
+      const result = await resolveCommandSecretRefsViaGateway({
+        config,
+        commandName: "channels resolve",
+        targetIds: new Set([channelPath]),
+        agentId: "ops",
+        mode: "read_only_operational",
+      });
+
+      expect(result.resolvedConfig.channels?.telegram?.botToken).toBe("resolved-telegram-token");
+      expect(callGateway.mock.calls[0]?.[0].params).not.toHaveProperty("agentId");
+    } finally {
+      restoreDeps();
+    }
   });
 
   it("enforces unresolved checks only for allowed paths when provided", async () => {
@@ -1467,6 +1571,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       const result = await resolveCommandSecretRefsViaGateway({
         config: {
           talk: {
+            provider: "gateway",
             providers: {
               gateway: {
                 apiKey: {
@@ -1475,21 +1580,28 @@ describe("resolveCommandSecretRefsViaGateway", () => {
                   id: "GATEWAY_ONLY_TALK_KEY",
                 },
               },
-              local: {
-                apiKey: { source: "env", provider: "default", id: localEnvKey },
+            },
+            realtime: {
+              provider: "local",
+              providers: {
+                local: {
+                  apiKey: { source: "env", provider: "default", id: localEnvKey },
+                },
               },
             },
           },
         } as OpenClawConfig,
         commandName: "reply",
-        targetIds: new Set(["talk.providers.*.apiKey"]),
+        targetIds: new Set(["talk.providers.*.apiKey", "talk.realtime.providers.*.apiKey"]),
       });
 
       expect(result.resolvedConfig.talk?.providers?.gateway?.apiKey).toBe("gateway-owned-key");
-      expect(result.resolvedConfig.talk?.providers?.local?.apiKey).toBe("local-fallback-key");
+      expect(result.resolvedConfig.talk?.realtime?.providers?.local?.apiKey).toBe(
+        "local-fallback-key",
+      );
       expect(result.targetStatesByPath).toMatchObject({
         "talk.providers.gateway.apiKey": "resolved_gateway",
-        "talk.providers.local.apiKey": "resolved_local",
+        "talk.realtime.providers.local.apiKey": "resolved_local",
       });
       expect(
         result.diagnostics.some((entry) => entry.includes("gateway secrets.resolve unavailable")),

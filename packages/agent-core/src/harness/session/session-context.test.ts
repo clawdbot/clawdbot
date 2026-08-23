@@ -133,6 +133,19 @@ function toolResultEntry(
 }
 
 describe("buildSessionContext", () => {
+  it("keeps display-only custom activity out of model input", () => {
+    const activity = {
+      role: "custom" as const,
+      customType: "openclaw.context-compaction",
+      content: "Context compacted",
+      display: true,
+      excludeFromContext: true,
+      timestamp: Date.parse(timestamp),
+    };
+
+    expect(convertToLlm([activity])).toEqual([]);
+  });
+
   it("keeps private shell executions in history without projecting them into context", () => {
     const hiddenEntry = bashEntry("hidden", "initial", "private shell output", true);
     const visibleEntry = bashEntry("visible", "hidden", "visible shell output", false);

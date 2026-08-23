@@ -393,18 +393,22 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
-  it("does not fallback after a yielded empty result records potential side effects", () => {
+  it.each([
+    {
+      label: "a yielded empty result records potential side effects",
+      meta: { replayInvalid: true, yielded: true, stopReason: "end_turn" },
+    },
+    {
+      label: "an exact terminal tool batch intentionally completes the turn",
+      meta: { intentionalTerminalCompletion: "tool-batch" as const },
+    },
+  ])("does not fallback after $label", ({ meta }) => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "openai",
       model: "gpt-5.5",
       result: {
         payloads: [],
-        meta: {
-          durationMs: 42,
-          replayInvalid: true,
-          yielded: true,
-          stopReason: "end_turn",
-        },
+        meta: { durationMs: 42, ...meta },
       },
     });
 

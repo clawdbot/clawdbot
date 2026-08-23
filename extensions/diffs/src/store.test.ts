@@ -310,6 +310,7 @@ describe("DiffArtifactStore", () => {
 });
 
 describe("createDiffsHttpHandler", () => {
+  const missingViewerPath = "/plugins/diffs/view/not-a-real-id/not-a-real-token";
   let store: DiffArtifactStore;
   let cleanupRootDir: () => Promise<void>;
 
@@ -331,6 +332,7 @@ describe("createDiffsHttpHandler", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await cleanupRootDir();
   });
 
@@ -511,7 +513,7 @@ describe("createDiffsHttpHandler", () => {
     expect(res.statusCode).toBe(expectedStatusCode);
   });
 
-  it("rate-limits repeated remote misses", async () => {
+  it("allows the at-capacity remote miss and blocks the next request", async () => {
     const handler = createDiffsHttpHandler({ store, allowRemoteViewer: true });
 
     for (let i = 0; i < 40; i++) {
@@ -519,7 +521,7 @@ describe("createDiffsHttpHandler", () => {
       await handler(
         remoteReq({
           method: "GET",
-          url: "/plugins/diffs/view/aaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          url: missingViewerPath,
         }),
         miss,
       );
@@ -530,11 +532,48 @@ describe("createDiffsHttpHandler", () => {
     await handler(
       remoteReq({
         method: "GET",
-        url: "/plugins/diffs/view/aaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        url: missingViewerPath,
       }),
       limited,
     );
     expect(limited.statusCode).toBe(429);
+  });
+
+  it("slides the remote failure window across the original window boundary", async () => {
+    vi.useFakeTimers();
+    const startedAt = new Date("2026-08-19T12:00:00Z").getTime();
+    vi.setSystemTime(startedAt);
+    const handler = createDiffsHttpHandler({ store, allowRemoteViewer: true });
+
+    const recordMisses = async (count: number) => {
+      for (let i = 0; i < count; i++) {
+        const miss = createMockServerResponse();
+        await handler(remoteReq({ method: "GET", url: missingViewerPath }), miss);
+        expect(miss.statusCode).toBe(404);
+      }
+    };
+
+    await recordMisses(20);
+    vi.setSystemTime(startedAt + 59_000);
+    await recordMisses(19);
+    vi.setSystemTime(startedAt + 61_000);
+    await recordMisses(1);
+    vi.setSystemTime(startedAt + 118_000);
+    await recordMisses(20);
+
+    const limited = createMockServerResponse();
+    await handler(remoteReq({ method: "GET", url: missingViewerPath }), limited);
+    expect(limited.statusCode).toBe(429);
+  });
+
+  it("keeps loopback viewer requests outside the remote failure limiter", async () => {
+    const handler = createDiffsHttpHandler({ store, allowRemoteViewer: true });
+
+    for (let i = 0; i < 41; i++) {
+      const miss = createMockServerResponse();
+      await handler(localReq({ method: "GET", url: missingViewerPath }), miss);
+      expect(miss.statusCode).toBe(404);
+    }
   });
 });
 

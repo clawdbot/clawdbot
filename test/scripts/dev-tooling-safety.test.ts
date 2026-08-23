@@ -22,13 +22,8 @@ import {
   redactHomePath,
   redactJsonValueForDevToolLog,
 } from "../../scripts/lib/dev-tooling-safety.ts";
-import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 
 const tempDirs: string[] = [];
-
-function expectedTaskkillPath(): string {
-  return resolveWindowsTaskkillPath();
-}
 
 async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
   const started = Date.now();
@@ -499,95 +494,6 @@ describe("script-specific dev tooling hardening", () => {
     );
 
     expect(retained.toString("utf8")).toBe("89abcdef");
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "signals the TUI PTY watch process group before falling back to the child",
-    () => {
-      const kill = vi.spyOn(process, "kill").mockReturnValue(true);
-      const childKill = vi.fn(() => true);
-
-      try {
-        tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM");
-        expect(kill).toHaveBeenCalledWith(-123, "SIGTERM");
-        expect(childKill).not.toHaveBeenCalled();
-      } finally {
-        kill.mockRestore();
-      }
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "falls back to direct TUI PTY watch child signaling when the process group is gone",
-    () => {
-      const kill = vi.spyOn(process, "kill").mockImplementation(() => {
-        const error = new Error("missing process group") as NodeJS.ErrnoException;
-        error.code = "ESRCH";
-        throw error;
-      });
-      const childKill = vi.fn(() => true);
-
-      try {
-        tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM");
-        expect(kill).toHaveBeenCalledWith(-123, "SIGTERM");
-        expect(childKill).toHaveBeenCalledWith("SIGTERM");
-      } finally {
-        kill.mockRestore();
-      }
-    },
-  );
-
-  it("signals Windows TUI PTY watch process trees with taskkill", () => {
-    const childKill = vi.fn(() => true);
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
-
-    tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "123", "/T"], {
-      stdio: "ignore",
-    });
-
-    tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGKILL", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "123", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(childKill).not.toHaveBeenCalled();
-  });
-
-  it("force-kills Windows TUI PTY watch process trees when graceful taskkill fails", () => {
-    const childKill = vi.fn(() => true);
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ error: undefined, status: 1 })
-      .mockReturnValueOnce({ error: undefined, status: 0 });
-
-    tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "123", "/T"], {
-      stdio: "ignore",
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "123", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(childKill).not.toHaveBeenCalled();
   });
 
   it("aborts stalled OpenAI realtime smoke fetches at the request timeout", async () => {

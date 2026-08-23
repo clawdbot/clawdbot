@@ -25,6 +25,7 @@ import { formatFencedCodeBlock } from "../shared/markdown-code.js";
 import { createPendingApprovalRegistry } from "../shared/pending-approval-registry.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
+import type { ChannelApprovalKind } from "./approval-types.js";
 import {
   resolveExecApprovalCommandDisplay,
   sanitizeExecApprovalWarningText,
@@ -55,7 +56,6 @@ type ResolveSessionTargetFn = (params: {
   request: ExecApprovalRequest;
 }) => MaybePromise<ExecApprovalForwardTarget | null>;
 
-type ApprovalKind = "exec" | "plugin";
 type ForwardTarget = ExecApprovalForwardTarget & { source: "session" | "target" };
 
 type ApprovalRouteRequest = {
@@ -98,7 +98,7 @@ type ApprovalStrategy<
   TResolved,
   TRouteRequest extends ApprovalRouteRequest = ApprovalRouteRequest,
 > = {
-  kind: ApprovalKind;
+  kind: ChannelApprovalKind;
   config: (cfg: OpenClawConfig) => ExecApprovalForwardingConfig | undefined;
   getRequestId: (request: TRequest) => string;
   getResolvedId: (resolved: TResolved) => string;
@@ -181,6 +181,7 @@ function buildTargetKey(target: ExecApprovalForwardTarget): string {
 
 function buildSyntheticApprovalRequest(routeRequest: ApprovalRouteRequest): ExecApprovalRequest {
   return {
+    approvalKind: "exec",
     id: SYNTHETIC_APPROVAL_REQUEST_ID,
     request: {
       command: "",
@@ -197,7 +198,7 @@ function buildSyntheticApprovalRequest(routeRequest: ApprovalRouteRequest): Exec
 }
 
 function shouldSkipForwardingFallback(params: {
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   target: ExecApprovalForwardTarget;
   cfg: OpenClawConfig;
   routeRequest: ApprovalRouteRequest;
@@ -313,7 +314,7 @@ function normalizeTurnSourceChannel(value?: string | null): string | undefined {
 
 function normalizeForwardingTurnSourceChannel(
   value: string | null | undefined,
-  approvalKind: ApprovalKind,
+  approvalKind: ChannelApprovalKind,
 ): string | undefined {
   const normalized = normalizeTurnSourceChannel(value);
   if (approvalKind === "exec" && normalized && !isDeliverableMessageChannel(normalized)) {
@@ -503,7 +504,7 @@ function buildPluginResolvedPayload(params: {
 async function resolveForwardTargets(params: {
   cfg: OpenClawConfig;
   config?: ExecApprovalForwardingConfig;
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
   routeRequest: ApprovalRouteRequest;
   resolveSessionTarget: ResolveSessionTargetFn;
 }): Promise<ForwardTarget[]> {
@@ -709,7 +710,7 @@ function createApprovalStrategy<
   TRequest extends { id: string; request: ApprovalRouteRequestFields; expiresAtMs: number },
   TResolved extends { id: string; request?: ApprovalRouteRequestFields | null },
 >(params: {
-  kind: ApprovalKind;
+  kind: ChannelApprovalKind;
   config: (cfg: OpenClawConfig) => ExecApprovalForwardingConfig | undefined;
   buildExpiredText: (request: TRequest) => string;
   buildPendingPayload: (

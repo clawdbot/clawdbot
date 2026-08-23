@@ -321,9 +321,7 @@ describe("session connection hydration", () => {
       await vi.advanceTimersByTimeAsync(0);
 
       expect(sessions.state.result).toBe(result);
-      expect(sessions.state.error).toBe(
-        "GatewayRequestError: session observer temporarily unavailable",
-      );
+      expect(sessions.state.error).toBe("session observer temporarily unavailable");
       expect(subscriptionCalls).toBe(1);
 
       await vi.advanceTimersByTimeAsync(99);
@@ -385,31 +383,31 @@ describe("session connection hydration", () => {
 
     try {
       connect();
-      expect(sent).toEqual([{ id: "request", method: "sessions.subscribe" }]);
+      expect(sent).toEqual([{ id: "1:request", method: "sessions.subscribe" }]);
 
       await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
-      expect(sent).toContainEqual({ id: "request:1", method: "sessions.list" });
-      respond("request:1", initialResult);
+      expect(sent).toContainEqual({ id: "2:request", method: "sessions.list" });
+      respond("2:request", initialResult);
       await vi.advanceTimersByTimeAsync(0);
       expect(sessions.state.result).toEqual(initialResult);
 
       await vi.advanceTimersByTimeAsync(500);
-      expect(sent).toContainEqual({ id: "request:2", method: "sessions.subscribe" });
+      expect(sent).toContainEqual({ id: "3:request", method: "sessions.subscribe" });
 
-      respond("request", { status: "accepted" });
-      respond("request", { subscribed: true });
+      respond("1:request", { status: "accepted" });
+      respond("1:request", { subscribed: true });
       await vi.advanceTimersByTimeAsync(0);
       expect(sessions.state.error).not.toBeNull();
       expect(sent.filter(({ method }) => method === "sessions.list")).toHaveLength(1);
 
-      respond("request:2", { subscribed: true });
+      respond("3:request", { subscribed: true });
       await vi.advanceTimersByTimeAsync(0);
-      expect(sent).toContainEqual({ id: "request:3", method: "sessions.list" });
-      respond("request:3", recoveredResult);
+      expect(sent).toContainEqual({ id: "4:request", method: "sessions.list" });
+      respond("4:request", recoveredResult);
       await vi.advanceTimersByTimeAsync(0);
 
-      respond("request", { status: "accepted" });
-      respond("request", { subscribed: true });
+      respond("1:request", { status: "accepted" });
+      respond("1:request", { subscribed: true });
       await vi.advanceTimersByTimeAsync(0);
 
       expect(sessions.state.error).toBeNull();
@@ -589,7 +587,7 @@ describe("session connection hydration", () => {
       try {
         connect();
         await vi.advanceTimersByTimeAsync(0);
-        const observerError = "GatewayRequestError: broad session observer unavailable";
+        const observerError = "broad session observer unavailable";
         expect(sessions.state.error).toBe(observerError);
 
         reconcile(sessions);
@@ -642,7 +640,7 @@ describe("session connection hydration", () => {
         connect();
         await vi.advanceTimersByTimeAsync(0);
         await sessions.refresh({ force: true });
-        const operationError = "Error: newer session list failure";
+        const operationError = "newer session list failure";
         expect(sessions.state.error).toBe(operationError);
 
         reconcile(sessions);
@@ -689,12 +687,12 @@ describe("session connection hydration", () => {
       connect();
       await vi.advanceTimersByTimeAsync(0);
       await sessions.refresh({ force: true });
-      expect(sessions.state.error).toBe("Error: newer session list failure");
+      expect(sessions.state.error).toBe("newer session list failure");
 
       await vi.advanceTimersByTimeAsync(100);
 
       expect(subscriptionCalls).toBe(2);
-      expect(sessions.state.error).toBe("Error: newer session list failure");
+      expect(sessions.state.error).toBe("newer session list failure");
     } finally {
       sessions.dispose();
       vi.useRealTimers();
@@ -740,13 +738,13 @@ describe("session connection hydration", () => {
       connect();
       await vi.advanceTimersByTimeAsync(0);
       await sessions.refresh({ force: true });
-      expect(sessions.state.error).toBe("GatewayRequestError: same failure message");
+      expect(sessions.state.error).toBe("same failure message");
 
       await vi.advanceTimersByTimeAsync(100);
 
       expect(subscriptionCalls).toBe(2);
       expect(listCalls).toBe(3);
-      expect(sessions.state.error).toBe("GatewayRequestError: same failure message");
+      expect(sessions.state.error).toBe("same failure message");
       completeCatchUpList(emptySessionsResult());
       await vi.advanceTimersByTimeAsync(0);
       expect(sessions.state.error).toBeNull();

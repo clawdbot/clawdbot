@@ -169,7 +169,7 @@ export function resolveDispatchTelegramContext(params: {
     threadSpec,
   );
   const recoveredFrom = params.context.isGroup
-    ? buildTelegramGroupFrom(params.context.chatId, threadSpec.id)
+    ? buildTelegramGroupFrom(params.context.chatId, threadSpec)
     : params.context.ctxPayload.From;
   const recoveredUpdateLastRoute =
     params.context.turn.record.updateLastRoute && threadSpec.id != null
@@ -180,7 +180,7 @@ export function resolveDispatchTelegramContext(params: {
         }
       : params.context.turn.record.updateLastRoute;
   const recoveredHistoryKey = params.context.isGroup
-    ? buildTelegramGroupPeerId(params.context.chatId, threadSpec.id)
+    ? buildTelegramGroupPeerId(params.context.chatId, threadSpec)
     : params.context.historyKey;
   const recoveredHistoryEntries =
     recoveredHistoryKey && params.context.historyLimit > 0

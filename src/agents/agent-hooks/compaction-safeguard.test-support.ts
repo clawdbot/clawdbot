@@ -6,7 +6,7 @@ type CompactionSafeguardTestApi = {
   collectToolFailures: CallableFunction;
   formatToolFailuresSection: CallableFunction;
   splitPreservedRecentTurns: CallableFunction;
-  formatPreservedTurnsSection: CallableFunction;
+  buildPreservedTurnsSection: CallableFunction;
   buildCompactionStructureInstructions: CallableFunction;
   buildStructuredFallbackSummary: CallableFunction;
   prependPreviousSummaryForRedistill: CallableFunction;
@@ -16,10 +16,9 @@ type CompactionSafeguardTestApi = {
   extractOpaqueIdentifiers: CallableFunction;
   auditSummaryQuality: CallableFunction;
   capCompactionSummary: CallableFunction;
-  capCompactionSummaryPreservingSuffix: CallableFunction;
+  budgetCompactionSummary: CallableFunction;
   formatFileOperations: CallableFunction;
   computeAdaptiveChunkRatio: CallableFunction;
-  isOversizedForSummary: CallableFunction;
   readWorkspaceContextForSummary: CallableFunction;
   hasMeaningfulConversationContent: CallableFunction;
   isRealConversationMessage: CallableFunction;

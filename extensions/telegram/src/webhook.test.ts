@@ -26,8 +26,8 @@ import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest as clearTelegramRuntime } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import { openTelegramIngressQueue } from "./telegram-ingress-spool.js";
-import { writeTelegramSpooledUpdate } from "./telegram-ingress-spool.test-support.js";
 import {
+  writeTelegramSpooledUpdate,
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
 } from "./telegram-ingress-spool.test-support.js";
@@ -1350,10 +1350,11 @@ describe("startTelegramWebhook", () => {
     }
   });
 
-  it("keeps a timed-out webhook lane guarded until replay settles", async () => {
+  it("retries a timed-out webhook update before later same-lane updates", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     try {
       let finishFirstUpdate: (() => void) | undefined;
+      let finishRetry: (() => void) | undefined;
       const seenUpdateIds: number[] = [];
       const firstUpdate = telegramMessageUpdate(40, "slow");
       const secondUpdate = telegramMessageUpdate(41, "blocked");
@@ -1370,7 +1371,11 @@ describe("startTelegramWebhook", () => {
         seenUpdateIds.push(updateId);
         if (updateId === 40) {
           await new Promise<void>((resolve) => {
-            finishFirstUpdate = resolve;
+            if (seenUpdateIds.filter((id) => id === 40).length === 1) {
+              finishFirstUpdate = resolve;
+            } else {
+              finishRetry = resolve;
+            }
           });
         }
       });
@@ -1390,7 +1395,9 @@ describe("startTelegramWebhook", () => {
         expect(seenUpdateIds).toEqual([40]);
 
         finishFirstUpdate?.();
-        await waitForWebhookState(() => expect(seenUpdateIds).toEqual([40, 41]));
+        await waitForWebhookState(() => expect(seenUpdateIds).toEqual([40, 40]));
+        finishRetry?.();
+        await waitForWebhookState(() => expect(seenUpdateIds).toEqual([40, 40, 41]));
       } finally {
         await started.stop();
       }

@@ -63,6 +63,7 @@ describe("audit activity protocol schemas", () => {
         limit: 500,
       }),
     ).toBe(true);
+    expect(validateAuditActivityListParams({ direction: "inbound" })).toBe(true);
     expect(validateAuditActivityListParams({ direction: "sideways" })).toBe(false);
     expect(validateAuditActivityListParams({ limit: 501 })).toBe(false);
   });
@@ -139,6 +140,14 @@ describe("audit activity protocol schemas", () => {
     expect(validate.Check(agentRun)).toBe(true);
     expect(validate.Check(toolAction)).toBe(true);
     expect(validate.Check(outboundMessage)).toBe(true);
+    expect(
+      validate.Check({
+        ...outboundMessage,
+        action: "message.outbound.queued",
+        status: "started",
+        outcome: "queued",
+      }),
+    ).toBe(false);
     expect(
       validate.Check({
         ...agentRun,

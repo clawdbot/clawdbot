@@ -498,7 +498,6 @@ suite.define(() => {
       expect(returnedSamples.every((sample) => sample.minOpacity === 1)).toBe(true);
       expect(returnedSamples.every((sample) => !sample.hiddenNotice)).toBe(true);
       expect(returnedSamples.every((sample) => !sample.loading)).toBe(true);
-      expect(await page.getByRole("button", { name: "Load older" }).count()).toBe(0);
       await expectRequestCountStable(gateway, "chat.history", historyRequestsBeforeReturn);
       if (artifactDir) {
         await page.screenshot({

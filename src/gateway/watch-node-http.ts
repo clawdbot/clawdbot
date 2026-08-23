@@ -24,6 +24,7 @@ import {
   deriveDeviceIdFromPublicKey,
   normalizeDevicePublicKeyBase64Url,
 } from "../infra/device-identity.js";
+import { approveBootstrapDevicePairing } from "../infra/device-pairing-approval.js";
 import { captureAuthenticatedNodePairingState } from "../infra/device-pairing-node-state.js";
 import {
   approveNodePairing,
@@ -35,13 +36,11 @@ import {
   recordPairedNodeDisconnection,
   type RequestNodePairingResult,
 } from "../infra/device-pairing-node.js";
+import { ensureDeviceToken, verifyDeviceToken } from "../infra/device-pairing-tokens.js";
 import {
-  approveBootstrapDevicePairing,
-  ensureDeviceToken,
   getPairedDevice,
   requestDevicePairing,
   resolveNodePairingState,
-  verifyDeviceToken,
 } from "../infra/device-pairing.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isNodePairingSetupBootstrapProfile } from "../shared/device-bootstrap-profile.js";
@@ -51,7 +50,6 @@ import {
   buildRateLimitIdentityKey,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
-import { hasForwardedRequestHeaders } from "./auth.js";
 import {
   broadcastSetupHandoffDeliveryUncertain,
   broadcastSetupHandoffCompletion,
@@ -67,8 +65,9 @@ import {
   sendRateLimited,
   sendUnauthorized,
 } from "./http-common.js";
+import { readPreparedGatewayIngressAttribution } from "./ingress-attribution.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
-import { isLoopbackAddress, resolveRequestClientIp } from "./net.js";
+import { hasForwardedRequestHeaders, isLoopbackAddress, resolveRequestClientIp } from "./net.js";
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
 import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
 import type { NodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
@@ -166,6 +165,13 @@ function resolveWatchClientAddress(
   req: IncomingMessage,
   config: OpenClawConfig,
 ): { clientIp?: string; rateLimitKey: string } {
+  const attribution = readPreparedGatewayIngressAttribution(req);
+  if (attribution && attribution.kind !== "unattributable-proxy") {
+    return {
+      clientIp: attribution.clientIp,
+      rateLimitKey: attribution.rateLimit.subject.key,
+    };
+  }
   const trustedProxies = config.gateway?.trustedProxies ?? [];
   const clientIp = resolveRequestClientIp(
     req,
@@ -588,7 +594,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         authOk: false,
         authMethod: "token",
         sharedAuthOk: false,
-        sharedAuthProvided: false,
+        pendingSharedAuthFailure: false,
         ...(bootstrapToken ? { bootstrapTokenCandidate: bootstrapToken } : {}),
         ...(deviceToken
           ? {

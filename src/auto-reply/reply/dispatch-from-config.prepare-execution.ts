@@ -152,39 +152,7 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
   const shouldSuppressProgressDelivery = () =>
     state.sendPolicyDenied ||
     (state.suppressDelivery && !state.shouldDeliverVerboseProgressDespiteSourceSuppression());
-  const hasVisibleRegularVerboseToolProgress = () =>
-    shouldEmitVerboseProgress() &&
-    !state.shouldEmitFullVerboseProgress() &&
-    shouldSendVerboseProgressMessages() &&
-    ctx.InboundEventKind !== "room_event" &&
-    !shouldSuppressProgressDelivery();
-  let observedVisibleToolErrorProgress = false;
-  const markVisibleToolErrorProgress = () => {
-    if (hasVisibleRegularVerboseToolProgress()) {
-      observedVisibleToolErrorProgress = true;
-    }
-  };
-  const hasFailedProgressStatus = (payload: {
-    phase?: string;
-    status?: string;
-    exitCode?: number | null;
-  }) =>
-    payload.phase === "error" ||
-    payload.status === "failed" ||
-    payload.status === "error" ||
-    (typeof payload.exitCode === "number" && payload.exitCode !== 0);
-  const shouldSuppressToolErrorWarnings = () => {
-    if (params.replyOptions?.suppressToolErrorWarnings !== undefined) {
-      return params.replyOptions.suppressToolErrorWarnings;
-    }
-    if (!shouldEmitVerboseProgress()) {
-      return false;
-    }
-    return observedVisibleToolErrorProgress ? true : undefined;
-  };
-  const suppressToolErrorWarnings =
-    params.replyOptions?.suppressToolErrorWarnings ??
-    (observedVisibleToolErrorProgress ? true : undefined);
+  const suppressToolErrorWarnings = params.replyOptions?.suppressToolErrorWarnings;
   const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
   const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
   const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
@@ -333,11 +301,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
           preserveProgressCallbackStartOrder && shouldDeliverDurableCommentaryProgress(payload)
             ? noteCommentaryProgress(payload)
             : undefined,
-        onVisible: (payload) => {
-          if (hasFailedProgressStatus(payload)) {
-            markVisibleToolErrorProgress();
-          }
-        },
       })
     : undefined;
   const canCaptureCliPreambleEvents =
@@ -394,9 +357,6 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     resolveToolDeliveryPayload,
     typing,
     shouldSuppressProgressDelivery,
-    markVisibleToolErrorProgress,
-    hasFailedProgressStatus,
-    shouldSuppressToolErrorWarnings,
     suppressToolErrorWarnings,
     onToolResultFromReplyOptions,
     onPlanUpdateFromReplyOptions,

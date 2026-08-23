@@ -84,6 +84,8 @@ type ModelCatalogEntry = {
   provider: string;
   id: string;
   name?: string;
+  api?: string;
+  baseUrl?: string;
   reasoning?: boolean;
   compat?: unknown;
 };
@@ -112,8 +114,13 @@ export function isTestModelKeyAllowed(allowedKeys: ReadonlySet<string>, key: str
 }
 
 export function buildTestConfiguredModelCatalog(cfg?: unknown): ModelCatalogEntry[] {
-  const providers = (cfg as { models?: { providers?: Record<string, { models?: unknown[] }> } })
-    ?.models?.providers;
+  const providers = (
+    cfg as {
+      models?: {
+        providers?: Record<string, { api?: unknown; baseUrl?: unknown; models?: unknown[] }>;
+      };
+    }
+  )?.models?.providers;
   if (!providers) {
     return [];
   }
@@ -130,6 +137,18 @@ export function buildTestConfiguredModelCatalog(cfg?: unknown): ModelCatalogEntr
               provider,
               id,
               name: typeof model.name === "string" ? model.name : id,
+              api:
+                typeof model.api === "string"
+                  ? model.api
+                  : typeof entry.api === "string"
+                    ? entry.api
+                    : undefined,
+              baseUrl:
+                typeof model.baseUrl === "string"
+                  ? model.baseUrl
+                  : typeof entry.baseUrl === "string"
+                    ? entry.baseUrl
+                    : undefined,
               reasoning: typeof model.reasoning === "boolean" ? model.reasoning : undefined,
               compat: model.compat,
             };

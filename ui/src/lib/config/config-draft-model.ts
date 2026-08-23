@@ -5,15 +5,18 @@ import {
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import { coerceConfigFormNumberString } from "../../components/config-form.numeric.ts";
-import { schemaType, type JsonSchema } from "../../components/config-form.shared.ts";
 import { t } from "../../i18n/index.ts";
 import {
   cloneConfigObject,
   removePathValue,
   sanitizeRedactedFormForSubmit,
+  schemaMayAcceptString,
+  schemaType,
   serializeConfigForm,
   setPathValue,
+  type JsonSchema,
 } from "../config-form-utils.ts";
+import { formatUiError } from "../format-error.ts";
 import { parseJson5Text, warmJson5 } from "../json5-runtime.ts";
 import {
   resolveAgentConfigEntryTarget,
@@ -29,7 +32,8 @@ export function clearConfigDraftTracking(state: RuntimeConfigState): void {
 }
 
 export function formatConfigMutationError(error: unknown, submittedRaw: string | null): string {
-  let message = String(error);
+  const formatted = formatUiError(error);
+  let message = error instanceof GatewayRequestError ? `${error.name}: ${formatted}` : formatted;
   if (!submittedRaw || !(error instanceof GatewayRequestError) || !isRecord(error.details)) {
     return message;
   }
@@ -206,6 +210,12 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
       return variant ? coerceFormValues(value, variant) : value;
     }
     if (typeof value === "string") {
+      // Editors commit branch-validated types (including boolean literals),
+      // and loaded values already passed Gateway validation. Preserve strings
+      // instead of guessing again here.
+      if (variants.some(schemaMayAcceptString)) {
+        return value;
+      }
       for (const variant of variants) {
         const variantType = schemaType(variant);
         if (variantType === "number" || variantType === "integer") {

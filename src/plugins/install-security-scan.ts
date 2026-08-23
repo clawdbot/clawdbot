@@ -5,11 +5,11 @@ import type {
   InstallPolicyRequestKind,
   InstallPolicySource,
 } from "../security/install-policy.js";
-export type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import type {
   InstallPolicyWarningDetails,
   InstallSafetyOverrides,
 } from "./install-security-scan.types.js";
+export type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 
 type InstallScanLogger = {
   warn?: (message: string) => void;

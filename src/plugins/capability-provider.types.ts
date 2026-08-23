@@ -48,6 +48,15 @@ import type { PluginJsonValue } from "./host-hooks.js";
 /** JSON-compatible provider settings for one configured worker profile. */
 export type WorkerProfile = Readonly<Record<string, PluginJsonValue>>;
 
+/** Provider-authored picker metadata for one machine class or exact machine type. */
+export type WorkerMachineOption = Readonly<{
+  id: string;
+  label: string;
+  cpu?: number;
+  memoryGb?: number;
+  default?: boolean;
+}>;
+
 /** SSH endpoint material returned by a worker provider after provisioning. */
 export type WorkerSshEndpoint = {
   host: string;
@@ -93,11 +102,27 @@ export type WorkerDesktopEndpoint = {
   protocol: "rfb";
   /** Loopback port on the worker (e.g. 5900). */
   port: number;
-  /** Absolute on-box path to the per-lease password file; read over SSH, never persisted as plaintext. */
+  /** Absolute on-box path to the per-lease password file; read by the owning transport, never persisted as plaintext. */
   passwordFilePath?: string;
   /** Closed application metadata advertised by the provider for this desktop. */
   apps?: WorkerDesktopApp[];
 };
+
+/** Placement execution modes a worker provider can carry. */
+export type WorkerExecutionMode = "worker-turn" | "remote-exec";
+
+/** Replay-safe node enrollment prepared only after a provider has allocated its machine. */
+export type WorkerNodeEnrollment = {
+  openclawVersion: string;
+  packageSpecs: readonly string[];
+  displayName: string;
+  /** Gateway shutdown cancels enrollment without releasing its replay-owned provider lease. */
+  signal?: AbortSignal;
+  waitForDeviceId: () => Promise<string>;
+} & (
+  | { mode: "connect"; setupCode: string; setupId: string }
+  | { mode: "resume"; deviceId: string }
+);
 
 /** Durable lease identity and endpoint returned by a successful provision operation. */
 export type WorkerLease = {
@@ -118,6 +143,29 @@ export type WorkerLeaseStatus =
   | { status: "destroyed" }
   | { status: "unknown" };
 
+/** Provision failed after allocation and the provider could not prove cleanup completed. */
+class WorkerProvisionCleanupError extends AggregateError {
+  readonly code = "cleanup_indeterminate";
+  readonly leaseId: string;
+
+  constructor(
+    leaseId: string,
+    readonly provisionError: unknown,
+    readonly cleanupError: unknown,
+  ) {
+    super(
+      [provisionError, cleanupError],
+      "Worker provision failed after allocation and cleanup is indeterminate",
+      { cause: provisionError },
+    );
+    this.name = "WorkerProvisionCleanupError";
+    this.leaseId = leaseId.trim();
+    if (!this.leaseId) {
+      throw new TypeError("Worker provision cleanup lease id must be non-empty");
+    }
+  }
+}
+
 /** Permanent provider rejection recorded as a terminal worker failure. */
 export class WorkerProviderError extends Error {
   readonly code = "invalid_profile";
@@ -126,21 +174,48 @@ export class WorkerProviderError extends Error {
     super(message);
     this.name = "WorkerProviderError";
   }
+
+  static cleanupIndeterminate(
+    leaseId: string,
+    provisionError: unknown,
+    cleanupError: unknown,
+  ): WorkerProvisionCleanupError {
+    return new WorkerProvisionCleanupError(leaseId, provisionError, cleanupError);
+  }
+
+  static isCleanupIndeterminate(error: unknown): error is WorkerProvisionCleanupError {
+    return error instanceof WorkerProvisionCleanupError;
+  }
 }
 
-/** Cloud-worker lifecycle capability registered by a plugin. */
-export type WorkerProvider = {
+/** Plugin registrations declare exactly one mode; the internal paired-device owner can carry both. */
+export type WorkerProvider<Scope extends "plugin" | "internal" = "plugin"> = {
   id: string;
+  /** Process-stable choices available for this profile; omit the hook to hide machine selection. */
+  listMachineOptions?: (profile: WorkerProfile) => Promise<readonly WorkerMachineOption[]>;
+  /** Omission advertises no placement support; external providers declare one transport mode. */
+  supportedExecutionModes?: Scope extends "internal"
+    ? readonly [WorkerExecutionMode] | readonly ["worker-turn", "remote-exec"]
+    : readonly [WorkerExecutionMode];
   /**
    * Provision before preparing an installation when the lease transport decides whether an
    * installation is needed. Defaults to false so SSH providers retain prepare-before-allocation.
    */
   provisionBeforeInstallation?: boolean;
+  /** Provider allocates a node host through the environment-owned enrollment callback. */
+  requiresNodeEnrollment?: boolean;
   /**
    * Provision or adopt the lease for this operation id.
    * Repeating the same operation id must be idempotent across gateway restarts.
    */
-  provision: (profile: WorkerProfile, operationId: string) => Promise<WorkerLease>;
+  provision: (
+    profile: WorkerProfile,
+    operationId: string,
+    options?: {
+      machineClass?: string;
+      beginNodeEnrollment?: () => Promise<WorkerNodeEnrollment>;
+    },
+  ) => Promise<WorkerLease>;
   /** Maximum core wait for one provision attempt, including provider-owned setup and cleanup. */
   resolveProvisionTimeoutMs?: (profile: WorkerProfile) => number;
   /** Throws on transient/indeterminate failures; `unknown` means authoritative absence. */

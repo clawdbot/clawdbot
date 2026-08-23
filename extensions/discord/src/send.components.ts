@@ -34,7 +34,6 @@ import {
   createDiscordMessageNonce,
   resolveChannelId,
   resolveDiscordChannel,
-  stripUndefinedFields,
   SUPPRESS_NOTIFICATIONS_FLAG,
   type DiscordAllowedMentions,
 } from "./send.shared.js";
@@ -201,10 +200,7 @@ async function buildDiscordComponentPayload(params: {
   spec: DiscordComponentMessageSpec;
   opts: DiscordComponentSendOpts;
   accountId: string;
-}): Promise<{
-  body: ReturnType<typeof stripUndefinedFields>;
-  buildResult: ReturnType<typeof buildDiscordComponentMessage>;
-}> {
+}) {
   const messageReference = params.opts.reply
     ? { message_id: params.opts.reply.messageId, fail_if_not_exists: false }
     : undefined;
@@ -260,10 +256,10 @@ async function buildDiscordComponentPayload(params: {
     ...(finalFlags ? { flags: finalFlags } : {}),
     ...(files ? { files } : {}),
   };
-  const body = stripUndefinedFields({
+  const body = {
     ...serializePayload(payload),
     ...(messageReference ? { message_reference: messageReference } : {}),
-  });
+  };
 
   return { body, buildResult };
 }

@@ -108,6 +108,114 @@ async function captureBrowserSettingProof(
 }
 
 suite.define(() => {
+  it("keeps selected segmented options distinct in forced colors", async () => {
+    const cases = [
+      {
+        colorScheme: "dark" as const,
+        config: { ui: { prefs: { themeMode: "dark" } } },
+        featureMethods: undefined,
+        route: "settings/appearance",
+        selected: "Dark",
+        unselected: "Light",
+      },
+      {
+        colorScheme: "light" as const,
+        config: { update: { auto: { enabled: true }, channel: "beta" } },
+        featureMethods: ["config.get", "config.set", "config.apply", "update.run"],
+        route: "settings/updates",
+        selected: "Beta",
+        unselected: "Stable",
+      },
+    ];
+
+    for (const scenario of cases) {
+      await suite.withPage(
+        {
+          colorScheme: scenario.colorScheme,
+          forcedColors: "active",
+          locale: "en-US",
+          serviceWorkers: "block",
+          viewport: { height: 900, width: 1280 },
+        },
+        async ({ page }) => {
+          await installMockGateway(page, {
+            featureMethods: scenario.featureMethods,
+            methodResponses: {
+              "config.get": {
+                config: scenario.config,
+                hash: `forced-colors-${scenario.route}`,
+                issues: [],
+                raw: JSON.stringify(scenario.config),
+                runtimeConfig: scenario.config,
+                valid: true,
+              },
+            },
+            operatorScopes: ["operator.read", "operator.admin"],
+          });
+
+          const response = await page.goto(`${suite.server.baseUrl}${scenario.route}`);
+          expect(response?.status()).toBe(200);
+          expect(await page.evaluate(() => matchMedia("(forced-colors: active)").matches)).toBe(
+            true,
+          );
+
+          const selected = page.getByRole("radio", { name: scenario.selected, exact: true });
+          const unselected = page.getByRole("radio", { name: scenario.unselected, exact: true });
+          await selected.waitFor();
+          expect(await selected.getAttribute("aria-checked")).toBe("true");
+          expect(await unselected.getAttribute("aria-checked")).toBe("false");
+          if (captureUiProofEnabled) {
+            await mkdir(uiProofArtifactDir, { recursive: true });
+            await selected
+              .locator(
+                "xpath=ancestor::div[contains(concat(' ', normalize-space(@class), ' '), ' settings-row ')][1]",
+              )
+              .screenshot({
+                animations: "disabled",
+                path: path.join(
+                  uiProofArtifactDir,
+                  `segmented-forced-colors-${scenario.colorScheme}.png`,
+                ),
+              });
+          }
+          expect(
+            await selected.evaluate((element) => {
+              const style = getComputedStyle(element);
+              return {
+                textDecorationLine: style.textDecorationLine,
+                textDecorationThickness: style.textDecorationThickness,
+              };
+            }),
+          ).toEqual({ textDecorationLine: "underline", textDecorationThickness: "2px" });
+          expect(
+            await unselected.evaluate((element) => getComputedStyle(element).textDecorationLine),
+          ).toBe("none");
+
+          await selected.focus();
+          expect(await selected.evaluate((element) => element.matches(":focus-visible"))).toBe(
+            true,
+          );
+          expect(
+            await selected.evaluate((element) => {
+              const style = getComputedStyle(element);
+              return {
+                outlineOffset: style.outlineOffset,
+                outlineStyle: style.outlineStyle,
+                outlineWidth: style.outlineWidth,
+                textDecorationLine: style.textDecorationLine,
+              };
+            }),
+          ).toEqual({
+            outlineOffset: "2px",
+            outlineStyle: "solid",
+            outlineWidth: "2px",
+            textDecorationLine: "underline",
+          });
+        },
+      );
+    }
+  });
+
   it("keeps checked switches on the scene accent on the security page", async () => {
     await suite.withPage(
       {
@@ -235,6 +343,7 @@ suite.define(() => {
               "chat.startup",
               "config.apply",
               "config.patch",
+              "config.schema",
               "config.set",
             ],
             methodResponses: {

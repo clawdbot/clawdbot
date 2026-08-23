@@ -16,8 +16,11 @@ export const TransportProtocolSchemas = {
   StateVersion: snapshot.StateVersionSchema,
   Snapshot: snapshot.SnapshotSchema,
   ErrorShape: frames.ErrorShapeSchema,
+  CronJobNotFoundErrorDetails: errorCodes.CronJobNotFoundErrorDetailsSchema,
   MissingScopeErrorDetails: errorCodes.MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetails: errorCodes.McpAppViewExpiredErrorDetailsSchema,
+  SkillProposalRevisionChangedErrorDetails:
+    errorCodes.SkillProposalRevisionChangedErrorDetailsSchema,
   UnknownAgentIdErrorDetails: errorCodes.UnknownAgentIdErrorDetailsSchema,
   WizardNotFoundErrorDetails: errorCodes.WizardNotFoundErrorDetailsSchema,
   GatewayErrorDetails: errorCodes.GatewayErrorDetailsSchema,

@@ -146,7 +146,6 @@ describe("anthropic provider policy public artifact", () => {
 
       expect(profile).toEqual({
         levels: [
-          { id: "off" },
           { id: "minimal" },
           { id: "low" },
           { id: "medium" },
@@ -192,7 +191,7 @@ describe("anthropic provider policy public artifact", () => {
     });
 
     expect(profile?.defaultLevel).toBe("adaptive");
-    expect(profile?.levels.map((level) => level.id)).toContain("max");
+    expect(profile?.levels.map((level) => level.id)).not.toContain("max");
   });
 
   it("exposes native max without xhigh for direct Claude 4.6 routes", () => {
