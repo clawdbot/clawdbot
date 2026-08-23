@@ -371,11 +371,12 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
       ? `${gateway.name}${gatewayPrimaryTag ? `, ${gatewayPrimaryTag}` : ""}`
       : buildSubtitle;
   const availableUpdate = host.updateAvailable;
+  const showUpdate = availableUpdate !== null;
   const updateBusy = host.updateBusy || host.updateSchedule?.campaign?.state === "applying";
   const showInbox = host.activeRouteId === "chat";
   return html`
     <div
-      class="sidebar-footer-bar ${showInbox && availableUpdate
+      class="sidebar-footer-bar ${showInbox && showUpdate
         ? "sidebar-footer-bar--two-actions"
         : "sidebar-footer-bar--one-action"}"
     >
@@ -421,10 +422,10 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
       <span class="sidebar-identity-card__status" role="status" aria-live="polite"
         >${host.offline ? t("connection.reconnecting") : ""}</span
       >
-      ${showInbox || availableUpdate
+      ${showInbox || showUpdate
         ? html`<span class="sidebar-footer-actions">
             ${showInbox ? renderAppSidebarAttention(host) : nothing}
-            ${availableUpdate
+            ${showUpdate
               ? html`<span class="sidebar-footer-update-slot">
                   <button
                     type="button"
