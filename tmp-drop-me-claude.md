@@ -1651,3 +1651,29 @@ No manual conflict decision was required.
 The candidate ref was pushed normally and the remote matched the local merge
 SHA exactly. Gates 2, 2.5, and 2.7 restart after the following journal-only
 checkpoint. Presentation and PR head remain untouched.
+
+## 2026-08-23T11:46:24Z - Third upstream freeze after gate invalidation
+
+The second exact gate candidate
+`b79eca0f0c729e8aac57d9c6e95ac3a7f7ab7986` completed its local Gate 2,
+Gate 2.5, Gate 2.7, and static work, but the mandatory pre-Mode-B fetch found
+nine additional upstream commits. Those receipts are historical and cannot
+authorize dispatch or presentation.
+
+The third exact frozen upstream is
+`50595d784e0ed4bfab789c7bfe8b488088285d07`.
+
+- merge base:
+  `23854c39fc7d87b659d5ae1ab86a97880f2fd210`;
+- frozen-upstream distance from merge base: 99 commits;
+- accepted feature paths: 929;
+- upstream-drift paths: 631;
+- shared paths: 37;
+- source classifier: 289 `SAFE-NEW`, 310 `GENUINE`, 330
+  `MIXED-CLOBBER`, zero `FROZEN-STALE`, exit 0;
+- exact prospective merge tree: conflict-free, exit 0.
+
+Independent reviewers were notified not to cosign the invalidated SHA and will
+be renewed against the next exact candidate. The third-freeze corpus is under
+`.gate-out/continuation-drift-cure/freeze-3-50595d784e0ed4bfab789c7bfe8b488088285d07/`.
+Presentation, PR head, deployment, and behavioral proof remain untouched.
