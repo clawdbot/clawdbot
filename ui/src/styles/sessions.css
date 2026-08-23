@@ -346,8 +346,11 @@
 }
 
 .sessions-filter-popover__trigger {
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
-  gap: var(--space-1);
+  justify-content: center;
+  padding: 0;
 }
 
 .sessions-filter-popover__trigger svg {
@@ -1109,5 +1112,11 @@
 
   .session-groupby__select {
     flex: 1 1 auto;
+  }
+}
+
+@media (max-width: 560px) {
+  .sessions-filter-popover__trigger {
+    margin-left: auto;
   }
 }

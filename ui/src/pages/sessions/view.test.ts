@@ -807,7 +807,9 @@ describe("sessions view", () => {
     const popover = toolbar?.querySelector("wa-popover");
     const panel = popover?.querySelector(".sessions-filter-popover__panel");
     expect(toolbar?.querySelector(".sessions-view-segment")).not.toBeNull();
-    expect(trigger?.textContent).toContain("Filters");
+    expect(trigger?.textContent?.trim()).toBe("");
+    expect(trigger?.getAttribute("aria-label")).toBe("Filters");
+    expect(trigger?.getAttribute("title")).toBe("Filters");
     expect(trigger?.getAttribute("aria-haspopup")).toBe("dialog");
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
     expect(panel?.querySelector(".session-filter-input--minutes")?.closest("label")).not.toBeNull();

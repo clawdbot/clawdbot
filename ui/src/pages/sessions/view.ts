@@ -1130,10 +1130,12 @@ function renderSessionsAdvancedFilters(props: SessionsProps) {
       id="sessions-filter-popover-trigger"
       type="button"
       class="btn btn--sm sessions-filter-popover__trigger ${active ? "active" : ""}"
+      title=${t("sessionsView.filters")}
+      aria-label=${t("sessionsView.filters")}
       aria-haspopup="dialog"
       aria-expanded="false"
     >
-      ${icons.listFilter} ${t("sessionsView.filters")}
+      ${icons.listFilter}
     </button>
     <wa-popover
       class="sessions-filter-popover"
