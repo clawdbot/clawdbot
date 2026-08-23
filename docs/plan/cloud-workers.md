@@ -1,15 +1,16 @@
 ---
-summary: Run agent sessions on ephemeral SSH-reachable machines with gateway-proxied inference and live sidebar streaming.
-title: Cloud workers plan
+summary: Historical design record for cloud workers before convergence onto node-backed worker turns.
+title: Cloud workers historical plan
 read_when:
-  - Designing or implementing cloud worker provisioning, worker mode, or session handoff
-  - Changing environments.*, the worker protocol, transcript ingestion, or inference proxy RPCs
-  - Reviewing security posture of remote agent execution
+  - Reviewing the design history behind cloud worker provisioning and session placement
+  - Comparing the superseded SSH reverse-tunnel proposal with the current node-backed architecture
 ---
 
 ## Status
 
-Proposal, revision 3. Not implemented. Direction agreed 2026-07; revision 2 incorporated adversarial review findings (dedicated worker protocol, placement/environment state machines, git-aware inbound sync, one-way v1 handoff, controlled-egress security wording). Revision 3 settles the sync ownership model (worker authors commits, gateway adopts and publishes), adds a no-git plain sync mode, fixes worker exec at full-within-box, moves internet policy to provision time, and restores agent dispatch to milestone 3.
+Superseded historical proposal. The implemented architecture is documented in [Runners and execution environments](/plan/runners) and [Cloud workers](/gateway/cloud-workers): Crabbox provisions a node-backed `worker-turn` lease with current reconnect-scoped v6 supervisor proof, the worker child dials the Gateway's authenticated public worker route, and workspace transfer uses the node channel. The former dedicated loopback listener, SSH reverse-forward carrier, and SSH-launched worker-turn path have been removed. SSH remains a separate `remote-exec` workspace transport and desktop carrier.
+
+The sections below preserve the pre-convergence design record and are not the current runtime contract.
 
 ## Problem
 
@@ -88,15 +89,17 @@ RPCs: `environments.create`, `environments.destroy`, extended `environments.list
 No bespoke worker artifact, and no dependence on npm availability:
 
 - Canonical install for all modes: a gateway-produced, content-hashed worker bundle (the gateway's own build output packed as a tarball), pushed over SSH and installed on the box. This covers dev builds and unreleased commits by construction.
-- `npm i -g openclaw@<exact gateway version>` is an optimization when the gateway runs a released version; never `latest`.
+- On npm 12 or npm 11.16+, `npm i -g openclaw@<exact gateway version> --allow-scripts=openclaw` is an optimization when the gateway runs a released version; never `latest`. On npm 11.15 and earlier, omit `--allow-scripts=openclaw`.
 - Bootstrap is idempotent; a warm lease with a matching bundle hash skips install. Raw machines may need a networked toolchain phase (Node runtime) — part of the setup phase, closed afterwards.
 - Handshake verifies worker build hash, protocol feature set, and runtime compatibility. The existing gateway version/protocol checks are insufficient for this (SSH-tunneled nodes are exempted from exact-version rejection), so worker admission does its own exact-build check.
 
 Worker mode (`openclaw worker`) is an entry point, not a fork: connection handling plus the embedded agent runner, with session persistence and model calls backed by gateway RPCs. It must not start gateway surfaces: no channels, no plugin auto-start beyond the session toolset, throwaway state dir, no local auth profiles.
 
-### 3. Transport: everything over SSH
+### 3. Historical transport proposal: everything over SSH
 
-The gateway owns connectivity; the worker requires nothing but sshd:
+This section describes the superseded carrier. Current `worker-turn` environments use authenticated node connectivity; only `remote-exec` workspace operations retain pinned SSH.
+
+The original proposal had the gateway own connectivity while the worker required nothing but sshd:
 
 - Gateway opens SSH to the worker (credentials from the provider lease, host key pinned from provisioning output — no `StrictHostKeyChecking=no`) and establishes a reverse tunnel forwarding a worker-local socket to the gateway's WS endpoint.
 - Control/model traffic and workspace transfer use separate SSH connections with the same pinned trust material so rsync cannot head-of-line-block token streams.
@@ -148,6 +151,13 @@ Runtime placement is a SQLite-owned state machine keyed to the session, not a pa
 `local → requested → provisioning → syncing → starting → active(worker) → draining → reconciling → local | reclaimed | failed`
 
 It persists environment id, transition generation, active owner epoch, workspace base manifest, worker bundle hash, and last ACK cursors. Turn admission atomically claims placement before either loop starts a turn, so a local message admitted against a stale snapshot can never race a worker turn — exactly one loop owns the session at any time.
+
+Device runner availability is a process-current projection, not another
+placement state. An active device placement stays active while its exact v6
+runner proof is absent. The default is to wait. Explicit Gateway continuation
+persists one abandonment bit on the move intent, force-closes the remote owner,
+and resumes from the last Gateway-synced workspace without replay; the UI warns
+that unsynced device files and in-flight work may be lost.
 
 UI:
 

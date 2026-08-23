@@ -234,26 +234,57 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
   } satisfies QaScenarioRuntimeDeps;
 }
 
-function createQaSuiteScenarioFlowApi(params: QaSuiteScenarioFlowApiParams) {
-  return createQaScenarioRuntimeApi({
-    env: params.env,
-    scenario: params.scenario,
-    deps: createQaSuiteScenarioDeps({
+function createQaSuiteScenarioFlowApi(
+  params: QaSuiteScenarioFlowApiParams & { signal: AbortSignal },
+) {
+  return {
+    ...createQaScenarioRuntimeApi({
       env: params.env,
-      runScenario: params.runScenario,
-      splitModelRef: params.splitModelRef,
-      formatErrorMessage: params.formatErrorMessage,
-      liveTurnTimeoutMs: params.liveTurnTimeoutMs,
-      resolveQaLiveTurnTimeoutMs: params.resolveQaLiveTurnTimeoutMs,
+      scenario: params.scenario,
+      deps: createQaSuiteScenarioDeps({
+        env: params.env,
+        runScenario: params.runScenario,
+        splitModelRef: params.splitModelRef,
+        formatErrorMessage: params.formatErrorMessage,
+        liveTurnTimeoutMs: params.liveTurnTimeoutMs,
+        resolveQaLiveTurnTimeoutMs: params.resolveQaLiveTurnTimeoutMs,
+      }),
+      constants: params.constants,
     }),
-    constants: params.constants,
-  });
+    signal: params.signal,
+  };
 }
 
-export function createQaSuiteScenarioStepRunner(
+function createQaScenarioDeadline(timeoutMs?: number) {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline =
+    timeoutMs === undefined
+      ? undefined
+      : new Promise<never>((_resolve, reject) => {
+          const timeoutError = new Error(`QA scenario flow timed out after ${timeoutMs}ms`);
+          timer = setTimeout(() => {
+            controller.abort(timeoutError);
+            reject(timeoutError);
+          }, timeoutMs);
+        });
+  return {
+    signal: controller.signal,
+    run: async <T>(operation: () => Promise<T>) => {
+      controller.signal.throwIfAborted();
+      // In-flight calls abort cooperatively. The flow runner fences later actions and
+      // preserves DSL finally cleanup; the suite owner then tears down runtime resources.
+      return deadline ? await Promise.race([operation(), deadline]) : await operation();
+    },
+    dispose: () => clearTimeout(timer),
+  };
+}
+
+function createQaSuiteScenarioStepRunner(
   env: QaSuiteScenarioFlowEnv,
   scenario: QaSeedScenarioWithSource,
   vars: Record<string, unknown>,
+  deadline: ReturnType<typeof createQaScenarioDeadline>,
   deps: {
     liveTurnTimeoutMs: QaSuiteScenarioDepsParams["liveTurnTimeoutMs"];
     runScenario: QaSuiteScenarioDepsParams["runScenario"];
@@ -264,36 +295,45 @@ export function createQaSuiteScenarioStepRunner(
 ): QaSuiteScenarioDepsParams["runScenario"] {
   const prepareFlow = env.transport.prepareFlow;
   const execution = scenario.execution;
-  if (!prepareFlow || execution.kind !== "flow") {
-    return deps.runScenario;
-  }
-  return async (name, steps) =>
-    await deps.runScenario(name, [
-      {
-        name: `Prepare ${env.transport.label}`,
-        run: async () => {
-          const prepared = await prepareFlow({
-            config: execution.config ?? {},
-            gateway: env.gateway,
-            outputDir: env.outputDir,
-            primaryModel: env.primaryModel,
-            scenarioId: scenario.id,
-            scenarioTitle: scenario.title,
-            timeoutMs: execution.timeoutMs ?? deps.liveTurnTimeoutMs(env, 60_000),
-            waitForConfigRestartSettle: async (options) =>
-              await suiteRuntimeGateway.waitForConfigRestartSettle(
-                env,
-                options?.restartDelayMs,
-                options?.timeoutMs,
-              ),
-          });
-          if (prepared) {
-            Object.assign(vars, prepared);
-          }
-        },
-      },
-      ...steps,
-    ]);
+  return async (name, steps) => {
+    const preparedSteps =
+      prepareFlow && execution.kind === "flow"
+        ? [
+            {
+              name: `Prepare ${env.transport.label}`,
+              run: async () => {
+                const prepared = await prepareFlow({
+                  signal: deadline.signal,
+                  config: execution.config ?? {},
+                  gateway: env.gateway,
+                  outputDir: env.outputDir,
+                  primaryModel: env.primaryModel,
+                  scenarioId: scenario.id,
+                  scenarioTitle: scenario.title,
+                  timeoutMs: execution.timeoutMs ?? deps.liveTurnTimeoutMs(env, 60_000),
+                  waitForConfigRestartSettle: async (options) =>
+                    await suiteRuntimeGateway.waitForConfigRestartSettle(
+                      env,
+                      options?.restartDelayMs,
+                      options?.timeoutMs,
+                    ),
+                });
+                deadline.signal.throwIfAborted();
+                if (prepared) {
+                  Object.assign(vars, prepared);
+                }
+              },
+            },
+            ...steps,
+          ]
+        : steps;
+    return await deps.runScenario(
+      name,
+      preparedSteps.map((step) =>
+        Object.assign({}, step, { run: async () => await deadline.run(step.run) }),
+      ),
+    );
+  };
 }
 
 export async function runQaSuiteScenarioDefinition(params: QaSuiteScenarioFlowApiParams) {
@@ -304,17 +344,23 @@ export async function runQaSuiteScenarioDefinition(params: QaSuiteScenarioFlowAp
     throw new Error(`scenario missing flow: ${params.scenario.id}`);
   }
   const vars: Record<string, unknown> = {};
-  const api = createQaSuiteScenarioFlowApi({
-    ...params,
-    runScenario: createQaSuiteScenarioStepRunner(params.env, params.scenario, vars, {
-      liveTurnTimeoutMs: params.liveTurnTimeoutMs,
-      runScenario: params.runScenario,
-    }),
-  });
-  return await runScenarioFlow({
-    api,
-    flow: params.scenario.execution.flow,
-    scenarioTitle: params.scenario.title,
-    vars,
-  });
+  const deadline = createQaScenarioDeadline(params.scenario.execution.timeoutMs);
+  try {
+    const api = createQaSuiteScenarioFlowApi({
+      ...params,
+      signal: deadline.signal,
+      runScenario: createQaSuiteScenarioStepRunner(params.env, params.scenario, vars, deadline, {
+        liveTurnTimeoutMs: params.liveTurnTimeoutMs,
+        runScenario: params.runScenario,
+      }),
+    });
+    return await runScenarioFlow({
+      api,
+      flow: params.scenario.execution.flow,
+      scenarioTitle: params.scenario.title,
+      vars,
+    });
+  } finally {
+    deadline.dispose();
+  }
 }

@@ -2,7 +2,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
-import { hashWorkerBundleManifest, type WorkerBundleHashEntry } from "./worker-bundle-hash.js";
+import {
+  compareWorkerBundlePaths,
+  hashWorkerBundleManifest,
+  type WorkerBundleHashEntry,
+} from "./worker-bundle-hash.js";
 
 export { DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS } from "./worker-bundle-limits.js";
 
@@ -121,7 +125,7 @@ export async function readWorkerBundleArchiveManifest(
         sha256: entry.sha256,
       };
     })
-    .toSorted((left, right) => left.path.localeCompare(right.path));
+    .toSorted((left, right) => compareWorkerBundlePaths(left.path, right.path));
 }
 
 export async function readWorkerBundleDirectoryManifest(params: {
@@ -170,7 +174,7 @@ export async function readWorkerBundleDirectoryManifest(params: {
     }
   };
   await visit(root, "");
-  return entries.toSorted((left, right) => left.path.localeCompare(right.path));
+  return entries.toSorted((left, right) => compareWorkerBundlePaths(left.path, right.path));
 }
 
 export async function extractWorkerBundleArchive(params: {

@@ -12,6 +12,13 @@ import { log } from "./openai-transport-shared.js";
 
 type ResponsesClientLike = ReturnType<typeof createOpenAIResponsesClient>;
 
+function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
+  return (
+    ((typeof value === "object" && value !== null) || typeof value === "function") &&
+    Symbol.asyncIterator in value
+  );
+}
+
 export function isInvalidEncryptedContentError(error: unknown): boolean {
   if (!error || typeof error !== "object") {
     return false;
@@ -184,7 +191,10 @@ export async function createResponsesStreamWithEncryptedContentRetry(params: {
         params.onCompactionRejected?.(checkpoint);
       }
     });
-    return { stream: data as unknown as AsyncIterable<unknown>, response, attempt };
+    if (!isAsyncIterable(data)) {
+      throw new Error("OpenAI Responses streaming request returned a non-stream response");
+    }
+    return { stream: data, response, attempt };
   };
 
   let attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams> = {

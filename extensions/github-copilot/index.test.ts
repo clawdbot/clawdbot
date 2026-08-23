@@ -56,9 +56,7 @@ vi.mock("./register.runtime.js", () => ({
 import plugin from "./index.js";
 
 const tempDirs: string[] = [];
-type RegisteredMemoryEmbeddingProvider = Parameters<
-  OpenClawPluginApi["registerMemoryEmbeddingProvider"]
->[0];
+type RegisteredEmbeddingProvider = Parameters<OpenClawPluginApi["registerEmbeddingProvider"]>[0];
 type RegisteredProvider = Parameters<OpenClawPluginApi["registerProvider"]>[0];
 type GithubCopilotTestProvider = RegisteredProvider & {
   auth: Array<{
@@ -370,8 +368,7 @@ describe("github-copilot plugin", () => {
   });
 
   it("registers embedding provider", () => {
-    const registerMemoryEmbeddingProviderMock =
-      vi.fn<OpenClawPluginApi["registerMemoryEmbeddingProvider"]>();
+    const registerEmbeddingProviderMock = vi.fn<OpenClawPluginApi["registerEmbeddingProvider"]>();
 
     plugin.register(
       createTestPluginApi({
@@ -382,14 +379,14 @@ describe("github-copilot plugin", () => {
         pluginConfig: {},
         runtime: {} as never,
         registerProvider: vi.fn(),
-        registerMemoryEmbeddingProvider: registerMemoryEmbeddingProviderMock,
+        registerEmbeddingProvider: registerEmbeddingProviderMock,
       }),
     );
 
-    expect(registerMemoryEmbeddingProviderMock).toHaveBeenCalledTimes(1);
-    const adapter = requireFirstMockArg<RegisteredMemoryEmbeddingProvider>(
-      registerMemoryEmbeddingProviderMock,
-      "memory embedding provider registration",
+    expect(registerEmbeddingProviderMock).toHaveBeenCalledTimes(1);
+    const adapter = requireFirstMockArg<RegisteredEmbeddingProvider>(
+      registerEmbeddingProviderMock,
+      "embedding provider registration",
     );
     expect(adapter.id).toBe("github-copilot");
   });
@@ -416,6 +413,34 @@ describe("github-copilot plugin", () => {
 
     expect(result).toBeNull();
     expect(mocks.resolveCopilotRuntimeAuth).not.toHaveBeenCalled();
+  });
+
+  it("does not exchange auth or discover models for an unavailable direct SecretRef", async () => {
+    const agentDir = await createAgentDir();
+    const provider = registerProviderWithPluginConfig({});
+
+    await expect(
+      provider.catalog.run({
+        config: {
+          models: {
+            providers: {
+              "github-copilot": {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENCLAW_MISSING_COPILOT_CATALOG_TOKEN",
+                },
+              },
+            },
+          },
+        },
+        agentDir,
+        env: { COPILOT_GITHUB_TOKEN: "ambient-token" },
+      }),
+    ).rejects.toThrow("models.providers.github-copilot.apiKey");
+
+    expect(mocks.resolveCopilotRuntimeAuth).not.toHaveBeenCalled();
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 
   it("exposes xhigh thinking for catalog-supported Copilot reasoning efforts", () => {

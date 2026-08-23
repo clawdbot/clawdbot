@@ -31,6 +31,7 @@ export {
 export {
   buildOpenAiCompatibleVideoRequestBody,
   coerceOpenAiCompatibleVideoText,
+  describeOpenAiCompatibleVideo,
   resolveMediaUnderstandingString,
   type OpenAiCompatibleVideoPayload,
 } from "../media-understanding/openai-compatible-video.ts";

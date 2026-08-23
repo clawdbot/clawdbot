@@ -8,7 +8,7 @@ import { isGatewayTransportError } from "../gateway/call.js";
 import type { ChannelAccountHealthSummary, HealthSummary } from "../gateway/health/types.js";
 
 export function formatGatewayClosedDiagnostic(err: unknown): string | undefined {
-  if (!isGatewayTransportError(err) || err.kind !== "closed") {
+  if (!isGatewayTransportError(err) || err.kind !== "closed" || err.code === undefined) {
     return undefined;
   }
   return `Gateway connect failed: ${sanitizeTerminalText(err.message.split("\n", 1)[0] ?? "")}`;

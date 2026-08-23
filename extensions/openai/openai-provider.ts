@@ -28,7 +28,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { OPENAI_ACCOUNT_WIZARD_GROUP, OPENAI_API_KEY_LABEL } from "./auth-choice-copy.js";
 import {
   OPENAI_CODEX_RESPONSES_BASE_URL,
   classifyOpenAIBaseUrl,
@@ -61,10 +60,11 @@ import {
   resolveOpenAICodexReasoningEfforts,
 } from "./model-route-contract.js";
 import {
-  buildOpenAIChatGPTAuthMethods,
+  buildOpenAIChatGPTAuthMethodRuns,
   buildOpenAICodexProviderHooks,
 } from "./openai-chatgpt-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { createOpenAIProvider } from "./provider-contract-api.js";
 import { resolveAuthoredOpenAIProviderConfig } from "./provider-policy-api.js";
 import {
   buildOpenAIResponsesProviderHooks,
@@ -91,7 +91,7 @@ function classifyOpenAiFailoverCode(code: string | undefined) {
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
 // Keep synchronized with extensions/codex's exact @openai/codex dependency;
 // the provider contract test fails when that managed-runtime pin changes.
-const OPENAI_CODEX_CLIENT_VERSION = "0.147.0";
+const OPENAI_CODEX_CLIENT_VERSION = "0.148.0";
 const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`;
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
@@ -875,6 +875,17 @@ const OPENAI_GPT_FORWARD_COMPAT_CASES = [
 ] satisfies Parameters<typeof resolveFamilyForwardCompatModel>[0]["cases"];
 
 function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
+  const modelId = normalizeLowercaseStringOrEmpty(ctx.modelId);
+  if (
+    modelId === OPENAI_GPT_56_SOL_MODEL_ID ||
+    modelId === OPENAI_GPT_56_TERRA_MODEL_ID ||
+    modelId === OPENAI_GPT_56_LUNA_MODEL_ID
+  ) {
+    const exactModel = ctx.modelRegistry.find(PROVIDER_ID, ctx.modelId);
+    if (exactModel) {
+      return exactModel;
+    }
+  }
   return resolveFamilyForwardCompatModel({
     providerId: PROVIDER_ID,
     ctx,
@@ -892,40 +903,46 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
 }
 
 export function buildOpenAIProvider(): ProviderPlugin {
+  const providerDefinition = createOpenAIProvider();
+  const apiKeyDefinition = providerDefinition.auth.find((method) => method.id === "api-key");
+  if (!apiKeyDefinition) {
+    throw new Error("OpenAI provider contract is missing API-key auth");
+  }
+  const chatGPTAuthRuns = buildOpenAIChatGPTAuthMethodRuns();
+  const apiKeyRuntime = createProviderApiKeyAuthMethod({
+    providerId: PROVIDER_ID,
+    methodId: apiKeyDefinition.id,
+    label: apiKeyDefinition.label,
+    hint: apiKeyDefinition.hint,
+    optionKey: "openaiApiKey",
+    flagName: "--openai-api-key",
+    envVar: "OPENAI_API_KEY",
+    promptMessage: "Enter OpenAI API key",
+    profileId: "openai:api-key",
+    defaultModel: OPENAI_DEFAULT_MODEL,
+    preserveExistingPrimary: true,
+    expectedProviders: [PROVIDER_ID],
+    applyConfig: (cfg) => applyOpenAIConfig(cfg),
+    wizard: apiKeyDefinition.wizard,
+  });
+  for (const method of providerDefinition.auth) {
+    if (method.id === "oauth" || method.id === "device-code") {
+      method.run = chatGPTAuthRuns[method.id];
+      continue;
+    }
+    if (method.id !== "api-key") {
+      throw new Error(`OpenAI provider contract has unknown auth method: ${method.id}`);
+    }
+    method.starterModel = apiKeyRuntime.starterModel;
+    method.run = apiKeyRuntime.run;
+    method.runNonInteractive = apiKeyRuntime.runNonInteractive;
+    method.validateNonInteractive = apiKeyRuntime.validateNonInteractive;
+  }
   const codexHooks = buildOpenAICodexProviderHooks();
   const nativeResponsesHooks = buildOpenAIResponsesProviderHooks();
   const responsesHooks = buildOpenAIResponsesProviderHooks({ transport: "sse" });
   return {
-    id: PROVIDER_ID,
-    label: "OpenAI",
-    hookAliases: ["azure-openai", "azure-openai-responses"],
-    docsPath: "/providers/models",
-    envVars: ["OPENAI_API_KEY"],
-    auth: [
-      ...buildOpenAIChatGPTAuthMethods(),
-      createProviderApiKeyAuthMethod({
-        providerId: PROVIDER_ID,
-        methodId: "api-key",
-        label: OPENAI_API_KEY_LABEL,
-        hint: "Use your OpenAI API key directly",
-        optionKey: "openaiApiKey",
-        flagName: "--openai-api-key",
-        envVar: "OPENAI_API_KEY",
-        promptMessage: "Enter OpenAI API key",
-        profileId: "openai:api-key",
-        defaultModel: OPENAI_DEFAULT_MODEL,
-        preserveExistingPrimary: true,
-        expectedProviders: ["openai"],
-        applyConfig: (cfg) => applyOpenAIConfig(cfg),
-        wizard: {
-          choiceId: "openai-api-key",
-          choiceLabel: OPENAI_API_KEY_LABEL,
-          choiceHint: "Use your OpenAI API key directly",
-          assistantPriority: 5,
-          ...OPENAI_ACCOUNT_WIZARD_GROUP,
-        },
-      }),
-    ],
+    ...providerDefinition,
     catalog: {
       order: "simple",
       run: async (ctx) => {

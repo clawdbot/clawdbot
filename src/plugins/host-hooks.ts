@@ -99,6 +99,7 @@ export type PluginControlUiDescriptor = {
   surface: "session" | "tool" | "run" | "settings" | "tab" | "widget";
   label: string;
   description?: string;
+  /** Bundled plugins may claim their matching native route as `route:<pluginId>`. */
   placement?: string;
   schema?: PluginJsonValue;
   requiredScopes?: OperatorScope[];

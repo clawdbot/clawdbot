@@ -1,4 +1,7 @@
 // Coverage for embedded run auth initialization and runtime credential refresh.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -10,6 +13,9 @@ import {
   resolveSecretSentinel,
 } from "../../../secrets/sentinel.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
+import { OAuthRefreshFailureError } from "../../auth-profiles/oauth-refresh-failure.js";
+import { resolveAuthProfileOrder } from "../../auth-profiles/order.js";
+import { ensureAuthProfileStore, saveAuthProfileStore } from "../../auth-profiles/store.js";
 import { FailoverError } from "../../failover-error.js";
 import type { RuntimeAuthState } from "./helpers.js";
 
@@ -104,13 +110,14 @@ function createMutableEmbeddedRunAuthController(params: {
   lockedProfileId?: string;
   allowTransientCooldownProbe?: boolean;
   warn?: (message: string) => void;
+  agentDir?: string;
   prepareModelForAuthProfile?: Parameters<
     typeof createEmbeddedRunAuthController
   >[0]["prepareModelForAuthProfile"];
 }) {
   return createEmbeddedRunAuthController({
     config: undefined,
-    agentDir: "/tmp/agent",
+    agentDir: params.agentDir ?? "/tmp/agent",
     workspaceDir: "/tmp/workspace",
     authStore:
       params.authStore ??
@@ -403,6 +410,95 @@ describe("createEmbeddedRunAuthController", () => {
     ).toHaveLength(1);
     expect(harness.profileIndex).toBe(2);
   });
+
+  it.each([
+    {
+      label: "initial candidate",
+      profileCandidates: ["expired", "healthy"],
+      expectedOrder: ["healthy", "expired"],
+      advanceAfterInitialization: false,
+    },
+    {
+      label: "rotated candidate",
+      profileCandidates: ["current", "expired", "healthy"],
+      expectedOrder: ["current", "healthy", "expired"],
+      advanceAfterInitialization: true,
+    },
+  ])(
+    "records a failed OAuth refresh for the $label and prefers the healthy profile next",
+    async ({ profileCandidates, expectedOrder, advanceAfterInitialization }) => {
+      const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-controller-"));
+      try {
+        const authStore: AuthProfileStore = {
+          version: 1,
+          profiles: {
+            current: { type: "api_key", provider: "custom-openai", key: "current-key" },
+            expired: {
+              type: "oauth",
+              provider: "custom-openai",
+              access: "expired-access",
+              refresh: "revoked-refresh",
+              expires: 0,
+            },
+            healthy: { type: "api_key", provider: "custom-openai", key: "healthy-key" },
+          },
+          order: { "custom-openai": profileCandidates },
+        };
+        saveAuthProfileStore(authStore, agentDir);
+        mocks.getApiKeyForModelCore.mockImplementation(async ({ profileId }) => {
+          if (profileId === "expired") {
+            throw new OAuthRefreshFailureError({
+              provider: "custom-openai",
+              profileId,
+              message: "OAuth token refresh failed for custom-openai: invalid_grant",
+            });
+          }
+          return {
+            apiKey: `${String(profileId)}-key`,
+            mode: "api-key" as const,
+            profileId,
+            source: `profile:${String(profileId)}`,
+          };
+        });
+        mocks.prepareProviderRuntimeAuth.mockResolvedValue(undefined);
+        const harness = createMutableAuthControllerHarness();
+        const warn = vi.fn<(message: string) => void>();
+        const controller = createMutableEmbeddedRunAuthController({
+          harness,
+          setRuntimeApiKey: vi.fn(),
+          profileCandidates,
+          authStore,
+          agentDir,
+          warn,
+        });
+
+        await controller.initializeAuthProfile();
+        if (advanceAfterInitialization) {
+          await expect(controller.advanceAuthProfile()).resolves.toBe(true);
+        }
+
+        expect(harness.lastProfileId).toBe("healthy");
+        const persistedStore = ensureAuthProfileStore(agentDir, { syncExternalCli: false });
+        expect(persistedStore.usageStats?.expired).toMatchObject({
+          disabledReason: "auth_permanent",
+          failureCounts: { auth_permanent: 1 },
+        });
+        expect(persistedStore.usageStats?.expired?.disabledUntil).toBeGreaterThan(Date.now());
+        expect(
+          resolveAuthProfileOrder({
+            store: persistedStore,
+            provider: "custom-openai",
+            forModel: "test-model",
+          }),
+        ).toEqual(expectedOrder);
+        expect(warn).toHaveBeenCalledWith(
+          'auth profile "expired" failed for provider "custom-openai": OAuth token refresh failed for custom-openai: invalid_grant',
+        );
+      } finally {
+        await fs.rm(agentDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("unwraps a sentinel for runtime auth exchange but keeps auth storage opaque", async () => {
     const harness = createMutableAuthControllerHarness();

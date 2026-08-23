@@ -1,4 +1,5 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
@@ -15,6 +16,7 @@ import type {
   AgentSessionEventListener,
   AgentSessionWriteSettlementRunner,
 } from "./agent-session-types.js";
+import { replaceAgentMessageInPlace } from "./agent-session-utils.js";
 import { formatNoApiKeyFoundMessage } from "./auth-guidance.js";
 import {
   type ExtensionCommandContextActions,
@@ -196,8 +198,8 @@ export abstract class AgentSessionBase {
     headers?: Record<string, string>;
   }> {
     if (
-      this.agent.streamFn ===
-      getModelRegistryRuntime(this.sessionModelRegistry).llmRuntime.streamSimple
+      getStreamLlmRuntime(this.agent.streamFn) ===
+      getModelRegistryRuntime(this.sessionModelRegistry).llmRuntime
     ) {
       return this.getRequiredRequestAuth(model);
     }
@@ -419,6 +421,10 @@ export abstract class AgentSessionBase {
           throw error;
         }
         if (event.message.role === "assistant") {
+          const persisted = this.sessionManager.getEntry(entryId);
+          if (persisted?.type === "message" && persisted.message.role === "assistant") {
+            replaceAgentMessageInPlace(event.message, persisted.message);
+          }
           this.lastAssistantEntryId = entryId;
         } else if (event.message.role === "user") {
           // A queued user message_end normally follows a committed append before listeners consume it.
@@ -478,21 +484,6 @@ export abstract class AgentSessionBase {
     return undefined;
   }
 
-  private replaceMessageInPlace(target: AgentMessage, replacement: AgentMessage): void {
-    // Agent-core stores the finalized message object in its state before emitting message_end.
-    // SessionManager persistence happens later in handleAgentEvent() with event.message.
-    // Mutating this object in place keeps agent state, later turn/agent events, listeners,
-    // and the eventual SessionManager.appendMessage(event.message) persistence in sync.
-    if (target === replacement) {
-      return;
-    }
-
-    for (const key of Object.keys(target)) {
-      Reflect.deleteProperty(target, key);
-    }
-    Object.assign(target, replacement);
-  }
-
   /** Emit extension events based on agent events */
   private async emitExtensionEvent(event: AgentEvent): Promise<boolean> {
     if (event.type === "agent_start") {
@@ -536,7 +527,7 @@ export abstract class AgentSessionBase {
       };
       const replacement = await this.currentExtensionRunner.emitMessageEnd(extensionEvent);
       if (replacement) {
-        this.replaceMessageInPlace(event.message, replacement);
+        replaceAgentMessageInPlace(event.message, replacement);
         return true;
       }
     } else if (event.type === "tool_execution_start") {

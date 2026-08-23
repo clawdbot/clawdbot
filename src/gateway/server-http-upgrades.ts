@@ -18,7 +18,14 @@ import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
 import { classifyWorkerGatewayPath } from "./gateway-http-route-contracts.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
-import { resolveRequestClientIp } from "./net.js";
+import {
+  markGatewayIngressTransport,
+  prepareGatewayIngressAttribution,
+  PROXY_ATTRIBUTION_GUIDANCE,
+  PROXY_ATTRIBUTION_REQUIRED_REASON,
+  type GatewayIngressTransport,
+  type GatewayUnattributableProxyReporter,
+} from "./ingress-attribution.js";
 import { normalizePluginNodeCapabilityScopedUrl } from "./plugin-node-capability.js";
 import {
   getCachedPluginGatewayAuthBypassPaths,
@@ -34,8 +41,6 @@ import type { PreauthConnectionBudget } from "./server/preauth-connection-budget
 import { markPublicWorkerIngress } from "./server/public-worker-ingress-context.js";
 import {
   GATEWAY_WS_CONNECTION_KIND_PROPERTY,
-  GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
-  GATEWAY_WS_WORKER_INGRESS_PROPERTY,
   type GatewayIngressWebSocket,
   type GatewayWsClient,
 } from "./server/ws-types.js";
@@ -82,6 +87,25 @@ function writeUpgradeAuthFailure(
     );
     return;
   }
+  if (auth.reason === PROXY_ATTRIBUTION_REQUIRED_REASON) {
+    const body = JSON.stringify({
+      error: {
+        message: `Proxy client attribution is required. ${PROXY_ATTRIBUTION_GUIDANCE}`,
+        type: PROXY_ATTRIBUTION_REQUIRED_REASON,
+      },
+    });
+    socket.write(
+      [
+        "HTTP/1.1 403 Forbidden",
+        "Content-Type: application/json; charset=utf-8",
+        `Content-Length: ${Buffer.byteLength(body, "utf8")}`,
+        "Connection: close",
+        "",
+        body,
+      ].join("\r\n"),
+    );
+    return;
+  }
   socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
 }
 
@@ -93,11 +117,18 @@ function handleBudgetedGatewayWebSocketUpgrade(params: {
   preauthConnectionBudget: PreauthConnectionBudget;
   preauthBudgetKey: string | undefined;
   ingressName: "Gateway" | "Worker";
+  isStartupPending?: () => boolean;
   prepareSocket?: (socket: GatewayIngressWebSocket) => void;
 }): void {
   const { req, socket, head, wss, preauthConnectionBudget, preauthBudgetKey, ingressName } = params;
+  const allowsRestartStartupPreauth =
+    ingressName === "Gateway" &&
+    isGatewayRestartDraining() &&
+    getGatewaySuspendAdmissionPhase() === "accepting" &&
+    params.isStartupPending?.() === true;
   if (
     isGatewayWorkAdmissionClosed() &&
+    !allowsRestartStartupPreauth &&
     (ingressName === "Worker" ||
       isGatewayRestartDraining() ||
       getGatewaySuspendAdmissionPhase() !== "prepared")
@@ -150,6 +181,7 @@ export function attachGatewayUpgradeHandler(opts: {
   wss: WebSocketServer;
   handlePluginUpgrade?: PluginHttpUpgradeHandler;
   shouldEnforcePluginGatewayAuth?: (pathContext: PluginRoutePathContext) => boolean;
+  isPluginAuthenticatedRoute?: (pathContext: PluginRoutePathContext) => boolean;
   resolvePluginNodeCapabilityRoute?: ResolvePluginNodeCapabilityRoute;
   clients: Set<GatewayWsClient>;
   preauthConnectionBudget: PreauthConnectionBudget;
@@ -165,6 +197,9 @@ export function attachGatewayUpgradeHandler(opts: {
   desktopSessionRegistry?: DesktopSessionRegistry;
   nodeDesktopStreamBroker?: NodeDesktopStreamBroker;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
+  isStartupPending?: () => boolean;
+  ingressTransport?: GatewayIngressTransport;
+  reportUnattributableProxy?: GatewayUnattributableProxyReporter;
 }) {
   const {
     httpServer,
@@ -182,15 +217,33 @@ export function attachGatewayUpgradeHandler(opts: {
   } = opts;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   httpServer.on("upgrade", (req, socket, head) => {
+    markGatewayIngressTransport(req, opts.ingressTransport ?? { kind: "ordinary" });
     void runWithDiagnosticTraceContext(createDiagnosticTraceContext(), async () => {
       const configSnapshot = getRuntimeConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
-      const requestClientIp = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
+      const ingressAttribution = prepareGatewayIngressAttribution({
+        req,
+        trustedProxies,
+        allowRealIpFallback,
+      });
+      const requestClientIp =
+        ingressAttribution.kind === "unattributable-proxy"
+          ? ingressAttribution.remoteAddress
+          : ingressAttribution.clientIp;
       const originalRequestPath = URL.parse(req.url ?? "/", "http://localhost")?.pathname;
       const originalWorkerGatewayRoute = originalRequestPath
         ? classifyWorkerGatewayPath(originalRequestPath)
         : "outside";
+      if (
+        originalWorkerGatewayRoute !== "outside" &&
+        ingressAttribution.kind === "unattributable-proxy"
+      ) {
+        opts.reportUnattributableProxy?.(ingressAttribution);
+        writeUpgradeAuthFailure(socket, { ok: false, reason: ingressAttribution.reason });
+        socket.destroy();
+        return;
+      }
       if (originalWorkerGatewayRoute === "worker" && !workerIngressEnabled) {
         writeGatewayUpgradeServiceUnavailable(socket, "Worker websocket ingress unavailable");
         socket.destroy();
@@ -222,7 +275,6 @@ export function attachGatewayUpgradeHandler(opts: {
             ingressName: "Worker",
             prepareSocket: (workerSocket) => {
               workerSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] = "worker";
-              workerSocket[GATEWAY_WS_WORKER_INGRESS_PROPERTY] = "public";
               markPublicWorkerIngress(workerSocket, {
                 clientIp: requestClientIp,
                 rateLimiter: publicRateLimiter,
@@ -258,6 +310,14 @@ export function attachGatewayUpgradeHandler(opts: {
         return;
       }
       const nodeCapability = resolvePluginNodeCapabilityRoute?.(pathContext);
+      if (ingressAttribution.kind === "unattributable-proxy") {
+        opts.reportUnattributableProxy?.(ingressAttribution);
+        if (nodeCapability || !opts.isPluginAuthenticatedRoute?.(pathContext)) {
+          writeUpgradeAuthFailure(socket, { ok: false, reason: ingressAttribution.reason });
+          socket.destroy();
+          return;
+        }
+      }
       if (nodeCapability) {
         // Node-capability WebSocket upgrades authenticate before plugin upgrade dispatch so
         // plugin handlers never receive unauthorized scoped capability sockets.
@@ -324,6 +384,11 @@ export function attachGatewayUpgradeHandler(opts: {
           return;
         }
       }
+      if (ingressAttribution.kind === "unattributable-proxy") {
+        writeUpgradeAuthFailure(socket, { ok: false, reason: ingressAttribution.reason });
+        socket.destroy();
+        return;
+      }
       if (requestPath === "/desktop/observe") {
         if (!opts.desktopSessionRegistry) {
           writeGatewayUpgradeServiceUnavailable(socket, "desktop observe unavailable");
@@ -370,6 +435,7 @@ export function attachGatewayUpgradeHandler(opts: {
           preauthConnectionBudget,
           preauthBudgetKey: requestClientIp,
           ingressName: "Gateway",
+          isStartupPending: opts.isStartupPending,
         });
       } catch {
         throw new Error("gateway websocket upgrade failed");
@@ -380,37 +446,5 @@ export function attachGatewayUpgradeHandler(opts: {
       log?.warn(`ws upgrade error from ${remoteAddress}: ${errorMessage}`);
       socket.destroy();
     });
-  });
-}
-
-/** Attach the loopback-only worker ingress and force every accepted socket into worker mode. */
-export function attachWorkerGatewayUpgradeHandler(params: {
-  httpServer: HttpServer;
-  wss: WebSocketServer;
-  preauthConnectionBudget: PreauthConnectionBudget;
-  log?: { warn: (message: string) => void };
-}): void {
-  params.httpServer.on("upgrade", (req, socket, head) => {
-    try {
-      handleBudgetedGatewayWebSocketUpgrade({
-        req,
-        socket,
-        head,
-        wss: params.wss,
-        preauthConnectionBudget: params.preauthConnectionBudget,
-        preauthBudgetKey: req.socket.remoteAddress,
-        ingressName: "Worker",
-        prepareSocket: (workerSocket) => {
-          workerSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] = "worker";
-          workerSocket[GATEWAY_WS_PREAUTH_BUDGET_PROPERTY] = params.preauthConnectionBudget;
-          workerSocket[GATEWAY_WS_WORKER_INGRESS_PROPERTY] = "loopback";
-        },
-      });
-    } catch (error) {
-      params.log?.warn(
-        `worker websocket upgrade failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      socket.destroy();
-    }
   });
 }

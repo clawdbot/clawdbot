@@ -119,7 +119,6 @@ function makeState(role: "operator" | "node", scopes: string[]) {
     handoffBootstrapProfile: null,
     deviceToken: null,
     bootstrapDeviceTokens: [],
-    controlUiDeviceAuthMigrationPending: false,
   };
 }
 

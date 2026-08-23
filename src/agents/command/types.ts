@@ -145,6 +145,8 @@ export type AgentCommandOpts = {
   /** Called once when the selected runtime actually admits the prompt for execution. */
   onExecutionStarted?: () => void;
   extraSystemPrompt?: string;
+  /** Frozen profile-backed human Git attribution prepared by trusted ingress. */
+  gitCoauthorAttribution?: string;
   /** Bootstrap workspace context injection mode for this run. */
   bootstrapContextMode?: "full" | "lightweight";
   /** Run kind hint for bootstrap context behavior. */

@@ -93,6 +93,18 @@ describe("AgentsDeleteResultSchema", () => {
       removed: [{ path: "/state/agents/ops/agent", method: "trash" }],
       failed: [{ path: "/state/workspace-ops", reason: "trash unavailable" }],
     });
+    expectAccepted(AgentsDeleteResultSchema, {
+      ok: true,
+      agentId: "ops",
+      removedBindings: 1,
+      purgeFailed: true,
+    });
+    expectRejected(AgentsDeleteResultSchema, {
+      ok: true,
+      agentId: "ops",
+      removedBindings: 1,
+      purgeFailed: false,
+    });
   });
 });
 
@@ -136,6 +148,9 @@ describe("AgentsListResultSchema", () => {
         {
           id: "investment-master",
           kind: "agent",
+          createdVia: "agent",
+          creatorAgentId: "main",
+          createdAt: 42,
           name: "Investment Master",
           workspaceGit: true,
           model: { primary: "deepseek/deepseek-v4-flash" },
@@ -255,6 +270,12 @@ describe("ModelsListResultSchema", () => {
         id: "codex",
         fallback: "openclaw",
         cloudPlacementSupported: true,
+        cloudPlacementExecutionMode: "remote-exec",
+        devicePlacementSupported: true,
+        devicePlacement: {
+          requiredNodeCommands: ["runtime.exec-server.v1"],
+          consumesWorkerSlot: false,
+        },
         source: "model",
       },
       thinkingLevels: [
@@ -262,6 +283,11 @@ describe("ModelsListResultSchema", () => {
         { id: "xhigh", label: "Extra high" },
       ],
       thinkingDefault: "xhigh",
+      contextWindows: [
+        { id: "200k", label: "200K", contextWindow: 200_000 },
+        { id: "1m", label: "1M", contextWindow: 1_000_000 },
+      ],
+      contextWindowDefault: "1m",
       input: ["text", "image", "audio", "video", "document"],
     };
 
@@ -283,6 +309,48 @@ describe("ModelsListResultSchema", () => {
       ModelsListResultSchema,
       {
         models: [{ ...model, agentRuntime: { id: "codex", source: "unknown" } }],
+      },
+      {
+        models: [
+          {
+            ...model,
+            agentRuntime: {
+              ...model.agentRuntime,
+              devicePlacement: { requiredNodeCommands: ["runtime.exec-server.v1"] },
+            },
+          },
+        ],
+      },
+      {
+        models: [
+          {
+            ...model,
+            agentRuntime: {
+              ...model.agentRuntime,
+              devicePlacement: {
+                requiredNodeCommands: ["x".repeat(129)],
+                consumesWorkerSlot: false,
+              },
+            },
+          },
+        ],
+      },
+      {
+        models: [
+          {
+            ...model,
+            agentRuntime: {
+              ...model.agentRuntime,
+              devicePlacement: {
+                requiredNodeCommands: Array.from(
+                  { length: 33 },
+                  (_, index) => `runtime.${index}.v1`,
+                ),
+                consumesWorkerSlot: false,
+              },
+            },
+          },
+        ],
       },
       { models: [{ ...model, thinkingLevels: [{ id: "", label: "Off" }] }] },
       { models: [{ ...model, input: ["text", "binary"] }] },

@@ -48,6 +48,18 @@ const CHIP_SURFACE_MIN_STEP = 1.05;
 const CHIP_BORDER_MIN_STEP = 1.25;
 
 /*
+ * Diff syntax uses its own translucent tint inside code surfaces. The ink must
+ * remain readable after that tint is composited onto every surface a markdown
+ * code block can use; missing light-mode overrides previously left additions
+ * at 1.15:1 on --bg-muted.
+ */
+const DIFF_SELECTORS = [
+  ":is(.code-block, .code-block-wrapper pre code.hljs) .hljs-addition",
+  ":is(.code-block, .code-block-wrapper pre code.hljs) .hljs-deletion",
+] as const;
+const DIFF_HOST_SURFACES = ["--bg", "--bg-muted", "--card"] as const;
+
+/*
  * Link contrast guardrail for painted chat bubbles.
  *
  * Accent-colored links can collapse into the accent-derived user fill, while
@@ -61,7 +73,7 @@ const SENDER_TINT_BUBBLE_RULE = ".chat-group.user.chat-group--sender-tint .chat-
 // Light mode resets both bubble skins back to flat surfaces, and those rules win
 // on source order (see the order contract in chat/grouped.css). Asserting the
 // dark fills against light palettes would guard a surface nothing paints.
-const LIGHT_USER_BUBBLE_RULE = ':root[data-theme-mode="light"] .chat-bubble';
+const LIGHT_USER_BUBBLE_RULE = ':root[data-theme-mode="light"] .chat-group.user .chat-bubble';
 const LIGHT_SENDER_TINT_BUBBLE_RULE =
   ':root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble';
 
@@ -304,6 +316,7 @@ function readChatLinkTokens(chatTextCss: string): { link: string; hover: string 
 function readBubbleBackgrounds(groupedCss: string): {
   user: string;
   lightUser: string;
+  lightUserText: string;
   senderTint: string;
   lightSenderTint: string;
 } {
@@ -317,6 +330,9 @@ function readBubbleBackgrounds(groupedCss: string): {
   return {
     user: readBackground(USER_BUBBLE_RULE),
     lightUser: readBackground(LIGHT_USER_BUBBLE_RULE),
+    lightUserText:
+      readRuleBody(groupedCss, LIGHT_USER_BUBBLE_RULE).match(/color:\s*var\((--[\w-]+)\)/u)?.[1] ??
+      "",
     senderTint: readBackground(SENDER_TINT_BUBBLE_RULE),
     lightSenderTint: readBackground(LIGHT_SENDER_TINT_BUBBLE_RULE),
   };
@@ -382,6 +398,37 @@ describe("Control UI theme contrast", () => {
     expect(failures).toEqual([]);
   });
 
+  it("keeps highlighted diff lines at WCAG AA on every code surface", () => {
+    const componentsCss = fs.readFileSync(path.join(stylesDir, "components.css"), "utf8");
+    const diffStyles = DIFF_SELECTORS.map((selector) => {
+      const rule = readRuleBody(componentsCss, selector);
+      const foregroundToken = rule.match(/color:\s*var\((--[\w-]+)\)/u)?.[1];
+      const tint = rule.match(/background:\s*([^;]+);/u)?.[1];
+      if (!foregroundToken || !tint) {
+        throw new Error(`could not read diff colors from "${selector}"`);
+      }
+      return { foregroundToken, tint };
+    });
+    const failures: string[] = [];
+    for (const [themeName, tokens] of themes) {
+      for (const { foregroundToken, tint } of diffStyles) {
+        const foreground = resolveOpaqueColor(`var(${foregroundToken})`, tokens);
+        const resolvedTint = resolveColor(tint, tokens);
+        for (const surfaceToken of DIFF_HOST_SURFACES) {
+          const host = resolveOpaqueColor(`var(${surfaceToken})`, tokens);
+          const background = composite(resolvedTint, host);
+          const ratio = contrastRatio(foreground, background);
+          if (ratio < AA_NORMAL_TEXT_MIN) {
+            failures.push(
+              `${themeName}: ${foregroundToken} on ${tint} over ${surfaceToken} = ${ratio.toFixed(2)}:1 (< ${AA_NORMAL_TEXT_MIN}:1)`,
+            );
+          }
+        }
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
   it("keeps chat links at WCAG AA on every bubble surface", () => {
     const chatTextCss = fs.readFileSync(path.join(stylesDir, "chat", "text.css"), "utf8");
     const groupedCss = fs.readFileSync(path.join(stylesDir, "chat", "grouped.css"), "utf8");
@@ -394,6 +441,17 @@ describe("Control UI theme contrast", () => {
       const userFill = isLight ? bubbleBackgrounds.lightUser : bubbleBackgrounds.user;
       const senderTint = isLight ? bubbleBackgrounds.lightSenderTint : bubbleBackgrounds.senderTint;
       const userBubble = composite(resolveColor(userFill, tokens), page);
+
+      if (isLight) {
+        expect(bubbleBackgrounds.lightUserText).not.toBe("");
+        const foreground = resolveOpaqueColor(`var(${bubbleBackgrounds.lightUserText})`, tokens);
+        const ratio = contrastRatio(foreground, userBubble);
+        if (ratio < AA_NORMAL_TEXT_MIN) {
+          failures.push(
+            `${themeName}: text ${bubbleBackgrounds.lightUserText} on user bubble ${userFill} = ${ratio.toFixed(2)}:1 (< ${AA_NORMAL_TEXT_MIN}:1)`,
+          );
+        }
+      }
 
       for (const [state, token] of [
         ["link", linkTokens.link],

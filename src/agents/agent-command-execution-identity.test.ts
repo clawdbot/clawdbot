@@ -5,6 +5,10 @@ import {
 } from "../audit/execution-identity-admission.js";
 import { attachAgentCommandAdmissionFacts } from "./agent-command-admission-facts.js";
 import {
+  readAgentCommandExecutionIdentitySpawnFacts,
+  withAgentCommandExecutionIdentitySpawnFacts,
+} from "./agent-command-execution-identity-spawn.js";
+import {
   prepareAgentCommandExecutionIdentity,
   sanitizePublicAgentCommandIngressOpts,
 } from "./agent-command-execution-identity.js";
@@ -39,6 +43,29 @@ describe("sanitizePublicAgentCommandIngressOpts", () => {
 });
 
 describe("Gateway agent command execution identity", () => {
+  it("preserves trusted spawn facts across internal option preparation", () => {
+    const facts = {
+      ingress: {
+        kind: "api" as const,
+        boundary: "sessions_spawn.subagent",
+        state: "present" as const,
+      },
+      invoker: { state: "present" as const, kind: "agent" as const, rawPrincipalRef: "main" },
+      applicableGrants: [{ rawGrantRef: "tool:sessions_spawn", state: "present" as const }],
+      assurance: [],
+      spawnAdmission: "[null,[]]",
+    };
+    const prepared = {
+      ...withAgentCommandExecutionIdentitySpawnFacts(
+        { message: "spawn", allowModelOverride: false },
+        facts,
+      ),
+      lifecycleGeneration: "generation-1",
+    };
+
+    expect(readAgentCommandExecutionIdentitySpawnFacts(prepared)).toBe(facts);
+  });
+
   it("carries only the prepared bounded, redacted label into opt-in run admission", async () => {
     let work: ExecutionIdentityAdmissionWork | undefined;
     const displayLabel = "Operator OPENAI_API_KEY=***".padEnd(128, "x");
@@ -113,7 +140,6 @@ describe("Gateway agent command execution identity", () => {
       throw new Error("expected captured present invoker");
     }
     expect(work.envelope.invoker.displayLabel).toBe("Operator OPENAI_API_KEY=***");
-    expect(work.envelope.invoker.displayLabel?.length).toBeLessThanOrEqual(128);
   });
 
   it("does not offer the prepared profile label to storage without execution audit opt-in", async () => {

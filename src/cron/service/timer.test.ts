@@ -112,7 +112,7 @@ afterEach(() => {
 });
 
 describe("cron service timer seam coverage", () => {
-  it("routes main cron jobs onto a cron run lane derived from the target agent", async () => {
+  it("routes main cron jobs to the owning agent's main session", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const enqueueSystemEvent = vi.fn();
@@ -123,7 +123,6 @@ describe("cron service timer seam coverage", () => {
       sessionKey: "agent:main-pr-router:main",
       state: { runningAtMs: now },
     };
-    const cronRunSessionKey = `agent:main-pr-router:cron:main-heartbeat-job:run:${now}`;
     const sessionStorePath = path.join(path.dirname(path.dirname(storePath)), "sessions.json");
     await upsertSessionEntryCore(
       { storePath: sessionStorePath, sessionKey: "agent:main-pr-router:main" },
@@ -151,10 +150,10 @@ describe("cron service timer seam coverage", () => {
 
     const result = await executeJobCore(state, job);
 
-    expect(result).toMatchObject({ status: "ok", sessionKey: cronRunSessionKey });
+    expect(result).toMatchObject({ status: "ok" });
+    expect(result.sessionKey).toBeUndefined();
     expect(enqueueSystemEvent).toHaveBeenCalledWith("heartbeat seam tick", {
-      agentId: undefined,
-      sessionKey: cronRunSessionKey,
+      agentId: "main-pr-router",
       contextKey: "cron:main-heartbeat-job",
       deliveryContext: { channel: "discord", to: "channel-1", accountId: "default" },
     });
@@ -162,8 +161,7 @@ describe("cron service timer seam coverage", () => {
       source: "cron",
       intent: "immediate",
       reason: "cron:main-heartbeat-job",
-      agentId: undefined,
-      sessionKey: cronRunSessionKey,
+      agentId: "main-pr-router",
       owningCronJobMarker: undefined,
       heartbeat: { target: "last" },
     });
@@ -194,18 +192,15 @@ describe("cron service timer seam coverage", () => {
 
     await onTimer(state);
 
-    const cronRunSessionKey = `agent:ops:cron:main-heartbeat-job:run:${now}`;
     expect(enqueueSystemEvent).toHaveBeenCalledWith("heartbeat seam tick", {
-      agentId: undefined,
-      sessionKey: cronRunSessionKey,
+      agentId: "ops",
       contextKey: "cron:main-heartbeat-job",
     });
     expect(requestHeartbeat).toHaveBeenCalledWith({
       source: "cron",
       intent: "event",
       reason: "cron:main-heartbeat-job",
-      agentId: undefined,
-      sessionKey: cronRunSessionKey,
+      agentId: "ops",
       heartbeat: { target: "last" },
     });
 
@@ -226,7 +221,7 @@ describe("cron service timer seam coverage", () => {
     expect(task.agentId).toBe("ops");
     expect(task.ownerKey).toBe("");
     expect(task.scopeKind).toBe("system");
-    expect(task.childSessionKey).toBe(cronRunSessionKey);
+    expect(task.childSessionKey).toBeUndefined();
     expect(task.runId).toMatch(new RegExp(`^cron:main-heartbeat-job:${now}:`));
     expect(task.label).toBe("main heartbeat job");
     expect(task.task).toBe("main heartbeat job");
@@ -236,7 +231,7 @@ describe("cron service timer seam coverage", () => {
     expect(task.startedAt).toBe(now);
     expect(task.lastEventAt).toBe(now);
     expect(task.endedAt).toBe(now);
-    expect(task.cleanupAfter).toBeUndefined();
+    expect(task.cleanupAfter).toBe(now + 7 * 24 * 60 * 60_000);
 
     const delays = timeoutSpy.mock.calls
       .map(([, delay]) => delay)
@@ -482,7 +477,7 @@ describe("cron service timer seam coverage", () => {
 
     await expect(executeJobCore(state, createDueScriptJob({ now }))).resolves.toMatchObject({
       status: "error",
-      error: expect.stringContaining("cron.triggers.enabled=true"),
+      error: expect.stringContaining("the operator set cron.triggers.enabled: false"),
     });
     expect(runScriptJob).not.toHaveBeenCalled();
   });
@@ -581,6 +576,12 @@ describe("cron service timer seam coverage", () => {
     await expect(executeJobCore(state, createDueScriptJob({ now }))).resolves.toEqual({
       status: "error",
       error: "cron script payload returned nextCheck, but this job has no pacing bounds",
+      errorClassification: { kind: "permanent" },
+      failureNotificationDetail: {
+        kind: "script-failure",
+        source: "payload",
+        code: "invalid_input",
+      },
     });
   });
 
@@ -829,10 +830,8 @@ describe("cron service timer seam coverage", () => {
       { jobId: "main-heartbeat-job", error: ledgerError },
       "cron: failed to create task ledger record",
     );
-    const cronRunSessionKey = `agent:main:cron:main-heartbeat-job:run:${now}`;
     expect(enqueueSystemEvent).toHaveBeenCalledWith("heartbeat seam tick", {
-      agentId: undefined,
-      sessionKey: cronRunSessionKey,
+      agentId: "main",
       contextKey: "cron:main-heartbeat-job",
     });
 

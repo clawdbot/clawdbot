@@ -110,7 +110,7 @@ Quick model for triaging risk reports:
 | `gateway.auth` (token/password/trusted-proxy/device auth) | Authenticates callers to gateway APIs             | "Needs per-message signatures on every frame to be secure"                    |
 | `sessionKey`                                              | Routing key for context/session selection         | "Session key is a user auth boundary"                                         |
 | Prompt/content guardrails                                 | Reduce model abuse risk                           | "Prompt injection alone proves auth bypass"                                   |
-| `canvas.eval` / browser evaluate                          | Intentional operator capability when enabled      | "Any JS eval primitive is automatically a vuln in this trust model"           |
+| Browser evaluate                                          | Intentional operator capability when enabled      | "Any JS eval primitive is automatically a vuln in this trust model"           |
 | Local TUI `!` shell                                       | Explicit operator-triggered local execution       | "Local shell convenience command is remote injection"                         |
 | Node pairing and node commands                            | Operator-level remote execution on paired devices | "Remote device control should be treated as untrusted user access by default" |
 | `gateway.nodes.pairing.autoApproveCidrs`                  | Opt-in trusted-network node enrollment policy     | "A disabled-by-default allowlist is an automatic pairing vulnerability"       |
@@ -226,7 +226,11 @@ Set per channel or per room/conversation - see [Groups](/channels/groups#context
 
 ## Prompt injection
 
-An attacker crafts a message that manipulates the model into unsafe action ("ignore your instructions", "dump your filesystem", "follow this link and run commands"). Prompt injection is **not solved** by system prompt guardrails alone - those are soft guidance; hard enforcement comes from tool policy, exec approvals, sandboxing, and channel allowlists (which operators can still disable by design).
+An attacker crafts a message that manipulates the model into unsafe action ("ignore your instructions", "dump your filesystem", "follow this link and run commands").
+
+Model choice now carries real weight here. Frontier models have become substantially more resistant: in a 2026 crowdsourced arena of 272K attacks across 41 agent scenarios - scored only when the agent both executed the harmful action **and** hid it from the user - success rates were 0.5% for Claude Opus 4.5, 1.0% for Sonnet 4.5, 1.3% for Haiku 4.5, and 8.5% for Gemini 2.5 Pro. Robustness tracked capability within a model family, so the models we recommend are a meaningful mitigation in their own right, not just a soft guardrail.
+
+Two caveats keep this from being a solved problem. Adaptive human attackers still break models that score well on static benchmarks, with published success rates above 80% against state-of-the-art defenses once the attacker adapts. And smaller or older models remain markedly easier to steer. So treat model choice as your first and cheapest layer, then keep hard enforcement - tool policy, exec approvals, sandboxing, and channel allowlists - for anything whose blast radius you would not accept on a bad day.
 
 Prompt injection does not require public DMs: even if only you can message the bot, any **untrusted content** it reads (web search/fetch results, browser pages, emails, docs, attachments, pasted logs/code) can carry adversarial instructions. The content itself is a threat surface, not just the sender.
 
@@ -239,7 +243,7 @@ Red flags to treat as untrusted:
 
 What helps in practice:
 
-- Keep inbound DMs locked down (pairing/allowlists); prefer mention gating in groups; avoid always-on bots in public rooms.
+- Keep inbound DMs locked down (pairing/allowlists). Groups are a supported deployment, not a last resort: use mention gating and `contextVisibility` so the agent reads what it needs and no more. Reserve extra caution for genuinely public rooms, where anyone can post untrusted content.
 - Treat links, attachments, and pasted instructions as hostile by default.
 - Run sensitive tool execution in a sandbox; keep secrets out of the agent's reachable filesystem. Sandboxing is opt-in: if sandbox mode is off, implicit `host=auto` resolves to the gateway host, while explicit `host=sandbox` still fails closed (no sandbox runtime available). Set `host=gateway` to make that behavior explicit in config.
 - Limit high-risk tools (`exec`, `browser`, `web_fetch`, `web_search`) to trusted agents or explicit allowlists.
@@ -538,7 +542,7 @@ Private/internal destinations stay blocked unless you explicitly opt in.
 
 ### Bind, port, firewall
 
-The Gateway multiplexes WebSocket + HTTP on one port (default `18789`; config/flags/env: `gateway.port`, `--port`, `OPENCLAW_GATEWAY_PORT`). That HTTP surface includes the Control UI (SPA assets, default base path `/`) and the canvas host (`/__openclaw__/canvas` and `/__openclaw__/a2ui` - arbitrary HTML/JS; treat as untrusted content when loaded in a normal browser; do not expose it to untrusted networks/users or share an origin with privileged web surfaces).
+The Gateway multiplexes WebSocket + HTTP on one port (default `18789`; config/flags/env: `gateway.port`, `--port`, `OPENCLAW_GATEWAY_PORT`). That HTTP surface includes the Control UI (SPA assets, default base path `/`), hosted widget documents (`/__openclaw__/canvas`), and A2UI renderer assets (`/__openclaw__/a2ui`). Widget documents contain agent-authored HTML/JS; treat them as untrusted content when loaded in a normal browser, do not expose them to untrusted networks or users, and do not share their origin with privileged web surfaces.
 
 `gateway.bind` controls where the Gateway listens:
 
@@ -634,7 +638,7 @@ Rotation checklist (token/password): generate/set a new secret (`gateway.auth.to
 
 ### Tailscale Serve identity headers
 
-When `gateway.auth.allowTailscale` is `true` (default for Serve), OpenClaw accepts the Tailscale Serve identity header `tailscale-user-login` for Control UI/WebSocket authentication. It verifies identity by resolving the `x-forwarded-for` address through the local Tailscale daemon (`tailscale whois`) and matching it to the header - this only triggers for loopback requests carrying `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host` as injected by Tailscale. For this async check, failed attempts for the same `{scope, ip}` are serialized before the limiter records the failure, so concurrent bad retries from one Serve client can lock out the second attempt immediately.
+When `gateway.auth.allowTailscale` is `true` (default for Serve), OpenClaw accepts the Tailscale Serve identity header `tailscale-user-login` for Control UI/WebSocket authentication. It verifies identity by resolving the `x-forwarded-for` address through the local Tailscale daemon (`tailscale whois`) and matching it to the header. This only triggers on OpenClaw's dedicated managed-Tailscale listener and requires `x-forwarded-for`, `x-forwarded-proto`, and `x-forwarded-host`; headers on the ordinary Gateway listener do not establish Serve provenance or tokenless auth. For this async check, failed attempts for the same `{scope, ip}` are serialized before the limiter records the failure, so concurrent bad retries from one Serve client can lock out the second attempt immediately.
 
 HTTP API endpoints (`/v1/*`, `/tools/invoke`, `/api/channels/*`) do not use Tailscale identity-header auth - they follow the gateway's configured HTTP auth mode.
 
@@ -642,13 +646,23 @@ Gateway HTTP bearer auth is effectively all-or-nothing operator access. Credenti
 
 Tokenless Serve auth assumes the gateway host itself is trusted - it is not protection against hostile same-host processes. If untrusted local code may run on the gateway host, disable `allowTailscale` and require explicit shared-secret auth (`token` or `password`).
 
-Do not forward these headers from your own reverse proxy. If you terminate TLS or proxy in front of the gateway, disable `allowTailscale` and use shared-secret auth or [Trusted Proxy Auth](/gateway/trusted-proxy-auth) instead.
+An externally managed Tailscale Serve or Funnel route may forward these headers to the ordinary listener only through an explicitly configured `gateway.trustedProxies` source with a valid non-loopback forwarded client address. OpenClaw treats that request as generic proxy ingress: the configured gateway auth applies, `allowTailscale` grants nothing, and no WhoIs lookup runs. Gateway-protected routes reject external Funnel ingress when auth mode is `none`; aggregate health, readiness, and startup probes keep their bounded unauthenticated responses. See [Tailscale](/gateway/tailscale#externally-managed-serve-and-funnel), [Health and readiness](/gateway/health), and [Trusted Proxy Auth](/gateway/trusted-proxy-auth).
 
 See [Tailscale](/gateway/tailscale) and [Web overview](/web).
 
 ### Reverse proxy configuration
 
 Set `gateway.trustedProxies` for proper forwarded-client IP handling behind nginx/Caddy/Traefik/etc. When the Gateway detects proxy headers from an address **not** in `trustedProxies`, it will not treat the connection as local; if gateway auth is disabled, that connection is rejected. This prevents proxied connections from appearing to come from localhost and receiving automatic trust.
+
+With token or password auth, an unconfigured same-host loopback proxy is
+rejected on Gateway-authenticated routes because OpenClaw cannot attribute its
+forwarded client headers. HTTP requests receive `403` with
+`proxy_attribution_required`; WebSocket auth fails with guidance to configure
+`gateway.trustedProxies`. Plugin-authenticated webhook routes retain their own
+signature or credential checks and ignore untrusted forwarded claims.
+Configure `trustedProxies` narrowly and make the proxy overwrite or safely
+rebuild forwarded headers; see [Rate
+limiting](/gateway/security/rate-limiting#unconfigured-same-host-reverse-proxies).
 
 `trustedProxies` also feeds `gateway.auth.mode: "trusted-proxy"`, which is stricter: it fails closed on loopback-source proxies by default. Same-host loopback reverse proxies can use `trustedProxies` for local-client detection and forwarded-IP handling, but can only satisfy `trusted-proxy` auth mode when `gateway.auth.trustedProxy.allowLoopback = true`; otherwise use token/password auth.
 
@@ -680,7 +694,7 @@ Trusted proxy headers do not make node device pairing automatically trusted - `g
 - OpenClaw's gateway is local/loopback first. If you terminate TLS at a reverse proxy, set HSTS there.
 - If the gateway itself terminates HTTPS, `gateway.http.securityHeaders.strictTransportSecurity` emits the HSTS header from OpenClaw responses.
 - Non-loopback Control UI deployments require `gateway.controlUi.allowedOrigins` by default; `allowedOrigins: ["*"]` is an explicit allow-all policy, not a hardened default - avoid it outside tightly controlled local testing.
-- Failed authentication from loopback is never locked out, so a local CLI cannot be denied before its credentials are checked. Wrong credentials are still tracked and progressively delayed (bounded delay, one shared timer per key); successful authentication resets the failure history. This raises the cost of repeated guessing from one loopback source; it is not a defense against an attacker who can already open many parallel loopback connections, because credentials are compared before the failure response is delayed. Loopback reachability is a trust boundary in its own right - see [Node pairing](/gateway/pairing#silent-local-pairing).
+- Failed authentication from loopback is never locked out, so a local CLI cannot be denied before its credentials are checked. Wrong credentials are still tracked and progressively delayed (bounded delay, one shared timer per key); successful authentication resets only the matching credential-class history. This raises the cost of repeated guessing from one loopback source; it is not a defense against an attacker who can already open many parallel loopback connections, because credentials are compared before the failure response is delayed. Loopback reachability is a trust boundary in its own right - see [Node pairing](/gateway/pairing#silent-local-pairing).
 - Browser-origin auth failures on loopback are still rate-limited even with the general loopback exemption enabled, but the lockout key is scoped per normalized `Origin` value instead of one shared localhost bucket.
 - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables Host-header origin fallback mode; treat it as a dangerous operator-selected policy.
 - Treat DNS rebinding and proxy-host header behavior as deployment hardening concerns; keep `trustedProxies` tight and avoid exposing the gateway directly to the public internet.
@@ -688,11 +702,11 @@ Trusted proxy headers do not make node device pairing automatically trusted - `g
 
 ### Control UI over HTTP
 
-The Control UI needs a secure context (HTTPS or localhost) to generate device identity.
+The Control UI generates device identity with pure-JS Ed25519, so pairing works on any origin, including plain HTTP.
 
-- Token/password auth does not replace browser device identity over remote plain HTTP. Use HTTPS (for example, Tailscale Serve) or open the UI on `127.0.0.1` from the Gateway host.
-- `gateway.controlUi.dangerouslyDisableDeviceAuth`: retired break-glass input. Older configs preserve authenticated, pairing-only Control UI access for remediation until a browser reopened over HTTPS or localhost completes the bounded, explicit self-pairing migration; do not add it to current config.
-- Separately, successful `gateway.auth.mode: "trusted-proxy"` authentication can admit **operator** Control UI sessions without device identity. This does not extend to node-role Control UI sessions.
+- Token/password auth does not replace browser device identity: HTTP browsers still pair with a signed device key, which never crosses the wire. Prefer HTTPS (for example, Tailscale Serve) — plaintext transport still exposes the page and the shared secret to on-path attackers.
+- `gateway.controlUi.dangerouslyDisableDeviceAuth`: retired break-glass input, now fully inert. Control UI browsers pair through the normal device flow; `openclaw doctor --fix` removes the legacy key.
+- Separately, successful `gateway.auth.mode: "trusted-proxy"` authentication can admit **operator** Control UI sessions without device identity when the browser cannot supply one. Browsers that can mint an identity (any origin, including plain HTTP) follow the normal pairing flow instead — automatic with `deviceAutoApprove`, otherwise a one-time approval. This does not extend to node-role Control UI sessions.
 
 ### Insecure/dangerous flags
 
@@ -701,7 +715,6 @@ The Control UI needs a secure context (HTTPS or localhost) to generate device id
 <AccordionGroup>
   <Accordion title="Flags tracked by the audit today">
     - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true`
-    - pending Control UI device-auth migration imported from retired `gateway.controlUi.dangerouslyDisableDeviceAuth=true`
     - `security.audit.suppressions configured (<count>)`
     - `hooks.gmail.allowUnsafeExternalContent=true`
     - `hooks.mappings[<index>].allowUnsafeExternalContent=true`
@@ -713,7 +726,7 @@ The Control UI needs a secure context (HTTPS or localhost) to generate device id
   <Accordion title="All dangerous*/dangerously* keys in the config schema">
     Control UI and browser:
     - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback`
-    - `gateway.controlUi.dangerouslyDisableDeviceAuth` (retired upgrade input)
+    - `gateway.controlUi.dangerouslyDisableDeviceAuth` (retired, inert)
     - `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`
 
     Channel name-matching (bundled and plugin channels; also per `accounts.<accountId>` where applicable):
@@ -831,7 +844,7 @@ Details: [Logging](/gateway/logging)
 }
 ```
 
-Keeps the Gateway private, requires DM pairing, and avoids always-on group bots. For safer tool execution too, add a sandbox + deny dangerous tools for any non-owner agent (see "Per-agent access profiles" above).
+Keeps the Gateway private, requires DM pairing, and gates group replies behind a mention. Groups are fully supported - sender identity is threaded through to the agent, and per-group settings let one room run different defaults than another - so the goal here is scoping the agent's attention, not avoiding groups. For safer tool execution too, add a sandbox + deny dangerous tools for any non-owner agent (see "Per-agent access profiles" above).
 
 ### Separate numbers (WhatsApp, Signal, Telegram)
 

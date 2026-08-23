@@ -9,6 +9,7 @@ import {
 } from "../../components/provider-icon.ts";
 import { syncDropdownItemRadio } from "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import "../../styles/model-setup.css";
 import {
   failureLabel,
@@ -160,7 +161,9 @@ function renderCandidateRows(props: ModelSetupViewProps, result: SystemAgentSetu
                   <strong>${candidate.label}</strong>
                   <span class="model-setup__chip">${candidateStatus(candidate)}</span>
                 </div>
-                <div class="muted">${candidate.modelRef} · ${candidate.detail}</div>
+                <div class="muted">
+                  ${candidate.modelRef} · ${formatUiExternalText(candidate.detail)}
+                </div>
                 ${testing
                   ? html`<div class="model-setup__testing" role="status">
                       ${t("modelSetup.candidates.testing", { modelRef: candidate.modelRef })}
@@ -250,8 +253,10 @@ function renderUnavailable(props: ModelSetupViewProps, result: SystemAgentSetupD
               <div class="model-setup__provider-copy">
                 ${renderProviderIcon(props, candidate)}
                 <div>
-                  <div><strong>${candidate.label}</strong> — ${candidate.detail}</div>
-                  <div class="muted">${candidate.reason}</div>
+                  <div>
+                    <strong>${candidate.label}</strong> — ${formatUiExternalText(candidate.detail)}
+                  </div>
+                  <div class="muted">${formatUiExternalText(candidate.reason)}</div>
                 </div>
               </div>
               <div class="model-setup__row-actions">

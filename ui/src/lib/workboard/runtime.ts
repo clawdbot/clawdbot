@@ -19,7 +19,6 @@ type WorkboardRuntime = {
   loadToken?: WorkboardLoadToken;
   loadError?: string;
   lifecycleTaskRefreshPromise?: Promise<number | null>;
-  lifecycleWrites: Set<Promise<unknown>>;
   loadGeneration?: number;
   lifecycleReconciliationEpoch?: number;
   liveRefreshGeneration?: number;
@@ -36,8 +35,6 @@ type WorkboardRuntime = {
   lifecycleTaskRetryTimer?: ReturnType<typeof setTimeout>;
   lifecycleTaskContinuationTimer?: ReturnType<typeof setTimeout>;
   liveRefreshEntry?: WorkboardLiveRefreshEntry;
-  pendingStatusTransitions: Set<string>;
-  lifecycleSyncKeys: Map<string, string>;
 };
 
 const workboardRuntimes = new WeakMap<WorkboardHost, WorkboardRuntime>();
@@ -144,24 +141,6 @@ function clearWorkboardLifecycleTaskContinuationTimer(host: WorkboardHost) {
   }
 }
 
-export function trackWorkboardLifecycleWrite(host: WorkboardHost, write: Promise<unknown>) {
-  getWorkboardRuntime(host).lifecycleWrites.add(write);
-}
-
-export function releaseWorkboardLifecycleWrite(host: WorkboardHost, write: Promise<unknown>) {
-  getWorkboardRuntime(host).lifecycleWrites.delete(write);
-}
-
-export async function waitForWorkboardLifecycleWrites(host: WorkboardHost) {
-  while (true) {
-    const writes = getWorkboardRuntime(host).lifecycleWrites;
-    if (!writes.size) {
-      return;
-    }
-    await Promise.allSettled(writes);
-  }
-}
-
 export function resetWorkboardLifecycleTaskConfirmations(
   state: WorkboardUiState,
   options: { host?: WorkboardHost } = {},
@@ -183,8 +162,6 @@ export function stopWorkboardLifecycleRefresh(host: WorkboardHost) {
     setWorkboardLifecycleTaskRefreshFailed(state, false);
     state.lifecycleTaskRefreshError = null;
     resetWorkboardLifecycleTaskConfirmations(state, { host });
-    // In-flight lifecycle writes clear themselves in finally. Keep them visible
-    // so reconnect loads wait for their backend mutations before becoming writable.
     // Detach stale loads so reconnecting can start fresh without letting the
     // old request clear a concurrent draft-save loading state.
     if (!state.draftSaving) {
@@ -354,6 +331,7 @@ function createDefaultState(): WorkboardUiState {
     draftOpen: false,
     draftSaving: false,
     editingCardId: null,
+    editingCardBase: null,
     draftTitle: "",
     draftNotes: "",
     draftStatus: "todo",
@@ -367,7 +345,6 @@ function createDefaultState(): WorkboardUiState {
     detailCommentBody: "",
     busyCardIds: new Set(),
     draggedCardId: null,
-    syncingCardIds: new Set(),
     capturingSessionKeys: new Set(),
   };
 }
@@ -375,11 +352,7 @@ function createDefaultState(): WorkboardUiState {
 export function getWorkboardRuntime(host: WorkboardHost): WorkboardRuntime {
   let runtime = workboardRuntimes.get(host);
   if (!runtime) {
-    runtime = {
-      lifecycleWrites: new Set(),
-      pendingStatusTransitions: new Set(),
-      lifecycleSyncKeys: new Map(),
-    };
+    runtime = {};
     workboardRuntimes.set(host, runtime);
   }
   return runtime;
@@ -396,12 +369,7 @@ export function workboardMutationsReady(state: WorkboardUiState): boolean {
 }
 
 export function workboardHasActiveWrites(state: WorkboardUiState): boolean {
-  return Boolean(
-    state.draftSaving ||
-    state.busyCardIds.size ||
-    state.syncingCardIds.size ||
-    state.capturingSessionKeys.size,
-  );
+  return Boolean(state.draftSaving || state.busyCardIds.size || state.capturingSessionKeys.size);
 }
 
 function workboardHasActiveLoad(host: WorkboardHost): boolean {

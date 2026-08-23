@@ -8,7 +8,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
+import type { SessionCatalogProvider as RegisteredSessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { adoptedSourceKey } from "./session-catalog-adoption.js";
 import {
@@ -24,6 +24,57 @@ import {
   listLocalClaudeSessionPage,
   readLocalClaudeTranscriptPage,
 } from "./session-catalog.js";
+
+type OptionalCatalogAgent<T extends { agentId?: string }> = Omit<T, "agentId"> & {
+  agentId?: string;
+};
+type SessionCatalogProvider = Omit<
+  RegisteredSessionCatalogProvider,
+  "list" | "read" | "continueSession" | "archive" | "openTerminal"
+> & {
+  list: (
+    params: OptionalCatalogAgent<Parameters<RegisteredSessionCatalogProvider["list"]>[0]>,
+  ) => ReturnType<RegisteredSessionCatalogProvider["list"]>;
+  read: (
+    params: OptionalCatalogAgent<Parameters<RegisteredSessionCatalogProvider["read"]>[0]>,
+  ) => ReturnType<RegisteredSessionCatalogProvider["read"]>;
+  continueSession?: (
+    params: OptionalCatalogAgent<
+      Parameters<NonNullable<RegisteredSessionCatalogProvider["continueSession"]>>[0]
+    >,
+  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["continueSession"]>>;
+  archive?: (
+    params: OptionalCatalogAgent<
+      Parameters<NonNullable<RegisteredSessionCatalogProvider["archive"]>>[0]
+    >,
+  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["archive"]>>;
+  openTerminal?: (
+    params: OptionalCatalogAgent<
+      Parameters<NonNullable<RegisteredSessionCatalogProvider["openTerminal"]>>[0]
+    >,
+  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["openTerminal"]>>;
+};
+
+function bindTestCatalogOwner(provider: RegisteredSessionCatalogProvider): SessionCatalogProvider {
+  return {
+    ...provider,
+    list: (params) => provider.list({ agentId: "main", ...params }),
+    read: (params) => provider.read({ agentId: "main", ...params }),
+    ...(provider.continueSession
+      ? {
+          continueSession: (params) => provider.continueSession!({ agentId: "main", ...params }),
+        }
+      : {}),
+    ...(provider.archive
+      ? { archive: (params) => provider.archive!({ agentId: "main", ...params }) }
+      : {}),
+    ...(provider.openTerminal
+      ? {
+          openTerminal: (params) => provider.openTerminal!({ agentId: "main", ...params }),
+        }
+      : {}),
+  } as SessionCatalogProvider;
+}
 
 function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
   registerClaudeSessionDiscovery({
@@ -56,8 +107,8 @@ function captureCatalogProvider(runtime: PluginRuntime): SessionCatalogProvider 
     id: "anthropic",
     config: {},
     runtime: runtimeWithSession,
-    registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-      provider = candidate;
+    registerSessionCatalog: (candidate: RegisteredSessionCatalogProvider) => {
+      provider = bindTestCatalogOwner(candidate);
     },
   } as unknown as OpenClawPluginApi);
   if (!provider) {
@@ -658,8 +709,8 @@ describe("Claude session catalog", () => {
           },
         },
       }),
-      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-        provider = candidate;
+      registerSessionCatalog: (candidate: RegisteredSessionCatalogProvider) => {
+        provider = bindTestCatalogOwner(candidate);
       },
     } as unknown as OpenClawPluginApi;
     registerClaudeSessionCatalog(api);
@@ -708,8 +759,8 @@ describe("Claude session catalog", () => {
       id: "anthropic",
       config: {},
       runtime: createPluginRuntimeMock({ config: { current: () => config } }),
-      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-        provider = candidate;
+      registerSessionCatalog: (candidate: RegisteredSessionCatalogProvider) => {
+        provider = bindTestCatalogOwner(candidate);
       },
     } as unknown as OpenClawPluginApi;
 
@@ -748,8 +799,8 @@ describe("Claude session catalog", () => {
         id: "anthropic",
         config,
         runtime: createPluginRuntimeMock({ config: { current: () => config } }),
-        registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-          provider = candidate;
+        registerSessionCatalog: (candidate: RegisteredSessionCatalogProvider) => {
+          provider = bindTestCatalogOwner(candidate);
         },
       } as unknown as OpenClawPluginApi;
 
@@ -786,8 +837,8 @@ describe("Claude session catalog", () => {
       id: "anthropic",
       config,
       runtime: createPluginRuntimeMock({ config: { current: () => config } }),
-      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-        provider = candidate;
+      registerSessionCatalog: (candidate: RegisteredSessionCatalogProvider) => {
+        provider = bindTestCatalogOwner(candidate);
       },
     } as unknown as OpenClawPluginApi;
 
@@ -823,8 +874,8 @@ describe("Claude session catalog", () => {
       id: "anthropic",
       config,
       runtime: createPluginRuntimeMock({ config: { current: () => config } }),
-      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-        provider = candidate;
+      registerSessionCatalog: (candidate: RegisteredSessionCatalogProvider) => {
+        provider = bindTestCatalogOwner(candidate);
       },
     } as unknown as OpenClawPluginApi;
 
@@ -861,8 +912,8 @@ describe("Claude session catalog", () => {
       id: "anthropic",
       config,
       runtime: createPluginRuntimeMock({ config: { current: () => config } }),
-      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-        provider = candidate;
+      registerSessionCatalog: (candidate: RegisteredSessionCatalogProvider) => {
+        provider = bindTestCatalogOwner(candidate);
       },
     } as unknown as OpenClawPluginApi;
 
@@ -1049,8 +1100,8 @@ describe("Claude session catalog", () => {
           },
         },
       },
-      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-        provider = candidate;
+      registerSessionCatalog: (candidate: RegisteredSessionCatalogProvider) => {
+        provider = bindTestCatalogOwner(candidate);
       },
     } as unknown as OpenClawPluginApi;
     registerClaudeSessionCatalog(api);
@@ -1163,8 +1214,8 @@ describe("Claude session catalog", () => {
       id: "anthropic",
       config: {},
       runtime,
-      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-        provider = candidate;
+      registerSessionCatalog: (candidate: RegisteredSessionCatalogProvider) => {
+        provider = bindTestCatalogOwner(candidate);
       },
     } as unknown as OpenClawPluginApi;
     registerClaudeSessionCatalog(api);
@@ -2523,8 +2574,8 @@ describe("Claude session catalog", () => {
         nodes: { list: async () => ({ nodes: [] }) },
         agent: { session: { listSessionEntries: () => [] } },
       },
-      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-        provider = candidate;
+      registerSessionCatalog: (candidate: RegisteredSessionCatalogProvider) => {
+        provider = bindTestCatalogOwner(candidate);
       },
     } as unknown as OpenClawPluginApi);
 

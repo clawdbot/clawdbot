@@ -1,7 +1,7 @@
 import type { Message } from "grammy/types";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
-import { buildTelegramThreadParams, resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
+import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import type { TelegramQuestionCallback } from "./question-callback-data.js";
 import { buildInlineKeyboard } from "./send.js";
 
@@ -44,9 +44,9 @@ export interface TelegramCallbackMessageActions {
 export function createTelegramCallbackMessageActions(params: {
   bot: RegisterTelegramHandlerParams["bot"];
   callbackMessage: Message;
-  isForum: boolean;
+  threadSpec: TelegramThreadSpec;
 }): TelegramCallbackMessageActions {
-  const { bot, callbackMessage, isForum } = params;
+  const { bot, callbackMessage, threadSpec } = params;
   const callbackBusinessParams =
     callbackMessage.business_connection_id !== undefined
       ? { business_connection_id: callbackMessage.business_connection_id }
@@ -89,9 +89,7 @@ export function createTelegramCallbackMessageActions(params: {
   };
 
   const replyToCallbackChat = async (text: string, replyParams?: TelegramCallbackReplyParams) => {
-    const threadParams = buildTelegramThreadParams(
-      resolveTelegramMessageThreadSpec(callbackMessage, isForum),
-    );
+    const threadParams = buildTelegramThreadParams(threadSpec);
     const mergedParams =
       callbackBusinessParams || threadParams || replyParams
         ? { ...replyParams, ...callbackBusinessParams, ...threadParams }

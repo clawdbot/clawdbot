@@ -4,8 +4,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { SsrFPolicy } from "../runtime-api.js";
-import type { BaseProbeResult } from "../runtime-api.js";
+import type { SsrFPolicy, BaseProbeResult } from "../runtime-api.js";
 import { isBunRuntime } from "./client/runtime.js";
 
 const loadMatrixProbeRuntimeDeps = createLazyRuntimeModule(() =>

@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
@@ -54,7 +55,8 @@ const workerDesktopEnvironment = {
 } as const;
 
 async function openDesktopPanel(page: Page) {
-  await page.goto(`${suite.server.baseUrl}chat`);
+  await page.goto(`${suite.server.baseUrl}activity`);
+  await waitForControlUiGatewayReady(page);
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent("openclaw:command-palette-open"));
   });

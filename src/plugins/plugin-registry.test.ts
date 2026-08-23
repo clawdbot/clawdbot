@@ -8,10 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
-import {
-  readPersistedInstalledPluginIndex,
-  writePersistedInstalledPluginIndex,
-} from "./installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import {
   resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginIndex,
@@ -21,13 +18,11 @@ import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.
 import {
   createPluginRegistryIdNormalizer,
   getPluginRecord,
-  inspectPluginRegistry,
   isPluginEnabled,
   listPluginContributionIds,
   loadPluginRegistrySnapshot,
   loadPluginRegistrySnapshotWithMetadata,
   normalizePluginsConfigWithRegistry,
-  refreshPluginRegistry,
   resolveManifestContractOwnerPluginId,
   resolveManifestContractPluginIds,
   resolvePluginContributionOwners,
@@ -980,95 +975,5 @@ describe("plugin registry facade", () => {
 
     expect(first.snapshot.hostContractVersion).toBe("2026.4.25");
     expect(second.snapshot.hostContractVersion).toBe("2026.4.26");
-  });
-
-  it("derives a fresh registry without persisted install records when caller disables persisted reads", async () => {
-    const stateDir = makeTempDir();
-    const rootDir = makeTempDir();
-    const candidate = createCandidate(rootDir);
-    await writePersistedInstalledPluginIndex(
-      createIndex("persisted", {
-        installRecords: {
-          persisted: {
-            source: "npm",
-            spec: "persisted-plugin@1.0.0",
-            installPath: path.join(stateDir, "plugins", "persisted"),
-          },
-        },
-      }),
-      { stateDir },
-    );
-
-    const result = loadPluginRegistrySnapshotWithMetadata({
-      stateDir,
-      candidates: [candidate],
-      env: hermeticEnv(),
-      preferPersisted: false,
-    });
-
-    expect(result.source).toBe("derived");
-    expectSnapshotPluginIds(result.snapshot, ["demo"]);
-    expect(result.snapshot.installRecords).not.toHaveProperty("persisted");
-  });
-
-  it("exposes explicit persisted registry inspect and refresh operations", async () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "plugins", "demo");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    const candidate = createCandidate(pluginDir);
-    const env = hermeticEnv();
-
-    const missingInspect = await inspectPluginRegistry({ stateDir, candidates: [candidate], env });
-    expect(missingInspect.state).toBe("missing");
-    expect(missingInspect.refreshReasons).toEqual(["missing"]);
-    expect(missingInspect.persisted).toBeNull();
-    expect(missingInspect.current.plugins.map((plugin) => plugin.pluginId)).toEqual(["demo"]);
-
-    await refreshPluginRegistry({
-      reason: "manual",
-      stateDir,
-      candidates: [candidate],
-      env,
-    });
-
-    const freshInspect = await inspectPluginRegistry({ stateDir, candidates: [candidate], env });
-    expect(freshInspect.state).toBe("fresh");
-    expect(freshInspect.refreshReasons).toEqual([]);
-    expect(freshInspect.persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["demo"]);
-  });
-
-  it("preserves install records when refreshing the persisted registry", async () => {
-    const stateDir = makeTempDir();
-    await writePersistedInstalledPluginIndex(
-      createIndex("missing", {
-        installRecords: {
-          missing: {
-            source: "npm",
-            spec: "missing-plugin@1.0.0",
-            installPath: path.join(stateDir, "plugins", "missing"),
-          },
-        },
-        plugins: [],
-      }),
-      { stateDir },
-    );
-
-    await refreshPluginRegistry({
-      reason: "manual",
-      stateDir,
-      candidates: [],
-      env: hermeticEnv(),
-    });
-
-    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-    if (!persisted) {
-      throw new Error("Expected persisted plugin index");
-    }
-    expectInstallRecord(persisted.installRecords, "missing", {
-      source: "npm",
-      spec: "missing-plugin@1.0.0",
-      installPath: path.join(stateDir, "plugins", "missing"),
-    });
-    expect(persisted.plugins).toEqual([]);
   });
 });

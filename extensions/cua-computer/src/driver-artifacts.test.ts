@@ -30,17 +30,16 @@ function createArtifactFixture(
   const nativeContents = "accepted native artifact";
   const expectedDigest =
     options.expectedDigest ?? createHash("sha256").update(nativeContents).digest("hex");
-  const pluginManifestPath = path.join(root, "plugin-package.json");
   const sdkManifestPath = path.join(root, "sdk-package.json");
   const platformPackageName = `@trycua/cua-driver-${platformKey}`;
   const platformDir = path.join(root, "platform");
   const platformManifestPath = path.join(platformDir, "package.json");
 
   fs.mkdirSync(platformDir);
-  writeJson(pluginManifestPath, {
+  const pluginManifest = {
     dependencies: { "@trycua/cua-driver": acceptedVersion },
     cuaDriverArtifacts: { [platformKey]: { files: { [nativeFile]: expectedDigest } } },
-  });
+  };
   writeJson(sdkManifestPath, {
     name: "@trycua/cua-driver",
     version: options.sdkVersion ?? acceptedVersion,
@@ -56,7 +55,7 @@ function createArtifactFixture(
     packages.set(platformPackageName, platformManifestPath);
   }
   return {
-    pluginManifestPath,
+    pluginManifest,
     resolvePackageJson: (packageName: string) => packages.get(packageName),
   };
 }
@@ -140,5 +139,22 @@ describe("CUA Driver artifact verification", () => {
 
     expect(result).toMatchObject({ ok: false, code: "COMPUTER_DRIVER_PLATFORM_UNSUPPORTED" });
     expect(result.ok ? "" : result.diagnostic).toContain("glibc-based Linux");
+  });
+});
+
+describe("verifyInstalledCuaDriverArtifacts (real resolution)", () => {
+  // Regression: the CUA Driver SDK is ESM-only, so require-condition resolution
+  // threw PATH_NOT_EXPORTED and every real install reported
+  // COMPUTER_DRIVER_PACKAGE_MISSING even with the packages present.
+  it("resolves the installed SDK package through import conditions", async () => {
+    const { verifyInstalledCuaDriverArtifacts } = await import("./driver-artifacts.js");
+    const result = verifyInstalledCuaDriverArtifacts();
+    if (process.platform === "linux" || process.platform === "win32") {
+      expect(result).toMatchObject({ ok: true, applicable: true });
+    } else if (!result.ok) {
+      // Other hosts are out of the fulfiller's scope but must never report a
+      // missing package for an installed SDK.
+      expect(result.code).not.toBe("COMPUTER_DRIVER_PACKAGE_MISSING");
+    }
   });
 });

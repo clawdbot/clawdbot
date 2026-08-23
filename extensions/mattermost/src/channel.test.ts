@@ -1739,7 +1739,7 @@ describe("mattermostPlugin", () => {
       expect(onDeliveryResult).toHaveBeenCalledWith({
         channel: "mattermost",
         messageId: "post-final",
-        channelId: "CHAN1",
+        target: { kind: "channel", id: "CHAN1" },
         content: "provider-final",
       });
     });

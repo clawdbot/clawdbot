@@ -99,6 +99,25 @@ describe("cron task run history", () => {
     ).toBe("failed");
   });
 
+  it.each([
+    { completionStatus: "succeeded" as const, expected: "succeeded" },
+    { completionStatus: "failed" as const, expected: "failed" },
+    { completionStatus: "unknown" as const, expected: "failed" },
+  ])(
+    "maps execution ok with completion $completionStatus to task status $expected",
+    ({ completionStatus, expected }) => {
+      expect(
+        cronRunStatusToTaskStatus({
+          ts: 100,
+          jobId: JOB_ID,
+          action: "finished",
+          status: "ok",
+          completionStatus,
+        }),
+      ).toBe(expected);
+    },
+  );
+
   it("reads executions produced by the cron service from the ledger", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-task-service-history-" },
@@ -211,6 +230,7 @@ describe("cron task run history", () => {
             jobId: JOB_ID,
             action: "finished",
             status: "ok",
+            completionStatus: "succeeded",
             summary: "delivered\n  needle",
             diagnostics: {
               summary: "healthy",
@@ -254,6 +274,7 @@ describe("cron task run history", () => {
             jobId: JOB_ID,
             action: "finished",
             status: "error",
+            completionStatus: "failed",
             error: "provider overloaded",
             errorReason: "overloaded",
             deliveryStatus: "not-delivered",
@@ -269,6 +290,7 @@ describe("cron task run history", () => {
             jobId: JOB_ID,
             action: "finished",
             status: "error",
+            completionStatus: "failed",
             error: "cron: job execution timed out",
             errorReason: "timeout",
             runId: "manual:history:timeout",
@@ -281,6 +303,7 @@ describe("cron task run history", () => {
             jobId: JOB_ID,
             action: "finished",
             status: "skipped",
+            completionStatus: "failed",
             error: "trigger condition not met",
             summary: "",
             runId: "manual:history:skipped",
@@ -305,6 +328,12 @@ describe("cron task run history", () => {
           "error",
           "error",
           "ok",
+        ]);
+        expect(ledger.entries.map((entry) => entry.completionStatus)).toEqual([
+          "failed",
+          "failed",
+          "failed",
+          "succeeded",
         ]);
       },
     );
@@ -467,6 +496,43 @@ describe("cron task run history", () => {
     expect(entry?.failureNotificationDelivery).toBeUndefined();
   });
 
+  it.each([
+    { status: "error", delivered: undefined, deliveryStatus: undefined, expected: "failed" },
+    { status: "ok", delivered: undefined, deliveryStatus: "delivered", expected: "succeeded" },
+    { status: "ok", delivered: true, deliveryStatus: undefined, expected: "succeeded" },
+    { status: "ok", delivered: undefined, deliveryStatus: "not-requested", expected: "succeeded" },
+    { status: "ok", delivered: undefined, deliveryStatus: "not-delivered", expected: "unknown" },
+    { status: "ok", delivered: undefined, deliveryStatus: "unknown", expected: "unknown" },
+    { status: "ok", delivered: undefined, deliveryStatus: undefined, expected: "unknown" },
+  ] as const)(
+    "derives legacy $status/$deliveryStatus completion as $expected",
+    ({ status, delivered, deliveryStatus, expected }) => {
+      expect(
+        parseCronRunLogEntryObject({
+          ts: 100,
+          jobId: JOB_ID,
+          action: "finished",
+          status,
+          ...(delivered === undefined ? {} : { delivered }),
+          ...(deliveryStatus === undefined ? {} : { deliveryStatus }),
+        })?.completionStatus,
+      ).toBe(expected);
+    },
+  );
+
+  it("normalizes invalid completion status from immutable stored facts", () => {
+    expect(
+      parseCronRunLogEntryObject({
+        ts: 100,
+        jobId: JOB_ID,
+        action: "finished",
+        status: "ok",
+        deliveryStatus: "not-delivered",
+        completionStatus: "partial",
+      })?.completionStatus,
+    ).toBe("unknown");
+  });
+
   it("keeps quiet-trigger recovery detail out of run history", () => {
     const task = taskFromEntry(
       { ts: 100, jobId: JOB_ID, action: "finished", status: "ok" },
@@ -544,6 +610,7 @@ describe("cron task run history", () => {
     ).toEqual({
       ...base,
       status: undefined,
+      completionStatus: "unknown",
       error: undefined,
       errorReason: undefined,
       summary: undefined,
@@ -558,13 +625,18 @@ describe("cron task run history", () => {
       usage: undefined,
     });
     expect(parseCronRunLogEntryObject({ ...base, usage: [] })?.usage).toBeUndefined();
-    expect(parseCronRunLogEntryObject({ ...base, usage: { input_tokens: 0 } })?.usage).toEqual({
+    expect(
+      parseCronRunLogEntryObject({ ...base, usage: { input_tokens: 0, future_tokens: 1 } })?.usage,
+    ).toEqual({
       input_tokens: 0,
       output_tokens: undefined,
       total_tokens: undefined,
       cache_read_tokens: undefined,
       cache_write_tokens: undefined,
     });
+    expect(
+      parseCronRunLogEntryObject({ ...base, usage: { future_tokens: 1 } })?.usage,
+    ).toBeUndefined();
     expect(parseCronRunLogEntryObject({ ...base, ts: MAX_DATE_TIMESTAMP_MS })).not.toBeNull();
     expect(parseCronRunLogEntryObject({ ...base, ts: MAX_DATE_TIMESTAMP_MS + 1 })).toBeNull();
   });

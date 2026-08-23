@@ -1,23 +1,36 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import pluginManifest from "../package.json" with { type: "json" };
 import {
   inspectCuaDriverArtifacts,
   readPackageIdentity,
   type CuaDriverArtifactVerification,
 } from "./driver-artifact-verification.js";
 
-const PLUGIN_MANIFEST_PATH = fileURLToPath(new URL("../package.json", import.meta.url));
 const requireFromPlugin = createRequire(import.meta.url);
+
+function resolvePackageEntry(packageName: string): string | undefined {
+  try {
+    return requireFromPlugin.resolve(packageName);
+  } catch {}
+  // The CUA Driver SDK is ESM-only: its exports map carries only the "import"
+  // condition, so require-condition resolution throws PATH_NOT_EXPORTED even
+  // when the package is installed. Resolve with import conditions before
+  // concluding the package is missing.
+  try {
+    return fileURLToPath(import.meta.resolve(packageName));
+  } catch {
+    return undefined;
+  }
+}
 
 function resolvePackageJson(packageName: string): string | undefined {
   try {
     return requireFromPlugin.resolve(`${packageName}/package.json`);
   } catch {}
-  let entry: string;
-  try {
-    entry = requireFromPlugin.resolve(packageName);
-  } catch {
+  const entry = resolvePackageEntry(packageName);
+  if (!entry) {
     return undefined;
   }
   let current = path.dirname(entry);
@@ -50,7 +63,7 @@ export function verifyInstalledCuaDriverArtifacts(): CuaDriverArtifactVerificati
     platform: process.platform,
     arch: process.arch,
     ...(process.platform === "linux" ? { linuxLibc: detectLinuxLibc() } : {}),
-    pluginManifestPath: PLUGIN_MANIFEST_PATH,
+    pluginManifest,
     resolvePackageJson,
   });
   return installedVerification;

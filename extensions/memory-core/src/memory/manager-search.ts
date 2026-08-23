@@ -449,6 +449,7 @@ export async function searchVector(params: {
   queryVec: number[];
   limit: number;
   snippetMaxChars: number;
+  signal?: AbortSignal;
   ensureVectorReady: (dimensions: number) => Promise<boolean>;
   sourceFilterVec: { sql: string; params: SearchSource[] };
   sourceFilterChunks: { sql: string; params: SearchSource[] };
@@ -456,6 +457,7 @@ export async function searchVector(params: {
   if (params.queryVec.length === 0 || params.limit <= 0) {
     return [];
   }
+  params.signal?.throwIfAborted();
   const providerModels = resolveProviderModels(params.providerModel, params.providerModelAliases);
   const vectorModelFilter = buildModelFilter("c.model", providerModels);
   const searchFallback = () =>
@@ -467,8 +469,11 @@ export async function searchVector(params: {
       queryVec: params.queryVec,
       limit: params.limit,
       snippetMaxChars: params.snippetMaxChars,
+      signal: params.signal,
     });
-  if (await params.ensureVectorReady(params.queryVec.length)) {
+  const vectorReady = await params.ensureVectorReady(params.queryVec.length);
+  params.signal?.throwIfAborted();
+  if (vectorReady) {
     // Use sqlite-vec's native KNN (MATCH ? AND k = ?) for candidate selection,
     // which runs in ~O(log N + k) via the vec0 index, instead of the previous
     // full-table scan over vec_distance_cosine(). Keep vec_distance_cosine() in
@@ -560,6 +565,7 @@ async function searchChunksByEmbedding(params: {
   queryVec: number[];
   limit: number;
   snippetMaxChars: number;
+  signal?: AbortSignal;
 }): Promise<SearchRowResult[]> {
   if (params.limit <= 0) {
     return [];
@@ -634,6 +640,7 @@ async function searchChunksByEmbedding(params: {
       break;
     }
     await yieldToEventLoop();
+    params.signal?.throwIfAborted();
   }
   topResults.sort((a, b) => b.score - a.score);
   // Read provenance once for the final retained set, not per scored candidate.

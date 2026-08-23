@@ -75,6 +75,7 @@ export type EmbeddedAttemptExecutionPhaseInput = {
       yieldAbortSettled: Promise<void> | null;
       yieldDetected: boolean;
       yieldMessage: string | null;
+      yieldAcknowledgment?: string;
     };
     setToolSearchCatalogExecutor: (
       executor: ReturnType<typeof prepareEmbeddedAttemptStream>["toolSearchCatalogExecutor"],

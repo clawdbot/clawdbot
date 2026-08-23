@@ -67,7 +67,7 @@ describe("reefOutboundAdapter", () => {
     ).resolves.toEqual({
       channel: "reef",
       messageId: "01JZ0000000000000000000200",
-      chatId: "alice",
+      target: { kind: "chat", id: "alice" },
       toJid: "reef:alice",
     });
     expect(order).toEqual(["dispatch", "send"]);

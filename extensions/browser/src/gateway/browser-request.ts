@@ -25,7 +25,6 @@ import {
 } from "../browser-proxy-upload.js";
 import {
   ErrorCodes,
-  applyBrowserProxyPaths,
   createBrowserControlContext,
   createBrowserRouteDispatcher,
   errorShape,
@@ -33,7 +32,7 @@ import {
   isBrowserHostLocalRoute,
   isNodeCommandAllowed,
   isPersistentBrowserProfileMutation,
-  persistBrowserProxyFiles,
+  persistBrowserProxyResultFiles,
   resolveNodeCommandAllowlist,
   resolveRequestedBrowserProfile,
   respondUnavailableOnNodeInvokeError,
@@ -213,9 +212,16 @@ export async function handleBrowserGatewayRequest({
         return;
       }
       const success = proxy as BrowserProxySuccess;
-      const mapping = await persistBrowserProxyFiles(success.files);
-      applyBrowserProxyPaths(success.result, mapping);
-      respond(true, success.result);
+      try {
+        const result = await persistBrowserProxyResultFiles(success.result, success.files);
+        respond(true, result);
+      } catch {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "browser proxy file transfer failed"),
+        );
+      }
       return;
     }
   }

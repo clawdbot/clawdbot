@@ -26,6 +26,10 @@ import {
   UserProfileNotFoundError,
 } from "../../state/user-profiles.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import {
+  authenticatedProfileUnavailableError,
+  isGatewayClientProfilePending,
+} from "./gateway-client-identity.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 function refreshConnectedProfile(
@@ -71,6 +75,9 @@ function resolveAuthenticatedProfileId(
 ): string | undefined {
   if (client?.authenticatedUserProfile?.profileId) {
     return resolveUserProfileId(client.authenticatedUserProfile.profileId);
+  }
+  if (client?.authenticatedGitHubIdentitySync) {
+    return undefined;
   }
   const authenticatedUserId = client?.authenticatedUserId;
   if (!authenticatedUserId) {
@@ -124,7 +131,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     respond(true, { profiles: listProfiles() });
   },
-  "users.self": ({ client, params, respond }) => {
+  "users.self": async ({ client, params, respond }) => {
     if (!validateUsersSelfParams(params)) {
       respond(false, undefined, invalidParams("users.self", validateUsersSelfParams.errors));
       return;
@@ -138,13 +145,16 @@ export const usersHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      if (client.authenticatedGitHubIdentitySync) {
+        try {
+          await client.authenticatedGitHubIdentitySync();
+        } catch {
+          // A previously attached immutable profile stays usable; unresolved aliases stay hidden.
+        }
+      }
       const profileId = resolveAuthenticatedProfileId(client);
       if (!profileId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "authenticated user profile is unavailable"),
-        );
+        respond(false, undefined, authenticatedProfileUnavailableError());
         return;
       }
       respond(true, { profile: getUserProfileListItem(profileId) });
@@ -163,17 +173,17 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     const profileId = client?.authenticatedUserProfile?.profileId ?? "";
     if (!profileId) {
+      if (isGatewayClientProfilePending(client)) {
+        respond(false, undefined, authenticatedProfileUnavailableError());
+        return;
+      }
       respond(true, { status: "no_durable_identity" }, undefined);
       return;
     }
     try {
       const canonicalProfileId = resolveUserProfileId(profileId);
       if (!canonicalProfileId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "authenticated user profile is unavailable"),
-        );
+        respond(false, undefined, authenticatedProfileUnavailableError());
         return;
       }
       respond(
@@ -196,17 +206,17 @@ export const usersHandlers: GatewayRequestHandlers = {
     }
     const profileId = client?.authenticatedUserProfile?.profileId ?? "";
     if (!profileId) {
+      if (isGatewayClientProfilePending(client)) {
+        respond(false, undefined, authenticatedProfileUnavailableError());
+        return;
+      }
       respond(true, { status: "no_durable_identity" }, undefined);
       return;
     }
     try {
       const canonicalProfileId = resolveUserProfileId(profileId);
       if (!canonicalProfileId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "authenticated user profile is unavailable"),
-        );
+        respond(false, undefined, authenticatedProfileUnavailableError());
         return;
       }
       const result = setUserPreferences(canonicalProfileId, params.entries);

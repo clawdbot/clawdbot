@@ -1,5 +1,6 @@
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 
 const REFRESH_LEAD_MS = 5_000;
 type AppViewMode = "cached" | "refresh" | "expired";
@@ -278,7 +279,7 @@ export class BoardMcpAppLifecycle {
       this.clearTimers();
       this.state = {
         status: "stale",
-        error: error instanceof Error ? error.message : String(error),
+        error: formatUiError(error),
       };
       this.loading = false;
       this.notify();

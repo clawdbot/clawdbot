@@ -3,7 +3,13 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getGatewaySuspendAdmissionPhase,
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../../process/gateway-work-admission.js";
+import { handleGatewayRequest } from "../server-methods.js";
 import { restartHandlers } from "./restart.js";
 
 const scheduleSafeGatewayRestart = vi.hoisted(() => vi.fn());
@@ -54,6 +60,40 @@ function invokeRestartPreflight() {
   ).then(() => respond);
 }
 
+async function invokeRestartRequestThroughGateway(params: unknown) {
+  const respond = vi.fn();
+  const handler = expectDefined(
+    restartHandlers["gateway.restart.request"],
+    'restartHandlers["gateway.restart.request"] test invariant',
+  );
+  await handleGatewayRequest({
+    req: {
+      type: "req",
+      id: `request-${crypto.randomUUID()}`,
+      method: "gateway.restart.request",
+      params,
+    },
+    respond,
+    client: {
+      connId: `conn-${crypto.randomUUID()}`,
+      clientIp: "127.0.0.1",
+      connect: {
+        role: "operator",
+        scopes: ["operator.admin"],
+        client: { id: "cli", version: "test", platform: "linux", mode: "cli" },
+        minProtocol: 1,
+        maxProtocol: 1,
+      },
+    },
+    isWebchatConnect: () => false,
+    context: { logGateway: { warn: vi.fn() } } as unknown as Parameters<
+      typeof handleGatewayRequest
+    >[0]["context"],
+    extraHandlers: { "gateway.restart.request": handler },
+  });
+  return respond;
+}
+
 function mockScheduledRestart(preflight: { safe: boolean; summary: string }) {
   scheduleSafeGatewayRestart.mockReturnValueOnce({
     ok: true,
@@ -81,6 +121,7 @@ function expectRestartRequest(skipDeferral: boolean) {
 
 describe("gateway restart handlers", () => {
   beforeEach(() => {
+    resetGatewayWorkAdmission();
     scheduleSafeGatewayRestart.mockClear();
     createSafeGatewayRestartPreflight.mockReset();
     requestGatewayRestartWithSignalAdmission.mockReset();
@@ -92,6 +133,10 @@ describe("gateway restart handlers", () => {
       createdAt: "2026-07-16T12:00:00.000Z",
       port: 18_789,
     });
+  });
+
+  afterEach(() => {
+    resetGatewayWorkAdmission();
   });
 
   it("keeps the deprecated read-only preflight response shape", async () => {
@@ -235,6 +280,95 @@ describe("gateway restart handlers", () => {
     expect(respond).toHaveBeenCalledWith(false, undefined, {
       code: "INVALID_REQUEST",
       message: "target gateway no longer owns the active lock",
+    });
+  });
+
+  it("retains prepared suspension when the exact restart target is stale", async () => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    readActiveGatewayLockIdentity.mockResolvedValue({
+      pid: process.pid,
+      ownerId: "replacement-owner",
+      createdAt: "2026-07-16T12:00:01.000Z",
+      port: 18_789,
+    });
+
+    const respond = await invokeRestartRequestThroughGateway({
+      reason: "operator",
+      target: {
+        pid: process.pid,
+        ownerId: "gateway-owner",
+        port: 18_789,
+      },
+    });
+
+    expect(readActiveGatewayLockIdentity).toHaveBeenCalledOnce();
+    expect(requestGatewayRestartWithSignalAdmission).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "INVALID_REQUEST",
+      message: "target gateway no longer owns the active lock",
+    });
+    expect(getGatewaySuspendAdmissionPhase()).toBe("prepared");
+    expect(suspension?.release()).toBe(true);
+  });
+
+  it("retains prepared suspension when exact restart delivery fails", async () => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+    requestGatewayRestartWithSignalAdmission.mockReturnValueOnce({ status: "failed" });
+
+    const respond = await invokeRestartRequestThroughGateway({
+      reason: "operator",
+      target: {
+        pid: process.pid,
+        ownerId: "gateway-owner",
+        port: 18_789,
+      },
+    });
+
+    expect(readActiveGatewayLockIdentity).toHaveBeenCalledOnce();
+    expect(requestGatewayRestartWithSignalAdmission).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "UNAVAILABLE",
+      message: "target gateway restart delivery failed",
+    });
+    expect(getGatewaySuspendAdmissionPhase()).toBe("prepared");
+    expect(suspension?.release()).toBe(true);
+  });
+
+  it("finishes an admitted exact restart after suspension resumes", async () => {
+    let resolveLock: (value: unknown) => void = () => {};
+    readActiveGatewayLockIdentity.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveLock = resolve;
+      }),
+    );
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    expect(suspension?.commit()).toBe(true);
+
+    const request = invokeRestartRequestThroughGateway({
+      reason: "operator",
+      target: {
+        pid: process.pid,
+        ownerId: "gateway-owner",
+        port: 18_789,
+      },
+    });
+    await vi.waitFor(() => expect(readActiveGatewayLockIdentity).toHaveBeenCalledOnce());
+    expect(suspension?.release()).toBe(true);
+    resolveLock({
+      pid: process.pid,
+      ownerId: "gateway-owner",
+      createdAt: "2026-07-16T12:00:00.000Z",
+      port: 18_789,
+    });
+
+    const respond = await request;
+    expect(requestGatewayRestartWithSignalAdmission).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(true, {
+      ok: true,
+      status: "emitted",
+      pid: process.pid,
     });
   });
 

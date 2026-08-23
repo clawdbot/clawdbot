@@ -131,7 +131,7 @@ Configure one of the supported Tailscale publishing modes:
 }
 ```
 
-OpenClaw automatically honors `gateway.tailscale.serviceName` when selecting the published host and `gateway.controlUi.basePath` when building the Control UI and WebSocket URLs.
+OpenClaw automatically honors `gateway.controlUi.basePath` when building the Control UI and WebSocket URLs.
 
 When the Mini App opens, Telegram provides signed WebApp `initData`. OpenClaw verifies its signature with the selected bot account's token, rejects missing, invalid, expired, or replayed data, extracts the numeric Telegram user ID, and checks owner access again before handing off to the Control UI.
 

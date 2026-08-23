@@ -1019,21 +1019,21 @@ class ChatControllerTranscriptCacheTest {
   @Test
   fun unscopedHistoryWaitsForAProvableDefaultOwner() =
     runTest {
-      var requestCount = 0
+      var historyRequestCount = 0
       val controller =
         createChatController(
           transcriptCache = FakeTranscriptCache(),
           cacheScope = { gatewayScope },
           currentDefaultAgentId = { null },
-        ) { _, _ ->
-          requestCount += 1
+        ) { method, _ ->
+          if (method == "chat.history") historyRequestCount += 1
           "{}"
         }
 
       controller.load("custom")
       advanceUntilIdle()
 
-      assertEquals(0, requestCount)
+      assertEquals(0, historyRequestCount)
       assertFalse(controller.historyLoading.value)
       assertTrue(controller.messages.value.isEmpty())
       assertEquals(null, controller.errorText.value)

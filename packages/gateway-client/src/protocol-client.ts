@@ -6,6 +6,14 @@ import {
 import { RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
 import { GatewayEventListeners } from "./event-listeners.js";
 import { GatewayPendingRequests, type GatewayProtocolRequestTiming } from "./pending-request.js";
+import type {
+  CloseSnapshot,
+  ConnectTimingState,
+  GatewayProtocolClientOptions,
+  GatewayProtocolCloseContext,
+  GatewayProtocolSocket,
+  GatewayProtocolTiming,
+} from "./protocol-client-contract.js";
 import {
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
@@ -19,15 +27,6 @@ export {
   type GatewayProtocolRequestOptions,
   type GatewayProtocolRequestTiming,
 };
-
-import type {
-  CloseSnapshot,
-  ConnectTimingState,
-  GatewayProtocolClientOptions,
-  GatewayProtocolCloseContext,
-  GatewayProtocolSocket,
-  GatewayProtocolTiming,
-} from "./protocol-client-contract.js";
 
 export type {
   GatewayProtocolCloseContext,
@@ -468,7 +467,8 @@ export class GatewayProtocolClient<TPlan> {
         new Error(`gateway closed (${code}): ${reason}`),
     );
     this.invoke("close", () => this.opts.onClose?.(context, decision));
-    if (decision.retry && !this.stopped) {
+    // A close callback can reconnect synchronously and already own the next socket or retry.
+    if (decision.retry && !this.stopped && !this.socket && !this.reconnectSignal) {
       this.scheduleReconnect(decision.reconnectDelayMs ?? context.connectFailure?.reconnectDelayMs);
     }
   }

@@ -476,10 +476,9 @@ export async function resolveReplyDirectives(params: {
   model = modelState.model;
 
   let contextTokens = useFastReplyRuntime
-    ? (agentCfg?.contextTokens ?? DEFAULT_CONTEXT_TOKENS)
+    ? DEFAULT_CONTEXT_TOKENS
     : resolveContextTokens({
         cfg,
-        agentCfg,
         provider,
         model,
         modelContextWindow: modelState.modelContextWindow,

@@ -164,6 +164,28 @@ openclaw config set agents.defaults.modelPolicy.allow '["openai/gpt-5.4","anthro
 `openclaw models set`, provider setup, and `openclaw models aliases add` can add entries under `agents.defaults.models`, but they never change `modelPolicy.allow`. This keeps model metadata and aliases independent from override policy.
 </Accordion>
 
+## Choose a model for a session
+
+Choose the model when you create a session whenever possible. The Control UI's
+**New Chat** composer includes the model picker for this reason: a fresh session
+gives the selected model a clean conversation boundary.
+
+Changing the model for an established session is an advanced operation. The
+session transcript remains available, but the next model may have a different
+context window, prompt and tool behavior, or prompt-cache implementation. A
+mid-session switch can therefore reduce continuity, require earlier compaction,
+or lose prompt-cache reuse and increase latency or cost. For a planned model
+change, prefer a new session; use `/model` or the active-session model picker
+when you intentionally want the existing transcript to continue with another
+model.
+
+Keep the thinking or reasoning level stable for the session when cache reuse
+matters. On OpenAI, changing the reasoning effort changes the reusable request
+state and can force the next turn to process the full conversation again. Other
+providers may also include thinking configuration in their cache identity, so
+changing only the thinking level can increase latency and input-token cost even
+when the model itself stays the same.
+
 ## `/model` in chat
 
 Direct owner/admin `/model <model>` requests **default scope**: it changes this session and starts a best-effort configured-default update. Adding `-s` uses **session scope**: only this session changes. If the agent has no explicit primary model, its effective default is the shared global `agents.defaults.model` fallback.

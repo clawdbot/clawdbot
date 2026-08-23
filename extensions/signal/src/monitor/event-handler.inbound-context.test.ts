@@ -35,6 +35,24 @@ type DispatchInboundMessageMockParams = {
 };
 
 type SendReactionSignalMockCall = [string, number, string, unknown];
+type TestDispatchResult = {
+  queuedFinal: boolean;
+  counts: Record<"tool" | "block" | "final", number>;
+  failedCounts?: Partial<Record<"tool" | "block" | "final", number>>;
+  settledReceipt?: {
+    counts: Record<
+      "tool" | "block" | "final",
+      {
+        delivered: number;
+        deliveredNotVisible: number;
+        cancelled: number;
+        failedBeforeSend: number;
+        failedAfterSend: number;
+      }
+    >;
+    anyVisibleDelivered: boolean;
+  };
+};
 
 const {
   sendTypingMock,
@@ -55,11 +73,13 @@ const {
     sendReactionSignalMock: vi.fn(async () => ({ ok: true })),
     enqueueSystemEventMock: vi.fn(),
     recordInboundSessionMock: vi.fn(),
-    dispatchInboundMessageMock: vi.fn(async (params: DispatchInboundMessageMockParams) => {
-      captureState.ctx = params.ctx;
-      await Promise.resolve(params.replyOptions?.onReplyStart?.());
-      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-    }),
+    dispatchInboundMessageMock: vi.fn(
+      async (params: DispatchInboundMessageMockParams): Promise<TestDispatchResult> => {
+        captureState.ctx = params.ctx;
+        await Promise.resolve(params.replyOptions?.onReplyStart?.());
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+      },
+    ),
     logVerboseMock: vi.fn(),
     shouldLogVerboseMock: vi.fn(() => false),
     readAgentRunTerminalOutcomeMock: vi.fn(),
@@ -144,8 +164,8 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
           history: resolved.history,
           admission: resolved.admission,
           botLoopProtection: resolved.botLoopProtection,
-          runDispatch: async () =>
-            await dispatchInboundMessageMock({
+          runDispatch: async () => {
+            const dispatchResult = await dispatchInboundMessageMock({
               ctx: resolved.ctxPayload,
               cfg: resolved.cfg,
               dispatcher,
@@ -153,7 +173,35 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
                 ...resolved.replyOptions,
                 onReplyStart: resolved.dispatcherOptions?.typingCallbacks?.onReplyStart,
               },
-            }),
+            });
+            if (dispatchResult.settledReceipt) {
+              return dispatchResult;
+            }
+            const counts = (kind: "tool" | "block" | "final") => {
+              const failedBeforeSend = dispatchResult.failedCounts?.[kind] ?? 0;
+              return {
+                delivered: Math.max(0, (dispatchResult.counts?.[kind] ?? 0) - failedBeforeSend),
+                deliveredNotVisible: 0,
+                cancelled: 0,
+                failedBeforeSend,
+                failedAfterSend: 0,
+              };
+            };
+            const settledCounts = {
+              tool: counts("tool"),
+              block: counts("block"),
+              final: counts("final"),
+            };
+            return {
+              ...dispatchResult,
+              settledReceipt: {
+                counts: settledCounts,
+                anyVisibleDelivered: Object.values(settledCounts).some(
+                  (entry) => entry.delivered > 0,
+                ),
+              },
+            };
+          },
         });
       };
       let result;

@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import * as talk from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveVoiceModelRefs } from "../tts/voice-models.js";
 import {
@@ -21,7 +22,6 @@ import type { PluginRegistry } from "./registry-types.js";
 
 type CapabilityProviderRegistryKey =
   | "embeddingProviders"
-  | "memoryEmbeddingProviders"
   | "speechProviders"
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders"
@@ -33,7 +33,6 @@ type CapabilityProviderRegistryKey =
 
 type CapabilityContractKey =
   | "embeddingProviders"
-  | "memoryEmbeddingProviders"
   | "speechProviders"
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders"
@@ -52,7 +51,6 @@ type CapabilityPluginResolution = {
 
 const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityContractKey> = {
   embeddingProviders: "embeddingProviders",
-  memoryEmbeddingProviders: "memoryEmbeddingProviders",
   speechProviders: "speechProviders",
   realtimeTranscriptionProviders: "realtimeTranscriptionProviders",
   realtimeVoiceProviders: "realtimeVoiceProviders",
@@ -270,6 +268,7 @@ function collectRequestedSpeechProviderIds(
       : undefined;
   addStringValue(requested, tts?.provider);
   addObjectKeys(requested, tts?.providers);
+  addStringValue(requested, cfg && talk.resolveConfiguredTalkSpeechProviderId(cfg));
   if (options.includeVoiceModel) {
     addModelConfigProviderIds(requested, cfg?.agents?.defaults?.voiceModel);
   }
@@ -314,10 +313,16 @@ function collectRequestedCapabilityProviderIds(params: {
         includeVoiceModel: params.includeVoiceModel ?? false,
       });
     case "realtimeTranscriptionProviders":
-    case "realtimeVoiceProviders":
       return params.includeVoiceModel
         ? collectRequestedVoiceModelProviderIds(params.cfg)
         : undefined;
+    case "realtimeVoiceProviders": {
+      const requested = params.includeVoiceModel
+        ? collectRequestedVoiceModelProviderIds(params.cfg)
+        : new Set<string>();
+      addStringValue(requested, talk.resolveConfiguredTalkRealtimeProviderId(params.cfg ?? {}));
+      return requested.size > 0 ? requested : undefined;
+    }
     case "mediaUnderstandingProviders":
       return collectRequestedMediaUnderstandingProviderIds(params.cfg);
     default:
@@ -574,7 +579,7 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
           }),
         )
       : undefined;
-  if (activeProviders.length > 0 && params.key !== "memoryEmbeddingProviders") {
+  if (activeProviders.length > 0) {
     if (!missingRequestedProviders && !shouldMergeManifestProvidersWhenActive(params.key)) {
       return activeProviders.map((entry) => entry.provider) as CapabilityProviderFor<K>[];
     }
@@ -625,25 +630,22 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     loadOptions,
     requested: requestedProviderFilter,
   });
-  if (params.key !== "memoryEmbeddingProviders") {
-    const requestedLoadedProviders = requestedProviderFilter
+  const requestedLoadedProviders = requestedProviderFilter
+    ? filterLoadedProvidersForRequestedConfig({
+        key: params.key,
+        requested: requestedProviderFilter,
+        entries: loadedProviders,
+      })
+    : loadedProviders;
+  const mergeLoadedProviders =
+    activeProviders.length > 0 && missingRequestedProviders
       ? filterLoadedProvidersForRequestedConfig({
           key: params.key,
-          requested: requestedProviderFilter,
-          entries: loadedProviders,
+          requested: missingRequestedProviders,
+          entries: requestedLoadedProviders,
         })
-      : loadedProviders;
-    const mergeLoadedProviders =
-      activeProviders.length > 0 && missingRequestedProviders
-        ? filterLoadedProvidersForRequestedConfig({
-            key: params.key,
-            requested: missingRequestedProviders,
-            entries: requestedLoadedProviders,
-          })
-        : requestedLoadedProviders;
-    return mergeCapabilityProviders(activeProviders, mergeLoadedProviders);
-  }
-  return mergeCapabilityProviders(activeProviders, loadedProviders);
+      : requestedLoadedProviders;
+  return mergeCapabilityProviders(activeProviders, mergeLoadedProviders);
 }
 
 export function prepareMediaCapabilityProviders(params: {

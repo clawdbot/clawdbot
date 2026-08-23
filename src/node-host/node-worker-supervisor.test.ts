@@ -1,6 +1,5 @@
 import childProcess from "node:child_process";
 import fs from "node:fs";
-import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -12,7 +11,6 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resolveNodeWorkerInstallation } from "./node-worker-build.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
 import {
   inspectNodeWorkerProcessIdentity,
@@ -43,7 +41,7 @@ function fixture(
   options: {
     capacity?: number;
     capacityWaitMs?: number;
-    onAvailabilityChanged?: (available: boolean) => void;
+    onCapacityChanged?: (capacity: { total: number; available: number }) => void;
   } = {},
 ) {
   const root = tempDirs.make("node-worker-supervisor-");
@@ -144,12 +142,12 @@ describe("node worker supervisor", () => {
       supervisorIdentity.startTime,
     );
 
-    const availability: boolean[] = [];
+    const capacitySnapshots: Array<{ total: number; available: number }> = [];
     const sameHandle = createNodeWorkerSupervisor({
       bundleRoot,
       env,
       capacity: 2,
-      onAvailabilityChanged: (available) => availability.push(available),
+      onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
     });
     expect(await sameHandle.status("pending-launch")).toMatchObject({
       state: "pending",
@@ -159,7 +157,10 @@ describe("node worker supervisor", () => {
       state: "running",
       worker: supervisorIdentity,
     });
-    expect(availability).toEqual([false]);
+    expect(capacitySnapshots).toEqual([
+      { total: 2, available: 0 },
+      { total: 2, available: 0 },
+    ]);
     await supervisor.close();
     await sameHandle.close();
     closeOpenClawStateDatabaseForTest();
@@ -193,7 +194,7 @@ describe("node worker supervisor", () => {
     const completed = await waitForTerminal(supervisor, input.launchId);
     expect(completed).toMatchObject({ state: "completed", errorText: null });
     expect(JSON.parse(completed.resultJson ?? "null")).toEqual({
-      argv: ["worker", "--internal-worker-ipc"],
+      argv: ["--internal-worker-ipc"],
       status: "completed",
     });
     expect(await supervisor.launch(input, TEST_WORKER_ENDPOINT)).toEqual(completed);
@@ -215,11 +216,11 @@ describe("node worker supervisor", () => {
   });
 
   it("admits two durable launches and releases one physical slot at a time", async () => {
-    const availability: boolean[] = [];
+    const capacitySnapshots: Array<{ total: number; available: number }> = [];
     const { env, supervisor, workspaceDir } = fixture({
       capacity: 2,
       capacityWaitMs: 5_000,
-      onAvailabilityChanged: (available) => availability.push(available),
+      onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
     });
     const first = launchInput(workspaceDir, "capacity-a", "wait");
     const second = launchInput(workspaceDir, "capacity-b", "wait");
@@ -233,7 +234,12 @@ describe("node worker supervisor", () => {
       launchId: first.launchId,
       state: "running",
     });
-    expect(availability).toEqual([false, true, false]);
+    expect(capacitySnapshots).toEqual([
+      { total: 2, available: 0 },
+      { total: 2, available: 2 },
+      { total: 2, available: 1 },
+      { total: 2, available: 0 },
+    ]);
 
     const thirdAdmission = supervisor.launch(third, TEST_WORKER_ENDPOINT);
     const fourthAdmission = supervisor.launch(fourth, TEST_WORKER_ENDPOINT);
@@ -256,7 +262,16 @@ describe("node worker supervisor", () => {
     await expect(thirdAdmittedFirst ? fourthAdmission : thirdAdmission).resolves.toMatchObject({
       state: "running",
     });
-    expect(availability).toEqual([false, true, false, true, false, true, false]);
+    expect(capacitySnapshots).toEqual([
+      { total: 2, available: 0 },
+      { total: 2, available: 2 },
+      { total: 2, available: 1 },
+      { total: 2, available: 0 },
+      { total: 2, available: 1 },
+      { total: 2, available: 0 },
+      { total: 2, available: 1 },
+      { total: 2, available: 0 },
+    ]);
 
     await supervisor.close();
   });
@@ -307,63 +322,13 @@ describe("node worker supervisor", () => {
     expect(new NodeWorkerLaunchStore({ env }).get(waiting.launchId)).toBeUndefined();
   });
 
-  it("reuses the advertised local install and refuses it after its worker bytes change", async () => {
-    const root = tempDirs.make("node-worker-local-install-");
-    const packageRoot = path.join(root, "package");
-    const workspaceDir = path.join(root, "workspace");
-    const stateDir = path.join(root, "state");
-    fs.mkdirSync(path.join(packageRoot, "dist"), { recursive: true });
-    fs.mkdirSync(workspaceDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(packageRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.8.1", type: "module", dependencies: {} }),
-    );
-    fs.writeFileSync(path.join(packageRoot, "openclaw.mjs"), TEST_WORKER_SOURCE, { mode: 0o755 });
-    const distPath = path.join(packageRoot, "dist", "entry.js");
-    fs.writeFileSync(distPath, "export const workerBuild = 1;\n");
-    const installation = await resolveNodeWorkerInstallation({
-      packageRoot,
-      openclawVersion: "2026.8.1",
-      protocolFeatures: [],
-    });
-    const supervisor = createNodeWorkerSupervisor({
-      env: { OPENCLAW_STATE_DIR: stateDir },
-      localInstallation: installation,
-    });
-    const localInput = (launchId: string) => {
-      const input = launchInput(workspaceDir, launchId);
-      input.installKind = "local";
-      input.expectedBundleHash = installation.build.bundleHash;
-      input.descriptor.admission.handshake = structuredClone(installation.build);
-      return input;
-    };
-    const stagingRoot = vi.spyOn(fsp, "mkdtemp");
-
-    const first = localInput("local-success");
-    expect(await supervisor.launch(first, TEST_WORKER_ENDPOINT)).toMatchObject({
-      state: "running",
-    });
-    expect(await waitForTerminal(supervisor, first.launchId)).toMatchObject({ state: "completed" });
-    expect(stagingRoot).not.toHaveBeenCalled();
-
-    fs.writeFileSync(distPath, "export const workerBuild = 2;\n");
-    expect(
-      await supervisor.launch(localInput("local-mutated"), TEST_WORKER_ENDPOINT),
-    ).toMatchObject({
-      state: "failed",
-      errorText: expect.stringContaining("changed after its build was advertised"),
-    });
-    expect(stagingRoot).toHaveBeenCalledTimes(1);
-    await supervisor.close();
-  });
-
   it.each(["status", "launch", "cancel", "close"] as const)(
     "retains an observed terminal outcome when %s reconciliation keeps failing",
     async (operation) => {
-      const availability: boolean[] = [];
+      const capacitySnapshots: Array<{ total: number; available: number }> = [];
       const { env, supervisor, workspaceDir } = fixture({
         capacity: 1,
-        onAvailabilityChanged: (available) => availability.push(available),
+        onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
       });
       const input = launchInput(workspaceDir, `finish-failure-${operation}`);
       const store = (supervisor as unknown as { store: NodeWorkerLaunchStore }).store;
@@ -396,11 +361,11 @@ describe("node worker supervisor", () => {
       });
       await vi.waitFor(() => expect(finish).toHaveBeenCalled(), { timeout: 5_000 });
       expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)?.state).toBe("running");
-      expect(availability.at(-1)).toBe(false);
+      expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 });
 
       await expect(invoke()).rejects.toThrow("injected finish failure");
       expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)?.state).toBe("running");
-      expect(availability.at(-1)).toBe(false);
+      expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 });
 
       persistenceUnavailable = false;
       const completed = await invoke();
@@ -409,7 +374,7 @@ describe("node worker supervisor", () => {
         resultJson: expect.stringContaining('"status":"completed"'),
       });
       expect(new NodeWorkerLaunchStore({ env }).get(input.launchId)?.state).toBe("completed");
-      expect(availability.at(-1)).toBe(true);
+      expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 1 });
       await supervisor.close();
     },
   );
@@ -449,7 +414,7 @@ describe("node worker supervisor", () => {
           LC_TIME: suppliedEnv.LC_TIME,
           NODE_EXTRA_CA_CERTS: suppliedEnv.NODE_EXTRA_CA_CERTS,
           NODE_USE_SYSTEM_CA: suppliedEnv.NODE_USE_SYSTEM_CA,
-          NODE_DISABLE_COMPILE_CACHE: "1",
+          NODE_COMPILE_CACHE: expect.stringContaining("node-worker-compile-cache"),
           OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: suppliedEnv.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS,
           OPENCLAW_NO_RESPAWN: "1",
           [suppliedPathKey]: suppliedEnv[suppliedPathKey],
@@ -717,7 +682,7 @@ describe("node worker supervisor", () => {
     const running = await supervisor.launch(input, TEST_WORKER_ENDPOINT);
     expect(running.state).toBe("running");
     const grandchildPath = path.join(workspaceDir, "grandchild.pid");
-    await vi.waitFor(() => expect(fs.existsSync(grandchildPath)).toBe(true));
+    await vi.waitFor(() => expect(fs.readFileSync(grandchildPath, "utf8")).toMatch(/^[1-9]\d*$/u));
     const grandchildPid = Number(fs.readFileSync(grandchildPath, "utf8"));
     const grandchild = requireNodeWorkerProcessIdentity(grandchildPid);
     expect(inspectNodeWorkerProcessIdentity(grandchild)).toBe("live");
@@ -744,7 +709,7 @@ describe("node worker supervisor", () => {
     const outsideEntry = path.join(root, "outside.mjs");
     fs.mkdirSync(escapedBundle, { recursive: true });
     fs.writeFileSync(outsideEntry, TEST_WORKER_SOURCE);
-    fs.symlinkSync(outsideEntry, path.join(escapedBundle, "openclaw.mjs"));
+    fs.symlinkSync(outsideEntry, path.join(escapedBundle, "worker.mjs"));
     const input = launchInput(workspaceDir, "escaped-entry");
     input.expectedBundleHash = escapedHash;
     input.descriptor.admission.handshake.bundleHash = escapedHash;

@@ -2,7 +2,10 @@
 import { html } from "lit";
 import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
-import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
+import {
+  normalizeChatModelProviderId,
+  resolvePreferredServerChatModelValue,
+} from "../../../lib/chat/model-ref.ts";
 import {
   resolveChatFastModeSelectState,
   resolveChatModelSelectState,
@@ -46,9 +49,11 @@ type ChatModelControlsProps = {
   thinkingDefaults?: SessionsListResult["defaults"];
   thinkingSession?: ChatThinkingTarget;
   onFastModeSelect?: (value: ChatFastModeSelectValue, sessionKey: string) => unknown;
+  onContextWindowSelect?: (value: string, sessionKey: string) => unknown;
   onModelSetup?: () => void;
   onModelPickerOpen?: () => unknown;
   onModelSelect?: (value: string, sessionKey: string) => unknown;
+  onModelPickerTargetRetry?: (groupId: string) => unknown;
   onModelPickerTargetSelect?: (groupId: string, value: string) => unknown;
   onRequestUpdate?: () => void;
   onThinkingSelect?: (value: string, sessionKey: string) => unknown;
@@ -149,8 +154,23 @@ function formatPickerModelLabel(label: string): string {
   return match?.[1] ?? label;
 }
 
-function modelAuthenticationNeededText(): string {
-  return `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`;
+function resolveCatalogTriggerStatus(
+  state: ChatModelCatalogState,
+  optionCount: number,
+): string | undefined {
+  if (state.status === "offline") {
+    return t("common.offline");
+  }
+  if (state.status === "error") {
+    return optionCount === 0 ? t("chat.modelControls.modelsUnavailable") : undefined;
+  }
+  if (!state.hasSnapshot && ["idle", "loading", "refreshing"].includes(state.status)) {
+    return t("chat.modelControls.loadingModels");
+  }
+  if (state.hasSnapshot && optionCount === 0) {
+    return t("chat.modelControls.noModelsAvailable");
+  }
+  return undefined;
 }
 
 export function renderChatModelControls(props: ChatModelControlsProps) {
@@ -272,6 +292,44 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     !explicitOverride && currentOverride.trim().toLowerCase() === defaultModel.trim().toLowerCase()
       ? ""
       : currentOverride;
+  const activeModelOption =
+    pickerValue === ""
+      ? modelOptions.find((option) => option.isDefault)
+      : modelOptions.find((option) => option.value === pickerValue);
+  const activeSessionModel = activeSession?.model
+    ? resolveChatModelCatalogEntry(
+        resolvePreferredServerChatModelValue(
+          activeSession.model,
+          activeSession.modelProvider,
+          props.modelCatalog,
+        ),
+        props.modelCatalog,
+      )
+    : undefined;
+  const activeOptionModel = activeModelOption
+    ? resolveChatModelCatalogEntry(activeModelOption.value, props.modelCatalog)
+    : undefined;
+  const activeSessionRuntime = activeSession?.agentRuntime?.id.trim().toLowerCase();
+  const activeOptionRuntime = (
+    activeOptionModel?.agentRuntime?.id ??
+    (activeModelOption?.isDefault ? props.sessionsResult?.defaults?.agentRuntime?.id : undefined)
+  )
+    ?.trim()
+    .toLowerCase();
+  const activeRuntimeMatches =
+    Boolean(activeSessionRuntime) && activeSessionRuntime === activeOptionRuntime;
+  // Missing or mismatched current-selection provenance cannot bind the cached
+  // session window. Even matching provenance is useful only after the switch settles.
+  if (
+    !props.modelSwitching &&
+    activeModelOption &&
+    activeSession?.contextTokens &&
+    activeRuntimeMatches &&
+    activeSessionModel !== undefined &&
+    activeSessionModel === activeOptionModel
+  ) {
+    activeModelOption.contextTokens = activeSession.contextTokens;
+  }
   const lockedModelLabel =
     props.modelSelectionRuntimeId?.trim().toLowerCase() === "codex"
       ? t("chat.selectors.nativeCodexModel")
@@ -292,16 +350,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const catalogLoadingWithoutSnapshot =
     !managedCatalog.hasSnapshot &&
     ["idle", "loading", "refreshing"].includes(managedCatalog.status);
-  const catalogErrorWithoutSnapshot =
-    managedCatalog.status === "error" && !managedCatalog.hasSnapshot;
-  const catalogSnapshotEmpty = managedCatalog.hasSnapshot && modelOptions.length === 0;
-  const catalogTriggerStatus = catalogLoadingWithoutSnapshot
-    ? t("chat.modelControls.loadingModels")
-    : catalogErrorWithoutSnapshot
-      ? t("chat.modelControls.modelsUnavailable")
-      : catalogSnapshotEmpty
-        ? modelAuthenticationNeededText()
-        : undefined;
+  const catalogTriggerStatus = resolveCatalogTriggerStatus(managedCatalog, modelOptions.length);
   const busy =
     props.loading || props.sending || Boolean(props.activeRunId) || props.stream !== null;
   const commonDisabled =
@@ -318,6 +367,14 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     !managedCatalog.hasSnapshot ||
     (thinking.options.length === 0 && thinking.selection.source === "default");
   const showFastMode = props.showFastMode !== false;
+  // One owner supplies the whole tuple: mixing an override session's fields with
+  // the defaults row can render the default model's options for a session whose
+  // model declares none, then patch an invalid option id.
+  const contextWindowOwner = activeSession ?? props.sessionsResult?.defaults;
+  const contextWindows = contextWindowOwner?.contextWindows ?? [];
+  const selectedContextWindow =
+    contextWindowOwner?.contextWindow ?? contextWindowOwner?.contextWindowDefault ?? "";
+  const defaultContextWindow = contextWindowOwner?.contextWindowDefault;
   const effortDisabled =
     commonDisabled ||
     effortMutationDisabled ||
@@ -325,6 +382,18 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   return html`
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       ${renderChatModelPicker({
+        contextWindow:
+          contextWindows.length > 1
+            ? {
+                options: contextWindows,
+                selected: selectedContextWindow,
+                ...(defaultContextWindow ? { defaultId: defaultContextWindow } : {}),
+                disabled: commonDisabled || effortMutationDisabled,
+                onSelect: async (next, targetSessionKey) => {
+                  await props.onContextWindowSelect?.(next, targetSessionKey);
+                },
+              }
+            : undefined,
         defaultModelLabel: formatPickerModelLabel(pickerDefaultLabel),
         disabled: modelDisabled,
         disabledReason: props.modelMutationDisabledReason,
@@ -340,6 +409,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         onOpen: props.onModelPickerOpen,
         onModelSelect: async (next, targetSessionKey) =>
           props.onModelSelect?.(next, targetSessionKey),
+        onTargetRetry: props.onModelPickerTargetRetry,
         onTargetSelect: props.onModelPickerTargetSelect,
         onRequestUpdate: props.onRequestUpdate,
       })}

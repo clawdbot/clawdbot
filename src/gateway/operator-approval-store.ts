@@ -21,6 +21,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type {
@@ -186,17 +187,26 @@ type OperatorApprovalReceiptRow = OperatorApprovalRow & {
   binding_execution_id: string | null;
 };
 type OperatorApprovalReceiptCursor = { occurredAt: number; rowId: number };
-type OperatorApprovalReceiptMetadataRow = Pick<
-  OperatorApprovalRow,
-  "approval_id" | "kind" | "resolution_ref" | "resolved_at_ms" | "updated_at_ms"
+type OperatorApprovalReceiptSnapshotRow = Omit<
+  OperatorApprovalReceiptRow,
+  "presentation_json" | "reviewer_device_ids_json" | "audience_session_keys_json"
 > & {
-  binding_context_id: string | null;
-  binding_execution_id: string | null;
+  presentation_json: string | null;
+  reviewer_device_ids_json: string | null;
+  audience_session_keys_json: string | null;
   receipt_rowid: number;
   payload_bytes: number;
 };
+type OperatorApprovalReceiptSnapshotQueryRow = OperatorApprovalReceiptSnapshotRow & {
+  cursor_boundary_rowid: number | null;
+  page_present: 0 | 1;
+};
+type OperatorApprovalReceiptPageEntry = {
+  receipt: DecisionReceiptV1;
+  selectorId: string;
+};
 type OperatorApprovalReceiptPage = {
-  receipts: DecisionReceiptV1[];
+  entries: OperatorApprovalReceiptPageEntry[];
   nextCursor?: OperatorApprovalReceiptCursor;
 };
 type OperatorApprovalExecutionLinkState = "exact" | "missing" | "malformed" | "mismatch";
@@ -747,7 +757,7 @@ function projectCorruptOperatorApprovalReceipt(
 }
 
 function projectOversizedOperatorApprovalReceipt(
-  row: OperatorApprovalReceiptMetadataRow,
+  row: OperatorApprovalReceiptSnapshotRow,
   context: OperatorApprovalReceiptContext,
 ): DecisionReceiptV1 {
   const receipt = projectCorruptOperatorApprovalReceipt(row, context);
@@ -781,6 +791,16 @@ function operatorApprovalRowId() {
   return /* kysely-allow-raw: SQLite rowid keeps the external cursor compact while the indexed approval id remains the query key. */ sql<number>`operator_approvals.rowid`;
 }
 
+function operatorApprovalSelectorId(
+  row: Pick<OperatorApprovalReceiptSnapshotRow, "receipt_rowid">,
+): string {
+  const rowId = normalizeSqliteNumber(row.receipt_rowid);
+  if (rowId === undefined || rowId < 1) {
+    throw new Error("invalid operator approval receipt rowid");
+  }
+  return `approval-decision:${rowId}`;
+}
+
 function operatorApprovalPayloadBytes() {
   return /* kysely-allow-raw: SQLite byte length excludes oversized retained presentation JSON before materialization. */ sql<number>`
     length(CAST(operator_approvals.presentation_json AS BLOB)) +
@@ -789,121 +809,165 @@ function operatorApprovalPayloadBytes() {
   `;
 }
 
-function terminalApprovalReceiptMetadataRows(params: {
+const OPERATOR_APPROVAL_PAYLOAD_COLUMNS = {
+  presentation_json: sql`operator_approvals.presentation_json`,
+  reviewer_device_ids_json: sql`operator_approvals.reviewer_device_ids_json`,
+  audience_session_keys_json: sql`operator_approvals.audience_session_keys_json`,
+} as const;
+
+function boundedOperatorApprovalPayload(column: keyof typeof OPERATOR_APPROVAL_PAYLOAD_COLUMNS) {
+  return /* kysely-allow-raw: the page statement must not materialize owner payload JSON above its audit bound. */ sql<
+    string | null
+  >`CASE WHEN ${operatorApprovalPayloadBytes()} <= ${OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES} THEN ${OPERATOR_APPROVAL_PAYLOAD_COLUMNS[column]} ELSE NULL END`;
+}
+
+function operatorApprovalReceiptSnapshotColumns(hasExecutionIdentityTable: boolean) {
+  const bindingContextId = hasExecutionIdentityTable
+    ? sql`operator_approval_execution_identities.source_context_id`
+    : sql`NULL`;
+  const bindingExecutionId = hasExecutionIdentityTable
+    ? sql`operator_approval_execution_identities.source_execution_id`
+    : sql`NULL`;
+  return sql`
+    operator_approvals.approval_id,
+    operator_approvals.consumed_at_ms,
+    operator_approvals.consumed_by,
+    operator_approvals.created_at_ms,
+    operator_approvals.decision,
+    operator_approvals.expires_at_ms,
+    operator_approvals.kind,
+    ${boundedOperatorApprovalPayload("presentation_json")} AS presentation_json,
+    operator_approvals.requested_by_client_id,
+    operator_approvals.requested_by_device_id,
+    operator_approvals.requested_by_device_token_auth,
+    operator_approvals.resolution_ref,
+    operator_approvals.resolved_at_ms,
+    operator_approvals.resolver_id,
+    operator_approvals.resolver_kind,
+    ${boundedOperatorApprovalPayload("reviewer_device_ids_json")} AS reviewer_device_ids_json,
+    operator_approvals.runtime_epoch,
+    operator_approvals.source_agent_id,
+    operator_approvals.source_run_id,
+    operator_approvals.source_session_id,
+    operator_approvals.source_session_key,
+    operator_approvals.source_tool_call_id,
+    operator_approvals.source_tool_name,
+    operator_approvals.status,
+    operator_approvals.terminal_reason,
+    operator_approvals.updated_at_ms,
+    ${boundedOperatorApprovalPayload("audience_session_keys_json")} AS audience_session_keys_json,
+    ${bindingContextId} AS binding_context_id,
+    ${bindingExecutionId} AS binding_execution_id,
+    ${operatorApprovalRowId()} AS receipt_rowid,
+    ${operatorApprovalPayloadBytes()} AS payload_bytes
+  `;
+}
+
+function terminalApprovalReceiptPageRows(params: {
   db: DatabaseSync;
-  stateDb: ReturnType<typeof getNodeSqliteKysely<OperatorApprovalDatabase>>;
   runId: string;
   nowMs: number;
   after?: OperatorApprovalReceiptCursor;
   offset?: number;
   limit: number;
-}): OperatorApprovalReceiptMetadataRow[] {
-  const boundary = params.after
-    ? executeSqliteQueryTakeFirstSync(
-        params.db,
-        params.stateDb
-          .selectFrom("operator_approvals")
-          .select(["approval_id", "resolved_at_ms"])
-          .where(operatorApprovalRowId(), "=", params.after.rowId)
-          .where("source_run_id", "=", params.runId)
-          .where("resolved_at_ms", "=", params.after.occurredAt),
-      )
-    : undefined;
-  if (params.after && !boundary) {
-    throw new Error("operator approval decision cursor is no longer retained");
-  }
-  const ordered = terminalApprovalsForRunQuery(params.stateDb, params.runId, params.nowMs)
-    .$if(boundary !== undefined && boundary.resolved_at_ms !== null, (query) =>
-      query.where((eb) =>
-        eb.or([
-          eb("operator_approvals.resolved_at_ms", ">", boundary!.resolved_at_ms!),
-          eb.and([
-            eb("operator_approvals.resolved_at_ms", "=", boundary!.resolved_at_ms!),
-            eb("operator_approvals.approval_id", ">", boundary!.approval_id),
-          ]),
-        ]),
-      ),
-    )
-    .orderBy("operator_approvals.resolved_at_ms", "asc")
-    .orderBy("operator_approvals.approval_id", "asc")
-    .$if(params.offset !== undefined, (query) => query.offset(params.offset!))
-    .limit(params.limit);
-  const metadata = (query: typeof ordered) =>
-    query
-      .select([
-        "operator_approvals.approval_id",
-        "operator_approvals.kind",
-        "operator_approvals.resolution_ref",
-        "operator_approvals.resolved_at_ms",
-        "operator_approvals.updated_at_ms",
-      ])
-      .select([
-        operatorApprovalRowId().as("receipt_rowid"),
-        operatorApprovalPayloadBytes().as("payload_bytes"),
-      ]);
-  if (!tableExists(params.db, "operator_approval_execution_identities")) {
-    return executeSqliteQuerySync(
-      params.db,
-      metadata(ordered).select((eb) => [
-        eb.val(null).as("binding_context_id"),
-        eb.val(null).as("binding_execution_id"),
-      ]),
-    ).rows;
-  }
-  return executeSqliteQuerySync(
+}): OperatorApprovalReceiptSnapshotRow[] {
+  const hasExecutionIdentityTable = tableExists(
     params.db,
-    metadata(ordered)
-      .leftJoin(
-        "operator_approval_execution_identities",
-        "operator_approval_execution_identities.approval_id",
-        "operator_approvals.approval_id",
-      )
-      .select([
-        "operator_approval_execution_identities.source_context_id as binding_context_id",
-        "operator_approval_execution_identities.source_execution_id as binding_execution_id",
-      ]),
-  ).rows;
-}
-
-function terminalApprovalReceiptRowsById(params: {
-  db: DatabaseSync;
-  stateDb: ReturnType<typeof getNodeSqliteKysely<OperatorApprovalDatabase>>;
-  ids: readonly string[];
-}): Map<string, OperatorApprovalReceiptRow> {
-  if (params.ids.length === 0) {
-    return new Map();
-  }
-  const query = params.stateDb
-    .selectFrom("operator_approvals")
-    .where("operator_approvals.approval_id", "in", [...params.ids])
-    .where(operatorApprovalPayloadBytes(), "<=", OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES);
-  if (!tableExists(params.db, "operator_approval_execution_identities")) {
-    const rows = executeSqliteQuerySync(
-      params.db,
-      query
-        .selectAll("operator_approvals")
-        .select((eb) => [
-          eb.val(null).as("binding_context_id"),
-          eb.val(null).as("binding_execution_id"),
-        ]),
-    ).rows;
-    return new Map(rows.map((row) => [row.approval_id, row]));
-  }
+    "operator_approval_execution_identities",
+  );
+  const executionIdentityJoin = hasExecutionIdentityTable
+    ? sql`LEFT JOIN operator_approval_execution_identities
+          ON operator_approval_execution_identities.approval_id = operator_approvals.approval_id`
+    : sql``;
+  const cutoffMs = params.nowMs - OPERATOR_APPROVAL_TERMINAL_RETENTION_MS;
+  const offset = params.offset ?? 0;
+  const pageStatement = params.after
+    ? /* kysely-allow-raw: one CTE statement preserves cursor validation and pairs each owner rowid with its bounded receipt payload in the same SQLite snapshot. */ sql<OperatorApprovalReceiptSnapshotQueryRow>`
+        WITH cursor_boundary AS (
+          SELECT approval_id, resolved_at_ms, ${operatorApprovalRowId()} AS receipt_rowid
+          FROM operator_approvals
+          WHERE ${operatorApprovalRowId()} = ${params.after.rowId}
+            AND source_run_id = ${params.runId}
+            AND resolved_at_ms = ${params.after.occurredAt}
+        ), approval_page AS (
+          SELECT ${operatorApprovalReceiptSnapshotColumns(hasExecutionIdentityTable)}
+          FROM operator_approvals
+          ${executionIdentityJoin}
+          CROSS JOIN cursor_boundary
+          WHERE operator_approvals.source_run_id = ${params.runId}
+            AND operator_approvals.status != 'pending'
+            AND operator_approvals.resolved_at_ms IS NOT NULL
+            AND operator_approvals.resolved_at_ms >= ${cutoffMs}
+            AND (
+              operator_approvals.resolved_at_ms > cursor_boundary.resolved_at_ms
+              OR (
+                operator_approvals.resolved_at_ms = cursor_boundary.resolved_at_ms
+                AND operator_approvals.approval_id > cursor_boundary.approval_id
+              )
+            )
+          ORDER BY operator_approvals.resolved_at_ms ASC, operator_approvals.approval_id ASC
+          LIMIT ${params.limit} OFFSET ${offset}
+        )
+        SELECT
+          cursor_boundary.receipt_rowid AS cursor_boundary_rowid,
+          CASE WHEN approval_page.receipt_rowid IS NULL THEN 0 ELSE 1 END AS page_present,
+          approval_page.*
+        FROM (SELECT 1) AS snapshot_seed
+        LEFT JOIN cursor_boundary ON TRUE
+        LEFT JOIN approval_page ON TRUE
+        ORDER BY approval_page.resolved_at_ms ASC, approval_page.approval_id ASC
+      `
+    : /* kysely-allow-raw: the initial page returns owner rowids and bounded receipt payloads in one SQLite snapshot. */ sql<OperatorApprovalReceiptSnapshotQueryRow>`
+        SELECT
+          NULL AS cursor_boundary_rowid,
+          1 AS page_present,
+          ${operatorApprovalReceiptSnapshotColumns(hasExecutionIdentityTable)}
+        FROM operator_approvals
+        ${executionIdentityJoin}
+        WHERE operator_approvals.source_run_id = ${params.runId}
+          AND operator_approvals.status != 'pending'
+          AND operator_approvals.resolved_at_ms IS NOT NULL
+          AND operator_approvals.resolved_at_ms >= ${cutoffMs}
+        ORDER BY operator_approvals.resolved_at_ms ASC, operator_approvals.approval_id ASC
+        LIMIT ${params.limit} OFFSET ${offset}
+      `;
+  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(params.db);
   const rows = executeSqliteQuerySync(
     params.db,
-    query
-      .leftJoin(
-        "operator_approval_execution_identities",
-        "operator_approval_execution_identities.approval_id",
-        "operator_approvals.approval_id",
+    stateDb
+      .selectFrom(
+        /* kysely-allow-raw: this derived table preserves the single owner-snapshot statement while exposing its closed row shape to Kysely. */
+        sql<OperatorApprovalReceiptSnapshotQueryRow>`(${pageStatement})`.as("approval_snapshot"),
       )
-      .selectAll("operator_approvals")
-      .select([
-        "operator_approval_execution_identities.source_context_id as binding_context_id",
-        "operator_approval_execution_identities.source_execution_id as binding_execution_id",
-      ]),
+      .selectAll(),
   ).rows;
-  return new Map(rows.map((row) => [row.approval_id, row]));
+  if (params.after && rows[0]?.cursor_boundary_rowid === null) {
+    throw new Error("operator approval decision cursor is no longer retained");
+  }
+  if (rows.length === 1 && rows[0]?.page_present === 0) {
+    return [];
+  }
+  return rows.map((row) => {
+    if (row.page_present !== 1) {
+      throw new Error("operator approval page snapshot is malformed");
+    }
+    return row;
+  });
+}
+
+function materializeBoundedOperatorApprovalRow(
+  row: OperatorApprovalReceiptSnapshotRow,
+): OperatorApprovalReceiptRow | null {
+  return typeof row.presentation_json === "string" &&
+    typeof row.reviewer_device_ids_json === "string" &&
+    typeof row.audience_session_keys_json === "string"
+    ? {
+        ...row,
+        presentation_json: row.presentation_json,
+        reviewer_device_ids_json: row.reviewer_device_ids_json,
+        audience_session_keys_json: row.audience_session_keys_json,
+      }
+    : null;
 }
 
 function operatorApprovalExecutionLinkState(
@@ -977,14 +1041,13 @@ export function summarizeOperatorApprovalReceiptsForRun(params: {
         return { count: 0, missingEvidence: [] };
       }
       const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
-      const metadataRows = terminalApprovalReceiptMetadataRows({
+      const snapshotRows = terminalApprovalReceiptPageRows({
         db,
-        stateDb,
         runId: params.context.runId,
         nowMs: params.nowMs ?? Date.now(),
         limit: OPERATOR_APPROVAL_RECEIPT_SUMMARY_MAX_ROWS + 1,
       });
-      const boundedCount = metadataRows.length;
+      const boundedCount = snapshotRows.length;
       const count = params.exactCount
         ? (executeSqliteQueryTakeFirstSync(
             db,
@@ -1005,26 +1068,19 @@ export function summarizeOperatorApprovalReceiptsForRun(params: {
           missingEvidence: ["operator_approval.summary_bounded"],
         };
       }
-      const hasOversizedRecord = metadataRows.some(
+      const hasOversizedRecord = snapshotRows.some(
         (row) => row.payload_bytes > OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES,
       );
-      const boundedMetadataRows = metadataRows.filter(
+      const boundedSnapshotRows = snapshotRows.filter(
         (row) => row.payload_bytes <= OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES,
       );
-      const rowsById = terminalApprovalReceiptRowsById({
-        db,
-        stateDb,
-        ids: boundedMetadataRows.map((row) => row.approval_id),
-      });
-      const rows = metadataRows.flatMap((metadata) => {
-        const row = rowsById.get(metadata.approval_id);
-        return row ? [row] : [];
-      });
-      const hasMissingBoundedRow = rows.length !== boundedMetadataRows.length;
-      const records = rows.map((row) => decodeOperatorApprovalRow(row));
+      const rows = boundedSnapshotRows.map(materializeBoundedOperatorApprovalRow);
+      const hasMissingBoundedRow = rows.some((row) => row === null);
+      const records = rows.map((row) => (row === null ? null : decodeOperatorApprovalRow(row)));
       const hasCorruptRecord = records.some((record) => record === null);
       const hasUnlinkedRecord = rows.some(
         (row, index) =>
+          row !== null &&
           records[index] !== null &&
           operatorApprovalExecutionLinkState(row, params.context) !== "exact",
       );
@@ -1058,47 +1114,40 @@ export function pageOperatorApprovalReceiptsForRun(params: {
   return (
     withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
       if (!tableExists(db, "operator_approvals")) {
-        return { receipts: [] };
+        return { entries: [] };
       }
-      const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
-      const metadataRows = terminalApprovalReceiptMetadataRows({
+      const snapshotRows = terminalApprovalReceiptPageRows({
         db,
-        stateDb,
         runId: params.context.runId,
         nowMs: params.nowMs ?? Date.now(),
         after: params.after,
         offset: params.offset,
         limit: params.limit + 1,
       });
-      const pageMetadata = metadataRows.slice(0, params.limit);
-      const rowsById = terminalApprovalReceiptRowsById({
-        db,
-        stateDb,
-        ids: pageMetadata
-          .filter((row) => row.payload_bytes <= OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES)
-          .map((row) => row.approval_id),
+      const pageRows = snapshotRows.slice(0, params.limit);
+      const entries = pageRows.map((snapshot) => {
+        let receipt: DecisionReceiptV1;
+        if (snapshot.payload_bytes > OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES) {
+          receipt = projectOversizedOperatorApprovalReceipt(snapshot, params.context);
+        } else {
+          const row = materializeBoundedOperatorApprovalRow(snapshot);
+          const record = row === null ? null : decodeOperatorApprovalRow(row);
+          if (row === null || record === null) {
+            receipt = projectCorruptOperatorApprovalReceipt(snapshot, params.context);
+          } else {
+            const linkState = operatorApprovalExecutionLinkState(row, params.context);
+            receipt =
+              linkState === "exact"
+                ? projectOperatorApprovalReceipt(record, params.context)
+                : projectUnlinkedOperatorApprovalReceipt(record, params.context, linkState);
+          }
+        }
+        return { receipt, selectorId: operatorApprovalSelectorId(snapshot) };
       });
-      const receipts = pageMetadata.map((metadata) => {
-        if (metadata.payload_bytes > OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES) {
-          return projectOversizedOperatorApprovalReceipt(metadata, params.context);
-        }
-        const row = rowsById.get(metadata.approval_id);
-        if (!row) {
-          return projectCorruptOperatorApprovalReceipt(metadata, params.context);
-        }
-        const record = decodeOperatorApprovalRow(row);
-        if (!record) {
-          return projectCorruptOperatorApprovalReceipt(row, params.context);
-        }
-        const linkState = operatorApprovalExecutionLinkState(row, params.context);
-        return linkState === "exact"
-          ? projectOperatorApprovalReceipt(record, params.context)
-          : projectUnlinkedOperatorApprovalReceipt(record, params.context, linkState);
-      });
-      const last = pageMetadata.at(-1);
+      const last = pageRows.at(-1);
       return {
-        receipts,
-        ...(metadataRows.length > params.limit && last && last.resolved_at_ms !== null
+        entries,
+        ...(snapshotRows.length > params.limit && last && last.resolved_at_ms !== null
           ? {
               nextCursor: {
                 occurredAt: last.resolved_at_ms,
@@ -1107,7 +1156,7 @@ export function pageOperatorApprovalReceiptsForRun(params: {
             }
           : {}),
       };
-    }, params.databaseOptions) ?? { receipts: [] }
+    }, params.databaseOptions) ?? { entries: [] }
   );
 }
 

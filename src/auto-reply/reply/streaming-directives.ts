@@ -26,6 +26,9 @@ type ConsumeOptions = {
   silentToken?: string;
 };
 
+// TRANSITIONAL(marker-retirement): streaming tail-buffering exists only because
+// live drafts still carry inline markers mid-run. Delete alongside the marker
+// parser when the visibleReplies default flips to "message_tool".
 // Holds back incomplete inline directive tails so parseChunk only ever sees
 // complete reply/audio tags.
 export const splitTrailingDirective = (text: string): { text: string; tail: string } => {

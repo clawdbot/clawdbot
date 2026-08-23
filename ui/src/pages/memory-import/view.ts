@@ -21,6 +21,7 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import "../../styles/memory-import.css";
 
 type MemoryCollection = {
@@ -52,6 +53,7 @@ export type SessionBackfillRollbackResult = {
 
 type MemoryImportViewProps = {
   connected: boolean;
+  canAdmin: boolean;
   agents: GatewayAgentRow[];
   selectedAgentId: string | null;
   plan: MigrationsMemoryPlanResult | null;
@@ -271,7 +273,7 @@ function renderResult(result: MigrationsMemoryApplyResult | undefined) {
                 );
                 return html`<li>
                   <strong>${artifactLabel(item)}</strong>
-                  <span>${item.reason ?? item.message ?? item.status}</span>
+                  <span>${formatUiExternalText(item.reason ?? item.message, item.status)}</span>
                   ${recoveryArtifacts.map(
                     (artifact) => html`<span class="memory-import__result-artifact">
                       <span>${artifact.label}</span>
@@ -296,7 +298,7 @@ function renderProvider(props: MemoryImportViewProps, provider: MemoryMigrationP
     props.backfillBusy === "rollback" ||
     props.backfillRollbackPending;
   const rows = provider.error
-    ? html`<div class="callout danger" role="alert">${provider.error}</div>`
+    ? html`<div class="callout danger" role="alert">${formatUiExternalText(provider.error)}</div>`
     : !provider.found
       ? renderSettingsEmpty(provider.message ?? t("memoryImport.noMemoryFound"))
       : html`
@@ -674,6 +676,9 @@ function renderBackfillSection(props: MemoryImportViewProps) {
 export function renderMemoryImport(props: MemoryImportViewProps) {
   if (!props.connected) {
     return renderSettingsPage(renderSettingsEmpty(t("memoryImport.disconnected")));
+  }
+  if (!props.canAdmin) {
+    return renderSettingsPage(renderSettingsEmpty(t("memoryImport.adminRequired")));
   }
   return html`
     <div class="memory-import" data-test-id="memory-import-page">

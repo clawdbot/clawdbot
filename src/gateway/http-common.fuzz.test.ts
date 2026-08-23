@@ -248,7 +248,14 @@ describe("fuzz: sendInvalidRequest", () => {
 });
 
 describe("fuzz: readJsonBodyOrError", () => {
-  const makeRequest = () => ({}) as IncomingMessage;
+  const makeRequest = () => {
+    const req = { destroyed: false } as IncomingMessage;
+    req.destroy = vi.fn(() => {
+      req.destroyed = true;
+      return req;
+    });
+    return req;
+  };
 
   it("maps readJsonBody results to the documented status/body contract", async () => {
     const rng = makeRng(0xc0de);

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { SessionManager } from "../../agents/sessions/index.js";
+import { getCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -16,6 +17,7 @@ import {
   formatSkillExperienceReviewTranscript,
   selectCurrentSkillTurnMessages,
 } from "./experience-review-prompt.js";
+import { resolveSkillWorkshopProjectionBudgets } from "./model-context-budget.js";
 import type { SkillWorkshopProposalMutationBudget } from "./types.js";
 
 const EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS = 10;
@@ -50,6 +52,7 @@ type ExperienceReviewAgentContext = {
   workspaceDir?: string;
   modelProviderId?: string;
   modelId?: string;
+  modelContextWindowTokens?: number;
   authProfileId?: string;
   modelIterations?: number;
   skillWorkshopAvailable?: boolean;
@@ -346,7 +349,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         log.debug(`experience review skipped: reason=ineligible-context session=${sessionKey}`);
         return;
       }
-      const workspaceDir = params.ctx.workspaceDir?.trim();
+      const workspaceDir = getCanonicalSkillWorkspace() ?? params.ctx.workspaceDir?.trim();
       if (!workspaceDir) {
         log.debug(`experience review skipped: reason=missing-workspace session=${sessionKey}`);
         return;
@@ -403,6 +406,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           ...senderIdentity,
           params.ctx.modelProviderId ?? "",
           params.ctx.modelId ?? "",
+          params.ctx.modelContextWindowTokens ?? "",
           params.ctx.authProfileId ?? "",
         ]);
         let accumulator = shallowBySession.get(sessionKey);
@@ -472,6 +476,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
             workspaceDir,
             modelProviderId: params.ctx.modelProviderId,
             modelId: params.ctx.modelId,
+            modelContextWindowTokens: params.ctx.modelContextWindowTokens,
             authProfileId: params.ctx.authProfileId,
             skillWorkshopAvailable: params.ctx.skillWorkshopAvailable,
             compacted: params.ctx.compacted,
@@ -492,7 +497,11 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
             senderIsOwner: params.ctx.senderIsOwner,
           },
           ...(params.config ? { config: params.config } : {}),
-          transcript: formatSkillExperienceReviewTranscript(reviewMessages),
+          transcript: formatSkillExperienceReviewTranscript(
+            reviewMessages,
+            resolveSkillWorkshopProjectionBudgets(params.ctx.modelContextWindowTokens)
+              .reviewTranscriptChars,
+          ),
           modelIterations: reviewIterations,
           usedSkills: reviewUsedSkills,
           turnAborted: reviewAborted,
@@ -536,7 +545,7 @@ async function runSkillExperienceReviewInner(
   candidate: ExperienceReviewCandidate,
   deps: ExperienceReviewRunDeps,
 ): Promise<void> {
-  const workspaceDir = candidate.ctx.workspaceDir;
+  const workspaceDir = getCanonicalSkillWorkspace() ?? candidate.ctx.workspaceDir;
   const sessionKey = candidate.ctx.sessionKey;
   const modelProviderId = candidate.ctx.modelProviderId?.trim();
   const modelId = candidate.ctx.modelId?.trim();

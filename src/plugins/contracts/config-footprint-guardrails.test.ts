@@ -188,7 +188,7 @@ describe("config footprint guardrails", () => {
     );
   });
 
-  it("keeps current channel schemas plugin-owned with a narrow shipped compatibility tier", () => {
+  it("keeps current channel schemas plugin-owned behind shipped compatibility exports", () => {
     const source = readSource("src/plugin-sdk/channel-config-schema.ts");
     const bundledSource = readSource("src/plugin-sdk/bundled-channel-config-schema.ts");
     const bundledSection = bundledSource.slice(

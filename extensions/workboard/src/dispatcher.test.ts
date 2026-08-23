@@ -1,6 +1,5 @@
 // Workboard tests cover dispatcher plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { cleanupWorkboardRunWorktree } from "./dispatcher-workspace.js";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { PersistedWorkboardCard, WorkboardKeyedStore } from "./persistence-types.js";
 import { WorkboardStore } from "./store.js";
@@ -79,7 +78,7 @@ describe("dispatchAndStartWorkboardCards", () => {
     expect(execution).not.toHaveProperty("model");
   });
 
-  it("materializes managed worktrees, supplies cwd, persists them, and cleans up on run end", async () => {
+  it("materializes managed worktrees, supplies cwd, and persists them", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({
       title: "Isolated worker",
@@ -135,12 +134,7 @@ describe("dispatchAndStartWorkboardCards", () => {
       },
     });
 
-    await cleanupWorkboardRunWorktree({ store, worktrees, runId: "run-worktree" });
-    expect(worktrees.removeIfLossless).toHaveBeenCalledWith({
-      path: "/state/worktrees/fingerprint/wb-card",
-      ownerKind: "workboard",
-      ownerId: card.id,
-    });
+    expect(worktrees.removeIfLossless).not.toHaveBeenCalled();
   });
 
   it("requires explicit reauthorization for legacy cards under full-host dispatch", async () => {

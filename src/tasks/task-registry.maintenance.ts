@@ -36,7 +36,6 @@ import {
   collectCronHistoryOverflowTaskIds,
   shouldPruneTerminalTask,
 } from "./cron-history-retention.js";
-export { CRON_HISTORY_KEEP_PER_JOB } from "./cron-history-retention.js";
 import {
   getDetachedTaskLifecycleRuntime,
   tryRecoverTaskBeforeMarkLost,
@@ -60,11 +59,15 @@ import {
   summarizeTaskAuditFindings,
 } from "./task-registry.audit.js";
 import type { TaskAuditFinding, TaskAuditSummary } from "./task-registry.audit.js";
-import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "./task-registry.store.sqlite.js";
+import {
+  listTaskRegistryRecordsByRuntimeSourceIdFromSqlite,
+  loadTaskRegistryStateFromSqliteReadOnlyResult,
+} from "./task-registry.store.sqlite.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registry.types.js";
 import type { ActiveTaskRestartBlocker } from "./task-restart-blocker.js";
 import { resolveEffectiveTaskCleanupAfter, resolveTaskCleanupAfter } from "./task-retention.js";
+export { CRON_HISTORY_KEEP_PER_JOB } from "./cron-history-retention.js";
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
@@ -487,15 +490,7 @@ function hasDetachedTaskRecoveryHook(): boolean {
 }
 
 function shouldStampCleanupAfter(task: TaskRecord): boolean {
-  return (
-    isTerminalTask(task) &&
-    typeof task.cleanupAfter !== "number" &&
-    resolveTaskCleanupAfter(task) !== undefined
-  );
-}
-
-function resolveCleanupAfter(task: TaskRecord): number | undefined {
-  return resolveTaskCleanupAfter(task);
+  return isTerminalTask(task) && typeof task.cleanupAfter !== "number";
 }
 
 function taskReferenceAt(task: TaskRecord): number {
@@ -695,7 +690,7 @@ function markTaskLost(
     ...task,
     status: "lost",
     endedAt: lostAt,
-  })!;
+  });
   const updated =
     taskRegistryMaintenanceRuntime.markTaskLostById({
       taskId: task.taskId,
@@ -744,7 +739,7 @@ function projectTaskRecovered(task: TaskRecord, recovery: CronTerminalRecovery):
     ...projected,
     ...(typeof projected.cleanupAfter === "number"
       ? {}
-      : { cleanupAfter: resolveCleanupAfter(projected) }),
+      : { cleanupAfter: resolveTaskCleanupAfter(projected) }),
   };
 }
 
@@ -764,7 +759,7 @@ function projectTaskLost(
     ...projected,
     ...(typeof projected.cleanupAfter === "number"
       ? {}
-      : { cleanupAfter: resolveCleanupAfter(projected) }),
+      : { cleanupAfter: resolveTaskCleanupAfter(projected) }),
   };
 }
 
@@ -795,19 +790,39 @@ function reconcileTaskRecordForOperatorInspection(
   );
 }
 
-export function reconcileInspectableTasks(): TaskRecord[] {
-  taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
+function reconcileTaskRecordsForOperatorInspection(tasks: TaskRecord[]): TaskRecord[] {
   const cronRecoveryContext = createCronRecoveryContext();
   const backingSessionContext = createBackingSessionLookupContext();
-  return taskRegistryMaintenanceRuntime
-    .listTaskRecords()
-    .map((task) =>
-      reconcileTaskRecordForOperatorInspectionWithContexts(
-        task,
-        cronRecoveryContext,
-        backingSessionContext,
-      ),
-    );
+  return tasks.map((task) =>
+    reconcileTaskRecordForOperatorInspectionWithContexts(
+      task,
+      cronRecoveryContext,
+      backingSessionContext,
+    ),
+  );
+}
+
+export function reconcileInspectableTasks(): TaskRecord[] {
+  taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
+  return reconcileTaskRecordsForOperatorInspection(
+    taskRegistryMaintenanceRuntime.listTaskRecords(),
+  );
+}
+
+/** Reads and reconciles persisted tasks without initializing the process task runtime. */
+export function listInspectableTasksReadOnly(): TaskRecord[] {
+  return inspectTasksReadOnly().tasks;
+}
+
+export function inspectTasksReadOnly(): {
+  tasks: TaskRecord[];
+  state: "ready" | "migration-required";
+} {
+  const loaded = loadTaskRegistryStateFromSqliteReadOnlyResult();
+  return {
+    state: loaded.state,
+    tasks: reconcileTaskRecordsForOperatorInspection([...loaded.snapshot.tasks.values()]),
+  };
 }
 
 configureTaskAuditTaskProvider(reconcileInspectableTasks);
@@ -1091,12 +1106,10 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
       continue;
     }
     if (shouldStampCleanupAfter(current)) {
-      const cleanupAfter = resolveCleanupAfter(current);
       if (
-        cleanupAfter !== undefined &&
         taskRegistryMaintenanceRuntime.setTaskCleanupAfterById({
           taskId: current.taskId,
-          cleanupAfter,
+          cleanupAfter: resolveTaskCleanupAfter(current),
         })
       ) {
         cleanupStamped += 1;

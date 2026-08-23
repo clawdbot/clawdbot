@@ -672,7 +672,7 @@ describe("buildStatusReply subagent summary", () => {
         activeModelAuthOverride: "api-key",
       });
 
-      expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
+      expect(normalizeTestText(text)).toContain("Context: 1.0k/200k");
     });
   });
 

@@ -5,6 +5,7 @@ import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
 import { coerceErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
@@ -160,11 +161,6 @@ function resolveExistingPath(value: string) {
   return currentPath;
 }
 
-function isPathInside(parentPath: string, childPath: string) {
-  const relativePath = path.relative(parentPath, childPath);
-  return !relativePath.startsWith("..") && !path.isAbsolute(relativePath);
-}
-
 function validatePnpmVersion(version: string) {
   if (!/^[0-9A-Za-z.+_-]+$/u.test(version)) {
     throw new Error(`unsupported pnpm version in packageManager: ${version}`);
@@ -183,7 +179,7 @@ function resolveMountedOutputPath(repoRoot: string, hostPath: string) {
   const realRepoRoot = resolveRealPath(repoRoot);
   const existingHostPath = resolveExistingPath(hostPath);
   const realExistingHostPath = resolveRealPath(existingHostPath);
-  if (!isPathInside(realRepoRoot, realExistingHostPath) && realExistingHostPath !== realRepoRoot) {
+  if (!isPathInside(realRepoRoot, realExistingHostPath)) {
     throw new Error(
       `qa suite --runner multipass requires --output-dir to stay under the repo root (${repoRoot}), got ${hostPath}.`,
     );

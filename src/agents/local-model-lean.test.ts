@@ -110,10 +110,10 @@ describe("local model lean tool filtering", () => {
 
     expect(
       filterLocalModelLeanTools({
-        tools: tools(["read", "image", "image_generate", "music_generate", "video_generate"]),
+        tools: tools(["read", "view_image", "image_generate", "music_generate", "video_generate"]),
         config: cfg,
       }).map((tool) => tool.name),
-    ).toEqual(["read", "image"]);
+    ).toEqual(["read", "view_image"]);
   });
 
   it("adds reply-required message tools to lean preservation", () => {

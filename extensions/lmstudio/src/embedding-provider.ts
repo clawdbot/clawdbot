@@ -10,7 +10,6 @@ import {
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { formatErrorMessage, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_DEFAULT_EMBEDDING_MODEL, LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import { ensureLmstudioModelLoaded, fetchLmstudioModels } from "./models.fetch.js";
 import {
@@ -102,8 +101,6 @@ async function resolveLmstudioApiKey(
 function resolveEmbeddingPreloadContextLength(params: {
   model: string;
   models: unknown;
-  providerContextTokens: unknown;
-  providerContextWindow: unknown;
 }): number | undefined {
   const configuredModel = normalizeLmstudioConfiguredCatalogEntries(params.models).find(
     (entry) => normalizeLmstudioModel(entry.id) === params.model,
@@ -111,17 +108,7 @@ function resolveEmbeddingPreloadContextLength(params: {
   if (configuredModel?.contextTokens !== undefined) {
     return configuredModel.contextTokens;
   }
-  // Provider contextTokens is the model default, so it caps an explicit model
-  // window only when that model did not declare its own effective token cap.
-  const providerContextTokens = asPositiveSafeInteger(params.providerContextTokens);
-  if (configuredModel?.contextWindow !== undefined && providerContextTokens !== undefined) {
-    return Math.min(configuredModel.contextWindow, providerContextTokens);
-  }
-  return (
-    providerContextTokens ??
-    configuredModel?.contextWindow ??
-    asPositiveSafeInteger(params.providerContextWindow)
-  );
+  return configuredModel?.contextWindow;
 }
 
 function resolveConfiguredLmstudioProvider(options: MemoryEmbeddingProviderCreateOptions) {
@@ -237,8 +224,6 @@ export async function createLmstudioEmbeddingProvider(
   const requestedContextLength = resolveEmbeddingPreloadContextLength({
     model,
     models: providerConfig?.models,
-    providerContextTokens: providerConfig?.contextTokens,
-    providerContextWindow: providerConfig?.contextWindow,
   });
   const localServiceTarget =
     providerConfig?.localService && !baseUrlSource

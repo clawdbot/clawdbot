@@ -1114,14 +1114,9 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
 export const testing = {
   parseDriverMode,
   parseArgs,
-  parseNumber,
-  DISCORD_RESPONSE_BODY_MAX_BYTES,
   redactDiscordApiPath,
-  readDiscordResponseText,
   remainingTimeoutMs,
   requestDiscordJson,
-  resolveStateDir,
-  safeErrorMessage,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

@@ -24,7 +24,6 @@ import {
   configSelectionFromSearch,
   extractQuickSettingsSecurity,
 } from "./config-page.ts";
-import { configSectionKeysForPage } from "./config-sections.ts";
 import type { ConfigViewState } from "./view.ts";
 
 const switchActiveRealtimeTalkCameras =
@@ -75,14 +74,6 @@ describe("configSelectionFromSearch", () => {
   });
 
   it("keeps MCP separate from Infrastructure", () => {
-    expect(configSectionKeysForPage("mcp")).toEqual(["mcp"]);
-    expect(configSectionKeysForPage("infrastructure")).toEqual([
-      "gateway",
-      "browser",
-      "nodeHost",
-      "discovery",
-      "acp",
-    ]);
     expect(configSelectionFromSearch("mcp", "?section=browser")).toEqual({
       activeSection: "mcp",
       activeSubsection: null,
@@ -93,24 +84,11 @@ describe("configSelectionFromSearch", () => {
     });
   });
 
-  it("keeps Communications focused on messages and text-to-speech", () => {
-    expect(configSectionKeysForPage("communications")).toEqual(["messages", "tts"]);
-  });
-
-  it("gives Talk its own curated page", () => {
-    expect(configSectionKeysForPage("talk")).toEqual(["talk"]);
-  });
-
-  it("gives Updates ownership of the update config section", () => {
-    expect(configSectionKeysForPage("updates")).toEqual(["update"]);
+  it("keeps the Updates section off Advanced", () => {
     expect(configSelectionFromSearch("advanced", "?section=update")).toEqual({
       activeSection: null,
       activeSubsection: null,
     });
-  });
-
-  it("keeps provider models off Agent Defaults", () => {
-    expect(configSectionKeysForPage("ai-agents")).toEqual(["agents", "skills", "tools", "session"]);
   });
 });
 

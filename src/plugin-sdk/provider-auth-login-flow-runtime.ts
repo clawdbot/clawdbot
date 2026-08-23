@@ -2,15 +2,15 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../packages/normalization-core/src/string-coerce.js";
+import type {
+  ModelsAuthLoginFlowOptions,
+  ModelsAuthLoginFlowResult,
+} from "../commands/models/auth.js";
 import { createLazyRuntimeMethodBinder, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { OpenClawConfig } from "./config-contracts.js";
 import type { RuntimeEnv } from "./runtime-env.js";
 
 export type {
-  ModelsAuthLoginFlowOptions,
-  ModelsAuthLoginFlowResult,
-} from "../commands/models/auth.js";
-import type {
   ModelsAuthLoginFlowOptions,
   ModelsAuthLoginFlowResult,
 } from "../commands/models/auth.js";

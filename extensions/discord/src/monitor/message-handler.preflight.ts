@@ -278,8 +278,10 @@ export async function preflightDiscordMessage(
   const messageText = resolveDiscordMessageText(message, {
     includeForwarded: true,
   });
+  // Only bot/webhook traffic can be rejected before canonical routing; ordinary
+  // messages should reach the single authoritative binding lookup below.
   const injectedBoundThreadBinding =
-    !isDirectMessage && !isGroupDm
+    !isDirectMessage && !isGroupDm && (webhookId || author.bot)
       ? resolveInjectedBoundThreadLookupRecord({
           threadBindings: params.threadBindings,
           threadId: messageChannelId,
@@ -819,6 +821,19 @@ export async function preflightDiscordMessage(
     }
   }
 
+  const guildId = isGuildMessage
+    ? (data.guild?.id ?? data.guild_id ?? message.guild_id)
+    : undefined;
+  const conversationAvatar =
+    isDirectMessage || guildId
+      ? params.avatarResolver?.resolve({
+          client: params.client,
+          conversationId: messageChannelId,
+          author,
+          ...(guildId ? { guildId } : {}),
+        })
+      : undefined;
+
   // Discord CDN attachment URLs expire; download now (receipt time) instead
   // of after the run queue, which may delay processing past the URL TTL.
   const mediaResolveOptions = {
@@ -868,6 +883,7 @@ export async function preflightDiscordMessage(
     ...(preflightTranscript !== undefined ? { preflightAudioTranscript: preflightTranscript } : {}),
     preparedMedia,
     wasMentioned,
+    conversationAvatar,
     route: effectiveRoute,
     threadBinding,
     boundSessionKey: boundSessionKey || undefined,

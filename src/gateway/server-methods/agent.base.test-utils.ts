@@ -695,7 +695,7 @@ describe("gateway agent handler", () => {
     );
 
     expectRespondError(respond, {
-      message: `Error: Session "${sessionKey}" was deleted while starting work. Retry.`,
+      message: `Session "${sessionKey}" was deleted while starting work. Retry.`,
     });
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
@@ -723,7 +723,7 @@ describe("gateway agent handler", () => {
     );
 
     expectRespondError(respond, {
-      message: `Error: Session "${sessionKey}" was deleted while starting work. Retry.`,
+      message: `Session "${sessionKey}" was deleted while starting work. Retry.`,
     });
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
@@ -756,7 +756,7 @@ describe("gateway agent handler", () => {
     );
 
     expectRespondError(respond, {
-      message: `Error: Session "${sessionKey}" was deleted while starting work. Retry.`,
+      message: `Session "${sessionKey}" was deleted while starting work. Retry.`,
     });
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
@@ -1169,7 +1169,7 @@ describe("gateway agent handler", () => {
     expect(store["agent:main:main"]).toBeUndefined();
   });
 
-  it("does not persist a gateway user-turn recorder after the session key is rebound", async () => {
+  it("does not re-persist an admitted gateway user turn after the session key is rebound", async () => {
     primeMainAgentRun({ sessionId: "accepted-session-id" });
 
     await runMainAgent("stale after reset", "idem-user-turn-rebound");
@@ -1177,10 +1177,13 @@ describe("gateway agent handler", () => {
     const call = await waitForAgentCommandCall<
       AgentCommandCall & {
         userTurnTranscriptRecorder?: {
+          hasPersisted: () => boolean;
           persistApproved: () => Promise<unknown>;
         };
       }
     >();
+    expect(call.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
+    expect(mocks.persistSessionTranscriptTurn).toHaveBeenCalledTimes(1);
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
       storePath: "/tmp/sessions.json",
@@ -1197,64 +1200,79 @@ describe("gateway agent handler", () => {
       },
     });
 
-    await expect(call.userTurnTranscriptRecorder?.persistApproved()).resolves.toBeUndefined();
+    await expect(call.userTurnTranscriptRecorder?.persistApproved()).resolves.toBeDefined();
+    expect(mocks.persistSessionTranscriptTurn).toHaveBeenCalledTimes(1);
   });
 
-  it("does not pass a text-only user-turn recorder for image agent runs", async () => {
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      model: "vision-model",
-      modelProvider: "test",
-      modelOverride: "vision-model",
-      modelOverrideSource: "user",
-      providerOverride: "test",
-    });
-    mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
-    const context = {
-      ...makeContext(),
-      loadGatewayModelCatalog: vi.fn(async () => [
-        {
-          id: "vision-model",
-          name: "vision-model",
-          provider: "test",
-          input: ["image"],
-        },
-      ]),
-    } as unknown as GatewayRequestContext;
-
-    await invokeAgent(
-      {
-        message: "describe this image",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        idempotencyKey: "idem-image-user-turn-recorder",
-        attachments: [
+  it("durably admits managed media for inline image agent runs", async () => {
+    await withTestDir({ prefix: "openclaw-gateway-agent-inline-image-" }, async (root) => {
+      useTestStateDir(root);
+      mockMainSessionEntry({
+        sessionId: "existing-session-id",
+        model: "vision-model",
+        modelProvider: "test",
+        modelOverride: "vision-model",
+        modelOverrideSource: "user",
+        providerOverride: "test",
+      });
+      mocks.updateSessionStore.mockResolvedValue(undefined);
+      mocks.agentCommand.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100 },
+      });
+      const context = {
+        ...makeContext(),
+        loadGatewayModelCatalog: vi.fn(async () => [
           {
-            type: "file",
-            mimeType: "image/png",
-            fileName: "test.png",
-            content: Buffer.from("fake-png-data").toString("base64"),
+            id: "vision-model",
+            name: "vision-model",
+            provider: "test",
+            input: ["image"],
           },
-        ],
-      },
-      { context, reqId: "idem-image-user-turn-recorder" },
-    );
+        ]),
+      } as unknown as GatewayRequestContext;
 
-    const call = await waitForAgentCommandCall();
-    expect(call.images).toEqual([
-      expect.objectContaining({
-        type: "image",
-        mimeType: "image/png",
-      }),
-    ]);
-    expect(call.userTurnTranscriptRecorder).toBeUndefined();
+      await invokeAgent(
+        {
+          message: "describe this image",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "idem-image-user-turn-recorder",
+          attachments: [
+            {
+              type: "file",
+              mimeType: "image/png",
+              fileName: "test.png",
+              content: Buffer.from("fake-png-data").toString("base64"),
+            },
+          ],
+        },
+        { context, reqId: "idem-image-user-turn-recorder" },
+      );
+
+      const call = await waitForAgentCommandCall<
+        AgentCommandCall & {
+          userTurnTranscriptRecorder?: {
+            getPersistedMessage: () => { __openclaw?: Record<string, unknown> } | undefined;
+            hasPersisted: () => boolean;
+          };
+        }
+      >();
+      expect(call.images).toEqual([
+        expect.objectContaining({
+          type: "image",
+          mimeType: "image/png",
+        }),
+      ]);
+      expect(call.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
+      expect(call.userTurnTranscriptRecorder?.getPersistedMessage()?.["__openclaw"]).toMatchObject({
+        media: [expect.objectContaining({ contentType: "image/png", kind: "image" })],
+        mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
+      });
+    });
   });
 
-  it("does not pass a text-only user-turn recorder for offloaded image agent runs", async () => {
+  it("durably admits managed media for offloaded image agent runs", async () => {
     await withTestDir({ prefix: "openclaw-gateway-agent-offloaded-image-" }, async (root) => {
       useTestStateDir(root);
       mockMainSessionEntry({
@@ -1300,11 +1318,22 @@ describe("gateway agent handler", () => {
         { context, reqId: "idem-offloaded-image-user-turn-recorder" },
       );
 
-      const call = await waitForAgentCommandCall();
+      const call = await waitForAgentCommandCall<
+        AgentCommandCall & {
+          userTurnTranscriptRecorder?: {
+            getPersistedMessage: () => { __openclaw?: Record<string, unknown> } | undefined;
+            hasPersisted: () => boolean;
+          };
+        }
+      >();
       expect(call.images).toEqual([]);
       expect(call.imageOrder).toEqual(["offloaded"]);
       expect(call.message).toContain("[media attached: media://inbound/");
-      expect(call.userTurnTranscriptRecorder).toBeUndefined();
+      expect(call.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
+      expect(call.userTurnTranscriptRecorder?.getPersistedMessage()?.["__openclaw"]).toMatchObject({
+        media: [expect.objectContaining({ contentType: "image/png", kind: "image" })],
+        mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
+      });
     });
   });
 

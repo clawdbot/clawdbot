@@ -5,6 +5,7 @@
  * and related browser-context mutations for the selected profile/tab.
  */
 import {
+  asNullableRecord,
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -200,10 +201,7 @@ export function registerBrowserAgentStorageRoutes(
   app.post("/cookies/set", async (req, res) => {
     const body = readBody(req);
     const targetId = resolveTargetIdFromBody(body);
-    const cookie =
-      body.cookie && typeof body.cookie === "object" && !Array.isArray(body.cookie)
-        ? (body.cookie as Record<string, unknown>)
-        : null;
+    const cookie = asNullableRecord(body.cookie);
     if (!cookie) {
       return jsonError(res, 400, "cookie is required");
     }

@@ -40,7 +40,7 @@ type CuaDriverArtifactInspectionOptions = {
   platform: NodeJS.Platform;
   arch: string;
   linuxLibc?: "gnu" | "musl";
-  pluginManifestPath: string;
+  pluginManifest: unknown;
   resolvePackageJson: (packageName: string) => string | undefined;
 };
 
@@ -96,10 +96,10 @@ function isSha256(value: unknown): value is string {
 }
 
 function loadArtifactRecord(
-  manifestPath: string,
+  manifestValue: unknown,
   key: SupportedArtifactPlatform,
 ): { version: string; artifact: DriverArtifactRecord } | undefined {
-  const value = readJson(manifestPath) as CuaDriverManifest;
+  const value = manifestValue as CuaDriverManifest;
   const version = value.dependencies?.[DRIVER_PACKAGE];
   const artifact = value.cuaDriverArtifacts?.[key];
   if (
@@ -139,7 +139,7 @@ export function inspectCuaDriverArtifacts(
 
   let accepted: ReturnType<typeof loadArtifactRecord>;
   try {
-    accepted = loadArtifactRecord(options.pluginManifestPath, selected.key);
+    accepted = loadArtifactRecord(options.pluginManifest, selected.key);
   } catch {
     accepted = undefined;
   }

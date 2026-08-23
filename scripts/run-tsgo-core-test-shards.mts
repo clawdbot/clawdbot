@@ -1,13 +1,10 @@
 #!/usr/bin/env node
 
 // Run bounded test graphs in fresh processes so one shard's checker heap cannot
-// accumulate while the next shard loads. Hold one lock across the full sequence.
+// accumulate while the next shard loads.
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
-import {
-  acquireLocalHeavyCheckLockSync,
-  resolveLocalHeavyCheckEnv,
-} from "./lib/local-heavy-check-runtime.mts";
+import { resolveLocalCheckEnv } from "./lib/local-check-runtime.mts";
 import { signalExitCode } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
@@ -48,15 +45,7 @@ if (concurrencyFlagIndex >= 0) {
     process.exit(1);
   }
 }
-const env = resolveLocalHeavyCheckEnv(process.env);
-const releaseLock =
-  env.OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD === "1"
-    ? () => {}
-    : acquireLocalHeavyCheckLockSync({
-        cwd: repoRoot,
-        env,
-        toolName: "tsgo:core:test",
-      });
+const env = resolveLocalCheckEnv(process.env);
 
 function runShard(config: string): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -65,7 +54,7 @@ function runShard(config: string): Promise<number> {
       [path.join(repoRoot, "scripts/run-tsgo.mjs"), "-b", config, "--builders", "1"],
       {
         cwd: repoRoot,
-        env: { ...env, OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
+        env,
         stdio: "inherit",
       },
     );
@@ -76,26 +65,22 @@ function runShard(config: string): Promise<number> {
   });
 }
 
-try {
-  const queue = [...shards];
-  let failureCode = 0;
-  const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
-    for (;;) {
-      const shard = queue.shift();
-      // Stop draining after the first failure so the exit stays prompt.
-      if (!shard || failureCode !== 0) {
-        return;
-      }
-      const code = await runShard(shard.config);
-      if (code !== 0 && failureCode === 0) {
-        failureCode = code;
-      }
+const queue = [...shards];
+let failureCode = 0;
+const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+  for (;;) {
+    const shard = queue.shift();
+    // Stop draining after the first failure so the exit stays prompt.
+    if (!shard || failureCode !== 0) {
+      return;
     }
-  });
-  await Promise.all(workers);
-  if (failureCode !== 0) {
-    process.exitCode = failureCode;
+    const code = await runShard(shard.config);
+    if (code !== 0 && failureCode === 0) {
+      failureCode = code;
+    }
   }
-} finally {
-  releaseLock();
+});
+await Promise.all(workers);
+if (failureCode !== 0) {
+  process.exitCode = failureCode;
 }

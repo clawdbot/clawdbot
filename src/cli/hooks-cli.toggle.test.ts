@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   requestExitAfterOneShotOutput: vi.fn(),
   listAgentIds: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
+  resolveConfiguredAgentId: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
   tryResolveLegacyCompatibilityAgentId: vi.fn(),
 }));
@@ -30,6 +31,7 @@ vi.mock("../state/config-machine-state.js", () => ({
 vi.mock("../agents/agent-scope.js", () => ({
   listAgentIds: mocks.listAgentIds,
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
+  resolveConfiguredAgentId: mocks.resolveConfiguredAgentId,
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
   tryResolveLegacyCompatibilityAgentId: mocks.tryResolveLegacyCompatibilityAgentId,
 }));
@@ -127,9 +129,32 @@ const report: HookStatusReport = {
 const { registerHooksCli } = await import("./hooks-cli.js");
 
 function createHooksProgram(): Command {
-  const program = new Command();
+  const program = new Command().enablePositionalOptions();
   registerHooksCli(program);
   return program;
+}
+
+function configureExplicitFleet() {
+  const config = {
+    ...sourceConfig,
+    agents: {
+      ownership: "explicit" as const,
+      list: [
+        { id: "main", workspace: "/tmp/openclaw-main-workspace" },
+        { id: "research", workspace: "/tmp/openclaw-research-workspace" },
+      ],
+    },
+  };
+  mocks.getRuntimeConfig.mockReturnValue(config);
+  mocks.listAgentIds.mockReturnValue(["main", "research"]);
+  mocks.tryResolveLegacyCompatibilityAgentId.mockReturnValue(undefined);
+  mocks.resolveDefaultAgentId.mockImplementation(() => {
+    throw new Error("selection required");
+  });
+  mocks.resolveAgentWorkspaceDir.mockImplementation(
+    (_config: unknown, agentId: string) => `/tmp/openclaw-${agentId}-workspace`,
+  );
+  return config;
 }
 
 describe("hooks CLI metadata config keys", () => {
@@ -140,6 +165,14 @@ describe("hooks CLI metadata config keys", () => {
     mocks.buildWorkspaceHookStatus.mockReturnValue(report);
     mocks.getRuntimeConfig.mockReturnValue(sourceConfig);
     mocks.listAgentIds.mockReturnValue(["main"]);
+    mocks.resolveConfiguredAgentId.mockImplementation(
+      (_config: OpenClawConfig, agentId: string) => {
+        if (!mocks.listAgentIds().includes(agentId)) {
+          throw new Error(`Unknown agent id "${agentId}"`);
+        }
+        return agentId;
+      },
+    );
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-hook-workspace");
     mocks.resolveDefaultAgentId.mockReturnValue("main");
     mocks.tryResolveLegacyCompatibilityAgentId.mockReturnValue("main");
@@ -252,8 +285,73 @@ describe("hooks CLI metadata config keys", () => {
       }),
     ).rejects.toThrow("__exit__:1");
 
-    expect(capture.runtimeErrors.at(-1)).toContain(
-      `Hook "${testCase.identifier}" is ambiguous; use a unique hook name or hook key`,
+    expect(capture.runtimeErrors.at(-1)).toBe(
+      `Error: Hook "${testCase.identifier}" is ambiguous; matches: ${testCase.hooks
+        .map((candidate) => `${candidate.name} (${candidate.hookKey})`)
+        .join(", ")}. Use a unique hook name or hook key.`,
+    );
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("bounds ambiguous hook candidates", async () => {
+    const hooks = Array.from({ length: 7 }, (_, index) => ({
+      ...hook,
+      name: "shared-name",
+      hookKey: `key-${index + 1}`,
+    }));
+    mocks.buildWorkspaceHookStatus.mockReturnValue({ ...report, hooks });
+
+    await expect(
+      createHooksProgram().parseAsync(["hooks", "disable", "shared-name"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(capture.runtimeErrors.at(-1)).toBe(
+      'Error: Hook "shared-name" is ambiguous; matches: shared-name (key-1), shared-name (key-2), shared-name (key-3), shared-name (key-4), shared-name (key-5) (+2). Use a unique hook name or hook key.',
+    );
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it.each(["enable", "disable"])(
+    "gives the recovery command for an unknown hook on %s",
+    async (action) => {
+      mocks.buildWorkspaceHookStatus.mockReturnValue({ ...report, hooks: [] });
+
+      await expect(
+        createHooksProgram().parseAsync(["hooks", action, "missing-hook"], { from: "user" }),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(capture.runtimeErrors.at(-1)).toBe(
+        'Error: Hook "missing-hook" not found. Run `openclaw hooks list` to see available hooks.',
+      );
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it("names missing requirements and the available install route", async () => {
+    const ineligibleHook: HookStatusEntry = {
+      ...hook,
+      requirementsSatisfied: false,
+      loadable: false,
+      blockedReason: "missing requirements",
+      missing: {
+        bins: ["missing-bin"],
+        anyBins: ["missing-any-a", "missing-any-b"],
+        env: ["MISSING_ENV"],
+        config: ["hooks.demo.enabled"],
+        os: ["linux"],
+      },
+      install: [
+        { id: "demo-npm", kind: "npm", label: "Install @openclaw/demo-hook (npm)", bins: [] },
+      ],
+    };
+    mocks.buildWorkspaceHookStatus.mockReturnValue({ ...report, hooks: [ineligibleHook] });
+
+    await expect(
+      createHooksProgram().parseAsync(["hooks", "enable", "display-name"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(capture.runtimeErrors.at(-1)).toBe(
+      'Error: Hook "display-name" is not eligible; missing bins: missing-bin; anyBins: missing-any-a, missing-any-b; env: MISSING_ENV; config: hooks.demo.enabled; os: linux. Install options: Install @openclaw/demo-hook (npm). Run `openclaw hooks info display-name` for details.',
     );
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
@@ -337,35 +435,84 @@ describe("hooks CLI metadata config keys", () => {
     }
   });
 
-  it("rejects a parent --agent for hook writes", async () => {
+  it.each([
+    ["enable", ["hooks", "--agent", "research", "enable", "display-name"], true],
+    ["enable", ["hooks", "enable", "display-name", "--agent", "research"], true],
+    ["disable", ["hooks", "--agent", "research", "disable", "display-name"], false],
+    ["disable", ["hooks", "disable", "display-name", "--agent", "research"], false],
+  ])("uses --agent for %s hook discovery", async (_label, argv, enabled) => {
+    const explicitFleet = configureExplicitFleet();
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      sourceConfig: explicitFleet,
+      hash: "config-hash",
+    });
+
+    await createHooksProgram().parseAsync(argv, { from: "user" });
+
+    expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
+    expect(mocks.resolveAgentWorkspaceDir).toHaveBeenCalledWith(explicitFleet, "research");
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: {
+        ...explicitFleet,
+        hooks: {
+          internal: {
+            enabled: true,
+            entries: {
+              "metadata-key": {
+                env: { HOOK_ENV: "preserved" },
+                enabled,
+              },
+            },
+          },
+        },
+      },
+      baseHash: "config-hash",
+    });
+  });
+
+  it("leaves config unchanged when the selected hook agent is invalid", async () => {
+    const explicitFleet = configureExplicitFleet();
+    const initialConfig = structuredClone(explicitFleet);
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      sourceConfig: explicitFleet,
+      hash: "config-hash",
+    });
+
     await expect(
-      createHooksProgram().parseAsync(["hooks", "--agent", "research", "enable", "display-name"], {
+      createHooksProgram().parseAsync(["hooks", "enable", "display-name", "--agent", "retired"], {
         from: "user",
       }),
-    ).rejects.toThrow("does not support --agent");
+    ).rejects.toThrow("__exit__:1");
 
+    expect(capture.runtimeErrors.at(-1)).toContain('Unknown agent id "retired"');
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(explicitFleet).toEqual(initialConfig);
+  });
+
+  it("rejects a blank hook agent before resolving a workspace", async () => {
+    configureExplicitFleet();
+
+    await expect(
+      createHooksProgram().parseAsync(["hooks", "list", "--agent", "", "--json"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(capture.runtimeErrors.at(-1)).toContain("--agent must not be blank");
+    expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("rejects a blank parent hook agent before dispatching a subcommand", async () => {
+    await expect(
+      createHooksProgram().parseAsync(["hooks", "--agent", "", "list"], { from: "user" }),
+    ).rejects.toThrow("--agent must not be blank");
+
+    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it("keeps the explicit owner in the offline hooks fallback", async () => {
-    const explicitFleet = {
-      agents: {
-        ownership: "explicit",
-        list: [
-          { id: "ops", workspace: "/tmp/openclaw-ops-workspace" },
-          { id: "research", workspace: "/tmp/openclaw-research-workspace" },
-        ],
-      },
-    };
-    mocks.getRuntimeConfig.mockReturnValue(explicitFleet);
-    mocks.listAgentIds.mockReturnValue(["ops", "research"]);
-    mocks.tryResolveLegacyCompatibilityAgentId.mockReturnValue(undefined);
-    mocks.resolveDefaultAgentId.mockImplementation(() => {
-      throw new Error("selection required");
-    });
-    mocks.resolveAgentWorkspaceDir.mockImplementation(
-      (_config: unknown, agentId: string) => `/tmp/openclaw-${agentId}-workspace`,
-    );
+    const explicitFleet = configureExplicitFleet();
 
     await createHooksProgram().parseAsync(["hooks", "list", "--agent", "research", "--json"], {
       from: "user",

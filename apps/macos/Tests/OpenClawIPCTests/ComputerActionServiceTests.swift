@@ -197,7 +197,7 @@ struct ComputerActionServiceTests {
             y: 2,
             refWidth: 1280)
         let missingError = self.validationError {
-            try ComputerActionService.validateDisplayFrame(missing, currentFrameId: currentFrameId)
+            try ComputerScreenActionExecutor.validateDisplayFrame(missing, currentFrameId: currentFrameId)
         }
         if case .some(.missingDisplayFrameId) = missingError {} else {
             Issue.record("expected missingDisplayFrameId")
@@ -210,7 +210,7 @@ struct ComputerActionServiceTests {
             y: 2,
             refWidth: 1280)
         let staleError = self.validationError {
-            try ComputerActionService.validateDisplayFrame(stale, currentFrameId: currentFrameId)
+            try ComputerScreenActionExecutor.validateDisplayFrame(stale, currentFrameId: currentFrameId)
         }
         if case .some(.displayFrameChanged) = staleError {} else {
             Issue.record("expected displayFrameChanged")
@@ -222,7 +222,7 @@ struct ComputerActionServiceTests {
             x: 1,
             y: 2,
             refWidth: 1280)
-        try ComputerActionService.validateDisplayFrame(current, currentFrameId: currentFrameId)
+        try ComputerScreenActionExecutor.validateDisplayFrame(current, currentFrameId: currentFrameId)
 
         let missingScale = OpenClawComputerActParams(
             action: .leftClick,
@@ -230,7 +230,7 @@ struct ComputerActionServiceTests {
             x: 1,
             y: 2)
         let missingScaleError = self.validationError {
-            try ComputerActionService.validateDisplayFrame(
+            try ComputerScreenActionExecutor.validateDisplayFrame(
                 missingScale,
                 currentFrameId: currentFrameId)
         }
@@ -262,7 +262,7 @@ struct ComputerActionServiceTests {
             y: 2,
             refWidth: 640)
         let mismatchedScaleError = self.validationError {
-            try ComputerActionService.validateDisplayFrame(
+            try ComputerScreenActionExecutor.validateDisplayFrame(
                 mismatchedScale,
                 currentFrameId: mismatchedScaleFrameId)
         }
@@ -272,7 +272,7 @@ struct ComputerActionServiceTests {
 
         // Cursor-relative/keyboard actions do not consume screenshot coordinates.
         let keyboard = OpenClawComputerActParams(action: .type, text: "hello")
-        try ComputerActionService.validateDisplayFrame(keyboard, currentFrameId: currentFrameId)
+        try ComputerScreenActionExecutor.validateDisplayFrame(keyboard, currentFrameId: currentFrameId)
     }
 
     @Test func `cursor-relative input stays inside the selected display`() throws {
@@ -281,50 +281,50 @@ struct ComputerActionServiceTests {
             originY: -50,
             widthPoints: 800,
             heightPoints: 600)
-        #expect(try ComputerActionService.validatedCurrentCursorPoint(
+        #expect(try ComputerScreenActionExecutor.validatedCurrentCursorPoint(
             CGPoint(x: 100, y: -50),
             display: display) == CGPoint(x: 100, y: -50))
         #expect(throws: ComputerActionService.ComputerActionError.self) {
-            try ComputerActionService.validatedCurrentCursorPoint(
+            try ComputerScreenActionExecutor.validatedCurrentCursorPoint(
                 CGPoint(x: 99, y: 0),
                 display: display)
         }
         #expect(throws: ComputerActionService.ComputerActionError.self) {
-            try ComputerActionService.validatedCurrentCursorPoint(nil, display: display)
+            try ComputerScreenActionExecutor.validatedCurrentCursorPoint(nil, display: display)
         }
     }
 
     @Test func `integrated drag and duplicate down are rejected during a split hold`() throws {
         #expect(throws: ComputerActionService.ComputerActionError.self) {
-            try ComputerActionService.validateHeldButtonTransition(
+            try ComputerScreenActionExecutor.validateHeldButtonTransition(
                 action: .leftClickDrag,
                 leftButtonDown: true)
         }
         #expect(throws: ComputerActionService.ComputerActionError.self) {
-            try ComputerActionService.validateHeldButtonTransition(
+            try ComputerScreenActionExecutor.validateHeldButtonTransition(
                 action: .leftMouseDown,
                 leftButtonDown: true)
         }
         #expect(throws: ComputerActionService.ComputerActionError.self) {
-            try ComputerActionService.validateHeldButtonTransition(
+            try ComputerScreenActionExecutor.validateHeldButtonTransition(
                 action: .doubleClick,
                 leftButtonDown: true)
         }
-        try ComputerActionService.validateHeldButtonTransition(
+        try ComputerScreenActionExecutor.validateHeldButtonTransition(
             action: .leftMouseUp,
             leftButtonDown: true)
     }
 
     @Test func `left mouse up requires a service owned split hold`() throws {
         #expect(throws: ComputerActionService.ComputerActionError.self) {
-            try ComputerActionService.validateHeldButtonTransition(
+            try ComputerScreenActionExecutor.validateHeldButtonTransition(
                 action: .leftMouseUp,
                 leftButtonDown: false)
         }
-        try ComputerActionService.validateHeldButtonTransition(
+        try ComputerScreenActionExecutor.validateHeldButtonTransition(
             action: .leftMouseDown,
             leftButtonDown: false)
-        try ComputerActionService.validateHeldButtonTransition(
+        try ComputerScreenActionExecutor.validateHeldButtonTransition(
             action: .leftMouseUp,
             leftButtonDown: true)
     }
@@ -333,7 +333,7 @@ struct ComputerActionServiceTests {
         let flags: CGEventFlags = [.maskCommand, .maskShift]
         var attempts = 0
         var postedFlags: [CGEventFlags] = []
-        let service = ComputerActionService { down, _, eventFlags in
+        let screen = ComputerScreenActionExecutor { down, _, eventFlags in
             #expect(!down)
             attempts += 1
             postedFlags.append(eventFlags)
@@ -341,13 +341,14 @@ struct ComputerActionServiceTests {
                 throw ComputerActionService.ComputerActionError.eventCreationFailed
             }
         }
-        service.holdLeftButtonForTesting(flags: flags)
+        let service = ComputerActionService(screen: screen)
+        screen.holdLeftButtonForTesting(flags: flags)
 
         await service.releaseHeldInput(lifecycleGeneration: 1)
 
-        #expect(!service.isLeftButtonDownForTesting)
-        #expect(service.heldButtonFlagsForTesting.isEmpty)
-        #expect(!service.buttonWatchdogArmedForTesting)
+        #expect(!screen.isLeftButtonDownForTesting)
+        #expect(screen.heldButtonFlagsForTesting.isEmpty)
+        #expect(!screen.buttonWatchdogArmedForTesting)
         #expect(attempts == 2)
         #expect(postedFlags == [flags, flags])
     }
@@ -355,7 +356,7 @@ struct ComputerActionServiceTests {
     @Test func `watchdog release retains ownership and rearms after post failure`() {
         let flags: CGEventFlags = [.maskAlternate]
         var attempts = 0
-        let service = ComputerActionService { down, _, eventFlags in
+        let screen = ComputerScreenActionExecutor { down, _, eventFlags in
             #expect(!down)
             #expect(eventFlags == flags)
             attempts += 1
@@ -363,19 +364,19 @@ struct ComputerActionServiceTests {
                 throw SyntheticPostError.failed
             }
         }
-        service.holdLeftButtonForTesting(flags: flags)
+        screen.holdLeftButtonForTesting(flags: flags)
 
-        service.fireButtonWatchdogForTesting()
+        screen.fireButtonWatchdogForTesting()
 
-        #expect(service.isLeftButtonDownForTesting)
-        #expect(service.heldButtonFlagsForTesting == flags)
-        #expect(service.buttonWatchdogArmedForTesting)
+        #expect(screen.isLeftButtonDownForTesting)
+        #expect(screen.heldButtonFlagsForTesting == flags)
+        #expect(screen.buttonWatchdogArmedForTesting)
 
-        service.fireButtonWatchdogForTesting()
+        screen.fireButtonWatchdogForTesting()
 
-        #expect(!service.isLeftButtonDownForTesting)
-        #expect(service.heldButtonFlagsForTesting.isEmpty)
-        #expect(!service.buttonWatchdogArmedForTesting)
+        #expect(!screen.isLeftButtonDownForTesting)
+        #expect(screen.heldButtonFlagsForTesting.isEmpty)
+        #expect(!screen.buttonWatchdogArmedForTesting)
         #expect(attempts == 2)
     }
 
@@ -385,7 +386,7 @@ struct ComputerActionServiceTests {
         let expectedFlags = heldFlags.union(releaseFlags)
         var attempts = 0
         var postedFlags: [CGEventFlags] = []
-        let service = ComputerActionService { down, _, eventFlags in
+        let screen = ComputerScreenActionExecutor { down, _, eventFlags in
             #expect(!down)
             attempts += 1
             postedFlags.append(eventFlags)
@@ -393,21 +394,21 @@ struct ComputerActionServiceTests {
                 throw SyntheticPostError.failed
             }
         }
-        service.holdLeftButtonForTesting(flags: heldFlags)
+        screen.holdLeftButtonForTesting(flags: heldFlags)
 
         #expect(throws: SyntheticPostError.self) {
-            try service.releaseHeldButtonForTesting(additionalFlags: releaseFlags)
+            try screen.releaseHeldButtonForTesting(additionalFlags: releaseFlags)
         }
 
-        #expect(service.isLeftButtonDownForTesting)
-        #expect(service.heldButtonFlagsForTesting == expectedFlags)
-        #expect(service.buttonWatchdogArmedForTesting)
+        #expect(screen.isLeftButtonDownForTesting)
+        #expect(screen.heldButtonFlagsForTesting == expectedFlags)
+        #expect(screen.buttonWatchdogArmedForTesting)
 
-        service.fireButtonWatchdogForTesting()
+        screen.fireButtonWatchdogForTesting()
 
-        #expect(!service.isLeftButtonDownForTesting)
-        #expect(service.heldButtonFlagsForTesting.isEmpty)
-        #expect(!service.buttonWatchdogArmedForTesting)
+        #expect(!screen.isLeftButtonDownForTesting)
+        #expect(screen.heldButtonFlagsForTesting.isEmpty)
+        #expect(!screen.buttonWatchdogArmedForTesting)
         #expect(attempts == 2)
         #expect(postedFlags == [expectedFlags, expectedFlags])
     }
@@ -439,8 +440,8 @@ struct ComputerActionServiceTests {
         #expect(probe.maximumActiveActionCount == 1)
     }
 
-    @Test func `v2 authority rejects a result after lifecycle revocation`() async {
-        let service = ComputerActionServiceV2()
+    @Test func `window authority rejects a result after lifecycle revocation`() async {
+        let service = ComputerWindowActionExecutor()
         var checks = 0
         let outcomeError: Error?
         do {
@@ -492,8 +493,8 @@ struct ComputerActionServiceTests {
         #expect(self.isLifecycleChanged(outcomeError))
     }
 
-    @Test func `v2 rejects foreground accessibility-only actions`() async {
-        let service = ComputerActionServiceV2()
+    @Test func `window executor rejects foreground accessibility-only actions`() async {
+        let service = ComputerWindowActionExecutor()
         for action in [OpenClawComputerAction.setValue, .invokeMenu] {
             let outcomeError: Error?
             do {
@@ -603,7 +604,8 @@ struct ComputerActionServiceTests {
 
     @Test func `typing posts exactly one event pair per Swift grapheme`() async throws {
         var posted: [Character] = []
-        let service = ComputerActionService(textGraphemePoster: { posted.append($0) })
+        let service = ComputerActionService(
+            screen: ComputerScreenActionExecutor(textGraphemePoster: { posted.append($0) }))
         let text = "A👨‍👩‍👧‍👦e\u{301}\n\t"
 
         _ = try await service.typeTextForTesting(text)
@@ -615,12 +617,13 @@ struct ComputerActionServiceTests {
         let firstPosted = AsyncSignal()
         let resumePoster = AsyncSignal()
         var posted: [Character] = []
-        let service = ComputerActionService(textGraphemePoster: { grapheme in
-            posted.append(grapheme)
-            guard posted.count == 1 else { return }
-            await firstPosted.signal()
-            await resumePoster.wait()
-        })
+        let service = ComputerActionService(screen: ComputerScreenActionExecutor(
+            textGraphemePoster: { grapheme in
+                posted.append(grapheme)
+                guard posted.count == 1 else { return }
+                await firstPosted.signal()
+                await resumePoster.wait()
+            }))
         let action = Task { @MainActor in
             try await service.typeTextForTesting("A👨‍👩‍👧‍👦B")
         }
@@ -644,12 +647,13 @@ struct ComputerActionServiceTests {
         let firstPosted = AsyncSignal()
         let resumePoster = AsyncSignal()
         var posted: [Character] = []
-        let service = ComputerActionService(textGraphemePoster: { grapheme in
-            posted.append(grapheme)
-            guard posted.count == 1 else { return }
-            await firstPosted.signal()
-            await resumePoster.wait()
-        })
+        let service = ComputerActionService(screen: ComputerScreenActionExecutor(
+            textGraphemePoster: { grapheme in
+                posted.append(grapheme)
+                guard posted.count == 1 else { return }
+                await firstPosted.signal()
+                await resumePoster.wait()
+            }))
         let action = Task { @MainActor in
             try await service.typeTextForTesting("A👨‍👩‍👧‍👦B")
         }
@@ -751,7 +755,7 @@ struct ComputerActionServiceTests {
     @Test func `raw click preconstructs up before posting down`() throws {
         var factoryCalls = 0
         var postCount = 0
-        let service = ComputerActionService(
+        let screen = ComputerScreenActionExecutor(
             mouseEventFactory: { type, point, button, _, _ in
                 factoryCalls += 1
                 if factoryCalls == 2 {
@@ -768,7 +772,7 @@ struct ComputerActionServiceTests {
             mouseEventPoster: { _ in postCount += 1 })
 
         #expect(throws: SyntheticPostError.self) {
-            try service.rawClickForTesting()
+            try screen.rawClickForTesting()
         }
         #expect(factoryCalls == 2)
         #expect(postCount == 0)
@@ -778,7 +782,7 @@ struct ComputerActionServiceTests {
         var eventTypes: [ObjectIdentifier: CGEventType] = [:]
         var postedTypes: [CGEventType] = []
         var failedMove = false
-        let service = ComputerActionService(
+        let screen = ComputerScreenActionExecutor(
             mouseEventFactory: { type, point, button, _, _ in
                 guard let event = CGEvent(
                     mouseEventSource: nil,
@@ -799,7 +803,7 @@ struct ComputerActionServiceTests {
             })
 
         do {
-            try await service.rawDragForTesting()
+            try await screen.rawDragForTesting()
             Issue.record("raw drag unexpectedly succeeded")
         } catch is SyntheticPostError {
             // Expected injected move failure.
@@ -815,7 +819,7 @@ struct ComputerActionServiceTests {
     @Test func `raw drag posts release when cancelled between moves`() async {
         var eventTypes: [ObjectIdentifier: CGEventType] = [:]
         var postedTypes: [CGEventType] = []
-        let service = ComputerActionService(
+        let screen = ComputerScreenActionExecutor(
             mouseEventFactory: { type, point, button, _, _ in
                 guard let event = CGEvent(
                     mouseEventSource: nil,
@@ -833,7 +837,7 @@ struct ComputerActionServiceTests {
             })
 
         let drag = Task { @MainActor in
-            try await service.rawDragForTesting()
+            try await screen.rawDragForTesting()
         }
         while !postedTypes.contains(.leftMouseDragged) {
             await Task.yield()

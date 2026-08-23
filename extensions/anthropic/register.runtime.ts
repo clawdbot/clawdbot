@@ -57,6 +57,7 @@ import {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
   CLAUDE_CLI_OFF_THINKING_PROFILE,
+  supportsClaudeDynamicSystemPromptSections,
 } from "./cli-shared.js";
 import {
   applyAnthropicConfigDefaults,
@@ -551,7 +552,7 @@ function buildAnthropicForwardCompatModel(
       ? {
           thinkingLevelMap: {
             ...(isAnthropicMandatoryClaude5Model(trimmedModelId)
-              ? { off: "low" as const, minimal: "low" as const }
+              ? { minimal: "low" as const }
               : {}),
             xhigh: "xhigh",
             max: "max",
@@ -771,7 +772,7 @@ function applyAnthropicThinkingLevelMap(params: {
   const nativeDefaults = isAnthropicMythosPreviewModel(params.modelId)
     ? { max: "max" as const }
     : {
-        ...(mandatoryClaude5 ? { off: "low" as const, minimal: "low" as const } : {}),
+        ...(mandatoryClaude5 ? { minimal: "low" as const } : {}),
         xhigh: nativeXhigh ? ("xhigh" as const) : null,
         max: "max" as const,
       };
@@ -1198,7 +1199,28 @@ export function buildAnthropicProvider(): ProviderPlugin {
 
 /** Register Anthropic provider, Claude CLI backend, and media understanding provider. */
 export function registerAnthropicPlugin(api: OpenClawPluginApi): void {
-  api.registerCliBackend(buildAnthropicCliBackend());
+  let supportsDynamicSystemPromptSections = false;
+  // Start once at plugin load. The first Claude execution awaits the same promise,
+  // so a post-ready gateway hook cannot race the first session's immutable argv.
+  const dynamicSystemPromptSectionsProbe = (async () => {
+    try {
+      const result = await api.runtime.system.runCommandWithTimeout(["claude", "--version"], {
+        timeoutMs: 1_500,
+        killProcessTree: true,
+        maxOutputBytes: { stdout: 1_024, stderr: 1_024 },
+      });
+      supportsDynamicSystemPromptSections =
+        result?.code === 0 && supportsClaudeDynamicSystemPromptSections(result.stdout);
+    } catch {
+      supportsDynamicSystemPromptSections = false;
+    }
+  })();
+  api.registerCliBackend(
+    buildAnthropicCliBackend({
+      ensureDynamicSystemPromptSectionsSupport: () => dynamicSystemPromptSectionsProbe,
+      supportsDynamicSystemPromptSections: () => supportsDynamicSystemPromptSections,
+    }),
+  );
   api.registerProvider(buildAnthropicProvider());
   api.registerMediaUnderstandingProvider(anthropicMediaUnderstandingProvider);
   registerClaudeSessionDiscovery(api);

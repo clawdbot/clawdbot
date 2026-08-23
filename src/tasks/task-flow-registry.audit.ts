@@ -1,36 +1,20 @@
 // Produces task-flow registry audit summaries for diagnostics and maintenance.
 import { listTasksForFlowId } from "./runtime-internal.js";
 import { isTaskFlowCancellationPending } from "./task-cancellation-state.js";
+import type {
+  TaskFlowAuditCode,
+  TaskFlowAuditFinding,
+  TaskFlowAuditSeverity,
+  TaskFlowAuditSummary,
+} from "./task-flow-registry.audit.types.js";
 import { getTaskFlowRegistryRestoreFailure, listTaskFlowRecords } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
-/** Severity used by task-flow registry audit findings. */
-export type TaskFlowAuditSeverity = "warn" | "error";
-export type TaskFlowAuditCode =
-  | "restore_failed"
-  | "stale_running"
-  | "stale_waiting"
-  | "stale_blocked"
-  | "cancel_stuck"
-  | "missing_linked_tasks"
-  | "blocked_task_missing"
-  | "inconsistent_timestamps";
-
-export type TaskFlowAuditFinding = {
-  severity: TaskFlowAuditSeverity;
-  code: TaskFlowAuditCode;
-  detail: string;
-  ageMs?: number;
-  flow?: TaskFlowRecord;
-};
-
-export type TaskFlowAuditSummary = {
-  total: number;
-  warnings: number;
-  errors: number;
-  byCode: Record<TaskFlowAuditCode, number>;
-};
+export type {
+  TaskFlowAuditFinding,
+  TaskFlowAuditSummary,
+} from "./task-flow-registry.audit.types.js";
 
 type TaskFlowAuditOptions = {
   now?: number;

@@ -14,7 +14,6 @@ import {
   type TelegramMentionCaseForTest,
   type TelegramMentionPolicyForTest,
 } from "./bot.create-telegram-bot.test-support.js";
-import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
 import { setTelegramRuntime } from "./runtime.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 
@@ -271,7 +270,7 @@ async function dispatchTelegramGroupPhoto(params: {
         id: -100456,
         type: "supergroup",
         title: "Ops Chat",
-        ...(params.topicId ? { is_forum: true } : {}),
+        is_forum: params.topicId !== undefined,
       },
       message_id: params.messageId,
       date: 1736380800,
@@ -397,7 +396,6 @@ describe("createTelegramBot channel_post media", () => {
   });
 
   beforeEach(() => {
-    resetTelegramForumFlagCacheForTest();
     setTelegramRuntime({
       state: {
         openKeyedStore: ((options) =>

@@ -13,6 +13,7 @@ import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type { OnboardingAgentTarget } from "./onboard-agent-target.js";
 import {
   applyCustomApiConfig,
   buildAnthropicVerificationProbeRequest,
@@ -238,7 +239,9 @@ export async function promptCustomApiConfig(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   config: OpenClawConfig;
+  target?: OnboardingAgentTarget;
   secretInputMode?: SecretInputMode;
+  setAsPrimary?: boolean;
 }): Promise<CustomApiResult> {
   const { prompter, runtime, config } = params;
 
@@ -391,7 +394,12 @@ export async function promptCustomApiConfig(params: {
       // Alias validation must use the post-collision provider id, otherwise a
       // renamed endpoint could incorrectly collide with the requested id.
       const modelRef = modelKey(resolvedProvider.providerId, modelId);
-      return resolveCustomModelAliasError({ raw: value, cfg: config, modelRef });
+      return resolveCustomModelAliasError({
+        raw: value,
+        cfg: config,
+        modelRef,
+        agentId: params.target?.agentId,
+      });
     },
   });
   const imageInputInference = resolveCustomModelImageInputInference(modelId);
@@ -412,6 +420,8 @@ export async function promptCustomApiConfig(params: {
     providerId: providerIdInput,
     alias: aliasInput,
     supportsImageInput,
+    ...(params.target ? { target: params.target } : {}),
+    ...(params.setAsPrimary === false ? { setAsPrimary: false } : {}),
   });
 
   if (result.providerIdRenamedFrom && result.providerId) {

@@ -20,6 +20,7 @@ import {
   detectImageReferences,
   hasHydratableMediaImages,
 } from "../embedded-agent-runner/run/images.js";
+import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image-metadata.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
 import { buildClaudeOwnerKey, closeClaudeSession } from "./claude-live-registry.js";
@@ -117,13 +118,17 @@ type ExecutePreparedCliRunOptions = {
   onPhase?: (phase: "send" | "resolve" | "cleanup") => void;
 };
 
+type PreparedCliRunInternalParams = PreparedCliRunContext["params"] & {
+  mediaImageLayout?: MediaImageLayout;
+};
+
 /** Executes a prepared CLI run context and returns normalized CLI output. */
 export async function executePreparedCliRun(
   context: PreparedCliRunContext,
   cliSessionIdToUse?: string,
   options?: ExecutePreparedCliRunOptions,
 ): Promise<CliOutput> {
-  const params = context.params;
+  const params = context.params as PreparedCliRunInternalParams;
   if (params.abortSignal?.aborted) {
     throw createCliAbortError();
   }
@@ -166,7 +171,9 @@ export async function executePreparedCliRun(
   if (
     nodePlacement &&
     ((params.images?.length ?? 0) > 0 ||
-      hasHydratableMediaImages(params.media) ||
+      (params.mediaImageLayout
+        ? params.mediaImageLayout.slots.length > 0
+        : hasHydratableMediaImages(params.media)) ||
       (params.imagePrompt ? detectImageReferences(params.imagePrompt).length > 0 : false))
   ) {
     throw new Error("paired-node Claude CLI sessions do not support attachments or images");
@@ -181,6 +188,7 @@ export async function executePreparedCliRun(
         localRoots: getAgentScopedMediaLocalRoots(params.config ?? {}, params.agentId),
         images: params.images,
         imageOrder: params.imageOrder,
+        mediaImageLayout: params.mediaImageLayout,
         media: params.media,
       });
   prompt = imagePayload.prompt;
@@ -410,6 +418,12 @@ export async function executePreparedCliRun(
             ...resolveNodeClaudeAuthEnv(context),
           }
         : undefined;
+      const nodeRuntimeClearEnv = nodePlacement
+        ? [...NODE_CLAUDE_FORWARD_ENV_KEYS].filter((key) => backend.clearEnv?.includes(key))
+        : [];
+      const nodeClearEnv = [...(selectedClaudeClearEnv ?? []), ...nodeRuntimeClearEnv].filter(
+        (key, index, values) => values.indexOf(key) === index,
+      );
       const env = sanitizeHostExecEnv({ baseEnv: process.env, blockPathOverrides: true });
       const preservedEnv = parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]);
       for (const key of backend.clearEnv ?? []) {
@@ -534,7 +548,7 @@ export async function executePreparedCliRun(
         nodePlacement,
         nodeSystemPrompt,
         nodeEnv: nodeEnv && Object.keys(nodeEnv).length > 0 ? nodeEnv : undefined,
-        nodeClearEnv: selectedClaudeClearEnv ? [...selectedClaudeClearEnv] : undefined,
+        nodeClearEnv: nodeClearEnv.length > 0 ? nodeClearEnv : undefined,
         useManagedClaudeLiveSession,
         useResume,
         cliSessionIdToUse,

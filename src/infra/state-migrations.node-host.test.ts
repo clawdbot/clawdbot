@@ -87,6 +87,7 @@ describe("legacy node-host Doctor migration", () => {
           gateway_tls: 0,
           gateway_tls_fingerprint: fixtureDigest,
           gateway_context_path: "/openclaw-gw",
+          gateway_cloudflare_access_json: null,
           updated_at_ms: params.updatedAtMs,
         }),
     );

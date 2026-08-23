@@ -14,6 +14,37 @@ function advertiseSessionRecovery(pane: TestChatPane) {
 }
 
 describe("chat pane session recovery", () => {
+  it("unlocks the composer when shared session state settles the exact local run", () => {
+    const { pane, state } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    state.chatRunId = "run-missed-terminal";
+    state.chatStream = "answer already rendered";
+
+    pane.applySessionsState({
+      result: {
+        sessions: [
+          {
+            key: state.sessionKey,
+            kind: "direct",
+            updatedAt: 20,
+            status: "done",
+            hasActiveRun: false,
+            lastRunId: "run-missed-terminal",
+          },
+        ],
+      },
+      agentId: "main",
+      loading: false,
+      error: null,
+      deletedSessions: [],
+    } as unknown as Parameters<typeof pane.applySessionsState>[0]);
+
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+  });
+
   it("recovers a tombstoned session into a fresh continuing session", async () => {
     const created = createDeferred<Awaited<ReturnType<SessionCapability["recover"]>>>();
     const sessions = {

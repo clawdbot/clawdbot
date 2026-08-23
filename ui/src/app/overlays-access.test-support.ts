@@ -121,6 +121,9 @@ export function createGatewayHarness(
     },
     gateway,
     connect,
+    replaceSnapshotWithoutPublishing(next: Partial<ApplicationGatewaySnapshot>) {
+      snapshot = { ...snapshot, ...next };
+    },
     update(next: Partial<ApplicationGatewaySnapshot>) {
       snapshot = { ...snapshot, ...next };
       for (const listener of snapshotListeners) {

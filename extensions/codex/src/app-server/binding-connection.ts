@@ -5,7 +5,10 @@ import {
   resolveCodexSupervisionAppServerRuntimeOptions,
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
-import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
+import {
+  buildCodexAppServerConnectionFingerprint,
+  resolveCodexCatalogConnectionHome,
+} from "./plugin-app-cache-key.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 
 type CodexAppServerRuntimeOptionsParams = NonNullable<
@@ -58,7 +61,7 @@ export function resolveCodexBindingAppServerConnection(
       "Codex supervision is disabled; refusing to open a native user-home supervised session",
     );
   }
-  const appServer = (
+  let appServer = (
     usesSupervisionConnection
       ? resolveCodexSupervisionAppServerRuntimeOptions
       : resolveCodexAppServerRuntimeOptions
@@ -69,6 +72,21 @@ export function resolveCodexBindingAppServerConnection(
     const persistedFingerprint =
       binding.pendingSupervisionBranch?.connectionFingerprint ??
       binding.appServerRuntimeFingerprint;
+    const catalogHome = persistedFingerprint
+      ? resolveCodexCatalogConnectionHome(persistedFingerprint, runtimeParams.agentDir)
+      : undefined;
+    if (catalogHome) {
+      // Connection recovery changes only the store location. The freshly resolved
+      // runtime keeps its native-model review and permission policy.
+      appServer = {
+        ...appServer,
+        start: {
+          ...appServer.start,
+          homeScope: "user",
+          env: { ...appServer.start.env, CODEX_HOME: catalogHome },
+        },
+      };
+    }
     const currentFingerprint = buildCodexAppServerConnectionFingerprint(
       appServer,
       runtimeParams.agentDir,

@@ -199,7 +199,6 @@ describe("buildDraftSessionCreateParams", () => {
         worktree: true,
         cwd: "/recorded/openclaw",
         workspace: "/workspace",
-        execNode: "ignored-node",
       }),
     ).toEqual({
       agentId: "main",
@@ -225,42 +224,6 @@ describe("buildDraftSessionCreateParams", () => {
       cwd: "/other/repo",
       worktree: true,
       worktreeBaseRef: "main",
-    });
-  });
-
-  it("sends the selected folder and execNode for node sessions", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
-        message: "remote work",
-        worktree: false,
-        cwd: "/other/repo",
-        workspace: "/workspace",
-        execNode: "macbook",
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "remote work",
-      cwd: "/other/repo",
-      execNode: "macbook",
-    });
-  });
-
-  it("sends the selected node cwd even when it matches the Gateway workspace path", () => {
-    expect(
-      buildDraftSessionCreateParams({
-        agentId: "main",
-        message: "remote work",
-        worktree: false,
-        cwd: "/workspace",
-        workspace: "/workspace",
-        execNode: "macbook",
-      }),
-    ).toEqual({
-      agentId: "main",
-      message: "remote work",
-      cwd: "/workspace",
-      execNode: "macbook",
     });
   });
 });

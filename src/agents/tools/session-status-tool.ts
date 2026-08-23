@@ -493,6 +493,7 @@ async function resolveModelOverride(params: {
 
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
+    agentId: params.agentId,
     defaultProvider: currentProvider,
   });
   const catalog = await loadPreparedModelCatalog({
@@ -536,6 +537,7 @@ async function resolveModelOverride(params: {
 
   const resolved = resolveModelRefFromString({
     cfg: params.cfg,
+    agentId: params.agentId,
     raw,
     defaultProvider: currentProvider,
     aliasIndex,
@@ -590,10 +592,11 @@ export function createSessionStatusTool(opts?: {
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const changesSince = readNonNegativeIntegerParam(params, "changesSince");
       const cfg = opts?.config ?? getRuntimeConfig();
-      const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
+      const { mainKey, alias, effectiveRequesterKey, mainSessionKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
+          requesterAgentId: opts?.requesterAgentIdOverride,
           sandboxed: opts?.sandboxed,
         });
       const a2aPolicy = createAgentToAgentPolicy(cfg);
@@ -662,9 +665,9 @@ export function createSessionStatusTool(opts?: {
         }
         let access = await resolveSessionToolAccess({
           action: "status",
-          defaultAgentId: configuredDefaultAgentId,
           requesterAgentId,
           requesterSessionKey: visibilityRequesterKey,
+          mainSessionKey,
           authorizationTargetSessionKey: target.authorizationTargetSessionKey,
           targetAgentId: target.targetAgentId,
           targetSessionKey: target.targetSessionKey,

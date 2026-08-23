@@ -19,6 +19,7 @@ import {
 type MockIncomingMessage = IncomingMessage & {
   destroyed?: boolean;
   destroy: () => MockIncomingMessage;
+  pause: () => MockIncomingMessage;
 };
 
 function createMockRequest(params: {
@@ -35,6 +36,7 @@ function createMockRequest(params: {
     req.destroyed = true;
     return req;
   }) as MockIncomingMessage["destroy"];
+  req.pause = (() => req) as MockIncomingMessage["pause"];
 
   if (params.chunks) {
     void Promise.resolve().then(() => {

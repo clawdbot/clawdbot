@@ -416,6 +416,8 @@ test.skipIf(process.platform === "win32")(
         sessionId,
       });
       expect(textContent(killed)).toBe(`Termination requested for session ${sessionId}.`);
+      // A performed kill must not read as a failed tool call.
+      expect(killed.details).toMatchObject({ status: "completed" });
 
       await expect
         .poll(

@@ -441,6 +441,67 @@ describe("executeAgentTurn: terminal failures", () => {
     ).toBe(true);
   });
 
+  it.each([
+    {
+      label: "settled result",
+      result: {
+        payloads: [{ text: "completed before the restart marker was observed" }],
+        meta: {},
+      },
+    },
+    {
+      label: "client-close error result",
+      result: {
+        payloads: [
+          {
+            text: "Codex app-server stopped before confirming turn completion.",
+            isError: true,
+          },
+        ],
+        meta: { error: { message: "codex app-server client closed before turn completed" } },
+      },
+    },
+  ])("hands an armed restart recovery owner the $label", async ({ label, result }) => {
+    const runId = `armed-restart-${label.replaceAll(" ", "-")}`;
+    const { replyOperation, failMock } = createMockReplyOperation();
+    let operationResult: typeof replyOperation.result = null;
+    const abortForRestart = vi.fn(() => {
+      operationResult = { kind: "aborted", code: "aborted_for_restart" };
+      return true;
+    });
+    const complete = vi.fn(() => {
+      operationResult ??= { kind: "completed" };
+    });
+    const restartReplyOperation = {
+      ...replyOperation,
+      get result() {
+        return operationResult;
+      },
+      abortForRestart,
+      complete,
+    } satisfies typeof replyOperation;
+    state.runEmbeddedAgentMock.mockResolvedValueOnce(result);
+    const { executeAgentTurn } = await import("./agent-runner-execution.js");
+
+    const execution = await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ replyOperation: restartReplyOperation }),
+      opts: { runId } as GetReplyOptions,
+      isRestartRecoveryArmed: () => true,
+    });
+
+    expect(execution).toEqual({
+      runId,
+      outcome: { kind: "aborted", reason: "restart" },
+    });
+    expect(abortForRestart).toHaveBeenCalledOnce();
+    expect(complete).not.toHaveBeenCalled();
+    expect(restartReplyOperation.result).toEqual({
+      kind: "aborted",
+      code: "aborted_for_restart",
+    });
+    expect(failMock).not.toHaveBeenCalled();
+  });
+
   it("uses compact generic copy for raw external chat errors when verbose is off", async () => {
     const agentEvents = await import("../../infra/agent-events.js");
     const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);

@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 import type { HealthCheck } from "./health-checks.js";
 
@@ -21,10 +21,30 @@ describe("core/doctor/bootstrap-size", () => {
   let tmp: string | undefined;
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     if (tmp !== undefined) {
       await fs.rm(tmp, { recursive: true, force: true });
       tmp = undefined;
     }
+  });
+
+  it("does not create shared state while inspecting bootstrap files", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-bootstrap-readonly-"));
+    await fs.writeFile(join(tmp, "AGENTS.md"), "bootstrap", "utf-8");
+    const stateDir = join(tmp, "state-root");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    await expect(
+      getBootstrapSizeCheck().detect({
+        mode: "lint",
+        runtime,
+        cfg: { agents: { defaults: { workspace: tmp } } },
+        cwd: tmp,
+      }),
+    ).resolves.toEqual([]);
+    await expect(fs.stat(join(stateDir, "state", "openclaw.sqlite"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("honors the per-agent bootstrapMaxChars override in health findings", async () => {

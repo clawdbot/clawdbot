@@ -1,11 +1,11 @@
 // Tui Pty Test Watch script supports OpenClaw repository automation.
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdir, open, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { terminateManagedChild } from "../lib/managed-child-process.mts";
 import { sleep as delay } from "../lib/sleep.mjs";
-import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 
 type Options = {
   altScreen: boolean;
@@ -47,12 +47,6 @@ type ChildStopper = {
 };
 
 type SignalChild = (child: KillableChild, signal: NodeJS.Signals) => void;
-
-type RunTaskkill = (
-  command: string,
-  args: string[],
-  options: { stdio: "ignore" },
-) => { error?: unknown; status?: number | null } | undefined;
 
 function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
   (timer as { unref?: () => void }).unref?.();
@@ -133,60 +127,6 @@ function currentTerminalDimension(value: number | undefined, fallback: number): 
   return String(value && value > 0 ? value : fallback);
 }
 
-function signalWindowsProcessTree(
-  pid: number,
-  signal: NodeJS.Signals,
-  runTaskkill: RunTaskkill = spawnSync,
-): boolean {
-  const args = ["/PID", String(pid), "/T"];
-  if (signal === "SIGKILL") {
-    args.push("/F");
-  }
-  const result = runTaskkill(resolveWindowsTaskkillPath(), args, { stdio: "ignore" });
-  return !result?.error && result?.status === 0;
-}
-
-function signalWindowsProcessTreeOrForce(
-  pid: number,
-  signal: NodeJS.Signals,
-  runTaskkill: RunTaskkill = spawnSync,
-): boolean {
-  if (signalWindowsProcessTree(pid, signal, runTaskkill)) {
-    return true;
-  }
-  return signal !== "SIGKILL" && signalWindowsProcessTree(pid, "SIGKILL", runTaskkill);
-}
-
-function signalChildProcessTree(
-  child: KillableChild,
-  signal: NodeJS.Signals,
-  {
-    platform = process.platform,
-    runTaskkill = spawnSync,
-    useProcessGroup = platform !== "win32",
-  }: {
-    platform?: NodeJS.Platform;
-    runTaskkill?: RunTaskkill;
-    useProcessGroup?: boolean;
-  } = {},
-): void {
-  if (useProcessGroup && typeof child.pid === "number") {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // Non-detached fallback or already-exited group; direct child signaling is
-      // still useful on platforms without process groups.
-    }
-  }
-  if (platform === "win32" && typeof child.pid === "number") {
-    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
-      return;
-    }
-  }
-  child.kill(signal);
-}
-
 function createChildStopper(
   child: KillableChild,
   options: {
@@ -195,7 +135,15 @@ function createChildStopper(
     sigkillGraceMs?: number;
   } = {},
 ): ChildStopper {
-  const signalChild = options.signalChild ?? signalChildProcessTree;
+  const signalChild =
+    options.signalChild ??
+    ((targetChild, signal) =>
+      terminateManagedChild(targetChild, signal, {
+        onChildSignalError(error) {
+          throw error;
+        },
+        taskkillTimeoutMs: null,
+      }));
   const sigtermGraceMs = options.sigtermGraceMs ?? CHILD_SIGTERM_GRACE_MS;
   const sigkillGraceMs = options.sigkillGraceMs ?? CHILD_SIGKILL_GRACE_MS;
   let stopping = false;
@@ -523,6 +471,4 @@ export const testing = {
   drainNewMirrorData,
   parseOptions,
   readNewMirrorData,
-  signalChildProcessTree,
-  usage,
 };

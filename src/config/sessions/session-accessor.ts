@@ -129,13 +129,13 @@ export {
   countSessionEntryRowsReadOnly,
   ensureSessionEntrySync,
   copySessionOwnedStateForCanonicalRepair,
+  ensureTranscriptGenerationsForCanonicalRepair,
   hasSessionEntriesByStatusReadOnly,
   listSessionGenerationIdsForCanonicalRepair,
   clearPluginOwnedSessionState,
   listSessionChildEntriesReadOnly,
   listSessionEntriesCore,
   listSessionEntriesReadOnly,
-  listSessionEntriesForCanonicalRepair,
   rehomeSessionDeliveryReferencesForCanonicalRepair,
   rehomeSessionDeliveryReferencesForCanonicalRepairBatch,
   listSessionEntryKeysReadOnly,
@@ -157,7 +157,7 @@ export {
   upsertSessionEntryCore,
 } from "./session-accessor.entry.js";
 export {
-  readSessionIdentityEvidence,
+  readSessionIdentityEvidenceBatch,
   type SessionIdentityEvidenceResult,
 } from "./session-accessor.sqlite-entry-availability.js";
 export {
@@ -175,6 +175,27 @@ export {
   recoverSessionEntryFromRestartTombstone,
   type RestartTombstoneRecoveryResult,
 } from "./session-accessor.sqlite-recovery.js";
+export { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
+export {
+  MAX_SESSION_PARTICIPANTS,
+  recordSessionParticipant,
+  type RecordSessionParticipantResult,
+} from "./session-accessor.sqlite-participants.js";
+export {
+  listSessionParticipantsReadOnly,
+  type SessionParticipantRecord,
+} from "./session-accessor.sqlite-participant-projection.js";
+export {
+  listCanonicalSessionRepairFacts,
+  loadCanonicalSessionRepairEntries,
+  scanDoctorSessionEntriesStrict,
+  scanDoctorSessionEntriesTolerant,
+  type CanonicalSessionRepairFact,
+} from "./session-accessor.sqlite-canonical-inventory.js";
+export {
+  iterateDoctorSessionKeyBatches,
+  rewriteDoctorSessionEntries,
+} from "./session-accessor.sqlite-doctor-rewrite.js";
 export {
   applySessionEntryLifecycleMutation,
   applySessionEntryReplacements,
@@ -211,6 +232,7 @@ export {
   appendTranscriptMessage,
   appendTranscriptMessageSync,
   findTranscriptEvent,
+  inspectTranscriptEventsSync,
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
@@ -225,6 +247,7 @@ export {
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
   rewriteTranscriptEventRowsExact,
+  rewriteTranscriptMessageAtAnchor,
   resolveTranscriptSessionKeyBySessionId,
   trimSessionTranscriptForManualCompact,
   withTranscriptWriteLock,

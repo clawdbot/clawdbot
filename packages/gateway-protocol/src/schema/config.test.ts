@@ -7,6 +7,7 @@ import {
   UpdateHoldParamsSchema,
   UpdateHoldResultSchema,
   UpdateScheduleStateSchema,
+  UpdateStatusParamsSchema,
   UpdateStatusResultSchema,
 } from "./config.js";
 
@@ -55,6 +56,12 @@ describe("ConfigSchemaLookupResultSchema", () => {
 });
 
 describe("update protocol schemas", () => {
+  it("accepts an optional explicit checkout refresh", () => {
+    expect(Value.Check(UpdateStatusParamsSchema, {})).toBe(true);
+    expect(Value.Check(UpdateStatusParamsSchema, { refreshCheckout: true })).toBe(true);
+    expect(Value.Check(UpdateStatusParamsSchema, { refreshCheckout: "yes" })).toBe(false);
+  });
+
   it("accepts package and git schedule targets", () => {
     expect(
       Value.Check(UpdateScheduleStateSchema, {

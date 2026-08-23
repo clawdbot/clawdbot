@@ -1,6 +1,7 @@
 /** Stable cron run-history wire shape and legacy JSONL migration input. */
 import type { FailoverReason } from "../agents/failover/signal.js";
 import type {
+  CronCompletionStatus,
   CronDeliveryStatus,
   CronDeliveryTrace,
   CronFailureNotificationDelivery,
@@ -15,6 +16,7 @@ export type CronRunLogEntry = {
   jobId: string;
   action: "finished";
   status?: CronRunStatus;
+  completionStatus?: CronCompletionStatus;
   error?: string;
   errorReason?: FailoverReason;
   summary?: string;

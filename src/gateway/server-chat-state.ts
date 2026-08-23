@@ -338,7 +338,6 @@ export type SessionEventSubscriberRegistry = {
   subscribe: (connId: string) => void;
   unsubscribe: (connId: string) => void;
   getAll: () => ReadonlySet<string>;
-  clear: () => void;
 };
 
 export type SessionMessageSubscriberRegistry = {
@@ -350,10 +349,8 @@ export type SessionMessageSubscriberRegistry = {
   unsubscribe: (connId: string, sessionKey: string) => void;
   unsubscribeAll: (connId: string) => void;
   get: (sessionKey: string) => ReadonlySet<string>;
-  getForConnection: (connId: string) => ReadonlySet<string>;
   getApprovals: (sessionKey: string) => ReadonlySet<string>;
   onChange: (listener: (sessionKey: string) => void) => () => void;
-  clear: () => void;
 };
 
 type SessionMessageSubscription = (() => void) & { commit: () => void };
@@ -371,14 +368,16 @@ const TOOL_EVENT_RECIPIENT_TTL_MS = 10 * 60 * 1000;
 const TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS = 30 * 1000;
 
 /** Create the broad sessions.changed subscriber registry. */
-export function createSessionEventSubscriberRegistry(): SessionEventSubscriberRegistry {
+export function createSessionEventSubscriberRegistry(
+  isConnectionActive?: (connId: string) => boolean,
+): SessionEventSubscriberRegistry {
   const connIds = new Set<string>();
   const empty = new Set<string>();
 
   return {
     subscribe: (connId: string) => {
       const normalized = connId.trim();
-      if (!normalized) {
+      if (!normalized || isConnectionActive?.(normalized) === false) {
         return;
       }
       connIds.add(normalized);
@@ -391,18 +390,17 @@ export function createSessionEventSubscriberRegistry(): SessionEventSubscriberRe
       connIds.delete(normalized);
     },
     getAll: () => (connIds.size > 0 ? connIds : empty),
-    clear: () => {
-      connIds.clear();
-    },
   };
 }
 
 /** Create the per-session message subscriber registry. */
-export function createSessionMessageSubscriberRegistry(): SessionMessageSubscriberRegistry {
+export function createSessionMessageSubscriberRegistry(
+  isConnectionActive?: (connId: string) => boolean,
+): SessionMessageSubscriberRegistry {
   const sessionToConnIds = new Map<string, Set<string>>();
-  const connToSessionKeys = new Map<string, Set<string>>();
   // The final state after overlapping replays settles to their latest success
   // or the original committed base; failed provisionals cannot leave ghosts.
+  // Its keys double as the per-connection reverse index for unsubscribeAll.
   const connToSessionRecency = new Map<string, Map<string, number>>();
   const provisionalSubscriptions = new Map<string, Map<string, ProvisionalSubscriptionState>>();
   const approvalSessionToConnIds = new Map<string, Set<string>>();
@@ -412,17 +410,6 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
   let subscriptionSequence = 0;
 
   const normalize = (value: string): string => value.trim();
-  const rebuildConnectionSessionKeys = (connId: string) => {
-    const recency = connToSessionRecency.get(connId);
-    if (!recency || recency.size === 0) {
-      connToSessionKeys.delete(connId);
-      return;
-    }
-    connToSessionKeys.set(
-      connId,
-      new Set([...recency.entries()].toSorted(([, a], [, b]) => a - b).map(([key]) => key)),
-    );
-  };
   const setMessageSubscription = (connId: string, sessionKey: string, subscribed: boolean) => {
     const connIds = sessionToConnIds.get(sessionKey);
     const wasSubscribed = connIds?.has(connId) === true;
@@ -473,7 +460,11 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
     subscribe: (connId: string, sessionKey: string, opts) => {
       const normalizedConnId = normalize(connId);
       const normalizedSessionKey = normalize(sessionKey);
-      if (!normalizedConnId || !normalizedSessionKey) {
+      if (
+        !normalizedConnId ||
+        !normalizedSessionKey ||
+        isConnectionActive?.(normalizedConnId) === false
+      ) {
         return undefined;
       }
       const hadApprovals =
@@ -497,7 +488,6 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
       setMessageSubscription(normalizedConnId, normalizedSessionKey, true);
       recency.set(normalizedSessionKey, provisionalRecency);
       connToSessionRecency.set(normalizedConnId, recency);
-      rebuildConnectionSessionKeys(normalizedConnId);
 
       setApprovalSubscription(
         normalizedConnId,
@@ -537,7 +527,6 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
         if (recency.size === 0) {
           connToSessionRecency.delete(normalizedConnId);
         }
-        rebuildConnectionSessionKeys(normalizedConnId);
         states.delete(normalizedSessionKey);
         if (states.size === 0) {
           provisionalSubscriptions.delete(normalizedConnId);
@@ -573,7 +562,6 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
         if (recency.size === 0) {
           connToSessionRecency.delete(normalizedConnId);
         }
-        rebuildConnectionSessionKeys(normalizedConnId);
       }
       const approvalConnIds = approvalSessionToConnIds.get(normalizedSessionKey);
       if (approvalConnIds) {
@@ -600,14 +588,13 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
         state.active = false;
       }
       provisionalSubscriptions.delete(normalizedConnId);
-      const sessionKeys = connToSessionKeys.get(normalizedConnId);
+      const sessionKeys = connToSessionRecency.get(normalizedConnId);
       if (!sessionKeys) {
         return;
       }
-      for (const sessionKey of sessionKeys) {
+      for (const sessionKey of sessionKeys.keys()) {
         setMessageSubscription(normalizedConnId, sessionKey, false);
       }
-      connToSessionKeys.delete(normalizedConnId);
       connToSessionRecency.delete(normalizedConnId);
 
       const approvalSessionKeys = connToApprovalSessionKeys.get(normalizedConnId);
@@ -627,13 +614,6 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
       }
       return sessionToConnIds.get(normalizedSessionKey) ?? empty;
     },
-    getForConnection: (connId: string) => {
-      const normalizedConnId = normalize(connId);
-      if (!normalizedConnId) {
-        return empty;
-      }
-      return connToSessionKeys.get(normalizedConnId) ?? empty;
-    },
     getApprovals: (sessionKey: string) => {
       const normalizedSessionKey = normalize(sessionKey);
       if (!normalizedSessionKey) {
@@ -644,25 +624,6 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
     onChange: (listener) => {
       changeListeners.add(listener);
       return () => changeListeners.delete(listener);
-    },
-    clear: () => {
-      const changedSessionKeys = [...sessionToConnIds.keys()].toSorted();
-      sessionToConnIds.clear();
-      connToSessionKeys.clear();
-      connToSessionRecency.clear();
-      for (const states of provisionalSubscriptions.values()) {
-        for (const state of states.values()) {
-          state.active = false;
-        }
-      }
-      provisionalSubscriptions.clear();
-      approvalSessionToConnIds.clear();
-      connToApprovalSessionKeys.clear();
-      for (const sessionKey of changedSessionKeys) {
-        for (const listener of changeListeners) {
-          listener(sessionKey);
-        }
-      }
     },
   };
   return registry;

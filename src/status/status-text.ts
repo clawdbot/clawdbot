@@ -56,9 +56,9 @@ import {
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
 // Status text helpers render runtime status summaries for CLI output.
-import { resolveUsageCredentialType } from "./codex-synthetic-usage.js";
 import {
   buildCodexSyntheticUsageAuth,
+  resolveUsageCredentialType,
   shouldUseCodexSyntheticUsageForRuntime,
 } from "./codex-synthetic-usage.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
@@ -597,30 +597,11 @@ export async function buildStatusReplyParts(
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
     (agentDefaults.thinkingDefault as ThinkLevel | undefined);
-  const configuredContextTokens =
-    typeof agentConfig?.contextTokens === "number" && agentConfig.contextTokens > 0
-      ? agentConfig.contextTokens
-      : typeof agentDefaults.contextTokens === "number" && agentDefaults.contextTokens > 0
-        ? agentDefaults.contextTokens
-        : undefined;
   const runtimeContextTokens = resolveStatusRuntimeContextTokens({
     cfg,
     provider: activeStatusProvider,
     model: modelRefs.active.model || model,
   });
-  const selectedContextTokens = resolveStatusRuntimeContextTokens({
-    cfg,
-    provider: selectedStatusProvider,
-    model: modelRefs.selected.model || selectedLookupModel,
-  });
-  const statusAgentContextTokens =
-    typeof contextTokens === "number" &&
-    contextTokens > 0 &&
-    (activeRuntimeIsAuthoritative ||
-      contextTokens === configuredContextTokens ||
-      contextTokens === selectedContextTokens)
-      ? contextTokens
-      : undefined;
   const statusRuntimeContextTokens = activeRuntimeIsAuthoritative
     ? (runtimeContextTokens ??
       (fallbackState.active && typeof contextTokens === "number" && contextTokens > 0
@@ -677,9 +658,6 @@ export async function buildStatusReplyParts(
         primary: params.primaryModelLabelOverride ?? `${provider}/${model}`,
         ...(agentFallbacksOverride === undefined ? {} : { fallbacks: agentFallbacksOverride }),
       },
-      ...(statusAgentContextTokens !== undefined
-        ? { contextTokens: statusAgentContextTokens }
-        : {}),
       thinkingDefault: explicitThinkingDefault,
       verboseDefault: agentDefaults.verboseDefault,
       reasoningDefault: agentConfig?.reasoningDefault ?? agentDefaults.reasoningDefault,
@@ -687,7 +665,6 @@ export async function buildStatusReplyParts(
     },
     agentId: statusAgentId,
     configuredDefaultModelLabel,
-    explicitConfiguredContextTokens: configuredContextTokens,
     runtimeContextTokens: statusRuntimeContextTokens,
     sessionEntry,
     sessionKey,

@@ -63,7 +63,16 @@ function createGateway(): TestGateway {
             commandOwnerConfigured: true,
             limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
           }
-        : {},
+        : method === "channels.status"
+          ? {
+              ts: 0,
+              channelOrder: [],
+              channelLabels: {},
+              channels: {},
+              channelAccounts: {},
+              channelDefaultAccountId: {},
+            }
+          : {},
     ),
   } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = {

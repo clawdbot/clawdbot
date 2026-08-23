@@ -399,6 +399,31 @@ describe("provider env vars dynamic manifest metadata", () => {
     }
   });
 
+  it("accepts placeholder text introduced by an environment value", () => {
+    const existsSync = vi.spyOn(fs, "existsSync").mockReturnValue(true);
+
+    try {
+      expect(
+        resolveLocalProviderAuthEvidence(
+          [
+            {
+              type: "local-file-with-env",
+              fallbackPaths: ["${EXTERNAL_CLOUD_CONFIG}/credentials.json"],
+              credentialMarker: "external-cloud-local-credentials",
+            },
+          ],
+          { EXTERNAL_CLOUD_CONFIG: "/fixture/${literal}" },
+        ),
+      ).toEqual({
+        credentialMarker: "external-cloud-local-credentials",
+        source: "local auth evidence",
+      });
+      expect(existsSync).toHaveBeenCalledWith("/fixture/${literal}/credentials.json");
+    } finally {
+      existsSync.mockRestore();
+    }
+  });
+
   it.each([
     {
       scenario: "missing variable",

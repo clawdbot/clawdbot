@@ -24,7 +24,10 @@ import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { removeCronRunContinuationSessionIfIdle } from "../../tasks/cron-run-continuation-cleanup.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
-import { resolveCronAbortReasonText } from "../service/execution-errors.js";
+import {
+  normalizeCronRunErrorText,
+  resolveCronAbortReasonText,
+} from "../service/execution-errors.js";
 import { getActiveCronTaskRunId } from "../service/task-runs.js";
 import type {
   CronAgentExecutionPhaseUpdate,
@@ -127,7 +130,12 @@ export async function runCronIsolatedAgentTurn(params: {
   let runContextOwnerToken: string | undefined;
   let runLifecycleGeneration = admittedLifecycleGeneration;
   let executionStarted = false;
-  const notifyExecutionStarted = (info?: { lifecycleGeneration?: string }) => {
+  const notifyExecutionStarted = (info?: {
+    lifecycleGeneration?: string;
+    isFallback?: boolean;
+    provider?: string;
+    model?: string;
+  }) => {
     executionStarted = true;
     if (info?.lifecycleGeneration) {
       runLifecycleGeneration = info.lifecycleGeneration;
@@ -137,9 +145,10 @@ export async function runCronIsolatedAgentTurn(params: {
       agentId: prepared.context.agentId,
       sessionId: prepared.context.currentRunSessionId(),
       sessionKey: prepared.context.runSessionKey,
+      ...(info?.isFallback === true ? { isFallback: true } : {}),
       phase: "runner_entered",
-      provider: prepared.context.liveSelection.provider,
-      model: prepared.context.liveSelection.model,
+      provider: info?.provider ?? prepared.context.liveSelection.provider,
+      model: info?.model ?? prepared.context.liveSelection.model,
     });
   };
   const notifyExecutionPhase = (
@@ -286,7 +295,7 @@ export async function runCronIsolatedAgentTurn(params: {
   } catch (err) {
     consumeCronNextCheckProposal(initialSessionId, params.job.id);
     const isCronLaneTimeout = isAborted() || isCronNestedLaneTaskTimeoutError(err);
-    const error = isCronLaneTimeout ? abortReason() : String(err);
+    const error = isCronLaneTimeout ? abortReason() : normalizeCronRunErrorText(err);
     outcome = "error";
     outcomeError = error;
     return prepared.context.withRunSession({
@@ -328,54 +337,56 @@ export async function runCronIsolatedAgentTurn(params: {
       sessionId: prepared.context.currentRunSessionId(),
       sessionKey: prepared.context.runSessionKey,
     };
-    messageLifecycle.markIdle(undefined, finalSessionRef);
-    messageLifecycle.markProcessed(outcome, {
-      ...finalSessionRef,
-      error: outcomeError,
-    });
     try {
-      if (!cronRunSessionCleanupAttempted) {
-        const cleanupOutcome = await cleanupCronRunSessionAfterRun({
-          job: params.job,
-          agentSessionKey: prepared.context.agentSessionKey,
-          sessionId: prepared.context.currentRunSessionId(),
-          lifecycleRevision: prepared.context.cronSession.lifecycleRevision,
-          sessionUpdatedAt: prepared.context.cronSession.sessionEntry.updatedAt,
-          beforeDelete: prepared.context.sessionWorkAdmission.release,
-          reason: "cron-delete-after-run-finally",
-        });
-        cronRunSessionCleanupAttempted = cleanupOutcome !== "not-requested";
-      }
+      messageLifecycle.markIdle(undefined, finalSessionRef);
+      messageLifecycle.markProcessed(outcome, {
+        ...finalSessionRef,
+        error: outcomeError,
+      });
     } finally {
-      // Release runtime references after the run completes (success or failure).
-      // The session entry has already been persisted to disk by this point,
-      // so the in-memory store and run context can be safely dropped.
       try {
-        if (prepared.context.runContinuationSession) {
-          try {
-            await removeCronRunContinuationSessionIfIdle(prepared.context.runSessionKey);
-          } catch (error) {
-            logWarn(
-              `[cron:${params.job.id}] Failed to remove unused run continuation: ${String(error)}`,
-            );
-          }
-        }
-        await disposeCronRunContext({
-          sessionId: initialSessionId,
-          cronSession: prepared.context.cronSession,
-          ownsRunContext,
-          runContextOwnerToken,
-        });
-      } finally {
-        prepared.context.sessionWorkAdmission.release();
-        // Only run-scoped browser identities end with this invocation.
-        // Persistent cron targets keep the session and its tracked tabs alive.
-        if (prepared.context.runSessionKey !== prepared.context.agentSessionKey) {
-          await cleanupBrowserSessionsForLifecycleEnd({
-            cfg: prepared.context.cfgWithAgentDefaults,
-            sessionKeys: [prepared.context.runSessionKey],
-            onWarn: (message) => logWarn(`[cron:${params.job.id}] ${message}`),
+        if (!cronRunSessionCleanupAttempted) {
+          await cleanupCronRunSessionAfterRun({
+            job: params.job,
+            agentSessionKey: prepared.context.agentSessionKey,
+            sessionId: prepared.context.currentRunSessionId(),
+            lifecycleRevision: prepared.context.cronSession.lifecycleRevision,
+            sessionUpdatedAt: prepared.context.cronSession.sessionEntry.updatedAt,
+            beforeDelete: prepared.context.sessionWorkAdmission.release,
+            reason: "cron-delete-after-run-finally",
           });
+        }
+      } finally {
+        // Release runtime references after the run completes (success or failure).
+        // The session entry has already been persisted to disk by this point,
+        // so the in-memory store and run context can be safely dropped.
+        try {
+          if (prepared.context.runContinuationSession) {
+            try {
+              await removeCronRunContinuationSessionIfIdle(prepared.context.runSessionKey);
+            } catch (error) {
+              logWarn(
+                `[cron:${params.job.id}] Failed to remove unused run continuation: ${String(error)}`,
+              );
+            }
+          }
+          await disposeCronRunContext({
+            sessionId: initialSessionId,
+            cronSession: prepared.context.cronSession,
+            ownsRunContext,
+            runContextOwnerToken,
+          });
+        } finally {
+          prepared.context.sessionWorkAdmission.release();
+          // Only run-scoped browser identities end with this invocation.
+          // Persistent cron targets keep the session and its tracked tabs alive.
+          if (prepared.context.runSessionKey !== prepared.context.agentSessionKey) {
+            await cleanupBrowserSessionsForLifecycleEnd({
+              cfg: prepared.context.cfgWithAgentDefaults,
+              sessionKeys: [prepared.context.runSessionKey],
+              onWarn: (message) => logWarn(`[cron:${params.job.id}] ${message}`),
+            });
+          }
         }
       }
     }

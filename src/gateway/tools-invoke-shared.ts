@@ -231,12 +231,12 @@ export async function invokeGatewayTool(params: {
     };
   }
   const { agentId: selectedAgentId, sessionKey } = sessionTarget;
-  const harnessEntry = isAgentHarnessSessionKey(sessionKey)
-    ? loadGatewaySessionEntryReadOnly(sessionKey, { agentId: selectedAgentId }).entry
-    : undefined;
+  const sessionEntry = loadGatewaySessionEntryReadOnly(sessionKey, {
+    agentId: selectedAgentId,
+  }).entry;
   if (
     isAgentHarnessSessionKey(sessionKey) &&
-    (!harnessEntry || isAgentHarnessSessionStoreEntryProtected(sessionKey, harnessEntry))
+    (!sessionEntry || isAgentHarnessSessionStoreEntryProtected(sessionKey, sessionEntry))
   ) {
     return {
       ok: false,
@@ -252,6 +252,7 @@ export async function invokeGatewayTool(params: {
     resolveGatewayScopedTools({
       cfg: params.cfg,
       sessionKey,
+      sessionId: sessionEntry?.sessionId,
       agentId: selectedAgentId,
       messageProvider: params.messageChannel,
       accountId: params.accountId,

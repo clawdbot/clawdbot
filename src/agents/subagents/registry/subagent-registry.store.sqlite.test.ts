@@ -139,6 +139,24 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
+  it("preserves requester-owned final receipts in the existing SQLite payload", async () => {
+    await withTempStateEnv(async () => {
+      const requesterVisibleFinal = {
+        requesterTurnRunId: "run-requester",
+        batchRunIds: ["run-one"],
+      };
+      const run = createRun({ delivery: { status: "delivered", requesterVisibleFinal } });
+
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      closeOpenClawStateDatabaseForTest();
+
+      expect(loadSubagentRegistryFromSqlite().get(run.runId)?.delivery).toMatchObject({
+        status: "delivered",
+        requesterVisibleFinal,
+      });
+    });
+  });
+
   it.each([
     {
       name: "visible",
@@ -283,6 +301,9 @@ describe("subagent registry sqlite store", () => {
         },
       });
       saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      openOpenClawStateDatabase()
+        .db.prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
+        .run("2026.7.0");
       closeOpenClawStateDatabaseForTest();
 
       const restored = loadSubagentRegistryFromSqlite().get(run.runId);
