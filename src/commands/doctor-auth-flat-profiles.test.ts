@@ -245,6 +245,51 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     },
   );
 
+  it("leaves shared OAuth that appears after confirmation for a fresh Doctor run", async () => {
+    const state = await makeTestState();
+    const authPath = await writeLegacyAuthProfilesJson(state, {
+      version: 1,
+      profiles: {
+        "openai:confirmed": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-confirmed",
+        },
+      },
+    });
+    const oauthPath = state.statePath("credentials/oauth.json");
+    const prompter = makePrompter(true);
+    prompter.confirmAutoFix = vi.fn(async () => {
+      fs.mkdirSync(path.dirname(oauthPath), { recursive: true });
+      fs.writeFileSync(
+        oauthPath,
+        `${JSON.stringify({
+          openai: {
+            access: "appeared-after-confirmation",
+            refresh: "appeared-after-confirmation",
+            expires: 1_900_000_000_000,
+          },
+        })}\n`,
+        "utf8",
+      );
+      return true;
+    });
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {},
+      prompter,
+      env: state.env,
+    });
+
+    expect(result.changes).toEqual([expect.stringContaining("Migrated auth profile JSON")]);
+    expect(result.warnings).toEqual([
+      "Legacy auth source set changed during migration; retry Doctor.",
+    ]);
+    expect(fs.existsSync(authPath)).toBe(false);
+    expect(fs.existsSync(oauthPath)).toBe(true);
+    expectNoMigratedArchive(oauthPath);
+  });
+
   it("keeps JSON-era ownership through shared writes until Doctor imports the credential", async () => {
     const state = await makeTestState();
     const authPath = await writeLegacyAuthProfilesJson(state, {

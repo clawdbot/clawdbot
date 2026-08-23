@@ -1348,7 +1348,9 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
     }
   }
   const hasLegacyOAuthAfterCleanup = inspectLegacyAuthProfileSourceEntry(oauthPath) !== "missing";
-  if (hasLegacyOAuthAfterCleanup && sharedMainCredentialSourceRemains) {
+  if (!hasLegacyOAuth && hasLegacyOAuthAfterCleanup) {
+    result.warnings.push("Legacy auth source set changed during migration; retry Doctor.");
+  } else if (hasLegacyOAuthAfterCleanup && sharedMainCredentialSourceRemains) {
     result.warnings.push(
       `Deferred shared legacy OAuth migration until higher-priority shared-main credential sources are resolved by ${formatCliCommand("openclaw doctor --fix")}.`,
     );
