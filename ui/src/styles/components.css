@@ -1696,6 +1696,7 @@ select.input {
 .lazy-view-error {
   margin: auto;
   display: grid;
+  align-content: center;
   gap: 8px;
   justify-items: center;
   text-align: center;
@@ -1742,6 +1743,7 @@ select.input {
 }
 
 .lazy-view-error__subtitle {
+  max-width: 40ch;
   font-size: 13px;
   line-height: 1.5;
   color: var(--muted);
