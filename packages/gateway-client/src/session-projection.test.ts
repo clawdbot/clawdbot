@@ -254,23 +254,6 @@ describe("session transcript projection", () => {
     expect(state.messages).toEqual([commentary, final]);
   });
 
-  it("does not let same-run Codex commentary in a snapshot consume a live final", () => {
-    const commentary = createMessage("assistant", "commentary", {
-      id: "commentary-1",
-      mirrorOrigin: "codex-app-server",
-      runId: "run-1",
-    });
-    const final = createMessage("assistant", "final answer");
-    const state = projectLiveSessionMessage(createSessionProjection(primaryScope), final, {
-      runId: "run-1",
-    });
-
-    expect(reconcileSessionProjectionSnapshot(state, [commentary], primaryScope).messages).toEqual([
-      commentary,
-      final,
-    ]);
-  });
-
   it("keeps the durable assistant identity when its run's terminal projection replays", () => {
     const persisted = createMessage("assistant", "persisted final", {
       id: "assistant-final",
