@@ -96,12 +96,15 @@ function isQueuedUserMessageEnd(event: unknown, queueIdentity: string): boolean 
   );
 }
 
-function isTerminalActiveSessionEvent(event: unknown): boolean {
+function getTerminalActiveSessionEvent(event: unknown): "settled" | "handoff" | undefined {
   if (!event || typeof event !== "object") {
-    return false;
+    return undefined;
   }
   const type = (event as { type?: unknown }).type;
-  return type === "agent_settled" || type === "agent_handoff";
+  if (type === "agent_settled") {
+    return "settled";
+  }
+  return type === "agent_handoff" ? "handoff" : undefined;
 }
 
 function getAgentSteeringQueueMessages(agent: unknown): unknown[] | undefined {
@@ -193,11 +196,11 @@ async function steerAndWaitForTranscriptCommit(
       }
       resolve();
     };
-    const rejectAfterCancellation = (message: string) => {
+    const rejectAfterCancellation = (message: string, allowReplay = false) => {
       // Cancellation is best-effort but must finish before rejecting so callers
       // do not return while a stale queued message can leak into the next turn.
       cancellation ??= cancelQueuedSteeringMessage(activeSession, queueIdentity).then((removed) => {
-        if (!removed) {
+        if (!removed && !allowReplay) {
           log.warn("failed to find queued steering message for cancellation");
           throw new EmbeddedSteeringAcceptedUnconfirmedError(message);
         }
@@ -239,11 +242,14 @@ async function steerAndWaitForTranscriptCommit(
         finish();
         return;
       }
-      if (isTerminalActiveSessionEvent(event)) {
-        const message =
-          "active session ended before queued steering message was committed to the transcript";
+      const terminalEvent = getTerminalActiveSessionEvent(event);
+      if (terminalEvent) {
+        const handedOff = terminalEvent === "handoff";
+        const message = `active session ${handedOff ? "handed off" : "ended"} before queued steering message was committed to the transcript`;
         if (accepted) {
-          rejectAfterCancellation(message);
+          // Handoff transfers delivery ownership to the parked follow-up, so a
+          // missing queue entry is recoverable rather than an ambiguous commit.
+          rejectAfterCancellation(message, handedOff);
           return;
         }
         rejectBeforeAcceptance(message);

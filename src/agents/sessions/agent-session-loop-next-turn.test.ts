@@ -343,9 +343,11 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(session.agent.hasQueuedMessages()).toBe(true);
   });
 
-  it("leaves queued messages dormant after a turn handoff", async () => {
+  it("returns an accepted steer for follow-up after a turn handoff", async () => {
     const sessionRef: { current?: AgentSession } = {};
     const settled = vi.fn();
+    const accepted = vi.fn();
+    let steerDelivery: ReturnType<typeof steerActiveSessionWithOptionalDeliveryWait> | undefined;
     const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
       ["agent_settled", [async () => settled()]],
     ]);
@@ -359,6 +361,17 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
         if (!activeSession) {
           throw new Error("session not ready");
         }
+        steerDelivery = steerActiveSessionWithOptionalDeliveryWait(
+          activeSession,
+          "steer during handoff",
+          {
+            deliveryTimeoutMs: 10_000,
+            onQueueAccepted: accepted,
+            waitForTranscriptCommit: true,
+          },
+        );
+        await vi.waitFor(() => expect(accepted).toHaveBeenCalledWith(true));
+        activeSession.agent.clearAllQueues();
         activeSession.agent.steer({
           role: "custom",
           customType: "test.turn-handoff",
@@ -389,6 +402,9 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
 
     await session.prompt("yield now");
 
+    await expect(steerDelivery).rejects.toThrow(
+      "active session handed off before queued steering message was committed to the transcript",
+    );
     expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
     expect(session.agent.hasQueuedMessages()).toBe(true);
     expect(settled).not.toHaveBeenCalled();
