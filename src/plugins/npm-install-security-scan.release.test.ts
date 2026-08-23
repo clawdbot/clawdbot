@@ -602,7 +602,12 @@ describe("publishable plugin npm package install security scan", () => {
     const relocatedFinding =
       "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/relocated.ts";
 
-    expect(isReviewedPublishableCriticalFinding(relocatedFinding)).toBe(false);
+    expect(
+      isReviewedPublishableCriticalFinding(
+        relocatedFinding,
+        "const child = spawn(other.command, other.argv, {",
+      ),
+    ).toBe(false);
     expect(resolveReviewedCodexSourceLayout([relocatedFinding])).toBeUndefined();
   });
 

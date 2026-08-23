@@ -2173,13 +2173,17 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
     expect(workflow).toContain("uses: ./.release-harness/.github/actions/setup-release-harness");
     expect(workflow).toContain("npm install -g bun@1.3.14");
     expect(workflow).toContain('install-bun: "false"');
-    expect(workflow).toContain("Run Bun global install image-provider smoke");
+    expect(workflow).toContain("Validate candidate payload artifact binding");
+    expect(workflow).toContain("Verify candidate payload contents");
+    expect(workflow).toContain("install-smoke-candidate-payload.mts verify");
+    expect(workflow).toContain("Run Bun global install candidate-payload smoke");
     expect(workflow).toContain("working-directory: .release-harness");
     expect(workflow).toContain("bash scripts/e2e/bun-global-install-smoke.sh");
     expect(workflow).not.toContain("uses: ./.release-harness/.github/actions/setup-node-env");
     expect(workflow).toContain(
-      "OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}",
+      "OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ: ${{ runner.temp }}/install-smoke-candidate-payload/candidate.tgz",
     );
+    expect(workflow).not.toContain("OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE:");
     expect(workflow).toContain("group: ${{ github.workflow }}-workflow-call-${{ github.run_id }}");
     expect(workflow).toContain("cancel-in-progress: false");
     expect(workflow).not.toContain(
