@@ -1,8 +1,0 @@
-
-    expect(Object.keys(payload)).toHaveLength(2);
-    // Before the fix this was 1: the second value overwrote the first.
-    expect(values).toHaveLength(2);
-    expect(new Set(values)).toEqual(new Set(["first", "second"]));
-  });
-});
-
