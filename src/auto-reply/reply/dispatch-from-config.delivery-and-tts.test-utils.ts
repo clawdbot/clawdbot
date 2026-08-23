@@ -613,6 +613,17 @@ describe("dispatchReplyFromConfig", () => {
       expectObservedDelivery: true,
     },
     {
+      name: "handled reply route delivers before abort",
+      claimOutcome: {
+        status: "handled",
+        result: { handled: true, reply: { text: "Codex routed reply" } },
+      },
+      routeResult: { ok: true, delivered: true, messageId: "routed-binding-aborted-1" },
+      processedReason: "reply_operation_aborted",
+      expectObservedDelivery: true,
+      abortAfterRoute: true,
+    },
+    {
       name: "handled reply route is hook-suppressed",
       claimOutcome: {
         status: "handled",
@@ -686,6 +697,7 @@ describe("dispatchReplyFromConfig", () => {
     };
     processedReason: string;
     expectObservedDelivery: boolean;
+    abortAfterRoute?: boolean;
   }>)(
     "attests observed delivery only when the routed binding turn delivered: $name",
     async (params) => {
@@ -696,7 +708,13 @@ describe("dispatchReplyFromConfig", () => {
       );
       hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
       hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue(params.claimOutcome);
-      mocks.routeReply.mockResolvedValue(params.routeResult);
+      const abortController = new AbortController();
+      mocks.routeReply.mockImplementation(async () => {
+        if (params.abortAfterRoute) {
+          abortController.abort();
+        }
+        return params.routeResult;
+      });
       sessionBindingMocks.resolveByConversation.mockReturnValue({
         bindingId: "binding-routed-attest-1",
         targetSessionKey: "plugin-binding:codex:routed-attest",
@@ -734,6 +752,7 @@ describe("dispatchReplyFromConfig", () => {
           }),
           cfg: emptyConfig,
           dispatcher,
+          replyOptions: { abortSignal: abortController.signal },
           replyResolver,
         }),
       );
@@ -745,7 +764,10 @@ describe("dispatchReplyFromConfig", () => {
         counts: { tool: 0, block: 0, final: 0 },
         ...(params.expectObservedDelivery ? { observedReplyDelivery: true } : {}),
       });
-      expect(processedOutcome).toEqual({ outcome: "completed", reason: params.processedReason });
+      expect(processedOutcome).toEqual({
+        outcome: params.abortAfterRoute ? "skipped" : "completed",
+        reason: params.processedReason,
+      });
       expect(mocks.routeReply).toHaveBeenCalledTimes(1);
       expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
       expect(replyResolver).not.toHaveBeenCalled();
