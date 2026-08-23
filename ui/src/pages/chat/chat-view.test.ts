@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { html, render } from "lit";
+import { html, render, type LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -896,7 +896,7 @@ describe("chat Swarm progress", () => {
 });
 
 describe("inline approval card", () => {
-  it("renders between the transcript and composer and enforces its grant projection", () => {
+  it("renders between the transcript and composer and enforces its grant projection", async () => {
     const onApprovalDecision = vi.fn();
     const inlineApproval = {
       id: "approval-inline",
@@ -913,7 +913,6 @@ describe("inline approval card", () => {
 
     const container = renderChatView({
       inlineApproval,
-      approvalNowMs: 1_000,
       approvalCanGrant: false,
       approvalErrors: new Map([["approval-inline", "Approval failed: gateway unavailable"]]),
       onApprovalDecision,
@@ -926,9 +925,19 @@ describe("inline approval card", () => {
     expect(
       inlineSurface?.nextElementSibling?.classList.contains("agent-chat__composer-shell"),
     ).toBe(true);
-    expect(container.querySelector(".exec-approval-countdown")?.textContent?.trim()).toBe(
-      "expires in 01:00",
+    const countdown = expectDefined(
+      container.querySelector<LitElement>(".exec-approval-countdown"),
+      "inline approval countdown",
     );
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    document.body.append(container);
+    try {
+      await countdown.updateComplete;
+      expect(countdown.textContent?.trim()).toBe("expires in 01:00");
+    } finally {
+      container.remove();
+      nowSpy.mockRestore();
+    }
     expect(container.querySelector(".exec-approval-command-span")?.textContent).toBe("rm -r");
     expect(container.querySelector(".exec-approval-error")?.textContent).toBe(
       "Approval failed: gateway unavailable",

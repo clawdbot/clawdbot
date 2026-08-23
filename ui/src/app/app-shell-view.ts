@@ -683,7 +683,6 @@ export function renderApplicationShell(host: ShellViewHost) {
               busy: overlaySnapshot.approvalBusy,
               canGrant: overlaySnapshot.approvalCanGrant,
               errors: overlaySnapshot.approvalErrors,
-              nowMs: overlaySnapshot.approvalNowMs,
               onDecision: (
                 approvalId: string,
                 decision: Parameters<typeof context.overlays.decideApproval>[0],

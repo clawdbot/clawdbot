@@ -501,13 +501,13 @@ export function handlePageGatewayEvent(
   }
   if (event.event === "agent" || event.event === "session.tool") {
     if (handleAgentEvent(state as never, event.payload as never)) {
-      requestChatPageUpdate(state);
+      requestChatPageUpdate(state, "animation-frame");
     }
     return;
   }
   if (event.event === "session.operation") {
     handleSessionOperationEvent(state as never, event.payload as never);
-    requestChatPageUpdate(state);
+    requestChatPageUpdate(state, "animation-frame");
     return;
   }
   if (event.event === "chat.send_timing") {
@@ -517,13 +517,13 @@ export function handlePageGatewayEvent(
   if (event.event === "session.message") {
     handleSessionMessageEvent(state, event.payload, isPresented);
     void resumeStoredChatOutboxes(state);
-    requestChatPageUpdate(state);
+    requestChatPageUpdate(state, "animation-frame");
     return;
   }
   if (event.event === "sessions.changed") {
     handleSessionsChangedEvent(state, event.payload, isPresented);
     void resumeStoredChatOutboxes(state);
-    requestChatPageUpdate(state);
+    requestChatPageUpdate(state, "animation-frame");
     return;
   }
   if (event.event === "task") {
