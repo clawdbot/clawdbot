@@ -74,12 +74,17 @@ export function mergeFeishuReplyDeliveryResults(
   content?: string,
 ): FeishuReplyDeliveryResult {
   const visible = results.filter((result) => result.visibleReplySent === true);
+  const acceptedContent = visible.flatMap((result) =>
+    result.content === undefined ? [] : [result.content],
+  );
   return createFeishuReplyDeliveryResult({
     results: visible,
     visibleReplySent: visible.length > 0,
     content:
       content === undefined
-        ? results.find((result) => result.content !== undefined)?.content
+        ? acceptedContent.length > 0
+          ? acceptedContent.join("\n\n")
+          : undefined
         : content,
   });
 }
