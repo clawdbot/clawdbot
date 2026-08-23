@@ -150,6 +150,13 @@ extension TalkModeRuntime {
                       realtimeRelayStartGeneration == nil,
                       realtimeSession == nil
                 else { return }
+                let fallbackConfig = await fetchTalkConfig()
+                guard await self.applyNativeFallbackTalkConfig(
+                    fallbackConfig,
+                    lifecycleGeneration: gen,
+                    recognitionGeneration: fallbackRecognitionGeneration,
+                    relayGeneration: fallbackRealtimeRelayGeneration)
+                else { return }
                 logger.error(
                     "talk realtime unavailable; using native fallback: " +
                         "\(error.localizedDescription, privacy: .public)")
@@ -323,6 +330,29 @@ extension TalkModeRuntime {
               self.realtimeRelayStartGeneration == relayGeneration
         else { throw CancellationError() }
         self.commitTalkConfig(config, locale: locale)
+    }
+
+    func applyNativeFallbackTalkConfig(
+        _ config: TalkModeGatewayConfigState,
+        lifecycleGeneration: Int,
+        recognitionGeneration: Int,
+        relayGeneration: UInt64) async -> Bool
+    {
+        let locale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
+        #if DEBUG
+        if let checkpoint = self.realtimeConfigApplicationCheckpoint {
+            await checkpoint()
+        }
+        #endif
+        guard self.isCurrent(lifecycleGeneration),
+              !self.isPaused,
+              self.recognitionGeneration == recognitionGeneration,
+              self.realtimeRelayGeneration == relayGeneration,
+              self.realtimeRelayStartGeneration == nil,
+              self.realtimeSession == nil
+        else { return false }
+        self.commitTalkConfig(config, locale: locale)
+        return true
     }
 
     func fallbackTalkConfig() -> TalkModeGatewayConfigState {

@@ -1486,7 +1486,7 @@ extension TalkModeRuntime {
         return parsed
     }
 
-    private func fetchTalkConfig() async -> TalkModeGatewayConfigState {
+    func fetchTalkConfig() async -> TalkModeGatewayConfigState {
         do {
             let snap: ConfigSnapshot = try await GatewayConnection.shared.requestDecoded(
                 method: .talkConfig,

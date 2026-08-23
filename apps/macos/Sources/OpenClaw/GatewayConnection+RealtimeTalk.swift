@@ -18,7 +18,7 @@ extension GatewayConnection {
         let lease = try await self.acquireServerLease()
         let data = try await self.request(
             method: Method.talkConfig.rawValue,
-            params: ["includeSecrets": AnyCodable(true)],
+            params: [:],
             timeoutMs: 8000,
             ifCurrentServerLease: lease)
         let snapshot = try JSONDecoder().decode(ConfigSnapshot.self, from: data)

@@ -480,6 +480,18 @@ private func assertConfigLookupCannotRecreateRoute(
             let replacement = try await connection.acquireRealtimeTalkBootstrap()
             #expect(replacement.sessionKey == "route-b")
             #expect(await replacement.transport.isCurrent())
+            let configRequests = recorder.snapshot().compactMap { message -> [String: Any]? in
+                guard let data = Self.messageData(message),
+                      let frame = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      frame["method"] as? String == "talk.config"
+                else { return nil }
+                return frame
+            }
+            #expect(configRequests.count == 2)
+            for request in configRequests {
+                let params = try #require(request["params"] as? [String: Any])
+                #expect(params["includeSecrets"] == nil)
+            }
         } catch {
             releaseConfig.open()
             entryTask.cancel()
