@@ -15,6 +15,15 @@ import { isSensitiveUrlQueryParamNameForDiagnostics } from "@openclaw/net-policy
 // logger already uses for form bodies (`src/logging/redact-patterns.ts`).
 const SENSITIVE_KEY_VALUE_PAIR_RE = /(^|[?&\s;,])([^=&\s;,?#]+)=([^&#\s"'<>)]*)/g;
 
+// `readUpgradeErrorBody` accepts an arbitrary peer response body, so a proxy can
+// answer with JSON (`{"X-Amz-Signature":"…"}`) or a colon-delimited field rather
+// than a form body. Those reach `GatewayClientRequestError.message` and then
+// host sinks such as node-host stderr, so the producer boundary has to redact
+// them too. The key may be quoted or bare; the value is matched as a quoted
+// string or an unquoted run, and only the value is replaced.
+const SENSITIVE_COLON_PAIR_RE =
+  /("?)([A-Za-z0-9_.\-[\]]+)\1(\s*:\s*)("(?:[^"\\]|\\.)*"|[^,;}\]\s]*)/g;
+
 /**
  * Masks the values of credential-named `key=value` pairs anywhere in diagnostic
  * text: query strings, form bodies, and bodies quoted back inside an error
@@ -22,8 +31,21 @@ const SENSITIVE_KEY_VALUE_PAIR_RE = /(^|[?&\s;,])([^=&\s;,?#]+)=([^&#\s"'<>)]*)/
  * field such as `X-Amz-Date` stays readable.
  */
 export function redactSensitiveKeyValuePairs(value: string): string {
-  return value.replace(SENSITIVE_KEY_VALUE_PAIR_RE, (match, prefix: string, key: string) =>
-    isSensitiveUrlQueryParamNameForDiagnostics(key) ? `${prefix}${key}=***` : match,
+  const formRedacted = value.replace(
+    SENSITIVE_KEY_VALUE_PAIR_RE,
+    (match, prefix: string, key: string) =>
+      isSensitiveUrlQueryParamNameForDiagnostics(key) ? `${prefix}${key}=***` : match,
+  );
+  return formRedacted.replace(
+    SENSITIVE_COLON_PAIR_RE,
+    (match, quote: string, key: string, separator: string, rawValue: string) => {
+      if (!isSensitiveUrlQueryParamNameForDiagnostics(key)) {
+        return match;
+      }
+      // Keep the value's original quoting so a redacted JSON body still parses.
+      const masked = rawValue.startsWith('"') ? '"***"' : "***";
+      return `${quote}${key}${quote}${separator}${masked}`;
+    },
   );
 }
 

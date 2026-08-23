@@ -95,3 +95,43 @@ describe("TLS fingerprint normalization", () => {
     expect(normalizeTlsFingerprint(fingerprint)).toBe("");
   });
 });
+
+describe("structured rejected-upgrade body redaction", () => {
+  // Regression: `readUpgradeErrorBody` accepts an arbitrary peer body, so a
+  // proxy can answer with JSON or colon-delimited fields instead of a form
+  // body. Those values reached host sinks unredacted.
+  it("redacts credential fields in a JSON body and keeps it parseable", () => {
+    const body = JSON.stringify({
+      "X-Amz-Credential": "AKIAJSONCREDENTIAL",
+      "X-Amz-Signature": "JSONSIGNATUREVALUE",
+      "X-Amz-Date": "20260813T000000Z",
+    });
+
+    const redacted = redactSensitiveKeyValuePairs(body);
+
+    expect(redacted).not.toContain("AKIAJSONCREDENTIAL");
+    expect(redacted).not.toContain("JSONSIGNATUREVALUE");
+    // Non-credential fields stay readable for diagnostics.
+    expect(redacted).toContain("20260813T000000Z");
+    expect(JSON.parse(redacted)).toEqual({
+      "X-Amz-Credential": "***",
+      "X-Amz-Signature": "***",
+      "X-Amz-Date": "20260813T000000Z",
+    });
+  });
+
+  it("redacts colon-delimited credential fields", () => {
+    const redacted = redactSensitiveKeyValuePairs(
+      "X-Amz-Signature: COLONSIGNATUREVALUE, X-Amz-Date: 20260813T000000Z",
+    );
+
+    expect(redacted).not.toContain("COLONSIGNATUREVALUE");
+    expect(redacted).toContain("20260813T000000Z");
+  });
+
+  it("leaves the surrounding error message and non-credential text intact", () => {
+    const message = "gateway rejected websocket upgrade (HTTP 403): status=ok retries=2";
+
+    expect(redactSensitiveKeyValuePairs(message)).toBe(message);
+  });
+});
