@@ -8,6 +8,7 @@ import {
   getSparseTsgoGuardError,
   shouldSkipSparseTsgoGuardError,
 } from "../../scripts/lib/tsgo-sparse-guard.mts";
+import { resolveTsgoTimeoutMs } from "../../scripts/run-tsgo.mts";
 import { waitForChildClose, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
@@ -235,6 +236,12 @@ describe("run-tsgo sparse guard", () => {
 });
 
 describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
+  it("keeps the watchdog opt-in", () => {
+    expect(resolveTsgoTimeoutMs({})).toBeUndefined();
+    expect(resolveTsgoTimeoutMs({ OPENCLAW_TSGO_TIMEOUT_MS: "  " })).toBeUndefined();
+    expect(resolveTsgoTimeoutMs({ OPENCLAW_TSGO_TIMEOUT_MS: "30000" })).toBe(30_000);
+  });
+
   function writeFakeTsgo(cwd: string, body: string) {
     const binDir = path.join(cwd, "node_modules", ".bin");
     fs.mkdirSync(binDir, { recursive: true });
@@ -306,7 +313,7 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
 
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("must be plain decimal digits");
-      expect(result.stderr).toContain("cannot be disabled");
+      expect(result.stderr).toContain("Unset it to disable the watchdog");
       expect(result.stderr).not.toContain("at readPositiveEnvInt");
       expect(result.stderr.trim().split("\n").at(-1)).toBe("[tsgo] FAILED (exit 1)");
     },
@@ -382,7 +389,7 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
   // regression that matters: without saturation Node collapses the delay to 1ms and
   // would kill this sleeping child immediately.
   it.each([
-    { bound: undefined, name: "the default deadline", body: "#!/bin/sh\nsleep 2\nexit 0\n" },
+    { bound: undefined, name: "the disabled watchdog", body: "#!/bin/sh\nsleep 2\nexit 0\n" },
     { bound: "30000", name: "an explicit bound", body: "#!/bin/sh\nexit 0\n" },
     {
       bound: "2147483648",

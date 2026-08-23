@@ -16,17 +16,21 @@ import {
   shouldSkipSparseTsgoGuardError,
 } from "./lib/tsgo-sparse-guard.mts";
 
-/**
- * Hosted tsgo lanes finish in 1-2 minutes and their CI jobs cap at 15-20, so 30
- * leaves headroom for a far slower local host while still bounding a wedge that
- * would otherwise never report. Raise OPENCLAW_TSGO_TIMEOUT_MS for slower hosts.
- */
-const DEFAULT_TSGO_TIMEOUT_MS = 30 * 60 * 1000;
 // Declared locally, as sibling scripts do, rather than imported from packages/:
 // a static import there resolves before the sparse-checkout guard can report a
 // missing project, turning a clean skip into ERR_MODULE_NOT_FOUND. Mirrors
 // normalization-core's MAX_TIMER_TIMEOUT_MS.
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
+
+export function resolveTsgoTimeoutMs(env: NodeJS.ProcessEnv): number | undefined {
+  if (!env.OPENCLAW_TSGO_TIMEOUT_MS?.trim()) {
+    return undefined;
+  }
+  return Math.min(
+    readPositiveEnvInt("OPENCLAW_TSGO_TIMEOUT_MS", env, MAX_TIMER_TIMEOUT_MS),
+    MAX_TIMER_TIMEOUT_MS,
+  );
+}
 
 async function main(): Promise<void> {
   const hostResources = {
@@ -58,17 +62,14 @@ async function main(): Promise<void> {
   }
 
   ensureRepoToolNodeModulesLink(tsgoPath);
-  let timeoutMs: number;
+  let timeoutMs: number | undefined;
   try {
-    timeoutMs = Math.min(
-      readPositiveEnvInt("OPENCLAW_TSGO_TIMEOUT_MS", env, DEFAULT_TSGO_TIMEOUT_MS),
-      MAX_TIMER_TIMEOUT_MS,
-    );
+    timeoutMs = resolveTsgoTimeoutMs(env);
   } catch {
     // main() is top-level awaited, so an escaping parse error would surface as a raw
     // module rejection with no guidance about the variable that caused it.
     console.error(
-      `[tsgo] OPENCLAW_TSGO_TIMEOUT_MS must be plain decimal digits with no leading zero, sign, exponent, or decimal point, between 1 and ${Number.MAX_SAFE_INTEGER}; got ${env.OPENCLAW_TSGO_TIMEOUT_MS}. The watchdog cannot be disabled; raise the value instead.`,
+      `[tsgo] OPENCLAW_TSGO_TIMEOUT_MS must be plain decimal digits with no leading zero, sign, exponent, or decimal point, between 1 and ${Number.MAX_SAFE_INTEGER}; got ${env.OPENCLAW_TSGO_TIMEOUT_MS}. Unset it to disable the watchdog.`,
     );
     process.exitCode = 1;
     return;
@@ -88,7 +89,7 @@ async function main(): Promise<void> {
       throw error;
     }
     console.error(
-      `[tsgo] no completion after ${timeoutMs}ms; killed the tsgo process tree. Raise OPENCLAW_TSGO_TIMEOUT_MS for intentionally longer builds.`,
+      `[tsgo] no completion after ${timeoutMs}ms; killed the tsgo process tree. Raise OPENCLAW_TSGO_TIMEOUT_MS for intentionally longer builds, or unset it to disable the watchdog.`,
     );
     process.exitCode = 1;
   }
