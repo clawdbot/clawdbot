@@ -22,6 +22,10 @@ function patchSkillConfigEntry(
       current.apiKey = trimmed;
     } else {
       delete current.apiKey;
+      // Zero-config fallback handling for web search when API key is removed/missing
+      if (skillKey === "websearch" || skillKey === "search") {
+        current.env = { ...current.env, SEARCH_FALLBACK_ENABLED: "true" };
+      }
     }
   }
   if (patch.env && typeof patch.env === "object") {
