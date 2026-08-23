@@ -92,6 +92,7 @@
 }
 
 .chat-group-messages {
+  --chat-message-type-boundary-gap: var(--space-1);
   position: relative; /* anchors message-local popovers */
   display: flex;
   flex-direction: column;
@@ -104,6 +105,14 @@
 }
 
 .chat-group-messages
+  > :is(
+    .chat-bubble--tool-shell + .chat-bubble:not(.chat-bubble--tool-shell),
+    .chat-bubble:not(.chat-bubble--tool-shell) + .chat-bubble--tool-shell
+  ) {
+  margin-block-start: var(--chat-message-type-boundary-gap);
+}
+
+.chat-group > .chat-group-messages
   > :is(
     .chat-bubble--tool-shell + .chat-bubble:not(.chat-bubble--tool-shell),
     .chat-bubble:not(.chat-bubble--tool-shell) + .chat-bubble--tool-shell,
