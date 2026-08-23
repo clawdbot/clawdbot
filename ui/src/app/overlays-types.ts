@@ -9,14 +9,15 @@ export type ApplicationOverlaySnapshot = {
   heldUpdateCampaignId: string | null;
   updateRunning: boolean;
   updateStatusRefreshing: boolean;
+  updateCampaignStatusHydrated: boolean;
   updateReconciliationPending: boolean;
   updateStatusBanner: ApplicationStatusBanner | null;
   recordedUpdateAttempt: RecordedUpdateAttempt | null;
   controlUiRefreshRequired: boolean;
   approvalQueue: readonly ExecApprovalRequest[];
   approvalBusy: boolean;
+  approvalCanGrant: boolean;
   approvalErrors: ReadonlyMap<string, string>;
-  approvalNowMs: number;
   devicePairSetupOpen: boolean;
   devicePairSetupLifecycle: DevicePairSetupLifecycle;
   devicePairPendingCount: number;

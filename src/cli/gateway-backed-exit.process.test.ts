@@ -812,7 +812,7 @@ describe("gateway-backed CLI process exit", () => {
       label: "skills workshop apply",
       args: ["skills", "workshop", "apply", "proposal-missing-credentials"],
       gatewayOwnsLock: true,
-      method: "health",
+      method: "skills.proposals.inspect",
     },
   ])(
     "renders missing $label credentials as expected guidance, not a crash",

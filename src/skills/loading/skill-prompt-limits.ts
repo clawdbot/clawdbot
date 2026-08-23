@@ -67,10 +67,13 @@ export function formatSkillsForPromptBounded(params: {
   maxSkillsInPrompt?: number;
   maxSkillsPromptChars?: number;
   remoteNote?: string;
+  preserveOrder?: boolean;
 }): string {
   const maxSkillsInPrompt = params.maxSkillsInPrompt ?? DEFAULT_MAX_SKILLS_IN_PROMPT;
   const maxSkillsPromptChars = params.maxSkillsPromptChars ?? DEFAULT_MAX_SKILLS_PROMPT_CHARS;
-  const orderedSkills = params.skills.toSorted((a, b) => a.name.localeCompare(b.name, "en"));
+  const orderedSkills = params.preserveOrder
+    ? params.skills
+    : params.skills.toSorted((a, b) => a.name.localeCompare(b.name, "en"));
   const total = orderedSkills.length;
   const byCount = orderedSkills.slice(0, Math.max(0, maxSkillsInPrompt));
   let skillsForPrompt = byCount;

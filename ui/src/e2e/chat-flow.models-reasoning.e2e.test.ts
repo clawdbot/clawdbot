@@ -11,6 +11,78 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("patches a selectable Claude CLI context window", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:session-a";
+    const contextWindows = [
+      { id: "200k", label: "200K", contextWindow: 200_000 },
+      { id: "1m", label: "1M", contextWindow: 1_000_000 },
+    ];
+    const session = {
+      key: sessionKey,
+      kind: "direct",
+      label: "Session A",
+      model: "claude-fable-5",
+      modelProvider: "claude-cli",
+      contextWindow: "1m",
+      contextWindowDefault: "1m",
+      contextWindows,
+      updatedAt: 2,
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": chatSessionListResponse([session]),
+      },
+      models: [
+        {
+          id: "claude-fable-5",
+          name: "Claude Fable 5",
+          provider: "claude-cli",
+          contextWindow: 1_000_000,
+          contextWindowDefault: "1m",
+          contextWindows,
+        },
+      ],
+      sessionKey,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+      const picker = pane.locator(".chat-controls__model-picker");
+      await picker.locator('[data-chat-model-select="true"]').click();
+      const toggle = picker.locator("[data-chat-context-window-toggle]");
+      await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("true");
+      await gateway.deferNext("sessions.patch");
+      const patchCount = (await gateway.getRequests("sessions.patch")).length;
+      await toggle.click();
+      const patch = await gateway.waitForRequest("sessions.patch", { after: patchCount });
+      expect(requireRecord(patch.params)).toMatchObject({
+        key: sessionKey,
+        contextWindow: "200k",
+      });
+      await gateway.setMethodResponse(
+        "sessions.list",
+        chatSessionListResponse([{ ...session, contextWindow: "200k" }]),
+      );
+      await gateway.resolveDeferred("sessions.patch");
+      await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("false");
+      await expect
+        .poll(async () =>
+          (await picker.locator("[data-chat-model-context-badge]").textContent())?.trim(),
+        )
+        .toBe("200K");
+      await expect.poll(() => picker.getAttribute("open")).not.toBeNull();
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("patches the session permission mode and reflects sessions.changed", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -255,6 +327,14 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
+      const main = page.getByRole("main");
+      await main.locator(".chat-composer-model-control").evaluate((element) => {
+        Object.assign((element as HTMLElement).style, {
+          position: "fixed",
+          right: "80px",
+          top: "640px",
+        });
+      });
       await page.evaluate(() => {
         document.documentElement.style.overflowY = "auto";
         document.body.style.height = "1800px";
@@ -262,17 +342,18 @@ suite.define(() => {
       });
       expect(await page.evaluate(() => window.scrollY)).toBe(300);
 
-      const main = page.getByRole("main");
       await main.locator('[data-chat-model-select="true"]').click();
       const modelScroller = main.locator(".chat-controls__model-options");
       await expect.poll(() => modelScroller.isVisible()).toBe(true);
+      await modelScroller.evaluate((element) => {
+        element.scrollTop = 0;
+      });
       await modelScroller.hover();
-      const outerScrollBeforeFling = await page.evaluate(() => window.scrollY);
-      expect(outerScrollBeforeFling).toBeGreaterThan(0);
+      expect(await page.evaluate(() => window.scrollY)).toBe(300);
       await page.mouse.wheel(0, -5_000);
       await page.waitForTimeout(100);
 
-      expect(await page.evaluate(() => window.scrollY)).toBe(outerScrollBeforeFling);
+      expect(await page.evaluate(() => window.scrollY)).toBe(300);
     } finally {
       await suite.closeBrowserContext(context);
     }

@@ -1,4 +1,5 @@
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   finalizedContextScopeKey,
@@ -65,6 +66,7 @@ type ChannelAdmissionEvidenceOwner = Readonly<{
   record: object;
   epoch: object;
   isLive: () => boolean;
+  resolveGatewayContext?: GatewayContextResolver;
 }>;
 
 type PreparedChannelAdmissionEvidence = Readonly<{
@@ -81,7 +83,10 @@ const state = resolveGlobalSingleton(CHANNEL_ADMISSION_EVIDENCE_STATE_KEY, () =>
   resolutionByIngress: new WeakMap<object, ChannelIngressResolutionBinding>(),
   ownerByChannelId: new Map<string, ChannelAdmissionEvidenceOwner>(),
   evidenceByPreparation: new WeakMap<object, ChannelAdmissionEvidence | undefined>(),
+  gatewayResolverByPreparation: new WeakMap<object, GatewayContextResolver>(),
   evidenceByContext: new WeakMap<object, ChannelAdmissionEvidence>(),
+  gatewayResolverByContext: new WeakMap<object, GatewayContextResolver>(),
+  gatewayResolverConflictsByContext: new WeakSet<object>(),
   scopeByContext: new WeakMap<object, string>(),
   consumedEvidence: new WeakSet<object>(),
   decisionSink: undefined as ((receipt: DecisionReceiptV1) => boolean) | undefined,
@@ -439,6 +444,9 @@ export function prepareHostChannelContextAdmissionEvidence(params: {
     preparation,
     valid ? combineChannelAdmissionEvidence(sources) : unknownChannelAdmissionEvidence(),
   );
+  if (valid && params.owner?.resolveGatewayContext) {
+    state.gatewayResolverByPreparation.set(preparation, params.owner.resolveGatewayContext);
+  }
   return preparation;
 }
 
@@ -448,11 +456,17 @@ export function bindHostChannelContextAdmissionEvidence(params: {
   preparation: PreparedChannelAdmissionEvidence;
 }): void {
   const preparedEvidence = state.evidenceByPreparation.get(params.preparation);
+  const gatewayContextResolver = state.gatewayResolverByPreparation.get(params.preparation);
   state.evidenceByPreparation.delete(params.preparation);
+  state.gatewayResolverByPreparation.delete(params.preparation);
+  const scopeKey = finalizedContextScopeKey(params.context);
+  if (gatewayContextResolver && scopeKey !== undefined) {
+    state.gatewayResolverByContext.set(params.context, gatewayContextResolver);
+    state.scopeByContext.set(params.context, scopeKey);
+  }
   if (!state.collectionEnabled) {
     return;
   }
-  const scopeKey = finalizedContextScopeKey(params.context);
   const evidence =
     preparedEvidence && scopeKey !== undefined
       ? preparedEvidence
@@ -471,10 +485,17 @@ export function readChannelContextAdmissionEvidence(
   return state.evidenceByContext.get(context);
 }
 
+export function readChannelContextGatewayContextResolver(
+  context: object,
+): GatewayContextResolver | undefined {
+  return state.gatewayResolverByContext.get(context);
+}
+
 /** Preserve private evidence when an owner intentionally replaces a finalized context object. */
 export function copyChannelParticipantAdmissionEvidence(source: object, target: object): void {
   const evidence = state.evidenceByContext.get(source);
-  if (!evidence) {
+  const gatewayContextResolver = state.gatewayResolverByContext.get(source);
+  if (!evidence && !gatewayContextResolver) {
     return;
   }
   const sourceScope = state.scopeByContext.get(source);
@@ -485,6 +506,16 @@ export function copyChannelParticipantAdmissionEvidence(source: object, target: 
     activePayload(evidence, Date.now()) !== undefined
       ? evidence
       : unknownChannelAdmissionEvidence();
+  if (gatewayContextResolver && sourceScope !== undefined && targetScope === sourceScope) {
+    const currentResolver = state.gatewayResolverByContext.get(target);
+    if (currentResolver && currentResolver !== gatewayContextResolver) {
+      state.gatewayResolverByContext.delete(target);
+      state.gatewayResolverConflictsByContext.add(target);
+    } else if (!state.gatewayResolverConflictsByContext.has(target)) {
+      state.gatewayResolverByContext.set(target, gatewayContextResolver);
+      state.scopeByContext.set(target, sourceScope);
+    }
+  }
   if (safeEvidence) {
     state.evidenceByContext.set(target, safeEvidence);
     if (targetScope !== undefined) {

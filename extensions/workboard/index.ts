@@ -4,7 +4,6 @@ import { registerWorkboardGatewayMethods } from "./runtime-api.js";
 import { createWorkboardAutomationNudgeService } from "./src/automation-nudge.js";
 import { createWorkboardChangeEventService } from "./src/change-events.js";
 import { registerWorkboardCommand } from "./src/command.js";
-import { cleanupWorkboardRunWorktree } from "./src/dispatcher-workspace.js";
 import {
   createWorkboardLifecycleService,
   readWorkboardLifecycleSessions,
@@ -30,6 +29,7 @@ export default definePluginEntry({
     });
     const lifecycleSync = createWorkboardLifecycleService({
       store,
+      worktrees: api.runtime.worktrees,
       readSessions: async (options) =>
         await readWorkboardLifecycleSessions(api.runtime.gateway, options),
     });
@@ -68,16 +68,12 @@ export default definePluginEntry({
     api.on("gateway_start", () => lifecycleSync.onGatewayStart());
     api.on("gateway_stop", () => lifecycleSync.onGatewayStop());
     api.on("subagent_ended", async (event) => {
-      await Promise.all([
-        syncWorkboardSubagentEnded({ store, event, onMatched: automationNudge.nudge }),
-        event.runId
-          ? cleanupWorkboardRunWorktree({
-              store,
-              worktrees: api.runtime.worktrees,
-              runId: event.runId,
-            })
-          : undefined,
-      ]);
+      await syncWorkboardSubagentEnded({
+        store,
+        worktrees: api.runtime.worktrees,
+        event,
+        onMatched: automationNudge.nudge,
+      });
     });
     api.on("agent_end", async (event, context) => {
       await syncWorkboardAgentEnded({

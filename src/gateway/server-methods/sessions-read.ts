@@ -11,6 +11,7 @@ import {
   validateSessionsResolveParams,
   validateSessionsSearchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { listAgentIds } from "../../agents/agent-scope-config.js";
 import {
   isPerAgentSessionStoreConfig,
   listSessionMembershipKeys,
@@ -211,6 +212,36 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     const configuredAgentsOnly = p.configuredAgentsOnly === true;
     const identityId = gatewayClientSessionCreator(client)?.id;
+    const preparedModelCatalogByAgent = await measureDiagnosticsTimelineSpan(
+      "gateway.sessions.list.model_catalog",
+      async () => {
+        // Scoped listings use exactly the requested agent's completed catalog.
+        // Unscoped listings must not apply one agent's catalog to rows owned by
+        // another agent; resolve each configured agent's completed snapshot
+        // (read-only, never starts discovery) so row projections stay
+        // owner-scoped while cache reuse stays fenced per agent.
+        if (p.agentId) {
+          const agentId = normalizeAgentId(p.agentId);
+          const catalog = await readPreparedServerMethodModelCatalog(context, { agentId });
+          return new Map([[agentId, catalog]]);
+        }
+        const catalogByAgent = new Map<
+          string,
+          Awaited<ReturnType<typeof readPreparedServerMethodModelCatalog>>
+        >();
+        for (const agentId of listAgentIds(cfg)) {
+          catalogByAgent.set(
+            agentId,
+            await readPreparedServerMethodModelCatalog(context, { agentId }),
+          );
+        }
+        return catalogByAgent;
+      },
+      {
+        config: cfg,
+        phase: "sessions.list",
+      },
+    );
     const run = () =>
       measureDiagnosticsTimelineSpan(
         "gateway.sessions.list",
@@ -219,25 +250,16 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             allowFullReload?: boolean;
             excludedKeys?: ReadonlySet<string>;
             loaded?: ReturnType<typeof loadCombinedSessionStoreForGatewayCore> & {
-              modelCatalog: Awaited<ReturnType<typeof readPreparedServerMethodModelCatalog>>;
+              modelCatalogByAgent: Map<
+                string,
+                Awaited<ReturnType<typeof readPreparedServerMethodModelCatalog>>
+              >;
             };
             rowRepairAttempted?: boolean;
           } = {},
         ): Promise<Awaited<ReturnType<typeof listSessionsFromStoreAsync>>> {
           let loaded = options.loaded;
           if (!loaded) {
-            const modelCatalog = await measureDiagnosticsTimelineSpan(
-              "gateway.sessions.list.model_catalog",
-              () =>
-                readPreparedServerMethodModelCatalog(
-                  context,
-                  p.agentId ? { agentId: p.agentId } : undefined,
-                ),
-              {
-                config: cfg,
-                phase: "sessions.list",
-              },
-            );
             const loadedStore = measureDiagnosticsTimelineSpanSync(
               "gateway.sessions.list.store_load",
               () =>
@@ -255,12 +277,12 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 },
               },
             );
-            loaded = { ...loadedStore, modelCatalog };
+            loaded = { ...loadedStore, modelCatalogByAgent: preparedModelCatalogByAgent };
           }
           if (!loaded) {
             throw new Error("sessions.list store input was not loaded");
           }
-          const { durableStorePath, durableTargets, modelCatalog, storePath } = loaded;
+          const { durableStorePath, durableTargets, modelCatalogByAgent, storePath } = loaded;
           const visibilityFilter = createSessionListEntryFilter({ client });
           const entryFilter =
             visibilityFilter || options.excludedKeys?.size
@@ -276,7 +298,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 ...(entryFilter ? { entryFilter } : {}),
                 storePath,
                 store: loaded.store,
-                modelCatalog,
+                modelCatalog: modelCatalogByAgent,
                 opts: p,
                 ...(p.involvingMe === true && identityId ? { involvingActorId: identityId } : {}),
               }),
@@ -405,7 +427,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                     ? { status: activeRunState.status ?? ("running" as const) }
                     : {}),
                   ...projectPlacement(session.sessionId),
-                  ...(activeRunState.runIds.length > 0
+                  ...(activeRunState.runIds !== undefined
                     ? { activeRunIds: activeRunState.runIds }
                     : {}),
                 });
@@ -473,7 +495,15 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           },
         },
       );
-    await respondWithCachedSessionList({ client, config: cfg, context, request: p, respond, run });
+    await respondWithCachedSessionList({
+      client,
+      config: cfg,
+      context,
+      modelCatalog: preparedModelCatalogByAgent,
+      request: p,
+      respond,
+      run,
+    });
   },
   "sessions.cleanup": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsCleanupParams, "sessions.cleanup", respond)) {

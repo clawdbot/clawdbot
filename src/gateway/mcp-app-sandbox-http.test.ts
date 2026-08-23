@@ -65,6 +65,7 @@ describe("MCP App sandbox HTTP origin", () => {
     );
     expect(result.end).toHaveBeenCalledWith(expect.stringContaining("widgetBridgePortOffered"));
     const proxyHtml = String(result.end.mock.calls.at(-1)?.[0]);
+    expect(proxyHtml).not.toContain("allow-popups");
     expect(proxyHtml).toContain("const guardedHtml = guardDocument(params.html)");
     expect(proxyHtml).toContain("nextInner.srcdoc = guardedHtml");
   });

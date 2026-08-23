@@ -173,7 +173,8 @@ final class MacNodeModeCoordinator: NSObject {
         self.nodeHostWorkerRetryPolicy = nodeHostWorkerRetryPolicy
         self.refreshEvents = refreshEvents.stream
         self.refreshContinuation = refreshEvents.continuation
-        self.lastObservedPaused = initialPaused ?? AppDefaults.standard.bool(forKey: pauseDefaultsKey)
+        self.lastObservedPaused = initialPaused ?? AppLaunchRuntimePlan.current.resolvePaused(
+            AppDefaults.standard.bool(forKey: pauseDefaultsKey))
         self.lastObservedComputerControlEnabled = initialComputerControlEnabled ??
             isComputerControlEnabled()
         self.lastObservedComputerControlProvider = initialComputerControlProvider ??
@@ -297,7 +298,8 @@ final class MacNodeModeCoordinator: NSObject {
 
     func refresh() {
         self.refresh(
-            isPaused: AppDefaults.standard.bool(forKey: pauseDefaultsKey),
+            isPaused: AppLaunchRuntimePlan.current.resolvePaused(
+                AppDefaults.standard.bool(forKey: pauseDefaultsKey)),
             computerControlEnabled: isComputerControlEnabled(),
             computerControlProvider: ComputerControlProvider.current())
     }
@@ -1209,11 +1211,6 @@ extension MacNodeModeCoordinator {
             OpenClawCanvasCommand.present.rawValue,
             OpenClawCanvasCommand.hide.rawValue,
             OpenClawCanvasCommand.navigate.rawValue,
-            OpenClawCanvasCommand.evalJS.rawValue,
-            OpenClawCanvasCommand.snapshot.rawValue,
-            OpenClawCanvasA2UICommand.push.rawValue,
-            OpenClawCanvasA2UICommand.pushJSONL.rawValue,
-            OpenClawCanvasA2UICommand.reset.rawValue,
         ]
 
         if computerControlProvider == .peekaboo {

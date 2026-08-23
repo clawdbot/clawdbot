@@ -19,7 +19,7 @@ import {
 import { buildDashboardSessionKey } from "../session-create-service.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import { interruptSessionRunIfActive } from "./sessions-messaging.js";
+import { interruptSessionRunIfActive } from "./session-run-interruption.js";
 import {
   loadAccessorSessionEntryForGatewayTarget,
   requireSessionKey,

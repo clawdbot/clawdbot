@@ -11,6 +11,7 @@ import { clearAllCliSessions, getCliSessionBinding } from "../../agents/cli-sess
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { conversationRouteContextFromMsgContext } from "../../config/sessions/conversation-route-context.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   hasTerminalMainSessionTranscriptNewerThanRegistry,
@@ -36,6 +37,7 @@ import {
 import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
 import {
   buildSessionCreationStamp,
+  resolveProfileParticipantIdFromSessionCreation,
   type SessionCreatedActor,
 } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
@@ -50,6 +52,7 @@ import {
   DEFAULT_RESET_TRIGGERS,
   SESSION_TOTAL_TOKENS_VERSION,
   type GroupKeyResolution,
+  type InternalSessionEntry,
   type SessionEntry,
   type SessionScope,
 } from "../../config/sessions/types.js";
@@ -383,7 +386,7 @@ function selectSessionModelOverride(
   };
 }
 
-function resolveReplySessionRolloverState(entry: SessionEntry): Partial<SessionEntry> {
+function resolveReplySessionRolloverState(entry: SessionEntry): Partial<InternalSessionEntry> {
   const preservedSelection = resolveResetPreservedSelection({ entry });
   return {
     thinkingLevel: entry.thinkingLevel,
@@ -970,6 +973,7 @@ async function initSessionStateAttemptLocked(
     sessionEntry.cacheRead = undefined;
     sessionEntry.cacheWrite = undefined;
     sessionEntry.contextTokens = undefined;
+    sessionEntry.contextTokensSource = undefined;
     sessionEntry.contextBudgetStatus = undefined;
     sessionEntry.goal = undefined;
     // Skills snapshots are prompt/runtime caches. Do not preserve a stale
@@ -1029,6 +1033,11 @@ async function initSessionStateAttemptLocked(
       }
     },
     previousEntry: previousSessionEntry,
+    ...(!isSystemEvent &&
+    sessionCtxForState.InboundAccessAuthorized === true &&
+    sessionCtxForState.ConversationRouteContextObserved === true
+      ? { routeContext: conversationRouteContextFromMsgContext(sessionCtxForState) ?? null }
+      : {}),
     retiredEntry: retiredLegacyMainDelivery,
     sessionEntry,
     sessionKey,
@@ -1046,13 +1055,19 @@ async function initSessionStateAttemptLocked(
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;
   if (!isSystemEvent && !isInterSession) {
-    const creationActor = ctx.SessionCreation?.actor;
+    const creation = ctx.SessionCreation;
+    const creationActor = creation?.actor;
+    const profileParticipantId = resolveProfileParticipantIdFromSessionCreation(creation);
     const senderId = normalizeOptionalString(ctx.SenderId);
     const participant:
-      | { actor: SessionCreatedActor & { id: string }; source: "profile" | "channel" }
-      | undefined =
-      creationActor?.id && (creationActor.type === "human" || creationActor.type === "agent")
-        ? { actor: { ...creationActor, id: creationActor.id }, source: "profile" }
+      | { actor: SessionCreatedActor & { id: string }; source: "profile" | "channel" | "agent" }
+      | undefined = profileParticipantId
+      ? { actor: { type: "human", id: profileParticipantId }, source: "profile" }
+      : creationActor?.type === "agent" && creationActor.id
+        ? {
+            actor: { ...creationActor, id: creationActor.id },
+            source: "agent",
+          }
         : senderId
           ? { actor: { type: "human", id: senderId }, source: "channel" }
           : undefined;

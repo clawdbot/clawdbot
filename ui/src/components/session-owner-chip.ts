@@ -9,10 +9,10 @@ import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import "./viewer-facepile.ts";
 
 export type SessionCreatedActor = ProtocolSessionCreatedActor;
-export type SessionOwnerOption = NonNullable<SessionsListResult["creators"]>[number];
+export type SessionOwnerOption = NonNullable<SessionsListResult["owners"]>[number];
 
 export function listAssignableSessionOwners(params: {
-  facet?: SessionsListResult["creators"];
+  facet?: SessionsListResult["owners"];
   agents?: readonly { id: string; name?: string }[];
   self?: { id: string; name?: string; avatarUrl?: string } | null;
 }): SessionOwnerOption[] {
@@ -41,16 +41,16 @@ export function listAssignableSessionOwners(params: {
 }
 
 export function renderSessionOwnerChip(
-  createdActor: SessionCreatedActor | null | undefined,
+  owner: SessionCreatedActor | null | undefined,
   size: "row" | "header",
   attribution: "created" | "owned" | "archived" = "created",
   viewingNow?: boolean,
   participants?: readonly SessionCreatedActor[],
   participantCount?: number,
 ) {
-  return createdActor?.id
+  return owner?.id
     ? html`<openclaw-session-owner-chip
-        .createdActor=${createdActor}
+        .owner=${owner}
         size=${size}
         attribution=${attribution}
         .viewingNow=${viewingNow}
@@ -60,8 +60,8 @@ export function renderSessionOwnerChip(
     : nothing;
 }
 
-export function sessionOwnerInitials(createdActor: SessionCreatedActor): string {
-  const source = createdActor.label?.trim() || createdActor.id?.trim() || "";
+export function sessionOwnerInitials(owner: SessionCreatedActor): string {
+  const source = owner.label?.trim() || owner.id?.trim() || "";
   if (!source) {
     return "";
   }
@@ -100,14 +100,13 @@ export function renderSessionOwnerMenuAvatar(owner: SessionOwnerOption) {
 }
 
 /**
- * Permanent session-owner avatar. Ownership remains visible when its owner
- * leaves; live viewing only changes avatar saturation. Render only when the
- * Gateway's complete owner facet has 2+ identities (solo mode shows no
- * attribution chrome). Human actors use the durable profile projection carried
- * by the session record; actors without it keep stable initials.
+ * Session-owner avatar. The owner may be reassigned; live viewing only changes
+ * avatar saturation. Render only when the Gateway's complete owner facet has 2+
+ * identities (solo mode shows no attribution chrome). Human actors use the durable
+ * profile projection carried by the session record; actors without it keep stable initials.
  */
 class SessionOwnerChip extends OpenClawLightDomElement {
-  @property({ attribute: false }) createdActor: SessionCreatedActor | null = null;
+  @property({ attribute: false }) owner: SessionCreatedActor | null = null;
   @property({ type: String }) size: "row" | "header" = "row";
   @property({ type: String }) attribution: "created" | "owned" | "archived" = "created";
   @property({ attribute: false }) viewingNow?: boolean;
@@ -115,15 +114,15 @@ class SessionOwnerChip extends OpenClawLightDomElement {
   @property({ type: Number }) participantCount = 0;
 
   override render() {
-    const createdActor = this.createdActor;
-    if (!createdActor?.id) {
+    const owner = this.owner;
+    if (!owner?.id) {
       return nothing;
     }
-    const initials = sessionOwnerInitials(createdActor);
+    const initials = sessionOwnerInitials(owner);
     if (!initials) {
       return nothing;
     }
-    const title = createdActor.label || createdActor.id;
+    const title = owner.label || owner.id;
     const attributionKey =
       this.attribution === "archived"
         ? "sessionsView.archivedBy"
@@ -134,11 +133,11 @@ class SessionOwnerChip extends OpenClawLightDomElement {
     const accessibleLabel = this.viewingNow
       ? `${attributionLabel} · ${t("sessionsView.viewingNow")}`
       : attributionLabel;
-    const avatar = createdActor.avatarUrl
+    const avatar = owner.avatarUrl
       ? resolveAvatar({
-          id: createdActor.id,
-          name: createdActor.label,
-          profileAvatarUrl: createdActor.avatarUrl,
+          id: owner.id,
+          name: owner.label,
+          profileAvatarUrl: owner.avatarUrl,
         })
       : null;
     if (this.size === "row" && this.participantCount > 0) {
@@ -168,16 +167,16 @@ class SessionOwnerChip extends OpenClawLightDomElement {
             class="session-owner-chip session-owner-chip--${this.size} ${this.viewingNow === false
               ? "session-owner-chip--away"
               : ""} session-owner-stack__front"
-            style="--owner-hue: ${ownerHue(createdActor.id)}"
+            style="--owner-hue: ${ownerHue(owner.id)}"
             role="img"
             aria-label=${accessibleLabel}
             title=${accessibleLabel}
             >${avatar?.kind === "profile"
               ? html`<openclaw-viewer-avatar
                   .user=${{
-                    id: createdActor.id,
-                    name: createdActor.label,
-                    avatarUrl: createdActor.avatarUrl,
+                    id: owner.id,
+                    name: owner.label,
+                    avatarUrl: owner.avatarUrl,
                     watchedSessions: [],
                   }}
                   .markAsViewer=${false}
@@ -194,16 +193,16 @@ class SessionOwnerChip extends OpenClawLightDomElement {
         class="session-owner-chip session-owner-chip--${this.size} ${this.viewingNow === false
           ? "session-owner-chip--away"
           : ""}"
-        style="--owner-hue: ${ownerHue(createdActor.id)}"
+        style="--owner-hue: ${ownerHue(owner.id)}"
         role="img"
         aria-label=${accessibleLabel}
         title=${accessibleLabel}
         >${avatar?.kind === "profile"
           ? html`<openclaw-viewer-avatar
               .user=${{
-                id: createdActor.id,
-                name: createdActor.label,
-                avatarUrl: createdActor.avatarUrl,
+                id: owner.id,
+                name: owner.label,
+                avatarUrl: owner.avatarUrl,
                 watchedSessions: [],
               }}
               .markAsViewer=${false}

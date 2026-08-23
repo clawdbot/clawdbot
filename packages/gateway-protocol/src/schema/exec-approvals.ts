@@ -77,6 +77,7 @@ export const ExecApprovalsSnapshotSchema = closedObject({
   exists: Type.Boolean(),
   hash: NonEmptyString,
   file: ExecApprovalsFileSchema,
+  resolvedDefaults: Type.Optional(ExecApprovalsResolvedDefaultsSchema),
 });
 
 const NativeExecApprovalActionSchema = Type.Union([

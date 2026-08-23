@@ -272,6 +272,7 @@ export function buildErrorAgentMeta(params: {
     provider: params.provider,
     model: params.model,
     ...(params.contextTokens ? { contextTokens: params.contextTokens } : {}),
+    ...(params.contextTokens ? { contextTokensSource: "resolved" as const } : {}),
     ...(usageMeta.usage ? { usage: usageMeta.usage } : {}),
     ...(usageMeta.lastCallUsage ? { lastCallUsage: usageMeta.lastCallUsage } : {}),
     ...(usageMeta.promptTokens ? { promptTokens: usageMeta.promptTokens } : {}),

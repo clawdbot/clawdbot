@@ -24,6 +24,7 @@ const { realRuntime, realServiceStartMock, realServiceStopMock, createRealServic
       startTurn(input: { requestId: string }) {
         return {
           requestId: input.requestId,
+          promptStarted: Promise.resolve(),
           events: (async function* () {})(),
           result: Promise.resolve({ status: "completed", stopReason: "end_turn" }),
           cancel: async () => {},
@@ -128,6 +129,7 @@ describe("acpx register runtime service", () => {
         mode: string;
         requestId: string;
       }): {
+        promptStarted: Promise<void>;
         events: AsyncIterable<unknown>;
         result: Promise<unknown>;
       };
@@ -171,6 +173,7 @@ describe("acpx register runtime service", () => {
       mode: "prompt",
       requestId: "turn-1",
     });
+    await expect(turn.promptStarted).resolves.toBeUndefined();
     await expect(turn.result).resolves.toEqual({
       status: "completed",
       stopReason: "end_turn",

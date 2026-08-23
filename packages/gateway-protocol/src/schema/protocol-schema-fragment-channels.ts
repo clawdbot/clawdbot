@@ -21,6 +21,7 @@ export const ChannelProtocolSchemas = {
   TalkSessionAppendAudioParams: channels.TalkSessionAppendAudioParamsSchema,
   TalkSessionAcknowledgeMarkParams: talkMarks.TalkSessionAcknowledgeMarkParamsSchema,
   TalkSessionCancelOutputParams: channels.TalkSessionCancelOutputParamsSchema,
+  TalkSessionCancelOutputResult: channels.TalkSessionCancelOutputResultSchema,
   TalkSessionCreateParams: channels.TalkSessionCreateParamsSchema,
   TalkSessionCreateResult: channels.TalkSessionCreateResultSchema,
   TalkSessionSteerParams: channels.TalkSessionSteerParamsSchema,

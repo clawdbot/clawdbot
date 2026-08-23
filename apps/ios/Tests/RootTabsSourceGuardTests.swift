@@ -48,42 +48,6 @@ struct RootTabsSourceGuardTests {
         #expect(startupTask.contains("self.appDelegate.scenePhaseChanged(self.scenePhase)"))
     }
 
-    @Test func `hidden sidebar reveal uses destination header without reserved rail`() throws {
-        let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
-        let componentSource = try String(contentsOf: Self.proComponentsSourceURL(), encoding: .utf8)
-
-        #expect(source.contains("sidebarHeaderAction"))
-        #expect(source.contains("Hide Sidebar"))
-        #expect(source.contains("Show Sidebar"))
-        #expect(source.contains("shouldShowSidebarRevealInDestinationHeader"))
-        #expect(source.contains("layoutMode: self.isSidebarDrawerLayout ? .drawer : .split"))
-        #expect(componentSource.contains("OpenClawSidebarHeaderLeadingSlot"))
-        #expect(componentSource.contains(".frame(width: 44, height: 44)"))
-        #expect(source.contains(".safeAreaPadding(.top, 8)"))
-        #expect(source.contains("Self.sidebarShowButtonAccessibilityIdentifier"))
-        #expect(source.contains("Self.sidebarHideButtonAccessibilityIdentifier"))
-        #expect(source.contains("accessibilityLabel: .localized(\"Hide Sidebar\")"))
-        #expect(source.contains("accessibilityLabel: .localized(\"Show Sidebar\")"))
-        #expect(source.contains("action: { self.hideSidebar() }"))
-        #expect(source.contains("action: { self.showSidebar() }"))
-        #expect(!source.contains("private var collapsedSidebarRail: some View"))
-        #expect(!source.contains("Self.sidebarCollapsedRailWidth"))
-        #expect(source.contains("requestedInitialSidebarVisibility"))
-        #expect(!source.contains("@State private var splitColumnVisibility: NavigationSplitViewVisibility"))
-        #expect(!source.contains("NavigationSplitView(columnVisibility: self.$splitColumnVisibility)"))
-        #expect(source.contains("HStack(spacing: 0)"))
-        #expect(!source.contains("self.syncSidebarVisibility(from: visibility)"))
-        #expect(!source.contains("shouldReserveSidebarRevealInset"))
-        #expect(!source.contains("safeAreaInset(edge: .top"))
-        #expect(!source.contains("thinMaterial, in: Circle"))
-        #expect(!source.contains("sidebarRevealInset"))
-        #expect(source.contains(".background(OpenClawSidebarPalette.background)"))
-        #expect(!source.contains("Color.black.opacity(0.35)"))
-        #expect(!source.contains("sidebarRevealCornerButton"))
-        #expect(!source.contains("shouldShowSidebarRevealOverlay"))
-        #expect(!source.contains("shouldShowOverviewHeaderSidebarReveal"))
-    }
-
     @Test func `i pad split stays integrated while compact drawer uses one local shell`() throws {
         let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
         let splitContent = try Self.extract(

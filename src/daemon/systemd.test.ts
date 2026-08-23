@@ -437,14 +437,15 @@ describe("isSystemdServiceEnabled", () => {
     execFileMock.mockReset();
   });
 
-  it("returns false when systemctl is not present", async () => {
+  it("throws when systemctl is not present", async () => {
     execFileMock.mockImplementation((_cmd, _args, _opts, cb) => {
       const err = new Error("spawn systemctl EACCES") as Error & { code?: string };
       err.code = "EACCES";
       cb(err, "", "");
     });
-    const result = await readManagedServiceEnabled();
-    expect(result).toBe(false);
+    await expect(readManagedServiceEnabled()).rejects.toThrow(
+      "systemctl is-enabled unavailable: spawn systemctl EACCES",
+    );
   });
 
   it("returns false without calling systemctl when the managed unit file is missing", async () => {

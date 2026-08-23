@@ -660,7 +660,8 @@ private func makeRestartingAISetupSession(
     suiteName: String,
     recorder: AISetupRequestRecorder,
     ownerObservation: ActivationOwnerObservation,
-    postRestartConfiguredModel: String?) -> GatewayTestWebSocketSession
+    postRestartConfiguredModel: String?,
+    replacementGate: AISetupRequestGate? = nil) -> GatewayTestWebSocketSession
 {
     let socketGeneration = AISetupSocketGeneration()
     return GatewayTestWebSocketSession(taskFactory: {
@@ -693,6 +694,9 @@ private func makeRestartingAISetupSession(
             }
             switch request.method {
             case "openclaw.setup.detect":
+                if let replacementGate {
+                    await replacementGate.wait()
+                }
                 let response = postRestartConfiguredModel.map {
                     persistedDetectedSetupResponse(id: request.id, configuredModel: $0)
                 } ?? detectedSetupResponse(
@@ -713,11 +717,17 @@ private func failedActivationResponse(id: String) -> Data {
     Data(#"{"type":"res","id":"\#(id)","ok":true,"payload":{"ok":false,"status":"auth","error":"rejected"}}"#.utf8)
 }
 
-private func successfulActivationResponse(id: String, modelRef: String, latencyMs: Int) -> Data {
-    Data(
+private func successfulActivationResponse(
+    id: String,
+    modelRef: String,
+    latencyMs: Int,
+    gatewayRestartRequired: Bool = false) -> Data
+{
+    let restartField = gatewayRestartRequired ? ",\"gatewayRestartRequired\":true" : ""
+    return Data(
         """
         {"type":"res","id":"\(id)","ok":true,"payload":{
-          "ok":true,"modelRef":"\(modelRef)","latencyMs":\(latencyMs),"lines":["Model ready"]}}
+          "ok":true,"modelRef":"\(modelRef)","latencyMs":\(latencyMs),"lines":["Model ready"]\(restartField)}}
         """.utf8)
 }
 
@@ -1282,19 +1292,34 @@ struct OnboardingAISetupTests {
         let defaults = try #require(isolatedAISetupDefaults(suiteName: suiteName))
         let recorder = AISetupRequestRecorder()
         let ownerObservation = ActivationOwnerObservation()
+        let replacementGate = AISetupRequestGate()
         let session = makeRestartingAISetupSession(
             suiteName: suiteName,
             recorder: recorder,
             ownerObservation: ownerObservation,
-            postRestartConfiguredModel: "openai/gpt-5.5")
+            postRestartConfiguredModel: "openai/gpt-5.5",
+            replacementGate: replacementGate)
         let url = try #require(URL(string: "ws://example.invalid"))
         let gateway = makeAISetupGateway(url: url, token: "route-token", session: session)
-        let model = makeAISetupModel(gateway: gateway, defaults: defaults)
-        var handoffCount = 0
-        model.onConnected = { handoffCount += 1 }
+        let appState = AppState(preview: true)
+        appState.connectionMode = .local
+        var handoffs: [OnboardingDashboardHandoff] = []
+        let view = OnboardingView(
+            state: appState,
+            aiSetupGateway: gateway,
+            systemAgentDefaults: defaults,
+            aiSetupRouteIdentityProvider: { "local" },
+            dashboardHandoffOpener: { handoffs.append($0) })
 
-        await model.detectAndAutoConnect()
-        await model.activate(kind: "codex-cli")
+        await view.aiSetup.detectAndAutoConnect()
+        let activation = Task { await view.aiSetup.activate(kind: "codex-cli") }
+        await replacementGate.waitUntilStarted()
+        guard case .activating = pendingState(defaults) else {
+            Issue.record("expected restart-required activation to remain pending")
+            return
+        }
+        await replacementGate.release()
+        await activation.value
 
         let activationOwner = try #require(ownerObservation.value())
         #expect(session.snapshotMakeCount() >= 2)
@@ -1304,11 +1329,12 @@ struct OnboardingAISetupTests {
             "openclaw.setup.detect",
             "openclaw.setup.verify",
         ])
-        #expect(model.connected)
-        #expect(model.selectedKind == "codex-cli")
-        #expect(handoffCount == 1)
+        #expect(view.aiSetup.connected)
+        #expect(view.aiSetup.selectedKind == "codex-cli")
         #expect(storedActivationOwner(defaults) == activationOwner)
         #expect(pendingState(defaults) == .completed)
+        #expect(view.finish())
+        #expect(handoffs == [.custodianOnboarding])
     }
 
     @Test func `managed Gateway restart rejects mismatched persisted transition`() async throws {

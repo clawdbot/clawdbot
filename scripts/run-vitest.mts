@@ -31,6 +31,7 @@ import {
   forwardSignalToVitestProcessGroup,
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
+  terminateVitestProcessGroupForTimeout,
 } from "./vitest-process-group.mts";
 
 type VitestFs = {
@@ -89,6 +90,14 @@ export const VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS = new Map([
   // ~210s on a loaded macOS host, so the 120s default kills healthy runs (#123025).
   [
     "test/vitest/vitest.extension-discord.config.ts",
+    DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
+  ],
+  // Codex extension shard: 168 serial files run ~6min total with silent
+  // stretches beyond 300s under the default reporter (measured 61s import +
+  // 293s testing while the worker burned ~95% CPU); the 300s CI window kills
+  // healthy runs and flips with incidental flake output (#125825).
+  [
+    "test/vitest/vitest.extension-codex.config.ts",
     DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   ],
   [GATEWAY_CORE_VITEST_CONFIG, DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS],
@@ -509,13 +518,28 @@ export function resolveRunVitestSpawnEnv(
   }
   const defaultTimeoutMs = resolveDefaultVitestNoOutputTimeoutMs(argv);
   const hasTimeout = Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY);
-  const timeoutMs = hasTimeout
+  const envTimeoutMs = hasTimeout
     ? parsePositiveInt(baseEnv[VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY])
+    : null;
+  // Per-config entries in VITEST_CONFIG_NO_OUTPUT_TIMEOUT_MS are measured
+  // silence floors for healthy lanes; a global env value (CI sets one for
+  // every shard) may widen a mapped lane's window but must not shrink it
+  // below its floor, or the watchdog kills legitimately quiet runs
+  // (#125825). Unmapped configs keep the env value verbatim.
+  const configArg = resolveVitestConfigArg(argv);
+  const configFloorMs = configArg === null ? null : resolveVitestConfigNoOutputTimeoutMs(configArg);
+  // An explicitly disabled or unparsable env value (e.g. "0") stays verbatim.
+  const timeoutMs = hasTimeout
+    ? envTimeoutMs === null || configFloorMs === null
+      ? envTimeoutMs
+      : Math.max(envTimeoutMs, configFloorMs)
     : defaultTimeoutMs;
   const hasHeartbeat = Object.hasOwn(baseEnv, VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY);
   return {
     ...baseEnv,
-    ...(!hasTimeout ? { [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(defaultTimeoutMs) } : {}),
+    ...(timeoutMs !== null && timeoutMs !== envTimeoutMs
+      ? { [VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY]: String(timeoutMs) }
+      : {}),
     ...(!hasHeartbeat && timeoutMs !== null && DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS < timeoutMs
       ? { [VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY]: String(DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS) }
       : {}),
@@ -1044,7 +1068,6 @@ export function installVitestNoOutputWatchdog(params: {
   streams?: Array<WatchdogStream | null>;
   timeoutMs: number | null;
   heartbeatMs?: number | null;
-  label?: string;
   forceKillAfterMs?: number;
   log?: (message: string) => void;
   onTimeout?: () => void;
@@ -1066,8 +1089,6 @@ export function installVitestNoOutputWatchdog(params: {
       : null;
   const streams =
     params.streams?.filter((stream): stream is WatchdogStream => stream !== null) ?? [];
-  const label = params.label?.trim();
-  const suffix = label ? ` (${label})` : "";
 
   let active = true;
   let silenceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1107,7 +1128,7 @@ export function installVitestNoOutputWatchdog(params: {
         return;
       }
       silentForMs += heartbeatMs;
-      params.log?.(`[vitest] still running with no output for ${silentForMs}ms${suffix}.`);
+      params.log?.(`[vitest] still running with no output for ${silentForMs}ms.`);
       if (silentForMs + heartbeatMs < timeoutMs) {
         scheduleHeartbeatTimer();
       }
@@ -1128,9 +1149,8 @@ export function installVitestNoOutputWatchdog(params: {
       clearHeartbeatTimer();
       timedOut = true;
       params.log?.(
-        `[vitest] no output for ${timeoutMs}ms; terminating stalled Vitest process group${suffix}.`,
+        `[vitest] no output for ${timeoutMs}ms; terminating stalled Vitest process group.`,
       );
-      params.onTimeout?.();
       if (forceKillAfterMs > 0) {
         clearForceKillTimer();
         forceKillTimer = setTimeoutFn(() => {
@@ -1138,11 +1158,12 @@ export function installVitestNoOutputWatchdog(params: {
             return;
           }
           params.log?.(
-            `[vitest] process group still alive after ${forceKillAfterMs}ms; sending SIGKILL${suffix}.`,
+            `[vitest] process group still alive after ${forceKillAfterMs}ms; sending SIGKILL.`,
           );
           params.onForceKill?.();
         }, forceKillAfterMs);
       }
+      params.onTimeout?.();
     }, timeoutMs);
   };
 
@@ -1229,16 +1250,15 @@ export function spawnWatchedVitestProcess({
   pnpmArgs,
   spawnParams,
   env,
-  label,
   onNoOutputTimeout,
 }: {
   pnpmArgs: string[];
   spawnParams: PnpmRunnerParams;
   env: NodeJS.ProcessEnv;
-  label?: string;
   onNoOutputTimeout?: () => void;
 }) {
   let forwardedSignal: NodeSignal | null = null;
+  let diagnosticsCompletion: Promise<void> | null = null;
   const child = spawnVitestProcess({
     pnpmArgs,
     spawnParams,
@@ -1255,17 +1275,19 @@ export function spawnWatchedVitestProcess({
     streams: [child.stdout, child.stderr],
     timeoutMs: resolveVitestNoOutputTimeoutMs(env),
     heartbeatMs: resolveVitestNoOutputHeartbeatMs(env),
-    label,
     log: (message) => {
       console.error(message);
     },
     onTimeout: () => {
-      onNoOutputTimeout?.();
-      forwardSignalToVitestProcessGroup({
+      const termination = terminateVitestProcessGroupForTimeout({
         child,
-        signal: "SIGTERM",
         kill: process.kill.bind(process),
+        log: (message) => {
+          console.error(message);
+        },
+        onTimeout: onNoOutputTimeout,
       });
+      diagnosticsCompletion = termination.diagnostics;
     },
     onForceKill: () => {
       forwardSignalToVitestProcessGroup({
@@ -1297,7 +1319,8 @@ export function spawnWatchedVitestProcess({
     }),
     forwardedOutput,
   ])
-    .then(([{ code, signal }]) => {
+    .then(async ([{ code, signal }]) => {
+      await diagnosticsCompletion;
       const result = unhandledErrors.finish();
       if (result) {
         writeVitestUnhandledErrorSummary(result, env);
@@ -1389,7 +1412,6 @@ async function main(
         ],
         spawnParams: resolveVitestSpawnParams(spawnEnv),
         env: spawnEnv,
-        label: guardedVitestArgs.join(" "),
       }),
     );
     if (exitCode !== 0) {

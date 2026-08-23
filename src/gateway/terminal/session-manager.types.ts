@@ -7,9 +7,20 @@ export type TerminalEventSink = (connId: string, event: string, payload: unknown
 
 export type TerminalExitReason = "process_exit" | "closed" | "disconnected" | "detached" | "error";
 
-export type TerminalOwner =
-  | { kind: "conn"; connId: string }
-  | { kind: "agent"; agentSessionKey: string; agentId?: string };
+export type AgentTerminalOwner = {
+  kind: "agent";
+  agentSessionKey: string;
+  agentSessionId: string;
+  agentId: string;
+};
+
+export type TerminalOwner = { kind: "conn"; connId: string } | AgentTerminalOwner;
+
+export type AgentTerminalSessionDrain = {
+  drained: Promise<void>;
+  hasWork(): boolean;
+  release(): void;
+};
 
 export type TerminalSession = {
   id: string;
@@ -17,6 +28,8 @@ export type TerminalSession = {
   owner: TerminalOwner | null;
   /** Operator connections co-attached to an agent-owned session. */
   viewers: Set<string>;
+  /** Initial UI viewer may discard this shared PTY until either side adopts it. */
+  unadoptedViewerConnId?: string;
   agentId: string;
   cwd: string;
   shell: string;
@@ -49,6 +62,8 @@ export type TerminalSessionManagerOptions = {
 
 export type TerminalOpenRequest = {
   owner: TerminalOwner;
+  /** Operator connection initially viewing an agent-owned session. */
+  viewerConnId?: string;
   agentId: string;
   cwd: string;
   shell: string;

@@ -27,6 +27,7 @@ const {
   detectRespawnSupervisorMock,
   getRuntimeConfigMock,
   refreshRemoteModelCatalogMock,
+  runGatewayUpdatePreflightMock,
   scheduleGatewaySigusr1RestartMock,
   startManagedServiceUpdateHandoffMock,
   versionMock,
@@ -41,6 +42,8 @@ const {
     models: 1,
     generatedAt: 1_753_500_000_000,
   })),
+  runGatewayUpdatePreflightMock:
+    vi.fn<typeof import("./update-runner.js").runGatewayUpdatePreflight>(),
   scheduleGatewaySigusr1RestartMock: vi.fn(() => ({ scheduled: true })),
   startManagedServiceUpdateHandoffMock: vi.fn<
     typeof import("./update-managed-service-handoff.js").startManagedServiceUpdateHandoff
@@ -111,6 +114,11 @@ vi.mock("./update-check.js", async () => {
     compareSemverStrings,
     resolveNpmChannelTag: vi.fn(),
   };
+});
+
+vi.mock("./update-runner.js", async () => {
+  const actual = await vi.importActual<typeof import("./update-runner.js")>("./update-runner.js");
+  return { ...actual, runGatewayUpdatePreflight: runGatewayUpdatePreflightMock };
 });
 
 vi.mock("../version.js", () => ({
@@ -287,6 +295,8 @@ describe("update-startup", () => {
     getRuntimeConfigMock.mockReset();
     getRuntimeConfigMock.mockReturnValue({});
     refreshRemoteModelCatalogMock.mockClear();
+    runGatewayUpdatePreflightMock.mockReset();
+    runGatewayUpdatePreflightMock.mockResolvedValue(undefined);
     detectRespawnSupervisorMock.mockReset();
     detectRespawnSupervisorMock.mockReturnValue(null);
     scheduleGatewaySigusr1RestartMock.mockClear();
@@ -1276,6 +1286,40 @@ describe("update-startup", () => {
       upstreamRef: "origin/main",
       upstreamSha: "frozen-upstream-sha",
     });
+    expect(runGatewayUpdatePreflightMock).toHaveBeenCalledWith(
+      "/opt/openclaw",
+      45 * 60 * 1000,
+      handoffParams?.devTarget,
+    );
+  });
+
+  it("keeps managed dev auto-update serving when target config preflight fails", async () => {
+    mockDevGitStatus({ upstreamSha: "frozen-upstream-sha" });
+    detectRespawnSupervisorMock.mockReturnValue("launchd");
+    runGatewayUpdatePreflightMock.mockResolvedValueOnce({
+      status: "error",
+      mode: "git",
+      reason: "preflight-no-good-commit",
+      steps: [],
+      durationMs: 1,
+    });
+    const log = { info: vi.fn() };
+
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "dev", auto: { enabled: true } } },
+      log,
+      isNixMode: false,
+      allowInTests: true,
+      activeWorkInspectors: idleActiveWorkInspectors(),
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      "auto-update attempt failed",
+      expect.objectContaining({ reason: "preflight-no-good-commit" }),
+    );
   });
 
   it("continues managed dev campaigns from a detached tracked deployment", async () => {
@@ -2091,17 +2135,6 @@ describe("update-startup", () => {
       skipCooldown: true,
       skipDeferral: true,
     });
-  });
-
-  it("scheduleGatewayUpdateCheck returns a cleanup function", () => {
-    mockPackageUpdateStatus("latest", "2.0.0");
-
-    const stop = scheduleGatewayUpdateCheck({
-      cfg: { update: { channel: "stable" } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-    });
-    stop();
   });
 
   it("schedules an initial and recurring 24-hour extended-stable hint check with cleanup", async () => {

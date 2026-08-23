@@ -415,6 +415,34 @@ describe("github-copilot plugin", () => {
     expect(mocks.resolveCopilotRuntimeAuth).not.toHaveBeenCalled();
   });
 
+  it("does not exchange auth or discover models for an unavailable direct SecretRef", async () => {
+    const agentDir = await createAgentDir();
+    const provider = registerProviderWithPluginConfig({});
+
+    await expect(
+      provider.catalog.run({
+        config: {
+          models: {
+            providers: {
+              "github-copilot": {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENCLAW_MISSING_COPILOT_CATALOG_TOKEN",
+                },
+              },
+            },
+          },
+        },
+        agentDir,
+        env: { COPILOT_GITHUB_TOKEN: "ambient-token" },
+      }),
+    ).rejects.toThrow("models.providers.github-copilot.apiKey");
+
+    expect(mocks.resolveCopilotRuntimeAuth).not.toHaveBeenCalled();
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+  });
+
   it("exposes xhigh thinking for catalog-supported Copilot reasoning efforts", () => {
     const provider = registerProviderWithPluginConfig({});
 

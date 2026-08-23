@@ -97,7 +97,7 @@ export function appendTranscriptMessageInTransaction<TMessage>(
   const messageId = options.eventId ?? randomUUID();
   const now = options.now ?? Date.now();
   const finalMessage = serializeForStorage(prepared);
-  ensureTranscriptHeader(database, resolved, options.cwd, now);
+  ensureTranscriptHeader(database, resolved, options.cwd);
   const parentId = resolveTranscriptMessageAppendParent(database, resolved.sessionId, options);
   const event = {
     type: "message",

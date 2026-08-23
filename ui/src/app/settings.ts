@@ -20,7 +20,7 @@ import {
 } from "../pages/chat/sidebar-layout-persistence.ts";
 import { normalizeChatSplitLayout } from "../pages/chat/split-layout-persistence.ts";
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
-import { resolveControlUiBasePath } from "./browser.ts";
+import { resolveControlUiPaths } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
@@ -257,7 +257,7 @@ function formatHostWithPort(hostname: string, port: string): string {
 
 function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const basePath = resolveControlUiBasePath(location.pathname);
+  const basePath = resolveControlUiPaths(location.pathname)[0];
   const pageUrl = `${proto}://${location.host}${basePath}`;
   if (!isViteDevPage()) {
     return { pageUrl, effectiveUrl: pageUrl };

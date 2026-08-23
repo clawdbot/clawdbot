@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveSandboxPath } from "../../agents/sandbox-paths.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { tryReadJson, writeJson } from "../../infra/json-files.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -19,7 +20,7 @@ import type {
 import { resolveSkillKey } from "./frontmatter.js";
 import { serializeByKey } from "./serialize.js";
 import { resolveSkillTelemetrySource } from "./source.js";
-import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
+import { loadMergedWorkspaceSkills, loadWorkspaceSkills } from "./workspace-skill-loader.js";
 
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
@@ -42,6 +43,7 @@ const SYNCED_SKILLS_MANIFEST_NAME = ".openclaw-sync.json";
 
 type SyncedSkillsManifest = {
   entryKeys: string[];
+  skillRootsFingerprint?: string;
   skillsVersion: number;
 };
 
@@ -68,7 +70,27 @@ function parseSyncedSkillsManifest(value: unknown): SyncedSkillsManifest | null 
   ) {
     return null;
   }
-  return { entryKeys: value.entryKeys, skillsVersion: value.skillsVersion } as SyncedSkillsManifest;
+  if (
+    value.skillRootsFingerprint !== undefined &&
+    typeof value.skillRootsFingerprint !== "string"
+  ) {
+    return null;
+  }
+  return {
+    entryKeys: value.entryKeys,
+    ...(value.skillRootsFingerprint === undefined
+      ? {}
+      : { skillRootsFingerprint: value.skillRootsFingerprint }),
+    skillsVersion: value.skillsVersion,
+  };
+}
+
+function resolveSyncedSkillsManifestKey(manifest: SyncedSkillsManifest): string {
+  return JSON.stringify([
+    manifest.skillsVersion,
+    manifest.skillRootsFingerprint,
+    manifest.entryKeys,
+  ]);
 }
 
 function resolveSyncedSkillDestinationPath(params: {
@@ -129,24 +151,29 @@ export async function syncWorkspaceSkills(params: {
   return await serializeByKey(`syncSkills:${targetDir}`, async () => {
     const targetSkillsDir = path.join(targetDir, "skills");
     const manifestPath = path.join(targetSkillsDir, SYNCED_SKILLS_MANIFEST_NAME);
-    const skillsVersion = getSkillsSnapshotVersion(sourceDir);
     const skillsSnapshot = params.skillsSnapshot;
+    const skillRoots = skillsSnapshot?.skillRoots;
+    // Same-named skills from different execution roots share entry identities.
+    // Bind roots to the cache so shared sandboxes recopy when sessions change repos.
+    const skillRootsFingerprint = skillRoots
+      ? sha256Hex(JSON.stringify([skillRoots.agentWorkspaceDir, skillRoots.executionSkillsDir]))
+      : undefined;
+    const skillsVersion = getSkillsSnapshotVersion(skillRoots?.agentWorkspaceDir ?? sourceDir);
 
     await ensureSyncedSkillsDirectory(targetSkillsDir);
     const manifest = parseSyncedSkillsManifest(await tryReadJson<unknown>(manifestPath));
     const expectedManifestKey =
       skillsSnapshot?.version === skillsVersion
-        ? JSON.stringify([
-            skillsVersion,
-            skillsSnapshot.skills
+        ? resolveSyncedSkillsManifestKey({
+            entryKeys: skillsSnapshot.skills
               .map((skill) => resolveSyncedSkillIdentity(skill.skillKey ?? skill.name, skill.name))
               .toSorted(),
-          ])
+            ...(skillRootsFingerprint ? { skillRootsFingerprint } : {}),
+            skillsVersion,
+          })
         : undefined;
     const cachedUsage = syncedSkillsUsageCache.get(targetSkillsDir);
-    const manifestKey = manifest
-      ? JSON.stringify([manifest.skillsVersion, manifest.entryKeys])
-      : undefined;
+    const manifestKey = manifest ? resolveSyncedSkillsManifestKey(manifest) : undefined;
     if (
       expectedManifestKey &&
       manifestKey === expectedManifestKey &&
@@ -155,7 +182,7 @@ export async function syncWorkspaceSkills(params: {
       return cachedUsage.skillUsagePaths.map((entry) => ({ ...entry }));
     }
 
-    const entries = loadWorkspaceSkills(sourceDir, {
+    const loadOptions = {
       config: params.config,
       skillFilter: params.skillFilter,
       agentId: params.agentId,
@@ -163,7 +190,12 @@ export async function syncWorkspaceSkills(params: {
       managedSkillsDir: params.managedSkillsDir,
       bundledSkillsDir: params.bundledSkillsDir,
       pluginSkillsDir: params.pluginSkillsDir,
-    });
+      ...(skillsSnapshot?.skillFilter ? { skillFilter: skillsSnapshot.skillFilter } : {}),
+      ...(skillsSnapshot?.skillOverrides ? { skillOverrides: skillsSnapshot.skillOverrides } : {}),
+    };
+    const entries = skillRoots
+      ? loadMergedWorkspaceSkills({ ...skillRoots, ...loadOptions })
+      : loadWorkspaceSkills(sourceDir, loadOptions);
 
     const usedDirNames = new Set<string>();
     const plans: Array<{ destinationPath?: string; entry: SkillEntry; identity: string }> = [];
@@ -199,7 +231,9 @@ export async function syncWorkspaceSkills(params: {
 
     await fsp.rm(manifestPath, { force: true });
     const previousUsage =
-      manifest?.skillsVersion === skillsVersion && cachedUsage?.manifestKey === manifestKey
+      manifest?.skillsVersion === skillsVersion &&
+      manifest.skillRootsFingerprint === skillRootsFingerprint &&
+      cachedUsage?.manifestKey === manifestKey
         ? cachedUsage
         : undefined;
     syncedSkillsUsageCache.delete(targetSkillsDir);
@@ -257,6 +291,7 @@ export async function syncWorkspaceSkills(params: {
     if (!copyFailed) {
       const nextManifest: SyncedSkillsManifest = {
         entryKeys: plans.map((plan) => plan.identity).toSorted(),
+        ...(skillRootsFingerprint ? { skillRootsFingerprint } : {}),
         skillsVersion,
       };
       await writeJson(manifestPath, nextManifest, { trailingNewline: true });
@@ -268,7 +303,7 @@ export async function syncWorkspaceSkills(params: {
               : [],
           ),
         ),
-        manifestKey: JSON.stringify([skillsVersion, nextManifest.entryKeys]),
+        manifestKey: resolveSyncedSkillsManifestKey(nextManifest),
         skillUsagePaths,
       });
       pruneMapToMaxSize(syncedSkillsUsageCache, 100);

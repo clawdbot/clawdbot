@@ -1,84 +1,104 @@
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
+import type { DraftCloudProfile } from "./discovery.ts";
+import { contextWith, deferred, renderControl } from "./model-control.test-support.ts";
 import { NewSessionModelControl } from "./model-control.ts";
-
-function contextWith(
-  models: ModelCatalogEntry[],
-  runtime = "openclaw",
-  featureMethods: string[] = [],
-  cloudPlacementSupported?: boolean,
-) {
-  const request = vi.fn().mockResolvedValue({ models });
-  const navigate = vi.fn();
-  const context = {
-    navigate,
-    gateway: {
-      snapshot: {
-        phase: "connected",
-        client: { request },
-        hello: { features: { methods: featureMethods } },
-      },
-    },
-    sessions: {
-      state: {
-        result: {
-          defaults: {
-            model: "openai/gpt-5.6-luna",
-            modelProvider: "openai",
-            agentRuntime: {
-              id: runtime,
-              ...(cloudPlacementSupported === undefined ? {} : { cloudPlacementSupported }),
-              source: "defaults",
-            },
-          },
-          sessions: [],
-        },
-      },
-    },
-  } as unknown as ApplicationContext;
-  return { context, navigate, request };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-}
-
-function renderControl(
-  control: NewSessionModelControl,
-  context: ApplicationContext,
-  agentId = "main",
-  agent: GatewayAgentRow | null = {
-    id: "main",
-    model: { primary: "openai/gpt-5.6-luna" },
-    thinkingDefault: "medium",
-  },
-) {
-  const container = document.createElement("div");
-  render(
-    control.render({
-      ...(agent ? { agent } : {}),
-      agentId,
-      context,
-      sending: false,
-    }),
-    container,
-  );
-  return container;
-}
 
 afterEach(() => {
   vi.useRealTimers();
 });
 
 describe("new-session model runtime", () => {
+  it.each([
+    {
+      name: "rejects a remote-exec runtime on a worker-turn profile",
+      runtime: {
+        id: "codex",
+        cloudPlacementSupported: true,
+        cloudPlacementExecutionMode: "remote-exec" as const,
+        source: "model" as const,
+      },
+      executionMode: "worker-turn" as const,
+      expected:
+        "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
+    },
+    {
+      name: "accepts a worker-turn runtime on a worker-turn profile",
+      runtime: {
+        id: "openclaw",
+        cloudPlacementSupported: true,
+        cloudPlacementExecutionMode: "worker-turn" as const,
+        source: "model" as const,
+      },
+      executionMode: "worker-turn" as const,
+      expected: undefined,
+    },
+    {
+      name: "preserves an unknown provider mode",
+      runtime: {
+        id: "codex",
+        cloudPlacementSupported: true,
+        cloudPlacementExecutionMode: "remote-exec" as const,
+        source: "model" as const,
+      },
+      executionMode: undefined,
+      expected: undefined,
+    },
+    {
+      name: "retains the existing whole-runtime rejection",
+      runtime: { id: "acpx", cloudPlacementSupported: false, source: "model" as const },
+      executionMode: "worker-turn" as const,
+      expected: "The acpx runtime does not support cloud workers.",
+    },
+  ])("$name", ({ runtime, executionMode, expected }) => {
+    const profile: DraftCloudProfile = {
+      id: "aws",
+      providerId: "crabbox",
+      ...(executionMode ? { executionMode } : {}),
+    };
+    const control = new NewSessionModelControl(() => undefined);
+    vi.spyOn(control, "resolveAgentRuntime").mockReturnValue(runtime);
+
+    expect(control.cloudRuntimeUnsupportedReason(profile)).toBe(expected);
+  });
+
+  it.each([
+    {
+      name: "allows opted-in remote execution",
+      runtimeId: "codex",
+      devicePlacement: {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+    },
+    {
+      name: "allows embedded execution",
+      runtimeId: "openclaw",
+      devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+    },
+    { name: "rejects a cloud-only runtime", runtimeId: "cloud-only" },
+    {
+      name: "rejects a stale support flag without an owner requirement",
+      runtimeId: "stale",
+      devicePlacementSupported: true,
+    },
+  ])("$name on paired devices", ({ runtimeId, devicePlacement, devicePlacementSupported }) => {
+    const control = new NewSessionModelControl(() => undefined);
+    vi.spyOn(control, "resolveAgentRuntime").mockReturnValue({
+      id: runtimeId,
+      cloudPlacementSupported: true,
+      devicePlacementSupported: devicePlacementSupported ?? Boolean(devicePlacement),
+      ...(devicePlacement ? { devicePlacement } : {}),
+      source: "model",
+    });
+
+    expect(control.devicePlacementUnsupportedReason()).toBe(
+      devicePlacement ? undefined : "This runtime does not support paired devices",
+    );
+  });
+
   it("keeps CLI agents hidden and undiscovered while the Labs gate is off", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
@@ -88,7 +108,7 @@ describe("new-session model runtime", () => {
     control.load(context, "main", true);
     control.loadCatalogTargets(context, "main", false);
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     expect(request).not.toHaveBeenCalledWith("sessions.catalog.list", expect.anything());
     expect(
       renderControl(control, context).querySelector("[data-chat-model-target-group]"),
@@ -133,14 +153,14 @@ describe("new-session model runtime", () => {
     control.load(context, "main", true);
     control.loadCatalogTargets(context, "main", true);
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(request).toHaveBeenCalledWith(
         "sessions.catalog.list",
         { agentId: "main", limitPerHost: 1 },
         { signal: expect.any(AbortSignal) },
       ),
     );
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       const container = renderControl(control, context);
       expect(container.querySelector('[data-chat-model-target-group="cliAgents"]')).not.toBeNull();
       expect(container.querySelector('[data-chat-model-target="anthropic"]')).not.toBeNull();
@@ -163,10 +183,19 @@ describe("new-session model runtime", () => {
     ]);
     const control = new NewSessionModelControl(() => undefined);
 
+    control.load(context, "main", true);
     control.loadCatalogTargets(context, "main", true);
-    await Promise.resolve();
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
 
-    expect(request).not.toHaveBeenCalled();
+    const container = renderControl(control, context);
+    const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
+    picker!.open = true;
+    picker!.dispatchEvent(new Event("toggle"));
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+
+    expect(request.mock.calls.some(([method]) => method === "sessions.catalog.list")).toBe(false);
+    expect(container.querySelector("[data-chat-model-target-group]")).toBeNull();
   });
 
   it("preserves a browser preference when an older server omits thinking profiles", async () => {
@@ -199,7 +228,7 @@ describe("new-session model runtime", () => {
     control.load(context, "main", true);
 
     expect(control.isRestoringPreference()).toBe(false);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
   });
 
   it("renders initial metadata loading without synthesizing the configured default", async () => {
@@ -210,7 +239,7 @@ describe("new-session model runtime", () => {
 
     control.load(context, "main", true);
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     const container = renderControl(control, context);
     expect(container.querySelector('[data-chat-model-select="true"]')?.textContent).toContain(
       "Loading models",
@@ -350,7 +379,7 @@ describe("new-session model runtime", () => {
     const control = new NewSessionModelControl(notify);
 
     control.load(context, "main", true);
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(request).toHaveBeenCalledOnce();
       expect(notify).toHaveBeenCalledTimes(2);
     });
@@ -403,7 +432,7 @@ describe("new-session model runtime", () => {
 
     control.load(context, "main", true);
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       const container = renderControl(control, context);
       expect(
         container
@@ -467,8 +496,8 @@ describe("new-session model runtime", () => {
 
     control.load(context, "main", true);
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    await vi.waitFor(() => {
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await waitForFast(() => {
       const container = renderControl(control, context);
       expect(
         container

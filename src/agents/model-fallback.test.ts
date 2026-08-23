@@ -3245,6 +3245,78 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
+  it("executes fallback aliases in the selected agent scope", async () => {
+    const cfg = makeCfg({
+      agents: {
+        list: [
+          { id: "main", default: true },
+          {
+            id: "worker",
+            models: {
+              "anthropic/worker-fallback": { alias: "fast" },
+            },
+          },
+        ],
+        defaults: {
+          model: {
+            primary: "openai/primary",
+            fallbacks: ["fast"],
+          },
+          models: {
+            "openai/global-fallback": { alias: "fast" },
+          },
+        },
+      },
+    });
+
+    expect(
+      testing.resolveFallbackCandidates({
+        cfg,
+        agentId: "worker",
+        provider: "openai",
+        model: "primary",
+      }),
+    ).toEqual([
+      { provider: "openai", model: "primary" },
+      { provider: "anthropic", model: "worker-fallback" },
+    ]);
+    expect(
+      testing.resolveFallbackCandidates({
+        cfg,
+        agentId: "main",
+        provider: "openai",
+        model: "primary",
+      }),
+    ).toEqual([
+      { provider: "openai", model: "primary" },
+      { provider: "openai", model: "global-fallback" },
+    ]);
+
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FailoverError("primary rate limited", {
+          reason: "rate_limit",
+          provider: "openai",
+          model: "primary",
+        }),
+      )
+      .mockResolvedValueOnce("worker fallback");
+    const result = await runWithModelFallback({
+      cfg,
+      agentId: "worker",
+      provider: "openai",
+      model: "primary",
+      skipAuthProfileRuntime: true,
+      run,
+    });
+
+    expect(result.result).toBe("worker fallback");
+    expect(run).toHaveBeenNthCalledWith(2, "anthropic", "worker-fallback", {
+      isFinalFallbackAttempt: true,
+    });
+  });
+
   it("tries configured fallbacks before primary for override credential validation errors", async () => {
     const cfg = makeCfg();
     const run = createOverrideFailureRun({

@@ -22,6 +22,7 @@ export {
   getTrackedConnectChallengeNonce,
   installGatewayTestHooks,
   onceMessage,
+  prepareGatewayReplyRuntimeForTest,
   readConnectChallengeNonce,
   rpcReq,
   startConnectedServerWithClient,

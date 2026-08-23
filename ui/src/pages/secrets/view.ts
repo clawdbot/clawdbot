@@ -42,7 +42,7 @@ type SecretsStoreViewProps = {
   onDraftNameChange: (name: string) => void;
   onDraftValueChange: (value: string) => void;
   onDraftAllowedHostsChange: (allowedHosts: string) => void;
-  onDraftSecretChange: (secret: boolean) => void;
+  onDraftKindChange: (kind: "secret" | "env") => void;
   onSubmitDraft: () => void;
   onOpenBulk: () => void;
   onCloseBulk: () => void;
@@ -120,6 +120,7 @@ function renderTable(props: SecretsStoreViewProps): TemplateResult {
         <thead>
           <tr>
             <th scope="col">${t("secretsStore.name")}</th>
+            <th scope="col">${t("secretsStore.access")}</th>
             <th scope="col">${t("secretsStore.value")}</th>
             <th scope="col">${t("secretsStore.allowedHosts")}</th>
             <th scope="col">${t("secretsStore.updated")}</th>
@@ -135,6 +136,15 @@ function renderTable(props: SecretsStoreViewProps): TemplateResult {
             (entry) => html`
               <tr tabindex="0" aria-label=${entry.name}>
                 <td><code class="secrets-store__name">${entry.name}</code></td>
+                <td>
+                  <span class="secrets-store__mode secrets-store__mode--${entry.kind}"
+                    >${t(
+                      entry.kind === "secret"
+                        ? "secretsStore.protectedSecret"
+                        : "secretsStore.agentReadable",
+                    )}</span
+                  >
+                </td>
                 <td>
                   <span
                     class="secrets-store__value ${entry.kind === "secret"
@@ -222,19 +232,45 @@ function renderEntryDialog(props: SecretsStoreViewProps): TemplateResult | typeo
               props.onDraftValueChange((event.currentTarget as HTMLTextAreaElement).value)}
           ></textarea>
         </label>
-        <label class="secrets-store-checkbox">
-          <input
-            type="checkbox"
-            .checked=${props.draft.kind === "secret"}
-            ?disabled=${props.busy}
-            @change=${(event: Event) =>
-              props.onDraftSecretChange((event.currentTarget as HTMLInputElement).checked)}
-          />
-          <span>
-            <strong>${t("secretsStore.secret")}</strong>
-            <small>${t("secretsStore.hint")}</small>
-          </span>
-        </label>
+        <fieldset class="secrets-store-modes">
+          <legend>${t("secretsStore.accessMode")}</legend>
+          <label
+            class="secrets-store-mode ${props.draft.kind === "secret"
+              ? "secrets-store-mode--selected"
+              : ""}"
+          >
+            <input
+              type="radio"
+              name="access-mode"
+              value="secret"
+              .checked=${props.draft.kind === "secret"}
+              ?disabled=${props.busy}
+              @change=${() => props.onDraftKindChange("secret")}
+            />
+            <span>
+              <strong>${t("secretsStore.protectedSecret")}</strong>
+              <small>${t("secretsStore.protectedSecretHint")}</small>
+            </span>
+          </label>
+          <label
+            class="secrets-store-mode ${props.draft.kind === "env"
+              ? "secrets-store-mode--selected secrets-store-mode--risk"
+              : ""}"
+          >
+            <input
+              type="radio"
+              name="access-mode"
+              value="env"
+              .checked=${props.draft.kind === "env"}
+              ?disabled=${props.busy}
+              @change=${() => props.onDraftKindChange("env")}
+            />
+            <span>
+              <strong>${t("secretsStore.agentReadable")}</strong>
+              <small>${t("secretsStore.agentReadableHint")}</small>
+            </span>
+          </label>
+        </fieldset>
         ${props.draft.kind === "secret"
           ? html`
               <label class="secrets-store-field">

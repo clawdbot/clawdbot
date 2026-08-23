@@ -73,6 +73,10 @@ export async function sessionsCompactCommand(
   opts: SessionsCompactCliOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
+  const agent = opts.agent?.trim();
+  if (opts.agent !== undefined && !agent) {
+    throw new Error("--agent must not be blank");
+  }
   const rpcOpts: SessionsCompactRpcOpts = {
     url: opts.url,
     token: opts.token,
@@ -84,7 +88,7 @@ export async function sessionsCompactCommand(
   };
   const params = {
     key: opts.key,
-    ...(opts.agent ? { agentId: opts.agent } : {}),
+    ...(agent ? { agentId: agent } : {}),
     ...(opts.maxLines !== undefined ? { maxLines: opts.maxLines } : {}),
   };
 

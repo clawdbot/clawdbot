@@ -317,10 +317,7 @@ export function isPrivateIpAddress(address: string, policy?: SsrFPolicy): boolea
       return true;
     }
     const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(strictIp);
-    if (embeddedIpv4) {
-      return isBlockedSpecialUseIpv4Address(embeddedIpv4, blockOptions);
-    }
-    return false;
+    return embeddedIpv4 ? isBlockedSpecialUseIpv4Address(embeddedIpv4, blockOptions) : false;
   }
 
   // Security-critical parse failures should fail closed for any malformed IPv6 literal.
@@ -424,8 +421,7 @@ function isLoopbackIpAddressIncludingEmbeddedIpv4(address: string): boolean {
   if (!parsed || isIpv4Address(parsed)) {
     return false;
   }
-  const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(parsed);
-  return embeddedIpv4?.range() === "loopback";
+  return extractEmbeddedIpv4FromIpv6(parsed)?.range() === "loopback";
 }
 
 function isUnspecifiedIpAddressIncludingEmbeddedIpv4(address: string): boolean {
@@ -443,6 +439,20 @@ function isUnspecifiedIpAddressIncludingEmbeddedIpv4(address: string): boolean {
     return false;
   }
   return extractEmbeddedIpv4FromIpv6(parsed)?.range() === "unspecified";
+}
+
+function isBlockedTrustedResolvedIpv6Address(address: string): boolean {
+  const parsed = parseCanonicalIpAddress(address);
+  if (!parsed || isIpv4Address(parsed)) {
+    return false;
+  }
+  // Trusted exact-origin DNS may still allow ULA/private hosts, but policy can
+  // block unicast-shaped IPv6 ranges that narrower rebound helpers cannot see.
+  const range = parsed.range();
+  if (range !== "unicast" && range !== "rfc6052") {
+    return false;
+  }
+  return isBlockedSpecialUseIpv6Address(parsed);
 }
 
 function isExplicitLoopbackHostname(hostname: string): boolean {
@@ -464,6 +474,7 @@ function assertAllowedTrustedHostnameResolvedAddressesOrThrow(
     if (
       isUnspecifiedIpAddressIncludingEmbeddedIpv4(entry.address) ||
       (!isLoopbackAllowed && isLoopbackIpAddressIncludingEmbeddedIpv4(entry.address)) ||
+      isBlockedTrustedResolvedIpv6Address(entry.address) ||
       isLinkLocalIpAddress(entry.address) ||
       isCloudMetadataIpAddress(entry.address)
     ) {

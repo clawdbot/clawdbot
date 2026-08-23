@@ -60,6 +60,16 @@ const NodeWorkerBundleStatusSchema = Type.Union([
   closedObject({ status: Type.Literal("missing") }),
 ]);
 
+/** Bounded live worker slots advertised by a connected node host. */
+export const WorkerSlotSummarySchema = Type.Refine(
+  closedObject({
+    total: Type.Integer({ minimum: 1, maximum: 1_024 }),
+    available: Type.Integer({ minimum: 0, maximum: 1_024 }),
+  }),
+  (slots) => slots.available <= slots.total,
+  (slots) => `available worker slots ${slots.available} exceed total ${slots.total}`,
+);
+
 /** Worker-only lifecycle metadata layered onto the existing environment projection. */
 export const WorkerEnvironmentMetadataSchema = closedObject({
   providerId: NonEmptyString,
@@ -84,6 +94,7 @@ function createEnvironmentSummarySchema() {
     status: EnvironmentStatusSchema,
     platform: Type.Optional(NonEmptyString),
     sessionHost: Type.Optional(Type.Boolean()),
+    workerSlots: Type.Optional(WorkerSlotSummarySchema),
     workerBundle: Type.Optional(NodeWorkerBundleStatusSchema),
     lastConnectedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     lastDisconnectedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -91,6 +102,12 @@ function createEnvironmentSummarySchema() {
     lastSeenReason: Type.Optional(NonEmptyString),
     trust: Type.Optional(EnvironmentTrustSchema),
     capabilities: Type.Optional(Type.Array(NonEmptyString)),
+    invocableCommands: Type.Optional(
+      Type.Array(Type.String({ minLength: 1, maxLength: 128 }), {
+        maxItems: 128,
+        uniqueItems: true,
+      }),
+    ),
     desktop: Type.Optional(Type.Boolean()),
     issues: Type.Optional(Type.Array(RuntimeTargetIssueSchema, { minItems: 1, maxItems: 8 })),
     worker: Type.Optional(WorkerEnvironmentMetadataSchema),
@@ -107,9 +124,9 @@ export const EnvironmentsListParamsSchema = closedObject({});
 export const WorkerMachineOptionSchema = closedObject({
   id: Type.String({ minLength: 1, maxLength: 128 }),
   label: Type.String({ minLength: 1, maxLength: 128 }),
-  description: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+  cpu: Type.Optional(Type.Integer({ minimum: 1, maximum: 65_536 })),
+  memoryGb: Type.Optional(Type.Integer({ minimum: 1, maximum: 65_536 })),
   default: Type.Optional(Type.Boolean()),
-  // CPU, memory, and price stay absent until providers expose authoritative values.
 });
 
 export const WorkerMachineOptionsSchema = Type.Array(WorkerMachineOptionSchema, {
@@ -117,11 +134,18 @@ export const WorkerMachineOptionsSchema = Type.Array(WorkerMachineOptionSchema, 
   maxItems: 32,
 });
 
+/** Placement execution modes shared by runtime requirements and worker providers. */
+export const WorkerExecutionModeSchema = Type.Union([
+  Type.Literal("worker-turn"),
+  Type.Literal("remote-exec"),
+]);
+
 /** Configured worker target exposed without provider settings or credentials. */
 const WorkerEnvironmentProfileSummarySchema = closedObject({
   id: NonEmptyString,
   providerId: NonEmptyString,
   trust: Type.Optional(EnvironmentTrustSchema),
+  executionMode: Type.Optional(WorkerExecutionModeSchema),
   machines: Type.Optional(WorkerMachineOptionsSchema),
 });
 
@@ -185,8 +209,10 @@ export type WorkerEnvironmentState = Static<typeof WorkerEnvironmentStateSchema>
 export type WorkerTunnelStatus = Static<typeof WorkerTunnelStatusSchema>;
 export type WorkerDesktopAppId = Static<typeof WorkerDesktopAppIdSchema>;
 export type RuntimeTargetIssue = Static<typeof RuntimeTargetIssueSchema>;
+export type WorkerSlotSummary = Static<typeof WorkerSlotSummarySchema>;
 export type WorkerEnvironmentMetadata = Static<typeof WorkerEnvironmentMetadataSchema>;
 export type WorkerMachineOption = Static<typeof WorkerMachineOptionSchema>;
+export type WorkerExecutionMode = Static<typeof WorkerExecutionModeSchema>;
 export type EnvironmentSummary = Static<typeof EnvironmentSummarySchema>;
 export type EnvironmentsCreateParams = Static<typeof EnvironmentsCreateParamsSchema>;
 export type EnvironmentsCreateResult = Static<typeof EnvironmentsCreateResultSchema>;

@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
 import {
   activeRuns,
+  createCodeModeBridgeDispatchState,
   disposeAllCodeModeRuns,
   disposeCodeModeRun,
   reserveActiveRunSlot,
@@ -52,8 +54,10 @@ function parkExpiringRun(
     ctx,
     config,
     runtime,
+    catalogProjection: createCodeModeCatalogProjection([]),
     namespaceRuntime: createCodeModeNamespaceRuntime(),
     output: [],
+    bridgeDispatch: createCodeModeBridgeDispatchState(),
   });
   return cancel;
 }

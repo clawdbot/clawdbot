@@ -17,6 +17,10 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import {
+  type OpenClawStateLeaseContext,
+  withOpenClawStateLease,
+} from "../state/openclaw-state-lease.js";
 
 export type ProjectRegistryRecord = {
   id: string;
@@ -32,6 +36,8 @@ type ProjectRow = Selectable<OpenClawStateKyselyDatabase["projects"]>;
 
 const ensuredDatabases = new WeakSet<DatabaseSync>();
 const PROJECT_ID_MAX_LENGTH = 64;
+const PROJECT_CHECKOUT_LEASE_MS = 30_000;
+const PROJECT_CHECKOUT_WAIT_MS = 30_000;
 const PROJECTS_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS projects (
   id TEXT NOT NULL PRIMARY KEY,
@@ -91,11 +97,20 @@ function insertProjectRegistry(
     source: "registered" | "cloned";
   },
   options: OpenClawStateDatabaseOptions,
+  lease: OpenClawStateLeaseContext,
 ): ProjectRegistryRecord {
   ensureProjectRegistrySchema(options);
   return runOpenClawStateWriteTransaction(
     ({ db: sqlite }) => {
+      lease.assertOwnedInTransaction(sqlite);
       const db = getNodeSqliteKysely<ProjectsDatabase>(sqlite);
+      const sameRoot = executeSqliteQueryTakeFirstSync(
+        sqlite,
+        db.selectFrom("projects").selectAll().where("repo_root", "=", input.repoRoot),
+      );
+      if (sameRoot) {
+        return rowToProject(sameRoot);
+      }
       if (input.source === "cloned" && input.originUrl) {
         const duplicate = executeSqliteQueryTakeFirstSync(
           sqlite,
@@ -127,6 +142,25 @@ function insertProjectRegistry(
     },
     options,
     { operationLabel: "projects.registry.insert" },
+  );
+}
+
+export async function withProjectCheckoutLifecycle<T>(
+  repoRoot: string,
+  options: OpenClawStateDatabaseOptions,
+  run: (lease: OpenClawStateLeaseContext) => Promise<T>,
+): Promise<T> {
+  return await withOpenClawStateLease(
+    {
+      scope: "projects.checkout",
+      key: repoRoot,
+      database: { scope: "shared", options },
+      leaseMs: PROJECT_CHECKOUT_LEASE_MS,
+      waitMs: PROJECT_CHECKOUT_WAIT_MS,
+      leaseLabel: "project checkout lease",
+      operationLabel: "projects.checkout.lease",
+    },
+    run,
   );
 }
 
@@ -199,37 +233,49 @@ export async function resolveProjectCheckout(projectPath: string): Promise<{
   return { path: requested, repoRoot, ...(originUrl ? { originUrl } : {}) };
 }
 
-export async function registerProjectRegistry(
-  input: { path: string; name?: string },
+async function registerResolvedProject(
+  input: {
+    path: string;
+    name?: string;
+    originUrl?: string;
+    source: "registered" | "cloned";
+  },
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<ProjectRegistryRecord> {
   const checkout = await resolveProjectCheckout(input.path);
   const displayName = input.name?.trim() || path.basename(checkout.repoRoot) || "Project";
-  return insertProjectRegistry(
-    {
-      displayName,
-      repoRoot: checkout.repoRoot,
-      originUrl: checkout.originUrl,
-      source: "registered",
-    },
-    options,
-  );
+  return await withProjectCheckoutLifecycle(checkout.repoRoot, options, async (lease) => {
+    // A deletion may have won the lease after the first canonicalization. Revalidate under the
+    // lifecycle owner so a stale registration cannot recreate a row for the removed checkout.
+    const current = await resolveProjectCheckout(checkout.repoRoot);
+    if (current.repoRoot !== checkout.repoRoot) {
+      throw new ProjectCheckoutError(`project checkout changed while registering: ${input.path}`);
+    }
+    return insertProjectRegistry(
+      {
+        displayName,
+        repoRoot: checkout.repoRoot,
+        originUrl: input.originUrl ?? checkout.originUrl,
+        source: input.source,
+      },
+      options,
+      lease,
+    );
+  });
+}
+
+export async function registerProjectRegistry(
+  input: { path: string; name?: string },
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<ProjectRegistryRecord> {
+  return await registerResolvedProject({ ...input, source: "registered" }, options);
 }
 
 export async function registerClonedProjectRegistry(
   input: { path: string; name: string; originUrl: string },
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<ProjectRegistryRecord> {
-  const checkout = await resolveProjectCheckout(input.path);
-  return insertProjectRegistry(
-    {
-      displayName: input.name,
-      repoRoot: checkout.repoRoot,
-      originUrl: input.originUrl,
-      source: "cloned",
-    },
-    options,
-  );
+  return await registerResolvedProject({ ...input, source: "cloned" }, options);
 }
 
 export function listProjectRegistry(
@@ -259,6 +305,58 @@ export function resolveProjectRegistry(
     kysely.selectFrom("projects").selectAll().where("id", "=", id),
   );
   return row ? rowToProject(row) : undefined;
+}
+
+export function removeProjectCheckoutReference(
+  project: ProjectRegistryRecord,
+  lease: OpenClawStateLeaseContext,
+  options: OpenClawStateDatabaseOptions = {},
+): "missing" | "changed" | "remaining" | "final" {
+  ensureProjectRegistrySchema(options);
+  return runOpenClawStateWriteTransaction(
+    ({ db: sqlite }) => {
+      lease.assertOwnedInTransaction(sqlite);
+      const db = getNodeSqliteKysely<ProjectsDatabase>(sqlite);
+      const current = executeSqliteQueryTakeFirstSync(
+        sqlite,
+        db.selectFrom("projects").selectAll().where("id", "=", project.id),
+      );
+      if (!current) {
+        return "missing";
+      }
+      if (current.source !== "cloned" || current.repo_root !== project.repoRoot) {
+        return "changed";
+      }
+      executeSqliteQuerySync(sqlite, db.deleteFrom("projects").where("id", "=", project.id));
+      const sibling = executeSqliteQueryTakeFirstSync(
+        sqlite,
+        db
+          .selectFrom("projects")
+          .selectAll()
+          .where("repo_root", "=", project.repoRoot)
+          .orderBy("id", "asc"),
+      );
+      if (!sibling) {
+        return "final";
+      }
+      if (sibling.source === "registered") {
+        executeSqliteQuerySync(
+          sqlite,
+          db
+            .updateTable("projects")
+            .set({
+              source: "cloned",
+              origin_url: sibling.origin_url ?? current.origin_url,
+              updated_at_ms: Date.now(),
+            })
+            .where("id", "=", sibling.id),
+        );
+      }
+      return "remaining";
+    },
+    options,
+    { operationLabel: "projects.registry.checkout-reference.remove" },
+  );
 }
 
 export async function resolveRecordedProjectRoot(

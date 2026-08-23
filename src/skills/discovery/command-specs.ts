@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveSkillTelemetrySource } from "../loading/source.js";
 import { filterWorkspaceSkills, loadVisibleSkills } from "../loading/workspace-skill-loader.js";
 import type { SkillEligibilityContext, SkillCommandSpec, SkillEntry } from "../types.js";
@@ -81,6 +82,7 @@ export function buildWorkspaceSkillCommandSpecs(
     skillFilter?: string[];
     includeAllowlistHidden?: boolean;
     eligibility?: SkillEligibilityContext;
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
     reservedNames?: Set<string>;
   },
 ): SkillCommandSpec[] {
@@ -99,6 +101,7 @@ export function buildWorkspaceSkillCommandSpecs(
         bundledSkillsDir: opts?.bundledSkillsDir,
         skillFilter: effectiveSkillFilter,
         eligibility: opts?.eligibility,
+        pluginMetadataSnapshot: opts?.pluginMetadataSnapshot,
       });
   const userInvocable = filterUserInvocableSkillEntries(eligible);
   const used = new Set<string>();

@@ -373,8 +373,12 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}agents`);
       await gateway.waitForRequest("agents.list");
       await selectAgentOnAgentsPage(page, "Reviewer");
+      await page.locator("#agents-tab-overview").click();
       const setDefault = page.locator(".agents-toolbar-actions button").nth(1);
       await expect.poll(() => setDefault.isDisabled()).toBe(true);
+      const identitySave = page.locator(".agent-identity-editor__actions button");
+      await expect.poll(async () => (await identitySave.textContent())?.trim()).toBe("Save");
+      await expect.poll(() => identitySave.isDisabled()).toBe(true);
       await setDefault.click({ force: true });
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
       await screenshot(page, "05-read-only-agents.png");

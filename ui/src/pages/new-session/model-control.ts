@@ -19,6 +19,8 @@ import {
   renderChatModelControls,
   type ChatModelCatalogState,
 } from "../chat/components/chat-model-controls.ts";
+import type { ChatModelPickerTargetGroup } from "../chat/components/chat-model-picker-options.ts";
+import type { DraftCloudProfile } from "./discovery.ts";
 import type { NewSessionPreference } from "./preferences.ts";
 
 type NewSessionMetadataClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
@@ -37,6 +39,17 @@ type NewSessionMetadataLoadOptions = {
 };
 
 type CatalogCreateTarget = Pick<SessionCatalog, "id" | "label">;
+type CatalogTargetOwner = { agentId: string; client: NewSessionMetadataClient };
+type CatalogTargetDiscoveryState =
+  | { status: "idle" }
+  | {
+      status: "loading";
+      owner: CatalogTargetOwner;
+      controller: AbortController;
+      requestId: number;
+    }
+  | { status: "ready"; owner: CatalogTargetOwner; targets: CatalogCreateTarget[] }
+  | { status: "error"; owner: CatalogTargetOwner };
 type ReconciledNewSessionSelection = {
   model: string;
   thinkingLevel: string;
@@ -105,19 +118,8 @@ export class NewSessionModelControl {
   private pendingAgent: GatewayAgentRow | undefined;
   private pendingContext: ApplicationContext | undefined;
   private pendingSelectionGeneration = 0;
-  private catalogTargets: CatalogCreateTarget[] = [];
   private catalogTargetRequestId = 0;
-  private activeCatalogTargetRequest:
-    | {
-        agentId: string;
-        client: NewSessionMetadataClient;
-        controller: AbortController;
-        id: number;
-      }
-    | undefined;
-  private catalogTargetOwner:
-    | { agentId: string; client: NewSessionMetadataClient; loaded: boolean }
-    | undefined;
+  private catalogTargetDiscovery: CatalogTargetDiscoveryState = { status: "idle" };
   selected = "";
   thinkingLevel = "";
 
@@ -143,16 +145,52 @@ export class NewSessionModelControl {
   }
 
   private clearCatalogTargets() {
-    const active = this.activeCatalogTargetRequest;
-    this.activeCatalogTargetRequest = undefined;
+    const previous = this.catalogTargetDiscovery;
+    this.catalogTargetDiscovery = { status: "idle" };
     this.catalogTargetRequestId += 1;
-    active?.controller.abort();
-    const changed = this.catalogTargets.length > 0 || this.catalogTargetOwner !== undefined;
-    this.catalogTargets = [];
-    this.catalogTargetOwner = undefined;
-    if (changed) {
+    if (previous.status === "loading") {
+      previous.controller.abort();
+    }
+    if (previous.status !== "idle") {
       this.notify();
     }
+  }
+
+  private startCatalogTargetRequest(owner: CatalogTargetOwner) {
+    const controller = new AbortController();
+    const requestId = ++this.catalogTargetRequestId;
+    this.catalogTargetDiscovery = { status: "loading", owner, controller, requestId };
+    this.notify();
+    void owner.client
+      .request<SessionsCatalogListResult>(
+        "sessions.catalog.list",
+        { agentId: owner.agentId, limitPerHost: 1 },
+        { signal: controller.signal },
+      )
+      .then(
+        (result) => {
+          const active = this.catalogTargetDiscovery;
+          if (active.status !== "loading" || active.requestId !== requestId) {
+            return;
+          }
+          this.catalogTargetDiscovery = {
+            status: "ready",
+            owner,
+            targets: result.catalogs
+              .filter((catalog) => catalog.capabilities.createSession !== undefined)
+              .map(({ id, label }) => ({ id, label })),
+          };
+          this.notify();
+        },
+        () => {
+          const active = this.catalogTargetDiscovery;
+          if (active.status !== "loading" || active.requestId !== requestId) {
+            return;
+          }
+          this.catalogTargetDiscovery = { status: "error", owner };
+          this.notify();
+        },
+      );
   }
 
   loadCatalogTargets(context: ApplicationContext | undefined, agentId: string, enabled: boolean) {
@@ -169,52 +207,18 @@ export class NewSessionModelControl {
       this.clearCatalogTargets();
       return;
     }
+    const owner = { agentId: normalizedAgentId, client };
+    const current = this.catalogTargetDiscovery;
     if (
-      this.catalogTargetOwner?.client === client &&
-      this.catalogTargetOwner.agentId === normalizedAgentId &&
-      (this.catalogTargetOwner.loaded || this.activeCatalogTargetRequest)
+      current.status !== "idle" &&
+      current.owner.client === owner.client &&
+      current.owner.agentId === owner.agentId
     ) {
       return;
     }
 
     this.clearCatalogTargets();
-    const controller = new AbortController();
-    const requestId = ++this.catalogTargetRequestId;
-    this.catalogTargetOwner = { agentId: normalizedAgentId, client, loaded: false };
-    this.activeCatalogTargetRequest = {
-      agentId: normalizedAgentId,
-      client,
-      controller,
-      id: requestId,
-    };
-    void client
-      .request<SessionsCatalogListResult>(
-        "sessions.catalog.list",
-        { agentId: normalizedAgentId, limitPerHost: 1 },
-        { signal: controller.signal },
-      )
-      .then(
-        (result) => {
-          if (this.activeCatalogTargetRequest?.id !== requestId) {
-            return;
-          }
-          this.activeCatalogTargetRequest = undefined;
-          this.catalogTargetOwner = { agentId: normalizedAgentId, client, loaded: true };
-          this.catalogTargets = result.catalogs
-            .filter((catalog) => catalog.capabilities.createSession !== undefined)
-            .map(({ id, label }) => ({ id, label }));
-          this.notify();
-        },
-        () => {
-          if (this.activeCatalogTargetRequest?.id !== requestId) {
-            return;
-          }
-          this.activeCatalogTargetRequest = undefined;
-          this.catalogTargetOwner = { agentId: normalizedAgentId, client, loaded: true };
-          this.catalogTargets = [];
-          this.notify();
-        },
-      );
+    this.startCatalogTargetRequest(owner);
   }
 
   private updateMetadataState(next: NewSessionMetadataState) {
@@ -286,12 +290,42 @@ export class NewSessionModelControl {
     );
   }
 
-  refreshMetadataOnPickerOpen() {
-    if (!this.metadataClient || !this.agentId) {
-      return;
+  private refreshPickerCatalogs() {
+    const metadataClient = this.metadataClient;
+    if (metadataClient && this.agentId) {
+      // Picker open is the retry; start directly so preference restoration is not re-armed.
+      this.startMetadataRequest(metadataClient, this.agentId);
     }
-    // Picker open is the retry; start directly so preference restoration is not re-armed.
-    this.startMetadataRequest(this.metadataClient, this.agentId);
+    const targetDiscovery = this.catalogTargetDiscovery;
+    if (
+      targetDiscovery.status === "error" &&
+      targetDiscovery.owner.client === metadataClient &&
+      targetDiscovery.owner.agentId === this.agentId
+    ) {
+      this.startCatalogTargetRequest(targetDiscovery.owner);
+    }
+  }
+
+  private catalogTargetGroups(): readonly ChatModelPickerTargetGroup[] | undefined {
+    const discovery = this.catalogTargetDiscovery;
+    if (
+      discovery.status === "idle" ||
+      (discovery.status === "ready" && !discovery.targets.length)
+    ) {
+      return undefined;
+    }
+    return [
+      {
+        errorLabel: t("newSession.cliAgentsUnavailable"),
+        id: "cliAgents",
+        label: t("newSession.cliAgentsGroup"),
+        options:
+          discovery.status === "ready"
+            ? discovery.targets.map(({ id, label }) => ({ value: id, label }))
+            : [],
+        status: discovery.status,
+      },
+    ];
   }
 
   invalidate(resetSelection = false) {
@@ -478,6 +512,32 @@ export class NewSessionModelControl {
     return runtimeId === runtime.id ? runtime : { ...runtime, id: runtimeId };
   }
 
+  devicePlacementUnsupportedReason(): string | undefined {
+    const runtime = this.resolveAgentRuntime({
+      agent: this.pendingAgent,
+      context: this.pendingContext,
+    });
+    return runtime && !runtime.devicePlacement
+      ? t("newSession.deviceRuntimeUnsupported")
+      : undefined;
+  }
+
+  cloudRuntimeUnsupportedReason(profile?: DraftCloudProfile): string | undefined {
+    const runtime = this.resolveAgentRuntime({
+      agent: this.pendingAgent,
+      context: this.pendingContext,
+    });
+    if (runtime?.cloudPlacementSupported === false) {
+      return t("newSession.cloudRuntimeUnsupported", { runtime: runtime.id });
+    }
+    return runtime &&
+      profile?.executionMode &&
+      runtime.cloudPlacementExecutionMode &&
+      profile.executionMode !== runtime.cloudPlacementExecutionMode
+      ? t("newSession.cloudProfileRuntimeUnsupported", { runtime: runtime.id })
+      : undefined;
+  }
+
   render(options: {
     agent?: GatewayAgentRow;
     agentId: string;
@@ -528,16 +588,7 @@ export class NewSessionModelControl {
             : this.metadataState.status,
       },
       modelOverrides: { [sessionKey]: this.selected },
-      modelPickerTargetGroups:
-        this.catalogTargets.length > 0
-          ? [
-              {
-                id: "cliAgents",
-                label: t("newSession.cliAgentsGroup"),
-                options: this.catalogTargets.map(({ id, label }) => ({ value: id, label })),
-              },
-            ]
-          : undefined,
+      modelPickerTargetGroups: this.catalogTargetGroups(),
       modelSwitching: false,
       sending: options.sending,
       sessionKey,
@@ -559,6 +610,11 @@ export class NewSessionModelControl {
           this.onCatalogTargetSelect(catalogId);
         }
       },
+      onModelPickerTargetRetry: (groupId) => {
+        if (groupId === "cliAgents") {
+          this.refreshPickerCatalogs();
+        }
+      },
       onThinkingSelect: (value) => {
         this.selectionGeneration += 1;
         this.restoringPreference = false;
@@ -566,7 +622,7 @@ export class NewSessionModelControl {
         this.onSelectionChange({ model: this.selected, thinkingLevel: this.thinkingLevel });
       },
       onModelSetup: () => options.context?.navigate("model-setup"),
-      onModelPickerOpen: () => this.refreshMetadataOnPickerOpen(),
+      onModelPickerOpen: () => this.refreshPickerCatalogs(),
       onRequestUpdate: this.notify,
     });
   }

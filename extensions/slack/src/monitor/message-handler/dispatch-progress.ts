@@ -25,7 +25,10 @@ import {
 } from "../../progress-blocks.js";
 import { applyAppendOnlyStreamUpdate } from "../../stream-mode.js";
 import { appendSlackStream, stopSlackStream } from "../../streaming.js";
-import { resolveExplicitSlackProgressTitle } from "./dispatch-helpers.js";
+import {
+  resolveExplicitSlackProgressTitle,
+  resolveSlackProgressStyle,
+} from "./dispatch-helpers.js";
 import {
   createSlackDraftProgressCardRuntime,
   formatSlackProgressDraftLine,
@@ -127,7 +130,11 @@ export function createSlackProgressRuntime(runtimeParams: {
   };
   const progressWorkCounter = createChannelProgressWorkCounter();
   const progressSeed = `${account.accountId}:${message.channel}`;
-  const useDraftProgressCard = Boolean(draftStream) && isProgressMode;
+  const slackProgressStyle = resolveSlackProgressStyle(account.config);
+  // THIS BEHAVIOR IS INTENTIONAL AND MUST NOT BE CASUALLY ADJUSTED.
+  // DO NOT CHANGE THIS WITHOUT APPROVAL FROM SJF OR PASHPASHPASH.
+  const useDraftProgressCard =
+    Boolean(draftStream) && isProgressMode && slackProgressStyle === "card";
   const explicitProgressTitle = resolveExplicitSlackProgressTitle(account.config);
   const progressDraftMaxLineChars = resolveChannelProgressDraftMaxLineChars(account.config);
   const progressCard = createSlackDraftProgressCardRuntime({
@@ -458,6 +465,9 @@ export function createSlackProgressRuntime(runtimeParams: {
 
   const pushPlanProgress = async (steps?: AgentPlanStep[], explanation?: string) => {
     if (isProgressMode) {
+      if (slackProgressStyle === "compact") {
+        return false;
+      }
       return await progressDraft.pushPlanProgress(steps, { explanation });
     }
     if (previewToolProgressSuppressed || !draftStream) {

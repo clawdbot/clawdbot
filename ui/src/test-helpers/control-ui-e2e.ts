@@ -10,7 +10,7 @@ import type { ConsoleMessage, Frame, Locator, Page, Request } from "playwright";
 import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
-import type { ModelCatalogEntry } from "../api/types.ts";
+import type { ModelCatalogEntry, UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 
@@ -203,6 +203,7 @@ export const defaultControlUiFeatureMethods = [
   "chat.startup",
   "config.apply",
   "config.patch",
+  "config.schema",
   "config.set",
   "device.scopes.requestUpgrade",
   "device.scopes.waitUpgrade",
@@ -230,6 +231,12 @@ export const defaultControlUiFeatureMethods = [
   "sessions.reclaim",
   "sessions.reset",
   "sessions.rewind",
+  "sessions.search",
+  "tools.github.status",
+  "tools.github.configure",
+  "tools.github.authorize.start",
+  "tools.github.authorize.poll",
+  "tools.github.authorize.cancel",
   "update.hold",
   "update.run",
   "update.status",
@@ -247,6 +254,7 @@ export type ControlUiMockGatewayScenario = {
   agentModel?: string | null;
   assistantAgentId?: string;
   assistantName?: string;
+  automaticallyFetchFavicons?: boolean;
   basePath?: string;
   controlUiTabs?: Array<{
     group?: string;
@@ -270,6 +278,10 @@ export type ControlUiMockGatewayScenario = {
   devGitBranch?: string;
   /** Exact immutable Control UI artifact served by the mocked Gateway. */
   serverBuildId?: string;
+  /** Optional startup update snapshot for rich local mock fixtures. */
+  updateAvailable?: UpdateAvailable | null;
+  /** Optional automatic-update campaign snapshot for rich local mock fixtures. */
+  updateSchedule?: UpdateScheduleState | null;
   controlUiBuildSource?: "bundled" | "configured";
   serverVersion?: string;
   deviceToken?: string;
@@ -318,6 +330,8 @@ export type ControlUiMockGatewayScenario = {
   /** Partition sessions.list fixtures by archived state after applying patches. */
   sessionArchiveFiltering?: boolean;
   models?: ModelCatalogEntry[];
+  /** Simulate a legacy Gateway whose connect hello predates the auth projection. */
+  omitConnectHelloAuth?: boolean;
   /** Operator scopes returned by the mocked connect handshake. */
   operatorScopes?: string[];
   sessionKey?: string;
@@ -846,6 +860,7 @@ function normalizeScenario(
       : basePathWithSlash;
   return {
     attachmentMaxBytes: scenario.attachmentMaxBytes ?? DEFAULT_MOCK_ATTACHMENT_MAX_BYTES,
+    automaticallyFetchFavicons: scenario.automaticallyFetchFavicons ?? false,
     agentModel:
       scenario.agentModel === undefined ? "openai/gpt-5.5" : scenario.agentModel?.trim() || null,
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
@@ -865,6 +880,8 @@ function normalizeScenario(
     deferredMethods: scenario.deferredMethods ?? [],
     devGitBranch: scenario.devGitBranch?.trim() || "",
     serverBuildId: scenario.serverBuildId?.trim() || "e2e",
+    updateAvailable: scenario.updateAvailable ?? null,
+    updateSchedule: scenario.updateSchedule ?? null,
     controlUiBuildSource: scenario.controlUiBuildSource ?? "bundled",
     serverVersion: scenario.serverVersion?.trim() || "e2e",
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
@@ -879,6 +896,7 @@ function normalizeScenario(
     inFlightRun: scenario.inFlightRun ?? null,
     presenceUsers: scenario.presenceUsers ?? [],
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
+    omitConnectHelloAuth: scenario.omitConnectHelloAuth ?? false,
     operatorScopes: scenario.operatorScopes ?? [
       "operator.admin",
       "operator.read",
@@ -903,6 +921,7 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
   const normalizedScenario = normalizeScenario(scenario);
   return {
     allowExternalEmbedUrls: false,
+    automaticallyFetchFavicons: normalizedScenario.automaticallyFetchFavicons,
     assistantAgentId: normalizedScenario.assistantAgentId,
     assistantAvatar: "",
     assistantName: normalizedScenario.assistantName,
@@ -1653,13 +1672,17 @@ function installControlUiMockGateway(
         const connectedDeviceToken =
           auth && typeof auth.deviceToken === "string" ? auth.deviceToken : scenario.deviceToken;
         return {
-          auth: {
-            deviceToken: connectedDeviceToken,
-            recoveryMigrationAllowed: true as const,
-            recoveryScope: "e2e-recovery-scope",
-            role: "operator",
-            scopes: scenario.operatorScopes,
-          },
+          ...(scenario.omitConnectHelloAuth
+            ? {}
+            : {
+                auth: {
+                  deviceToken: connectedDeviceToken,
+                  recoveryMigrationAllowed: true as const,
+                  recoveryScope: "e2e-recovery-scope",
+                  role: "operator",
+                  scopes: scenario.operatorScopes,
+                },
+              }),
           features: {
             capabilities: scenario.featureCapabilities,
             events: [],
@@ -1687,10 +1710,13 @@ function installControlUiMockGateway(
           },
           snapshot: {
             ...presenceSnapshot(params),
+            ...(scenario.updateAvailable ? { updateAvailable: scenario.updateAvailable } : {}),
+            ...(scenario.updateSchedule ? { updateSchedule: scenario.updateSchedule } : {}),
             sessionDefaults: {
               defaultAgentId: scenario.defaultAgentId,
               mainKey: "main",
               mainSessionKey: scenario.sessionKey,
+              modelConfigured: Boolean(scenario.agentModel),
               scope: "agent",
             },
           },
@@ -1843,6 +1869,8 @@ function installControlUiMockGateway(
           },
           params,
         );
+      case "sessions.search":
+        return { results: [] };
       case "sessions.patchMany": {
         const targets = isRecord(params) && Array.isArray(params.targets) ? params.targets : [];
         const result = {

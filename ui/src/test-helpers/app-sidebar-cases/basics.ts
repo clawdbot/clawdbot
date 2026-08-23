@@ -2,8 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
 import { sessionRefFromPath } from "../../app-session-route-paths.ts";
-import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import {
   clearSessionBoardAvailability,
   recordSessionBoardAvailability,
@@ -20,7 +18,6 @@ import {
   mountSidebar,
   TWO_AGENTS,
 } from "../app-sidebar.ts";
-import { installDialogPolyfill, nextFrame, waitForRenderedModalDialog } from "../modal-dialog.ts";
 import "../../components/app-sidebar.ts";
 
 await import("../../components/viewer-facepile.ts");
@@ -32,298 +29,6 @@ describe("AppSidebar update card wiring", () => {
 
     expect(sidebar.querySelector('.nav-item[href="/custodian"]')).toBeNull();
     expect(sidebar.querySelector('.nav-item[href="/settings/secrets"]')).toBeNull();
-  });
-
-  it("renders the update card in the footer after the attention slot and forwards its action", async () => {
-    const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    const onUpdate = vi.fn();
-    const onRefresh = vi.fn();
-    sidebar.updateAvailable = {
-      currentVersion: "1.0.0",
-      latestVersion: "2.0.0",
-      channel: "stable",
-    };
-    sidebar.canUpdate = true;
-    sidebar.onUpdate = onUpdate;
-    sidebar.onRefresh = onRefresh;
-    await sidebar.updateComplete;
-
-    const footer = sidebar.querySelector(".sidebar-shell__footer");
-    // Attention chips (when present) stack above the update card.
-    expect(footer?.firstElementChild?.localName).toBe("openclaw-sidebar-attention");
-    const card = footer?.querySelector("openclaw-sidebar-update-card");
-    expect(card).not.toBeNull();
-    const restoreDialogPolyfill = installDialogPolyfill();
-    card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
-    const { modal } = await waitForRenderedModalDialog(document.body);
-    [...modal.querySelectorAll("button")]
-      .find((button) => button.textContent?.trim() === "Update and restart")
-      ?.click();
-    await nextFrame();
-    restoreDialogPolyfill();
-    expect(onUpdate).toHaveBeenCalledOnce();
-
-    sidebar.refreshRequired = true;
-    await sidebar.updateComplete;
-    const refreshCard = footer?.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "openclaw-sidebar-update-card",
-    );
-    await refreshCard?.updateComplete;
-    expect(refreshCard?.textContent).toContain("Server updated");
-    refreshCard?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
-    expect(onRefresh).toHaveBeenCalledOnce();
-    expect(onUpdate).toHaveBeenCalledOnce();
-  });
-});
-
-describe("AppSidebar viewer presence", () => {
-  it("shows only other online identities with active-first ordering and idle dimming", async () => {
-    const client = { instanceId: "self-instance" } as GatewayBrowserClient;
-    const gatewayHarness = createGatewayHarness(client);
-    const { sidebar } = await mountSidebar(
-      gatewayHarness.gateway,
-      createSessions("main", ["agent:main:main"]),
-    );
-    const onNavigate = vi.fn();
-    sidebar.onNavigate = onNavigate;
-
-    expect(sidebar.querySelector(".sidebar-online")).toBeNull();
-    gatewayHarness.publishEvent("presence", {
-      presence: [
-        {
-          instanceId: "self-instance",
-          user: { id: "self", name: "Self" },
-          lastInputSeconds: 0,
-          ts: 1,
-        },
-      ],
-    });
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-online")).toBeNull();
-
-    gatewayHarness.publishEvent("presence", {
-      presence: [
-        {
-          instanceId: "self-instance",
-          user: { id: "self", name: "Self" },
-          lastInputSeconds: 0,
-          ts: 1,
-        },
-        {
-          instanceId: "zed-instance",
-          user: { id: "zed", name: "Zed" },
-          lastInputSeconds: 20,
-          ts: 1,
-        },
-        {
-          instanceId: "alice-instance",
-          user: { id: "alice", name: "Alice" },
-          lastInputSeconds: 600,
-          ts: 1,
-        },
-        {
-          instanceId: "bob-instance",
-          user: { id: "bob", name: "Bob" },
-          ts: 1,
-        },
-      ],
-    });
-
-    await vi.waitFor(() => {
-      const rows = [...sidebar.querySelectorAll<HTMLElement>(".sidebar-online__person")];
-      expect(
-        rows.map((row) => row.querySelector(".sidebar-online__person-name")?.textContent?.trim()),
-      ).toEqual(["Bob", "Zed", "Alice"]);
-      expect(rows.map((row) => row.classList.contains("sidebar-online__person--away"))).toEqual([
-        false,
-        false,
-        true,
-      ]);
-    });
-    expect(sidebar.querySelector('[data-online-user-id="self"]')).toBeNull();
-
-    sidebar.querySelector<HTMLAnchorElement>('[data-online-user-id="alice"]')?.click();
-    expect(onNavigate).toHaveBeenCalledWith("activity", {
-      pathname: "/activity",
-      search: "?person=alice",
-    });
-  });
-
-  it("renders the self user's avatar route in the footer identity chip", async () => {
-    const client = { instanceId: "self-instance" } as GatewayBrowserClient;
-    const gatewayHarness = createGatewayHarness(client);
-    const { sidebar } = await mountSidebar(
-      gatewayHarness.gateway,
-      createSessions("main", ["agent:main:main"]),
-    );
-    sidebar.connected = true;
-
-    gatewayHarness.publishEvent("presence", {
-      presence: [
-        {
-          instanceId: "self-instance",
-          // Presence publishes the canonical gateway avatar route; the gateway
-          // serves an uploaded avatar or its Gravatar fallback behind it, so the
-          // chip renders that same-origin route (CSP-safe) rather than a direct
-          // gravatar.com URL the Control UI CSP would block.
-          user: {
-            id: "00-self",
-            email: "test@example.com",
-            name: "Self User",
-            avatarUrl: "/api/users/00-self/avatar?v=7",
-          },
-        },
-      ],
-    });
-
-    await vi.waitFor(() => {
-      const avatar = sidebar.querySelector<HTMLImageElement>(
-        ".sidebar-identity-card openclaw-viewer-avatar img",
-      );
-      expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=7");
-    });
-  });
-
-  it("groups identified viewers for session rows and keeps the footer identity-only", async () => {
-    const client = { instanceId: "self-instance" } as GatewayBrowserClient;
-    const gatewayHarness = createGatewayHarness(client);
-    const { sidebar } = await mountSidebar(
-      gatewayHarness.gateway,
-      createSessions("main", ["agent:main:main", "agent:main:work"]),
-    );
-    sidebar.connected = true;
-    gatewayHarness.publishEvent("presence", {
-      presence: [
-        {
-          instanceId: "self-instance",
-          user: {
-            id: "00-self",
-            name: "Self User",
-            avatarUrl: "/api/users/00-self/avatar?v=1",
-          },
-          watchedSessions: ["agent:main:work"],
-        },
-        {
-          instanceId: "alice-1",
-          // Presence publishes avatars as the canonical gateway route; the
-          // resolver renders only that, falling back to initials otherwise.
-          user: { id: "alice", name: "Alice", avatarUrl: "/api/users/alice/avatar" },
-          watchedSessions: ["agent:main:work"],
-        },
-        {
-          instanceId: "alice-2",
-          user: { id: "alice", name: "Alice" },
-          watchedSessions: ["agent:main:main"],
-        },
-        {
-          instanceId: "bob-1",
-          user: { id: "bob", email: "bob@example.test" },
-          watchedSessions: ["agent:main:work"],
-        },
-        ...["carol", "dave", "erin", "frank"].map((id) => ({
-          instanceId: `${id}-1`,
-          user: { id, name: id[0]?.toUpperCase() + id.slice(1) },
-          watchedSessions: ["agent:main:work"],
-        })),
-        {
-          instanceId: "anonymous-1",
-          watchedSessions: ["agent:main:work"],
-        },
-        {
-          instanceId: "offline-1",
-          reason: "disconnect",
-          user: { id: "offline", name: "Offline User" },
-          watchedSessions: ["agent:main:work"],
-        },
-      ],
-    });
-    await sidebar.updateComplete;
-    gatewayHarness.publish({
-      selfUser: {
-        id: "00-self",
-        name: "Self User",
-        avatarUrl: "/api/users/00-self/avatar?v=1",
-      },
-    });
-    await sidebar.updateComplete;
-
-    const sessionFacepile = sidebar.querySelector<HTMLElement>(
-      '[data-session-key="agent:main:work"] openclaw-viewer-facepile',
-    );
-    await (sessionFacepile as { updateComplete?: Promise<unknown> } | null)?.updateComplete;
-    expect(
-      sessionFacepile?.querySelector(".viewer-facepile")?.getAttribute("data-viewer-count"),
-    ).toBe("6");
-    expect(
-      [...(sessionFacepile?.querySelectorAll<HTMLElement>("[data-viewer-id]") ?? [])].map(
-        (avatar) => avatar.dataset.viewerId,
-      ),
-    ).toEqual(["alice", "bob", "carol"]);
-    expect(sessionFacepile?.querySelector(".viewer-avatar--overflow")?.textContent).toContain("+3");
-    expect(sessionFacepile?.querySelector('[data-viewer-id="alice"] img')).not.toBeNull();
-    expect(
-      [...(sessionFacepile?.querySelectorAll("openclaw-tooltip") ?? [])].map(
-        (tooltip) => (tooltip as HTMLElement & { content?: string }).content,
-      ),
-    ).toEqual(["Alice", "bob@example.test", "Carol", "Dave\nErin\nFrank"]);
-
-    const identityCard = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
-    expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
-      "Self User",
-    );
-    expect(identityCard?.querySelector('[data-viewer-id="00-self"]')).not.toBeNull();
-
-    const avatar = identityCard?.querySelector<HTMLImageElement>("openclaw-viewer-avatar img");
-    expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=1");
-    const footer = sidebar.querySelector(".sidebar-footer-bar");
-    expect(footer?.querySelector("openclaw-viewer-facepile")).toBeNull();
-    expect(footer?.querySelector("openclaw-sidebar-build-chip")).toBeNull();
-    expect(footer?.querySelector(".sidebar-brand__logo-slot")).toBeNull();
-    expect([...(footer?.children ?? [])].map((element) => element.localName)).toEqual([
-      "openclaw-tooltip",
-      "openclaw-tooltip",
-    ]);
-    gatewayHarness.gateway.updateSelfUser?.({
-      name: "Augusta Ada",
-      avatarUrl: "/api/users/00-self/avatar?v=4",
-    });
-    await sidebar.updateComplete;
-
-    // Profile mutations update gateway state directly; no presence event follows them.
-    expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
-      "Augusta Ada",
-    );
-    expect(avatar?.getAttribute("src")).toBe("/api/users/00-self/avatar?v=4");
-
-    sidebar.connected = false;
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
-      "Augusta Ada",
-    );
-  });
-
-  it("renders an Account fallback for an unidentified connection", async () => {
-    const client = { instanceId: "anonymous-self" } as GatewayBrowserClient;
-    const gatewayHarness = createGatewayHarness(client);
-    const { sidebar } = await mountSidebar(
-      gatewayHarness.gateway,
-      createSessions("main", ["agent:main:main"]),
-    );
-
-    gatewayHarness.publishEvent("presence", {
-      presence: [
-        { instanceId: "anonymous-self", watchedSessions: ["agent:main:main"] },
-        { instanceId: "alice", user: { id: "alice", name: "Alice" } },
-      ],
-    });
-    await sidebar.updateComplete;
-
-    const identityCard = sidebar.querySelector(".sidebar-identity-card");
-    expect(identityCard?.querySelector(".sidebar-identity-card__name")?.textContent?.trim()).toBe(
-      "Account",
-    );
-    expect(identityCard?.querySelector('[data-viewer-id="account"]')?.textContent).toContain("A");
   });
 });
 
@@ -364,53 +69,10 @@ describe("AppSidebar brand actions", () => {
     brandButton?.click();
     expect(onOpenNewSession).toHaveBeenCalledExactlyOnceWith("research");
 
-    const headerButton = sidebar.querySelector<HTMLButtonElement>(
-      '[data-session-section="ungrouped"] .sidebar-new-session',
+    const toolbarButton = sidebar.querySelector<HTMLButtonElement>(
+      ".sidebar-session-toolbar .sidebar-new-session",
     );
-    expect(headerButton?.getAttribute("aria-label")).toBe("New session");
-  });
-});
-
-describe("AppSidebar footer actions", () => {
-  it("gates Ask OpenClaw on the advertised method and admin scope", async () => {
-    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gatewayHarness.gateway,
-      createSessions("main", ["agent:main:main"]),
-    );
-
-    gatewayHarness.publish({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.admin"] },
-        features: { methods: ["openclaw.chat"] },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-    await sidebar.updateComplete;
-    const toggle = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__custodian");
-    expect(toggle?.getAttribute("aria-label")).toBe("Ask OpenClaw");
-    const toggleListener = vi.fn();
-    window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggleListener);
-    toggle?.click();
-    window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggleListener);
-    expect(toggleListener).toHaveBeenCalledOnce();
-
-    gatewayHarness.publish({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.admin"] },
-        features: { methods: [] as string[] },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-footer-bar__custodian")).toBeNull();
-
-    gatewayHarness.publish({
-      hello: {
-        auth: { role: "operator", scopes: ["operator.read"] },
-        features: { methods: ["openclaw.chat"] },
-      } as ApplicationGatewaySnapshot["hello"],
-    });
-    await sidebar.updateComplete;
-    expect(sidebar.querySelector(".sidebar-footer-bar__custodian")).toBeNull();
+    expect(toolbarButton?.getAttribute("aria-label")).toBe("New session");
   });
 });
 
@@ -592,7 +254,15 @@ describe("AppSidebar agent chip", () => {
         path: "",
         count: 1,
         defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 5, hasActiveRun: true }],
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: 5,
+            hasActiveRun: true,
+            unread: true,
+          },
+        ],
       },
       agentId: "main",
     });
@@ -606,9 +276,24 @@ describe("AppSidebar agent chip", () => {
     expect(spinner).not.toBeNull();
     expect(sidebar.querySelector(".nav-item--home .nav-item__icon")).not.toBeNull();
     expect(sidebar.querySelector(".nav-item--home .session-glyph__ring")).toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).toBeNull();
     expect(spinner?.getAttribute("role")).toBe("img");
     expect(spinner?.getAttribute("aria-label")).toBe("Active run");
     expect(spinner?.getAttribute("title")).toBe("Active run");
+
+    harness.publishList({
+      result: {
+        ts: 3,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 6, unread: true }],
+      },
+      agentId: "main",
+    });
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".nav-item--home .session-run-spinner")).toBeNull();
+    expect(sidebar.querySelector(".nav-item--home .session-glyph__badge--unread")).not.toBeNull();
   });
 
   it("uses the shared tooltip for the Home dashboard glyph", async () => {

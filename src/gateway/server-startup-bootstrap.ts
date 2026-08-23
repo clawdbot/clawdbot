@@ -35,6 +35,7 @@ import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { applyLoggingConfig } from "../logging/logger.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { completePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -440,6 +441,7 @@ export async function prepareGatewayServerBootstrap(input: {
     startupLastGoodSnapshot = startupSnapshot;
   }
   setAppliedRuntimeConfigSnapshot(cfgAtStart, startupLastGoodSnapshot.sourceConfig);
+  applyLoggingConfig(cfgAtStart.logging);
   initializePublishedConfigRuntimeEnv(startupLastGoodSnapshot.sourceConfig, {
     ownedEnv: collectConfigRuntimeEnvOwnership(
       startupLastGoodSnapshot.sourceConfig,
@@ -456,6 +458,10 @@ export async function prepareGatewayServerBootstrap(input: {
       });
   const { prepareGatewayPluginBootstrap, runGatewayStartupMaintenance } =
     await loadStartupPluginsModule();
+  const pluginGatewayContext: {
+    current: import("./server-methods/types.js").GatewayRequestContext | undefined;
+  } = { current: undefined };
+  const resolvePluginGatewayContext = () => pluginGatewayContext.current;
   await startupTrace.measure("startup.maintenance", () =>
     runGatewayStartupMaintenance({
       cfgAtStart,
@@ -545,13 +551,15 @@ export async function prepareGatewayServerBootstrap(input: {
     startupInternalWriteHash,
     startupLastGoodSnapshot,
     workerEnvironmentStartup,
+    pluginGatewayContext,
+    resolvePluginGatewayContext,
     pluginBootstrap,
     gatewayPluginConfigAtStart,
     defaultWorkspaceDir,
     pluginWorkspaceDir,
     startupPluginIds,
     pluginManifestRecords,
-    pluginMetadataSnapshot,
+    pluginMetadataSnapshot: currentPluginMetadataSnapshot,
     pluginLookUpTable,
     baseMethods,
     ambientAutostartSuppressedChannelIds,

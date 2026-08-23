@@ -6,11 +6,14 @@ import {
   mockLinuxOomWrapperShell,
 } from "./test-support.js";
 
-const { spawnMock, ptyKillMock, signalProcessTreeMock } = vi.hoisted(() => ({
-  spawnMock: vi.fn(),
-  ptyKillMock: vi.fn(),
-  signalProcessTreeMock: vi.fn(),
-}));
+const { spawnMock, ptyKillMock, signalProcessTreeMock, signalPtySessionTreeMock } = vi.hoisted(
+  () => ({
+    spawnMock: vi.fn(),
+    ptyKillMock: vi.fn(),
+    signalProcessTreeMock: vi.fn(),
+    signalPtySessionTreeMock: vi.fn(),
+  }),
+);
 
 vi.mock("@lydell/node-pty", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
@@ -18,6 +21,7 @@ vi.mock("@lydell/node-pty", () => ({
 
 vi.mock("../../kill-tree.js", () => ({
   signalProcessTree: (...args: unknown[]) => signalProcessTreeMock(...args),
+  signalPtySessionTree: (...args: unknown[]) => signalPtySessionTreeMock(...args),
 }));
 
 function createStubPty(pid = 1234) {
@@ -80,6 +84,7 @@ describe("createPtyAdapter", () => {
     spawnMock.mockClear();
     ptyKillMock.mockClear();
     signalProcessTreeMock.mockClear();
+    signalPtySessionTreeMock.mockClear();
     vi.useRealTimers();
   });
 
@@ -186,7 +191,8 @@ describe("createPtyAdapter", () => {
     });
 
     adapter.kill("SIGTERM");
-    expect(signalProcessTreeMock).toHaveBeenCalledWith(1234, "SIGTERM", { detached: true });
+    expect(signalPtySessionTreeMock).toHaveBeenCalledWith(1234, "SIGTERM");
+    expect(signalProcessTreeMock).not.toHaveBeenCalled();
     expect(ptyKillMock).not.toHaveBeenCalled();
   });
 
@@ -199,7 +205,8 @@ describe("createPtyAdapter", () => {
     });
 
     adapter.kill();
-    expect(signalProcessTreeMock).toHaveBeenCalledWith(1234, "SIGKILL", { detached: true });
+    expect(signalPtySessionTreeMock).toHaveBeenCalledWith(1234, "SIGKILL");
+    expect(signalProcessTreeMock).not.toHaveBeenCalled();
     expect(ptyKillMock).not.toHaveBeenCalled();
   });
 
@@ -395,7 +402,8 @@ describe("createPtyAdapter", () => {
       });
 
       adapter.kill("SIGKILL");
-      expect(signalProcessTreeMock).toHaveBeenCalledWith(4567, "SIGKILL", { detached: true });
+      expect(signalPtySessionTreeMock).toHaveBeenCalledWith(4567, "SIGKILL");
+      expect(signalProcessTreeMock).not.toHaveBeenCalled();
       expect(ptyKillMock).not.toHaveBeenCalled();
     } finally {
       if (originalPlatform) {

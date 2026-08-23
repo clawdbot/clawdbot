@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CONTROL_UI_ENVIRONMENT_COLORS } from "../gateway/control-ui-bootstrap-contract.js";
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
@@ -66,6 +67,12 @@ export const GatewayConfigSchema = z
         enabled: z.boolean().optional(),
         basePath: z.string().optional(),
         root: z.string().optional(),
+        environment: z
+          .strictObject({
+            label: z.string().trim().min(1).max(24),
+            color: z.enum(CONTROL_UI_ENVIRONMENT_COLORS),
+          })
+          .optional(),
         github: z
           .strictObject({ token: SecretInputSchema.optional().register(sensitive) })
           .optional(),
@@ -75,6 +82,7 @@ export const GatewayConfigSchema = z
           .union([z.literal("strict"), z.literal("scripts"), z.literal("trusted")])
           .optional(),
         allowExternalEmbedUrls: z.boolean().optional(),
+        automaticallyFetchFavicons: z.boolean().optional(),
         allowedOrigins: z.array(z.string()).optional(),
         dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
       })

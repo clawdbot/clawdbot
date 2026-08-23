@@ -44,7 +44,7 @@ Manage automations with the `openclaw automations` CLI; `openclaw cron` remains 
 - Automations run **inside the Gateway process**, not inside the model. The Gateway must be running for schedules to fire.
 - Job definitions, runtime state, and run history persist in OpenClaw's shared SQLite state database, so restarts do not lose schedules.
 - Every automation run creates a [background task](/automation/tasks) record.
-- One-shot jobs (`--at`) auto-delete after success by default; pass `--keep-after-run` to keep them.
+- One-shot jobs (`--at`) auto-delete only when run `completionStatus` is `succeeded`; pass `--keep-after-run` to keep successful jobs. A required-delivery failure or unknown completion keeps the job disabled for inspection and restart recovery without replaying the payload.
 - Per-run wall-clock budget: `--timeout-seconds` when set. Otherwise, isolated/detached agent-turn jobs are bounded by the scheduler's own 60-minute watchdog before the underlying agent-turn timeout (`agents.defaults.timeoutSeconds`, default 48 hours) would ever apply; command jobs default to 10 minutes, and script payloads default to 5 minutes.
 - On Gateway startup, overdue isolated agent-turn jobs are rescheduled instead of replayed immediately, keeping model/tool bootstrap work out of the channel-connect window.
 - If you drive `openclaw agent` from system cron or another external scheduler, wrap it with a hard-kill escalation even though the CLI already handles `SIGTERM`/`SIGINT`. Gateway-backed runs ask the Gateway to abort accepted runs; `--local` runs get the same abort signal. For GNU `timeout`, prefer `timeout -k 60 600 openclaw agent ...` over plain `timeout 600 ...` — the `-k` value is the backstop if the process cannot drain in time. For systemd units, use a `SIGTERM` stop signal with a grace window (`TimeoutStopSec`) before the final kill. Reusing a `--run-id` while the original Gateway run is still active reports the duplicate as in-flight instead of starting a second run.
@@ -141,12 +141,14 @@ An event trigger adds a headless condition script to an `every`, `cron`, or `str
   schedule: { kind: "every", everyMs: 30000 },
   trigger: {
     // Fires only when the observed status differs from the last evaluation.
-    script: "const res = await tools.call('exec', { command: 'gh pr checks 123 --json state -q \\'.[].state\\' | sort -u' }); const status = String(res?.result?.details?.aggregated ?? '').trim(); json({ fire: status !== trigger.state?.status, message: `PR 123 CI: ${trigger.state?.status ?? 'unknown'} -> ${status}`, state: { status } });",
+    script: "const res = await exec({ command: 'gh pr checks 123 --json state -q \\'.[].state\\' | sort -u' }); const status = String(res?.aggregated ?? '').trim(); json({ fire: status !== trigger.state?.status, message: `PR 123 CI: ${trigger.state?.status ?? 'unknown'} -> ${status}`, state: { status } });",
     once: false,
   },
   payload: { kind: "agentTurn", message: "Investigate the CI status change." },
 }
 ```
+
+When upgrading, run `openclaw doctor --fix` to migrate persisted trigger scripts that call `tools.call('exec', args)` and read the legacy `.result.details` envelope. Doctor leaves custom or ambiguous legacy scripts unchanged and identifies each affected job for manual conversion; standalone script payloads are not migrated.
 
 The script must return `{ fire, message?, state? }`. The previous JSON state is available as the deeply frozen `trigger.state`; stream gates also receive the current batch as `trigger.streamBatch`. Return a new `state` value to persist it. State is capped at 16 KB. When a firing result includes `message`, the scheduler appends it to the system-event text or agent-turn message before execution. `once: true` disables the job after its first successful fired payload.
 
@@ -301,18 +303,18 @@ envelope continue their ordinary non-app behavior; recreate or reauthorize one
 only when it needs Codex app access. See
 [Native Codex plugins](/plugins/codex-native-plugins#scheduled-automations).
 
-| Style           | `--session` value   | Runs in                     | Best for                        |
-| --------------- | ------------------- | --------------------------- | ------------------------------- |
-| Main session    | `main`              | Owning agent's main session | Reminders, system events        |
-| Isolated        | `isolated`          | Dedicated `cron:<jobId>`    | Reports, background chores      |
-| Current session | `current`           | Bound at creation time      | Context-aware recurring work    |
-| Custom session  | `session:custom-id` | Persistent named session    | Workflows that build on history |
+| Style           | `--session` value   | Runs in                                              | Best for                        |
+| --------------- | ------------------- | ---------------------------------------------------- | ------------------------------- |
+| Main session    | `main`              | Owning agent's main session                          | Reminders, system events        |
+| Isolated        | `isolated`          | Dedicated `cron:<jobId>`                             | Reports, background chores      |
+| Current session | `current`           | Detached; commits to the creation-bound conversation | Context-aware recurring work    |
+| Custom session  | `session:custom-id` | Persistent named session                             | Workflows that build on history |
 
 Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events and heartbeats still default to `main`; command and script payloads still default to `isolated`.
 
 <AccordionGroup>
-  <Accordion title="Main session vs isolated vs custom">
-    **Main session** jobs enqueue a system event into the owning agent's main session and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). The event is processed with that session's existing context and last delivery context. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+  <Accordion title="Main session vs current vs isolated vs custom">
+    **Main session** jobs enqueue a system event into the owning agent's main session and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). The event is processed with that session's existing context and last delivery context. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Current-session** jobs execute in a detached run session, read a bounded tail of the conversation captured when the job was created, and commit the final visible assistant result back to that exact conversation. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
     Main-session automation events are self-contained system-event reminders. They do not automatically include the default heartbeat prompt or the heartbeat monitor scratch; say it explicitly in the automation event text if a reminder should consult that context.
 
@@ -342,6 +344,12 @@ Agent-turn jobs default to the creating conversation when the create request car
 | `webhook`  | POST finished event payload to a URL                                |
 | `none`     | No runner fallback delivery                                         |
 
+For a `current` job using `announce` (the default), the final assistant result is a first-class session completion, not a WebChat-specific outbound message. OpenClaw waits for active turns in the creation-bound conversation, verifies that the same session generation still owns the key, and commits the result through the canonical transcript writer with cron job/run provenance and a job/run idempotency key. A retry cannot append the same result twice.
+
+WebChat receives the committed `session.message` event immediately. The same assistant result comes from `chat.history` after a refresh or reconnect; no follow-up user message is required. Delivery is successful only after that transcript/event commit succeeds.
+
+If the bound conversation is an external channel, OpenClaw also performs its normal durable channel send. That send still happens at most once, and the required session commit does not create a second external message. A verified `message` tool send suppresses the automatic channel resend but does not suppress the session commit. The run is reported delivered only after both the external recipient handoff (when required) and the canonical session commit succeed.
+
 <Warning>
   Every outbound automation webhook uses the strict SSRF guard. Loopback,
   private/internal, link-local, and other special-use targets are refused by
@@ -367,7 +375,7 @@ services. Leaving the policy unset keeps strict behavior.
 
 Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`; OpenClaw also accepts the Telegram-owned `-1001234567890:123` shorthand. Direct RPC/config callers may pass `delivery.threadId` as a string or number. Slack/Discord/Mattermost targets use explicit prefixes (`channel:<id>`, `user:<id>`). Matrix room IDs are case-sensitive; use the exact room ID or `room:!room:server` form from Matrix.
 
-On hosts with multiple configured channels, isolated announce jobs created with `automations add|create` or changed with `automations edit` must set `--channel <id>` unless a provider-prefixed `--to` or a preserved session route selects the channel. Use `--best-effort-deliver` only when unresolved fallback delivery is acceptable; it does not choose a channel, and a delivery failure does not fail the job.
+On hosts with multiple configured channels, isolated announce jobs created with `automations add|create` or changed with `automations edit` must set `--channel <channel-plugin-id>` unless a provider-prefixed `--to` or a preserved session route selects the channel. Use `--best-effort-deliver` only when unresolved fallback delivery is acceptable; it does not choose a channel, and a delivery failure does not fail the job.
 
 When announce delivery uses `channel: "last"` or omits `channel`, a provider-prefixed target such as `telegram:123` can select the channel before the scheduler falls back to session history or a single configured channel. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the target prefix must name the same provider; `channel: "whatsapp"` with `to: "telegram:123"` is rejected instead of letting WhatsApp interpret the Telegram ID as a phone number. Target-kind and service prefixes (`channel:<id>`, `user:<id>`, `imessage:<handle>`, `sms:<number>`) stay channel-owned target syntax, not provider selectors.
 
@@ -379,19 +387,28 @@ Implicit announce delivery uses configured channel allowlists to validate and re
 
 ### Failure notifications
 
-Failure notifications follow a separate destination path:
+Execution failures use one scheduler-owned threshold and cooldown policy. A job with an existing failure route is covered by default after 2 consecutive failures with a 1-hour cooldown. The route can be a resolved failure destination or the job's primary announce target. Jobs with no such route stay quiet unless a per-job or global `failureAlert` object explicitly activates the policy.
 
-- The destination fields on `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`) set a global default for failure notifications. The retired `cron.failureDestination` block is merged into them by `openclaw doctor --fix`.
-- `job.delivery.failureDestination` overrides that per job.
-- If neither is set and the job already delivers via `announce`, failure notifications fall back to that primary announce target.
+Failure notification routes resolve in this order:
+
+1. Route fields in the job's `failureAlert` object.
+2. `job.delivery.failureDestination`, layered over the destination fields in global `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`). The retired `cron.failureDestination` block is merged into the global object by `openclaw doctor --fix`.
+3. The job's primary announce target.
+
+- `job.failureAlert: false` disables execution and required-delivery failure alerts for that job. The auto-disable safety notification remains active.
+- Global `cron.failureAlert.enabled: false` disables inherited notifications. A per-job `failureAlert` object explicitly re-enables that job; `enabled: true` explicitly enables the global policy.
+- A per-job `failureAlert` object or any global `cron.failureAlert` object activates and tunes the policy even when the job had no existing route.
+- `delivery.bestEffort: true` suppresses inherited/default execution-failure alerts. An explicit per-job `failureAlert` remains authoritative.
 - `delivery.failureDestination` is only supported on `sessionTarget="isolated"` jobs unless the primary delivery mode is `webhook`.
 - `failureAlert.includeSkipped: true` opts a job or global automation alert policy into repeated skipped-run alerts. Skipped runs keep a separate consecutive-skip counter, so they do not affect execution-error backoff.
 - `openclaw automations edit` exposes per-job alert tuning: `--failure-alert`/`--no-failure-alert`, `--failure-alert-after <n>`, `--failure-alert-channel`, `--failure-alert-to`, `--failure-alert-cooldown`, `--failure-alert-include-skipped`/`--failure-alert-exclude-skipped`, `--failure-alert-mode`, and `--failure-alert-account-id`.
 
-Chat failure notifications include the run start time in the agent's configured user timezone. Webhook message text stays stable; integrations can read the same instant from the structured `runAtMs` field.
-Chat notifications show the normalized failure cause when one is available and keep raw commands, paths, and provider errors in automation history. Failure webhooks retain the structured raw error for diagnostic integrations.
+A required completion-delivery failure is distinct from an execution failure: a run can record `status: "ok"` with `completionStatus: "failed"`. It does not increment the execution-failure streak or backoff. The scheduler may notify immediately only through a resolved alternate failure destination; it never retries the already-failed primary route.
 
-Failure alerts are opt-in, but the scheduler also provides an unconditional safety backstop. A time-based recurring job is auto-disabled after 10 consecutive execution failures; a successful run resets that streak. Repeated schedule-computation failures auto-disable after 3 errors. The job records `state.autoDisabled.reason` as `consecutive-failures` or `schedule-errors`, and the owning agent receives a notification with a safe cause and recovery command. Raw errors stay in automation history. After fixing the cause, run `openclaw automations enable <jobId>`; enabling clears the recorded reason and failure streaks. Because disabled jobs are hidden by the default list, use `openclaw automations list --all` to inspect them.
+Chat failure notifications include the run start time in the agent's configured user timezone. Webhook message text stays stable; integrations can read the same instant from the structured `runAtMs` field.
+Chat notifications show normalized failure causes or allowlisted producer facts for known command and script failures. Arbitrary commands, paths, provider bodies, secrets, delivery errors, skip reasons, diagnostics, and stack/error text remain in automation history. Failure webhooks retain the structured raw error for diagnostic integrations.
+
+The scheduler also provides an unconditional safety backstop. A time-based recurring job is auto-disabled after 10 consecutive execution failures; a successful run resets that streak. On the terminal failure, the richer auto-disable notification replaces the regular threshold alert. Repeated schedule-computation failures auto-disable after 3 errors. The job records `state.autoDisabled.reason` as `consecutive-failures` or `schedule-errors`, and the owning agent receives a notification with a safe cause and recovery command. Raw errors stay in automation history. After fixing the cause, run `openclaw automations enable <jobId>`; enabling clears the recorded reason and failure streaks. Because disabled jobs are hidden by the default list, use `openclaw automations list --all` to inspect them.
 
 ### Output language
 
@@ -510,7 +527,9 @@ openclaw automations edit <jobId> --clear-agent
 
 Archiving a session (Control UI, or `sessions.patch { key, archived: true, expectedSessionId }` using the durable ID from `sessions.list`) disables every enabled automation job bound to that session: its isolated `cron:<jobId>` session, a `session:<key>` target, or a delivery/wake `sessionKey` lane. Restoring the session requires the same observed identity and does not re-enable those jobs; use `openclaw automations enable <jobId>`. Sessions with an enabled bound job show a clock badge in the Control UI sidebar.
 
-`openclaw automations run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes; it polls the returned `runId` (default timeout `10m`, poll interval `2s`) and exits `0` for status `ok`, non-zero for `error`, `skipped`, or a wait timeout.
+`openclaw automations run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes; it polls the returned `runId` (default timeout `10m`, poll interval `2s`) and exits `0` only for `completionStatus: "succeeded"`. Failed or unknown completion and wait timeouts exit non-zero.
+
+Run history keeps payload execution in `status` (`ok`, `error`, or `skipped`) and whole-run completion in `completionStatus` (`succeeded`, `failed`, or `unknown`). Delivery is required only when the admitted job explicitly sets `delivery.bestEffort: false`; delivery-only failure leaves execution `status: "ok"`, does not increment execution error counters or enter retry backoff, and records `completionStatus: "failed"`.
 
 Direct Gateway event sources can use `cron.run` with `mode: "if-enabled"` to run immediately without overriding an operator-disabled or auto-disabled job. Explicit operator run-now commands continue to use `force`.
 
@@ -578,7 +597,7 @@ Query-string tokens are rejected.
       Target agent. When supplied, it must name a configured agent. It is required when the configured agent fleet has no implicit or retained legacy owner.
     </ParamField>
     <ParamField path="sessionKey" type="string">
-      Target session. Requires `hooks.allowRequestSessionKey: true` and must match `hooks.allowedSessionKeyPrefixes` when configured. Both wake modes can target an explicit session.
+      Target session. Requires `mode: "now"` and `hooks.allowRequestSessionKey: true`, and must match `hooks.allowedSessionKeyPrefixes` when configured. Deferred `next-heartbeat` wakes use the agent's main session.
     </ParamField>
 
   </Accordion>
@@ -831,7 +850,7 @@ Disable automations: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 
   </Accordion>
   <Accordion title="Maintenance">
-    `cron.sessionRetention` (default `24h`, `false` or `"0h"` disables) prunes isolated run-session entries. Run history keeps the newest 2000 terminal rows per job; lost rows retain their 24-hour cleanup window.
+    `cron.sessionRetention` (default `24h`, `false` or `"0h"` disables) prunes isolated run-session entries. Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
   </Accordion>
   <Accordion title="Legacy store migration">
     On upgrade, run `openclaw doctor --fix` to import historical `~/.openclaw/cron/jobs.json`, `jobs-state.json`, `jobs-quarantine.json`, and `runs/*.jsonl` files into SQLite and archive the originals with a `.migrated` suffix. Malformed job rows remain recoverable in SQLite while valid jobs keep running.

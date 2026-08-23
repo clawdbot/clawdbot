@@ -18,6 +18,31 @@ describe("resolveHeartbeatPromptForSystemPrompt", () => {
     ).toBeDefined();
   });
 
+  it.each([
+    {
+      name: "explicit fleet",
+      config: {
+        agents: {
+          ownership: "explicit" as const,
+          defaults: { systemAgent: { agentId: "beta" } },
+          entries: { alpha: {}, beta: {} },
+        },
+      },
+    },
+    {
+      name: "legacy-marked fleet",
+      config: {
+        agents: {
+          defaults: { systemAgent: { agentId: "beta" } },
+          entries: { alpha: { default: true }, beta: {} },
+        },
+      },
+    },
+  ])("includes ambient heartbeat guidance only for the system owner in an $name", ({ config }) => {
+    expect(resolveHeartbeatPromptForSystemPrompt({ config, agentId: "beta" })).toBeDefined();
+    expect(resolveHeartbeatPromptForSystemPrompt({ config, agentId: "alpha" })).toBeUndefined();
+  });
+
   it("omits the heartbeat section when the default cadence is disabled", () => {
     expect(
       resolveHeartbeatPromptForSystemPrompt({

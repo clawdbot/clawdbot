@@ -438,13 +438,14 @@ describe("plugin registry install migration", () => {
     const result = await migratePluginRegistryForInstall({
       stateDir,
       candidates: [candidate],
-      readConfig: async () => ({}),
+      config: {},
       env: hermeticEnv(),
     });
     expectRecordFields(requireRecord(result, "migration result"), {
       status: "migrated",
       migrated: true,
     });
+    expect(result.preflight.action).toBe("initialize");
     const current = requireMigratedIndex(result);
     expect(current.refreshReason).toBe("migration");
     expect(current.migrationVersion).toBe(1);

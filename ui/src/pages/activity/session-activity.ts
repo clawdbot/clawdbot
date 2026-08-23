@@ -1,4 +1,5 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { ACTIVITY_PERSON_PARAM } from "../../app-route-paths.ts";
 import {
   presenceViewerLabel,
   projectPresencePayload,
@@ -15,7 +16,7 @@ export type SessionActivityFilters = {
   time: ActivityTimeFilter;
 };
 
-type ActivityPerson = PresenceViewer & { count: number };
+type ActivityPerson = PresenceViewer & { count: number; lastActiveAt: number };
 
 type SessionActivityDay = {
   key: string;
@@ -47,7 +48,7 @@ export function parseSessionActivityFilters(search: string): SessionActivityFilt
   const params = new URLSearchParams(search);
   const rawTime = params.get("time");
   return {
-    personId: normalized(params.get("person")) ?? null,
+    personId: normalized(params.get(ACTIVITY_PERSON_PARAM)) ?? null,
     query: params.get("q")?.trim() ?? "",
     time: isActivityTimeFilter(rawTime) ? rawTime : DEFAULT_ACTIVITY_TIME_FILTER,
   };
@@ -59,7 +60,7 @@ export function sessionActivitySearch(filters: SessionActivityFilters): string {
     params.set("time", filters.time);
   }
   if (filters.personId) {
-    params.set("person", filters.personId);
+    params.set(ACTIVITY_PERSON_PARAM, filters.personId);
   }
   if (filters.query) {
     params.set("q", filters.query);
@@ -129,10 +130,12 @@ function dayStart(timestamp: number): number {
 function projectPeople(rows: readonly GatewaySessionRow[]): ActivityPerson[] {
   const people = new Map<string, ActivityPerson>();
   for (const row of rows) {
+    const lastActiveAt = sessionActivityTimestamp(row);
     for (const actor of sessionActors(row)) {
       const existing = people.get(actor.id);
       if (existing) {
         existing.count += 1;
+        existing.lastActiveAt = Math.max(existing.lastActiveAt, lastActiveAt);
         continue;
       }
       people.set(actor.id, {
@@ -141,13 +144,14 @@ function projectPeople(rows: readonly GatewaySessionRow[]): ActivityPerson[] {
         avatarUrl: normalized(actor.avatarUrl),
         watchedSessions: [],
         count: 1,
+        lastActiveAt,
       });
     }
   }
   return [...people.values()].toSorted((a, b) => {
-    const countOrder = b.count - a.count;
-    if (countOrder !== 0) {
-      return countOrder;
+    const activityOrder = b.lastActiveAt - a.lastActiveAt;
+    if (activityOrder !== 0) {
+      return activityOrder;
     }
     const labelA = presenceViewerLabel(a).toLowerCase();
     const labelB = presenceViewerLabel(b).toLowerCase();

@@ -49,6 +49,7 @@ export type QaSuiteSummaryJson = {
   };
   evidence?: QaEvidenceSummaryJson;
   run: {
+    status: "running" | "completed";
     startedAt: string;
     finishedAt: string;
     providerMode: QaProviderMode;
@@ -92,7 +93,24 @@ function isQaSuiteFailureStatus(status: unknown): boolean {
   return status !== "pass" && status !== "skip" && status !== "skipped";
 }
 
-async function readQaSuiteSummaryFile(summaryPath: string): Promise<unknown> {
+export function findQaSuiteSummaryCompletionError(summary: unknown): string | undefined {
+  if (!isRecord(summary)) {
+    return "has invalid completion state";
+  }
+  if (!isRecord(summary.run) || !Object.hasOwn(summary.run, "status")) {
+    return "is missing run.status";
+  }
+  const status = summary.run.status;
+  if (status === "completed") {
+    return undefined;
+  }
+  if (status === "running") {
+    return "is still running";
+  }
+  return `has unsupported run.status=${typeof status === "string" ? status : typeof status}`;
+}
+
+export async function readCompletedQaSuiteSummaryFile(summaryPath: string): Promise<unknown> {
   let summaryText: string;
   try {
     summaryText = await fs.readFile(summaryPath, "utf8");
@@ -104,8 +122,19 @@ async function readQaSuiteSummaryFile(summaryPath: string): Promise<unknown> {
     );
   }
   try {
-    return JSON.parse(summaryText) as unknown;
+    const summary = JSON.parse(summaryText) as unknown;
+    const completionError = findQaSuiteSummaryCompletionError(summary);
+    if (completionError) {
+      throw new QaSuiteArtifactError(
+        "summary_not_completed",
+        `QA summary at ${summaryPath} ${completionError}.`,
+      );
+    }
+    return summary;
   } catch (error) {
+    if (error instanceof QaSuiteArtifactError) {
+      throw error;
+    }
     throw new QaSuiteArtifactError(
       "summary_parse_failed",
       `Could not parse QA summary JSON at ${summaryPath}: ${formatErrorMessage(error)}`,
@@ -426,7 +455,7 @@ function readQaSuiteFailedOrSkippedScenarioCountFromSummary(summary: unknown): n
 }
 
 export async function readQaSuiteFailedScenarioCountFromFile(summaryPath: string): Promise<number> {
-  const payload = await readQaSuiteSummaryFile(summaryPath);
+  const payload = await readCompletedQaSuiteSummaryFile(summaryPath);
   assertQaSuiteSummaryHasExecutedScenarios(payload, summaryPath, "summary_failure_count_missing");
   const failedScenarioCount = readQaSuiteFailedScenarioCountFromSummary(payload);
   if (failedScenarioCount !== null) {
@@ -442,7 +471,7 @@ export async function readQaSuiteFailedOrSkippedScenarioCountFromFile(
   summaryPath: string,
   options?: { optionalScenarioNames?: ReadonlySet<string>; requireExecutedScenario?: boolean },
 ): Promise<number> {
-  const payload = await readQaSuiteSummaryFile(summaryPath);
+  const payload = await readCompletedQaSuiteSummaryFile(summaryPath);
   assertQaSuiteSummaryHasExecutedScenarios(
     payload,
     summaryPath,

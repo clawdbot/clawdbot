@@ -202,7 +202,7 @@ it("renders ordered static participant actors without presence filtering", async
   expect(facepile.querySelector(".viewer-avatar--overflow")?.textContent?.trim()).toBe("+1");
 });
 
-it("excludes the session creator before choosing visible avatars and overflow", async () => {
+it("excludes the session owner before choosing visible avatars and overflow", async () => {
   const facepile = document.createElement("openclaw-viewer-facepile") as ViewerFacepileElement;
   facepile.sessionKey = "agent:main:active";
   facepile.excludeUserId = "owner";

@@ -207,9 +207,10 @@ describe("normalizeBrowserUrlDraft", () => {
     expect(panel.browserPanelIsOpen()).toBe(false);
   });
 
-  it("treats an embedded panel as open while the side panel owns visibility", async () => {
+  it("treats an embedded panel as open only while it is presented", async () => {
     const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
       embedded: boolean;
+      presented: boolean;
       browserPanelIsOpen: () => boolean;
       updateComplete: Promise<unknown>;
     };
@@ -217,19 +218,27 @@ describe("normalizeBrowserUrlDraft", () => {
     document.body.append(panel);
     await panel.updateComplete;
 
+    expect(panel.browserPanelIsOpen()).toBe(false);
+    panel.presented = true;
+    await panel.updateComplete;
     expect(panel.browserPanelIsOpen()).toBe(true);
+    panel.presented = false;
+    await panel.updateComplete;
+    expect(panel.browserPanelIsOpen()).toBe(false);
   });
 
   it("starts a fresh browser tab draft when an embedded panel receives a new-tab request", async () => {
     const panel = document.createElement("openclaw-browser-panel") as unknown as HTMLElement & {
       available: boolean;
       embedded: boolean;
+      presented: boolean;
       handleToggleRequest: (event: Event) => void;
       renderRoot: ShadowRoot;
       updateComplete: Promise<unknown>;
     };
     panel.available = true;
     panel.embedded = true;
+    panel.presented = true;
     document.body.append(panel);
     await panel.updateComplete;
 

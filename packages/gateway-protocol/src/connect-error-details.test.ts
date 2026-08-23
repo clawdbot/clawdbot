@@ -238,6 +238,26 @@ describe("classifyGatewayConnectFailure", () => {
       remediation: undefined,
     },
     {
+      name: "identity proxy redirect rejection",
+      input: {
+        details: { reason: "websocket-upgrade-rejected", httpStatus: 302 },
+        message: "gateway rejected websocket upgrade (HTTP 302)",
+      },
+      kind: "identity-proxy",
+      message: "gateway rejected websocket upgrade (HTTP 302)",
+      remediation: "gateway.remote.edgeAuth",
+    },
+    {
+      name: "identity proxy forbidden rejection",
+      input: {
+        details: { reason: "websocket-upgrade-rejected", httpStatus: 403 },
+        message: "gateway rejected websocket upgrade (HTTP 403)",
+      },
+      kind: "identity-proxy",
+      message: "gateway rejected websocket upgrade (HTTP 403)",
+      remediation: "identity-aware proxy",
+    },
+    {
       name: "unreachable endpoint",
       input: { message: "connect ECONNREFUSED 127.0.0.1:18789" },
       kind: "unreachable",
@@ -257,6 +277,28 @@ describe("classifyGatewayConnectFailure", () => {
       expect(result.remediation).toContain("--url");
       expect(result.remediation).toContain("--token/--password");
     }
+  });
+
+  it("adds a Cloudflare hint only for Cloudflare Access redirect hosts", () => {
+    const cloudflare = classifyGatewayConnectFailure({
+      details: {
+        reason: "websocket-upgrade-rejected",
+        httpStatus: 302,
+        location: "https://team.cloudflareaccess.com/cdn-cgi/access/login?token=***",
+      },
+    });
+    const generic = classifyGatewayConnectFailure({
+      details: {
+        reason: "websocket-upgrade-rejected",
+        httpStatus: 302,
+        location: "https://login.example/authorize",
+      },
+    });
+
+    expect(cloudflare.kind).toBe("identity-proxy");
+    expect(cloudflare.kind).not.toBe("unreachable");
+    expect(cloudflare.remediation).toContain("Cloudflare Access");
+    expect(generic.remediation).not.toContain("Cloudflare");
   });
 });
 

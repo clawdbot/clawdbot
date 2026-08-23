@@ -124,8 +124,12 @@ menu is built from the current installation:
 - With a configured default model, **Keep existing model config** appears first
   and is selected by default, followed by **QuickStart (recommended)** and
   **Manual setup**.
-- Each detected migration source adds an **Import from &lt;source&gt;** choice
-  after the setup choices.
+- When a migration provider is available, **Import from another agent** appears
+  after the setup choices. Selecting it opens provider-specific entries such as
+  **Import from Claude**, **Import from Codex**, and **Import from Hermes**.
+  Detected sources appear first with their paths; other available providers ask
+  for a source path. Use Back from the provider list to return to **Setup mode**
+  before an import begins.
 
 Pass `--flow quickstart` or `--flow manual` (alias `advanced`) to select a
 classic setup flow and skip that prompt. Import flags select the import flow

@@ -25,6 +25,7 @@ describe("searxng web search provider", () => {
   });
 
   beforeEach(() => {
+    vi.unstubAllEnvs();
     runSearxngSearch.mockReset();
     runSearxngSearch.mockImplementation(async (params: Record<string, unknown>) => params);
   });
@@ -135,36 +136,63 @@ describe("searxng web search provider", () => {
   });
 
   it("reads base URL from plugin config SecretRef, then env var, stripping trailing slashes", () => {
+    vi.stubEnv("SEARXNG_BASE_URL", "http://localhost:8888/");
     expect(
-      resolveSearxngBaseUrl(
-        {
-          plugins: {
-            entries: {
-              searxng: {
-                config: {
-                  webSearch: {
-                    baseUrl: {
-                      source: "env",
-                      provider: "default",
-                      id: "SEARXNG_BASE_URL",
-                    },
+      resolveSearxngBaseUrl({
+        plugins: {
+          entries: {
+            searxng: {
+              config: {
+                webSearch: {
+                  baseUrl: {
+                    source: "env",
+                    provider: "default",
+                    id: "SEARXNG_BASE_URL",
                   },
                 },
               },
             },
           },
-        } as never,
-        { SEARXNG_BASE_URL: "http://localhost:8888/" },
-      ),
+        },
+      } as never),
     ).toBe("http://localhost:8888");
 
-    expect(
-      resolveSearxngBaseUrl({} as never, {
-        SEARXNG_BASE_URL: "https://search.local/searxng///",
-      }),
-    ).toBe("https://search.local/searxng");
+    vi.stubEnv("SEARXNG_BASE_URL", "https://search.local/searxng///");
+    expect(resolveSearxngBaseUrl({} as never)).toBe("https://search.local/searxng");
 
-    expect(resolveSearxngBaseUrl({} as never, {})).toBeUndefined();
+    vi.stubEnv("SEARXNG_BASE_URL", "");
+    expect(resolveSearxngBaseUrl({} as never)).toBeUndefined();
+  });
+
+  it("does not fall back to ambient env when an explicit SecretRef is blocked", () => {
+    vi.stubEnv("SEARXNG_BASE_URL", "https://ambient.example/");
+    const config = {
+      secrets: {
+        providers: {
+          restricted: {
+            source: "env",
+            allowlist: [],
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          searxng: {
+            config: {
+              webSearch: {
+                baseUrl: {
+                  source: "env",
+                  provider: "restricted",
+                  id: "SEARXNG_BASE_URL",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSearxngBaseUrl(config)).toBeUndefined();
   });
 
   it("reads categories and language from plugin config", () => {
@@ -204,6 +232,6 @@ describe("searxng web search provider", () => {
 
     setConfiguredCredentialValue(config, "http://search.local:9000");
 
-    expect(resolveSearxngBaseUrl(config, {})).toBe("http://search.local:9000");
+    expect(resolveSearxngBaseUrl(config)).toBe("http://search.local:9000");
   });
 });

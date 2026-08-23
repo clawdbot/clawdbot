@@ -220,6 +220,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   @property({ attribute: false }) startedAt?: number;
   @property({ attribute: false }) lastReadAt?: number;
   @property({ attribute: false }) progressCard: ProgressCard | null = null;
+  @property({ attribute: false }) onDismissProgressCard?: (card: ProgressCard) => void;
   @property({ attribute: false }) pullRequests: ControlUiSessionPullRequest[] = [];
   @property({ attribute: false }) companion: ChatSessionCompanionThread = {
     exchanges: [],
@@ -626,7 +627,8 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
         ${digest
           ? html`<div class="chat-session-rail__digest">${this.renderDigestDetails(digest)}</div>`
           : nothing}
-        ${renderSessionProgressCard(this.progressCard, "rail")} ${this.renderThread()}
+        ${renderSessionProgressCard(this.progressCard, "rail", this.onDismissProgressCard)}
+        ${this.renderThread()}
         ${this.companion.exchanges.length === 0 && !this.companion.pendingQuestion
           ? this.renderStarters()
           : nothing}

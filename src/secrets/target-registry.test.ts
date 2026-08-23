@@ -60,7 +60,7 @@ describe("secret target registry", () => {
       pathSegments: ["models", "providers", "openai", "apiKey"],
     });
     const authProfileTarget = resolveSecretPlanTargetByPathCore({
-      configFile: "auth-profiles.json",
+      configFile: "auth-profile-store",
       pathSegments: ["profiles", "openai:default", "key"],
     });
 

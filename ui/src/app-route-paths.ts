@@ -1,3 +1,4 @@
+import { inferControlUiFocusBasePath } from "@openclaw/session-url-contract";
 import { normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
@@ -104,6 +105,19 @@ export function pathForRoute(routeId: RouteId, basePath = ""): string {
   const normalizedBasePath = normalizeBasePath(basePath);
   const path = APP_ROUTE_DEFINITIONS[routeId].path;
   return normalizedBasePath ? `${normalizedBasePath}${path}` : path;
+}
+
+/** Query key the Activity feed reads to scope its session list to one person. */
+export const ACTIVITY_PERSON_PARAM = "person";
+
+/** Activity feed scoped to one person, for every surface that shows an identity. */
+export function activityPersonLocation(
+  personId: string,
+  basePath = "",
+): { pathname: string; search: string; href: string } {
+  const pathname = pathForRoute("activity", basePath);
+  const search = `?${new URLSearchParams({ [ACTIVITY_PERSON_PARAM]: personId }).toString()}`;
+  return { pathname, search, href: `${pathname}${search}` };
 }
 
 export function pathForWorkboardBoard(boardId: string, basePath = ""): string {
@@ -310,6 +324,10 @@ function isRouteOwnedBasePath(basePath: string): boolean {
 }
 
 export function inferBasePathFromPathname(pathname: string): string {
+  const focusBasePath = inferControlUiFocusBasePath(pathname);
+  if (focusBasePath !== null) {
+    return focusBasePath;
+  }
   const isMountRoot = pathname.trim().endsWith("/");
   const normalizedPath = normalizePath(pathname);
   if (normalizedPath.toLowerCase().endsWith("/index.html")) {

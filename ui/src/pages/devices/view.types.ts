@@ -17,6 +17,8 @@ export type DevicesProps = {
   devicesError: string | null;
   devicesList: DevicePairingList | null;
   canPairDevice: boolean;
+  canManagePairing: boolean;
+  canAdmin: boolean;
   configForm: Record<string, unknown> | null;
   configLoading: boolean;
   configSaving: boolean;

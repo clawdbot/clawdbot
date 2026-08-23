@@ -1,4 +1,10 @@
-import { ChannelType, MessageFlags, PermissionFlagsBits, Routes } from "discord-api-types/v10";
+import {
+  ChannelType,
+  MessageFlags,
+  PermissionFlagsBits,
+  Routes,
+  type APIMessageTopLevelComponent,
+} from "discord-api-types/v10";
 // Discord tests cover send.sends basic channel messages plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -283,6 +289,183 @@ describe("sendMessageDiscord", () => {
     expectRestRoute(postMock, 0, Routes.channelMessages("789"));
     expect(requireRestBody(postMock).content).toBe("hello world");
     expect(requireRestBody(postMock).flags).toBe(MessageFlags.SuppressEmbeds);
+  });
+
+  it("sends embed-only messages with a card receipt and enforced nonce", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({ id: "embed1", channel_id: "789" });
+    const onDeliveryResult = vi.fn();
+
+    const result = await sendMessageDiscord("channel:789", "", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      embeds: [{ title: "Release notes", description: "Version available" }],
+      reply: { messageId: "orig-123", scope: "first" },
+      allowedMentions: { parse: [] },
+      onDeliveryResult,
+    });
+
+    expectSingleReceiptPart(result.receipt, { platformMessageId: "embed1", kind: "card" });
+    expectSingleReceiptPart(onDeliveryResult.mock.calls[0]?.[0]?.receipt, {
+      platformMessageId: "embed1",
+      kind: "card",
+    });
+    expect(requireRestBody(postMock)).toMatchObject({
+      embeds: [{ title: "Release notes", description: "Version available" }],
+      allowed_mentions: { parse: [] },
+      message_reference: { message_id: "orig-123", fail_if_not_exists: false },
+      enforce_nonce: true,
+    });
+    expect(requireRestBody(postMock)).not.toHaveProperty("content");
+    expect(requireRestBody(postMock)).not.toHaveProperty("flags");
+  });
+
+  it.each([
+    { name: "without message text", text: "" },
+    { name: "alongside message text", text: "Choose an action" },
+  ])("sends raw native Discord action rows $name", async ({ text }) => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({ id: "component1", channel_id: "789" });
+    const components: APIMessageTopLevelComponent[] = [
+      {
+        type: 1,
+        components: [{ type: 2, style: 1, custom_id: "open", label: "Open" }],
+      },
+    ];
+
+    const result = await sendMessageDiscord("channel:789", text, {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      components,
+    });
+
+    expectSingleReceiptPart(result.receipt, { platformMessageId: "component1", kind: "card" });
+    expect(requireRestBody(postMock)).toMatchObject({ components, enforce_nonce: true });
+    if (text) {
+      expect(requireRestBody(postMock).content).toBe(text);
+    } else {
+      expect(requireRestBody(postMock)).not.toHaveProperty("content");
+    }
+  });
+
+  it("sends raw Components V2 without legacy content or embeds", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({ id: "component2", channel_id: "789" });
+    const components: APIMessageTopLevelComponent[] = [
+      { type: 17, components: [{ type: 10, content: "Choose an action" }] },
+    ];
+
+    const result = await sendMessageDiscord("channel:789", "legacy fallback", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      components,
+      embeds: [{ title: "legacy embed" }],
+    });
+
+    expectSingleReceiptPart(result.receipt, { platformMessageId: "component2", kind: "card" });
+    expect(requireRestBody(postMock)).toMatchObject({
+      components,
+      flags: MessageFlags.IsComponentsV2,
+      enforce_nonce: true,
+    });
+    expect(requireRestBody(postMock)).not.toHaveProperty("content");
+    expect(requireRestBody(postMock)).not.toHaveProperty("embeds");
+  });
+
+  it("keeps native components and embeds on the first message chunk only", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock
+      .mockResolvedValueOnce({ id: "component1", channel_id: "789" })
+      .mockResolvedValueOnce({ id: "component2", channel_id: "789" });
+    const components: APIMessageTopLevelComponent[] = [
+      {
+        type: 1,
+        components: [{ type: 2, style: 1, custom_id: "open", label: "Open" }],
+      },
+    ];
+    const onDeliveryResult = vi.fn();
+
+    await sendMessageDiscord("channel:789", "a".repeat(2_500), {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      components,
+      embeds: [{ title: "Release notes" }],
+      reply: { messageId: "orig-123", scope: "first" },
+      onDeliveryResult,
+    });
+
+    expect(postMock).toHaveBeenCalledTimes(2);
+    expect(requireRestBody(postMock, 0)).toMatchObject({
+      components,
+      embeds: [{ title: "Release notes" }],
+      message_reference: { message_id: "orig-123", fail_if_not_exists: false },
+    });
+    expect(requireRestBody(postMock, 1)).not.toHaveProperty("components");
+    expect(requireRestBody(postMock, 1)).not.toHaveProperty("embeds");
+    expect(requireRestBody(postMock, 1)).not.toHaveProperty("message_reference");
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.receipt.parts[0]?.kind)).toEqual([
+      "card",
+      "text",
+    ]);
+  });
+
+  it("delivers embed-only and native Components V2 messages over real HTTP", async () => {
+    const loopback = await createDiscordLoopbackRest();
+    try {
+      await sendMessageDiscord("channel:789", "", {
+        rest: loopback.rest,
+        token: "test-token",
+        cfg: DISCORD_TEST_CFG,
+        embeds: [{ title: "Release notes" }],
+      });
+      await sendMessageDiscord("channel:789", "", {
+        rest: loopback.rest,
+        token: "test-token",
+        cfg: DISCORD_TEST_CFG,
+        components: [{ type: 17, components: [{ type: 10, content: "Choose" }] }],
+      });
+
+      const messageRequests = loopback.requests.filter((request) => request.method === "POST");
+      expect(messageRequests).toHaveLength(2);
+      expect(JSON.parse(messageRequests[0]?.body ?? "{}")).toMatchObject({
+        embeds: [{ title: "Release notes" }],
+        enforce_nonce: true,
+      });
+      expect(JSON.parse(messageRequests[1]?.body ?? "{}")).toMatchObject({
+        components: [{ type: 17, components: [{ type: 10, content: "Choose" }] }],
+        flags: MessageFlags.IsComponentsV2 | MessageFlags.SuppressEmbeds,
+        enforce_nonce: true,
+      });
+    } finally {
+      await loopback.close();
+    }
+  });
+
+  it.each([
+    { name: "no components", components: undefined },
+    { name: "empty component array", components: [] },
+    { name: "empty component factory", components: () => [] },
+  ])("still rejects empty messages with $name", async ({ components }) => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+
+    await expect(
+      sendMessageDiscord("channel:789", "", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+        components,
+      }),
+    ).rejects.toThrow("Message must be non-empty for Discord sends");
+    expect(postMock).not.toHaveBeenCalled();
   });
 
   it.each(DISCORD_MARKDOWN_GOLDENS)("$name", async ({ before, after }) => {

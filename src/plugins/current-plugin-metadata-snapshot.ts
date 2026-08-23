@@ -63,6 +63,7 @@ type PluginMetadataSnapshotCandidate = {
   compatiblePolicyHashes?: readonly string[];
   compatibleConfigFingerprints?: readonly string[];
   hasConfigIdentity?: (config: OpenClawConfig) => boolean;
+  immutableRuntimeGeneration?: boolean;
 };
 
 type ScopedPluginMetadataSnapshot = PluginMetadataSnapshotCandidate & {
@@ -300,6 +301,7 @@ export function withPluginMetadataSnapshotScope<T>(
       compatiblePolicyHashes,
       compatibleConfigFingerprints,
       hasConfigIdentity: (config) => configIdentities.has(config),
+      immutableRuntimeGeneration: options.trustConfigIdentity === true,
       parent: scopedPluginMetadataSnapshot.getStore(),
     },
     run,
@@ -332,6 +334,11 @@ function resolveCompatiblePluginMetadataSnapshot(
     params.allowScopedSnapshot !== true
   ) {
     return undefined;
+  }
+  // Immutable runtime generations already selected their executable plugin graph. Nested config
+  // and workspace projections are run data, not authority to reopen lifecycle-owned discovery.
+  if (candidate.immutableRuntimeGeneration) {
+    return snapshot;
   }
   const requestedWorkspaceDir =
     params.workspaceDir ??
@@ -396,6 +403,17 @@ function resolveCompatiblePluginMetadataSnapshot(
     }
   }
   return snapshot;
+}
+
+export function isCurrentPluginMetadataSnapshotRuntimeGeneration(
+  snapshot: PluginMetadataSnapshot,
+): boolean {
+  for (let scoped = scopedPluginMetadataSnapshot.getStore(); scoped; scoped = scoped.parent) {
+    if (scoped.snapshot === snapshot && scoped.immutableRuntimeGeneration === true) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function getCurrentPluginMetadataSnapshot(

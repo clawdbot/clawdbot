@@ -7,12 +7,24 @@ import {
   resolveOAuthDir,
   resolveStateDir,
 } from "../config/config.js";
-import { pathExists, shortenHomePath } from "../utils.js";
+import { pathExists, resolveUserPath, shortenHomePath } from "../utils.js";
 import { buildCleanupPlan, isPathWithin } from "./cleanup-utils.js";
+import { planUpgradeConfigRepair } from "./doctor/shared/automatic-upgrade-config-repair.js";
 
 // DEFLATE can legitimately encode zero-filled sparse ranges just over 1000:1.
 // Keep bounded headroom without disabling node-tar's decompression bomb guard.
 export const BACKUP_MAX_DECOMPRESSION_RATIO = 1100;
+
+export function resolveRequiredBackupPath(
+  value: string | undefined,
+  label: "--repository" | "--target" | "<snapshot>" | "--scratch",
+): string {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    throw new Error(`Missing required ${label} value.`);
+  }
+  return resolveUserPath(trimmed);
+}
 
 type BackupAssetKind = "state" | "config" | "credentials" | "workspace";
 type BackupSkipReason = "covered" | "missing";
@@ -317,13 +329,15 @@ export async function resolveBackupPlanFromDisk(
 
   // Backup discovery must not initialize or migrate the state DB before snapshot validation.
   const configSnapshot = await readConfigFileSnapshot({ observe: false });
-  if (includeWorkspace && configSnapshot.exists && !configSnapshot.valid) {
+  const discoverySnapshot = planUpgradeConfigRepair(configSnapshot)?.snapshot ?? configSnapshot;
+  if (includeWorkspace && discoverySnapshot.exists && !discoverySnapshot.valid) {
     throw new Error(
-      `Config invalid at ${shortenHomePath(configSnapshot.path)}. OpenClaw cannot reliably discover custom workspaces for backup. Fix the config or rerun with --no-include-workspace for a partial backup.`,
+      `Config invalid at ${shortenHomePath(discoverySnapshot.path)}. OpenClaw cannot reliably discover custom workspaces for backup. Fix the config or rerun with --no-include-workspace for a partial backup.`,
     );
   }
   const cleanupPlan = buildCleanupPlan({
-    cfg: configSnapshot.config,
+    // Discovery uses the validated compatibility view; the archive still reads configPath bytes.
+    cfg: discoverySnapshot.config,
     stateDir,
     configPath,
     oauthDir,

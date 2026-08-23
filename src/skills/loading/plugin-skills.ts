@@ -13,6 +13,7 @@ import {
 import { resolveMemorySlotDecision } from "../../plugins/config-state.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { hasKind } from "../../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../../security/scan-paths.js";
 import { CONFIG_DIR } from "../../utils.js";
@@ -49,13 +50,27 @@ export function resolvePluginSkillDirs(params: {
     });
     return [];
   }
-  const config = params.config ?? {};
   const metadataSnapshot = resolvePluginMetadataSnapshot({
     workspaceDir,
-    config,
+    config: params.config,
     env: process.env,
-    allowWorkspaceScopedCurrent: true,
   });
+  return resolvePluginSkillDirsFromMetadata({ ...params, metadataSnapshot });
+}
+
+export function resolvePluginSkillDirsFromMetadata(params: {
+  workspaceDir: string | undefined;
+  config?: OpenClawConfig;
+  pluginSkillsDir?: string;
+  metadataSnapshot: PluginMetadataSnapshot;
+}): string[] {
+  const workspaceDir = (params.workspaceDir ?? "").trim();
+  if (!workspaceDir) {
+    publishPluginSkills([], { pluginSkillsDir: params.pluginSkillsDir });
+    return [];
+  }
+  const config = params.config ?? {};
+  const metadataSnapshot = params.metadataSnapshot;
   const registry = metadataSnapshot.manifestRegistry;
   if (registry.plugins.length === 0) {
     publishPluginSkills([], {

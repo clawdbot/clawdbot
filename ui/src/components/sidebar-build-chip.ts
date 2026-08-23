@@ -8,6 +8,7 @@ import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import {
   formatBuildChipText,
   formatSettingsBuildLabel,
+  formatSidebarBuildSubtitle,
   renderSidebarServerDetails,
 } from "./sidebar-build-chip-format.ts";
 import "./tooltip.ts";
@@ -16,18 +17,20 @@ class SidebarBuildChip extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) gatewayVersion: string | null = null;
   @property({ attribute: false }) onNavigate?: (routeId: "about") => void;
-  @property({ attribute: false }) variant: "compact" | "settings" = "compact";
+  @property({ attribute: false }) variant: "compact" | "identity" | "settings" = "compact";
 
   override render() {
     const text =
       this.variant === "settings"
         ? formatSettingsBuildLabel(CONTROL_UI_BUILD_INFO, this.gatewayVersion)
-        : formatBuildChipText(CONTROL_UI_BUILD_INFO);
+        : this.variant === "identity"
+          ? formatSidebarBuildSubtitle(CONTROL_UI_BUILD_INFO)
+          : formatBuildChipText(CONTROL_UI_BUILD_INFO);
     if (!text) {
       return nothing;
     }
     return html`
-      <openclaw-tooltip class="sidebar-hover-tooltip">
+      <openclaw-tooltip class="sidebar-hover-tooltip" .delay=${600} .closeDelay=${300}>
         <a
           class="sidebar-footer-build"
           href=${pathForRoute("about", this.basePath)}

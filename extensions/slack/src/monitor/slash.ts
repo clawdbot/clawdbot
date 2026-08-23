@@ -46,6 +46,7 @@ import {
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import { SLACK_MAX_BLOCKS } from "../blocks-input.js";
+import { requireSlackPostMessageTimestamp } from "../client-delivery.js";
 import { formatSlackError } from "../errors.js";
 import { truncateSlackText } from "../truncate.js";
 import { resolveSlackCommandIngress, resolveSlackEffectiveAllowFrom } from "./auth.js";
@@ -1289,12 +1290,13 @@ async function deliverSlackSlashResponseWithWebApi(params: {
 
   if (payload.response_type === "in_channel") {
     const postSlackMessage = params.client.chat.postMessage;
-    await postSlackMessage({
+    const response = await postSlackMessage({
       channel: params.command.channel_id,
       text,
       ...(blocks ? { blocks } : {}),
       ...(mrkdwn !== undefined ? { mrkdwn } : {}),
     });
+    requireSlackPostMessageTimestamp(response);
   } else {
     await params.client.chat.postEphemeral({
       channel: params.command.channel_id,
