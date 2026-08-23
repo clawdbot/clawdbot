@@ -1651,3 +1651,38 @@ describe("current reply target under a saturated context budget", () => {
     expect(prefix).toContain("#5150:");
   });
 });
+
+describe("structured context work after budget exhaustion", () => {
+  // Regression: entries past the exhausted budget were still serialized before
+  // pushContextBlock discarded them, letting a long tail of channel-supplied
+  // payloads burn CPU without ever reaching the model.
+  it("stops formatting structured entries once the budget is exhausted", () => {
+    let formatted = 0;
+    const structured = Array.from({ length: 200 }, (_, index) => ({
+      label: `Bulky channel payload ${index}`,
+      source: "telegram",
+      type: "directory",
+      // Counting getter: reading `payload` means this entry was formatted.
+      get payload() {
+        formatted += 1;
+        return { blob: "x".repeat(60_000) };
+      },
+    }));
+
+    const prefix = buildInboundUserContextPrefix({
+      Provider: "telegram",
+      OriginatingChannel: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+      MessageSid: "5150",
+      ReplyToQuoteText: "the quoted sentence the model must answer",
+      ChannelStructuredContext: structured,
+    } as unknown as TemplateContext);
+
+    expect(prefix).toContain("…[truncated: inbound context budget exhausted]");
+    // The reply-target reservation must still survive the early break.
+    expect(prefix).toContain("Current message:");
+    // Before the fix every one of the 200 entries was serialized.
+    expect(formatted).toBeLessThan(structured.length);
+  });
+});

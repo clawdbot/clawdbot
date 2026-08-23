@@ -799,6 +799,12 @@ export function buildInboundUserContextPrefix(
     if (!entry || typeof entry !== "object") {
       continue;
     }
+    // Formatting a structured entry serializes a channel-supplied payload, so
+    // once the budget is spent that work is pure waste: `pushContextBlock`
+    // would discard the result. Stop before formatting rather than after.
+    if (contextBudgetExhausted) {
+      break;
+    }
     const chatWindow = formatChatWindowStructuredContext(entry, envelope);
     if (chatWindow) {
       pushContextBlock(chatWindow);
