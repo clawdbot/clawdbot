@@ -27,8 +27,11 @@ export async function startGatewayServerCore(
 ): Promise<GatewayServer> {
   // Direct embedders have no CLI lifecycle row, so the server start boundary
   // still owns an exact generation instead of making clients infer one.
-  const suppliedBootId = opts.bootId?.trim();
-  if (opts.bootId !== undefined && (!suppliedBootId || suppliedBootId.length > 96)) {
+  const suppliedBootId = opts.bootId;
+  if (
+    suppliedBootId !== undefined &&
+    (suppliedBootId.trim() !== suppliedBootId || !suppliedBootId || suppliedBootId.length > 96)
+  ) {
     throw new Error("Gateway boot ID must contain 1 to 96 characters");
   }
   const bootId = suppliedBootId ?? randomUUID();
