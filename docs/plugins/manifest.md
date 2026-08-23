@@ -775,7 +775,21 @@ Use `configContracts` for manifest-owned config behavior that generic core helpe
         {
           "path": "routes.*.secret",
           "expected": "string",
-          "ownerKind": "route"
+          "ownerKind": "route",
+          "ownerContractFields": ["endpoint", "secret"]
+        },
+        {
+          "path": "feature.token",
+          "expected": "string",
+          "ownerKind": "capability",
+          "ownerId": "example-feature",
+          "ownerContractFields": ["endpoint", "token"]
+        },
+        {
+          "path": "provider.apiKey",
+          "expected": "string",
+          "ownerKind": "provider",
+          "ownerId": "example-provider"
         }
       ]
     }
@@ -799,10 +813,14 @@ Each `dangerousFlags` entry supports:
 
 `secretInputs` supports:
 
-| Field                   | Required | Type       | What it means                                                                                                                                                                                                                                                                                                                                              |
-| ----------------------- | -------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bundledDefaultEnabled` | No       | `boolean`  | Override bundled-plugin default enablement when deciding whether this SecretRef surface is active. Use this when the plugin is bundled but the surface should stay inactive until explicitly enabled in config.                                                                                                                                            |
-| `paths`                 | Yes      | `object[]` | Secret-shaped config paths, each with `path` (dot-separated, relative to `plugins.entries.<id>.config`, supports `*` wildcards), optional `expected` (currently only `"string"`), and optional `ownerKind` (currently only `"route"`). A declared owner isolates only that exact matched path when resolution fails; its owner id is the full config path. |
+| Field                   | Required | Type       | What it means                                                                                                                                                                                                           |
+| ----------------------- | -------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bundledDefaultEnabled` | No       | `boolean`  | Override bundled-plugin default enablement when deciding whether this SecretRef surface is active. Use this when the plugin is bundled but the surface should stay inactive until explicitly enabled in config.         |
+| `paths`                 | Yes      | `object[]` | Secret-shaped config paths, each with `path` (dot-separated, relative to `plugins.entries.<id>.config`, supports `*` wildcards), optional `expected` (currently only `"string"`), and optional exact runtime ownership. |
+
+`ownerKind` accepts only `"route"`, `"capability"`, or `"provider"`. A route owner uses the concrete matched config path as its owner ID and must not declare `ownerId`. Capability and provider owners require a nonempty static `ownerId`. Missing or invalid ownership remains unknown and fails closed; it never grants ownership of the entire plugin.
+
+Owned paths may declare `ownerContractFields` to limit last-known-good credential reuse to the listed behavior-bearing fields on the exact matched config block. For example, include destination and credential fields while excluding operator-only descriptions. If `ownerContractFields` is omitted, the existing complete-plugin owner contract remains unchanged.
 
 ## mediaUnderstandingProviderMetadata reference
 

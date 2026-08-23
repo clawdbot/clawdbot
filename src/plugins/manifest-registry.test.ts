@@ -2793,6 +2793,81 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
+  it("normalizes exact SecretInput owners and rejects malformed ownership", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "secret-owners",
+      configSchema: { type: "object" },
+      configContracts: {
+        secretInputs: {
+          paths: [
+            {
+              path: "routes.*.secret",
+              ownerKind: "route",
+              ownerContractFields: [" endpoint ", "", "secret"],
+            },
+            {
+              path: "feature.token",
+              expected: "string",
+              ownerKind: "capability",
+              ownerId: " feature-owner ",
+              ownerContractFields: ["endpoint", "token"],
+            },
+            {
+              path: "provider.apiKey",
+              ownerKind: "provider",
+              ownerId: "example-provider",
+              ownerContractFields: ["baseUrl", "apiKey"],
+            },
+            { path: "invalidRoute.secret", ownerKind: "route", ownerId: "wrong" },
+            { path: "missingCapability.token", ownerKind: "capability" },
+            { path: "emptyProvider.apiKey", ownerKind: "provider", ownerId: "  " },
+            { path: "nonstringProvider.apiKey", ownerKind: "provider", ownerId: 42 },
+            { path: "unknownOwner.token", ownerKind: "plugin", ownerId: "secret-owners" },
+            {
+              path: "ownerless.token",
+              ownerId: "secret-owners",
+              ownerContractFields: ["token"],
+            },
+          ],
+        },
+      },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "secret-owners",
+      rootDir: dir,
+      origin: "workspace",
+    });
+
+    expect(registry.plugins[0]?.configContracts?.secretInputs?.paths).toEqual([
+      {
+        path: "routes.*.secret",
+        ownerKind: "route",
+        ownerContractFields: ["endpoint", "secret"],
+      },
+      {
+        path: "feature.token",
+        expected: "string",
+        ownerKind: "capability",
+        ownerId: "feature-owner",
+        ownerContractFields: ["endpoint", "token"],
+      },
+      {
+        path: "provider.apiKey",
+        ownerKind: "provider",
+        ownerId: "example-provider",
+        ownerContractFields: ["baseUrl", "apiKey"],
+      },
+      { path: "invalidRoute.secret" },
+      { path: "missingCapability.token" },
+      { path: "emptyProvider.apiKey" },
+      { path: "nonstringProvider.apiKey" },
+      { path: "unknownOwner.token" },
+      { path: "ownerless.token" },
+    ]);
+  });
+
   it("resolves contract plugin ids by compatibility runtime path", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

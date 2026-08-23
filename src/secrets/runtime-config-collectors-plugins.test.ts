@@ -164,6 +164,154 @@ describe("collectPluginConfigAssignments", () => {
     expect(assignment.expected).toBe("string");
   });
 
+  it.each([
+    {
+      descriptor: { ownerKind: "route" },
+      ownerKind: "route",
+      ownerId: "plugins.entries.secret-owner.config.service.token",
+    },
+    {
+      descriptor: { ownerKind: "capability", ownerId: "feature-owner" },
+      ownerKind: "capability",
+      ownerId: "feature-owner",
+    },
+    {
+      descriptor: { ownerKind: "provider", ownerId: "provider-owner" },
+      ownerKind: "provider",
+      ownerId: "provider-owner",
+    },
+  ] as const)("isolates only the manifest-declared $ownerKind owner", (scenario) => {
+    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
+      plugins: [
+        {
+          id: "secret-owner",
+          origin: "config",
+          configContracts: {
+            secretInputs: {
+              paths: [{ path: "service.token", expected: "string", ...scenario.descriptor }],
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const context = collectAssignments(
+      createPluginConfig("secret-owner", {
+        service: { endpoint: "https://example.invalid", token: envRef("OWNER_TOKEN") },
+      }),
+      [["secret-owner", "config"]],
+    );
+
+    expect(context.assignments).toMatchObject([
+      {
+        path: "plugins.entries.secret-owner.config.service.token",
+        ownerKind: scenario.ownerKind,
+        ownerId: scenario.ownerId,
+        requiredForGateway: false,
+        disposition: "isolate",
+        ownerContractDigest: expect.any(String),
+      },
+    ]);
+  });
+
+  it("projects declared contract fields from the exact matched owner block", () => {
+    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
+      plugins: [
+        {
+          id: "secret-owner",
+          origin: "config",
+          configContracts: {
+            secretInputs: {
+              paths: [
+                {
+                  path: "service.token",
+                  ownerKind: "capability",
+                  ownerId: "feature-owner",
+                  ownerContractFields: ["endpoint", "token"],
+                },
+              ],
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const digest = (endpoint: string, description: string, sibling: string) => {
+      const config = createPluginConfig("secret-owner", {
+        service: { endpoint, description, token: envRef("OWNER_TOKEN") },
+        sibling: { description: sibling },
+      });
+      return requireAssignment(collectAssignments(config, [["secret-owner", "config"]]), 0)
+        .ownerContractDigest;
+    };
+
+    expect(digest("https://first.example.invalid", "first", "first")).toBe(
+      digest("https://first.example.invalid", "changed", "changed"),
+    );
+    expect(digest("https://first.example.invalid", "first", "first")).not.toBe(
+      digest("https://second.example.invalid", "first", "first"),
+    );
+  });
+
+  it("preserves the complete existing owner contract when fields are omitted", () => {
+    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
+      plugins: [
+        {
+          id: "secret-owner",
+          origin: "config",
+          configContracts: {
+            secretInputs: { paths: [{ path: "service.token", ownerKind: "route" }] },
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const digest = (sibling: string) => {
+      const config = createPluginConfig("secret-owner", {
+        service: { token: envRef("OWNER_TOKEN") },
+        sibling,
+      });
+      return requireAssignment(collectAssignments(config, [["secret-owner", "config"]]), 0)
+        .ownerContractDigest;
+    };
+
+    expect(digest("first")).not.toBe(digest("changed"));
+  });
+
+  it("keeps installed web-provider headers unknown while applying exact dotted keys", () => {
+    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
+      plugins: [
+        {
+          id: "custom-search",
+          origin: "config",
+          contracts: { webSearchProviders: ["custom-search"] },
+          configContracts: {
+            secretInputs: { paths: [{ path: "webSearch.headers.*", expected: "string" }] },
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    const config = createPluginConfig("custom-search", {
+      webSearch: { headers: { "X.Trace": envRef("CUSTOM_TRACE") } },
+    });
+    const context = collectAssignments(config, [["custom-search", "config"]]);
+
+    expect(context.assignments).toMatchObject([
+      {
+        path: "plugins.entries.custom-search.config.webSearch.headers.X.Trace",
+        ownerKind: "unknown",
+      },
+    ]);
+    requireAssignment(context, 0).apply("resolved-trace");
+    expect(config.plugins?.entries?.["custom-search"]?.config).toMatchObject({
+      webSearch: { headers: { "X.Trace": "resolved-trace" } },
+    });
+  });
+
   it("collects contracts from a secondary agent workspace registry", () => {
     loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
       plugins: [

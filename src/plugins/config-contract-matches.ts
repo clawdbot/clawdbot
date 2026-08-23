@@ -8,11 +8,15 @@ type PluginConfigContractMatch = {
   path: string;
   /** Config value stored at the matched path. */
   value: unknown;
+  /** Exact matched container and key; rendered paths cannot round-trip dotted wildcard keys. */
+  parent: Record<string, unknown> | unknown[];
+  key: string;
 };
 
 type TraversalState = {
   segments: string[];
   value: unknown;
+  parent?: Record<string, unknown> | unknown[];
 };
 
 function normalizePathPattern(pathPattern: string): string[] {
@@ -52,6 +56,7 @@ export function collectPluginConfigContractMatches(params: {
             nextStates.push({
               segments: [...state.segments, String(index)],
               value,
+              parent: state.value,
             });
           }
           continue;
@@ -61,6 +66,7 @@ export function collectPluginConfigContractMatches(params: {
             nextStates.push({
               segments: [...state.segments, key],
               value,
+              parent: state.value,
             });
           }
         }
@@ -72,6 +78,7 @@ export function collectPluginConfigContractMatches(params: {
           nextStates.push({
             segments: [...state.segments, segment],
             value: state.value[index],
+            parent: state.value,
           });
         }
         continue;
@@ -82,6 +89,7 @@ export function collectPluginConfigContractMatches(params: {
       nextStates.push({
         segments: [...state.segments, segment],
         value: state.value[segment],
+        parent: state.value,
       });
     }
     states = nextStates;
@@ -93,5 +101,7 @@ export function collectPluginConfigContractMatches(params: {
   return states.map((state) => ({
     path: state.segments.reduce(appendPathSegment, ""),
     value: state.value,
+    parent: state.parent!,
+    key: state.segments.at(-1)!,
   }));
 }

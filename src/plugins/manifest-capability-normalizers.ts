@@ -434,11 +434,23 @@ function normalizeManifestSecretInputPaths(
       continue;
     }
     const expected = entry.expected === "string" ? entry.expected : undefined;
-    const ownerKind = entry.ownerKind === "route" ? entry.ownerKind : undefined;
+    const ownerId = normalizeOptionalString(entry.ownerId);
+    const owner =
+      entry.ownerKind === "route" && entry.ownerId === undefined
+        ? { ownerKind: "route" as const }
+        : (entry.ownerKind === "capability" || entry.ownerKind === "provider") && ownerId
+          ? ({ ownerKind: entry.ownerKind, ownerId } as const)
+          : undefined;
+    if (!owner) {
+      normalized.push({ path: pathLocal, ...(expected ? { expected } : {}) });
+      continue;
+    }
+    const ownerContractFields = normalizeTrimmedStringList(entry.ownerContractFields);
     normalized.push({
       path: pathLocal,
       ...(expected ? { expected } : {}),
-      ...(ownerKind ? { ownerKind } : {}),
+      ...owner,
+      ...(ownerContractFields.length > 0 ? { ownerContractFields } : {}),
     });
   }
   return normalized.length > 0 ? normalized : undefined;

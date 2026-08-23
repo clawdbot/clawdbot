@@ -362,6 +362,85 @@ describe("secrets runtime snapshot", () => {
     ]);
   });
 
+  it("retains a route credential only when its declared owner contract stays unchanged", async () => {
+    const secret = { source: "env" as const, provider: "default", id: "ROUTE_SECRET" };
+    const manifestRegistry = {
+      plugins: [
+        {
+          id: "owner-fixture",
+          origin: "config" as const,
+          configContracts: {
+            secretInputs: {
+              paths: [
+                {
+                  path: "routes.*.secret",
+                  ownerKind: "route" as const,
+                  ownerContractFields: ["endpoint", "secret"],
+                },
+              ],
+            },
+          },
+        } as never,
+      ],
+    };
+    const config = (endpoint: string, description: string, sibling: string) =>
+      asConfig({
+        ...explicitMainRoster(),
+        plugins: {
+          entries: {
+            "owner-fixture": {
+              enabled: true,
+              config: {
+                routes: { "sales.eu": { endpoint, description, secret } },
+                sibling,
+              },
+            },
+          },
+        },
+      });
+    const prepare = (endpoint: string, description: string, sibling: string, env = {}) =>
+      prepareSecretsRuntimeSnapshot({
+        config: config(endpoint, description, sibling),
+        env,
+        includeAuthStoreRefs: false,
+        allowUnavailableSecretOwners: true,
+        loadablePluginOrigins: new Map([["owner-fixture", "config" as const]]),
+        manifestRegistry,
+      });
+
+    activateSecretsRuntimeSnapshotState({
+      snapshot: await prepare("https://first.example.invalid", "first", "first", {
+        ROUTE_SECRET: "resolved-route",
+      }),
+      refreshContext: null,
+      refreshHandler: null,
+    });
+
+    const stale = await prepare("https://first.example.invalid", "changed", "changed");
+    expect(stale.degradedOwners).toMatchObject([
+      {
+        ownerKind: "route",
+        ownerId: "plugins.entries.owner-fixture.config.routes.sales.eu.secret",
+        degradationState: "stale",
+      },
+    ]);
+    expect(stale.config.plugins?.entries?.["owner-fixture"]?.config).toMatchObject({
+      routes: { "sales.eu": { secret: "resolved-route" } },
+    });
+
+    const cold = await prepare("https://second.example.invalid", "changed", "changed");
+    expect(cold.degradedOwners).toMatchObject([
+      {
+        ownerKind: "route",
+        ownerId: "plugins.entries.owner-fixture.config.routes.sales.eu.secret",
+        degradationState: "cold",
+      },
+    ]);
+    expect(cold.config.plugins?.entries?.["owner-fixture"]?.config).toMatchObject({
+      routes: { "sales.eu": { secret } },
+    });
+  });
+
   it("registers every resolved value for exact redaction", async () => {
     const secret = "runtime-registration-secret";
     await prepareSecretsRuntimeSnapshot({

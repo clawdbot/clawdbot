@@ -1,5 +1,4 @@
 /** Collects plugin config secret refs from runtime plugin metadata. */
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -7,18 +6,14 @@ import {
   resolvePluginConfigContractsById,
 } from "../plugins/config-contracts.js";
 import { normalizePluginsConfig, resolveEnableState } from "../plugins/config-state.js";
+import type { PluginManifestSecretInputPath } from "../plugins/manifest-types.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
-import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import {
   collectRuntimeSecretInputAssignment,
   type ResolverContext,
   type SecretDefaults,
 } from "./runtime-shared.js";
 import { isRecord } from "./shared.js";
-
-function parsePluginConfigArrayIndex(segment: string): number | undefined {
-  return parseConfigPathArrayIndex(segment);
-}
 
 /**
  * Walk manifest-declared plugin config SecretRef surfaces and collect
@@ -137,7 +132,7 @@ export function collectPluginConfigAssignments(params: {
 function collectConfiguredPluginSecretAssignments(params: {
   pluginId: string;
   pluginConfig: Record<string, unknown>;
-  secretPaths: ReadonlyArray<{ path: string; expected?: "string"; ownerKind?: "route" }>;
+  secretPaths: ReadonlyArray<PluginManifestSecretInputPath>;
   active: boolean;
   inactiveReason: string;
   defaults: SecretDefaults | undefined;
@@ -154,6 +149,7 @@ function collectConfiguredPluginSecretAssignments(params: {
         continue;
       }
       seenPaths.add(fullPath);
+      const ownerConfig = match.parent;
 
       // SecretInput allows both explicit objects and inline env-template refs
       // like `${MCP_API_KEY}`. Non-ref strings remain untouched because
@@ -170,51 +166,28 @@ function collectConfiguredPluginSecretAssignments(params: {
           ? {
               owner: {
                 ownerKind: secretPath.ownerKind,
-                ownerId: fullPath,
+                ownerId: secretPath.ownerKind === "route" ? fullPath : secretPath.ownerId,
                 requiredForGateway: false,
                 disposition: "isolate" as const,
-                contract: params.pluginConfig,
+                contract:
+                  secretPath.ownerContractFields && isRecord(ownerConfig)
+                    ? Object.fromEntries(
+                        secretPath.ownerContractFields.flatMap((field) =>
+                          Object.hasOwn(ownerConfig, field) ? [[field, ownerConfig[field]]] : [],
+                        ),
+                      )
+                    : params.pluginConfig,
               },
             }
           : {}),
-        apply: createPluginConfigAssignmentApply(params.pluginConfig, match.path),
+        apply: (value) => {
+          if (Array.isArray(ownerConfig)) {
+            ownerConfig[Number(match.key)] = value;
+          } else {
+            ownerConfig[match.key] = value;
+          }
+        },
       });
     }
   }
-}
-
-function createPluginConfigAssignmentApply(
-  pluginConfig: Record<string, unknown>,
-  relativePath: string,
-): (value: unknown) => void {
-  return (value) => {
-    // Manifest paths use dotted/bracket notation; assignment writes need concrete object/array steps.
-    const segments = normalizeStringEntries(relativePath.replace(/\[(\d+)\]/g, ".$1").split("."));
-    if (segments.length === 0) {
-      return;
-    }
-    let current: unknown = pluginConfig;
-    for (const segment of segments.slice(0, -1)) {
-      if (Array.isArray(current)) {
-        const index = parsePluginConfigArrayIndex(segment);
-        current = index !== undefined && index < current.length ? current[index] : undefined;
-        continue;
-      }
-      current = isRecord(current) ? current[segment] : undefined;
-    }
-    const finalSegment = segments.at(-1);
-    if (!finalSegment) {
-      return;
-    }
-    if (Array.isArray(current)) {
-      const index = parsePluginConfigArrayIndex(finalSegment);
-      if (index !== undefined && index < current.length) {
-        current[index] = value;
-      }
-      return;
-    }
-    if (isRecord(current)) {
-      current[finalSegment] = value;
-    }
-  };
 }
