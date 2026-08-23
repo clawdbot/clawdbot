@@ -122,6 +122,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
         agentSession: {
           activeSession,
           clientToolCallSlots: [],
+          getCodeModeReconciliationCandidate: vi.fn(() => false),
           hasDeliveredSourceReply: vi.fn(() => false),
           hookRunner: {},
           setActiveSessionSystemPrompt: vi.fn(),

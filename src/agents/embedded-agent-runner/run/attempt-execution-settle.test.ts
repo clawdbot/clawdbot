@@ -173,6 +173,7 @@ function createFixture() {
     agentSession: {
       activeSession,
       clientToolCallSlots: [],
+      getCodeModeReconciliationCandidate: vi.fn(() => false),
       hasDeliveredSourceReply: vi.fn(() => true),
       hookRunner,
       setActiveSessionSystemPrompt: vi.fn(),
