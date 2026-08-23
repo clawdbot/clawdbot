@@ -3858,6 +3858,17 @@ openclaw-sidebar-attention {
   display: block;
 }
 
+.sidebar-issues-panel__update > .sidebar-issues-panel__details {
+  margin-inline: -6px;
+}
+
+.sidebar-issues-panel__list
+  > [data-attention-kind]
+  + .sidebar-issues-panel__update
+  > .sidebar-issues-panel__details {
+  border-block-start: 3px solid var(--sidebar-bg);
+}
+
 .sidebar-issues-panel__details {
   margin: 0;
   border-radius: 0;
@@ -4166,8 +4177,11 @@ openclaw-sidebar-attention {
 }
 
 .sidebar-approval-row {
+  display: flex;
   min-width: 0;
   min-height: 104px;
+  align-items: flex-start;
+  gap: 8px;
   padding: 8px 12px;
   border-radius: 0;
   transition: background var(--duration-fast) ease;
@@ -4177,6 +4191,11 @@ openclaw-sidebar-attention {
 .sidebar-approval-row:focus-within {
   border-radius: var(--radius-md);
   background: var(--bg-hover);
+}
+
+.sidebar-approval-row__content {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .sidebar-approval-row__header {

@@ -269,65 +269,70 @@ export function renderSidebarApprovalRow(props: SidebarApprovalRowProps) {
     data-attention-kind="pendingApproval"
     data-approval-id=${approval.id}
   >
-    <div class="sidebar-approval-row__header" data-issue-row-focus tabindex="-1">
-      <span class="sidebar-issues-panel__entity" title=${sessionTitle}>${sessionTitle}</span>
-      <span
-        class="sidebar-approval-row__timer ${expiryUrgent
-          ? "sidebar-approval-row__timer--urgent"
-          : ""}"
-        role="timer"
-        aria-label=${expiryLabel}
-        title=${expiryLabel}
-        >${remainingLabel}</span
-      >
-    </div>
-    <div class="sidebar-approval-row__command mono" title=${approval.request.command}>
-      <span aria-hidden="true">$ </span>${command}
-    </div>
-    <div
-      class="sidebar-approval-row__actions"
-      role="group"
-      aria-label=${t("approvalPage.actionsLabel")}
+    <span class="sidebar-issues-panel__icon sidebar-approval-row__icon" aria-hidden="true"
+      >${icons.shieldQuestion}</span
     >
-      ${resolveApprovalDecisions(approval).map((decision) => {
-        const label = approvalDecisionLabel(decision);
-        return html`<button
-          type="button"
-          class="btn btn--xs ${decision === "deny"
-            ? "btn--ghost"
-            : ""} sidebar-approval-row__action sidebar-approval-row__action--${decision}"
-          aria-label=${t("execApproval.decisionRequest", { decision: label, command })}
-          ?disabled=${props.busy || !props.canGrant || expired}
-          @click=${(event: Event) => props.onDecision(event, approval.id, decision)}
+    <div class="sidebar-approval-row__content">
+      <div class="sidebar-approval-row__header" data-issue-row-focus tabindex="-1">
+        <span class="sidebar-issues-panel__entity" title=${sessionTitle}>${sessionTitle}</span>
+        <span
+          class="sidebar-approval-row__timer ${expiryUrgent
+            ? "sidebar-approval-row__timer--urgent"
+            : ""}"
+          role="timer"
+          aria-label=${expiryLabel}
+          title=${expiryLabel}
+          >${remainingLabel}</span
         >
-          ${label}
-        </button>`;
-      })}
-      ${props.openSessionHref && props.onOpenSession
-        ? html`<a
-            class="sidebar-approval-row__open-session"
-            href=${props.openSessionHref}
-            aria-label=${t("sessionsView.openSession")}
-            title=${t("sessionsView.openSession")}
-            @click=${props.onOpenSession}
+      </div>
+      <div class="sidebar-approval-row__command mono" title=${approval.request.command}>
+        <span aria-hidden="true">$ </span>${command}
+      </div>
+      <div
+        class="sidebar-approval-row__actions"
+        role="group"
+        aria-label=${t("approvalPage.actionsLabel")}
+      >
+        ${resolveApprovalDecisions(approval).map((decision) => {
+          const label = approvalDecisionLabel(decision);
+          return html`<button
+            type="button"
+            class="btn btn--xs ${decision === "deny"
+              ? "btn--ghost"
+              : ""} sidebar-approval-row__action sidebar-approval-row__action--${decision}"
+            aria-label=${t("execApproval.decisionRequest", { decision: label, command })}
+            ?disabled=${props.busy || !props.canGrant || expired}
+            @click=${(event: Event) => props.onDecision(event, approval.id, decision)}
           >
-            ${icons.arrowUpRight}
-          </a>`
+            ${label}
+          </button>`;
+        })}
+        ${props.openSessionHref && props.onOpenSession
+          ? html`<a
+              class="sidebar-approval-row__open-session"
+              href=${props.openSessionHref}
+              aria-label=${t("sessionsView.openSession")}
+              title=${t("sessionsView.openSession")}
+              @click=${props.onOpenSession}
+            >
+              ${icons.arrowUpRight}
+            </a>`
+          : nothing}
+      </div>
+      ${!props.canGrant
+        ? html`<div class="sidebar-approval-row__message" role=${grantError ? "alert" : "note"}>
+            ${reviewOnlyMessage}
+          </div>`
+        : nothing}
+      ${props.error && !grantError
+        ? html`<div
+            class="sidebar-approval-row__message sidebar-approval-row__message--error"
+            role="alert"
+          >
+            ${props.error}
+          </div>`
         : nothing}
     </div>
-    ${!props.canGrant
-      ? html`<div class="sidebar-approval-row__message" role=${grantError ? "alert" : "note"}>
-          ${reviewOnlyMessage}
-        </div>`
-      : nothing}
-    ${props.error && !grantError
-      ? html`<div
-          class="sidebar-approval-row__message sidebar-approval-row__message--error"
-          role="alert"
-        >
-          ${props.error}
-        </div>`
-      : nothing}
   </article>`;
 }
 
