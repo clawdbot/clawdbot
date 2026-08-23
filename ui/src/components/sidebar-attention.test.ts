@@ -62,6 +62,7 @@ type SidebarAttentionElement = HTMLElement & {
   hasUpdateSurface(): boolean;
   updateSurfaceVisible(): boolean;
   dismissUpdateSurface(): void;
+  startUpdate(): void;
   modelAuthStatus: ModelAuthStatusResult | null;
   loadedAtMs: number;
 };
@@ -620,6 +621,35 @@ describe("update attention", () => {
     expect(element.updateSurfaceVisible()).toBe(true);
     overlaySnapshot.updateStatusBanner = { tone: "danger", text: "Update failed" };
     expect(element.updateSurfaceVisible()).toBe(true);
+  });
+
+  it("does not start an update when a failure has no actionable target", () => {
+    const runUpdate = vi.fn();
+    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    element.context = {
+      gateway: {
+        snapshot: {
+          phase: "connected",
+          hello: {
+            auth: { role: "operator", scopes: ["operator.admin"] },
+            features: { methods: ["update.run"] },
+          },
+        },
+      },
+      overlays: {
+        runUpdate,
+        snapshot: {
+          updateAvailable: null,
+          updateSchedule: null,
+          updateRunning: false,
+          updateStatusBanner: { tone: "danger", text: "Update failed" },
+        },
+      },
+    } as unknown as ApplicationContext;
+
+    element.startUpdate();
+
+    expect(runUpdate).not.toHaveBeenCalled();
   });
 });
 

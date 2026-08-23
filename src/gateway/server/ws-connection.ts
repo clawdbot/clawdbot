@@ -225,6 +225,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     const requestUserAgent = headerValue(upgradeReq.headers["user-agent"]);
     const forwardedFor = headerValue(upgradeReq.headers["x-forwarded-for"]);
     const realIp = headerValue(upgradeReq.headers["x-real-ip"]);
+    const openedDuringStartup = isStartupPending?.() === true;
     const pluginNodeCapabilities =
       connectionKind === "gateway" ? (getPluginNodeCapabilities?.() ?? []) : [];
     const pluginSurfaceBaseUrl =
@@ -417,7 +418,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       isLoopbackAddress(remote);
 
     const isExpectedLocalAppStartupAbort = (code: number) =>
-      isStartupPending?.() === true &&
+      openedDuringStartup &&
       (code === 1001 || code === 1006) &&
       lastHandshakePhase === "ws_upgrade_started" &&
       !hasReceivedPreauthFrame &&
@@ -461,8 +462,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
             ? logWsControl.debug
             : logWsControl.warn;
         const authReason = stringMetaValue(closeMeta, "authReason");
-        // This pre-connect close path has no client object yet; treat only
-        // missing shared credentials as suppressible startup retry noise.
+        // Only missing shared credentials are suppressible startup retry noise.
         const shouldLimitMissingAuthClose =
           closeCause === "unauthorized" &&
           shouldLimitMissingCredentialAuthLog({

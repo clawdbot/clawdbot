@@ -14,6 +14,7 @@ import {
   NATIVE_UPDATE_DECLINED_EVENT,
 } from "../app/native-link-routing.ts";
 import { confirmAndStartUpdate, type UpdateProgress } from "../app/update-confirmation.ts";
+import { isUpdateActionable } from "../app/update-overlay-helpers.ts";
 import { t } from "../i18n/index.ts";
 import { createInitialCronState, loadCronJobsPage } from "../lib/cron/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
@@ -422,6 +423,11 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       !context ||
       !snapshot ||
       busy ||
+      !isUpdateActionable(
+        snapshot.updateAvailable,
+        snapshot.updateSchedule,
+        snapshot.updateRunning,
+      ) ||
       !canCallGatewayMethod(context.gateway.snapshot, "update.run", "operator.admin")
     ) {
       return;
@@ -597,6 +603,11 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     const updateBusy =
       overlaySnapshot.updateRunning ||
       overlaySnapshot.updateSchedule?.campaign?.state === "applying";
+    const updateActionable = isUpdateActionable(
+      overlaySnapshot.updateAvailable,
+      overlaySnapshot.updateSchedule,
+      overlaySnapshot.updateRunning,
+    );
     const canUpdate = canCallGatewayMethod(
       this.context.gateway.snapshot,
       "update.run",
@@ -644,7 +655,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
               type="button"
               class="sidebar-footer-update"
               aria-label=${t("updates.sidebar.availableTitle")}
-              ?disabled=${updateBusy || !canUpdate}
+              ?disabled=${updateBusy || !updateActionable || !canUpdate}
               @click=${this.startUpdate}
             >
               <span class="sidebar-footer-update__icon" aria-hidden="true"
