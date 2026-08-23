@@ -63,6 +63,7 @@ export type VisibleSessionsSpawnDeps = {
 
 type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps & {
   agentSessionKey?: string;
+  requesterTurnRunId?: string;
   completionOwnerKey?: string;
   agentChannel?: string;
   agentAccountId?: string;
@@ -381,6 +382,7 @@ export async function maybeSpawnVisibleSession(params: {
     try {
       (params.options?.registerRun ?? registerSubagentRun)({
         runId,
+        requesterTurnRunId: params.options?.requesterTurnRunId,
         childSessionKey,
         controllerSessionKey: ownership.controllerSessionKey,
         requesterSessionKey: ownership.completionRequesterSessionKey,

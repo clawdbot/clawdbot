@@ -112,6 +112,45 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     expect(body).toContain("- Overall: `true`");
   });
 
+  it("renders trusted lane digests and their count differential", () => {
+    const manifest = loadEvidenceManifest(writeFixtureManifest());
+    manifest.comparison = {
+      baseline: {
+        digest:
+          "2 sent · 2 bot messages · 1 edit · 1 delete · 3 provider requests · 134s observed · attempt 1 · sent: `/queue followup`",
+        expected: "baseline behavior",
+        sha: "aaa",
+        status: "pass",
+      },
+      candidate: {
+        digest:
+          "2 sent · 3 bot messages · 1 edit · 0 deletes · 3 provider requests · 134s observed · attempt 1 · sent: `/queue followup`",
+        expected: "candidate behavior",
+        sha: "bbb",
+        status: "pass",
+      },
+      differential: "bot messages 2→3 · deletes 1→0",
+      outcome: "pass",
+      pass: true,
+    };
+
+    const body = renderEvidenceComment({
+      manifest,
+      marker: "<!-- mantis-telegram-desktop-proof -->",
+      rawBase: "https://qa.openclaw.ai/mantis/telegram/pr-1/run-1",
+    });
+
+    expect(body).toContain(
+      "- Baseline: `pass` at `aaa` — baseline behavior · facts: 2 sent · 2 bot messages · 1 edit · 1 delete · 3 provider requests · 134s observed · attempt 1 · sent: `/queue followup`",
+    );
+    expect(body).toContain(
+      "- Candidate (PR merged onto main): `pass` at `bbb` — candidate behavior · facts: 2 sent · 3 bot messages · 1 edit · 0 deletes · 3 provider requests · 134s observed · attempt 1 · sent: `/queue followup`",
+    );
+    expect(body).toContain(
+      "- Differential (trusted facts): bot messages 2→3 · deletes 1→0\n- Overall: `pass`",
+    );
+  });
+
   it("uploads manifest artifacts to R2-compatible object storage", async () => {
     const manifest = loadEvidenceManifest(writeFixtureManifest());
     const requests: Array<{

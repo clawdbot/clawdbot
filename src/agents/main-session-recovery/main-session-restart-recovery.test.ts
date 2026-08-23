@@ -5102,31 +5102,57 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
-  it("keeps an unmatched failed wait restricted when its checkpoint is replay-safe", async () => {
-    await writeMainSessionTranscript([
-      { role: "user", content: "do the thing" },
-      codeModeCheckpointMessage(),
-      codeModeWaitCallMessage(),
-      {
-        role: "toolResult",
-        toolName: "wait",
-        toolCallId: "call-other",
-        content: [{ type: "text", text: "Error: The operation was aborted." }],
-        details: {
-          status: "failed",
-          error: "Error: The operation was aborted.",
-          code: "internal_error",
-        },
-        isError: true,
-      },
-    ]);
+  it.each([
+    {
+      label: "matching failed-wait result identity",
+      toolCallIds: ["call-wait-1"],
+      restoresCodeModeTools: true,
+    },
+    {
+      label: "mismatched failed-wait result identity",
+      toolCallIds: ["call-other"],
+      restoresCodeModeTools: false,
+    },
+    {
+      label: "missing failed-wait result identity",
+      toolCallIds: [undefined],
+      restoresCodeModeTools: false,
+    },
+    {
+      label: "duplicate failed-wait result identities",
+      toolCallIds: ["call-wait-1", "call-wait-1"],
+      restoresCodeModeTools: false,
+    },
+  ])(
+    "restores Code Mode tools only for exactly one $label",
+    async ({ toolCallIds, restoresCodeModeTools }) => {
+      await writeMainSessionTranscript([
+        { role: "user", content: "do the thing" },
+        codeModeCheckpointMessage(),
+        codeModeWaitCallMessage(),
+        ...toolCallIds.map((toolCallId) => ({
+          role: "toolResult",
+          toolName: "wait",
+          ...(toolCallId ? { toolCallId } : {}),
+          content: [{ type: "text", text: "Error: The operation was aborted." }],
+          details: {
+            status: "failed",
+            error: "Error: The operation was aborted.",
+            code: "internal_error",
+          },
+          isError: true,
+        })),
+      ]);
 
-    await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
-    expect(gatewayParams()).toMatchObject({
-      forceRestartSafeTools: true,
-      forceCodeModeTools: true,
-    });
-  });
+      await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
+      expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+      if (restoresCodeModeTools) {
+        expect(gatewayParams()).toMatchObject({ forceCodeModeTools: true });
+      } else {
+        expect(gatewayParams()).not.toHaveProperty("forceCodeModeTools");
+      }
+    },
+  );
 
   it.each([
     {
