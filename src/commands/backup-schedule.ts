@@ -1,4 +1,3 @@
-import path from "node:path";
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
 import {
   callGatewayFromCli,
@@ -11,8 +10,9 @@ import type { CronJob } from "../cron/types.js";
 import { executeGitCommand } from "../infra/git-exec.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { shortenHomePath } from "../utils.js";
 import { GIT_BACKUP_PUSH_CREDENTIAL_WARNING } from "./backup-git.js";
+import { resolveRequiredBackupPath } from "./backup-shared.js";
 
 const BACKUP_CRON_JOB_NAME = "openclaw-backup-scheduled";
 const LOCAL_GATEWAY_REQUIRED_ERROR =
@@ -42,14 +42,6 @@ function resolveScheduledRedaction(options: BackupScheduleOptions): boolean {
     return options.excludeSecrets === true;
   }
   return options.includeSecrets !== true;
-}
-
-function resolveRepository(value: string | undefined): string {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    throw new Error("Missing required --repository value.");
-  }
-  return path.resolve(resolveUserPath(trimmed));
 }
 
 function buildScheduledArgv(
@@ -106,7 +98,7 @@ export async function backupEnableCommand(
   options: BackupScheduleOptions,
 ): Promise<{ id: string; updated: boolean }> {
   await assertLocalGatewayScheduleTarget(options);
-  const repositoryPath = resolveRepository(options.repository);
+  const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
   const every = options.every?.trim() || "24h";
   const everyMs = parseDurationMs(every, { defaultUnit: "ms" });
   if (!Number.isSafeInteger(everyMs) || everyMs <= 0) {
