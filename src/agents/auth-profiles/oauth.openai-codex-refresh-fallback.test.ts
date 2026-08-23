@@ -9,7 +9,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE, resetFileLockStateForTest } from "../../infra/file-lock.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
 import { buildRefreshContentionError } from "./oauth-refresh-lock-errors.js";
@@ -19,6 +22,7 @@ import {
   readAuthProfileStoreForTest,
 } from "./oauth-test-utils.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./runtime-snapshots.js";
+import { resolveAuthProfileDatabasePath } from "./sqlite.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
@@ -1026,6 +1030,35 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     });
 
     expect(getOAuthApiKeyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves the OAuth diagnosis when stale lastGood cleanup fails", async () => {
+    const profileId = "openai:default";
+    saveAuthProfileStore(
+      {
+        ...createExpiredOauthStore({ profileId, provider: "openai" }),
+        lastGood: { openai: profileId },
+      },
+      agentDir,
+    );
+    const store = ensureAuthProfileStore(agentDir);
+    openOpenClawAgentDatabase({
+      agentId: "main",
+      path: resolveAuthProfileDatabasePath(agentDir),
+    }).db.exec("ALTER TABLE auth_profile_state DROP COLUMN updated_at");
+    getOAuthApiKeyMock.mockImplementationOnce(async () => {
+      throw new Error(
+        '401 {"error":{"message":"Your refresh token has already been used to generate a new access token.","code":"refresh_token_reused"}}',
+      );
+    });
+
+    const failure = await resolveApiKeyForProfile({ store, profileId, agentDir }).catch(
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(OAuthRefreshFailureError);
+    expect(String(failure)).toContain("refresh_token_reused");
+    expect(String(failure)).not.toContain("no column named updated_at");
   });
 
   it("clears stale lastGood before selecting an alternate Codex OAuth profile", async () => {
