@@ -68,6 +68,8 @@ const TAG_OVERRIDES: Record<string, ConfigTag[]> = {
   "gateway.nodes.allowSkills": ["tools", "security", "access", "network", "advanced"],
   "nodeHost.agentRuns.claude.enabled": ["tools", "security", "access", "network", "advanced"],
   "nodeHost.workerRuns.enabled": ["tools", "security", "access", "network", "advanced"],
+  "nodeHost.workerRuns.isolation": ["security", "access", "advanced"],
+  "nodeHost.workerRuns.containerImage": ["security", "network", "advanced"],
   "nodeHost.mcp.servers": ["tools", "network", "advanced"],
   "nodeHost.skills.enabled": ["tools", "network", "advanced"],
   "proxy.tls.caFile": ["security", "network", "storage", "advanced"],

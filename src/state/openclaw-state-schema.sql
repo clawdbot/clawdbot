@@ -964,6 +964,7 @@ CREATE TABLE IF NOT EXISTS node_worker_launches (
   worker_start_time INTEGER CHECK (
     worker_start_time IS NULL OR worker_start_time BETWEEN 0 AND 9007199254740991
   ),
+  worker_container_json TEXT,
   result_json TEXT CHECK (
     result_json IS NULL
     OR (

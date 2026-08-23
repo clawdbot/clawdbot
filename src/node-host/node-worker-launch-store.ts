@@ -1,10 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { ensureColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   runOpenClawStateWriteTransaction,
@@ -26,6 +28,12 @@ type NodeWorkerLaunchState =
   | "cancelled";
 export type NodeWorkerTerminalState = Exclude<NodeWorkerLaunchState, "pending" | "running">;
 
+export type NodeWorkerContainerIdentity = {
+  engine: "docker" | "podman";
+  containerId: string;
+  engineTarget: string;
+};
+
 type NodeWorkerLaunchDatabase = Pick<OpenClawStateDatabase, "node_worker_launches">;
 type NodeWorkerLaunchRow = Selectable<NodeWorkerLaunchDatabase["node_worker_launches"]>;
 
@@ -41,6 +49,7 @@ export type NodeWorkerLaunchReceipt = {
   state: NodeWorkerLaunchState;
   supervisor: NodeWorkerProcessIdentity;
   worker: NodeWorkerProcessIdentity | null;
+  container?: NodeWorkerContainerIdentity;
   resultJson: string | null;
   errorText: string | null;
   completedAtMs: number | null;
@@ -168,10 +177,39 @@ function processIdentity(pid: number, startTime: number): NodeWorkerProcessIdent
   return { pid, startTime };
 }
 
+function containerIdentity(value: string | null | undefined): NodeWorkerContainerIdentity | null {
+  if (value == null) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch {
+    throw new Error("invalid node worker container identity");
+  }
+  if (
+    !isRecord(parsed) ||
+    Object.keys(parsed).length !== 3 ||
+    (parsed.engine !== "docker" && parsed.engine !== "podman") ||
+    typeof parsed.containerId !== "string" ||
+    typeof parsed.engineTarget !== "string"
+  ) {
+    throw new Error("invalid node worker container identity");
+  }
+  const identity: NodeWorkerContainerIdentity = {
+    engine: parsed.engine,
+    containerId: parsed.containerId,
+    engineTarget: parsed.engineTarget,
+  };
+  validateContainerIdentity(identity);
+  return identity;
+}
+
 function receiptFromRow(row: NodeWorkerLaunchRow): NodeWorkerLaunchReceipt {
   if (!isNodeWorkerLaunchState(row.state)) {
     throw new Error(`invalid node worker launch state ${row.state}`);
   }
+  const container = containerIdentity(row.worker_container_json);
   return {
     launchId: row.launch_id,
     planHash: row.plan_hash,
@@ -187,6 +225,7 @@ function receiptFromRow(row: NodeWorkerLaunchRow): NodeWorkerLaunchReceipt {
       row.worker_pid === null || row.worker_start_time === null
         ? null
         : processIdentity(row.worker_pid, row.worker_start_time),
+    ...(container ? { container } : {}),
     resultJson: row.result_json,
     errorText: row.error_text,
     completedAtMs: row.completed_at_ms,
@@ -232,6 +271,22 @@ function validateProcessIdentity(identity: NodeWorkerProcessIdentity): void {
     identity.startTime < 0
   ) {
     throw new Error("node worker process identity must contain a bounded pid and start time");
+  }
+}
+
+function validateContainerIdentity(identity: NodeWorkerContainerIdentity): void {
+  if (identity.engine !== "docker" && identity.engine !== "podman") {
+    throw new Error("node worker container engine must be docker or podman");
+  }
+  if (!/^[a-f0-9]{64}$/u.test(identity.containerId)) {
+    throw new Error(
+      "node worker container id must contain exactly 64 lowercase hexadecimal digits",
+    );
+  }
+  if (!/^[a-f0-9]{64}$/u.test(identity.engineTarget)) {
+    throw new Error(
+      "node worker container engine target must contain exactly 64 lowercase hexadecimal digits",
+    );
   }
 }
 
@@ -448,6 +503,12 @@ export class NodeWorkerLaunchStore {
     });
   }
 
+  ensureContainerIdentityColumn(): void {
+    this.write("node-worker-launch.ensure-container-identity", (database) => {
+      ensureColumn(database, "node_worker_launches", "worker_container_json TEXT");
+    });
+  }
+
   listNonterminal(): NodeWorkerLaunchReceipt[] {
     return this.write("node-worker-launch.list-nonterminal", (database) =>
       readNonterminalRows(database).map(receiptFromRow),
@@ -550,13 +611,20 @@ export class NodeWorkerLaunchStore {
     planHash: string;
     supervisor: NodeWorkerProcessIdentity;
     worker: NodeWorkerProcessIdentity;
+    container?: NodeWorkerContainerIdentity;
     nowMs?: number;
   }): NodeWorkerLaunchReceipt {
     const nowMs = params.nowMs ?? Date.now();
     validateTimestamp(nowMs);
     validateProcessIdentity(params.supervisor);
     validateProcessIdentity(params.worker);
+    if (params.container) {
+      validateContainerIdentity(params.container);
+    }
     return this.write("node-worker-launch.mark-running", (database) => {
+      if (params.container) {
+        ensureColumn(database, "node_worker_launches", "worker_container_json TEXT");
+      }
       const current = requireMatchingRow(database, params.launchId, params.planHash);
       if (TERMINAL_STATES.has(current.state)) {
         return receiptFromRow(current);
@@ -576,6 +644,15 @@ export class NodeWorkerLaunchStore {
             state: "running",
             worker_pid: params.worker.pid,
             worker_start_time: params.worker.startTime,
+            ...(params.container
+              ? {
+                  worker_container_json: JSON.stringify({
+                    engine: params.container.engine,
+                    containerId: params.container.containerId,
+                    engineTarget: params.container.engineTarget,
+                  }),
+                }
+              : {}),
             updated_at_ms: updatedAtMs,
           })
           .where("launch_id", "=", params.launchId)

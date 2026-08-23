@@ -1040,6 +1040,7 @@ export interface NodeWorkerLaunches {
   supervisor_pid: number;
   supervisor_start_time: number;
   updated_at_ms: number;
+  worker_container_json: string | null;
   worker_pid: number | null;
   worker_start_time: number | null;
 }

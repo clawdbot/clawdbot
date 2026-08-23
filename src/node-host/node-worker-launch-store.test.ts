@@ -197,3 +197,149 @@ describe("node worker launch store pruning", () => {
     expect(launchIds(database)).toEqual(["replayed-launch"]);
   });
 });
+
+describe("node worker launch store container identity", () => {
+  function claimLaunch(store: NodeWorkerLaunchStore, launchId: string) {
+    const supervisor = requireNodeWorkerProcessIdentity(process.pid);
+    const planHash = "a".repeat(64);
+    const result = store.claim(
+      {
+        launchId,
+        planHash,
+        gatewayNamespace: "gateway-1",
+        environmentId: "environment-1",
+        sessionId: "session-1",
+        ownerEpoch: 3,
+        placementGeneration: 4,
+        runId: "run-1",
+      },
+      supervisor,
+      2,
+      NOW_MS,
+    );
+    expect(result.action).toBe("start");
+    return { planHash, supervisor };
+  }
+
+  function hasContainerIdentityColumn(database: ReturnType<typeof fixture>["database"]): boolean {
+    return Boolean(
+      database
+        .prepare("SELECT 1 FROM pragma_table_info('node_worker_launches') WHERE name = ?")
+        .get("worker_container_json"),
+    );
+  }
+
+  it("keeps the container column absent for existing bare-worker journals", () => {
+    const { database, env, store } = fixture();
+    database.exec("ALTER TABLE node_worker_launches DROP COLUMN worker_container_json");
+    const { planHash, supervisor } = claimLaunch(store, "bare-launch");
+
+    const receipt = store.markRunning({
+      launchId: "bare-launch",
+      planHash,
+      supervisor,
+      worker: supervisor,
+      nowMs: NOW_MS,
+    });
+
+    expect(hasContainerIdentityColumn(database)).toBe(false);
+    expect(Object.hasOwn(receipt, "container")).toBe(false);
+    expect(store.get("bare-launch")).toEqual(receipt);
+    closeOpenClawStateDatabaseForTest();
+
+    expect(new NodeWorkerLaunchStore({ env }).get("bare-launch")).toEqual(receipt);
+    expect(hasContainerIdentityColumn(openOpenClawStateDatabase({ env }).db)).toBe(false);
+  });
+
+  it("lazily persists container identity across reopen without advancing the schema", () => {
+    const { database, env, store } = fixture();
+    database.exec("ALTER TABLE node_worker_launches DROP COLUMN worker_container_json");
+    const initialSchemaVersion = database.prepare("PRAGMA user_version").get();
+    const { planHash, supervisor } = claimLaunch(store, "container-launch");
+    const container = {
+      engine: "docker",
+      containerId: "a".repeat(64),
+      engineTarget: "b".repeat(64),
+    } as const;
+
+    const receipt = store.markRunning({
+      launchId: "container-launch",
+      planHash,
+      supervisor,
+      worker: supervisor,
+      container,
+      nowMs: NOW_MS,
+    });
+
+    expect(receipt.container).toEqual(container);
+    expect(hasContainerIdentityColumn(database)).toBe(true);
+    expect(database.prepare("PRAGMA user_version").get()).toEqual(initialSchemaVersion);
+    closeOpenClawStateDatabaseForTest();
+
+    expect(new NodeWorkerLaunchStore({ env }).get("container-launch")).toEqual(receipt);
+  });
+
+  it.each([
+    ["missing container id", JSON.stringify({ engine: "docker", engineTarget: "b".repeat(64) })],
+    ["missing engine target", JSON.stringify({ engine: "docker", containerId: "a".repeat(64) })],
+    [
+      "unknown engine",
+      JSON.stringify({
+        engine: "runc",
+        containerId: "a".repeat(64),
+        engineTarget: "b".repeat(64),
+      }),
+    ],
+    [
+      "ambiguous container id prefix",
+      JSON.stringify({
+        engine: "docker",
+        containerId: "a".repeat(12),
+        engineTarget: "b".repeat(64),
+      }),
+    ],
+    [
+      "invalid container id",
+      JSON.stringify({
+        engine: "docker",
+        containerId: "container-123",
+        engineTarget: "b".repeat(64),
+      }),
+    ],
+    [
+      "invalid engine target",
+      JSON.stringify({
+        engine: "docker",
+        containerId: "a".repeat(64),
+        engineTarget: "b".repeat(12),
+      }),
+    ],
+    [
+      "unexpected identity field",
+      JSON.stringify({
+        engine: "docker",
+        containerId: "a".repeat(64),
+        engineTarget: "b".repeat(64),
+        extra: true,
+      }),
+    ],
+  ])("fails closed when a persisted container identity has %s", (_reason, malformed) => {
+    const { database, store } = fixture();
+    const { planHash, supervisor } = claimLaunch(store, "corrupt-container-launch");
+    store.markRunning({
+      launchId: "corrupt-container-launch",
+      planHash,
+      supervisor,
+      worker: supervisor,
+      container: { engine: "docker", containerId: "a".repeat(64), engineTarget: "b".repeat(64) },
+      nowMs: NOW_MS,
+    });
+    database
+      .prepare("UPDATE node_worker_launches SET worker_container_json = ? WHERE launch_id = ?")
+      .run(malformed, "corrupt-container-launch");
+
+    expect(() => store.listNonterminal()).toThrow(
+      /node worker container (identity|id|engine target)/u,
+    );
+  });
+});

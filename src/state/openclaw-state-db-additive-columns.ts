@@ -21,6 +21,7 @@ export const CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS = [
   { columnName: "shared_host", dataType: "INTEGER", tableName: "worker_environments" },
   { columnName: "node_setup_id", dataType: "TEXT", tableName: "worker_environments" },
   { columnName: "node_device_id", dataType: "TEXT", tableName: "worker_environments" },
+  { columnName: "worker_container_json", dataType: "TEXT", tableName: "node_worker_launches" },
   { columnName: "terminal_reason", dataType: "TEXT", tableName: "worker_session_placements" },
   { columnName: "terminal_at_ms", dataType: "INTEGER", tableName: "worker_session_placements" },
   {
@@ -52,6 +53,7 @@ function isFirstUseAdditiveStateColumn({
 }: LazyAdditiveStateColumnDefinition): boolean {
   return (
     (tableName === "device_bootstrap_tokens" && columnName === "setup_id") ||
+    (tableName === "node_worker_launches" && columnName === "worker_container_json") ||
     (tableName === "skill_workshop_proposals" && columnName === "claim_released_time") ||
     (tableName === "worker_session_placement_moves" &&
       (columnName === "abandon_source" || columnName === "target_machine_class")) ||

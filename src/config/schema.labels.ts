@@ -413,6 +413,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "nodeHost.workerRuns": "Node Worker Runs",
   "nodeHost.workerRuns.enabled": "Node Worker Runs Enabled",
   "nodeHost.workerRuns.capacity": "Node Worker Run Capacity",
+  "nodeHost.workerRuns.isolation": "Node Worker Run Isolation",
+  "nodeHost.workerRuns.containerImage": "Node Worker Run Container Image",
   "nodeHost.browserProxy": "Node Browser Proxy",
   "nodeHost.browserProxy.enabled": "Node Browser Proxy Enabled",
   "nodeHost.browserProxy.allowProfiles": "Node Browser Proxy Allowed Profiles",
