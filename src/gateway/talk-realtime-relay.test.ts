@@ -2365,7 +2365,20 @@ describe("talk realtime gateway relay", () => {
   it("drains native calls that join while a forced terminal result is pending", async () => {
     const fixture = await createSuppressionUnsupportedForcedConsultFixture(["native-1"]);
     const first = createDeferred();
-    fixture.submitToolResult.mockReturnValueOnce(first.promise).mockReturnValueOnce(undefined);
+    const second = createDeferred();
+    const third = createDeferred();
+    const secondStarted = createDeferred();
+    const thirdStarted = createDeferred();
+    fixture.submitToolResult
+      .mockReturnValueOnce(first.promise)
+      .mockImplementationOnce(() => {
+        secondStarted.resolve();
+        return second.promise;
+      })
+      .mockImplementationOnce(() => {
+        thirdStarted.resolve();
+        return third.promise;
+      });
     const submission = submitTalkRealtimeRelayToolResult({
       relaySessionId: fixture.session.relaySessionId,
       connId: "conn-1",
@@ -2382,17 +2395,43 @@ describe("talk realtime gateway relay", () => {
     expect(fixture.submitToolResult.mock.calls.map((call) => call[0])).toEqual(["native-1"]);
 
     first.resolve();
-    await submission;
+    await secondStarted.promise;
+    fixture.bridgeRequest?.onToolCall?.({
+      itemId: "later-item",
+      callId: "native-3",
+      name: "openclaw_agent_consult",
+      args: { question: "Can you check this?" },
+    });
+    second.resolve();
+    await vi.waitFor(() =>
+      expect(fixture.submitToolResult.mock.calls.map((call) => call[0])).toEqual([
+        "native-1",
+        "native-2",
+        "native-3",
+      ]),
+    );
+    await thirdStarted.promise;
+    let terminalSettled = false;
+    const completion = Promise.resolve(submission).then(() => {
+      terminalSettled = true;
+    });
+    expect(terminalSettled).toBe(false);
+    third.resolve();
+    await completion;
+    expect(terminalSettled).toBe(true);
     expect(fixture.submitToolResult.mock.calls.map((call) => call[0])).toEqual([
       "native-1",
       "native-2",
+      "native-3",
     ]);
     expect(fixture.sendUserMessage).not.toHaveBeenCalled();
     expect(
       fixture.events.filter(
         (entry) =>
           (entry.payload as { type?: string }).type === "toolResult" &&
-          (entry.payload as { callId?: string }).callId === "native-2",
+          ["native-2", "native-3"].includes(
+            (entry.payload as { callId?: string }).callId ?? "",
+          ),
       ),
     ).toHaveLength(0);
   });

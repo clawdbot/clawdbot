@@ -334,24 +334,40 @@ final class RealtimeTalkRelaySession {
         let json = data.flatMap { String(data: $0, encoding: .utf8) }
         _ = try? await transport.request("talk.session.close", json, 8)
     }
+}
 
+extension RealtimeTalkRelaySession {
     @discardableResult
     func cancelOutput(reason: String = "user") -> Bool {
         let turnId = self.activeOutputTurnId
         self.stopOutputPlayback()
-        guard let relaySessionId,
-              let startupTransport,
-              let turnId
-        else { return false }
-        Task { [startupTransport] in
-            let payload: [String: Any] = [
-                "sessionId": relaySessionId,
-                "reason": reason,
-                "turnId": turnId,
-            ]
-            let data = try? JSONSerialization.data(withJSONObject: payload)
-            let json = data.flatMap { String(data: $0, encoding: .utf8) }
-            _ = try? await startupTransport.request("talk.session.cancelOutput", json, 8)
+        guard let relaySessionId, self.startupTransport != nil, let turnId else { return false }
+        Task { [weak self, lifecycleGeneration = self.lifecycleGeneration] in
+            guard let self else { return }
+            do {
+                let payload = ["sessionId": relaySessionId, "reason": reason, "turnId": turnId]
+                let result = try await self.requestJSON(
+                    method: "talk.session.cancelOutput",
+                    payload: payload,
+                    decodeAs: TalkSessionCancelOutputResult.self,
+                    timeoutSeconds: 8,
+                    lifecycleGeneration: lifecycleGeneration)
+                let validStatus = result.status == nil ||
+                    ["applied", "stale", "idle"].contains(result.status?.stringValue ?? "")
+                let validTurn = result.turnid == nil || self.nonEmpty(result.turnid) == turnId
+                guard result.ok, validStatus, validTurn else { throw URLError(.badServerResponse) }
+            } catch {
+                guard self.isCurrentLifecycleLocally(lifecycleGeneration) else { return }
+                let message = "Realtime output cancellation failed: \(error.localizedDescription)"
+                self.onIssue(.realtimeUnavailable(
+                    message: message,
+                    provider: self.options.provider,
+                    model: self.options.model,
+                    transport: "gateway-relay",
+                    phase: "output-cancel"))
+                self.onStatus(message)
+                self.close(sendClose: true)
+            }
         }
         return true
     }

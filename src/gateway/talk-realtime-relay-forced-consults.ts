@@ -238,18 +238,28 @@ function drainForcedTerminalProviderResults(
         submitForcedConsultProviderResult(session, callId, terminal.result, terminal.options),
       )
       .filter((submission): submission is Promise<void> => submission !== undefined);
-  const submissions = submitPending();
-  if (submissions.length === 0) {
-    return;
+  if (terminal.nativeCallIds) {
+    const submissions = submitPending();
+    if (submissions.length === 0) {
+      return;
+    }
+    return Promise.allSettled(submissions).then(async () => {
+      if (isCurrent()) {
+        await Promise.allSettled(submitPending());
+      }
+    });
   }
-  const settle = (pending: Promise<void>[]) =>
-    terminal.nativeCallIds ? Promise.allSettled(pending) : Promise.all(pending);
-  return settle(submissions).then(async () => {
+  const drainDynamic = (): void | Promise<void> => {
     if (!isCurrent()) {
       return;
     }
-    await settle(submitPending());
-  });
+    const submissions = submitPending();
+    if (submissions.length === 0) {
+      return;
+    }
+    return Promise.all(submissions).then(drainDynamic);
+  };
+  return drainDynamic();
 }
 
 function drainForcedTerminalProviderResultsAfterPending(
