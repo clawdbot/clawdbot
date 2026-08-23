@@ -4146,7 +4146,20 @@ button.chat-pr__diff {
   }
 
   .agent-chat__input .agent-chat__composer-controls {
+    --chat-mobile-model-control-min-width: 144px;
+    --chat-mobile-picker-padding-end: 10px;
+    --chat-mobile-picker-padding-start: 10px;
     min-width: 187px;
+  }
+
+  .agent-chat__input
+    .agent-chat__composer-controls:has(
+      .agent-chat__composer-run-status,
+      .agent-chat__session-overrides-pill
+    ) {
+    --chat-mobile-model-control-min-width: 156px;
+    --chat-mobile-picker-padding-end: 6px;
+    --chat-mobile-picker-padding-start: 6px;
   }
 
   .agent-chat__input .agent-chat__composer-run-status,
@@ -4197,7 +4210,7 @@ button.chat-pr__diff {
      text yields before either picker does. */
   .agent-chat__input .agent-chat__composer-controls .chat-composer-model-control {
     flex: 0 1 auto;
-    min-width: 144px;
+    min-width: var(--chat-mobile-model-control-min-width);
   }
 
   .agent-chat__input .agent-chat__composer-controls .chat-controls__model-picker {
@@ -4219,7 +4232,14 @@ button.chat-pr__diff {
     height: 44px;
     min-height: 44px;
     gap: 4px;
-    padding: 0 2px 0 4px;
+    padding: 0 var(--chat-mobile-picker-padding-end, 2px) 0
+      var(--chat-mobile-picker-padding-start, 4px);
+  }
+
+  /* Shift two pixels toward the label edge to balance the leading zap icon. */
+  .agent-chat__input .agent-chat__composer-controls .chat-controls__effort-trigger--fast {
+    padding-inline: calc(var(--chat-mobile-picker-padding-start) - 1px)
+      calc(var(--chat-mobile-picker-padding-end) + 1px);
   }
 
   .agent-chat__input .chat-controls__model-menu,
