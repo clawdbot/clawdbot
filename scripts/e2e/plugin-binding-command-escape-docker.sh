@@ -58,8 +58,13 @@ try {
   fs.closeSync(fd);
 }
 const text = buffer.toString("utf8").replace(/\x1B\[[0-?]*[ -/]*[@-~]/gu, "");
+const passCounts = Array.from(
+  text.matchAll(/(?:^|\n)\s*Tests\s+(\d+) passed\b/gu),
+  (match) => Number.parseInt(match[1], 10),
+);
+const totalPassed = passCounts.reduce((sum, count) => sum + count, 0);
 
-if (!/(?:^|\n)\s*Tests\s+3 passed\b/u.test(text)) {
+if (passCounts.length !== 2 || totalPassed !== 3) {
   console.error("expected focused Vitest summary for exactly 3 passed tests");
   console.error(text.slice(-4000));
   process.exit(1);

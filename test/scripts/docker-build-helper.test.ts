@@ -5128,6 +5128,8 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
       'docker_e2e_docker_cmd rm -f "$CONTAINER_NAME"',
       "lets authorized gateway-style plugin commands escape plugin-owned bindings",
       "keeps unauthorized plugin-owned binding slash replies suppressed while routed to the bound plugin",
+      "text.matchAll",
+      "passCounts.length !== 2 || totalPassed !== 3",
       "expected focused Vitest summary for exactly 3 passed tests",
     ]);
     expect(runner).not.toContain("-- --reporter=verbose");
