@@ -62,6 +62,7 @@ export type ResolvedAgentConfig = {
   params?: AgentEntry["params"];
   runtime?: AgentEntry["runtime"];
   modelPolicy?: AgentEntry["modelPolicy"];
+  usageBudget?: AgentEntry["usageBudget"];
   agentRuntime?: AgentEntry["agentRuntime"];
   utilityModel?: AgentEntry["utilityModel"];
   thinkingDefault?: AgentEntry["thinkingDefault"];
@@ -349,6 +350,7 @@ export function resolveAgentConfig(
     ...(entry.params ? { params: entry.params } : {}),
     ...(entry.runtime ? { runtime: entry.runtime } : {}),
     ...(hasExplicitModelPolicyAllow(entry.modelPolicy) ? { modelPolicy: entry.modelPolicy } : {}),
+    usageBudget: entry.usageBudget ?? agentDefaults?.usageBudget,
     ...(entry.agentRuntime ? { agentRuntime: entry.agentRuntime } : {}),
     utilityModel: readStringValue(entry.utilityModel),
     thinkingDefault: entry.thinkingDefault,

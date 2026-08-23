@@ -590,10 +590,13 @@ export async function refreshCostUsageCacheForAgent(params: {
     const rows = readSessionCostUsageRollupRows(params.agentId, databasePath);
     const rawValues = new Map(rows.map((row) => [row.key, row.valueJson]));
     const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath, rows);
-    const discoveredFiles = await listUsageCountedTranscriptStats(
-      params.agentId,
-      params.sessionsDir ? { sessionsDir: params.sessionsDir } : undefined,
-    );
+    const targetedRefresh = (params.sessionFiles?.length ?? 0) > 0;
+    const discoveredFiles = targetedRefresh
+      ? []
+      : await listUsageCountedTranscriptStats(
+          params.agentId,
+          params.sessionsDir ? { sessionsDir: params.sessionsDir } : undefined,
+        );
     const requestedFiles: UsageCostTranscriptFile[] = [];
     for (const requested of params.sessionFiles ?? []) {
       const resolved = await resolveUsageCostTranscriptFile(requested);
@@ -606,12 +609,14 @@ export async function refreshCostUsageCacheForAgent(params: {
       filesByPath.set(file.filePath, file);
     }
     const files = [...filesByPath.values()];
-    deleteSessionCostUsageRollupsExcept({
-      agentId: params.agentId,
-      databasePath,
-      liveKeys: new Set(files.map((file) => file.filePath)),
-      rows,
-    });
+    if (!targetedRefresh) {
+      deleteSessionCostUsageRollupsExcept({
+        agentId: params.agentId,
+        databasePath,
+        liveKeys: new Set(files.map((file) => file.filePath)),
+        rows,
+      });
+    }
 
     const requestedPaths = new Set<string>();
     for (const file of requestedFiles) {

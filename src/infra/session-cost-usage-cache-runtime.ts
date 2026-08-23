@@ -204,7 +204,7 @@ export async function loadSessionCostSummariesFromCache(params: {
   };
 }
 
-function requestCostUsageCacheRefresh(params: {
+export function requestCostUsageCacheRefresh(params: {
   config?: OpenClawConfig;
   agentId: string;
   sessionFiles?: string[];

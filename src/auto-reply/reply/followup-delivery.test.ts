@@ -1,5 +1,5 @@
 // Tests follow-up reply delivery and route preservation.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -12,6 +12,15 @@ const deliveryState = vi.hoisted(() => ({
   followupRoute: undefined as { route: "dispatcher" | "origin" | "drop" } | undefined,
   routeReply: vi.fn(),
   runtimeError: vi.fn(),
+}));
+
+const usageBudgetState = vi.hoisted(() => ({
+  prepareWarning: vi.fn<() => string | undefined>(() => undefined),
+}));
+
+vi.mock("../../agents/usage-budget-warning.js", () => ({
+  prepareAgentUsageBudgetWarningBestEffort: () => usageBudgetState.prepareWarning(),
+  requestAgentUsageBudgetRefreshBestEffort: vi.fn(),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -448,6 +457,64 @@ function createAccounting(
 }
 
 describe("resolveFollowupDeliveryDecision", () => {
+  beforeEach(() => {
+    usageBudgetState.prepareWarning.mockReset().mockReturnValue(undefined);
+  });
+
+  it.each([
+    [{ text: "working", isStatusNotice: true }],
+    [{ text: "thinking", isReasoning: true }],
+    [{ text: "checking", isCommentary: true }],
+  ])("does not append a budget warning to non-terminal payloads", (payload) => {
+    usageBudgetState.prepareWarning.mockReturnValue("budget warning");
+    const execution = createSettledExecution();
+    if (execution.outcome.kind === "settled") {
+      execution.outcome.result.meta = { ...execution.outcome.result.meta, yielded: true };
+    }
+
+    const decision = resolveFollowupDeliveryDecision({
+      turn: createTurn(),
+      execution,
+      accounting: createAccounting([payload]),
+      opts: { reasoningPayloadsEnabled: true, commentaryPayloadsEnabled: true },
+    });
+
+    expect(decision).toMatchObject({ kind: "deliver", payloads: [payload] });
+    expect(usageBudgetState.prepareWarning).not.toHaveBeenCalled();
+  });
+
+  it("appends a budget warning to a terminal payload", () => {
+    usageBudgetState.prepareWarning.mockReturnValue("budget warning");
+
+    expect(
+      resolveFollowupDeliveryDecision({
+        turn: createTurn(),
+        execution: createSettledExecution("done"),
+        accounting: createAccounting([{ text: "done" }]),
+      }),
+    ).toMatchObject({
+      kind: "deliver",
+      payloads: [{ text: "done" }, { text: "budget warning" }],
+    });
+  });
+
+  it("appends a budget warning when fallback supplies the terminal payload", () => {
+    usageBudgetState.prepareWarning.mockReturnValue("budget warning");
+
+    expect(
+      resolveFollowupDeliveryDecision({
+        turn: createTurn(),
+        execution: createSettledExecution(),
+        accounting: createAccounting([], {
+          terminalFailurePayload: { text: "terminal failure", isError: true },
+        }),
+      }),
+    ).toMatchObject({
+      kind: "deliver",
+      payloads: [{ text: "terminal failure" }, { text: "budget warning" }],
+    });
+  });
+
   const sourceReplyTarget = {
     tool: "message",
     provider: "discord",

@@ -71,6 +71,7 @@ type AgentRunParams = {
     mediaUrls?: string[];
     isReasoning?: boolean;
     isCommentary?: boolean;
+    isStatusNotice?: boolean;
   }) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   shouldEmitToolResult?: () => boolean;
@@ -90,6 +91,7 @@ const state = vi.hoisted(() => ({
   queueEmbeddedAgentMessageMock: vi.fn(),
   activeBackendCancelMock: vi.fn(),
   runEmbeddedAgentMock: vi.fn(),
+  usageBudgetWarningMock: vi.fn(),
 }));
 const parkedSteer = vi.hoisted(() => {
   const admit = vi.fn(async () => "steer" as const);
@@ -235,6 +237,12 @@ vi.mock("../../agents/model-fallback-attempt.js", () => ({
     Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
+vi.mock("../../agents/usage-budget-warning.js", () => ({
+  prepareAgentUsageBudgetWarningBestEffort: (...args: unknown[]) =>
+    state.usageBudgetWarningMock(...args),
+  requestAgentUsageBudgetRefreshBestEffort: vi.fn(),
+}));
+
 vi.mock("../../agents/runtime-plan/build.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/runtime-plan/build.js")>()),
   buildAgentRuntimeDeliveryPlan: () => ({
@@ -323,6 +331,7 @@ beforeEach(() => {
     payloads: [{ text: "final" }],
     meta: { agentMeta: { usage: { input: 1, output: 1 } } },
   });
+  state.usageBudgetWarningMock.mockReset().mockReturnValue(undefined);
   state.queueEmbeddedAgentMessageMock.mockReset();
   state.activeBackendCancelMock.mockReset();
   state.beforeAgentReplyHasHooksMock.mockReset().mockReturnValue(false);
@@ -4376,6 +4385,92 @@ describe("runReplyAgent typing (heartbeat)", () => {
     } finally {
       fallbackSpy.mockRestore();
     }
+  });
+
+  it("returns a usage budget warning after a streamed terminal reply", async () => {
+    const onBlockReply = vi.fn();
+    state.usageBudgetWarningMock.mockReturnValueOnce("budget warning");
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onBlockReply?.({ text: "streamed answer" });
+      return { payloads: [], meta: {} };
+    });
+
+    const { run } = createMinimalRun({
+      blockStreamingEnabled: true,
+      opts: { onBlockReply },
+    });
+    const result = await run();
+
+    expect(onBlockReply).toHaveBeenCalledOnce();
+    expect(state.usageBudgetWarningMock).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ text: "budget warning" });
+  });
+
+  it("keeps usage budget warnings after non-streamed terminal replies", async () => {
+    state.usageBudgetWarningMock.mockReturnValueOnce("budget warning");
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final answer" }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun();
+    const result = await run();
+
+    expect(state.usageBudgetWarningMock).toHaveBeenCalledOnce();
+    expect(result).toEqual([
+      expect.objectContaining({ text: "final answer" }),
+      expect.objectContaining({ text: "budget warning" }),
+    ]);
+  });
+
+  it.each([
+    {
+      label: "reasoning-only streams",
+      payload: { text: "internal reasoning", isReasoning: true },
+      opts: { reasoningPayloadsEnabled: true },
+    },
+    {
+      label: "commentary-only streams",
+      payload: { text: "internal commentary", isCommentary: true },
+      opts: { commentaryPayloadsEnabled: true },
+    },
+    {
+      label: "message-tool-only progress",
+      payload: { text: "working", isStatusNotice: true },
+      opts: { sourceReplyDeliveryMode: "message_tool_only" as const },
+    },
+  ])("does not claim a usage budget warning after $label", async ({ payload, opts }) => {
+    const onBlockReply = vi.fn();
+    state.usageBudgetWarningMock.mockReturnValue("budget warning");
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onBlockReply?.(payload);
+      return { payloads: [payload], meta: {} };
+    });
+
+    const { run } = createMinimalRun({
+      blockStreamingEnabled: true,
+      opts: { ...opts, onBlockReply },
+    });
+    await run();
+
+    expect(state.usageBudgetWarningMock).not.toHaveBeenCalled();
+  });
+
+  it("does not claim a usage budget warning after an aborted block stream", async () => {
+    const onBlockReply = vi.fn(() => new Promise<void>(() => {}));
+    state.usageBudgetWarningMock.mockReturnValue("budget warning");
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onBlockReply?.({ text: "streamed answer" });
+      return { payloads: [], meta: {} };
+    });
+
+    const { run } = createMinimalRun({
+      blockStreamingEnabled: true,
+      opts: { onBlockReply, blockReplyTimeoutMs: 1 },
+    });
+    await run();
+
+    expect(state.usageBudgetWarningMock).not.toHaveBeenCalled();
   });
 
   it("threads fallback notices without consuming the first assistant reply slot", async () => {

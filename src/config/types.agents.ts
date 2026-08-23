@@ -102,6 +102,8 @@ export type AgentConfig = {
   models?: Record<string, AgentModelEntryConfig>;
   /** Per-agent model override policy. Replaces the default policy when allow is present. */
   modelPolicy?: AgentModelPolicyConfig;
+  /** Optional per-agent warning budget. Replaces agents.defaults.usageBudget when set. */
+  usageBudget?: AgentDefaultsConfig["usageBudget"];
   /** @deprecated Legacy per-agent compaction config is kept for raw doctor migration/repair. */
   compaction?: AgentDefaultsConfig["compaction"];
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */

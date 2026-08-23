@@ -293,6 +293,40 @@ Per-agent override for the skills prompt budget.
 }
 ```
 
+### `agents.defaults.usageBudget`
+
+Optional best-effort spend warnings for agents. This mode never blocks model
+calls or changes provider credentials.
+
+```json5
+{
+  agents: {
+    defaults: {
+      usageBudget: {
+        daily: { usd: 10 },
+        action: "warn",
+      },
+    },
+    entries: {
+      local: { default: true, usageBudget: { enabled: false } },
+    },
+  },
+}
+```
+
+- `daily.usd` is a repeating warning interval: `10` warns after known spend
+  crosses $10, $20, $30, and so on. The interval resets at 00:00 UTC.
+- Warnings are appended only to direct replies for an owner-authorized sender.
+  Group replies and non-owner replies do not expose spend information.
+- Delivery is best-effort and can lag while the background usage cache warms.
+  Amounts are OpenClaw estimates from known session usage, not provider billing
+  records; unpriced calls are reported as missing.
+- Per-agent configuration replaces the default. Use
+  `usageBudget: { enabled: false }` to disable an inherited warning.
+
+This warning-only mode is an informational subset of the broader enforcement
+design in [#42475](https://github.com/openclaw/openclaw/issues/42475).
+
 ### `agents.defaults.imageMaxDimensionPx`
 
 Max pixel size for the longest image side in transcript/tool image blocks before provider calls.

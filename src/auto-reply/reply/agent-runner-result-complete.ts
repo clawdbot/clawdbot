@@ -2,6 +2,10 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasConfiguredModelFallbacks } from "../../agents/agent-scope.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
+import {
+  prepareAgentUsageBudgetWarningBestEffort,
+  requestAgentUsageBudgetRefreshBestEffort,
+} from "../../agents/usage-budget-warning.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -47,6 +51,7 @@ type PreparedReplyAgentPayloads = {
   kind: "continue";
   activeSessionEntry: SessionEntry | undefined;
   completedSourceReplyDelivery: boolean;
+  completedTerminalSourceReplyDelivery: boolean;
   guardedReplyPayloads: ReplyPayload[];
   responseUsageLine: string | undefined;
 };
@@ -141,11 +146,18 @@ export async function completeReplyAgentRun(input: {
       prefixNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
     }
   }
+  const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";
+  if (!isHookBlockedRun) {
+    requestAgentUsageBudgetRefreshBestEffort({
+      cfg,
+      agentId: followupRun.run.agentId,
+      sessionFile: runResult.meta?.agentMeta?.sessionFile ?? followupRun.run.sessionFile,
+    });
+  }
   if (execution.abortReason) {
     return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
   }
   const prefixPayloads = [...prefixNotices];
-  const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";
   const rawUserText = isHookBlockedRun
     ? runResult.meta?.finalPromptText
     : (runResult.meta?.finalPromptText ?? (sessionCtx.commandText || sessionCtx.agentText));
@@ -276,6 +288,19 @@ export async function completeReplyAgentRun(input: {
   }
   if (responseUsageLine) {
     finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+  }
+  const completedTerminalSourceReplyDelivery = prepared.completedTerminalSourceReplyDelivery;
+  if (!isHookBlockedRun && completedTerminalSourceReplyDelivery) {
+    const warning = prepareAgentUsageBudgetWarningBestEffort({
+      cfg,
+      agentId: followupRun.run.agentId,
+      sessionFile: runResult.meta?.agentMeta?.sessionFile ?? followupRun.run.sessionFile,
+      chatType: sessionCtx.ChatType,
+      senderIsOwner: followupRun.run.senderIsOwner,
+    });
+    if (warning) {
+      finalPayloads = [...finalPayloads, { text: warning }];
+    }
   }
   if (isHookBlockedRun) {
     finalPayloads = markBeforeAgentRunBlockedPayloads(finalPayloads);
@@ -422,7 +447,11 @@ export async function completeReplyAgentRun(input: {
     }
   }
   const result = returnWithQueuedFollowupDrain(
-    finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
+    finalPayloads.length === 0
+      ? undefined
+      : finalPayloads.length === 1
+        ? finalPayloads[0]
+        : finalPayloads,
   );
   return result;
 }

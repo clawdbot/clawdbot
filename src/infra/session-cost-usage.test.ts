@@ -1694,6 +1694,43 @@ describe("session cost usage", () => {
     });
   });
 
+  it("refreshes requested sessions without discovering or pruning other rollups", async () => {
+    const root = await makeSessionCostRoot("cost-cache-targeted-refresh");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const targetFile = path.join(sessionsDir, "target.jsonl");
+    const otherFile = path.join(sessionsDir, "other.jsonl");
+    const usageEntry = (timestamp: string, total: number) => ({
+      type: "message",
+      timestamp,
+      message: { role: "assistant", usage: { totalTokens: 1, cost: { total } } },
+    });
+    await fs.writeFile(targetFile, transcriptText("target", usageEntry("2026-02-05", 0.01)));
+    await fs.writeFile(otherFile, transcriptText("other", usageEntry("2026-02-05", 0.02)));
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCacheForAgent({ agentId: "main", sessionsDir });
+      const otherBefore = readSessionCostUsageRollupRows("main").find(
+        (row) => row.key === otherFile,
+      );
+      await fs.appendFile(targetFile, `${JSON.stringify(usageEntry("2026-02-05", 0.03))}\n`);
+
+      const readdirSpy = vi.spyOn(nodeFs.promises, "readdir");
+      try {
+        await refreshCostUsageCacheForAgent({ agentId: "main", sessionFiles: [targetFile] });
+        expect(readdirSpy).not.toHaveBeenCalled();
+      } finally {
+        readdirSpy.mockRestore();
+      }
+      const rows = readSessionCostUsageRollupRows("main");
+      expect(rows.find((row) => row.key === otherFile)).toEqual(otherBefore);
+      expect(rows.some((row) => row.key === targetFile)).toBe(true);
+      expect(
+        readSessionCostUsageRollupRows("main", undefined, { updatedAtGte: Date.now() + 1 }),
+      ).toEqual([]);
+    });
+  });
+
   it("rebuilds cold durable aggregate cache synchronously when requested", async () => {
     const root = await makeSessionCostRoot("cost-cache-cold-sync");
     const sessionsDir = path.join(root, "agents", "main", "sessions");

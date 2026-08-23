@@ -899,6 +899,27 @@ export const AgentModelPolicySchema = z
   })
   .strict();
 
+export const AgentUsageBudgetSchema = z
+  .union([
+    z.object({ enabled: z.literal(false) }).strict(),
+    z
+      .object({
+        enabled: z.literal(true).optional(),
+        daily: z
+          .object({
+            usd: z
+              .number()
+              .min(0.000001)
+              .multipleOf(0.000001)
+              .max(Number.MAX_SAFE_INTEGER / 1_000_000),
+          })
+          .strict(),
+        action: z.literal("warn"),
+      })
+      .strict(),
+  ])
+  .optional();
+
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -910,6 +931,7 @@ export const AgentEntrySchema = z
     utilityModel: z.string().optional(),
     models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
     modelPolicy: AgentModelPolicySchema.optional(),
+    usageBudget: AgentUsageBudgetSchema,
     thinkingDefault: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra"])
       .optional(),

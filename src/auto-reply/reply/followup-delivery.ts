@@ -11,11 +11,16 @@ import {
   hasIntentionalTerminalCompletion,
 } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { buildAgentRuntimeDeliveryPlan } from "../../agents/runtime-plan/build.js";
+import {
+  prepareAgentUsageBudgetWarningBestEffort,
+  requestAgentUsageBudgetRefreshBestEffort,
+} from "../../agents/usage-budget-warning.js";
 import { logVerbose } from "../../globals.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import {
   getReplyPayloadMetadata,
   isReplyPayloadTerminalContent,
@@ -65,6 +70,17 @@ type FollowupDeliveryDecision =
       resolved: { provider: string; model: string };
     };
 
+function isTerminalDeliveryPayload(
+  payload: ReplyPayload,
+  sourceReplyDeliveryMode: SourceReplyDeliveryMode,
+): boolean {
+  return (
+    isReplyPayloadTerminalContent(payload) &&
+    (sourceReplyDeliveryMode !== "message_tool_only" ||
+      getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true)
+  );
+}
+
 /** Resolves one final queued delivery action without performing transport I/O. */
 export function resolveFollowupDeliveryDecision(params: {
   turn: AdmittedFollowupTurn;
@@ -73,6 +89,14 @@ export function resolveFollowupDeliveryDecision(params: {
   opts?: InternalGetReplyOptions;
 }): FollowupDeliveryDecision {
   const { turn, execution, accounting, opts } = params;
+  requestAgentUsageBudgetRefreshBestEffort({
+    cfg: turn.config,
+    agentId: turn.queued.run.agentId,
+    sessionFile:
+      execution.outcome.kind === "settled"
+        ? (execution.outcome.result.meta?.agentMeta?.sessionFile ?? turn.queued.run.sessionFile)
+        : turn.queued.run.sessionFile,
+  });
   if (turn.sendPolicy === "deny") {
     return { kind: "suppress", reason: "send-policy" };
   }
@@ -242,11 +266,8 @@ export function resolveFollowupDeliveryDecision(params: {
         },
         cfg: turn.config,
       }));
-  const hasTerminalPayload = payloads.some(
-    (payload) =>
-      isReplyPayloadTerminalContent(payload) &&
-      (sourcePolicy.sourceReplyDeliveryMode !== "message_tool_only" ||
-        getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
+  const hasTerminalPayload = payloads.some((payload) =>
+    isTerminalDeliveryPayload(payload, sourcePolicy.sourceReplyDeliveryMode),
   );
   if (!hasTerminalPayload && fallbackPayload) {
     payloads = [
@@ -288,6 +309,22 @@ export function resolveFollowupDeliveryDecision(params: {
     return explicitlyDeliverable.length > 0
       ? { kind: "deliver", payloads: explicitlyDeliverable, resolved: runtimeResolved }
       : { kind: "suppress", reason: "message-tool-only" };
+  }
+  if (
+    payloads.some((payload) =>
+      isTerminalDeliveryPayload(payload, sourcePolicy.sourceReplyDeliveryMode),
+    )
+  ) {
+    const warning = prepareAgentUsageBudgetWarningBestEffort({
+      cfg: turn.config,
+      agentId: turn.queued.run.agentId,
+      sessionFile: result.meta?.agentMeta?.sessionFile ?? turn.queued.run.sessionFile,
+      chatType: turn.queued.originatingChatType ?? turn.queued.run.chatType,
+      senderIsOwner: turn.queued.run.senderIsOwner,
+    });
+    if (warning) {
+      payloads = [...payloads, { text: warning }];
+    }
   }
   return payloads.length > 0
     ? { kind: "deliver", payloads, resolved: runtimeResolved }
