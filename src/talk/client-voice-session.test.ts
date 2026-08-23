@@ -945,26 +945,26 @@ describe("client voice session", () => {
   });
 
   it("resolves the open client record for legacy tool calls", () => {
+    const resolveOpen = (sessionKey: string) =>
+      resolveOpenClientVoiceSessionId({
+        agentId: "main",
+        sessionKey,
+        agentSessionKey: sessionKey,
+      });
     const voiceSessionId = createOrResumeClientVoiceSession({
       agentId: "main",
       sessionKey: "agent:main:main",
       origin: "client",
     });
 
-    expect(
-      resolveOpenClientVoiceSessionId({ agentId: "main", sessionKey: "agent:main:main" }),
-    ).toBe(voiceSessionId);
-    expect(
-      resolveOpenClientVoiceSessionId({ agentId: "main", sessionKey: "agent:main:other" }),
-    ).toBeUndefined();
+    expect(resolveOpen("agent:main:main")).toBe(voiceSessionId);
+    expect(resolveOpen("agent:main:other")).toBeUndefined();
     createOrResumeClientVoiceSession({
       agentId: "main",
       sessionKey: "agent:main:main",
       origin: "client",
     });
-    expect(
-      resolveOpenClientVoiceSessionId({ agentId: "main", sessionKey: "agent:main:main" }),
-    ).toBeUndefined();
+    expect(resolveOpen("agent:main:main")).toBeUndefined();
   });
 
   it("keeps repeated tool-call ids separate across consult runs", () => {

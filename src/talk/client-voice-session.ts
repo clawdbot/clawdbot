@@ -399,7 +399,9 @@ export function resolveClientVoiceSessionOrigin(params: {
 export function resolveOpenClientVoiceSessionId(params: {
   agentId: string;
   sessionKey: string;
+  agentSessionKey: string;
 }): string | undefined {
+  const agentSessionKey = normalizeVoiceAgentSessionKey(params.agentSessionKey);
   const database = openOpenClawAgentDatabase({ agentId: params.agentId });
   const rows = database.db
     .prepare("SELECT value_json FROM cache_entries WHERE scope = ? ORDER BY updated_at DESC")
@@ -410,7 +412,7 @@ export function resolveOpenClientVoiceSessionId(params: {
     if (
       record?.origin === "client" &&
       record.status === "open" &&
-      record.agentSessionKey !== undefined &&
+      record.agentSessionKey === agentSessionKey &&
       record.agentId === params.agentId &&
       record.sessionKey === params.sessionKey
     ) {

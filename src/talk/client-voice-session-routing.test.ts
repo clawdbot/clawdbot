@@ -186,7 +186,7 @@ describe("client voice agent-session routing", () => {
     );
   });
 
-  it("rejects configured-target drift for a pinned call", () => {
+  it("rejects an old pinned target and resolves a fresh call after configured drift", () => {
     const voiceSessionId = createOrResumeClientVoiceSession({
       agentId: "main",
       sessionKey: "main",
@@ -194,6 +194,7 @@ describe("client voice agent-session routing", () => {
       origin: "client",
       voiceSessionId: "voice-pinned-target",
     });
+    const originalRecord = clientVoiceSessionTesting.readRecord("main", voiceSessionId);
 
     expect(() =>
       createOrResumeClientVoiceSession({
@@ -212,6 +213,35 @@ describe("client voice agent-session routing", () => {
         voiceSessionId,
       }),
     ).toThrow("canonical target does not match");
+
+    expect(
+      resolveOpenClientVoiceSessionId({
+        agentId: "main",
+        sessionKey: "main",
+        agentSessionKey: "agent:main:work",
+      }),
+    ).toBeUndefined();
+    expect(originalRecord).toMatchObject({
+      status: "open",
+      agentSessionKey: "agent:main:main",
+    });
+
+    const freshVoiceSessionId = createOrResumeClientVoiceSession({
+      agentId: "main",
+      sessionKey: "main",
+      agentSessionKey: "agent:main:work",
+      origin: "client",
+      voiceSessionId: "voice-after-config-drift",
+      now: 8,
+    });
+    expect(
+      resolveOpenClientVoiceSessionId({
+        agentId: "main",
+        sessionKey: "main",
+        agentSessionKey: "agent:main:work",
+      }),
+    ).toBe(freshVoiceSessionId);
+    expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)).toEqual(originalRecord);
   });
 
   it("preserves an unpinned row and allows a fresh call after config drift", () => {
@@ -235,7 +265,11 @@ describe("client voice agent-session routing", () => {
     );
 
     expect(
-      resolveOpenClientVoiceSessionId({ agentId: "main", sessionKey: "main" }),
+      resolveOpenClientVoiceSessionId({
+        agentId: "main",
+        sessionKey: "main",
+        agentSessionKey: "agent:main:work",
+      }),
     ).toBeUndefined();
     expect(() =>
       createOrResumeClientVoiceSession({
@@ -263,9 +297,13 @@ describe("client voice agent-session routing", () => {
       voiceSessionId: "voice-after-config-drift",
       now: 8,
     });
-    expect(resolveOpenClientVoiceSessionId({ agentId: "main", sessionKey: "main" })).toBe(
-      freshVoiceSessionId,
-    );
+    expect(
+      resolveOpenClientVoiceSessionId({
+        agentId: "main",
+        sessionKey: "main",
+        agentSessionKey: "agent:main:work",
+      }),
+    ).toBe(freshVoiceSessionId);
     expect(clientVoiceSessionTesting.readRecord("main", freshVoiceSessionId)).toMatchObject({
       agentSessionKey: "agent:main:work",
     });

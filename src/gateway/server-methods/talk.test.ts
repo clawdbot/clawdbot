@@ -2593,6 +2593,68 @@ describe("talk.client.toolCall handler", () => {
     });
   });
 
+  it("creates a fresh implicit session when a cached canonical target drifts", async () => {
+    mocks.resolveOpenClientVoiceSessionId.mockReturnValueOnce("voice-before-drift");
+    mocks.createOrResumeClientVoiceSession.mockReturnValueOnce("voice-after-drift");
+    mocks.assertClientVoiceSessionOpen
+      .mockImplementationOnce(() => "client")
+      .mockImplementationOnce(({ agentSessionKey, voiceSessionId }) => {
+        if (agentSessionKey === "global" && voiceSessionId === "voice-before-drift") {
+          throw new Error("voice session canonical target does not match this agent session");
+        }
+        return "client";
+      });
+    const client = { connId: "conn-config-drift" };
+
+    const initialRespond = vi.fn();
+    await callTalkHandler("talk.client.toolCall", {
+      params: {
+        sessionKey: "main",
+        callId: "call-before-drift",
+        name: "openclaw_agent_consult",
+        args: { question: "Start the call" },
+      },
+      client,
+      respond: initialRespond,
+      context: { getRuntimeConfig: () => ({}) as OpenClawConfig },
+    });
+    expectRespondOk(initialRespond, { agentSessionKey: "agent:main:main" });
+
+    const driftedRespond = vi.fn();
+    await callTalkHandler("talk.client.toolCall", {
+      params: {
+        sessionKey: "main",
+        callId: "call-after-drift",
+        name: "openclaw_agent_consult",
+        args: { question: "Continue after the config change" },
+      },
+      client,
+      respond: driftedRespond,
+      context: {
+        getRuntimeConfig: () => ({ session: { scope: "global" } }) as OpenClawConfig,
+      },
+    });
+
+    expect(mocks.resolveOpenClientVoiceSessionId).toHaveBeenNthCalledWith(2, {
+      agentId: "main",
+      sessionKey: "main",
+      agentSessionKey: "global",
+    });
+    expect(mocks.createOrResumeClientVoiceSession).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "main",
+      agentSessionKey: "global",
+      origin: "client",
+    });
+    expect(mocks.assertClientVoiceSessionOpen).toHaveBeenLastCalledWith({
+      agentId: "main",
+      sessionKey: "main",
+      agentSessionKey: "global",
+      voiceSessionId: "voice-after-drift",
+    });
+    expectRespondOk(driftedRespond, { agentSessionKey: "global" });
+  });
+
   it("requires relay connection ownership for relay-origin voice records", async () => {
     mocks.assertClientVoiceSessionOpen.mockReturnValueOnce("relay");
     const respond = vi.fn();

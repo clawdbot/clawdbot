@@ -81,7 +81,10 @@ const LEGACY_VOICE_BINDING_TTL_MS = 6 * 60 * 60_000;
 const REALTIME_VOICE_CONTEXT_MAX_ITEMS = 16;
 const REALTIME_VOICE_CONTEXT_MAX_ITEM_CHARS = 800;
 const REALTIME_VOICE_CLIENT_SESSION_MIN_TTL_MS = 5_000;
-const legacyVoiceSessionByClient = new Map<string, { voiceSessionId: string; expiresAt: number }>();
+const legacyVoiceSessionByClient = new Map<
+  string,
+  { voiceSessionId: string; agentSessionKey: string; expiresAt: number }
+>();
 
 function legacyVoiceBindingKey(connId: string, sessionKey: string): string {
   return `${connId}\0${sessionKey}`;
@@ -443,6 +446,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
             pruneLegacyVoiceBindings(now);
             legacyVoiceSessionByClient.set(legacyVoiceBindingKey(connId, voiceSessionKey), {
               voiceSessionId,
+              agentSessionKey,
               expiresAt: now + LEGACY_VOICE_BINDING_TTL_MS,
             });
           }
@@ -529,6 +533,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       config,
       params.sessionKey,
     );
+    const voiceTarget = { agentId, sessionKey: voiceSessionKey, agentSessionKey };
     const relaySessionId = normalizeOptionalString(params.relaySessionId);
     const connId = normalizeOptionalString(request.client?.connId);
     pruneLegacyVoiceBindings();
@@ -544,33 +549,20 @@ export const talkClientHandlers: GatewayRequestHandlers = {
     let confirmationGrant: ClientVoiceConfirmationGrant | undefined;
     let voiceSessionId: string;
     try {
+      const legacyBinding = connId
+        ? legacyVoiceSessionByClient.get(legacyVoiceBindingKey(connId, voiceSessionKey))
+        : undefined;
       // Shipped clients may consult without ever creating a voice session (old app,
       // restarted gateway, ambiguous open records). Implicitly create one instead of
       // erroring so confirmation and mutation evidence stay always-on.
       voiceSessionId =
         explicitVoiceSessionId ??
         relaySessionId ??
-        (connId
-          ? legacyVoiceSessionByClient.get(legacyVoiceBindingKey(connId, voiceSessionKey))
-              ?.voiceSessionId
+        (legacyBinding?.agentSessionKey === agentSessionKey
+          ? legacyBinding.voiceSessionId
           : undefined) ??
-        resolveOpenClientVoiceSessionId({ agentId, sessionKey: voiceSessionKey }) ??
-        createOrResumeClientVoiceSession({
-          agentId,
-          sessionKey: voiceSessionKey,
-          agentSessionKey,
-          origin: "client",
-        });
-      // Pin the resolved id to this connection so a legacy client's later consults
-      // reuse one record instead of forking a new never-closed session each time.
-      if (connId && !relaySessionId) {
-        const now = Date.now();
-        pruneLegacyVoiceBindings(now);
-        legacyVoiceSessionByClient.set(legacyVoiceBindingKey(connId, voiceSessionKey), {
-          voiceSessionId,
-          expiresAt: now + LEGACY_VOICE_BINDING_TTL_MS,
-        });
-      }
+        resolveOpenClientVoiceSessionId(voiceTarget) ??
+        createOrResumeClientVoiceSession({ ...voiceTarget, origin: "client" });
       if (relaySessionId && connId) {
         // Initialize the canonical session row BEFORE binding: the bind drains the
         // relay's buffered finals into transcript appends, which fail without it.
@@ -583,12 +575,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         await flushTalkRealtimeRelayVoiceWrites({ relaySessionId, connId });
       }
       const parsedArgs = parseRealtimeVoiceAgentConsultArgs(params.args ?? {});
-      const origin = assertClientVoiceSessionOpen({
-        agentId,
-        sessionKey: voiceSessionKey,
-        agentSessionKey,
-        voiceSessionId,
-      });
+      const origin = assertClientVoiceSessionOpen({ ...voiceTarget, voiceSessionId });
       if (origin === "relay" && (!relaySessionId || !connId)) {
         throw new Error(
           "relay-owned voice sessions require relaySessionId and connection ownership",
@@ -599,6 +586,17 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           agentId,
           voiceSessionId,
           confirmationId: parsedArgs.confirmationId,
+        });
+      }
+      // Publish only a validated target so an incompatible explicit id cannot poison
+      // later implicit recovery on this connection.
+      if (connId && !relaySessionId) {
+        const now = Date.now();
+        pruneLegacyVoiceBindings(now);
+        legacyVoiceSessionByClient.set(legacyVoiceBindingKey(connId, voiceSessionKey), {
+          voiceSessionId,
+          agentSessionKey,
+          expiresAt: now + LEGACY_VOICE_BINDING_TTL_MS,
         });
       }
     } catch (err) {
@@ -619,9 +617,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       connId,
       onRunStarted: (runId) => {
         registerClientVoiceConsultRun({
-          agentId,
-          sessionKey: voiceSessionKey,
-          agentSessionKey,
+          ...voiceTarget,
           voiceSessionId,
           runId,
           config: request.context.getRuntimeConfig(),
@@ -691,7 +687,10 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         return;
       }
       const config = context.getRuntimeConfig();
-      const { agentId, voiceSessionKey } = resolveTalkSessionTarget(config, params.sessionKey);
+      const { agentId, voiceSessionKey, agentSessionKey } = resolveTalkSessionTarget(
+        config,
+        params.sessionKey,
+      );
       const origin = resolveClientVoiceSessionOrigin({
         agentId,
         sessionKey: voiceSessionKey,
@@ -709,7 +708,11 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       const connId = normalizeOptionalString(client?.connId);
       if (connId) {
         const key = legacyVoiceBindingKey(connId, voiceSessionKey);
-        if (legacyVoiceSessionByClient.get(key)?.voiceSessionId === params.voiceSessionId) {
+        const binding = legacyVoiceSessionByClient.get(key);
+        if (
+          binding?.voiceSessionId === params.voiceSessionId &&
+          binding.agentSessionKey === agentSessionKey
+        ) {
           legacyVoiceSessionByClient.delete(key);
         }
       }
