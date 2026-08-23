@@ -333,6 +333,143 @@ describe("cli json stdout contract", () => {
 
   it.each([
     {
+      name: "cleanup with an inherited filter in human mode",
+      args: ["sessions", "--active", "5", "cleanup"],
+      message:
+        "`sessions cleanup` does not support the parent `sessions` option --active; session-list filters cannot scope session maintenance.",
+      human: true,
+    },
+    {
+      name: "cleanup inherited filter with leaf JSON",
+      args: ["sessions", "--active", "5", "cleanup", "--json"],
+      message:
+        "`sessions cleanup` does not support the parent `sessions` option --active; session-list filters cannot scope session maintenance.",
+    },
+    {
+      name: "cleanup inherited limit with parent JSON",
+      args: ["sessions", "--json", "--limit", "1", "cleanup"],
+      message:
+        "`sessions cleanup` does not support the parent `sessions` option --limit; session-list filters cannot scope session maintenance.",
+    },
+    {
+      name: "trajectory export inherited all-agent scope",
+      args: [
+        "sessions",
+        "--all-agents",
+        "export-trajectory",
+        "--session-key",
+        "agent:main:main",
+        "--json",
+      ],
+      message:
+        "`sessions export-trajectory` does not support the parent `sessions` option --all-agents; trajectory export targets one session and cannot apply session-list filters.",
+    },
+    {
+      name: "archive inherited store with leaf JSON",
+      args: ["sessions", "--store", "/tmp/other.sqlite", "archive", "agent:main:test", "--json"],
+      message:
+        "`sessions archive` does not support the parent `sessions` option --store; the gateway resolves target stores from each key and --agent.",
+    },
+    {
+      name: "archive invalid timeout with parent JSON",
+      args: ["sessions", "--json", "archive", "agent:main:test", "--timeout", "0"],
+      message: "--timeout must be a positive integer (milliseconds).",
+    },
+    {
+      name: "delete inherited all-agent scope",
+      args: ["sessions", "--all-agents", "delete", "agent:main:test", "--yes", "--json"],
+      message:
+        "`sessions delete` does not support the parent `sessions` option --all-agents; the gateway resolves target stores from each key and --agent.",
+    },
+    {
+      name: "delete invalid timeout with leaf JSON",
+      args: ["sessions", "delete", "agent:main:test", "--timeout", "nope", "--yes", "--json"],
+      message: "--timeout must be a positive integer (milliseconds).",
+    },
+    {
+      name: "compact inherited all-agent scope",
+      args: ["sessions", "--all-agents", "compact", "agent:main:test", "--json"],
+      message:
+        "`sessions compact` does not support the parent `sessions` option --all-agents; the gateway resolves the target store from <key> and --agent.",
+    },
+    {
+      name: "compact invalid max-lines with leaf JSON",
+      args: ["sessions", "compact", "agent:main:test", "--max-lines", "0", "--json"],
+      message: "--max-lines must be a positive integer.",
+    },
+    {
+      name: "compact invalid timeout with parent JSON",
+      args: ["sessions", "--json", "compact", "agent:main:test", "--timeout", "0"],
+      message: "--timeout must be a positive integer (milliseconds).",
+    },
+    {
+      name: "human-only tail rejecting inherited JSON",
+      args: ["sessions", "--json", "tail"],
+      message:
+        "`sessions tail` does not support the parent `sessions` option --json; trajectory tail emits human-readable progress and selects sessions separately.",
+    },
+    {
+      name: "cleanup inherited filter through forced Commander",
+      args: ["sessions", "--active", "5", "cleanup", "--json"],
+      message:
+        "`sessions cleanup` does not support the parent `sessions` option --active; session-list filters cannot scope session maintenance.",
+      commander: true,
+    },
+    {
+      name: "compact invalid max-lines through dual-TTY finalization",
+      args: ["sessions", "compact", "agent:main:test", "--max-lines", "0", "--json"],
+      message: "--max-lines must be a positive integer.",
+      tty: true,
+    },
+  ])("renders sessions registration validation failures for $name", async (testCase) => {
+    await withTempHome(
+      async (tempHome) => {
+        const preload = Buffer.from(
+          [
+            'import net from "node:net";',
+            'net.Socket.prototype.connect = function () { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };',
+            'globalThis.fetch = async () => { throw new Error("AUTOQA_NETWORK_FORBIDDEN"); };',
+            ...("tty" in testCase
+              ? [
+                  'Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });',
+                  'Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });',
+                ]
+              : []),
+          ].join("\n"),
+        ).toString("base64");
+        const result = runBuiltCli(tempHome, testCase.args, {
+          NODE_OPTIONS: `--import=data:text/javascript;base64,${preload}`,
+          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+          OPENCLAW_GATEWAY_PORT: "29791",
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+          ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
+        });
+
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stdout, result.stderr).not.toContain("\u001B");
+        expect(result.stdout, result.stderr).not.toContain("\u0007");
+        if ("human" in testCase) {
+          expect(result.stdout).toBe("");
+        } else {
+          expect(JSON.parse(result.stdout)).toEqual({
+            ok: false,
+            error: { type: "cli_error", message: testCase.message },
+          });
+        }
+        expect(result.stderr).toContain(testCase.message);
+        expect(result.stderr.split(testCase.message)).toHaveLength(2);
+        expect(result.stderr).not.toContain("AUTOQA_NETWORK_FORBIDDEN");
+        if ("tty" in testCase) {
+          expect(result.stderr).toContain("\u001B[?25h");
+        }
+      },
+      { prefix: "openclaw-sessions-registration-json-failure-e2e-" },
+    );
+  });
+
+  it.each([
+    {
       name: "account validation in human mode",
       args: ["channels", "capabilities", "--account", "ghost"],
       message: "--account requires a specific --channel. Run openclaw channels list to choose one.",
