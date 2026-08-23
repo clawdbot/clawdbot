@@ -279,7 +279,11 @@ export async function handleDiscordMessageAction(
     }
     const content =
       readStringParam(params, "message", { allowEmpty: true }) ??
-      readStringParam(params, "content", { allowEmpty: true });
+      readStringParam(params, "content", { allowEmpty: true }) ??
+      // `media` is accepted as an alias for the file, so a send-shaped call
+      // arrives with its text in `caption`; without this alias that text is
+      // silently dropped instead of becoming the uploaded message's content.
+      readStringParam(params, "caption", { allowEmpty: true });
     const filename = readStringParam(params, "filename");
     const replyTo = readStringParam(params, "replyTo");
     const silent = readBooleanParam(params, "silent") === true;

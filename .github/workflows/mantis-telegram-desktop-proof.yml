@@ -1023,13 +1023,22 @@ jobs:
           manifest="$trusted_output/mantis-evidence.json"
           judgment="$RUNNER_TEMP/mantis-agent-judgment.json"
           sudo jq -e '
+            def valid_assertion:
+              select(type == "object") |
+              select((keys | sort) == ["mode", "target", "value"]) |
+              select(.target == "providerRequests" or .target == "botApiRequests" or .target == "observationEvents") |
+              select(.mode == "contains" or .mode == "absent") |
+              select((.value | type) == "string" and (.value | length) >= 1 and (.value | length) <= 200);
+            select(.schemaVersion == 2) |
             select((.summary | type) == "string" and (.summary | length) <= 4000) |
             select((.comparison.baseline.expected | type) == "string" and (.comparison.baseline.expected | length) <= 1000) |
             select((.comparison.candidate.expected | type) == "string" and (.comparison.candidate.expected | length) <= 1000) |
             {
               summary,
               baselineExpected: .comparison.baseline.expected,
-              candidateExpected: .comparison.candidate.expected
+              baselineAssertion: (.comparison.baseline.assertion | valid_assertion),
+              candidateExpected: .comparison.candidate.expected,
+              candidateAssertion: (.comparison.candidate.assertion | valid_assertion)
             }
           ' "$agent_manifest" > "$judgment"
           baseline_status="$(sudo jq -r '.comparison.baseline.status' "$agent_manifest")"
@@ -1164,17 +1173,15 @@ jobs:
           sudo jq --slurpfile judgment "$judgment" '
             .summary = (if .comparison.outcome == "pass" then $judgment[0].summary else .summary end) |
             .comparison.baseline.expected = $judgment[0].baselineExpected |
-            .comparison.candidate.expected = $judgment[0].candidateExpected
+            .comparison.baseline.assertion = $judgment[0].baselineAssertion |
+            .comparison.candidate.expected = $judgment[0].candidateExpected |
+            .comparison.candidate.assertion = $judgment[0].candidateAssertion
           ' "$manifest" | sudo tee "$trusted_manifest" >/dev/null
           sudo mv "$trusted_manifest" "$manifest"
-
-          jq -e '
-            (.comparison.outcome == "pass" and .comparison.pass == true and
-              .comparison.baseline.status == "pass" and .comparison.candidate.status == "pass") or
-            (.comparison.outcome == "blocked" and .comparison.pass == false and
-              (.comparison.baseline.status == "blocked" or .comparison.candidate.status == "blocked")) or
-            (.comparison.outcome == "fail" and .comparison.pass == false)
-          ' "$manifest" >/dev/null
+          sudo env -i PATH=/usr/local/lib/mantis-toolchain:/usr/local/bin:/usr/bin:/bin \
+            /usr/local/lib/mantis-toolchain/node \
+            "$GITHUB_WORKSPACE/scripts/mantis/publish-pr-evidence.mjs" \
+            --manifest "$manifest" --validate-only true
 
           token="$(sudo jq -r '.sutToken' "$SUT_CREDENTIAL_DIR/credential.json")"
           if sudo grep -RIlF -- "$token" "$trusted_output" >/dev/null; then

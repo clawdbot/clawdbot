@@ -34,6 +34,7 @@ type ManifestLane = {
   detail?: string;
   digest?: string;
   expected: string;
+  expectationMet?: boolean;
   status: string;
   ref?: string;
   sha?: string;
@@ -490,7 +491,7 @@ function buildTelegramDesktopProofManifest({
   const baselineDigest = laneDigest(baseline.facts);
   const candidateDigest = laneDigest(candidate.facts);
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "telegram-desktop-proof",
     title: "Mantis Telegram Desktop Proof",
     summary: outcome === "pass" ? PASS_SUMMARY : INCOMPLETE_SUMMARY,

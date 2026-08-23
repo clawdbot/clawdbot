@@ -402,15 +402,16 @@ jobs:
             --arg candidateStatus "$candidate_status" \
             --argjson pass "$([[ "$comparison_status" == "pass" ]] && echo true || echo false)" \
             '{
-              schemaVersion: 1,
+              schemaVersion: 2,
               id: "discord-thread-attachment",
               title: "Mantis Discord Thread Attachment QA",
               summary: "Mantis reproduced the Discord thread-reply filePath attachment bug with a synthetic baseline that reverts only the thread attachment fix, then verified the candidate preserves the attachment.",
               scenario: "discord-thread-reply-filepath-attachment",
               comparison: {
+                outcome: (if $pass then "pass" else "fail" end),
                 pass: $pass,
-                baseline: { ref: $baselineRef, status: $baselineStatus, expected: "thread reply omits filePath attachment" },
-                candidate: { ref: $candidateRef, status: $candidateStatus, expected: "thread reply includes filePath attachment" }
+                baseline: { ref: $baselineRef, status: $baselineStatus, expected: "thread reply omits filePath attachment", expectationMet: ($baselineStatus == "fail") },
+                candidate: { ref: $candidateRef, status: $candidateStatus, expected: "thread reply includes filePath attachment", expectationMet: ($candidateStatus == "pass") }
               },
               artifacts: [
                 { kind: "timeline", lane: "baseline", label: "Baseline missing filePath attachment", path: "baseline/discord-thread-reply-filepath-attachment-attachment.png", targetPath: "baseline.png", alt: "Baseline Discord thread reply without filePath attachment", width: 420 },

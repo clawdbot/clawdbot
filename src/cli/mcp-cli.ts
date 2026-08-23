@@ -1097,6 +1097,10 @@ export function registerMcpCli(program: Command) {
         if (!loaded.ok) {
           fail(loaded.error);
         }
+        const targetName = name.trim();
+        if (targetName && Object.hasOwn(loaded.mcpServers, targetName)) {
+          fail(`MCP server ${JSON.stringify(targetName)} already exists.`);
+        }
         const shouldProbe =
           opts.probe !== false && server.enabled !== false && server.auth !== "oauth";
         if (shouldProbe) {
@@ -1106,7 +1110,7 @@ export function registerMcpCli(program: Command) {
             servers: { [name]: server },
           });
         }
-        const result = await setConfiguredMcpServer({ name, server });
+        const result = await setConfiguredMcpServer({ name, server, createOnly: true });
         if (!result.ok) {
           fail(result.error);
         }

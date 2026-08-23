@@ -10,4 +10,19 @@ describe("buildRestartRecoveryResumeMessage", () => {
         "Use the latest figures\n\nPlease continue where you left off.",
     );
   });
+
+  it.each([
+    ["original task", (value: string) => buildRestartRecoveryResumeMessage(value)],
+    [
+      "latest user direction",
+      (value: string) => buildRestartRecoveryResumeMessage("Finish the report", value),
+    ],
+  ])("bounds the %s without splitting UTF-16 surrogate pairs", (_label, buildMessage) => {
+    const retained = `${"x".repeat(1_997)}🦞`;
+    const message = buildMessage(`${retained}🚀discarded direction`);
+
+    expect(message).toContain(`${retained}...\n\n`);
+    expect(message).not.toContain("🚀");
+    expect(message).not.toContain("discarded direction");
+  });
 });

@@ -582,7 +582,12 @@ function openOpenClawStateDatabaseWithBusyTimeout(
   }
   const cached = stateDbCache.getCachedOpenClawStateDatabase(pathname);
   if (cached?.db.isOpen) {
-    assertOpenClawStateWriteAllowed({ database: cached.db, databasePath: pathname, env });
+    assertOpenClawStateWriteAllowed({
+      database: cached.db,
+      databasePath: pathname,
+      env,
+      schemaReady: true,
+    });
     return cached;
   }
   try {
@@ -696,6 +701,7 @@ export function runOpenClawStateWriteTransaction<T>(
           database: database.db,
           databasePath: database.path,
           env: options.env ?? process.env,
+          schemaReady: !options.database && database === getOpenClawStateDatabaseIfOpen(options),
         });
         return operation(database);
       },

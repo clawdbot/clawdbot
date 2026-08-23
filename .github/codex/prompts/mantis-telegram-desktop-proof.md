@@ -177,9 +177,11 @@ commands, and proof facts. The builder publishes it as a non-inline attachment.
 Build `mantis-evidence.json` with
 `scripts/mantis/build-telegram-desktop-proof-evidence.mts` as before, using each
 lane's generated `telegram-user-crabbox-session-summary.json`. Edit only the
-human summary/expected wording. Name the concrete product defect or missing
-primitive when a lane fails or blocks; the workflow derives the outcome from
-trusted lane facts.
+human summary/expected wording and add each lane's assertion in the same edit:
+`{"target":"providerRequests|botApiRequests|observationEvents","mode":"contains|absent","value":"literal substring (1..200 chars)"}`.
+Trusted code evaluates it against that lane's recorded facts; never set
+`expectationMet`. If the expectation cannot be expressed as this fact predicate,
+the lane is `blocked` with a concrete reason—never `pass`.
 
 ```bash
 node --import tsx scripts/mantis/build-telegram-desktop-proof-evidence.mts \
