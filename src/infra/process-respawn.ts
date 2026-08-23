@@ -7,16 +7,16 @@ import { formatErrorMessage } from "./errors.js";
 import { triggerOpenClawRestart } from "./restart.js";
 import { detectGatewayRespawnSupervisor } from "./supervisor-markers.js";
 
-type RespawnMode = "spawned" | "supervised" | "disabled" | "failed";
-
 type GatewayRespawnResult = {
-  mode: RespawnMode;
-  pid?: number;
+  mode: "supervised" | "disabled" | "failed";
   detail?: string;
   handoffSpawned?: Promise<boolean>;
 };
 
-type GatewayUpdateRespawnResult = GatewayRespawnResult & {
+type GatewayUpdateRespawnResult = {
+  mode: "spawned" | "disabled" | "failed";
+  pid?: number;
+  detail?: string;
   child?: ChildProcess;
 };
 type GatewayRespawnOptions = {

@@ -23,9 +23,21 @@ const consumeGatewaySigusr1RestartIntent = vi.fn<
     reason?: string;
     force?: boolean;
     waitMs?: number;
-    successorOwner?: "managed-update-handoff";
+    successorOwner?: {
+      kind: "managed-update-handoff";
+      handoffId: string;
+      installRoot: string;
+    };
   } | null
 >(() => null);
+const managedUpdateSuccessorOwner = {
+  kind: "managed-update-handoff",
+  handoffId: "handoff-under-test",
+  installRoot: "/openclaw/install",
+} as const;
+const cancelManagedServiceUpdateHandoff = vi.fn(
+  async (_identity: typeof managedUpdateSuccessorOwner) => true,
+);
 const consumeGatewaySigusr1RestartAuthorization = vi.fn(() => true);
 const consumeGatewayRestartIntentSync = vi.fn(() => false);
 const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
@@ -124,8 +136,7 @@ const reloadTaskRuntimeStateFromStore = vi.fn();
 const clearRuntimeConfigSnapshot = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
   (_opts?: { env?: NodeJS.ProcessEnv }) => {
-    mode: "spawned" | "supervised" | "disabled" | "failed";
-    pid?: number;
+    mode: "supervised" | "disabled" | "failed";
     detail?: string;
     handoffSpawned?: Promise<boolean>;
   }
@@ -194,6 +205,11 @@ vi.mock("../../infra/restart.js", async (importOriginal) => {
 vi.mock("../../infra/restart-intent.js", () => ({
   consumeGatewayRestartIntentPayloadSync: () => consumeGatewayRestartIntentPayloadSync(),
   consumeGatewayRestartIntentSync: () => consumeGatewayRestartIntentSync(),
+}));
+
+vi.mock("../../infra/update-managed-service-handoff.js", () => ({
+  cancelManagedServiceUpdateHandoff: (identity: typeof managedUpdateSuccessorOwner) =>
+    cancelManagedServiceUpdateHandoff(identity),
 }));
 
 vi.mock("../../infra/gateway-suspend-coordinator.js", () => ({
@@ -526,6 +542,8 @@ beforeEach(async () => {
   parkCurrentLaunchAgentForMaintenance.mockResolvedValue(true);
   parkCurrentSystemdServiceForMaintenance.mockReset();
   parkCurrentSystemdServiceForMaintenance.mockResolvedValue();
+  cancelManagedServiceUpdateHandoff.mockReset();
+  cancelManagedServiceUpdateHandoff.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -2083,11 +2101,12 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("releases the lock before exiting on spawned restart", async () => {
+  it("releases the lock before exiting on supervised restart", async () => {
     vi.clearAllMocks();
     peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
     const originalTraceEnv = process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
     process.env.OPENCLAW_GATEWAY_RESTART_TRACE = "1";
+    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
 
     try {
       await withIsolatedSignals(async ({ captureSignal }) => {
@@ -2096,11 +2115,7 @@ describe("runGatewayLoop", () => {
           release: lockRelease,
         });
 
-        // Override process-respawn to return "spawned" mode
-        restartGatewayProcessWithFreshPid.mockReturnValueOnce({
-          mode: "spawned",
-          pid: 9999,
-        });
+        restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised" });
 
         const exitCallOrder: string[] = [];
         const { runtime, exited } = await createSignaledLoopHarness(exitCallOrder);
@@ -2118,9 +2133,10 @@ describe("runGatewayLoop", () => {
         const [respawnOpts] = restartGatewayProcessWithFreshPid.mock.calls[0] ?? [];
         expect(respawnOpts?.env?.OPENCLAW_GATEWAY_RESTART_TRACE_STARTED_AT_MS).toMatch(/^\d/u);
         expect(respawnOpts?.env?.OPENCLAW_GATEWAY_RESTART_TRACE_LAST_AT_MS).toMatch(/^\d/u);
-        expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
+        expect(writeGatewayRestartHandoffSync).toHaveBeenCalledOnce();
       });
     } finally {
+      delete process.env.OPENCLAW_SUPERVISOR_MODE;
       if (originalTraceEnv === undefined) {
         delete process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
       } else {
@@ -2415,6 +2431,7 @@ describe("runGatewayLoop", () => {
       envKey: "OPENCLAW_SYSTEMD_UNIT",
       envValue: "openclaw-gateway.service",
       park: parkCurrentSystemdServiceForMaintenance,
+      persistedIntent: true,
     },
     {
       supervisor: "launchd",
@@ -2432,22 +2449,21 @@ describe("runGatewayLoop", () => {
     },
   ])(
     "hands the managed $supervisor successor off without generic respawn",
-    async ({ platform, envKey, envValue, park }) => {
+    async ({ platform, envKey, envValue, park, persistedIntent }) => {
       vi.clearAllMocks();
       consumeGatewaySigusr1RestartIntent.mockReturnValueOnce({
         reason: "update.auto",
-        successorOwner: "managed-update-handoff",
+        successorOwner: managedUpdateSuccessorOwner,
       });
+      if (persistedIntent) {
+        consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ reason: "gateway.restart" });
+      }
 
       try {
         setPlatform(platform);
         process.env[envKey] = envValue;
         await withIsolatedSignals(async ({ captureSignal }) => {
-          const close = createCloseMock();
-          const { start, started } = createSignaledStart(close);
-          const { runtime, exited } = createRuntimeWithExitSignal();
-          await runLoopWithStart({ start, runtime });
-          await waitForStart(started);
+          const { close, start, exited } = await createSignaledLoopHarness();
 
           captureSignal("SIGUSR1")();
 
@@ -2463,6 +2479,7 @@ describe("runGatewayLoop", () => {
           }
           expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
           expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
+          expect(cancelManagedServiceUpdateHandoff).not.toHaveBeenCalled();
           expect(start).toHaveBeenCalledOnce();
         });
       } finally {
@@ -2481,12 +2498,29 @@ describe("runGatewayLoop", () => {
       supervisorMode: "external",
       unitName: "openclaw-gateway.service",
     },
+    {
+      supervisor: "systemd parking failure",
+      supervisorMode: undefined,
+      unitName: "openclaw-gateway.service",
+      parkingFailed: true,
+    },
+    {
+      supervisor: "unconfirmed systemd cancellation",
+      supervisorMode: undefined,
+      unitName: "openclaw-gateway.service",
+      parkingFailed: true,
+      cancellationConfirmed: false,
+    },
   ])("rejects $supervisor managed successors and recovers without respawning", async (testCase) => {
     vi.clearAllMocks();
     consumeGatewaySigusr1RestartIntent.mockReturnValueOnce({
       reason: "update.auto",
-      successorOwner: "managed-update-handoff",
+      successorOwner: managedUpdateSuccessorOwner,
     });
+    if (testCase.parkingFailed) {
+      parkCurrentSystemdServiceForMaintenance.mockRejectedValueOnce(new Error("park rejected"));
+    }
+    cancelManagedServiceUpdateHandoff.mockResolvedValue(testCase.cancellationConfirmed !== false);
 
     try {
       setPlatform("linux");
@@ -2501,15 +2535,20 @@ describe("runGatewayLoop", () => {
         delete process.env.OPENCLAW_SYSTEMD_UNIT;
       }
       await withIsolatedSignals(async ({ captureSignal }) => {
-        const { start, runtime, exited } = await createSignaledLoopHarness();
+        const { close, start, runtime, exited } = await createSignaledLoopHarness();
 
         captureSignal("SIGUSR1")();
         await waitForLoopCondition(
-          () => start.mock.calls.length === 2,
-          `${testCase.supervisor} managed successor did not recover in-process`,
+          () => cancelManagedServiceUpdateHandoff.mock.calls.length === 1,
+          `${testCase.supervisor} managed successor was not cancelled`,
         );
 
-        expect(parkCurrentSystemdServiceForMaintenance).not.toHaveBeenCalled();
+        expect(cancelManagedServiceUpdateHandoff).toHaveBeenCalledWith(managedUpdateSuccessorOwner);
+        if (testCase.parkingFailed) {
+          expect(parkCurrentSystemdServiceForMaintenance).toHaveBeenCalledOnce();
+        } else {
+          expect(parkCurrentSystemdServiceForMaintenance).not.toHaveBeenCalled();
+        }
         expect(markUpdateRestartSentinelFailure).toHaveBeenCalledWith(
           "restart-handoff-unavailable",
         );
@@ -2517,6 +2556,19 @@ describe("runGatewayLoop", () => {
         expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
         expect(runtime.exit).not.toHaveBeenCalled();
 
+        if (testCase.cancellationConfirmed === false) {
+          expect(close).not.toHaveBeenCalled();
+          expect(start).toHaveBeenCalledOnce();
+          expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(true);
+          return;
+        }
+        await waitForLoopCondition(
+          () => start.mock.calls.length === 2,
+          `${testCase.supervisor} managed successor did not recover in-process`,
+        );
+        expect(cancelManagedServiceUpdateHandoff.mock.invocationCallOrder[0]).toBeLessThan(
+          close.mock.invocationCallOrder[0] ?? Infinity,
+        );
         captureSignal("SIGINT")();
         await expect(exited).resolves.toBe(0);
       });
@@ -2668,95 +2720,146 @@ describe("runGatewayLoop", () => {
     }
   });
 
-  it("fails closed when a managed update arrives after successor parking closes", async () => {
+  it("fails closed when cancellation of a replacement managed owner cannot be confirmed", async () => {
     vi.clearAllMocks();
-    consumeGatewayRestartIntentPayloadSync.mockReset();
-    consumeGatewayRestartIntentPayloadSync.mockReturnValue(null);
-    consumeGatewaySigusr1RestartIntent.mockReset();
-    consumeGatewaySigusr1RestartIntent.mockReturnValueOnce(null).mockReturnValueOnce({
-      reason: "update.auto",
-      successorOwner: "managed-update-handoff",
-    });
-    consumeGatewaySigusr1RestartAuthorization.mockReset();
-    consumeGatewaySigusr1RestartAuthorization.mockReturnValue(true);
-    peekGatewaySigusr1RestartReason.mockReset();
-    peekGatewaySigusr1RestartReason
-      .mockReturnValueOnce("config.patch")
-      .mockReturnValueOnce("update.auto");
-
+    const replacementOwner = { ...managedUpdateSuccessorOwner, handoffId: "replacement-handoff" };
+    consumeGatewaySigusr1RestartIntent
+      .mockReturnValueOnce({ reason: "update.run", successorOwner: managedUpdateSuccessorOwner })
+      .mockReturnValueOnce({ reason: "update.auto", successorOwner: replacementOwner });
+    parkCurrentSystemdServiceForMaintenance.mockRejectedValueOnce(new Error("park rejected"));
+    cancelManagedServiceUpdateHandoff.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     let releaseClose: () => void = () => {};
-    const close = vi.fn<GatewayCloseFn>(async () => {});
-    close.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          releaseClose = resolve;
-        }),
-    );
 
+    setPlatform("linux");
+    process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
     try {
-      setPlatform("linux");
-      process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
       await withIsolatedSignals(async ({ captureSignal }) => {
-        const { start, started } = createSignaledStart(close);
-        const { runtime, exited } = createRuntimeWithExitSignal();
-        await runLoopWithStart({ start, runtime, ownsProcessLifecycle: true });
-        await waitForStart(started);
+        const { close, start, runtime } = await createSignaledLoopHarness();
+        close.mockImplementationOnce(
+          () =>
+            new Promise<void>((resolve) => {
+              releaseClose = resolve;
+            }),
+        );
         const sigusr1 = captureSignal("SIGUSR1");
-        const sigint = captureSignal("SIGINT");
 
         sigusr1();
         await waitForLoopCondition(
           () => close.mock.calls.length === 1,
-          "restart close did not start",
+          "first owner not cancelled",
         );
         sigusr1();
         await waitForLoopCondition(
-          () =>
-            gatewayLog.info.mock.calls.some(([message]) =>
-              String(message).includes("upgrading to update.auto"),
-            ),
-          "accepted restart was not upgraded",
+          () => consumeGatewaySigusr1RestartIntent.mock.calls.length === 2,
+          "replacement owner not admitted",
         );
-
         releaseClose();
         await waitForLoopCondition(
-          () => start.mock.calls.length === 2,
-          "late managed successor did not recover in-process",
+          () => cancelManagedServiceUpdateHandoff.mock.calls.length === 2,
+          "replacement owner escaped cancellation",
         );
-        expect(parkCurrentSystemdServiceForMaintenance).not.toHaveBeenCalled();
-        expect(markUpdateRestartSentinelFailure).toHaveBeenCalledWith(
-          "restart-handoff-unavailable",
-        );
-        expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
-        expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
-        expect(runtime.exit).not.toHaveBeenCalled();
 
-        sigint();
-        await expect(exited).resolves.toBe(0);
+        expect(cancelManagedServiceUpdateHandoff).toHaveBeenNthCalledWith(
+          1,
+          managedUpdateSuccessorOwner,
+        );
+        expect(cancelManagedServiceUpdateHandoff).toHaveBeenNthCalledWith(2, replacementOwner);
+        expect(start).toHaveBeenCalledOnce();
+        expect(runtime.exit).not.toHaveBeenCalled();
+        expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(true);
       });
     } finally {
       releaseClose();
       delete process.env.OPENCLAW_SYSTEMD_UNIT;
-      if (originalPlatformDescriptor) {
-        Object.defineProperty(process, "platform", originalPlatformDescriptor);
-      }
     }
   });
 
-  it("reads a managed update upgrade after asynchronous lock release", async () => {
+  it.each([true, false])(
+    "keeps a committed generic successor authoritative only after confirmed cancellation: %s",
+    async (cancellationConfirmed) => {
+      vi.clearAllMocks();
+      consumeGatewaySigusr1RestartIntent.mockReturnValueOnce(null).mockReturnValueOnce({
+        reason: "update.auto",
+        successorOwner: managedUpdateSuccessorOwner,
+      });
+      peekGatewaySigusr1RestartReason
+        .mockReturnValueOnce("update.run")
+        .mockReturnValueOnce("update.auto");
+      cancelManagedServiceUpdateHandoff.mockResolvedValue(cancellationConfirmed);
+      const kill = vi.fn();
+      respawnGatewayProcessForUpdate.mockReturnValueOnce({
+        mode: "spawned",
+        pid: 7777,
+        child: { kill },
+      });
+      let continueSuccessor: () => void = () => {};
+      const successorBlocked = new Promise<void>((resolve) => {
+        continueSuccessor = resolve;
+      });
+      const waitForHealthyChild = vi.fn(async () => {
+        await successorBlocked;
+        return true;
+      });
+
+      try {
+        await withIsolatedSignals(async ({ captureSignal }) => {
+          const close = createCloseMock();
+          const { start, started } = createSignaledStart(close);
+          const { runtime, exited } = createRuntimeWithExitSignal();
+          await runLoopWithStart({ start, runtime, lockPort: 18789, waitForHealthyChild });
+          await waitForStart(started);
+          const sigusr1 = captureSignal("SIGUSR1");
+
+          sigusr1();
+          await waitForLoopCondition(
+            () => waitForHealthyChild.mock.calls.length === 1,
+            "generic successor did not reach its health check",
+          );
+          sigusr1();
+          await waitForLoopCondition(
+            () => consumeGatewaySigusr1RestartIntent.mock.calls.length === 2,
+            "managed ownership did not upgrade generic successor",
+          );
+          continueSuccessor();
+          await waitForLoopCondition(
+            () => cancelManagedServiceUpdateHandoff.mock.calls.length === 1,
+            "committed generic successor did not cancel managed ownership",
+          );
+
+          expect(cancelManagedServiceUpdateHandoff).toHaveBeenCalledWith(
+            managedUpdateSuccessorOwner,
+          );
+          expect(markUpdateRestartSentinelFailure).toHaveBeenCalledWith(
+            "restart-handoff-unavailable",
+          );
+          expect(start).toHaveBeenCalledOnce();
+          if (cancellationConfirmed) {
+            await expect(exited).resolves.toBe(0);
+            expect(kill).not.toHaveBeenCalled();
+          } else {
+            await waitForLoopCondition(
+              () => kill.mock.calls.length === 1,
+              "live successor was not fenced after unconfirmed cancellation",
+            );
+            expect(runtime.exit).not.toHaveBeenCalled();
+            expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(true);
+          }
+        });
+      } finally {
+        continueSuccessor();
+      }
+    },
+  );
+
+  it("disarms the watchdog before cancelling a managed upgrade blocked on lock release", async () => {
     vi.clearAllMocks();
-    consumeGatewayRestartIntentPayloadSync.mockReset();
-    consumeGatewayRestartIntentPayloadSync.mockReturnValue(null);
-    consumeGatewaySigusr1RestartIntent.mockReset();
-    consumeGatewaySigusr1RestartIntent.mockReturnValue(null);
-    consumeGatewaySigusr1RestartAuthorization.mockReset();
-    consumeGatewaySigusr1RestartAuthorization.mockReturnValue(true);
-    peekGatewaySigusr1RestartReason.mockReset();
+    consumeGatewaySigusr1RestartIntent.mockReturnValueOnce(null).mockReturnValueOnce({
+      reason: "update.auto",
+      successorOwner: managedUpdateSuccessorOwner,
+    });
     peekGatewaySigusr1RestartReason
       .mockReturnValueOnce("config.patch")
       .mockReturnValueOnce("update.auto");
-    restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised" });
-
     let releaseLock: () => void = () => {};
     const lockReleaseBlocked = new Promise<void>((resolve) => {
       releaseLock = resolve;
@@ -2766,10 +2869,15 @@ describe("runGatewayLoop", () => {
     });
     acquireGatewayLock.mockResolvedValueOnce({ release: lockRelease });
 
-    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    setPlatform("linux");
+    process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
     try {
       await withIsolatedSignals(async ({ captureSignal }) => {
-        const { runtime, exited } = await createSignaledLoopHarness();
+        const close = createCloseMock();
+        const { start, started } = createSignaledStart(close);
+        const { runtime, exited } = createRuntimeWithExitSignal();
+        await runLoopWithStart({ start, runtime, ownsProcessLifecycle: true });
+        await waitForStart(started);
         const sigusr1 = captureSignal("SIGUSR1");
 
         sigusr1();
@@ -2785,15 +2893,27 @@ describe("runGatewayLoop", () => {
             ),
           "lock-release restart was not upgraded",
         );
+        expect(cancelShutdownHardExitWatchdog).toHaveBeenCalledOnce();
+        expect(cancelManagedServiceUpdateHandoff).not.toHaveBeenCalled();
 
         releaseLock();
-        await expect(exited).resolves.toBe(0);
-        expect(restartGatewayProcessWithFreshPid).toHaveBeenCalledTimes(1);
+        await waitForLoopCondition(
+          () => start.mock.calls.length === 2,
+          "managed lock-release upgrade did not cancel before recovery",
+        );
+        expect(cancelManagedServiceUpdateHandoff).toHaveBeenCalledWith(managedUpdateSuccessorOwner);
+        expect(cancelShutdownHardExitWatchdog.mock.invocationCallOrder[0]).toBeLessThan(
+          cancelManagedServiceUpdateHandoff.mock.invocationCallOrder[0] ?? Infinity,
+        );
+        expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
         expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
-        expect(runtime.exit).toHaveBeenCalledWith(0);
+        expect(runtime.exit).not.toHaveBeenCalled();
+        captureSignal("SIGINT")();
+        await expect(exited).resolves.toBe(0);
       });
     } finally {
-      delete process.env.OPENCLAW_SUPERVISOR_MODE;
+      releaseLock();
+      delete process.env.OPENCLAW_SYSTEMD_UNIT;
     }
   });
 

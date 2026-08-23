@@ -48,6 +48,7 @@ const startManagedServiceUpdateHandoffMock = vi.fn<
   command: "openclaw update --yes --timeout 1800",
   logPath: "/tmp/openclaw-update-run-handoff/handoff.log",
   handoffId: "handoff-1",
+  installRoot: "/tmp/openclaw",
 }));
 const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({ scheduled: true }));
 const logGatewayInfoMock = vi.fn();

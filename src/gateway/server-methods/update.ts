@@ -416,7 +416,7 @@ export const updateHandlers: GatewayRequestHandlers = {
             sentinelMeta.handoffId = started.handoffId ?? handoffId;
             // The owner pairs helper creation with parent exit before any
             // persistence can fail. Joiners leave both to the active owner.
-            if (ownsManagedServiceHandoff) {
+            if (started.status === "started") {
               handoff = {
                 status: "started",
                 ...(started.pid ? { pid: started.pid } : {}),
@@ -425,7 +425,11 @@ export const updateHandlers: GatewayRequestHandlers = {
               managedHandoffRestart = scheduleGatewaySigusr1Restart({
                 delayMs: managedRestartDelayMs,
                 reason: "update.run",
-                successorOwner: "managed-update-handoff",
+                successorOwner: {
+                  kind: "managed-update-handoff",
+                  handoffId: started.handoffId,
+                  installRoot: started.installRoot,
+                },
                 skipDeferral: true,
                 skipCooldown: true,
                 audit: {

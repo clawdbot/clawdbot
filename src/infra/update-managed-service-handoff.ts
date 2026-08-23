@@ -12,7 +12,11 @@ import {
 } from "../daemon/constants.js";
 import { forceKillChildProcessTree } from "../process/child-process-tree.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { resolveExecutableFromPathEnv } from "./executable-path.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { resolveNodeSqliteLocation } from "./node-sqlite.js";
+import type { GatewayRestartIntent } from "./restart-intent.js";
+import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { SUPERVISOR_HINT_ENV_VARS, type RespawnSupervisor } from "./supervisor-markers.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import type { UpdateChannel } from "./update-channels.js";
@@ -33,7 +37,6 @@ const HANDOFF_READY_TIMEOUT_MS = 30_000;
 const HANDOFF_READY_MARKER = "OPENCLAW_UPDATE_HANDOFF_READY\n";
 const HANDOFF_BUSY_MARKER = "HANDOFF_BUSY ";
 const HANDOFF_STATE_DATABASE_BUSY_TIMEOUT_MS = 5_000;
-const SYSTEMD_RUN_CANDIDATE_PATHS = ["/usr/bin/systemd-run", "/bin/systemd-run"] as const;
 const SERVICE_IDENTITY_ENV_VARS = new Set<string>([
   "OPENCLAW_LAUNCHD_LABEL",
   "OPENCLAW_SYSTEMD_UNIT",
@@ -48,12 +51,14 @@ const fs = require("node:fs");
 const params = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const gateDeadline = Date.now() + 30000;
 const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
-while (!fs.existsSync(params.runnerGatePath)) {
+let decision;
+while (!(decision = fs.existsSync(params.runnerGatePath) && fs.readFileSync(params.runnerGatePath, "utf8"))) {
   if (Date.now() >= gateDeadline) {
     process.exit(1);
   }
   Atomics.wait(waitBuffer, 0, 0, 25);
 }
+if (decision !== "go") process.exit(0);
 if (process.platform !== "win32" && typeof process.execve === "function") {
   process.execve(params.commandArgv[0], params.commandArgv, process.env);
 }
@@ -883,17 +888,14 @@ function markUpdateSentinelFailureIfPending(reason) {
   }
 }
 
-function runCommandSync(command, args) {
+function runServiceCommand(command, args) {
+  if (!managedUpdateLeaseOwned) return 1;
   try {
     const result = spawnSync(command, args, { stdio: "ignore", timeout: 30000 });
     return typeof result.status === "number" ? result.status : 1;
   } catch {
     return 1;
   }
-}
-
-function runServiceCommand(command, args) {
-  return managedUpdateLeaseOwned ? runCommandSync(command, args) : 1;
 }
 
 function startGatewayServiceBestEffort() {
@@ -948,14 +950,15 @@ function startGatewayServiceBestEffort() {
     await sleep(25);
     return;
   }
-  fs.writeSync(1, ${JSON.stringify(HANDOFF_READY_MARKER)});
-
   try {
+    fs.rmSync(params.runnerGatePath, { force: true });
+    fs.writeSync(1, ${JSON.stringify(HANDOFF_READY_MARKER)});
     let deadline =
       typeof params.parentExitTimeoutMs === "number"
         ? Date.now() + params.parentExitTimeoutMs
         : null;
     while (isPidAlive(params.parentPid)) {
+      if (fs.existsSync(params.runnerGatePath) && fs.readFileSync(params.runnerGatePath, "utf8") === "cancel") return;
       if (deadline !== null && Date.now() >= deadline) {
         appendLog(
           "gateway parent pid " +
@@ -996,18 +999,23 @@ function startGatewayServiceBestEffort() {
         detached: true,
         stdio: ["ignore", outputFd, outputFd],
       });
+      const exited = new Promise((resolve) => {
+        child.once("error", (err) => resolve({ error: err }));
+        child.once("exit", (code, signal) => resolve({ code, signal }));
+      });
       if (!bindManagedUpdateLeaseToProcess(child.pid)) {
         try {
           child.kill("SIGKILL");
         } catch {}
         throw new Error("managed update runner lease binding failed");
       }
-      fs.writeFileSync(params.runnerGatePath, "go", { mode: 0o600 });
+      try {
+        fs.writeFileSync(params.runnerGatePath, "go", { flag: "wx", mode: 0o600 });
+      } catch (err) {
+        if (!err || err.code !== "EEXIST") throw err;
+      }
       appendLog("managed update command pid=" + (child.pid || "unknown"));
-      const exit = await new Promise((resolve) => {
-        child.once("error", (err) => resolve({ error: err }));
-        child.once("exit", (code, signal) => resolve({ code, signal }));
-      });
+      const exit = await exited;
       if (!bindManagedUpdateLeaseToProcess(process.pid)) {
         process.exitCode = 1;
         return;
@@ -1079,30 +1087,23 @@ type ManagedServiceUpdateHandoffParams = {
   parentPid?: number;
 };
 
-type StartedManagedServiceUpdateHandoff = {
-  status: "started";
+type ManagedServiceUpdateHandoffResult = {
   pid?: number;
   command: string;
   logPath: string;
-  handoffId?: string;
+} & (
+  | { status: "started"; handoffId: string; installRoot: string }
+  | { status: "joined"; handoffId?: string }
+);
+
+type ActiveManagedServiceUpdateHandoff = {
+  handoffId: string;
+  flight?: Promise<ManagedServiceUpdateHandoffResult>;
+  child?: HandoffChild;
+  runnerGatePath?: string;
+  cancelling?: boolean;
 };
-
-type ManagedServiceUpdateHandoffResult = Omit<StartedManagedServiceUpdateHandoff, "status"> & {
-  status: "started" | "joined";
-};
-
-const activeManagedServiceUpdateHandoffs = new Map<
-  string,
-  Promise<ManagedServiceUpdateHandoffResult>
->();
-
-function isNodeLikeRuntime(execPath: string | undefined): boolean {
-  if (!execPath?.trim()) {
-    return false;
-  }
-  const base = path.basename(execPath).toLowerCase();
-  return base === "node" || base === "node.exe" || base === "bun" || base === "bun.exe";
-}
+const activeManagedServiceUpdateHandoffs = new Map<string, ActiveManagedServiceUpdateHandoff>();
 
 function resolveUpdateCliArgv(params: {
   timeoutMs?: number;
@@ -1127,7 +1128,7 @@ function resolveUpdateCliArgv(params: {
   if (execPath && argv1) {
     return [execPath, argv1, ...updateArgs];
   }
-  if (execPath && !isNodeLikeRuntime(execPath)) {
+  if (execPath && !/^(?:node|bun)(?:\.exe)?$/iu.test(path.basename(execPath))) {
     return [execPath, ...updateArgs];
   }
   return ["openclaw", ...updateArgs];
@@ -1138,17 +1139,9 @@ export function formatManagedServiceUpdateCommand(params?: {
   channel?: UpdateChannel;
   tag?: string;
 }): string {
-  const args = ["openclaw", "update", "--yes"];
-  if (params?.channel) {
-    args.push("--channel", params.channel);
-  }
-  if (params?.tag) {
-    args.push("--tag", params.tag);
-  }
-  if (typeof params?.timeoutMs === "number" && Number.isFinite(params.timeoutMs)) {
-    args.push("--timeout", String(Math.max(1, Math.ceil(params.timeoutMs / 1000))));
-  }
-  return args.join(" ");
+  return resolveUpdateCliArgv(params ?? {})
+    .toSpliced(3, 1)
+    .join(" ");
 }
 
 type GatewayServiceRecovery =
@@ -1161,13 +1154,9 @@ function resolveGatewayServiceRecovery(
   env: NodeJS.ProcessEnv,
 ): GatewayServiceRecovery | undefined {
   if (supervisor === "systemd") {
-    const override = env.OPENCLAW_SYSTEMD_UNIT?.trim();
-    const unit = override
-      ? override.endsWith(".service")
-        ? override
-        : `${override}.service`
-      : `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
-    return { kind: "systemd", unit };
+    const unit =
+      env.OPENCLAW_SYSTEMD_UNIT?.trim() || resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+    return { kind: "systemd", unit: unit.endsWith(".service") ? unit : `${unit}.service` };
   }
   if (supervisor === "launchd") {
     const label =
@@ -1201,18 +1190,9 @@ function stripSupervisorHintEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 async function resolveManagedServiceHandoffCwd(root: string): Promise<string> {
-  const candidates = [os.homedir(), os.tmpdir(), path.dirname(process.execPath), root];
-  for (const candidate of candidates) {
-    if (!candidate.trim()) {
-      continue;
-    }
-    try {
-      const stat = await fs.stat(candidate);
-      if (stat.isDirectory()) {
-        return candidate;
-      }
-    } catch {
-      // Try the next candidate.
+  for (const candidate of [os.homedir(), os.tmpdir(), path.dirname(process.execPath), root]) {
+    if (candidate.trim() && (await fs.stat(candidate).catch(() => undefined))?.isDirectory()) {
+      return candidate;
     }
   }
   return root;
@@ -1222,45 +1202,13 @@ function resolveManagedUpdateLeaseDatabasePath(): string {
   return path.join(resolvePreferredOpenClawTmpDir(), "managed-update-handoffs.sqlite");
 }
 
-async function resolveExecutableOnPath(
-  name: string,
-  env: NodeJS.ProcessEnv,
-  fallbackPaths: readonly string[],
-): Promise<string | null> {
-  const candidates = new Set<string>();
-  const pathValue = env.PATH?.trim();
-  if (pathValue) {
-    for (const dir of pathValue.split(path.delimiter)) {
-      if (dir.trim()) {
-        candidates.add(path.join(dir, name));
-      }
-    }
-  }
-  for (const candidate of fallbackPaths) {
-    candidates.add(candidate);
-  }
-
-  for (const candidate of candidates) {
-    try {
-      await fs.access(candidate, fs.constants.X_OK);
-      return candidate;
-    } catch {
-      // Try the next candidate.
-    }
-  }
-  return null;
-}
-
 function sanitizeSystemdUnitFragment(value: string | undefined): string {
   const normalized = value?.trim().replace(/[^A-Za-z0-9_.:@-]+/gu, "-") ?? "";
   return normalized.replace(/^-+|-+$/gu, "").slice(0, 80);
 }
 
 function buildSystemdHandoffUnitName(handoffId: string | undefined): string {
-  const suffix =
-    sanitizeSystemdUnitFragment(handoffId) ||
-    sanitizeSystemdUnitFragment(`${process.pid}-${Date.now()}`) ||
-    "handoff";
+  const suffix = sanitizeSystemdUnitFragment(handoffId) || `${process.pid}-${Date.now()}`;
   return `openclaw-update-${suffix}.scope`;
 }
 
@@ -1351,14 +1299,14 @@ async function waitForHandoffReady(child: HandoffChild): Promise<HandoffReadines
   });
 }
 
-async function resolveHandoffSpawn(params: {
+function resolveHandoffSpawn(params: {
   supervisor?: RespawnSupervisor | null;
   env: NodeJS.ProcessEnv;
   execPath: string;
   scriptPath: string;
   paramsPath: string;
   handoffId?: string;
-}): Promise<{ command: string; args: string[] }> {
+}): { command: string; args: string[] } {
   if (params.supervisor !== "systemd") {
     return {
       command: params.execPath,
@@ -1366,10 +1314,10 @@ async function resolveHandoffSpawn(params: {
     };
   }
 
-  const systemdRunPath = await resolveExecutableOnPath(
+  const systemdRunPath = resolveExecutableFromPathEnv(
     "systemd-run",
+    [params.env.PATH ?? "", "/usr/bin", "/bin"].join(path.delimiter),
     params.env,
-    SYSTEMD_RUN_CANDIDATE_PATHS,
   );
   if (!systemdRunPath) {
     throw new Error(
@@ -1392,9 +1340,9 @@ async function resolveHandoffSpawn(params: {
 }
 
 async function spawnManagedServiceUpdateHandoff(
-  params: ManagedServiceUpdateHandoffParams,
+  params: ManagedServiceUpdateHandoffParams & { handoffId: string },
   rootIdentity: string,
-  onExit: () => void,
+  owner: ActiveManagedServiceUpdateHandoff,
 ): Promise<ManagedServiceUpdateHandoffResult> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX));
   const scriptPath = path.join(dir, "handoff.cjs");
@@ -1458,6 +1406,12 @@ async function spawnManagedServiceUpdateHandoff(
 
   let child!: HandoffChild;
   let readiness!: HandoffReadiness;
+  const onExit = () => {
+    owner.child = undefined;
+    if (!owner.cancelling && activeManagedServiceUpdateHandoffs.get(rootIdentity) === owner) {
+      activeManagedServiceUpdateHandoffs.delete(rootIdentity);
+    }
+  };
   try {
     await fs.writeFile(scriptPath, `${HANDOFF_SCRIPT}\n`, { mode: 0o700 });
     await fs.writeFile(runnerScriptPath, `${HANDOFF_COMMAND_RUNNER_SCRIPT}\n`, { mode: 0o700 });
@@ -1470,7 +1424,7 @@ async function spawnManagedServiceUpdateHandoff(
       OPENCLAW_UPDATE_RUN_HANDOFF: "1",
     };
     const env = params.devTarget ? applyDevUpdateTargetEnv(childEnv, params.devTarget) : childEnv;
-    const spawnTarget = await resolveHandoffSpawn({
+    const spawnTarget = resolveHandoffSpawn({
       supervisor: params.supervisor,
       env,
       execPath: params.execPath ?? process.execPath,
@@ -1484,6 +1438,8 @@ async function spawnManagedServiceUpdateHandoff(
       detached: true,
       stdio: ["ignore", "pipe", "ignore"],
     });
+    owner.child = child;
+    owner.runnerGatePath = runnerGatePath;
     child.once("exit", onExit);
     // systemd-run --scope remains synchronous until the helper exits, so this
     // child's exit owns the full handoff lifetime. The ready marker means the
@@ -1496,19 +1452,20 @@ async function spawnManagedServiceUpdateHandoff(
   }
   child.unref();
 
-  return {
-    status: readiness.status === "ready" ? "started" : "joined",
-    ...(readiness.status === "ready" && child.pid ? { pid: child.pid } : {}),
-    command: commandLabel,
-    logPath,
-    ...(readiness.status === "joined"
-      ? readiness.handoffId
-        ? { handoffId: readiness.handoffId }
-        : {}
-      : params.handoffId
-        ? { handoffId: params.handoffId }
-        : {}),
-  };
+  const result = { command: commandLabel, logPath };
+  return readiness.status === "ready"
+    ? {
+        ...result,
+        status: "started",
+        ...(child.pid ? { pid: child.pid } : {}),
+        handoffId: params.handoffId,
+        installRoot: rootIdentity,
+      }
+    : {
+        ...result,
+        status: "joined",
+        ...(readiness.handoffId ? { handoffId: readiness.handoffId } : {}),
+      };
 }
 
 export async function startManagedServiceUpdateHandoff(
@@ -1516,34 +1473,87 @@ export async function startManagedServiceUpdateHandoff(
 ): Promise<ManagedServiceUpdateHandoffResult> {
   const root = resolveUpdateInstallRoot(params.root);
   const active = activeManagedServiceUpdateHandoffs.get(root);
-  if (active) {
-    return { ...(await active), status: "joined" };
+  if (active?.flight) {
+    const joined = await active.flight;
+    return {
+      status: "joined",
+      command: joined.command,
+      logPath: joined.logPath,
+      ...(joined.pid ? { pid: joined.pid } : {}),
+      ...(joined.handoffId ? { handoffId: joined.handoffId } : {}),
+    };
   }
-  const handoffId = params.handoffId ?? randomUUID();
+  const owner: ActiveManagedServiceUpdateHandoff = { handoffId: params.handoffId ?? randomUUID() };
+  activeManagedServiceUpdateHandoffs.set(root, owner);
   const flight = spawnManagedServiceUpdateHandoff(
     {
       ...params,
-      handoffId,
+      handoffId: owner.handoffId,
       meta: {
         ...params.meta,
-        handoffId: params.meta.handoffId ?? handoffId,
+        handoffId: params.meta.handoffId ?? owner.handoffId,
       },
     },
     root,
-    () => {
-      if (activeManagedServiceUpdateHandoffs.get(root) === flight) {
-        activeManagedServiceUpdateHandoffs.delete(root);
-      }
-    },
+    owner,
   );
-  activeManagedServiceUpdateHandoffs.set(root, flight);
+  owner.flight = flight;
   try {
     return await flight;
   } catch (err) {
-    if (activeManagedServiceUpdateHandoffs.get(root) === flight) {
+    if (activeManagedServiceUpdateHandoffs.get(root) === owner) {
       activeManagedServiceUpdateHandoffs.delete(root);
     }
     throw err;
+  }
+}
+
+export async function cancelManagedServiceUpdateHandoff(
+  identity: NonNullable<GatewayRestartIntent["successorOwner"]>,
+): Promise<boolean> {
+  const root = resolveUpdateInstallRoot(identity.installRoot);
+  const active = activeManagedServiceUpdateHandoffs.get(root);
+  if (
+    identity.kind !== "managed-update-handoff" ||
+    active?.handoffId !== identity.handoffId ||
+    !active.child ||
+    !active.runnerGatePath ||
+    active.cancelling
+  ) {
+    return false;
+  }
+  active.cancelling = true;
+  const completion = new Promise<void>((resolve) => {
+    active.child?.once("exit", resolve);
+  });
+  try {
+    await fs.writeFile(active.runnerGatePath, "cancel", { flag: "wx", mode: 0o600 });
+    await completion;
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(resolveManagedUpdateLeaseDatabasePath());
+    let unowned: boolean;
+    try {
+      const lease = getNodeSqliteKysely<{ managed_update_handoffs: { install_root: string } }>(db);
+      const handoffQuery = lease.selectFrom("managed_update_handoffs").select("install_root");
+      unowned = runSqliteImmediateTransactionSync(
+        db,
+        () => !executeSqliteQueryTakeFirstSync(db, handoffQuery.where("install_root", "=", root)),
+      );
+    } finally {
+      db.close();
+    }
+    if (activeManagedServiceUpdateHandoffs.get(root) !== active) {
+      return false;
+    }
+    activeManagedServiceUpdateHandoffs.delete(root);
+    return unowned;
+  } catch {
+    return false;
+  } finally {
+    active.cancelling = false;
+    if (!active.child && activeManagedServiceUpdateHandoffs.get(root) === active) {
+      activeManagedServiceUpdateHandoffs.delete(root);
+    }
   }
 }
 

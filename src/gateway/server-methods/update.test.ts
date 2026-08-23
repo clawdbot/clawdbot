@@ -55,13 +55,14 @@ type ManagedServiceUpdateHandoffResult = Awaited<
   >
 >;
 const startManagedServiceUpdateHandoffMock = vi.fn<
-  (params?: { handoffId?: string }) => Promise<ManagedServiceUpdateHandoffResult>
+  (params?: { handoffId?: string; root?: string }) => Promise<ManagedServiceUpdateHandoffResult>
 >(async (params) => ({
   status: "started",
   pid: 12345,
   command: "openclaw update --yes --timeout 1800",
   logPath: "/tmp/openclaw-update-run-handoff/handoff.log",
-  handoffId: params?.handoffId,
+  handoffId: params?.handoffId ?? "handoff-default",
+  installRoot: params?.root ?? "/tmp/openclaw",
 }));
 
 const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({ scheduled: true }));
@@ -291,12 +292,13 @@ beforeEach(() => {
   recordLatestUpdateRestartSentinelMock.mockClear();
   startManagedServiceUpdateHandoffMock.mockClear();
   startManagedServiceUpdateHandoffMock.mockImplementation(
-    async (params?: { handoffId?: string }) => ({
+    async (params?: { handoffId?: string; root?: string }) => ({
       status: "started" as const,
       pid: 12345,
       command: "openclaw update --yes --timeout 1800",
       logPath: "/tmp/openclaw-update-run-handoff/handoff.log",
-      handoffId: params?.handoffId,
+      handoffId: params?.handoffId ?? "handoff-default",
+      installRoot: params?.root ?? "/tmp/openclaw",
     }),
   );
   scheduleGatewaySigusr1RestartMock.mockClear();
@@ -554,13 +556,17 @@ describe("update.run restart scheduling", () => {
       {
         delayMs?: number;
         reason?: string;
-        successorOwner?: string;
+        successorOwner?: unknown;
         skipCooldown?: boolean;
         skipDeferral?: boolean;
       },
     ];
     expect(restartParams?.reason).toBe("update.run");
-    expect(restartParams?.successorOwner).toBe("managed-update-handoff");
+    expect(restartParams?.successorOwner).toEqual({
+      kind: "managed-update-handoff",
+      handoffId: handoffParams.handoffId,
+      installRoot: "/tmp/openclaw-global",
+    });
     expect(restartParams?.skipCooldown).toBe(true);
     expect(restartParams?.skipDeferral).toBe(true);
     expect(payload?.ok).toBe(true);
@@ -689,7 +695,11 @@ describe("update.run restart scheduling", () => {
       expect.objectContaining({
         delayMs: 2000,
         reason: "update.run",
-        successorOwner: "managed-update-handoff",
+        successorOwner: {
+          kind: "managed-update-handoff",
+          handoffId: expect.any(String),
+          installRoot: "/tmp/openclaw-global",
+        },
         skipCooldown: true,
         skipDeferral: true,
       }),

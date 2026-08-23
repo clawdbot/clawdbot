@@ -33,7 +33,11 @@ export type GatewayRestartIntent = {
   force?: boolean;
   waitMs?: number;
   // Process-local only: persisted restart requests cannot delegate successor ownership.
-  successorOwner?: "managed-update-handoff";
+  successorOwner?: {
+    kind: "managed-update-handoff";
+    handoffId: string;
+    installRoot: string;
+  };
 };
 
 function normalizeRestartIntentPid(pid: number | undefined): number | null {
