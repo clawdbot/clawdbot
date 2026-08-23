@@ -66,7 +66,6 @@ describe("redactSensitiveKeyValuePairs", () => {
       "gateway rejected websocket upgrade (HTTP 503)",
     );
     expect(redactSensitiveKeyValuePairs("status=ok retries=2")).toBe("status=ok retries=2");
-
   });
 });
 
