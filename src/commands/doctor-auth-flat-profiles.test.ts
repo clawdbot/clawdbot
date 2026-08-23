@@ -222,6 +222,29 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     },
   );
 
+  it.skipIf(process.platform === "win32")(
+    "removes a dangling shared OAuth link without reporting a stale migration failure",
+    async () => {
+      const state = await makeTestState();
+      const oauthPath = state.statePath("credentials/oauth.json");
+      fs.mkdirSync(path.dirname(oauthPath), { recursive: true });
+      fs.symlinkSync("missing-oauth.json", oauthPath);
+
+      const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+        cfg: {},
+        prompter: makePrompter(true),
+        env: state.env,
+      });
+
+      expect(result.detected).toContain(oauthPath);
+      expect(result.changes).toEqual([
+        expect.stringContaining("Removed dangling legacy auth source link"),
+      ]);
+      expect(result.warnings).toEqual([]);
+      expect(() => fs.lstatSync(oauthPath)).toThrow(expect.objectContaining({ code: "ENOENT" }));
+    },
+  );
+
   it("keeps JSON-era ownership through shared writes until Doctor imports the credential", async () => {
     const state = await makeTestState();
     const authPath = await writeLegacyAuthProfilesJson(state, {

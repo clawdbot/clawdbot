@@ -1347,11 +1347,12 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       releaseSource();
     }
   }
-  if (hasLegacyOAuth && sharedMainCredentialSourceRemains) {
+  const hasLegacyOAuthAfterCleanup = inspectLegacyAuthProfileSourceEntry(oauthPath) !== "missing";
+  if (hasLegacyOAuthAfterCleanup && sharedMainCredentialSourceRemains) {
     result.warnings.push(
       `Deferred shared legacy OAuth migration until higher-priority shared-main credential sources are resolved by ${formatCliCommand("openclaw doctor --fix")}.`,
     );
-  } else if (hasLegacyOAuth) {
+  } else if (hasLegacyOAuthAfterCleanup) {
     try {
       migrateLegacyOAuthFile({ oauthPath, env, now, result });
     } catch (err) {
