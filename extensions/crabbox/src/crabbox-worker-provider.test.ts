@@ -416,7 +416,7 @@ describe("Crabbox worker provider", () => {
       expect(setup).toContain('require("node:child_process").spawnSync');
       expect(setup).toContain('[launcher,"--version"]');
       expect(setup).toContain("codex-cli ${runtime.version}");
-      expect(setup).toContain('ln -s "$codex_root" "$state_dir/extensions/codex"');
+      expect(setup).not.toContain("$state_dir/extensions/codex");
       expect(setup).toContain('OPENCLAW_STATE_DIR="$state_dir" openclaw plugins enable codex');
       expect(setup).toContain(
         'OPENCLAW_STATE_DIR="$state_dir" npx --yes --package "$package_spec" -- openclaw plugins enable codex',

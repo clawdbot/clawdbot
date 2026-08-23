@@ -44,9 +44,9 @@ export function createCrabboxNodeEnrollmentSetup(params: {
     }
     const inspectPlugin = [
       'const fs=require("node:fs"),path=require("node:path"),module=require("node:module");',
-      'const plugin=JSON.parse(fs.readFileSync(0,"utf8")).plugin;',
+      'const inspection=JSON.parse(fs.readFileSync(0,"utf8")),plugin=inspection.plugin;',
       `const version=${JSON.stringify(enrollment.openclawVersion)};`,
-      'if(plugin?.id!=="codex"||plugin.packageName!=="@openclaw/codex"||plugin.packageVersion!==version||(plugin.origin!=="bundled"&&plugin.trustedOfficialInstall!==true)){',
+      'if(plugin?.id!=="codex"||plugin.packageName!=="@openclaw/codex"||plugin.packageVersion!==version||(plugin.origin!=="bundled"&&(plugin.trustedOfficialInstall!==true||inspection.install?.source!=="npm"))){',
       "throw new Error(`Codex remote-exec requires the exact official @openclaw/codex@${version} plugin to be installed by cloudWorkers profile setup`)}",
       "const root=fs.realpathSync(plugin.rootDir);",
       'const manifest=JSON.parse(fs.readFileSync(path.join(root,"package.json"),"utf8"));',
@@ -58,19 +58,20 @@ export function createCrabboxNodeEnrollmentSetup(params: {
       'const probe=require("node:child_process").spawnSync(process.execPath,[launcher,"--version"],{encoding:"utf8",timeout:10000,stdio:["ignore","pipe","pipe"]});',
       "if(probe.status!==0||probe.stdout?.trim()!==`codex-cli ${runtime.version}`){",
       'throw new Error("Codex remote-exec requires the exact executable platform-native Codex binary")}',
-      "process.stdout.write(root);",
+      'if(plugin.origin!=="bundled"){',
+      'const project=path.join(process.argv[1],"npm","projects","codex");',
+      'const packageRoot=path.join(project,"node_modules","@openclaw");',
+      "fs.mkdirSync(packageRoot,{recursive:true,mode:0o700});",
+      'const dependency={"@openclaw/codex":version};',
+      'fs.writeFileSync(path.join(project,"package.json"),JSON.stringify({name:"openclaw-cloud-codex",private:true,dependencies:dependency})+"\\n",{mode:0o600});',
+      'const projected=path.join(packageRoot,"codex");',
+      "try{const existing=fs.lstatSync(projected);",
+      'if(!existing.isSymbolicLink()||fs.realpathSync(projected)!==root){throw new Error("Codex node plugin path is occupied")}',
+      '}catch(error){if(error.code!=="ENOENT"){throw error}fs.symlinkSync(root,projected)}',
+      "}",
     ].join("");
     return [
-      `  codex_root="$(${binary} plugins inspect codex --json | node -e ${shellQuote(inspectPlugin)})"`,
-      '  mkdir -p "$state_dir/extensions"',
-      '  if [ -L "$state_dir/extensions/codex" ]; then',
-      '    [ "$(readlink "$state_dir/extensions/codex")" = "$codex_root" ]',
-      '  elif [ -e "$state_dir/extensions/codex" ]; then',
-      '    printf "%s\\n" "Codex node plugin path is occupied" >&2',
-      "    exit 1",
-      "  else",
-      '    ln -s "$codex_root" "$state_dir/extensions/codex"',
-      "  fi",
+      `  ${binary} plugins inspect codex --json | node -e ${shellQuote(inspectPlugin)} "$state_dir"`,
       `  OPENCLAW_STATE_DIR="$state_dir" ${binary} plugins enable codex`,
     ];
   };
