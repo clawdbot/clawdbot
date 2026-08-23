@@ -488,6 +488,7 @@ describe("memory-core doctor dreaming migration", () => {
 
   afterEach(async () => {
     resetMemoryCoreDreamingStateForTests();
+    resetPluginStateStoreForTests();
     await fs.rm(rootDir, { recursive: true, force: true });
   });
 

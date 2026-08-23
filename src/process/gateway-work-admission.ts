@@ -179,6 +179,10 @@ export function isGatewayRestartDraining(): boolean {
   );
 }
 
+export function isGatewayRestartDrainError(error: unknown): error is GatewayDrainingError {
+  return error instanceof GatewayDrainingError && isGatewayRestartDraining();
+}
+
 /** Restart drain is one-way until the in-process restart resets runtime state. */
 export function markGatewayRestartDraining(): void {
   if (GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
@@ -250,6 +254,21 @@ export function tryBeginGatewayRootWorkAdmission(): GatewayRootWorkAdmissionLeas
   if (
     GATEWAY_WORK_ADMISSION_STATE.restartDraining ||
     GATEWAY_WORK_ADMISSION_STATE.restartSignalPending ||
+    GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting"
+  ) {
+    return null;
+  }
+  return createGatewayRootWorkAdmission();
+}
+
+/**
+ * Tracks a host-selected restart-startup recovery handshake without reopening admission.
+ * The caller still owns frame/auth validation; this lease grants no method authority.
+ */
+export function tryBeginGatewayRestartStartupRootWorkAdmission(): GatewayRootWorkAdmissionLease | null {
+  if (
+    (!GATEWAY_WORK_ADMISSION_STATE.restartDraining &&
+      !GATEWAY_WORK_ADMISSION_STATE.restartSignalPending) ||
     GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting"
   ) {
     return null;

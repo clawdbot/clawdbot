@@ -221,6 +221,7 @@ export interface SessionConversations {
   first_seen_at: number;
   last_seen_at: number;
   role: Generated<string>;
+  route_context_json: string | null;
   session_id: string;
 }
 

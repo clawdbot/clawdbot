@@ -1,5 +1,5 @@
 import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
-import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-contract.js";
+import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths.ts";
 
 type WindowWithControlUiBasePath = Window &

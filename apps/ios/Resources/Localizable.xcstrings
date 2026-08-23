@@ -2585,6 +2585,142 @@
         }
       }
     },
+    "%@ is not currently discoverable on this network.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ is not currently discoverable on this network."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 当前在此网络上不可发现。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 目前在此網路上無法被探索到。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ não está atualmente detectável nesta rede."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ ist in diesem Netzwerk derzeit nicht auffindbar."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ no es actualmente detectable en esta red."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ は現在このネットワーク上で検出できません。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@을(를) 현재 이 네트워크에서 검색할 수 없습니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ n'est pas actuellement détectable sur ce réseau."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ इस नेटवर्क पर वर्तमान में खोजा नहीं जा सकता है।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "‏%@ غير قابل للاكتشاف حاليًا على هذه الشبكة."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ non è attualmente rilevabile su questa rete."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ şu anda bu ağda bulunabilir değil."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ наразі не виявляється в цій мережі."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ saat ini tidak dapat ditemukan di jaringan ini."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ nie jest obecnie wykrywalny w tej sieci."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ขณะนี้ไม่พบ %@ บนเครือข่ายนี้"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ hiện không thể phát hiện trên mạng này."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ is momenteel niet vindbaar op dit netwerk."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ در حال حاضر در این شبکه قابل کشف نیست."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ сейчас недоступен для обнаружения в этой сети."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ kan för närvarande inte upptäckas i det här nätverket."
+          }
+        }
+      }
+    },
     "%@ min": {
       "localizations": {
         "en": {
@@ -23529,142 +23665,6 @@
         }
       }
     },
-    "Available": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Available"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "可用"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "可用"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Disponível"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Verfügbar"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Disponible"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "利用可能"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "사용 가능"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Disponible"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "उपलब्ध"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "متاح"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Disponibile"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kullanılabilir"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Доступно"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tersedia"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Dostępne"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "พร้อมใช้งาน"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Có sẵn"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Beschikbaar"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "در دسترس"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Доступно"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tillgänglig"
-          }
-        }
-      }
-    },
     "Back": {
       "localizations": {
         "en": {
@@ -34949,142 +34949,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Stäng"
-          }
-        }
-      }
-    },
-    "Close canvas": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Close canvas"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "关闭画布"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "關閉畫布"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Fechar tela"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Canvas schließen"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Cerrar lienzo"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "キャンバスを閉じる"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "캔버스 닫기"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Fermer le canevas"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "कैनवास बंद करें"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "إغلاق اللوحة"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Chiudi canvas"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tuvali kapat"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Закрити полотно"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Tutup kanvas"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Zamknij obszar roboczy"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "ปิดแคนวาส"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Đóng canvas"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Canvas sluiten"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "بستن بوم"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Закрыть холст"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stäng canvas"
           }
         }
       }
@@ -50321,6 +50185,278 @@
         }
       }
     },
+    "Could not save the active gateway selection.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not save the active gateway selection."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法保存当前的 gateway 选择。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法儲存啟用中的 Gateway 選擇。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível salvar a seleção do gateway ativo."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Auswahl des aktiven Gateways konnte nicht gespeichert werden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo guardar la selección del gateway activo."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アクティブな Gateway の選択を保存できませんでした。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "활성 gateway 선택을 저장할 수 없습니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible d'enregistrer la sélection du gateway actif."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "सक्रिय gateway चयन सहेजा नहीं जा सका।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تعذّر حفظ اختيار Gateway النشط."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile salvare la selezione del gateway attivo."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Etkin gateway seçimi kaydedilemedi."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не вдалося зберегти вибір активного gateway."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tidak dapat menyimpan pilihan gateway aktif."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nie można zapisać wyboru aktywnego gateway."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ไม่สามารถบันทึกการเลือก gateway ที่ใช้งานอยู่ได้"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Không thể lưu lựa chọn gateway đang hoạt động."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kan de selectie van de actieve gateway niet opslaan."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ذخیره انتخاب gateway فعال ممکن نشد."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось сохранить выбор активного gateway."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Det gick inte att spara valet av aktiv gateway."
+          }
+        }
+      }
+    },
+    "Could not save the paired gateway.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not save the paired gateway."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法保存已配对的 gateway。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法儲存已配對的 Gateway。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível salvar o gateway pareado."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das gekoppelte Gateway konnte nicht gespeichert werden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo guardar el gateway emparejado."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ペアリング済みの Gateway を保存できませんでした。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "페어링된 gateway를 저장할 수 없습니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible d'enregistrer le gateway appairé."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "युग्मित gateway सहेजा नहीं जा सका।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تعذّر حفظ Gateway المقترن."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile salvare il gateway associato."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eşleştirilen gateway kaydedilemedi."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не вдалося зберегти спарений gateway."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tidak dapat menyimpan gateway yang dipasangkan."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nie można zapisać sparowanego gateway."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ไม่สามารถบันทึก gateway ที่จับคู่ไว้ได้"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Không thể lưu gateway đã ghép nối."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kan de gekoppelde gateway niet opslaan."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ذخیره gateway جفت‌شده ممکن نشد."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось сохранить сопряжённый gateway."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Det gick inte att spara den parkopplade gatewayen."
+          }
+        }
+      }
+    },
     "Could not save the watch device credential": {
       "localizations": {
         "en": {
@@ -53717,142 +53853,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kontrollpanelen kräver en ansluten Gateway"
-          }
-        }
-      }
-    },
-    "Debug Screen Status": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Debug Screen Status"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "调试屏幕状态"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "偵錯畫面狀態"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Status da tela de depuração"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Debug-Bildschirmstatus"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Estado de la pantalla de depuración"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "デバッグ画面のステータス"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "디버그 화면 상태"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "État de l’écran de débogage"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "डीबग स्क्रीन स्थिति"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "حالة شاشة تصحيح الأخطاء"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Stato schermata debug"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Hata Ayıklama Ekranı Durumu"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Стан екрана налагодження"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Status Layar Debug"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Status ekranu debugowania"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "สถานะหน้าจอดีบัก"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Trạng thái màn hình gỡ lỗi"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Status van debugscherm"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "وضعیت صفحه اشکال‌زدایی"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Состояние экрана отладки"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Status för felsökningsskärm"
           }
         }
       }
@@ -70857,6 +70857,142 @@
         }
       }
     },
+    "Failed to build the gateway URL.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed to build the gateway URL."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法构建 gateway URL。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法建立 Gateway URL。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha ao criar a URL do gateway."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Gateway-URL konnte nicht erstellt werden."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo construir la URL del gateway."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway の URL を構築できませんでした。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "gateway URL을 생성하지 못했습니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de la création de l'URL du gateway."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "gateway URL बनाने में विफल रहा।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تعذّر إنشاء عنوان URL الخاص بـ Gateway."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile creare l'URL del gateway."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway URL'si oluşturulamadı."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не вдалося сформувати URL gateway."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gagal membangun URL gateway."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nie udało się utworzyć adresu URL gateway."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "สร้าง URL ของ gateway ไม่สำเร็จ"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Không thể tạo URL gateway."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kan de gateway-URL niet opbouwen."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ساخت آدرس gateway ناموفق بود."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось сформировать URL gateway."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Det gick inte att bygga gateway-URL:en."
+          }
+        }
+      }
+    },
     "Failed: host required": {
       "localizations": {
         "en": {
@@ -78745,142 +78881,6 @@
         }
       }
     },
-    "Gateway needs attention": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway needs attention"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway 需要注意"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway 需要注意"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway precisa de atenção"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway erfordert Aufmerksamkeit"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway requiere atención"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway に注意が必要です"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway에 주의가 필요합니다"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway nécessite une attention"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway पर ध्यान देने की आवश्यकता है"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "يتطلب Gateway الانتباه"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway richiede attenzione"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway dikkat gerektiriyor"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway потребує уваги"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway perlu perhatian"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway wymaga uwagi"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway ต้องการการดูแล"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway cần chú ý"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway vereist aandacht"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway نیاز به توجه دارد"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway требует внимания"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Gateway kräver uppmärksamhet"
-          }
-        }
-      }
-    },
     "Gateway not connected": {
       "localizations": {
         "en": {
@@ -79557,6 +79557,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Gateway-behörighet krävs"
+          }
+        }
+      }
+    },
+    "Gateway reconnect failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway reconnect failed"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway 重新连接失败"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway 重新連線失敗"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falha na reconexão do Gateway"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erneutes Verbinden mit dem Gateway fehlgeschlagen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falló la reconexión del gateway"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway の再接続に失敗しました"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway 재연결 실패"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Échec de la reconnexion au Gateway"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway पुनः कनेक्ट विफल रहा"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "فشل إعادة الاتصال بـ Gateway"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riconnessione al Gateway non riuscita"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway yeniden bağlantısı başarısız oldu"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не вдалося повторно підключитися до Gateway"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sambungan ulang gateway gagal"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ponowne połączenie z gateway nie powiodło się"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เชื่อมต่อ Gateway ใหม่ไม่สำเร็จ"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kết nối lại Gateway thất bại"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opnieuw verbinden met Gateway mislukt"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "اتصال مجدد Gateway ناموفق بود"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось переподключить Gateway"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Återanslutning till Gateway misslyckades"
           }
         }
       }
@@ -114241,6 +114377,142 @@
         }
       }
     },
+    "No paired gateway is available to reconnect.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No paired gateway is available to reconnect."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有可用于重新连接的已配对 gateway。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "沒有可重新連線的已配對 Gateway。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nenhum gateway pareado está disponível para reconexão."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kein gekoppeltes Gateway zum erneuten Verbinden verfügbar."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No hay ningún gateway emparejado disponible para reconectar."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "再接続できるペアリング済み Gateway がありません。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "재연결할 수 있는 페어링된 gateway가 없습니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucun gateway appairé n'est disponible pour la reconnexion."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "पुनः कनेक्ट करने के लिए कोई युग्मित gateway उपलब्ध नहीं है।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "لا يوجد Gateway مقترن متاح لإعادة الاتصال."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessun gateway associato disponibile per la riconnessione."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yeniden bağlanmak için kullanılabilir eşleştirilmiş gateway yok."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Немає спареного gateway для повторного підключення."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tidak ada gateway terpasang yang tersedia untuk disambungkan kembali."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Brak sparowanego gateway do ponownego połączenia."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ไม่มี gateway ที่จับคู่ไว้สำหรับเชื่อมต่อใหม่"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Không có gateway đã ghép nối nào để kết nối lại."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Er is geen gekoppelde gateway beschikbaar om opnieuw verbinding mee te maken."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "هیچ gateway جفت‌شده‌ای برای اتصال مجدد در دسترس نیست."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Нет доступного сопряжённого gateway для переподключения."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ingen parkopplad gateway är tillgänglig för återanslutning."
+          }
+        }
+      }
+    },
     "No phase status": {
       "localizations": {
         "en": {
@@ -124845,142 +125117,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "OpenClaw kunde inte spara TLS-certifikatets pin för %@ på ett säkert sätt."
-          }
-        }
-      }
-    },
-    "OpenClaw iOS": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "OpenClaw iOS"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "new",
-            "value": "OpenClaw iOS"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "new",
-            "value": "OpenClaw iOS"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "new",
-            "value": "OpenClaw iOS"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "new",
-            "value": "OpenClaw iOS"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "new",
-            "value": "OpenClaw iOS"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "new",
-            "value": "OpenClaw iOS"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "new",
-            "value": "OpenClaw iOS"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "new",
-            "value": "OpenClaw iOS"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "new",
-            "value": "OpenClaw iOS"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "new",
-            "value": "OpenClaw iOS"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "new",
-            "value": "OpenClaw iOS"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "new",
-            "value": "OpenClaw iOS"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "new",
-            "value": "OpenClaw iOS"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "new",
-            "value": "OpenClaw iOS"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "new",
-            "value": "OpenClaw iOS"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "new",
-            "value": "OpenClaw iOS"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "new",
-            "value": "OpenClaw iOS"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "new",
-            "value": "OpenClaw iOS"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "new",
-            "value": "OpenClaw iOS"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "new",
-            "value": "OpenClaw iOS"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "new",
-            "value": "OpenClaw iOS"
           }
         }
       }
@@ -151913,6 +152049,142 @@
         }
       }
     },
+    "Review the proposal draft before applying or rejecting it.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review the proposal draft before applying or rejecting it."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在应用或拒绝之前，请查看提案草稿。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在套用或拒絕之前，請先檢視提案草稿。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Revise o rascunho da proposta antes de aplicá-la ou rejeitá-la."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Überprüfe den Vorschlagsentwurf, bevor du ihn anwendest oder ablehnst."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Revisa el borrador de la propuesta antes de aplicarla o rechazarla."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "適用または却下する前に、提案のドラフトを確認してください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "적용하거나 거부하기 전에 제안 초안을 검토하세요."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Examinez le brouillon de proposition avant de l'appliquer ou de le rejeter."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "लागू करने या अस्वीकार करने से पहले प्रस्ताव मसौदे की समीक्षा करें।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "راجع مسودة الاقتراح قبل تطبيقها أو رفضها."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rivedi la bozza della proposta prima di applicarla o rifiutarla."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uygulamadan veya reddetmeden önce öneri taslağını inceleyin."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перегляньте чернетку пропозиції перед застосуванням або відхиленням."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tinjau draf proposal sebelum menerapkan atau menolaknya."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Przejrzyj wersję roboczą propozycji przed jej zastosowaniem lub odrzuceniem."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ตรวจสอบร่างข้อเสนอก่อนที่จะนำไปใช้หรือปฏิเสธ"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Xem lại bản nháp đề xuất trước khi áp dụng hoặc từ chối."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bekijk het conceptvoorstel voordat je het toepast of afwijst."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "پیش‌نویس پیشنهاد را پیش از اعمال یا رد کردن آن بررسی کنید."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Просмотрите черновик предложения перед применением или отклонением."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Granska förslagsutkastet innan du tillämpar eller avvisar det."
+          }
+        }
+      }
+    },
     "Review this endpoint. Credentials are applied only after you tap Connect.": {
       "localizations": {
         "en": {
@@ -152725,142 +152997,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Roller"
-          }
-        }
-      }
-    },
-    "Routed on this phone": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Routed on this phone"
-          }
-        },
-        "zh-CN": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Routed on this phone"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Routed on this phone"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Routed on this phone"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Routed on this phone"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Routed on this phone"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Routed on this phone"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "이 휴대폰에서 라우팅됨"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Routed on this phone"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Routed on this phone"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Routed on this phone"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Routed on this phone"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Routed on this phone"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Routed on this phone"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Routed on this phone"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Routed on this phone"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Routed on this phone"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Routed on this phone"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Routed on this phone"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Routed on this phone"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Routed on this phone"
-          }
-        },
-        "sv": {
-          "stringUnit": {
-            "state": "new",
-            "value": "Routed on this phone"
           }
         }
       }
@@ -190129,6 +190265,414 @@
         }
       }
     },
+    "This gateway is unavailable.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This gateway is unavailable."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此 gateway 不可用。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此 Gateway 無法使用。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este gateway está indisponível."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieses Gateway ist nicht verfügbar."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este gateway no está disponible."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この Gateway は利用できません。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 gateway를 사용할 수 없습니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce gateway est indisponible."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "यह gateway अनुपलब्ध है।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "‏Gateway هذا غير متاح."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo gateway non è disponibile."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu gateway kullanılamıyor."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Цей gateway недоступний."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway ini tidak tersedia."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ten gateway jest niedostępny."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "gateway นี้ไม่พร้อมใช้งาน"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway này không khả dụng."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deze gateway is niet beschikbaar."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "این gateway در دسترس نیست."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этот gateway недоступен."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Den här gatewayen är inte tillgänglig."
+          }
+        }
+      }
+    },
+    "This paired gateway has an invalid saved endpoint.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This paired gateway has an invalid saved endpoint."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此已配对的 gateway 保存的端点无效。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此已配對的 Gateway 儲存的端點無效。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este gateway pareado tem um endpoint salvo inválido."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieses gekoppelte Gateway hat einen ungültigen gespeicherten Endpunkt."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este gateway emparejado tiene un endpoint guardado no válido."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このペアリング済み Gateway には無効な保存済みエンドポイントがあります。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 페어링된 gateway의 저장된 엔드포인트가 유효하지 않습니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce gateway appairé possède un point de terminaison enregistré non valide."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "इस युग्मित gateway का सहेजा गया एंडपॉइंट अमान्य है।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "‏Gateway المقترن هذا لديه نقطة نهاية محفوظة غير صالحة."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo gateway associato ha un endpoint salvato non valido."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu eşleştirilmiş gateway'in kayıtlı uç noktası geçersiz."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Цей спарений gateway має недійсну збережену кінцеву точку."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway terpasang ini memiliki endpoint tersimpan yang tidak valid."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ten sparowany gateway ma nieprawidłowy zapisany punkt końcowy."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "gateway ที่จับคู่ไว้นี้มีปลายทางที่บันทึกไว้ไม่ถูกต้อง"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway đã ghép nối này có điểm cuối đã lưu không hợp lệ."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deze gekoppelde gateway heeft een ongeldig opgeslagen eindpunt."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "این gateway جفت‌شده نقطه پایانی ذخیره‌شده نامعتبری دارد."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "У этого сопряжённого gateway недействительная сохранённая конечная точка."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Den här parkopplade gatewayen har en ogiltig sparad slutpunkt."
+          }
+        }
+      }
+    },
+    "This paired gateway is no longer available.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This paired gateway is no longer available."
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此已配对的 gateway 不再可用。"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此已配對的 Gateway 已無法使用。"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este gateway pareado não está mais disponível."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dieses gekoppelte Gateway ist nicht mehr verfügbar."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Este gateway emparejado ya no está disponible."
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このペアリング済み Gateway は利用できなくなりました。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "이 페어링된 gateway는 더 이상 사용할 수 없습니다."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ce gateway appairé n'est plus disponible."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "यह युग्मित gateway अब उपलब्ध नहीं है।"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "‏Gateway المقترن هذا لم يعد متاحًا."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questo gateway associato non è più disponibile."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu eşleştirilmiş gateway artık kullanılamıyor."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Цей спарений gateway більше недоступний."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway terpasang ini sudah tidak tersedia."
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ten sparowany gateway nie jest już dostępny."
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "gateway ที่จับคู่ไว้นี้ไม่พร้อมใช้งานอีกต่อไป"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gateway đã ghép nối này không còn khả dụng."
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deze gekoppelde gateway is niet meer beschikbaar."
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "این gateway جفت‌شده دیگر در دسترس نیست."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Этот сопряжённый gateway больше недоступен."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Den här parkopplade gatewayen är inte längre tillgänglig."
+          }
+        }
+      }
+    },
     "This permanently deletes the session and its transcript.": {
       "localizations": {
         "en": {
@@ -192029,6 +192573,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Trådens namn"
+          }
+        }
+      }
+    },
+    "Thread queued": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thread queued"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "线程已加入队列"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "討論串已排入佇列"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thread enfileirada"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thread in Warteschlange"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hilo en cola"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "スレッドをキューに追加しました"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "스레드가 대기열에 추가됨"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fil mis en file d'attente"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "थ्रेड कतारबद्ध किया गया"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تمت جدولة المحادثة"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thread in coda"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İş parçacığı sıraya alındı"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Потік поставлено в чергу"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thread dimasukkan ke antrean"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wątek dodany do kolejki"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "จัดคิวเธรดแล้ว"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đã xếp hàng luồng"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Thread in wachtrij geplaatst"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "رشته در صف قرار گرفت"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Тред поставлен в очередь"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tråd köad"
           }
         }
       }
@@ -203181,6 +203861,142 @@
           "stringUnit": {
             "state": "translated",
             "value": "Väntar"
+          }
+        }
+      }
+    },
+    "Waiting for a concurrency slot": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for a concurrency slot"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在等待并发槽位"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在等待並行處理配額"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aguardando um espaço de simultaneidade"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warten auf einen Parallelverarbeitungs-Slot"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esperando un espacio de concurrencia"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同時実行スロットを待機中"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "동시 실행 슬롯을 기다리는 중"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En attente d'un créneau de concurrence"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "समवर्तीता स्लॉट की प्रतीक्षा हो रही है"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "في انتظار فتحة تزامن"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In attesa di uno slot di concorrenza"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eşzamanlılık yuvası bekleniyor"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Очікування слоту паралельності"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Menunggu slot konkurensi"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Oczekiwanie na wolny slot współbieżności"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "กำลังรอช่องประมวลผลพร้อมกัน"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Đang chờ khe xử lý đồng thời"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wachten op een gelijktijdigheidsplek"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "در انتظار جایگاه هم‌زمانی"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ожидание свободного слота параллельной обработки"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Väntar på en samtidighetsplats"
           }
         }
       }

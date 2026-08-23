@@ -770,7 +770,6 @@ export class TerminalPanelSessionController
     this.openRetry.clear();
     this.updateControllerState("booting", false);
     this.host.terminalPanelUploadController.dispose();
-    this.host.clearTerminalPanelResizeListeners();
     for (const tab of this.tabs) {
       // No terminal.close here: this teardown runs for disconnects,
       // availability loss, and element removal — exactly the sessions the

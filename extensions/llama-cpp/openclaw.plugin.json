@@ -2,27 +2,21 @@
   "id": "llama-cpp",
   "name": "llama.cpp Provider",
   "description": "Managed and external llama.cpp servers for GGUF chat and embeddings.",
-  "doctorContract": {
-    "configRepair": true
-  },
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
-  "autoEnableWhenConfiguredProviders": ["llama-cpp", "llama-server"],
-  "providers": ["llama-cpp", "llama-server"],
+  "autoEnableWhenConfiguredProviders": ["llama-cpp"],
+  "providers": ["llama-cpp"],
   "modelCatalog": {
     "discovery": {
-      "llama-server": "refreshable"
+      "llama-cpp": "refreshable"
     }
   },
   "providerRequest": {
     "providers": {
       "llama-cpp": {
-        "family": "llama-cpp"
-      },
-      "llama-server": {
-        "family": "llama-server",
+        "family": "llama-cpp",
         "openAICompletions": {
           "supportsStreamingUsage": true
         }
@@ -33,18 +27,15 @@
     "providers": {
       "llama-cpp": {
         "external": false
-      },
-      "llama-server": {
-        "external": false
       }
     }
   },
-  "syntheticAuthRefs": ["llama-cpp", "llama-server"],
-  "nonSecretAuthMarkers": ["llama-cpp-local", "llama-server-local"],
+  "syntheticAuthRefs": ["llama-cpp"],
+  "nonSecretAuthMarkers": ["llama-cpp-local"],
   "setup": {
     "providers": [
       {
-        "id": "llama-server",
+        "id": "llama-cpp",
         "envVars": ["LLAMA_SERVER_API_KEY"]
       }
     ]
@@ -63,9 +54,9 @@
       "groupHint": "Managed or external llama.cpp server"
     },
     {
-      "provider": "llama-server",
-      "method": "custom",
-      "choiceId": "llama-server",
+      "provider": "llama-cpp",
+      "method": "existing-server",
+      "choiceId": "llama-cpp-existing-server",
       "appGuidedDiscovery": true,
       "appGuidedSecret": true,
       "choiceLabel": "Existing llama-server",

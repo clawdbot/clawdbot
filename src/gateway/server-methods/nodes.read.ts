@@ -15,10 +15,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import {
   formatNodeRunnerUpdateRequired,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
-  NODE_WORKER_SUPERVISOR_BINARY_CAPACITY_PROTOCOL_FEATURE,
-  NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE,
-  NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE,
-  NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE,
+  NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   parseNodeRunnerInventoryDeclaration,
 } from "../../infra/node-runner-inventory.js";
 import { resolveLocalNodeId } from "../../node-host/local-id.js";
@@ -438,11 +435,8 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       return;
     }
     if (
-      declaration.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_LEGACY_PROTOCOL_FEATURE ||
-      declaration.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_BUILD_PROTOCOL_FEATURE ||
-      declaration.protocolFeatures[0] ===
-        NODE_WORKER_SUPERVISOR_EXECUTION_CONTEXT_V1_PROTOCOL_FEATURE ||
-      declaration.protocolFeatures[0] === NODE_WORKER_SUPERVISOR_BINARY_CAPACITY_PROTOCOL_FEATURE
+      declaration.protocolFeatures.length === 1 &&
+      declaration.protocolFeatures[0] !== NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE
     ) {
       respond(
         false,

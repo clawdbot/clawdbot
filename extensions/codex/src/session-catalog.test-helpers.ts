@@ -172,8 +172,13 @@ export function createCodexSessionCatalogNodeHostCommands(
     getPluginConfig: () => undefined,
     getRuntimeConfig: () => config,
   },
+  bindingStore?: CodexAppServerBindingStore,
 ) {
-  return createCodexSessionCatalogNodeHostCommandsRuntime(asControlFactory(control), configSources);
+  return createCodexSessionCatalogNodeHostCommandsRuntime(
+    asControlFactory(control),
+    configSources,
+    bindingStore,
+  );
 }
 
 type CreateSessionEntryParams = Parameters<

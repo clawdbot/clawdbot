@@ -35,6 +35,7 @@ export type ApplicationThemeServerSelection = {
 
 export type ApplicationTheme = {
   readonly mode: ThemeMode;
+  readonly resolvedMode: "dark" | "light";
   readonly serverSelection: ApplicationThemeServerSelection | null;
   recordServerSelection: (theme: ThemeName | null, scope: string) => void;
   setMode: (mode: ThemeMode, element?: HTMLElement | null) => void;

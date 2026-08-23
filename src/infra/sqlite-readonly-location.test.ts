@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -5,7 +6,12 @@ import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { prepareSqliteReadOnlyLocation } from "./sqlite-readonly-location.js";
+import {
+  prepareSqliteReadOnlyLocation,
+  prepareSqliteReadOnlyLocationInProcess,
+  prepareSqliteReadOnlyLocationSync,
+  prepareSqliteReadOnlyLocationSyncInProcess,
+} from "./sqlite-readonly-location.js";
 
 const workers: Worker[] = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -19,6 +25,42 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 function createTempDatabasePath(): string {
   const tempDir = tempDirs.make("openclaw-sqlite-readonly-");
   return path.join(tempDir, "state.sqlite");
+}
+
+async function expectPublicSnapshot(
+  prepare: (
+    pathname: string,
+  ) =>
+    | { cleanup: () => boolean; location: string }
+    | Promise<{ cleanup: () => boolean; location: string }>,
+): Promise<void> {
+  const sqlite = requireNodeSqlite();
+  const databasePath = createTempDatabasePath();
+  const writer = new sqlite.DatabaseSync(databasePath);
+  let cleanup: (() => boolean) | undefined;
+  try {
+    writer.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA wal_autocheckpoint = 0;
+      CREATE TABLE probe (value TEXT NOT NULL);
+      INSERT INTO probe VALUES ('from-wal');
+    `);
+    expect(fs.existsSync(`${databasePath}-wal`)).toBe(true);
+
+    const prepared = await prepare(databasePath);
+    cleanup = prepared.cleanup;
+    const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
+    try {
+      expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "from-wal" }]);
+    } finally {
+      snapshot.close();
+    }
+    expect(prepared.cleanup()).toBe(true);
+    cleanup = undefined;
+  } finally {
+    cleanup?.();
+    writer.close();
+  }
 }
 
 function readFamily(pathname: string): Map<string, Buffer> {
@@ -56,7 +98,105 @@ function waitForWorkerMessage(worker: Worker, expected: string): Promise<void> {
   });
 }
 
+type PosixLock = {
+  length: number;
+  pid: number;
+  start: number;
+  type: string;
+};
+
+function readMainDatabasePosixLocks(pathname: string): PosixLock[] {
+  const result = spawnSync(
+    "python3",
+    [
+      "-c",
+      `
+import fcntl, json, os, struct, sys
+layout = struct.Struct("hhqqi4x")
+request = layout.pack(fcntl.F_WRLCK, os.SEEK_SET, 1073741826, 510, 0)
+with open(sys.argv[1], "rb") as database:
+    result = layout.unpack(fcntl.fcntl(database.fileno(), fcntl.F_GETLK, request))
+lock_type, _, start, length, pid = result
+locks = [] if lock_type == fcntl.F_UNLCK else [{
+    "length": length,
+    "pid": pid,
+    "start": start,
+    "type": "read" if lock_type == fcntl.F_RDLCK else "write",
+}]
+print(json.dumps(locks))
+`,
+      pathname,
+    ],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0) {
+    throw new Error(result.stderr || "POSIX lock probe failed");
+  }
+  return JSON.parse(result.stdout) as PosixLock[];
+}
+
 describe("prepareSqliteReadOnlyLocation", () => {
+  it("prepares a readable WAL snapshot through the async public entry point", async () => {
+    await expectPublicSnapshot(prepareSqliteReadOnlyLocation);
+  });
+
+  it("prepares a readable WAL snapshot through the sync public entry point", async () => {
+    await expectPublicSnapshot(prepareSqliteReadOnlyLocationSync);
+  });
+
+  it("propagates async public entry point failures", async () => {
+    const missingPath = path.join(tempDirs.make("openclaw-sqlite-readonly-missing-"), "missing.db");
+    await expect(prepareSqliteReadOnlyLocation(missingPath)).rejects.toThrow(
+      /SQLite read-only worker .*ENOENT/u,
+    );
+  });
+
+  it("propagates sync public entry point failures", () => {
+    const missingPath = path.join(tempDirs.make("openclaw-sqlite-readonly-missing-"), "missing.db");
+    expect(() => prepareSqliteReadOnlyLocationSync(missingPath)).toThrow(
+      /SQLite read-only worker .*ENOENT/u,
+    );
+  });
+
+  it.runIf(process.platform === "linux")(
+    "keeps a live WAL connection's POSIX locks in the owning process",
+    async () => {
+      const sqlite = requireNodeSqlite();
+      const databasePath = createTempDatabasePath();
+      const writer = new sqlite.DatabaseSync(databasePath);
+      writer.exec(`
+        PRAGMA journal_mode = WAL;
+        CREATE TABLE writes (id INTEGER PRIMARY KEY);
+        INSERT INTO writes DEFAULT VALUES;
+      `);
+      const locksBefore = readMainDatabasePosixLocks(databasePath);
+      const cleanups: Array<() => boolean> = [];
+      try {
+        expect(locksBefore).toHaveLength(1);
+
+        const preparedAsync = await prepareSqliteReadOnlyLocation(databasePath);
+        cleanups.push(preparedAsync.cleanup);
+        expect(readMainDatabasePosixLocks(databasePath)).toEqual(locksBefore);
+        expect(preparedAsync.cleanup()).toBe(true);
+
+        const preparedSync = prepareSqliteReadOnlyLocationSync(databasePath);
+        cleanups.push(preparedSync.cleanup);
+        expect(readMainDatabasePosixLocks(databasePath)).toEqual(locksBefore);
+        expect(preparedSync.cleanup()).toBe(true);
+
+        const characterized = prepareSqliteReadOnlyLocationSyncInProcess(databasePath);
+        cleanups.push(characterized.cleanup);
+        expect(readMainDatabasePosixLocks(databasePath)).toEqual([]);
+        expect(characterized.cleanup()).toBe(true);
+      } finally {
+        for (const cleanup of cleanups) {
+          cleanup();
+        }
+        writer.close();
+      }
+    },
+  );
+
   it("retries a same-size WAL reset instead of accepting an impossible pair", async () => {
     const sqlite = requireNodeSqlite();
     const livePath = createTempDatabasePath();
@@ -92,7 +232,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
       }
     });
 
-    const prepared = await prepareSqliteReadOnlyLocation(databasePath);
+    const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
     expect(injected).toBe(true);
     expect(fs.statSync(`${databasePath}-wal`).size).toBe(walSizeBeforeReset);
     const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
@@ -152,7 +292,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     try {
       await waitForWorkerMessage(worker, "ready");
 
-      const prepared = await prepareSqliteReadOnlyLocation(databasePath);
+      const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
       const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
       expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(snapshot.prepare("SELECT COUNT(*) AS count FROM payload").get()).toEqual({ count: 1 });
@@ -196,7 +336,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
       return statSync(pathname, options as never);
     }) as typeof fs.statSync);
 
-    const prepared = await prepareSqliteReadOnlyLocation(databasePath);
+    const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
     const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
     expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "ok" }]);
     snapshot.close();
@@ -249,7 +389,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     try {
       await waitForWorkerMessage(worker, "ready");
 
-      const prepared = await prepareSqliteReadOnlyLocation(databasePath);
+      const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
       const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
       const values = snapshot
         .prepare("SELECT value FROM pair ORDER BY name")
@@ -290,7 +430,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
       }
     });
 
-    const prepared = await prepareSqliteReadOnlyLocation(databasePath);
+    const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
     expect(injected).toBe(true);
     expect(path.resolve(prepared.location)).not.toBe(path.resolve(databasePath));
     const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
@@ -316,7 +456,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
       const symlinkPath = path.join(path.dirname(databasePath), "state-link.sqlite");
       fs.symlinkSync(path.basename(databasePath), symlinkPath);
 
-      const prepared = await prepareSqliteReadOnlyLocation(symlinkPath);
+      const prepared = await prepareSqliteReadOnlyLocationInProcess(symlinkPath);
       const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
       expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "from-wal" }]);
       snapshot.close();
@@ -346,7 +486,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
       return statSync(pathname, options as never);
     }) as typeof fs.statSync);
 
-    const prepared = await prepareSqliteReadOnlyLocation(databasePath);
+    const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
     expect(injected).toBe(true);
     const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
     expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "ok" }]);
@@ -360,7 +500,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     const seed = new sqlite.DatabaseSync(databasePath);
     seed.exec("CREATE TABLE probe (value TEXT);");
     seed.close();
-    const prepared = await prepareSqliteReadOnlyLocation(databasePath);
+    const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
     const privateDirectory = path.dirname(prepared.location);
     const rmSync = fs.rmSync.bind(fs);
     let failRemoval = true;
@@ -397,7 +537,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     const beforeMain = fs.readFileSync(databasePath);
     const beforeEntries = fs.readdirSync(path.dirname(databasePath)).toSorted();
 
-    const prepared = await prepareSqliteReadOnlyLocation(databasePath);
+    const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
     const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
     expect(snapshot.prepare("SELECT value FROM probe").all()).toEqual([{ value: "committed" }]);
     snapshot.close();

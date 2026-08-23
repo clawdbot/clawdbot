@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { GatewayTransportError } from "../gateway/transport-error.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
@@ -20,7 +21,6 @@ const mocks = vi.hoisted(() => ({
   runSessionsCleanup: vi.fn(),
   serializeSessionCleanupResult: vi.fn(),
   callGateway: vi.fn(),
-  isGatewayTransportError: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -47,9 +47,11 @@ vi.mock("../config/sessions.js", () => ({
   serializeSessionCleanupResult: mocks.serializeSessionCleanupResult,
 }));
 
-vi.mock("../gateway/call.js", () => ({
+vi.mock("../gateway/call.js", async () => ({
+  ...(await vi.importActual<typeof import("../gateway/transport-error.js")>(
+    "../gateway/transport-error.js",
+  )),
   callGateway: mocks.callGateway,
-  isGatewayTransportError: mocks.isGatewayTransportError,
 }));
 
 import { sessionsCleanupCommand } from "./sessions-cleanup.js";
@@ -69,6 +71,15 @@ function makeRuntime(): { runtime: RuntimeEnv; logs: string[] } {
 function expectLogsToInclude(logs: readonly string[], text: string): void {
   const matches = logs.filter((line) => line.includes(text));
   expect(matches.length).toBeGreaterThan(0);
+}
+
+function gatewayTransportError(kind: "closed" | "timeout", code?: number): GatewayTransportError {
+  return new GatewayTransportError({
+    kind,
+    code,
+    message: `gateway ${kind}`,
+    connectionDetails: { url: "ws://127.0.0.1:1", urlSource: "test", message: "test gateway" },
+  });
 }
 
 describe("sessionsCleanupCommand", () => {
@@ -120,7 +131,6 @@ describe("sessionsCleanupCommand", () => {
     mocks.capEntryCount.mockImplementation(() => 0);
     mocks.updateSessionStore.mockResolvedValue(0);
     mocks.callGateway.mockResolvedValue(null);
-    mocks.isGatewayTransportError.mockReturnValue(true);
     mocks.resolveSessionCleanupAction.mockImplementation(
       (params: {
         key: string;
@@ -176,9 +186,7 @@ describe("sessionsCleanupCommand", () => {
   });
 
   it("emits a single JSON object for non-dry runs and applies maintenance", async () => {
-    mocks.callGateway.mockRejectedValue(
-      Object.assign(new Error("closed"), { name: "GatewayTransportError" }),
-    );
+    mocks.callGateway.mockRejectedValue(gatewayTransportError("closed"));
     mocks.runSessionsCleanup.mockResolvedValue({
       mode: "enforce",
       previewResults: [],
@@ -257,6 +265,35 @@ describe("sessionsCleanupCommand", () => {
     expect(cleanupCall?.targets).toEqual([
       { agentId: "main", storePath: "/resolved/sessions.json" },
     ]);
+  });
+
+  it.each([
+    { label: "request timeout after dispatch", error: gatewayTransportError("timeout") },
+    { label: "established WebSocket close", error: gatewayTransportError("closed", 1006) },
+    { label: "authentication rejection", error: new Error("unauthorized") },
+    {
+      label: "malformed transport failure",
+      error: Object.assign(new Error("malformed transport failure"), {
+        name: "GatewayTransportError",
+        kind: "closed",
+      }),
+    },
+  ])("surfaces $label without replaying cleanup locally", async ({ error }) => {
+    mocks.callGateway.mockRejectedValue(error);
+
+    const { runtime } = makeRuntime();
+    await expect(sessionsCleanupCommand({ enforce: true }, runtime)).rejects.toBe(error);
+
+    expect(mocks.callGateway).toHaveBeenCalledOnce();
+    expect(mocks.runSessionsCleanup).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit offline store cleanup local", async () => {
+    const { runtime } = makeRuntime();
+    await sessionsCleanupCommand({ store: "/explicit/sessions.sqlite", enforce: true }, runtime);
+
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.runSessionsCleanup).toHaveBeenCalledOnce();
   });
 
   it("delegates non-store enforcing cleanup through the Gateway writer when reachable", async () => {
@@ -415,6 +452,7 @@ describe("sessionsCleanupCommand", () => {
       wouldMutate: true,
     });
     expect(mocks.runSessionsCleanup).toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(mocks.updateSessionStore).not.toHaveBeenCalled();
   });
 

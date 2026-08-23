@@ -268,12 +268,13 @@ function codeClassAttribute(lang: string, highlighted: string): string {
 function renderCodeElement(
   text: string,
   lang: string,
-  options: { blockArt?: boolean } = {},
+  options: { blockArt?: boolean; highlight?: boolean } = {},
 ): string {
   if (options.blockArt || isMarkdownBlockArtText(text)) {
     return `<pre><code class="markdown-block-art">${escapeMarkdownHtml(text)}</code></pre>`;
   }
-  const highlighted = highlightCodeHtml(text, lang);
+  const highlighted =
+    options.highlight === false ? escapeMarkdownHtml(text) : highlightCodeHtml(text, lang);
   const classAttr = codeClassAttribute(lang, highlighted);
   return `<pre><code${classAttr}>${highlighted}</code></pre>`;
 }
@@ -301,10 +302,10 @@ export function renderMarkdownCodeBlock(
   text: string,
   lang: string,
   env: unknown,
-  options: { blockArt?: boolean; copyText?: string } = {},
+  options: { blockArt?: boolean; copyText?: string; highlight?: boolean } = {},
 ): string {
   const blockArt = options.blockArt || isMarkdownBlockArtText(text);
-  const codeBlock = renderCodeElement(text, lang, { blockArt });
+  const codeBlock = renderCodeElement(text, lang, { blockArt, highlight: options.highlight });
   if (!shouldRenderCodeBlockCopy(env) && !shouldRenderCodeBlockInteraction(env)) {
     return codeBlock;
   }
@@ -316,10 +317,9 @@ export function renderMarkdownCodeBlock(
   if (!shouldRenderCodeBlockInteraction(env)) {
     return `<div class="code-block-wrapper">${renderCodeBlockHeader(lang, copyButton)}${codeBlock}</div>`;
   }
-  const hiddenLineCount = Math.max(
-    0,
-    markdownCodeBlockCopyText(text).split("\n").length - CODE_PREVIEW_LINE_COUNT,
-  );
+  const hiddenLineCount = ["text", "md", "markdown"].includes(lang.trim().toLowerCase())
+    ? 0
+    : Math.max(0, markdownCodeBlockCopyText(text).split("\n").length - CODE_PREVIEW_LINE_COUNT);
   const hiddenCount = { count: String(hiddenLineCount) };
   const expandLabel = t(
     hiddenLineCount === 1 ? "chat.codeBlock.showHiddenLine" : "chat.codeBlock.showHiddenLines",

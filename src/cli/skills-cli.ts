@@ -9,6 +9,7 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
+  resolveConfiguredAgentId,
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -67,7 +68,7 @@ import type {
 } from "../skills/workshop/types.js";
 import { CONFIG_DIR } from "../utils.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
-import { resolveOptionFromCommand } from "./cli-utils.js";
+import { resolveOptionFromCommand, runCommandWithRuntime } from "./cli-utils.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "./failure-output.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
@@ -142,6 +143,14 @@ const GATEWAY_SKILLS_OFFLINE_LOCK_TIMEOUT_MS = 250;
 // Apply can await evaluator, proposal-change, and skill-change hook phases.
 const GATEWAY_SKILLS_APPLY_TIMEOUT_MS = 1_850_000;
 
+function normalizeExplicitAgentId(agentId?: string): string | undefined {
+  const normalizedAgentId = agentId?.trim();
+  if (agentId !== undefined && !normalizedAgentId) {
+    throw new Error("--agent must not be blank");
+  }
+  return normalizedAgentId;
+}
+
 function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   config: ReturnType<typeof getRuntimeConfig>;
   workspaceDir: string;
@@ -151,14 +160,14 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   const config = getRuntimeConfig(
     options?.skipPluginValidation ? { skipPluginValidation: true } : undefined,
   );
-  const explicitAgentId = normalizeOptionalString(options?.agentId);
+  const explicitAgentId = normalizeExplicitAgentId(options?.agentId);
   const inferredAgentId = explicitAgentId
     ? undefined
     : resolveAgentIdByWorkspacePath(config, options?.cwd ?? process.cwd());
-  const agentId =
-    explicitAgentId ??
-    inferredAgentId ??
-    resolveDefaultAgentId(config, { surface: "the skills command", hint: "Pass --agent <id>." });
+  const agentId = explicitAgentId
+    ? resolveConfiguredAgentId(config, explicitAgentId)
+    : (inferredAgentId ??
+      resolveDefaultAgentId(config, { surface: "the skills command", hint: "Pass --agent <id>." }));
   return {
     config,
     agentId,
@@ -210,13 +219,10 @@ async function runSkillsAction(
   render: (report: SkillStatusReport) => string,
   options?: ResolveSkillsWorkspaceOptions,
 ): Promise<void> {
-  try {
+  await runCommandWithRuntime(defaultRuntime, async () => {
     const report = await loadSkillsStatusReport(options);
     defaultRuntime.writeStdout(render(report));
-  } catch (err) {
-    defaultRuntime.error(formatErrorMessage(err));
-    defaultRuntime.exit(1);
-  }
+  });
 }
 
 function resolveSkillsWorkspaceForCommand(
@@ -231,8 +237,8 @@ function resolveClawHubTargetWorkspace(
   opts: { agent?: string; global?: boolean },
   reportError: (message: string) => void = defaultRuntime.error,
 ): Pick<ResolvedSkillsWorkspace, "config" | "workspaceDir"> | undefined {
-  const agentId = resolveAgentOption(command, opts);
-  if (opts.global && normalizeOptionalString(agentId)) {
+  const agentId = normalizeExplicitAgentId(resolveAgentOption(command, opts));
+  if (opts.global && agentId) {
     reportError("Use either --global or --agent, not both.");
     defaultRuntime.exit(1);
     return undefined;
@@ -593,7 +599,7 @@ export function registerSkillsCli(program: Command) {
     .option("--limit <n>", "Max results", (value) => parseStrictPositiveIntOption(value, "--limit"))
     .option("--json", "Output as JSON", false)
     .action(async (queryParts: string[], opts: { limit?: number; json?: boolean }) => {
-      try {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         const results = await searchSkillsFromClawHub({
           query: normalizeOptionalString(queryParts.join(" ")),
           limit: opts.limit,
@@ -618,10 +624,7 @@ export function registerSkillsCli(program: Command) {
           const trust = isExternalSource ? `  ${CLAWHUB_SKILLS_SH_TRUST_LABEL}` : "";
           defaultRuntime.log(`${skillRef}${version}  ${displayName}${summary}${trust}`);
         }
-      } catch (err) {
-        defaultRuntime.error(formatErrorMessage(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 
   skills
@@ -683,8 +686,16 @@ export function registerSkillsCli(program: Command) {
             return;
           }
           if (isSkillSourceInstallSpec(slug)) {
-            if (opts.version) {
-              defaultRuntime.error("--version is only supported for ClawHub skill installs.");
+            const clawHubOnlyOption = [
+              opts.version && "--version",
+              opts.forceInstall && "--force-install",
+              (opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true) &&
+                "--acknowledge-clawhub-risk",
+            ].find(Boolean);
+            if (clawHubOnlyOption) {
+              defaultRuntime.error(
+                `${clawHubOnlyOption} is only supported for ClawHub skill installs.`,
+              );
               defaultRuntime.exit(1);
               return;
             }
@@ -763,6 +774,7 @@ export function registerSkillsCli(program: Command) {
     .description("Update ClawHub-installed skills in the active or shared managed directory")
     .argument("[skill-ref]", "Single ClawHub skill ref (@owner/slug)")
     .option("--all", "Update all tracked ClawHub skills", false)
+    .option("--force", "Replace installed skills even when they have local changes", false)
     .option(
       "--force-install",
       "Install a pending GitHub-backed skill before ClawHub scan completes",
@@ -785,6 +797,7 @@ export function registerSkillsCli(program: Command) {
         slug: string | undefined,
         opts: {
           all?: boolean;
+          force?: boolean;
           forceInstall?: boolean;
           acknowledgeClawhubRisk?: boolean;
           acknowledgeClawHubRisk?: boolean;
@@ -817,6 +830,7 @@ export function registerSkillsCli(program: Command) {
           const results = await updateSkillsFromClawHub({
             workspaceDir: target.workspaceDir,
             slug,
+            ...(opts.force ? { force: true } : {}),
             ...(opts.forceInstall ? { forceInstall: true } : {}),
             ...resolveInstallPolicyWarningAcknowledgementCliOptions({
               acknowledgeInstallPolicyWarning: opts.acknowledgeInstallPolicyWarning,
@@ -835,7 +849,9 @@ export function registerSkillsCli(program: Command) {
           for (const result of results) {
             if (!result.ok) {
               failed = true;
-              if (!isClawHubSkillBlockedCliFailure(result)) {
+              if (result.code === "force_required") {
+                defaultRuntime.error(`${result.error} Re-run with --force to update it anyway.`);
+              } else if (!isClawHubSkillBlockedCliFailure(result)) {
                 defaultRuntime.error(result.error);
               }
               continue;

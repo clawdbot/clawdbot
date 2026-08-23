@@ -15,8 +15,6 @@ describe("llama-server model mapping", () => {
             n_ctx: 65536,
             params: { max_tokens: 4096 },
           },
-          total_slots: 2,
-          build_info: "b10000-deadbeef",
           chat_template_caps: {
             supports_tools: true,
             supports_tool_calls: true,
@@ -26,8 +24,6 @@ describe("llama-server model mapping", () => {
       ),
     ).toMatchObject({
       status: "loaded",
-      buildInfo: "b10000-deadbeef",
-      totalSlots: 2,
       config: {
         id: "ggml-org/model:Q4_K_M",
         contextWindow: 65536,

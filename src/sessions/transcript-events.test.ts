@@ -4,6 +4,7 @@ import {
   emitSessionTranscriptUpdate,
   onInternalSessionTranscriptUpdate,
   onSessionTranscriptUpdate,
+  resolveTerminalAssistantTranscriptRunId,
 } from "./transcript-events.js";
 
 const cleanup: Array<() => void> = [];
@@ -39,6 +40,7 @@ describe("transcript events", () => {
       message: { role: "assistant", content: "hi" },
       messageId: "  msg-1  ",
       messageSeq: 2,
+      runId: "  run-1  ",
     });
 
     expect(publicListener).toHaveBeenCalledWith({
@@ -53,6 +55,7 @@ describe("transcript events", () => {
       message: { role: "assistant", content: "hi" },
       messageId: "msg-1",
       messageSeq: 2,
+      runId: "run-1",
     });
     expect(internalListener).toHaveBeenCalledWith({
       sessionFile: "/tmp/session.jsonl",
@@ -67,6 +70,7 @@ describe("transcript events", () => {
       message: { role: "assistant", content: "hi" },
       messageId: "msg-1",
       messageSeq: 2,
+      runId: "run-1",
     });
   });
 
@@ -287,5 +291,36 @@ describe("transcript events", () => {
     expect(emitSessionTranscriptUpdate({ sessionFile: "/tmp/session.jsonl" })).toBeUndefined();
     expect(first).toHaveBeenCalledTimes(1);
     expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { name: "user", message: { role: "user", content: "prompt" }, expected: undefined },
+    {
+      name: "tool result",
+      message: { role: "toolResult", content: [{ type: "text", text: "result" }] },
+      expected: undefined,
+    },
+    {
+      name: "intermediate tool turn without a call block",
+      message: { role: "assistant", content: [], stopReason: "toolUse" },
+      expected: undefined,
+    },
+    ...["toolCall", "toolUse", "functionCall"].map((type) => ({
+      name: `incomplete ${type} block`,
+      message: { role: "assistant", content: [{ type }], stopReason: "error" },
+      expected: undefined,
+    })),
+    ...["stop", "length", "error", "aborted"].map((stopReason) => ({
+      name: `${stopReason} terminal assistant`,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "answer" }],
+        stopReason,
+      },
+      expected: "run-owned",
+    })),
+  ])("attributes run ownership only to terminal assistants: $name", ({ message, expected }) => {
+    expect(resolveTerminalAssistantTranscriptRunId(message, "  run-owned  ")).toBe(expected);
+    expect(resolveTerminalAssistantTranscriptRunId(message, "  ")).toBeUndefined();
   });
 });

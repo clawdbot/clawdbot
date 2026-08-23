@@ -12,6 +12,7 @@ export const SessionsCreateParamsSchema = closedObject({
   label: Type.Optional(SessionLabelString),
   category: Type.Optional(SessionLabelString),
   model: Type.Optional(NonEmptyString),
+  contextWindow: Type.Optional(NonEmptyString),
   thinkingLevel: Type.Optional(NonEmptyString),
   permissionMode: Type.Optional(SessionPermissionModeSchema),
   incognito: Type.Optional(Type.Boolean()),

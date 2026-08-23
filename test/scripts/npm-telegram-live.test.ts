@@ -467,14 +467,12 @@ describe("package Telegram live Docker E2E", () => {
   it.each(["fail", "skip", "skipped", "timeout"])(
     "fails package Telegram QA when a scenario has %s status",
     async (status) => {
-      const summaryPath = path.join(mkTempRoot(), "qa-evidence.json");
+      const summaryPath = path.join(mkTempRoot(), "qa-suite-summary.json");
       writeFileSync(
         summaryPath,
         JSON.stringify({
-          kind: "openclaw.qa.evidence-summary",
-          schemaVersion: 2,
-          generatedAt: "2026-05-01T00:00:00.000Z",
-          entries: [{ result: { status } }],
+          run: { status: "completed" },
+          scenarios: [{ status }],
         }),
         "utf8",
       );
@@ -489,14 +487,12 @@ describe("package Telegram live Docker E2E", () => {
   );
 
   it("passes package Telegram QA when every scenario passes", async () => {
-    const summaryPath = path.join(mkTempRoot(), "qa-evidence.json");
+    const summaryPath = path.join(mkTempRoot(), "qa-suite-summary.json");
     writeFileSync(
       summaryPath,
       JSON.stringify({
-        kind: "openclaw.qa.evidence-summary",
-        schemaVersion: 2,
-        generatedAt: "2026-05-01T00:00:00.000Z",
-        entries: [{ result: { status: "pass" } }],
+        run: { status: "completed" },
+        scenarios: [{ status: "pass" }],
       }),
       "utf8",
     );

@@ -13,7 +13,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
-import { terminateManagedChild } from "./lib/managed-child-process.mts";
+import {
+  inspectManagedProcessGroup,
+  terminateManagedChild,
+  waitForManagedProcessGroupExit,
+} from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import {
@@ -51,7 +55,6 @@ const PROC_MEMINFO_PATH = "/proc/meminfo";
 const tsdownStdio = () => ["ignore", "pipe", "pipe"] satisfies ["ignore", "pipe", "pipe"];
 // Build descendants get a short cleanup window; a timed-out build must not hold CI for seconds.
 const TERMINATION_GRACE_MS = 250;
-const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const POST_FORCE_KILL_WAIT_MS = 250;
 const ROOT_TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
 const PRESERVED_TSDOWN_OUTPUT_FILES = ["dist/cli-startup-metadata.json"];
@@ -899,35 +902,18 @@ export async function runTsdownBuildInvocation(
     relayParentSignal("SIGHUP");
   }
 
-  function processTreeAlive() {
-    if (!child.pid) {
-      return false;
-    }
-    if (!useProcessGroup) {
-      return child.exitCode === null && child.signalCode === null;
-    }
-    try {
-      process.kill(-child.pid, 0);
-      return true;
-    } catch (error) {
-      return (
-        typeof error === "object" && error !== null && "code" in error && error.code === "EPERM"
-      );
-    }
-  }
-
-  async function waitForProcessTreeExit(timeoutMsToWait: number) {
-    const deadlineAt = Date.now() + timeoutMsToWait;
-    while (Date.now() < deadlineAt) {
-      if (!processTreeAlive()) {
-        return true;
-      }
-      await new Promise((resolvePoll) => {
-        setTimeout(resolvePoll, PROCESS_GROUP_EXIT_POLL_MS);
-      });
-    }
-    return !processTreeAlive();
-  }
+  const processTreeAlive = () =>
+    inspectManagedProcessGroup(child, {
+      errorPolicy: "alive-on-eperm",
+      inspectLeaderWhenNoGroup: true,
+      platform,
+    }) === "live";
+  const waitForProcessTreeExit = (timeoutMsToWait: number) =>
+    waitForManagedProcessGroupExit(child, timeoutMsToWait, {
+      errorPolicy: "alive-on-eperm",
+      inspectLeaderWhenNoGroup: true,
+      platform,
+    });
 
   async function finishTimedOutProcessTree() {
     const graceRemainingMs =

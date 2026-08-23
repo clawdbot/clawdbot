@@ -147,6 +147,102 @@ describe("prepared model catalog builder", () => {
     );
   });
 
+  it("carries manifest context-window choices into the prepared catalog", async () => {
+    const plugin = {
+      id: "anthropic",
+      origin: "bundled",
+      providers: ["anthropic"],
+      modelCatalog: {
+        providers: {
+          anthropic: {
+            models: [
+              {
+                id: "claude-fable-5",
+                contextWindow: 1_000_000,
+                contextWindows: [
+                  { id: "200k", label: "200K", contextWindow: 200_000 },
+                  { id: "1m", label: "1M", contextWindow: 1_000_000 },
+                ],
+                contextWindowDefault: "1m",
+              },
+            ],
+          },
+        },
+        discovery: { anthropic: "refreshable" },
+      },
+    };
+    const snapshot = {
+      plugins: [plugin],
+      manifestRegistry: { plugins: [plugin] },
+    } as unknown as PluginMetadataSnapshot;
+
+    expect(
+      loadManifestModelCatalog({ config: {}, metadataSnapshot: snapshot }).find(
+        (entry) => entry.id === "claude-fable-5",
+      ),
+    ).toMatchObject({
+      contextWindows: [
+        { id: "200k", label: "200K", contextWindow: 200_000 },
+        { id: "1m", label: "1M", contextWindow: 1_000_000 },
+      ],
+      contextWindowDefault: "1m",
+    });
+  });
+
+  it("drops a base context-window default when an overlay replaces the options list", async () => {
+    const plugin = {
+      id: "anthropic",
+      origin: "bundled",
+      providers: ["anthropic"],
+      modelCatalog: {
+        providers: {
+          anthropic: {
+            models: [
+              {
+                id: "claude-fable-5",
+                contextWindow: 1_000_000,
+                contextWindows: [
+                  { id: "200k", label: "200K", contextWindow: 200_000 },
+                  { id: "1m", label: "1M", contextWindow: 1_000_000 },
+                ],
+                contextWindowDefault: "1m",
+              },
+            ],
+          },
+        },
+        discovery: { anthropic: "refreshable" },
+      },
+    };
+    // Live provider discovery overlays the manifest row but replaces the
+    // options list without restating a default.
+    mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
+      {
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        provider: "anthropic",
+        contextWindow: 200_000,
+        contextWindows: [{ id: "200k", label: "200K", contextWindow: 200_000 }],
+      },
+    ]);
+    const snapshot = await build({
+      metadataSnapshot: {
+        plugins: [plugin],
+        manifestRegistry: { plugins: [plugin] },
+      } as unknown as PluginMetadataSnapshot,
+      entries: [{ id: "claude-fable-5", name: "Claude Fable 5", provider: "anthropic" }],
+      readOnly: false,
+    });
+
+    const merged = findModelCatalogEntry(snapshot.entries, {
+      provider: "anthropic",
+      modelId: "claude-fable-5",
+    });
+    // Options + default are one normalized unit: the overlay owns both, so the
+    // base "1m" default absent from the replacement list must not leak through.
+    expect(merged?.contextWindows).toEqual([{ id: "200k", label: "200K", contextWindow: 200_000 }]);
+    expect(merged?.contextWindowDefault).toBeUndefined();
+  });
+
   it("keeps an account's runtime-discovered model list authoritative", async () => {
     const snapshot = await build({
       entries: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],

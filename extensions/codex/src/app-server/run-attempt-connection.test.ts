@@ -19,6 +19,10 @@ import {
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+import {
+  createIsolatedCodexAppServerClient,
+  getLeasedSharedCodexAppServerClient,
+} from "./shared-client.js";
 
 setupRunAttemptTestHooks();
 
@@ -153,6 +157,69 @@ describe("prepareCodexAttemptConnection", () => {
     expect(connection.shellEnvironment).toEqual({ GH_TOKEN: "", GITHUB_TOKEN: "" });
     expect(connection.disableLoginShell).toBe(true);
   });
+
+  it.each([
+    {
+      name: "paired-device remote execution",
+      placement: { placementExecutionMode: "remote-exec", placementNodeId: "paired-device-1" },
+      expectedFactory: createIsolatedCodexAppServerClient,
+    },
+    {
+      name: "SSH remote execution",
+      placement: { placementExecutionMode: "remote-exec" },
+      expectedFactory: getLeasedSharedCodexAppServerClient,
+    },
+    {
+      name: "local sandbox execution",
+      placement: {},
+      expectedFactory: getLeasedSharedCodexAppServerClient,
+    },
+  ])(
+    "selects the correct app-server ownership for $name",
+    async ({ placement, expectedFactory }) => {
+      const sessionFile = path.join(
+        tempDir,
+        `client-ownership-${placement.placementNodeId ?? "other"}.jsonl`,
+      );
+      const workspaceDir = path.join(
+        tempDir,
+        `workspace-client-ownership-${placement.placementNodeId ?? "other"}`,
+      );
+      const params = createParams(sessionFile, workspaceDir);
+      params.sandbox = { ...createSandboxContext({}), ...placement } as NonNullable<
+        typeof params.sandbox
+      >;
+      if (placement.placementExecutionMode === "remote-exec") {
+        const runtimePlan = createCodexRuntimePlanFixture();
+        params.runtimePlan = {
+          ...runtimePlan,
+          auth: {
+            ...runtimePlan.auth,
+            providerForAuth: "openai",
+            authProfileProviderForAuth: "openai",
+            selectedAuthMode: "api-key",
+            modelRoute: {
+              provider: "openai",
+              modelId: "gpt-5.4-codex",
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+              authRequirement: "api-key",
+              requestTransportOverrides: "none",
+            },
+          },
+        };
+        params.resolvedApiKey = "prepared-test-key";
+      }
+      registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
+
+      const connection = await prepareCodexAttemptConnection({
+        params,
+        options: { bindingStore: testCodexAppServerBindingStore },
+      });
+
+      expect(connection.attemptClientFactory).toBe(expectedFactory);
+    },
+  );
 
   it("keeps a user-home subscription on native account verification", async () => {
     const sessionFile = path.join(tempDir, "user-home-native-auth.jsonl");

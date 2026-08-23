@@ -13,6 +13,7 @@ import {
   installProviderHttpMockCleanup,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const {
@@ -171,6 +172,10 @@ describe("openai video generation provider", () => {
       } else {
         process.env.OPENAI_API_KEY = previousOpenAIKey;
       }
+      // Saving the profile store opens the per-agent database under the temporary agent
+      // dir, and clearing the snapshots does not release it, so Windows fails the removal
+      // with EBUSY unless the cached handles are closed first.
+      closeOpenClawAgentDatabasesForTest();
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
   });
