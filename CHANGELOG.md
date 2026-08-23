@@ -69,7 +69,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Automation schedule editing:** accept `--on-exit` and `--on-exit-cwd` when editing existing jobs, keep creation-only defaults out of edit patches, and show every supported session target in edit help.
 - **Control UI terminal transcript settlement:** retire live commentary, tool, and streamed reply projections atomically when the matching durable terminal message arrives, preventing duplicated final responses and transient row overlap after steering. Fixes #127209. Thanks @shakkernerd.
 - **Control UI Codex compaction history:** preserve successful native context compactions as durable, model-excluded activity inside completed work traces after the composer status clears or the session reloads. Fixes #127206. Thanks @shakkernerd.
 - **Control UI Codex steering:** preserve pre-steer commentary and tool activity in durable transcript order, keep it visible while active, and collapse it before the steering message after completion. Fixes #126938. Thanks @shakkernerd.
