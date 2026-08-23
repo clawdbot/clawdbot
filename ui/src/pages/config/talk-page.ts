@@ -14,6 +14,7 @@ import {
   talkProviderRejectsTransport,
 } from "./talk-schema.ts";
 import {
+  effectiveTalkValues,
   renderTalk,
   selectedTalkProviderOption,
   talkProviderConfigKeys,
@@ -57,6 +58,10 @@ function toProviderOption(
 
 /** Transports whose sessions are client-owned (`talk.client.create`). */
 const TALK_CLIENT_OWNED_TRANSPORTS = new Set(["webrtc", "provider-websocket"]);
+
+function gptLiveRejectsTransport(model: string | null, transport: string): boolean {
+  return isTalkGptLiveModel(model) && transport === "provider-websocket";
+}
 
 class TalkSettingsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -203,14 +208,21 @@ class TalkSettingsPage extends OpenClawLightDomElement {
       const selection = this.liveSelection();
       const transport = selection.transport;
       const provider = selectedTalkProviderOption(this.catalog, selection);
+      const rejectsTransport =
+        transport !== null &&
+        (gptLiveRejectsTransport(model, transport) ||
+          talkProviderRejectsTransport(provider?.transports, transport));
       // Preserve configured transports unless the selected provider positively
       // advertises that it cannot serve them.
-      if (
-        isTalkGptLiveModel(model) &&
-        transport &&
-        talkProviderRejectsTransport(provider?.transports, transport)
-      ) {
+      if (isTalkGptLiveModel(model) && rejectsTransport) {
         runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
+      } else if (
+        provider?.id === "openai" &&
+        isTalkGptLiveModel(model) &&
+        transport === "gateway-relay" &&
+        selection.consultRouting === "force-agent-consult"
+      ) {
+        runtimeConfig.removeFormValue(["talk", "realtime", "consultRouting"]);
       }
       return;
     }
@@ -266,6 +278,7 @@ class TalkSettingsPage extends OpenClawLightDomElement {
       return;
     }
     const runtimeConfig = this.context.runtimeConfig;
+    const selection = this.liveSelection();
     for (const key of ["model", "speakerVoice", "speakerVoiceId"]) {
       runtimeConfig.removeFormValue(["talk", "realtime", key]);
     }
@@ -276,15 +289,21 @@ class TalkSettingsPage extends OpenClawLightDomElement {
       runtimeConfig.removeFormValue(["talk", "realtime", "provider"]);
       return;
     }
-    const configuredTransport = this.liveSelection().transport;
+    const configuredTransport = selection.transport;
     const option =
       this.catalog.kind === "ready"
         ? this.catalog.providers.find((provider) => provider.id === providerId)
         : undefined;
-    if (
-      configuredTransport &&
-      talkProviderRejectsTransport(option?.transports, configuredTransport)
-    ) {
+    const targetModel =
+      effectiveTalkValues(
+        { ...selection, provider: providerId, model: null, speakerVoice: null },
+        option,
+      ).model ?? option?.defaultModel;
+    const rejectsTransport =
+      configuredTransport !== null &&
+      (gptLiveRejectsTransport(targetModel ?? null, configuredTransport) ||
+        talkProviderRejectsTransport(option?.transports, configuredTransport));
+    if (rejectsTransport) {
       runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
     }
     runtimeConfig.patchForm(["talk", "realtime", "provider"], providerId);
@@ -294,8 +313,18 @@ class TalkSettingsPage extends OpenClawLightDomElement {
       option !== undefined &&
       option.transports.length > 0 &&
       !option.transports.some((candidate) => TALK_CLIENT_OWNED_TRANSPORTS.has(candidate));
+    let resultingTransport = rejectsTransport ? null : configuredTransport;
     if (relayOnly && configuredTransport !== "gateway-relay") {
       runtimeConfig.patchForm(["talk", "realtime", "transport"], "gateway-relay");
+      resultingTransport = "gateway-relay";
+    }
+    if (
+      option?.id === "openai" &&
+      isTalkGptLiveModel(targetModel ?? null) &&
+      resultingTransport === "gateway-relay" &&
+      selection.consultRouting === "force-agent-consult"
+    ) {
+      runtimeConfig.removeFormValue(["talk", "realtime", "consultRouting"]);
     }
   }
 

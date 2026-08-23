@@ -7,7 +7,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import "./talk-page.ts";
-import { isTalkGptLiveModel } from "./talk-schema.ts";
+import { isTalkGptLiveModel, resolveTalkRealtimeSelection } from "./talk-schema.ts";
 import { renderTalk } from "./talk.ts";
 
 type TalkSettingsPageTestElement = HTMLElement & {
@@ -21,7 +21,11 @@ type TalkSettingsPageTestElement = HTMLElement & {
 type TalkMutationHarnessOptions = {
   activeProvider?: string | null;
   aliases?: string[];
+  consultRouting?: string | null;
+  defaultModel?: string;
+  openAIProviderModel?: string;
   provider?: string | null;
+  transport?: string | null;
   transports?: string[];
   unavailable?: boolean;
 };
@@ -45,7 +49,7 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
                 models: ["gpt-live-1-boulder-alpha"],
                 voices: ["marin"],
                 transports: options.transports ?? ["gateway-relay"],
-                defaultModel: "gpt-live-1-boulder-alpha",
+                defaultModel: options.defaultModel ?? "gpt-live-1-boulder-alpha",
               },
               {
                 id: "xai",
@@ -78,7 +82,11 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
       realtime: {
         provider: options.provider === undefined ? "openai" : options.provider,
         model: "gpt-realtime-2.1",
-        transport: "gateway-relay",
+        transport: options.transport === undefined ? "gateway-relay" : options.transport,
+        consultRouting: options.consultRouting,
+        providers: options.openAIProviderModel
+          ? { openai: { model: options.openAIProviderModel } }
+          : undefined,
       },
     },
   };
@@ -150,6 +158,21 @@ describe("isTalkGptLiveModel", () => {
   );
 });
 
+describe("resolveTalkRealtimeSelection", () => {
+  it.each([
+    [" force-agent-consult ", "force-agent-consult"],
+    [" Provider-Direct ", "provider-direct"],
+    [" ", null],
+    [null, null],
+  ])("normalizes consult routing: %s", (consultRouting, expected) => {
+    expect(
+      resolveTalkRealtimeSelection({
+        talk: { realtime: { consultRouting } },
+      }).consultRouting,
+    ).toBe(expected);
+  });
+});
+
 describe("renderTalk", () => {
   it("locks every curated picker when config mutation is unavailable", () => {
     const container = document.createElement("div");
@@ -160,6 +183,7 @@ describe("renderTalk", () => {
           model: "gpt-live",
           speakerVoice: "marin",
           transport: "webrtc",
+          consultRouting: null,
           providerEntries: {},
         },
         catalog: {
@@ -210,6 +234,7 @@ describe("renderTalk", () => {
           model: "gpt-live",
           speakerVoice: null,
           transport: "webrtc",
+          consultRouting: null,
           providerEntries: {},
         },
         catalog: {
@@ -263,6 +288,7 @@ describe("renderTalk", () => {
           model,
           speakerVoice: null,
           transport: "gateway-relay",
+          consultRouting: null,
           providerEntries: {},
         },
         catalog: {
@@ -296,6 +322,42 @@ describe("renderTalk", () => {
 });
 
 describe("TalkSettingsPage realtime transport mutation", () => {
+  it("removes forced consult routing when OpenAI GPT-Live keeps gateway relay", async () => {
+    const removeFormValue = await selectModel("gpt-live-1-boulder-alpha", {
+      consultRouting: " Force-Agent-Consult ",
+      transports: ["gateway-relay"],
+    });
+
+    expect(removeFormValue).toHaveBeenCalledTimes(1);
+    expect(removeFormValue).toHaveBeenCalledWith(["talk", "realtime", "consultRouting"]);
+    expect(removeFormValue).not.toHaveBeenCalledWith(["talk", "realtime", "transport"]);
+  });
+
+  it.each([
+    [
+      "provider-direct routing",
+      "gpt-live-1-boulder-alpha",
+      "provider-direct",
+      "openai",
+      "gateway-relay",
+    ],
+    ["another model", "gpt-realtime", "force-agent-consult", "openai", "gateway-relay"],
+    ["another provider", "gpt-live-1-boulder-alpha", "force-agent-consult", "xai", "gateway-relay"],
+    ["another transport", "gpt-live-1-boulder-alpha", "force-agent-consult", "openai", "webrtc"],
+  ] as const)(
+    "preserves consult routing for %s",
+    async (_label, model, consultRouting, provider, transport) => {
+      const removeFormValue = await selectModel(model, {
+        consultRouting,
+        provider,
+        transport,
+        transports: ["gateway-relay", "webrtc"],
+      });
+
+      expect(removeFormValue).not.toHaveBeenCalledWith(["talk", "realtime", "consultRouting"]);
+    },
+  );
+
   it("preserves transport when switching to a provider that advertises it", async () => {
     const removeFormValue = await selectProvider("openai", {
       provider: "xai",
@@ -304,6 +366,35 @@ describe("TalkSettingsPage realtime transport mutation", () => {
 
     expect(removeFormValue).not.toHaveBeenCalledWith(["talk", "realtime", "transport"]);
   });
+
+  it("removes provider websocket when switching to a GPT-Live provider", async () => {
+    const removeFormValue = await selectProvider("openai", {
+      provider: "xai",
+      transport: "provider-websocket",
+      transports: ["provider-websocket", "webrtc"],
+    });
+
+    expect(removeFormValue).toHaveBeenCalledWith(["talk", "realtime", "transport"]);
+  });
+
+  it.each([
+    ["catalog default", "gpt-live-1-boulder-alpha", undefined],
+    ["provider fallback", "gpt-realtime-2.1", "gpt-live-1-boulder-alpha"],
+  ])(
+    "removes forced consult when a provider switch activates a GPT-Live %s",
+    async (_label, defaultModel, openAIProviderModel) => {
+      const removeFormValue = await selectProvider("openai", {
+        consultRouting: "force-agent-consult",
+        defaultModel,
+        openAIProviderModel,
+        provider: "xai",
+        transports: ["gateway-relay", "webrtc"],
+      });
+
+      expect(removeFormValue).toHaveBeenCalledWith(["talk", "realtime", "consultRouting"]);
+      expect(removeFormValue).not.toHaveBeenCalledWith(["talk", "realtime", "transport"]);
+    },
+  );
 
   it("removes transport when switching to a provider that positively rejects it", async () => {
     const removeFormValue = await selectProvider("openai", {
@@ -324,6 +415,15 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     expect(
       await selectModel("gpt-live-1-boulder-alpha", { transports: [] }),
     ).not.toHaveBeenCalled();
+  });
+
+  it("removes provider websocket from a selected GPT-Live model", async () => {
+    expect(
+      await selectModel("gpt-live-1-boulder-alpha", {
+        transport: "provider-websocket",
+        transports: ["provider-websocket", "webrtc"],
+      }),
+    ).toHaveBeenCalledWith(["talk", "realtime", "transport"]);
   });
 
   it("preserves a transport advertised by the explicit provider", async () => {

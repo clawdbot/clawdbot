@@ -19,6 +19,8 @@ export type TalkRealtimeSelection = {
   speakerVoice: string | null;
   /** Raw configured `talk.realtime.transport`. */
   transport: string | null;
+  /** Normalized configured `talk.realtime.consultRouting`. */
+  consultRouting: string | null;
   /** Per-provider fallback values keyed by the raw config map key. */
   providerEntries: Record<string, TalkProviderEntryValues>;
 };
@@ -52,6 +54,7 @@ export function resolveTalkRealtimeSelection(
     speakerVoice:
       readTrimmedString(realtime?.speakerVoice) ?? readTrimmedString(realtime?.speakerVoiceId),
     transport: readTrimmedString(realtime?.transport),
+    consultRouting: readTrimmedString(realtime?.consultRouting)?.toLowerCase() ?? null,
     providerEntries,
   };
 }
