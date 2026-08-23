@@ -12,6 +12,16 @@
   line-height: 1.45;
 }
 
+/* Sessions is a scan-heavy workspace, so keep its section rhythm tighter than
+   form-heavy settings pages while preserving the shared control sizes. */
+.settings-page:has(> .sessions-facts) {
+  gap: var(--space-4);
+}
+
+.settings-page:has(> .sessions-facts) > .settings-section {
+  gap: var(--space-2);
+}
+
 /* --- Compact overview facts --- */
 .sessions-facts {
   display: flex;
@@ -353,6 +363,11 @@
 /* --- Table --- */
 .sessions-table {
   min-width: 760px;
+}
+
+.sessions-table th,
+.sessions-table td {
+  padding-block: var(--space-2);
 }
 
 .sessions-table tbody tr.session-data-row > td {
@@ -828,8 +843,8 @@
 
 .session-details-panel {
   display: grid;
-  gap: var(--space-4);
-  padding: var(--space-4);
+  gap: var(--space-2);
+  padding: var(--space-3);
   border-top: 1px solid var(--border);
 }
 
@@ -874,8 +889,8 @@
 
 .session-details-section {
   display: grid;
-  gap: var(--space-3);
-  padding-top: var(--space-3);
+  gap: var(--space-2);
+  padding-top: var(--space-2);
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
@@ -914,8 +929,8 @@
 .session-details-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
-  gap: var(--space-3);
-  padding-top: var(--space-3);
+  gap: var(--space-2);
+  padding-top: var(--space-2);
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
