@@ -4,7 +4,7 @@
  * blocks or plain prompt text.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import {
   formatGeneratedAttachmentLines,
   mediaUrlsFromGeneratedAttachments,
@@ -109,16 +109,6 @@ function sanitizeSingleLineField(value: string, fallback: string): string {
   return sanitized || fallback;
 }
 
-function truncateSingleLineField(value: string, maxChars: number, marker: string): string {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  const keep = Math.max(0, maxChars - marker.length);
-  // truncateUtf16Safe never splits a surrogate pair, so astral characters in
-  // provider/lifecycle error text cannot leave a dangling half in the prompt.
-  return `${truncateUtf16Safe(value, keep).trimEnd()}${marker}`;
-}
-
 function sanitizeMultilineField(value: string, fallback: string): string {
   const sanitized = escapeInternalRuntimeContextDelimiters(value).replace(/\r\n/g, "\n").trim();
   return sanitized || fallback;
@@ -169,10 +159,14 @@ function formatTaskCompletionEvent(
   const sessionId = sanitizeSingleLineField(event.childSessionId ?? "unknown", "unknown");
   const announceType = sanitizeSingleLineField(event.announceType, "unknown");
   const taskLabel = sanitizeSingleLineField(event.taskLabel, "unnamed task");
-  const statusLabel = truncateSingleLineField(
+  const statusLabel = truncateWithMarker(
     sanitizeSingleLineField(event.statusLabel, event.status),
     MAX_TASK_COMPLETION_STATUS_LABEL_CHARS,
-    TASK_COMPLETION_STATUS_LABEL_TRUNCATION_MARKER,
+    {
+      marker: TASK_COMPLETION_STATUS_LABEL_TRUNCATION_MARKER,
+      reserve: TASK_COMPLETION_STATUS_LABEL_TRUNCATION_MARKER.length,
+      trimEnd: true,
+    },
   );
   const result = formatChildResultDataBlock(event.result);
   const attachmentLines = formatGeneratedAttachmentLines(event.attachments);
