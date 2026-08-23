@@ -1823,18 +1823,17 @@ class TalkModeManagerTest {
   fun aFirstWriteThatFailsCannotLeaveTheMicrophoneSuppressedForever() =
     runTest {
       val gateAtFirstWrite = AtomicReference<Boolean?>(null)
+      // A negative result is a device error: terminal, not backpressure.
       val manager = playoutManagerObservingFirstWrite(gateAtFirstWrite, acceptWrites = false)
       setRealtimeAecEnabled(manager, false)
 
       manager.realtimeEvent(audioEventPayload(480))
       runCurrent()
+      // The gate was shut while the device was being written to, which is the point of the gate.
       assertEquals(false, gateAtFirstWrite.get())
-      assertFalse(shouldAppendRealtimeCapturedFrame(manager, 4_800))
 
-      // Nothing was ever presented, so the idle check the publication started is what reopens it.
-      advanceTimeBy(200)
-      runCurrent()
-
+      // The failure path retires the device and republishes idle state, so the gate reopens with
+      // the failure itself rather than waiting for an idle tick to notice nothing is presenting.
       assertTrue(shouldAppendRealtimeCapturedFrame(manager, 4_800))
       manager.stopAllCapture()
     }

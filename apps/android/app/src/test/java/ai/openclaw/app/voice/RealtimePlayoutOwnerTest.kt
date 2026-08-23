@@ -98,6 +98,76 @@ class RealtimePlayoutOwnerTest {
     }
 
   @Test
+  fun aNegativeWriteAfterPartialProgressFailsPlaybackInsteadOfBankingThePrefix() =
+    runTest {
+      // AudioTrack.ERROR_DEAD_OBJECT. Any negative result is a terminal device error, not
+      // backpressure -- the distinction the retry loop above depends on.
+      val deviceError = -6
+      // call 0: the first frame is accepted whole. call 1: the second frame is accepted in part.
+      // call 2: the device dies mid-frame, so a strict prefix of that frame reached it.
+      val sinks =
+        FakeRealtimeAudioSinkFactory { offered, call ->
+          when (call) {
+            0 -> offered
+            1 -> 100
+            else -> deviceError
+          }
+        }
+      val talk = realtimePlayoutHarness(sinks)
+
+      talk.audioEvent(pcm(200))
+      runCurrent()
+      talk.markEvent("audio-1")
+      runCurrent()
+      // The barrier is pending against the first frame and has not been released yet.
+      assertEquals(emptyList<Pair<String, String>>(), talk.acknowledgements)
+      assertEquals(100L, talk.writtenFrames())
+
+      talk.audioEvent(pcm(480))
+      runCurrent()
+
+      // The device error is a playback failure, not a logged break that leaves the relay running.
+      assertTrue(talk.talkFailed())
+      // The truncated frame is not banked. Were it counted, a later barrier could clear a target
+      // frame the device never presented.
+      assertEquals(0L, talk.writtenFrames())
+      assertFalse(talk.sinkInstalled())
+      assertEquals(1, sinks.last.closeCalls)
+      assertFalse(talk.isSpeaking())
+      assertFalse(talk.idleTickerActive())
+      // The stranded barrier is released exactly once, by the failure path, so the provider's
+      // playback gate does not hang -- and it is released because the relay failed, not because
+      // the partial frame was treated as fully played.
+      assertEquals(listOf("relay-1" to "audio-1"), talk.acknowledgements)
+      // The owner survives its own failure: later commands are still drained, not swallowed.
+      talk.audioEvent(pcm(200))
+      runCurrent()
+      assertEquals(0, talk.queuedProviderCommands())
+      assertEquals(0L, talk.queuedAudioBytes())
+      talk.shutdown()
+    }
+
+  @Test
+  fun aNegativeWriteOnTheFirstAttemptFailsPlaybackAndRetiresTheDevice() =
+    runTest {
+      // No partial progress at all: the very first write reports the device is gone.
+      val sinks = FakeRealtimeAudioSinkFactory { _, _ -> -6 }
+      val talk = realtimePlayoutHarness(sinks)
+
+      talk.audioEvent(pcm(480))
+      runCurrent()
+
+      assertTrue(talk.talkFailed())
+      assertFalse(talk.sinkInstalled())
+      assertEquals(1, sinks.last.closeCalls)
+      assertFalse(talk.isSpeaking())
+      assertFalse(talk.idleTickerActive())
+      // One write, then the failure: a dead device is never retried on the stall budget.
+      assertEquals(1, sinks.last.writeCalls)
+      talk.shutdown()
+    }
+
+  @Test
   fun refusedWritesRetryOnABoundedDelayInsteadOfSpinning() =
     runTest {
       // Two refusals, then the device drains.
@@ -672,6 +742,11 @@ private class RealtimePlayoutHarness(
   fun setPlaybackEnabled(enabled: Boolean) = manager.setPlaybackEnabled(enabled)
 
   fun idleTickerActive(): Boolean = (readPrivateField(manager, "realtimePlaybackIdleJob") as Job?)?.isActive == true
+
+  /** Frames the owner has banked as written. Retirement resets it, so a failed frame leaves 0. */
+  fun writtenFrames(): Long = readPrivateField(manager, "realtimeWrittenFrames") as Long
+
+  fun sinkInstalled(): Boolean = readPrivateField(manager, "realtimeAudioSink") != null
 
   fun queuedProviderCommands(): Int = (readPrivateField(manager, "queuedRealtimeProviderCommands") as AtomicInteger).get()
 

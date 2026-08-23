@@ -1996,10 +1996,12 @@ class TalkModeManager internal constructor(
       if (command.epoch != realtimePlaybackEpoch.get()) break
       val accepted = sink.write(bytes, writtenBytes, bytes.size - writtenBytes)
       if (accepted < 0) {
-        // A device error code, not backpressure. Keep the frames already accepted and stop
-        // retrying; the next command decides whether the device is still usable.
-        Log.w(tag, "realtime audio write failed: $accepted")
-        break
+        // A device error code, not backpressure: the same class of terminal playout failure as a
+        // device that accepts nothing for the whole stall budget, and routed the same way. The
+        // owner's handler retires the sink and fails the relay. Breaking instead would bank the
+        // accepted prefix as played, extend the presentation deadline by a frame the device never
+        // finished, and leave later audio and marks running against a dead sink.
+        throw IllegalStateException("realtime audio write failed with device error $accepted")
       }
       if (accepted == 0) {
         if (stalledMs >= stallBudgetMs) {
