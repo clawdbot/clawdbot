@@ -824,8 +824,17 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(stagedMediaRecipe.indexOf("--until-provider-requests 4")).toBeLessThan(
       stagedMediaRecipe.lastIndexOf("finish --lane baseline"),
     );
+    const longHeldActiveTurnRecipe = readFileSync(
+      ".github/codex/prompts/mantis-recipes/long-held-active-turn.md",
+      "utf8",
+    );
+    const recipesReadme = readFileSync(".github/codex/prompts/mantis-recipes/README.md", "utf8");
+    expect(longHeldActiveTurnRecipe).toContain("MANTIS-SECOND-SURVIVED");
+    expect(recipesReadme).toContain("`long-held-active-turn.md`");
     expect(prompt).toContain("mantis-recipes/");
-    expect(prompt).toContain("recipe-suggestion.md");
+    expect(prompt).toMatch(
+      /change scenario mechanics after a failed attempt that was not a product\s+defect, write `MANTIS_OUTPUT_DIR\/recipe-suggestion\.md`/u,
+    );
     expect(prompt).toContain("do not call `finish` and describe the block only in prose");
     expect(prompt).toContain("`block --reason TEXT [--missing-primitive NAME]`");
     expect(prompt).toContain("`@{sut}`");
