@@ -389,9 +389,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     this.panelOpen = true;
     document.addEventListener("pointerdown", this.closeOnOutsidePointer, true);
     void this.updateComplete.then(() => {
-      this.querySelector<HTMLElement>(
-        ".sidebar-approval-row__disclosure, .sidebar-issues-panel summary",
-      )?.focus();
+      this.querySelector<HTMLElement>(".sidebar-issues-panel__list")?.focus();
     });
   }
 
