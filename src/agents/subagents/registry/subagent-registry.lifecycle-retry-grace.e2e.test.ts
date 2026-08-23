@@ -44,23 +44,13 @@ type SessionStoreEntry = {
   delivery?: SessionDeliveryState;
 };
 
-type GatewayAgentInternalEvent = {
-  status?: string;
-  statusLabel?: string;
-  result?: string;
-};
-
-type GatewayAgentRequestParams = {
-  sessionKey?: string;
-  inputProvenance?: {
-    sourceSessionKey?: string;
-  };
-  internalEvents?: GatewayAgentInternalEvent[];
-};
-
 type GatewayRequest = {
   method?: string;
-  params?: GatewayAgentRequestParams;
+  params?: {
+    sessionKey?: string;
+    inputProvenance?: { sourceSessionKey?: string };
+    internalEvents?: Array<{ status?: string; statusLabel?: string; result?: string }>;
+  };
   timeoutMs?: number;
   expectFinal?: boolean;
 };

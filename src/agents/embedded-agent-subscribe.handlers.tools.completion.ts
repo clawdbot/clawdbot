@@ -105,17 +105,21 @@ import { isToolResultError, readToolResultDetails } from "./tool-result-error.js
 import { cancelAskUserPromptDelivery } from "./tools/ask-user-tool.js";
 import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 
+type ToolExecutionEndResult =
+  | { status: "stale" }
+  | { status: "completed"; executionStarted: boolean };
+
 /** Handles a tool-execution result and commits replay, media, hook, and error state. */
 export async function handleToolExecutionEnd(
   ctx: ToolHandlerContext,
   evt: Extract<AgentEvent, { type: "tool_execution_end" }>,
   options?: { deliveryGeneration?: number },
-) {
+): Promise<ToolExecutionEndResult> {
   const isCurrentDeliveryGeneration = () =>
     options?.deliveryGeneration === undefined ||
     options.deliveryGeneration === ctx.getBlockReplyDeliveryGeneration();
   if (!isCurrentDeliveryGeneration()) {
-    return;
+    return { status: "stale" };
   }
   const rawToolName = evt.toolName;
   const toolName = normalizeToolPolicyName(rawToolName);
@@ -670,19 +674,19 @@ export async function handleToolExecutionEnd(
     deliveryGeneration: options?.deliveryGeneration,
   });
   if (!isCurrentDeliveryGeneration()) {
-    return;
+    return { status: "stale" };
   }
   await Promise.resolve(ctx.params.onToolStreamBoundary?.()).catch((error: unknown) => {
     ctx.log.debug(`embedded run tool stream boundary callback failed: ${String(error)}`);
   });
   if (!isCurrentDeliveryGeneration()) {
-    return;
+    return { status: "stale" };
   }
 
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();
   if (!isCurrentDeliveryGeneration()) {
-    return;
+    return { status: "stale" };
   }
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
     const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
@@ -708,5 +712,5 @@ export async function handleToolExecutionEnd(
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
       });
   }
-  return { executionStarted: terminal.executionStarted };
+  return { status: "completed", executionStarted: terminal.executionStarted };
 }

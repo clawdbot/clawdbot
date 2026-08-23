@@ -144,6 +144,7 @@ function runCandidate(
     provider: "openai",
     model: "gpt-5.6-luna",
     candidateFastMode: {},
+    runLane: "main",
     runId: "run-fallback",
     getLifecycleGeneration: () => "generation-1",
     onLifecycleGeneration: vi.fn(),

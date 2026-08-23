@@ -1476,3 +1476,129 @@ Both converged with the staged resolution. The index has zero unmerged entries,
 all tracked conflict markers are gone, and `git diff --cached --check` passes.
 The 30 auto-resolved shared files plus these four conflicts remain subject to
 the complete post-merge shared-path, Gate 2, Gate 2.5, and Gate 2.7 walks.
+
+## 2026-08-23T10:46:04Z - Post-merge gates and integrated-contract repairs
+
+The two-parent merge committed and remotely checkpointed as
+`de1fce0188450e7aaa3488c40f4c300cc60f54da`:
+
+- first parent:
+  `41be231735237cbc2d21560860e8cc6ce07638a9`;
+- frozen-upstream parent:
+  `3cb52f4bb869959dcd06cb6d4d33e34db3b6a665`.
+
+Accepted source and frozen upstream are ancestors. Forbidden composite
+`6e6da7bba079b0fc50d134b96657cda683985837` is not.
+
+### Gate 2 at the merge checkpoint
+
+- Canonical primitive-core walker:
+  40 invariants, zero failures, 35 byte-identical, two exact upstream
+  projections, three tombstones, exit 0.
+- The exact upstream projections are
+  `src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts` and
+  `src/agents/embedded-agent-runner/run/params.ts`.
+- Broader 929-path walker:
+  924 automatic passes and five explained manual rows.
+- Four rows are the textual conflict files already covered by the line-level
+  conflict ledger. The fifth is this append-only journal, intentional cure-only
+  metadata. No unexplained feature byte exists.
+- Post-merge geometry:
+  929 accepted feature paths, 499 upstream-drift paths, 34 shared paths, 949
+  reviewer-visible three-dot paths, and 949 tip-to-tip two-dot paths. There is
+  no two-dot/three-dot anomaly and no accepted path is absent.
+- Twenty reviewer-visible paths outside the accepted set are 19 committed
+  `.gate-out` evidence files plus the required upstream transcript-context test
+  API adaptation. These are explicit cure-only metadata/test-repair classes,
+  not unexplained product additions.
+
+### Gate 2.7 at the merge checkpoint
+
+The exact canonical classifier examined 949 paths:
+
+- 308 `SAFE-NEW`;
+- 326 `GENUINE`;
+- 315 `MIXED-CLOBBER`;
+- zero `FROZEN-STALE`;
+- exit 0.
+
+Every mixed row has a disposition:
+
+- 294 rows have exact accepted-overlay/no-current-drift geometry:
+  `UPSTREAM:path == OLD_MERGE_BASE:path` and
+  `CANDIDATE:path == SOURCE:path`. Their table records path, dropped-line
+  count, both blob identities, source numstat, source commit set, and the
+  resulting no-current-upstream-hunk decision.
+- 21 combined/represented rows were split into disjoint owner reviews across
+  agent runtime, lifecycle/subagents, heartbeat, and policy/Signal surfaces.
+  Those reviews inspected all four blobs, histories, callers, callees, tests,
+  exact missing-line sets, and within-hunk interleaves.
+- All 34 shared paths are dispositioned: 20 mixed rows plus 14 genuine rows.
+  Auditors found zero dropped applicable upstream lines.
+
+Primary review found two integrated-contract defects even though the upstream
+lines were present:
+
+1. `handleToolExecutionEnd` could return no value after source-owned generation
+   invalidation while upstream dereferenced its new execution-start result.
+2. `runEmbeddedFallbackCandidate` gained required `runLane`, while the accepted
+   continuation fixture still called the old signature.
+
+### Canonical repair set
+
+- Tool completion now returns a closed `stale | completed` result. Every
+  generation rejection is `stale`; only completed processing carries
+  `executionStarted`. Trusted no-start provenance is re-registered only from a
+  completed terminal fact, never a discarded generation.
+- The complete two-phase internal tool lifecycle moved from the oversized
+  subscription owner into existing
+  `embedded-agent-subscribe.handlers.tools.ts`. This turns the former re-export
+  shell into the lifecycle owner, keeps `embedded-agent-subscribe.ts` below the
+  700-line ceiling, and removes three inherited `as never` casts.
+- The assertion-safety baseline shrinks from 13,488 to 13,485 assertions across
+  the same 4,277 files. No allowance grew.
+- The fallback continuation fixture supplies `runLane: "main"`, matching the
+  non-heartbeat turn under test.
+- The merged lifecycle E2E test was six code lines above its existing
+  1,000-line ceiling. Two redundant request subtypes were folded into the one
+  local request shape, preserving every test and avoiding a suppression or
+  duplicate harness.
+
+### Gate 2.5 enumeration and focused proof
+
+- Complete upstream history touched 499 paths.
+- The expanded test-substrate classifier enumerated 198 test, E2E,
+  test-support, fixture, snapshot, and harness paths.
+- 184 rows are byte-identical to frozen upstream and carry exact blob
+  dispositions.
+- 14 rows differ at the candidate; every row has a four-way manual
+  disposition. Thirteen intersect the accepted feature set; the fourteenth is
+  the new transcript-context test whose import was adapted to the accepted raw
+  wake boundary.
+- All 14 owner rows passed at one Vitest worker. Additional conflict owners
+  passed: client tool/reconciliation, tool completion/media, and heartbeat
+  coalescing/trust.
+- The first lifecycle E2E launch failed before test collection because the
+  inherited worktree dependency symlink lacked the new workspace package
+  build. It changed no source. The symlink was removed, an isolated
+  `pnpm install --frozen-lockfile` completed, and the exact E2E owner then
+  passed 14/14.
+- Repair proof passed:
+  - embedded fallback continuation 2/2;
+  - tool lifecycle and Code Mode owners 253 assertions;
+  - lifecycle retry-grace E2E 14/14;
+  - the full targeted changed gate, including production/test typecheck,
+    formatting, core/script lint, max-lines, assertion safety, dead exports,
+    database-first, schema-version, import-cycle, dependency, patch, plugin,
+    webhook, and auth guards.
+
+The generated checkpoint corpus is under
+`.gate-out/continuation-drift-cure/post-merge-de1fce0188450e7aaa3488c40f4c300cc60f54da/`.
+It retains the initial gate outputs, complete path inventories, 315 mixed-row
+dispositions, 198 Gate 2.5 rows, primary review receipts, failure logs, rerun
+logs, and static proof.
+
+These repair bytes are not yet a frozen candidate. They must be committed,
+pushed, and remotely verified, after which Gates 2, 2.5, and 2.7 restart at the
+new exact SHA. Presentation remains untouched; no deployment or proof fire
+occurred.

@@ -1,0 +1,35 @@
+path	class	dropped_lines	detail
+config/assertion-safety-baseline.txt	MIXED-CLOBBER	8	203aafc4156 feat(lint): SAFETY-comment assertion ratchet +
+extensions/signal/src/monitor/event-handler.ts	MIXED-CLOBBER	5	?
+src/agents/embedded-agent-runner/run-orchestrator.ts	GENUINE	0	-
+src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts	MIXED-CLOBBER	20	?
+src/agents/embedded-agent-runner/run/attempt-client-tools.ts	MIXED-CLOBBER	3	?
+src/agents/embedded-agent-runner/run/attempt-stream-prepare.test.ts	MIXED-CLOBBER	2	?
+src/agents/embedded-agent-runner/run/attempt-stream-prepare.ts	MIXED-CLOBBER	6	?
+src/agents/embedded-agent-runner/run/attempt-tool-prepare.ts	GENUINE	0	-
+src/agents/embedded-agent-runner/run/params.ts	GENUINE	0	-
+src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts	GENUINE	0	-
+src/agents/embedded-agent-subscribe.handlers.tools.completion.ts	GENUINE	0	-
+src/agents/embedded-agent-subscribe.handlers.ts	MIXED-CLOBBER	16	c3ec166cbcd fix: repair code mode preflight failures
+src/agents/embedded-agent-subscribe.ts	MIXED-CLOBBER	5	?
+src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts	MIXED-CLOBBER	1	1ced7441eb6 refactor(agents): move announce, completion, r
+src/agents/subagents/registry/subagent-registry.lifecycle-retry-grace.e2e.test.ts	MIXED-CLOBBER	4	1ced7441eb6 refactor(agents): move announce, completion, r
+src/agents/subagents/spawn/subagent-spawn.in-process-gateway.test.ts	MIXED-CLOBBER	4	8430fc0e3b8 refactor(agents): move spawn family into subag
+src/agents/tool-result-error.ts	MIXED-CLOBBER	28	?
+src/agents/tools/sessions-spawn-tool.test.ts	MIXED-CLOBBER	1	?
+src/auto-reply/reply/agent-runner-embedded-candidate.ts	MIXED-CLOBBER	2	?
+src/auto-reply/reply/agent-runner-fallback-candidate.ts	MIXED-CLOBBER	2	?
+src/auto-reply/reply/queue/drain.ts	GENUINE	0	-
+src/cron/isolated-agent/delivery-dispatch.double-announce.test.ts	GENUINE	0	-
+src/gateway/server-methods/server-methods.test.ts	GENUINE	0	-
+src/gateway/server-runtime-subscriptions.ts	MIXED-CLOBBER	18	?
+src/gateway/server.chat.gateway-server-chat-b.test.ts	GENUINE	0	-
+src/infra/heartbeat-runner-execution.ts	MIXED-CLOBBER	12	b45ddf2754f fix(heartbeat): keep failed work pending after
+src/infra/heartbeat-runner-scheduler.ts	GENUINE	0	-
+src/infra/heartbeat-runner.returns-default-unset.test.ts	GENUINE	0	-
+src/infra/heartbeat-runner.targeted-unscheduled-wake.test.ts	MIXED-CLOBBER	1	8f0a71d475a fix(tasks): wake queued completion events (#12
+src/infra/heartbeat-wake-policy.ts	MIXED-CLOBBER	1	?
+src/infra/heartbeat-wake.ts	MIXED-CLOBBER	70	7dd75d0716f fix(heartbeat): serialize wake lifecycle state
+src/state/openclaw-state-db.test.ts	GENUINE	0	-
+ui/src/e2e/session-management.groups.e2e.test.ts	GENUINE	0	-
+ui/src/pages/sessions/view.browser.test.ts	GENUINE	0	-

@@ -18,8 +18,7 @@ import { createEmbeddedAgentSessionEventHandler } from "./embedded-agent-subscri
 import { readPendingToolMediaReply } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import {
   cleanupRunToolStartData,
-  handleToolExecutionEnd,
-  handleToolExecutionStart,
+  createEmbeddedToolLifecycle,
 } from "./embedded-agent-subscribe.handlers.tools.js";
 import type {
   EmbeddedAgentSubscribeContext,
@@ -34,14 +33,9 @@ import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "./embedded-agent-tool-media.js";
-import { buildToolLifecycleErrorResult } from "./embedded-agent-tool-results.js";
 import { stripDowngradedToolCallText } from "./embedded-agent-utils.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
-import {
-  consumeTrustedToolNoStartError,
-  registerTrustedToolNoStartError,
-} from "./tool-result-error.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSessionParams) {
@@ -564,6 +558,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
   };
 
+  const runToolLifecycle = createEmbeddedToolLifecycle(ctx);
   const sessionUnsubscribe = params.session.subscribe(createEmbeddedAgentSessionEventHandler(ctx));
 
   const unsubscribe = () => {
@@ -613,55 +608,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       state.latestMcpAppChannelView ? { ...state.latestMcpAppChannelView } : undefined,
     getLatestMcpConnectAction: () =>
       state.latestMcpConnectAction ? { ...state.latestMcpConnectAction } : undefined,
-    runToolLifecycle: async <T>(toolParams: {
-      toolName: string;
-      toolCallId: string;
-      args: unknown;
-      replaySafe?: boolean;
-      hideFromChannelProgress?: boolean;
-      execute: (onImplementationStart: () => void) => Promise<T>;
-    }): Promise<T> => {
-      await handleToolExecutionStart(ctx, {
-        type: "tool_execution_start",
-        toolName: toolParams.toolName,
-        toolCallId: toolParams.toolCallId,
-        args: toolParams.args,
-        replaySafe: toolParams.replaySafe,
-        hideFromChannelProgress: toolParams.hideFromChannelProgress,
-      } as never);
-      let executionStarted = false;
-      const onImplementationStart = () => {
-        executionStarted = true;
-      };
-      try {
-        const result = await toolParams.execute(onImplementationStart);
-        await handleToolExecutionEnd(ctx, {
-          type: "tool_execution_end",
-          toolName: toolParams.toolName,
-          toolCallId: toolParams.toolCallId,
-          isError: false,
-          executionStarted,
-          result,
-          hideFromChannelProgress: toolParams.hideFromChannelProgress,
-        } as never);
-        return result;
-      } catch (error) {
-        const trustedNoStart = consumeTrustedToolNoStartError(error);
-        const terminal = await handleToolExecutionEnd(ctx, {
-          type: "tool_execution_end",
-          toolName: toolParams.toolName,
-          toolCallId: toolParams.toolCallId,
-          isError: true,
-          executionStarted,
-          result: buildToolLifecycleErrorResult(error),
-          hideFromChannelProgress: toolParams.hideFromChannelProgress,
-        } as never);
-        if (trustedNoStart && !terminal.executionStarted) {
-          registerTrustedToolNoStartError(error);
-        }
-        throw error;
-      }
-    },
+    runToolLifecycle,
     unsubscribe,
     setTerminalLifecycleMeta: (meta: {
       replayInvalid?: boolean;

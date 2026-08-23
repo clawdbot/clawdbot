@@ -1,0 +1,105 @@
+
+===== agents-lifecycle-e2e =====
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/home/figs/flesh_beast_best_beast/source/WORKTREES/openclaw-85651-continuation-drift-cure-candidate-20260823[39m
+
+[openclaw] Building TypeScript (dist is stale: missing_private_qa_dist - private QA dist entry missing).
+[openclaw] Building bundled plugin assets.
+[canvas] build: node scripts/bundle-a2ui.mjs
+[diffs] build: node --import tsx ../../scripts/build-diffs-viewer-runtime.mts curated
+[diffs-language-pack] build: node --import tsx ../../scripts/build-diffs-viewer-runtime.mts full
+[discord] build: node --import tsx ../../scripts/build-discord-activity-sdk.mts
+[tsdown-build] invocation 1/11 finished in 3.1s
+[tsdown-build] invocation 2/11 finished in 9.8s
+../../openclaw/node_modules/playwright-core/lib/coreBundle.js (65821:28) [33m[EVAL] [0mUse of direct `eval` function is strongly discouraged as it poses security risks and may cause issues with minification.
+       [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m ../../openclaw/node_modules/playwright-core/lib/coreBundle.js:65821:29 [38;5;246m][0m
+       [38;5;246m│[0m
+ [38;5;246m65821 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249ms[0m[38;5;249mt[0m[38;5;249m [0m[38;5;249mv[0m[38;5;249ma[0m[38;5;249ml[0m[38;5;249mu[0m[38;5;249me[0m[38;5;249m [0m[38;5;249m=[0m[38;5;249m [0meval[38;5;249m([0m[38;5;249m`[0m[38;5;249m([0m[38;5;249m$[0m[38;5;249m{[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mp[0m[38;5;249mr[0m[38;5;249m}[0m[38;5;249m)[0m[38;5;249m`[0m[38;5;249m)[0m[38;5;249m;[0m
+ [38;5;240m      │[0m                             ──┬─
+ [38;5;240m      │[0m                               ╰─── Use of direct `eval` here.
+ [38;5;240m      │[0m
+ [38;5;240m      │[0m [38;5;115mHelp[0m: Consider using indirect eval. For more information, check the documentation: https://rolldown.rs/guide/troubleshooting#avoiding-direct-eval
+[38;5;246m───────╯[0m
+
+../../openclaw/node_modules/playwright-core/lib/coreBundle.js (65828:28) [33m[EVAL] [0mUse of direct `eval` function is strongly discouraged as it poses security risks and may cause issues with minification.
+       [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m ../../openclaw/node_modules/playwright-core/lib/coreBundle.js:65828:29 [38;5;246m][0m
+       [38;5;246m│[0m
+ [38;5;246m65828 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249ms[0m[38;5;249mt[0m[38;5;249m [0m[38;5;249mv[0m[38;5;249ma[0m[38;5;249ml[0m[38;5;249mu[0m[38;5;249me[0m[38;5;249m [0m[38;5;249m=[0m[38;5;249m [0meval[38;5;249m([0m[38;5;249m`[0m[38;5;249m([0m[38;5;249m$[0m[38;5;249m{[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mp[0m[38;5;249mr[0m[38;5;249m}[0m[38;5;249m)[0m[38;5;249m`[0m[38;5;249m)[0m[38;5;249m;[0m
+ [38;5;240m      │[0m                             ──┬─
+ [38;5;240m      │[0m                               ╰─── Use of direct `eval` here.
+ [38;5;240m      │[0m
+ [38;5;240m      │[0m [38;5;115mHelp[0m: Consider using indirect eval. For more information, check the documentation: https://rolldown.rs/guide/troubleshooting#avoiding-direct-eval
+[38;5;246m───────╯[0m
+
+../../openclaw/node_modules/web-tree-sitter/web-tree-sitter.js (2343:30) [33m[EVAL] [0mUse of direct `eval` function is strongly discouraged as it poses security risks and may cause issues with minification.
+      [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m ../../openclaw/node_modules/web-tree-sitter/web-tree-sitter.js:2343:31 [38;5;246m][0m
+      [38;5;246m│[0m
+ [38;5;246m2343 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249mA[0m[38;5;249mS[0m[38;5;249mM[0m[38;5;249m_[0m[38;5;249mC[0m[38;5;249mO[0m[38;5;249mN[0m[38;5;249mS[0m[38;5;249mT[0m[38;5;249mS[0m[38;5;249m[[0m[38;5;249ms[0m[38;5;249mt[0m[38;5;249ma[0m[38;5;249mr[0m[38;5;249mt[0m[38;5;249m][0m[38;5;249m [0m[38;5;249m=[0m[38;5;249m [0meval[38;5;249m([0m[38;5;249mf[0m[38;5;249mu[0m[38;5;249mn[0m[38;5;249mc[0m[38;5;249m)[0m[38;5;249m;[0m
+ [38;5;240m     │[0m                               ──┬─
+ [38;5;240m     │[0m                                 ╰─── Use of direct `eval` here.
+ [38;5;240m     │[0m
+ [38;5;240m     │[0m [38;5;115mHelp[0m: Consider using indirect eval. For more information, check the documentation: https://rolldown.rs/guide/troubleshooting#avoiding-direct-eval
+[38;5;246m──────╯[0m
+
+../../openclaw/node_modules/web-tree-sitter/web-tree-sitter.js (2366:32) [33m[EVAL] [0mUse of direct `eval` function is strongly discouraged as it poses security risks and may cause issues with minification.
+      [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m ../../openclaw/node_modules/web-tree-sitter/web-tree-sitter.js:2366:33 [38;5;246m][0m
+      [38;5;246m│[0m
+ [38;5;246m2366 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249mm[0m[38;5;249mo[0m[38;5;249md[0m[38;5;249mu[0m[38;5;249ml[0m[38;5;249me[0m[38;5;249mE[0m[38;5;249mx[0m[38;5;249mp[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249mt[0m[38;5;249ms[0m[38;5;249m[[0m[38;5;249mn[0m[38;5;249ma[0m[38;5;249mm[0m[38;5;249me[0m[38;5;249m][0m[38;5;249m [0m[38;5;249m=[0m[38;5;249m [0meval[38;5;249m([0m[38;5;249mf[0m[38;5;249mu[0m[38;5;249mn[0m[38;5;249mc[0m[38;5;249m)[0m[38;5;249m;[0m
+ [38;5;240m     │[0m                                 ──┬─
+ [38;5;240m     │[0m                                   ╰─── Use of direct `eval` here.
+ [38;5;240m     │[0m
+ [38;5;240m     │[0m [38;5;115mHelp[0m: Consider using indirect eval. For more information, check the documentation: https://rolldown.rs/guide/troubleshooting#avoiding-direct-eval
+[38;5;246m──────╯[0m
+
+[tsdown-build] invocation 3/11 finished in 30.2s
+[tsdown-build] invocation 4/11 finished in 20.0s
+[tsdown-build] invocation 5/11 finished in 21.3s
+[tsdown-build] invocation 6/11 finished in 23.4s
+[tsdown-build] invocation 7/11 finished in 20.9s
+[tsdown-build] invocation 8/11 finished in 22.5s
+[tsdown-build] invocation 9/11 finished in 20.8s
+[tsdown-build] invocation 10/11 finished in 23.9s
+[tsdown-build] invocation 11/11 finished in 24.4s
+[openclaw] Failed to write runtime build artifacts: built plugin control-plane module load failures:
+- anthropic (contract) dist/extensions/anthropic/contract-api.js: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/home/figs/flesh_beast_best_beast/source/WORKTREES/openclaw-85651-continuation-drift-cure-candidate-20260823/node_modules/@openclaw/ai/dist/internal/retry-after.mjs' imported from /home/figs/flesh_beast_best_beast/source/WORKTREES/openclaw-85651-continuation-drift-cure-candidate-20260823/dist/provider-transport-fetch-BV5IMocG.js
+    at finalizeResolution (node:internal/modules/esm/resolve:271:11)
+    at moduleResolve (node:internal/modules/esm/resolve:861:10)
+    at defaultResolve (node:internal/modules/esm/resolve:988:11)
+    at #cachedDefaultResolve (node:internal/modules/esm/loader:697:20)
+    at #resolveAndMaybeBlockOnLoaderThread (node:internal/modules/esm/loader:714:38)
+    at ModuleLoader.resolveSync (node:internal/modules/esm/loader:746:52)
+    at ModuleLoader.getOrCreateModuleJob (node:internal/modules/esm/loader:596:27)
+    at ModuleJobSync.syncLink (node:internal/modules/esm/module_job:162:33)
+    at ModuleJobSync.link (node:internal/modules/esm/module_job:487:17)
+    at new ModuleJobSync (node:internal/modules/esm/module_job:477:26)
+[31mNo test files found, exiting with code 1
+[39m
+[2mfilter: [22m[33msrc/agents/subagents/registry/subagent-registry.lifecycle-retry-grace.e2e.test.ts[39m
+[2minclude: [22m[33mtest/**/*.e2e.test.ts[2m, [22msrc/**/*.e2e.test.ts[2m, [22mpackages/**/*.e2e.test.ts[2m, [22msrc/gateway/gateway.test.ts[2m, [22msrc/gateway/server.startup-matrix-migration.integration.test.ts[2m, [22msrc/gateway/sessions-history-http.test.ts[2m, [22mextensions/**/*.e2e.test.ts[39m
+[2mexclude:  [22m[33mdist/**[2m, [22mtest/fixtures/**[2m, [22mapps/macos/**[2m, [22mapps/macos/.build/**[2m, [22m**/node_modules/**[2m, [22m**/vendor/**[2m, [22mdist/OpenClaw.app/**[2m, [22m**/._*[2m, [22m**/*.live.test.ts[2m, [22msrc/tui/tui-auth-child-pty.e2e.test.ts[2m, [22msrc/tui/tui-pty-harness.e2e.test.ts[2m, [22msrc/tui/tui-session-identity-pty.e2e.test.ts[2m, [22msrc/tui/tui-reset-transition-pty.e2e.test.ts[2m, [22msrc/tui/tui-pty-local.e2e.test.ts[39m
+
+
+[31m⎯⎯⎯⎯⎯⎯[39m[1m[41m Unhandled Error [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+[31m[1mError[22m: E2E setup command failed with exit code 1: scripts/run-node.mjs --version[39m
+[36m [2m❯[22m runE2eGlobalSetup test/vitest/vitest.e2e.global-setup.ts:[2m55:13[22m[39m
+    [90m 53|[39m     [35mconst[39m status [33m=[39m [35mawait[39m [34mrunCommand[39m(args[33m,[39m commandEnv)[33m;[39m
+    [90m 54|[39m     [35mif[39m (status [33m!==[39m [34m0[39m) {
+    [90m 55|[39m       throw new Error(`E2E setup command failed with exit code ${statu…
+    [90m   |[39m             [31m^[39m
+    [90m 56|[39m     }
+    [90m 57|[39m   }
+[90m [2m❯[22m Object.setup test/vitest/vitest.e2e.global-setup.ts:[2m61:3[22m[39m
+[90m [2m❯[22m TestProject._initializeGlobalSetup ../../openclaw/node_modules/vitest/dist/chunks/cli-api.BK8pd4xc.js:[2m10746:21[22m[39m
+[90m [2m❯[22m Vitest.initializeGlobalSetup ../../openclaw/node_modules/vitest/dist/chunks/cli-api.BK8pd4xc.js:[2m13745:35[22m[39m
+[90m [2m❯[22m ../../openclaw/node_modules/vitest/dist/chunks/cli-api.BK8pd4xc.js:[2m13588:6[22m[39m
+[90m [2m❯[22m ../../openclaw/node_modules/vitest/dist/chunks/cli-api.BK8pd4xc.js:[2m13617:11[22m[39m
+[90m [2m❯[22m ../../openclaw/node_modules/vitest/dist/chunks/cli-api.BK8pd4xc.js:[2m13479:19[22m[39m
+[90m [2m❯[22m startVitest ../../openclaw/node_modules/vitest/dist/chunks/cli-api.BK8pd4xc.js:[2m14554:8[22m[39m
+[90m [2m❯[22m start ../../openclaw/node_modules/vitest/dist/chunks/cac.DdICfEr1.js:[2m2340:15[22m[39m
+[90m [2m❯[22m CAC.run ../../openclaw/node_modules/vitest/dist/chunks/cac.DdICfEr1.js:[2m2318:2[22m[39m
+
+
+
+
+[vitest] FAILED (exit 1)
+[test] FAILED (exit 1)

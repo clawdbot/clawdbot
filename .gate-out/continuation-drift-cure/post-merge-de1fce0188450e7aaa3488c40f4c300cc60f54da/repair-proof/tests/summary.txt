@@ -1,0 +1,5 @@
+auto-reply exit=0
+agents-core exit=0
+embedded-run exit=0
+lifecycle-e2e exit=0
+overall=0

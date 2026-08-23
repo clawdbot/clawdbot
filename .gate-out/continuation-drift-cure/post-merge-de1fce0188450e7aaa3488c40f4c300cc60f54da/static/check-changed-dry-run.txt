@@ -1,0 +1,34 @@
+[check:changed:dry-run] lanes=core, coreTests
+[check:changed:dry-run] src/agents/embedded-agent-runner/run/attempt-client-tools.ts: core production
+[check:changed:dry-run] src/agents/embedded-agent-subscribe.handlers.ts: core production
+[check:changed:dry-run] src/infra/heartbeat-runner-scheduler.ts: core production
+[check:changed:dry-run] src/infra/heartbeat-wake.transcript-context.test.ts: core test
+[check:changed:dry-run] src/infra/heartbeat-wake.ts: core production
+[check:changed:dry-run] would run: pnpm check:no-conflict-markers
+[check:changed:dry-run] would run: pnpm check:max-lines-ratchet --base origin/main
+[check:changed:dry-run] would run: pnpm check:assertion-safety --base origin/main
+[check:changed:dry-run] would run: pnpm check:changelog-attributions
+[check:changed:dry-run] would run: pnpm check:doctor-deprecation-registry
+[check:changed:dry-run] would run: pnpm lint:extensions:no-guarded-wildcard-reexports
+[check:changed:dry-run] would run: pnpm lint:extensions:no-plugin-sdk-wildcard-reexports
+[check:changed:dry-run] would run: pnpm dup:check:coverage
+[check:changed:dry-run] would run: pnpm check:coercion-helpers
+[check:changed:dry-run] would run: pnpm deps:pins:check
+[check:changed:dry-run] would run: pnpm format:check --no-error-on-unmatched-pattern -- src/agents/embedded-agent-runner/run/attempt-client-tools.ts src/agents/embedded-agent-subscribe.handlers.ts src/infra/heartbeat-runner-scheduler.ts src/infra/heartbeat-wake.transcript-context.test.ts src/infra/heartbeat-wake.ts
+[check:changed:dry-run] would run: pnpm check:deprecated-api-usage
+[check:changed:dry-run] would run: pnpm plugins:boundary-report:ci
+[check:changed:dry-run] would run: pnpm check:wrapper-shadowing
+[check:changed:dry-run] would run: pnpm deps:patches:check
+[check:changed:dry-run] would run: node --import tsx scripts/check-deadcode-exports.mts
+[check:changed:dry-run] would run: node scripts/report-test-temp-creations.mjs --base origin/main --head HEAD
+[check:changed:dry-run] would run: pnpm tsgo:core
+[check:changed:dry-run] would run: pnpm tsgo:core:test
+[check:changed:dry-run] would run: node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src/agents/embedded-agent-runner/run/attempt-client-tools.ts src/agents/embedded-agent-subscribe.handlers.ts src/infra/heartbeat-runner-scheduler.ts src/infra/heartbeat-wake.transcript-context.test.ts src/infra/heartbeat-wake.ts
+[check:changed:dry-run] would run: node scripts/check-native-state-schema-version.mjs
+[check:changed:dry-run] would run: pnpm check:database-first-legacy-stores
+[check:changed:dry-run] would run: pnpm check:media-download-helpers
+[check:changed:dry-run] would run: pnpm check:runtime-sidecar-loaders
+[check:changed:dry-run] would run: pnpm check:import-cycles
+[check:changed:dry-run] would run: pnpm lint:webhook:no-low-level-body-read
+[check:changed:dry-run] would run: pnpm lint:auth:no-pairing-store-group
+[check:changed:dry-run] would run: pnpm lint:auth:pairing-account-scope

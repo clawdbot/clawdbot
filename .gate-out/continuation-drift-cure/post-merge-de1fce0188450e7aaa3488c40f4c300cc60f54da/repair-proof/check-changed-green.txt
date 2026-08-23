@@ -1,0 +1,165 @@
+[check:changed] lanes=core, coreTests, tooling
+[check:changed] config/assertion-safety-baseline.txt: tooling surface
+[check:changed] src/agents/embedded-agent-subscribe.handlers.tools.completion.ts: core production
+[check:changed] src/agents/embedded-agent-subscribe.handlers.tools.ts: core production
+[check:changed] src/agents/embedded-agent-subscribe.ts: core production
+[check:changed] src/agents/subagents/registry/subagent-registry.lifecycle-retry-grace.e2e.test.ts: core test
+[check:changed] src/auto-reply/reply/agent-runner-embedded-candidate.continuation.test.ts: core test
+
+[check:changed] conflict markers
+$ node scripts/check-no-conflict-markers.mjs
+
+[check:changed] max-lines suppression ratchet
+$ node --import tsx scripts/check-max-lines-ratchet.mts --base origin/main
+max-lines ratchet OK: 897 grandfathered suppressions.
+OPENCLAW_* count 501/501
+
+[check:changed] assertion SAFETY comment ratchet
+$ node --import tsx scripts/check-assertion-safety-ratchet.mts --base origin/main
+assertion SAFETY ratchet OK: 4277 files, 13485 grandfathered assertions.
+
+[check:changed] changelog attributions
+$ node --import tsx scripts/check-changelog-attributions.mts
+
+[check:changed] doctor deprecation registry
+$ node --import tsx scripts/check-doctor-deprecation-registry.ts
+[doctor-deprecation-registry] OK as of 2026-08-23
+
+[check:changed] guarded extension wildcard re-exports
+$ node --import tsx scripts/check-extension-wildcard-reexports.mts
+No guarded extension wildcard re-exports found.
+
+[check:changed] plugin-sdk wildcard re-exports
+$ node --import tsx scripts/check-plugin-sdk-wildcard-reexports.mts
+No plugin-sdk wildcard re-exports found in extension API barrels.
+
+[check:changed] duplicate scan target coverage
+$ node scripts/check-duplicates.mjs --coverage
+[dup:check] target coverage ok
+
+[check:changed] coercion helper declaration guard
+$ node --import tsx scripts/check-coercion-helper-declarations.mts
+Coercion helper declaration guard passed (106 allowlisted declarations).
+
+[check:changed] dependency pin guard
+$ node --import tsx scripts/check-dependency-pins.mts
+PASS direct dependency pin guard: checked 618 directly declared dependency specs across 177 tracked package manifests; 0 violations.
+
+[check:changed] format changed files
+$ oxfmt --check --no-error-on-unmatched-pattern -- config/assertion-safety-baseline.txt src/agents/embedded-agent-subscribe.handlers.tools.completion.ts src/agents/embedded-agent-subscribe.handlers.tools.ts src/agents/embedded-agent-subscribe.ts src/agents/subagents/registry/subagent-registry.lifecycle-retry-grace.e2e.test.ts src/auto-reply/reply/agent-runner-embedded-candidate.continuation.test.ts
+Checking formatting...
+
+All matched files use the correct format.
+Finished in 61ms on 5 files using 20 threads.
+
+[check:changed] deprecated API usage
+$ node --import tsx scripts/check-deprecated-api-usage.mts
+deprecated API usage guard passed
+
+[check:changed] plugin boundaries
+$ node --import tsx scripts/plugin-boundary-report.ts --summary --fail-on-eligible-compat
+Plugin Boundary Report
+
+compat deprecated=23 eligibleForRemoval=0 removalPending=3 removalPendingDue=0
+  removal-pending 2026-09-30 plugin-sdk-media-understanding-public-demotion due=false blocker=`api.registerMediaUnderstandingProvider(...)` with provider-owned request helpers and types from `openclaw/plugin-sdk/plugin-entry`; retain the public subpath through the 2026-09-30 window while official plugin consumers migrate readerRefs=44 readers=extensions/anthropic/media-understanding-provider.ts,extensions/browser/src/browser/vision.ts,extensions/browser/src/sdk-setup-tools.ts,extensions/codex/media-understanding-provider.ts,extensions/deepgram/audio.ts
+  removal-pending 2026-09-30 plugin-sdk-memory-host-core-public-demotion due=false blocker=host-prepared memory prompts via `openclaw/plugin-sdk/core` and memory capability registration through the injected plugin API; retain the facade through the 2026-09-30 window and until a focused public-artifact read seam exists readerRefs=23 readers=extensions/active-memory/index.test.ts,extensions/active-memory/index.ts,extensions/codex/src/app-server/attempt-context.test.ts,extensions/memory-core/src/memory-get-corpus.test.ts,extensions/memory-core/src/public-artifacts.ts
+  removal-pending 2026-12-01 plugin-sdk-plugin-config-runtime-public-demotion due=false blocker=`api.pluginConfig`, runtime tool context config, and focused `config-contracts`, `runtime-config-snapshot`, or `config-mutation` subpaths; retain the public subpath through the 2026-12-01 window while official plugin consumers migrate readerRefs=57 readers=extensions/active-memory/index.ts,extensions/active-memory/session-policy.ts,extensions/amazon-bedrock-mantle/register.sync.runtime.ts,extensions/amazon-bedrock/register.sync.runtime.ts,extensions/browser/src/sdk-config.ts
+plugin-sdk entrypoints=336 supportedBundledFacade=2 publicPluginOwned=1
+memory-host-sdk implementation=private-package-core-integrated private=true exports=10 sourceBridgeFiles=0 coreReferenceFiles=10
+
+[check:changed] wrapper shadowing
+$ node --import tsx scripts/check-wrapper-shadowing.mts
+wrapper shadowing guard passed.
+
+[check:changed] package patch guard
+$ node --import tsx scripts/check-package-patches.mts
+PASS package patch guard: no new pnpm patches; 2 approved patches allowlisted.
+
+[check:changed] dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)
+[deadcode] Knip production unused-export scan passed with 0 entries.
+[deadcode] Knip full-tree unused-export scan passed with 0 entries.
+[deadcode] Knip script unused-export scan passed with 0 entries.
+[deadcode] Knip production and full-tree unused-export checks passed with 0 entries.
+
+[check:changed] test temp creation report (warning-only)
+New test temp-directory migration warnings:
+- extensions/acpx/src/pi-session-catalog.test.ts:227 new mkdtemp temp directory creation: const fixtureRoot = await fs.mkdtemp(path.join(path.dirname(sessionDirectory), "pi-agent-"));
+- extensions/matrix/src/actions.test.ts:58 new mkdtemp temp directory creation: stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-test-"));
+- src/agents/command/attempt-execution.continue-work-opts.test.ts:148 new mkdtemp temp directory creation: tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-746-trap-"));
+- src/agents/command/attempt-execution.continue-work-token.test.ts:116 new mkdtemp temp directory creation: tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "oc952-token-"));
+- src/agents/command/attempt-execution.request-compaction-opts.test.ts:131 new mkdtemp temp directory creation: tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-917-trap-"));
+- src/agents/delegate-artifacts.test-helpers.ts:11 new mkdtemp temp directory creation: const directory = mkdtempSync(join(tmpdir(), "openclaw-delegate-artifacts-"));
+- src/agents/embedded-agent-runner/cli-backend-dispatch-transcript.persistence.test.ts:13 new mkdtemp temp directory creation: const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-dispatch-transcript-"));
+- src/agents/embedded-agent-runner/compact.hooks.test.ts:335 new mkdtemp temp directory creation: defaultStoreDir = await mkdtemp(join(tmpdir(), "openclaw-compact-hooks-store-"));
+- src/agents/embedded-agent-runner/compact.hooks.test.ts:5390 new mkdtemp temp directory creation: const dir = await mkdtemp(join(tmpdir(), "openclaw-compaction-marker-legacy-"));
+- src/agents/embedded-agent-runner/run.continuation-lifecycle-admission.test-support.ts:55 new mkdtemp temp directory creation: const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-harness-admission-"));
+- src/agents/embedded-agent-runner/run.continuation-overflow-recovery.test-support.ts:240 new mkdtemp temp directory creation: const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-empty-preflight-"));
+- src/agents/embedded-agent-subscribe.handlers.compaction.test.ts:385 new mkdtemp temp directory creation: const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-attribution-"));
+- src/agents/subagent-announce.live-tree-chain-proof.test.ts:150 new mkdtemp temp directory creation: stateDir = mkdtempSync(join(tmpdir(), "openclaw-proof-state-live-tree-chain-"));
+- src/agents/subagent-registry-registration-rollback.test.ts:33 new mkdtemp temp directory creation: tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-rollback-"));
+- src/agents/subagent-registry.persistence.restore-recovery.test.ts:123 new mkdtemp temp directory creation: tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+- src/agents/subagent-registry.persistence.restore-recovery.test.ts:306 new mkdtemp temp directory creation: tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+- src/agents/subagent-registry.persistence.restore-recovery.test.ts:437 new mkdtemp temp directory creation: tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+- src/agents/subagent-registry.persistence.timing.test.ts:93 new mkdtemp temp directory creation: tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+- src/agents/subagent-registry.persistence.timing.test.ts:132 new mkdtemp temp directory creation: tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+- src/agents/subagent-registry.persistence.timing.test.ts:173 new mkdtemp temp directory creation: tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+- src/agents/subagent-registry.persistence.timing.test.ts:211 new mkdtemp temp directory creation: tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+- src/agents/subagents/registry/subagent-registry.persistence.resume.test.ts:138 new mkdtemp temp directory creation: tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+- src/agents/tools/delegate-artifacts-tool.test.ts:66 new mkdtemp temp directory creation: const root = mkdtempSync(join(tmpdir(), "openclaw-delegate-artifact-tool-"));
+- src/auto-reply/continuation/work-dispatch.durable-3.test.ts:615 new mkdtemp temp directory creation: const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-continuation-work-"));
+- src/auto-reply/reply/session-updates.compaction.test.ts:35 new mkdtemp temp directory creation: tmp = mkdtempSync(join(tmpdir(), "openclaw-incr-compaction-"));
+- src/context-engine/context-engine.test.ts:137 new mkdtemp temp directory creation: testStateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-context-engine-"));
+- test/vitest-ui-e2e-config.test.ts:58 new mkdtemp temp directory creation: const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ui-e2e-hints-"));
+Prefer useAutoCleanupTempDirTracker(afterEach) from test/helpers/temp-dir.ts for new test-owned temp directories.
+
+[check:changed] typecheck core
+$ node scripts/run-tsgo.mjs -p tsconfig.core.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core.tsbuildinfo
+
+[check:changed] typecheck core tests
+$ node scripts/run-tsgo-core-test-shards.mjs
+
+[check:changed] lint core
+$ node --import tsx scripts/run-oxlint-shards.mts --only=core
+[oxlint] shard concurrency 1 (cpus=20, memGB=122)
+[oxlint:core] starting
+[oxlint:core] still running after 30s
+[oxlint:core] still running after 60s
+[oxlint:core] still running after 90s
+[oxlint:core] still running after 120s
+[oxlint:core] still running after 150s
+[oxlint:core] still running after 180s
+[oxlint:core] finished
+
+[check:changed] lint scripts
+$ pnpm lint:docker-e2e && pnpm lint:tmp:no-raw-http2-imports && node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.scripts.json scripts
+$ node --import tsx scripts/check-docker-e2e-boundaries.mts
+Docker E2E package boundary/catalog guard passed.
+$ node --import tsx scripts/check-no-raw-http2-imports.mts
+OK: raw node:http2 imports stay behind the APNs proxy wrapper.
+
+[check:changed] native state schema version guard
+native state schema version guard passed (v9)
+
+[check:changed] database-first legacy-store guard
+$ node --import tsx scripts/check-database-first-legacy-stores.mts
+Database-first legacy-store guard passed.
+
+[check:changed] media download helper guard
+$ node --import tsx scripts/check-media-download-helper-roundtrip.mts
+
+[check:changed] runtime sidecar loader guard
+$ node --import tsx scripts/check-runtime-sidecar-loaders.mts
+runtime-sidecar-loaders: local runtime sidecar loaders look OK.
+
+[check:changed] runtime import cycles
+$ node --import tsx scripts/check-import-cycles.ts
+Import cycle check: 0 runtime value cycle(s).
+
+[check:changed] webhook body guard
+$ node --import tsx scripts/check-webhook-auth-body-order.mts
+
+[check:changed] pairing store guard
+$ node --import tsx scripts/check-no-pairing-store-group-auth.mts
+
+[check:changed] pairing account guard
+$ node --import tsx scripts/check-pairing-account-scope.mts

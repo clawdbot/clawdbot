@@ -1,0 +1,11 @@
+
+===== agents-core-isolated =====
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/home/figs/flesh_beast_best_beast/source/WORKTREES/openclaw-85651-continuation-drift-cure-candidate-20260823[39m
+
+ [32m✓[39m [30m[43m agents-core-isolated [49m[39m src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts [2m([22m[2m36 tests[22m[2m)[22m[32m 140[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m36 passed[39m[22m[90m (36)[39m
+[2m   Start at [22m 02:45:45
+[2m   Duration [22m 2.90s[2m (transform 2.37s, setup 712ms, import 1.95s, tests 140ms, environment 0ms)[22m

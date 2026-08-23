@@ -1,0 +1,88 @@
+
+===== agents-lifecycle-e2e-retry =====
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.10 [39m[90m/home/figs/flesh_beast_best_beast/source/WORKTREES/openclaw-85651-continuation-drift-cure-candidate-20260823[39m
+
+[openclaw] Building TypeScript (dist is stale: missing_build_stamp - build stamp missing).
+[openclaw] Building bundled plugin assets.
+[canvas] build: node scripts/bundle-a2ui.mjs
+A2UI bundle up to date; skipping.
+[diffs] build: node --import tsx ../../scripts/build-diffs-viewer-runtime.mts curated
+[diffs-language-pack] build: node --import tsx ../../scripts/build-diffs-viewer-runtime.mts full
+[discord] build: node --import tsx ../../scripts/build-discord-activity-sdk.mts
+[tsdown-build] invocation 1/11 finished in 2.9s
+[tsdown-build] invocation 2/11 finished in 11.0s
+[vitest] still running with no output for 30000ms.
+[tsdown-build] still running pid=3909016; no output for 30s
+node_modules/playwright-core/lib/coreBundle.js (65821:28) [33m[EVAL] [0mUse of direct `eval` function is strongly discouraged as it poses security risks and may cause issues with minification.
+       [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m node_modules/playwright-core/lib/coreBundle.js:65821:29 [38;5;246m][0m
+       [38;5;246m│[0m
+ [38;5;246m65821 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249ms[0m[38;5;249mt[0m[38;5;249m [0m[38;5;249mv[0m[38;5;249ma[0m[38;5;249ml[0m[38;5;249mu[0m[38;5;249me[0m[38;5;249m [0m[38;5;249m=[0m[38;5;249m [0meval[38;5;249m([0m[38;5;249m`[0m[38;5;249m([0m[38;5;249m$[0m[38;5;249m{[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mp[0m[38;5;249mr[0m[38;5;249m}[0m[38;5;249m)[0m[38;5;249m`[0m[38;5;249m)[0m[38;5;249m;[0m
+ [38;5;240m      │[0m                             ──┬─
+ [38;5;240m      │[0m                               ╰─── Use of direct `eval` here.
+ [38;5;240m      │[0m
+ [38;5;240m      │[0m [38;5;115mHelp[0m: Consider using indirect eval. For more information, check the documentation: https://rolldown.rs/guide/troubleshooting#avoiding-direct-eval
+[38;5;246m───────╯[0m
+
+node_modules/playwright-core/lib/coreBundle.js (65828:28) [33m[EVAL] [0mUse of direct `eval` function is strongly discouraged as it poses security risks and may cause issues with minification.
+       [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m node_modules/playwright-core/lib/coreBundle.js:65828:29 [38;5;246m][0m
+       [38;5;246m│[0m
+ [38;5;246m65828 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249mc[0m[38;5;249mo[0m[38;5;249mn[0m[38;5;249ms[0m[38;5;249mt[0m[38;5;249m [0m[38;5;249mv[0m[38;5;249ma[0m[38;5;249ml[0m[38;5;249mu[0m[38;5;249me[0m[38;5;249m [0m[38;5;249m=[0m[38;5;249m [0meval[38;5;249m([0m[38;5;249m`[0m[38;5;249m([0m[38;5;249m$[0m[38;5;249m{[0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mp[0m[38;5;249mr[0m[38;5;249m}[0m[38;5;249m)[0m[38;5;249m`[0m[38;5;249m)[0m[38;5;249m;[0m
+ [38;5;240m      │[0m                             ──┬─
+ [38;5;240m      │[0m                               ╰─── Use of direct `eval` here.
+ [38;5;240m      │[0m
+ [38;5;240m      │[0m [38;5;115mHelp[0m: Consider using indirect eval. For more information, check the documentation: https://rolldown.rs/guide/troubleshooting#avoiding-direct-eval
+[38;5;246m───────╯[0m
+
+node_modules/web-tree-sitter/web-tree-sitter.js (2343:30) [33m[EVAL] [0mUse of direct `eval` function is strongly discouraged as it poses security risks and may cause issues with minification.
+      [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m node_modules/web-tree-sitter/web-tree-sitter.js:2343:31 [38;5;246m][0m
+      [38;5;246m│[0m
+ [38;5;246m2343 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249mA[0m[38;5;249mS[0m[38;5;249mM[0m[38;5;249m_[0m[38;5;249mC[0m[38;5;249mO[0m[38;5;249mN[0m[38;5;249mS[0m[38;5;249mT[0m[38;5;249mS[0m[38;5;249m[[0m[38;5;249ms[0m[38;5;249mt[0m[38;5;249ma[0m[38;5;249mr[0m[38;5;249mt[0m[38;5;249m][0m[38;5;249m [0m[38;5;249m=[0m[38;5;249m [0meval[38;5;249m([0m[38;5;249mf[0m[38;5;249mu[0m[38;5;249mn[0m[38;5;249mc[0m[38;5;249m)[0m[38;5;249m;[0m
+ [38;5;240m     │[0m                               ──┬─
+ [38;5;240m     │[0m                                 ╰─── Use of direct `eval` here.
+ [38;5;240m     │[0m
+ [38;5;240m     │[0m [38;5;115mHelp[0m: Consider using indirect eval. For more information, check the documentation: https://rolldown.rs/guide/troubleshooting#avoiding-direct-eval
+[38;5;246m──────╯[0m
+
+node_modules/web-tree-sitter/web-tree-sitter.js (2366:32) [33m[EVAL] [0mUse of direct `eval` function is strongly discouraged as it poses security risks and may cause issues with minification.
+      [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m node_modules/web-tree-sitter/web-tree-sitter.js:2366:33 [38;5;246m][0m
+      [38;5;246m│[0m
+ [38;5;246m2366 │[0m [38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249m [0m[38;5;249mm[0m[38;5;249mo[0m[38;5;249md[0m[38;5;249mu[0m[38;5;249ml[0m[38;5;249me[0m[38;5;249mE[0m[38;5;249mx[0m[38;5;249mp[0m[38;5;249mo[0m[38;5;249mr[0m[38;5;249mt[0m[38;5;249ms[0m[38;5;249m[[0m[38;5;249mn[0m[38;5;249ma[0m[38;5;249mm[0m[38;5;249me[0m[38;5;249m][0m[38;5;249m [0m[38;5;249m=[0m[38;5;249m [0meval[38;5;249m([0m[38;5;249mf[0m[38;5;249mu[0m[38;5;249mn[0m[38;5;249mc[0m[38;5;249m)[0m[38;5;249m;[0m
+ [38;5;240m     │[0m                                 ──┬─
+ [38;5;240m     │[0m                                   ╰─── Use of direct `eval` here.
+ [38;5;240m     │[0m
+ [38;5;240m     │[0m [38;5;115mHelp[0m: Consider using indirect eval. For more information, check the documentation: https://rolldown.rs/guide/troubleshooting#avoiding-direct-eval
+[38;5;246m──────╯[0m
+
+[tsdown-build] invocation 3/11 finished in 35.5s
+[tsdown-build] invocation 4/11 finished in 19.5s
+[tsdown-build] invocation 5/11 finished in 22.5s
+[tsdown-build] invocation 6/11 finished in 24.4s
+[tsdown-build] invocation 7/11 finished in 19.8s
+[tsdown-build] invocation 8/11 finished in 22.7s
+[tsdown-build] invocation 9/11 finished in 20.8s
+[tsdown-build] invocation 10/11 finished in 23.5s
+[tsdown-build] invocation 11/11 finished in 23.6s
+[plugin-control-plane-loads] verified 35 built modules with native require and checked doctor closures
+runtime-postbuild: 11 phases completed in 2525ms (slowest: built plugin control-plane loads 1882ms)
+OpenClaw 2026.8.1 (de1fce0)
+[tsdown-build] invocation 1/1 finished in 2.3s
+ [32m✓[39m src/agents/subagents/registry/subagent-registry.lifecycle-retry-grace.e2e.test.ts[2m > [22msubagent registry lifecycle error grace[2m > [22myields an owned visible child and delivers its requester final exactly once[33m 687[2mms[22m[39m
+ [32m✓[39m src/agents/subagents/registry/subagent-registry.lifecycle-retry-grace.e2e.test.ts[2m > [22msubagent registry lifecycle error grace[2m > [22mdoes not replay a requester-owned final already delivered before its turn yields[32m 40[2mms[22m[39m
+ [32m✓[39m src/agents/subagents/registry/subagent-registry.lifecycle-retry-grace.e2e.test.ts[2m > [22msubagent registry lifecycle error grace[2m > [22mlets requester settlement own a yielded batch after sibling deliveries race[32m 57[2mms[22m[39m
+ [32m✓[39m src/agents/subagents/registry/subagent-registry.lifecycle-retry-grace.e2e.test.ts[2m > [22msubagent registry lifecycle error grace[2m > [22mkeeps a frozen live child asleep until its real registry row becomes terminal[32m 27[2mms[22m[39m
+ [32m✓[39m src/agents/subagents/registry/subagent-registry.lifecycle-retry-grace.e2e.test.ts[2m > [22msubagent registry lifecycle error grace[2m > [22mignores transient lifecycle errors when run retries and then ends successfully[32m 28[2mms[22m[39m
+ [32m✓[39m src/agents/subagents/registry/subagent-registry.lifecycle-retry-grace.e2e.test.ts[2m > [22msubagent registry lifecycle error grace[2m > [22mannounces error when lifecycle error remains terminal after grace window[32m 44[2mms[22m[39m
+ [32m✓[39m src/agents/subagents/registry/subagent-registry.lifecycle-retry-grace.e2e.test.ts[2m > [22msubagent registry lifecycle error grace[2m > [22mfreezes completion result at run termination across deferred announce retries[32m 50[2mms[22m[39m
+ [32m✓[39m src/agents/subagents/registry/subagent-registry.lifecycle-retry-grace.e2e.test.ts[2m > [22msubagent registry lifecycle error grace[2m > [22mrefreshes frozen completion output from later turns in the same session[32m 49[2mms[22m[39m
+ [32m✓[39m src/agents/subagents/registry/subagent-registry.lifecycle-retry-grace.e2e.test.ts[2m > [22msubagent registry lifecycle error grace[2m > [22mignores silent follow-up turns when refreshing frozen completion output[32m 52[2mms[22m[39m
+ [32m✓[39m src/agents/subagents/registry/subagent-registry.lifecycle-retry-grace.e2e.test.ts[2m > [22msubagent registry lifecycle error grace[2m > [22mregression, captures frozen completion output with 100KB cap and retains it for keep-mode cleanup[32m 26[2mms[22m[39m
+ [32m✓[39m src/agents/subagents/registry/subagent-registry.lifecycle-retry-grace.e2e.test.ts[2m > [22msubagent registry lifecycle error grace[2m > [22mrecords a bare aborted end event as cancellation after retry grace[32m 23[2mms[22m[39m
+ [32m✓[39m src/agents/subagents/registry/subagent-registry.lifecycle-retry-grace.e2e.test.ts[2m > [22msubagent registry lifecycle error grace[2m > [22mannounces a provider hard timeout from its canonical lifecycle metadata[32m 26[2mms[22m[39m
+ [32m✓[39m src/agents/subagents/registry/subagent-registry.lifecycle-retry-grace.e2e.test.ts[2m > [22msubagent registry lifecycle error grace[2m > [22mcancels timeout grace when a successful end event arrives before the grace window expires[32m 26[2mms[22m[39m
+ [32m✓[39m src/agents/subagents/registry/subagent-registry.lifecycle-retry-grace.e2e.test.ts[2m > [22msubagent registry lifecycle error grace[2m > [22mkeeps parallel child completion results frozen even when late traffic arrives[32m 88[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m14 passed[39m[22m[90m (14)[39m
+[2m   Start at [22m 02:51:20
+[2m   Duration [22m 250.29s[2m (transform 13.02s, setup 840ms, import 14.26s, tests 1.23s, environment 0ms)[22m
