@@ -53,12 +53,12 @@ import {
   type UpdateRestartStatusResponse,
   type UpdateRunResponse,
 } from "./update-overlay-helpers.ts";
+import { readUpdateScheduleValue } from "./update-schedule-dto.ts";
 import {
   projectConnectedUpdateSnapshot,
   projectUpdateAvailableEvent,
-  readUpdateScheduleValue,
   resolveHeldUpdateCampaignId,
-} from "./update-schedule-dto.ts";
+} from "./update-schedule-projection.ts";
 import {
   announceRecordedUpdateSuccess,
   announceVerifiedUpdateInstall,
