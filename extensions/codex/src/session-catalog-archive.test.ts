@@ -568,10 +568,21 @@ describe("Codex supervision actions", () => {
     const { runtime, createSessionEntry } = createRuntime();
     const { api, getProvider, registerSessionCatalog } = createGatewayApi(runtime);
     const control = createEligibleControl();
+    const processFallbackControl = {
+      forRequest: () => control,
+      homesForAgent: () => [
+        {
+          hostId: CODEX_LOCAL_SESSION_HOST_ID,
+          sourceHomeId: "process-home",
+          usesProcessHomeFallback: true,
+        } as never,
+      ],
+      forUpstream: () => undefined,
+    };
     registerCodexSessionCatalog({
       api,
       bindingStore: createCodexTestBindingStore(),
-      control,
+      control: processFallbackControl,
       getRuntimeConfig: () => config,
     });
     expect(registerSessionCatalog).toHaveBeenCalledOnce();
