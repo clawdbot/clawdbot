@@ -219,6 +219,15 @@ export type ModelCatalogCost = {
   tieredPricing?: ModelCatalogTieredCost[];
 };
 
+/** Bounded provider-declared context-window choice for one model. */
+export type ModelCatalogContextWindowOption = {
+  id: string;
+  label: string;
+  contextWindow: number;
+};
+
+export const MODEL_CATALOG_MAX_CONTEXT_WINDOWS = 16;
+
 /** Provider manifest model entry. */
 export type ModelCatalogModel = {
   id: string;
@@ -229,6 +238,8 @@ export type ModelCatalogModel = {
   input?: ModelCatalogInput[];
   reasoning?: boolean;
   contextWindow?: number;
+  contextWindows?: ModelCatalogContextWindowOption[];
+  contextWindowDefault?: string;
   contextTokens?: number;
   maxTokens?: number;
   thinkingLevelMap?: ModelCatalogThinkingLevelMap;
@@ -303,6 +314,8 @@ export type NormalizedModelCatalogRow = {
   baseUrl?: string;
   headers?: Record<string, string>;
   contextWindow?: number;
+  contextWindows?: ModelCatalogContextWindowOption[];
+  contextWindowDefault?: string;
   contextTokens?: number;
   maxTokens?: number;
   thinkingLevelMap?: ModelCatalogThinkingLevelMap;

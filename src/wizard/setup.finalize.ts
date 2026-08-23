@@ -21,7 +21,7 @@ import {
 } from "../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../commands/gateway-install-token.js";
 import { formatHealthCheckFailure } from "../commands/health-format.js";
-import { healthCommand } from "../commands/health.js";
+import { healthCommandNonExiting } from "../commands/health.js";
 import {
   probeGatewayReachable,
   waitForGatewayReachable,
@@ -45,7 +45,7 @@ import {
   isGatewayExternallySupervised,
 } from "../infra/gateway-supervision.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
@@ -507,6 +507,9 @@ export async function finalizeSetupWizard(
 ): Promise<{ launchedTui: boolean }> {
   const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } = options;
   let gatewayProbe: { ok: boolean; detail?: string } = { ok: true };
+  // Reachability and health are separate facts: a reachable gateway can still
+  // fail its health check, and the outro must not report plain success then.
+  let gatewayHealthCheckFailed = false;
   let resolvedGatewayPassword = "";
   let sessionGateway: import("../gateway/server.js").GatewayServer | undefined;
 
@@ -587,7 +590,7 @@ export async function finalizeSetupWizard(
                   },
                 }
               : nextConfig;
-          await healthCommand(
+          await healthCommandNonExiting(
             {
               json: false,
               timeoutMs: 10_000,
@@ -598,7 +601,12 @@ export async function finalizeSetupWizard(
             runtime,
           );
         } catch (err) {
-          runtime.error(formatHealthCheckFailure(err));
+          gatewayHealthCheckFailed = true;
+          // A trapped ExitError means healthCommand already printed its own
+          // reachable-gateway diagnostic; re-formatting it would only add noise.
+          if (!(err instanceof ExitError)) {
+            runtime.error(formatHealthCheckFailure(err));
+          }
           await prompter.note(
             [
               t("common.docs"),
@@ -975,22 +983,27 @@ export async function finalizeSetupWizard(
     await prompter.note(t("wizard.finalize.whatNow"), t("wizard.finalize.whatNowTitle"));
 
     await prompter.outro(
-      gatewayProbe.ok
-        ? dashboardReady
-          ? t("wizard.finalize.outroDashboardLink")
-          : controlUiEnabled
-            ? [
-                t("wizard.guided.complete"),
-                t("wizard.finalize.dashboardWhenReady", {
-                  command: formatCliCommand("openclaw dashboard"),
-                }),
-              ].join(" ")
-            : t("wizard.guided.complete")
-        : buildGatewayRecoveryProjection({
-            gateway,
-            reachable: false,
-            serviceLabel: gateway.status === "skipped" ? undefined : resolveGatewayService().label,
-          }).summary,
+      gatewayProbe.ok && gatewayHealthCheckFailed
+        ? t("wizard.finalize.outroHealthCheckFailed", {
+            command: formatCliCommand("openclaw health"),
+          })
+        : gatewayProbe.ok
+          ? dashboardReady
+            ? t("wizard.finalize.outroDashboardLink")
+            : controlUiEnabled
+              ? [
+                  t("wizard.guided.complete"),
+                  t("wizard.finalize.dashboardWhenReady", {
+                    command: formatCliCommand("openclaw dashboard"),
+                  }),
+                ].join(" ")
+              : t("wizard.guided.complete")
+          : buildGatewayRecoveryProjection({
+              gateway,
+              reachable: false,
+              serviceLabel:
+                gateway.status === "skipped" ? undefined : resolveGatewayService().label,
+            }).summary,
     );
 
     if (shouldLaunchTui) {

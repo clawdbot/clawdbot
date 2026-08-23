@@ -1,15 +1,16 @@
 // Slack plugin module implements prepare routing behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  resolveConfiguredBindingRoute,
-  resolveRuntimeConversationBindingRoute,
-  type ConfiguredBindingRouteResult,
-  type RuntimeConversationBindingRouteResult,
+import type {
+  ConfiguredBindingRouteResult,
+  RuntimeConversationBindingRouteResult,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { resolveSlackReplyToMode } from "../../account-reply-mode.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
-import { parseSlackTarget, type SlackTargetKind } from "../../targets.js";
+import {
+  normalizeSlackRouteBindingConfig,
+  resolveSlackConversationBindingRoute,
+} from "../../conversation-binding-route.js";
 import { resolveSlackThreadContext } from "../../threading.js";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackChannelConfigResolved } from "../channel-config.js";
@@ -42,92 +43,6 @@ type SlackRoutingContext = {
   sessionKey: string;
   historyKey: string;
 };
-
-type SlackRouteBinding = NonNullable<OpenClawConfig["bindings"]>[number];
-type SlackRouteBindingPeer = NonNullable<SlackRouteBinding["match"]["peer"]>;
-
-const slackRouteBindingConfigCache = new WeakMap<
-  OpenClawConfig,
-  { bindingsRef: OpenClawConfig["bindings"]; normalizedCfg: OpenClawConfig }
->();
-
-function slackTargetDefaultKindForPeer(kind: SlackRouteBindingPeer["kind"]): SlackTargetKind {
-  return kind === "direct" ? "user" : "channel";
-}
-
-function slackTargetKindMatchesPeer(
-  peerKind: SlackRouteBindingPeer["kind"],
-  targetKind: SlackTargetKind,
-): boolean {
-  if (targetKind === "user") {
-    return peerKind === "direct";
-  }
-  return peerKind === "channel" || peerKind === "group";
-}
-
-function normalizeSlackRouteBindingPeer(peer: SlackRouteBindingPeer): SlackRouteBindingPeer {
-  const rawId = peer.id.trim();
-  if (!rawId || rawId === "*") {
-    return peer;
-  }
-
-  const target = (() => {
-    try {
-      return parseSlackTarget(rawId, {
-        defaultKind: slackTargetDefaultKindForPeer(peer.kind),
-      });
-    } catch {
-      return undefined;
-    }
-  })();
-  if (!target || !slackTargetKindMatchesPeer(peer.kind, target.kind)) {
-    return peer;
-  }
-  const normalizedId = target.teamId
-    ? `team:${target.teamId}:${target.kind}:${target.id}`
-    : target.id;
-  return normalizedId === peer.id ? peer : { ...peer, id: normalizedId };
-}
-
-function normalizeSlackRouteBindingConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const bindings = cfg.bindings;
-  const cached = slackRouteBindingConfigCache.get(cfg);
-  if (cached && cached.bindingsRef === bindings) {
-    return cached.normalizedCfg;
-  }
-  if (!Array.isArray(bindings)) {
-    return cfg;
-  }
-
-  let changed = false;
-  const normalizedBindings = bindings.map((binding) => {
-    if (binding.type === "acp" || binding.match.channel.trim().toLowerCase() !== "slack") {
-      return binding;
-    }
-    const peer = binding.match.peer;
-    if (!peer) {
-      return binding;
-    }
-    const normalizedPeer = normalizeSlackRouteBindingPeer(peer);
-    if (normalizedPeer === peer) {
-      return binding;
-    }
-    changed = true;
-    return {
-      ...binding,
-      match: {
-        ...binding.match,
-        peer: normalizedPeer,
-      },
-    };
-  });
-
-  const normalizedCfg = changed
-    ? ({ ...cfg, bindings: normalizedBindings } as OpenClawConfig)
-    : cfg;
-  slackRouteBindingConfigCache.set(cfg, { bindingsRef: bindings, normalizedCfg });
-  return normalizedCfg;
-}
 
 function resolveSlackBaseConversationId(params: {
   message: SlackMessageEvent;
@@ -259,48 +174,18 @@ export function resolveSlackRoutingContext(params: {
   });
   const runtimeBindingThreadId =
     routedThreadId ?? (isDirectMessage && isThreadReply ? threadTs : undefined);
-  const boundThreadRoute =
-    !eventScope && runtimeBindingThreadId
-      ? resolveRuntimeConversationBindingRoute({
-          route,
-          conversation: {
-            channel: "slack",
-            accountId: account.accountId,
-            conversationId: runtimeBindingThreadId,
-            parentConversationId: baseConversationId,
-          },
-        })
-      : null;
-  const runtimeRoute = eventScope
-    ? { route, bindingRecord: null, boundSessionKey: undefined }
-    : boundThreadRoute?.boundSessionKey || boundThreadRoute?.bindingRecord
-      ? boundThreadRoute
-      : resolveRuntimeConversationBindingRoute({
-          route,
-          conversation: {
-            channel: "slack",
-            accountId: account.accountId,
-            conversationId: baseConversationId,
-          },
-        });
-  let configuredBinding: ConfiguredBindingRouteResult["bindingResolution"] = null;
-  let configuredBindingSessionKey = "";
-  if (runtimeRoute.boundSessionKey || runtimeRoute.bindingRecord) {
-    route = runtimeRoute.route;
-  } else if (!eventScope) {
-    const configuredRoute = resolveConfiguredBindingRoute({
-      cfg: ctx.cfg,
-      route,
-      conversation: {
-        channel: "slack",
-        accountId: account.accountId,
-        conversationId: baseConversationId,
-      },
-    });
-    configuredBinding = configuredRoute.bindingResolution;
-    configuredBindingSessionKey = configuredRoute.boundSessionKey ?? "";
-    route = configuredRoute.route;
-  }
+  const bindingRoute = resolveSlackConversationBindingRoute({
+    cfg: ctx.cfg,
+    route,
+    accountId: account.accountId,
+    baseConversationId,
+    runtimeBindingThreadId,
+    bindingsEnabled: !eventScope,
+  });
+  const runtimeRoute = bindingRoute.runtimeRoute;
+  const configuredBinding = bindingRoute.configuredRoute?.bindingResolution ?? null;
+  const configuredBindingSessionKey = bindingRoute.configuredRoute?.boundSessionKey ?? "";
+  route = bindingRoute.route;
   const threadKeys =
     runtimeRoute.boundSessionKey || configuredBindingSessionKey
       ? { sessionKey: route.sessionKey, parentSessionKey: undefined }

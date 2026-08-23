@@ -532,6 +532,39 @@ describe("devices inventory rendering", () => {
     );
   });
 
+  it("shows node-only offline affordances while preserving mixed-role device liveness", () => {
+    const container = renderDevicesContainer({
+      devicesList: {
+        pending: [],
+        paired: [
+          {
+            deviceId: "windows-mixed",
+            displayName: "Mixed-role Windows",
+            platform: "Windows 11",
+            roles: ["operator", "node"],
+            connected: true,
+          },
+        ],
+      },
+      nodes: [
+        {
+          nodeId: "windows-mixed",
+          displayName: "Mixed-role Windows",
+          platform: "Windows 11",
+          connected: false,
+          paired: true,
+        },
+      ],
+    });
+    const section = getInventorySection(container);
+    const row = getSettingsRow(section, "Mixed-role Windows");
+
+    expect(section.textContent).toContain("1 of 1 connected");
+    expect(
+      Array.from(row.querySelectorAll(".settings-status"), (status) => status.textContent?.trim()),
+    ).toEqual(["offline", "manual wake required"]);
+  });
+
   it("shows token rows with rotate and revoke inside entry details", () => {
     const rotations: Array<{ deviceId: string; name: string; role: string }> = [];
     const revocations: Array<{ deviceId: string; role: string }> = [];

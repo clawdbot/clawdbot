@@ -116,6 +116,15 @@ describe("resolveCurrentTurnImages", () => {
       imageBytes: PNG_IMAGE_BYTES,
       expectedMime: "image/png",
     },
+    {
+      name: "an opaque image identified by separate filename metadata",
+      fileName: "opaque",
+      originalFileName: "photo.png",
+      contentType: "application/octet-stream",
+      kind: undefined,
+      imageBytes: PNG_IMAGE_BYTES,
+      expectedMime: "image/png",
+    },
   ])("hydrates $name using the verified byte MIME", async (testCase) => {
     await withTestDir({ prefix: "openclaw-current-turn-canonical-kind-" }, async (base) => {
       const imagePath = path.join(base, testCase.fileName);
@@ -127,6 +136,7 @@ describe("resolveCurrentTurnImages", () => {
           media: [
             {
               path: imagePath,
+              ...("originalFileName" in testCase ? { fileName: testCase.originalFileName } : {}),
               contentType: testCase.contentType,
               kind: testCase.kind,
               workspaceDir: base,

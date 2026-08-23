@@ -383,31 +383,31 @@ describe("session connection hydration", () => {
 
     try {
       connect();
-      expect(sent).toEqual([{ id: "request", method: "sessions.subscribe" }]);
+      expect(sent).toEqual([{ id: "1:request", method: "sessions.subscribe" }]);
 
       await vi.advanceTimersByTimeAsync(DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
-      expect(sent).toContainEqual({ id: "request:1", method: "sessions.list" });
-      respond("request:1", initialResult);
+      expect(sent).toContainEqual({ id: "2:request", method: "sessions.list" });
+      respond("2:request", initialResult);
       await vi.advanceTimersByTimeAsync(0);
       expect(sessions.state.result).toEqual(initialResult);
 
       await vi.advanceTimersByTimeAsync(500);
-      expect(sent).toContainEqual({ id: "request:2", method: "sessions.subscribe" });
+      expect(sent).toContainEqual({ id: "3:request", method: "sessions.subscribe" });
 
-      respond("request", { status: "accepted" });
-      respond("request", { subscribed: true });
+      respond("1:request", { status: "accepted" });
+      respond("1:request", { subscribed: true });
       await vi.advanceTimersByTimeAsync(0);
       expect(sessions.state.error).not.toBeNull();
       expect(sent.filter(({ method }) => method === "sessions.list")).toHaveLength(1);
 
-      respond("request:2", { subscribed: true });
+      respond("3:request", { subscribed: true });
       await vi.advanceTimersByTimeAsync(0);
-      expect(sent).toContainEqual({ id: "request:3", method: "sessions.list" });
-      respond("request:3", recoveredResult);
+      expect(sent).toContainEqual({ id: "4:request", method: "sessions.list" });
+      respond("4:request", recoveredResult);
       await vi.advanceTimersByTimeAsync(0);
 
-      respond("request", { status: "accepted" });
-      respond("request", { subscribed: true });
+      respond("1:request", { status: "accepted" });
+      respond("1:request", { subscribed: true });
       await vi.advanceTimersByTimeAsync(0);
 
       expect(sessions.state.error).toBeNull();

@@ -1,7 +1,6 @@
 // Update gateway methods run self-update flows, report status, write restart
 // sentinels, and hand off managed-service restarts when needed.
 import { randomUUID } from "node:crypto";
-import os from "node:os";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   validateUpdateHoldParams,
@@ -19,7 +18,6 @@ import {
   EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
   isGatewayExternallySupervised,
 } from "../../infra/gateway-supervision.js";
-import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { type RestartSentinelPayload, writeRestartSentinel } from "../../infra/restart-sentinel.js";
 import {
@@ -59,6 +57,7 @@ import {
   getUpdateAvailable,
   getUpdateEffectiveChannel,
   getUpdateSchedule,
+  initializeGatewayUpdateStatus,
   refreshGatewayUpdateStatus,
 } from "../../infra/update-startup.js";
 import { VERSION } from "../../version.js";
@@ -80,14 +79,6 @@ function formatUpdateRunErrorMessage(err: unknown): string {
     return err.message || err.name;
   }
   return String(err);
-}
-
-function tryResolveProcessCwd(): string | undefined {
-  try {
-    return process.cwd();
-  } catch {
-    return undefined;
-  }
 }
 
 // Explicit callers share only active checkout work for the exact config snapshot.
@@ -308,30 +299,18 @@ export const updateHandlers: GatewayRequestHandlers = {
     try {
       const config = context.getRuntimeConfig();
       const configChannel = normalizeUpdateChannel(config.update?.channel);
-      const invocationCwd = tryResolveProcessCwd();
-      const root =
-        (await resolveOpenClawPackageRoot({
-          moduleUrl: import.meta.url,
-          argv1: process.argv[1],
-          ...(invocationCwd ? { cwd: invocationCwd } : {}),
-        })) ??
-        invocationCwd ??
-        os.homedir();
+      const { root, status } = await initializeGatewayUpdateStatus();
       const installSurface = await resolveUpdateInstallSurface({
+        root,
+        installKind: status.installKind,
         timeoutMs,
-        cwd: root,
-        argv1: process.argv[1],
       });
       const installRoot = installSurface.root;
       const effectiveChannel = resolveEffectiveUpdateChannel({
         configChannel,
         currentVersion: VERSION,
-        installKind:
-          installSurface.kind === "git"
-            ? "git"
-            : installSurface.kind === "global" || installSurface.kind === "package-root"
-              ? "package"
-              : "unknown",
+        installKind: status.installKind,
+        git: status.git,
       }).channel;
       const supervisor = detectRespawnSupervisor(process.env, process.platform);
       const hasHandoffContext = supervisor
@@ -346,14 +325,20 @@ export const updateHandlers: GatewayRequestHandlers = {
         !isGatewayExternallySupervised()
           ? await runGatewayUpdatePreflight(installRoot, timeoutMs, adoptedDevTarget)
           : undefined;
-      if (isGatewayExternallySupervised()) {
-        const beforeVersion = installSurface.root
-          ? await readPackageVersion(installSurface.root)
-          : null;
+      if (installSurface.kind === "missing") {
+        result = {
+          status: "error",
+          mode: "unknown",
+          reason: "not-openclaw-root",
+          steps: [],
+          durationMs: 0,
+        };
+      } else if (isGatewayExternallySupervised()) {
+        const beforeVersion = await readPackageVersion(installSurface.root);
         result = {
           status: "skipped",
           mode: installSurface.mode,
-          ...(installSurface.root ? { root: installSurface.root } : {}),
+          root: installSurface.root,
           reason: EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
           ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
           steps: [],
@@ -525,8 +510,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         // RPC server before the response and restart sentinel become durable.
         result = await runGatewayUpdate({
           timeoutMs,
-          cwd: root,
-          argv1: process.argv[1],
+          cwd: installSurface.root,
           channel:
             installSurface.kind === "git"
               ? (configChannel ?? undefined)

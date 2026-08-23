@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   listChannelPluginCatalogEntries: vi.fn(),
   getChannelPluginCatalogEntry: vi.fn(),
   getChannelPlugin: vi.fn(),
+  getLoadedChannelPlugin: vi.fn(),
   loadChannelSetupPluginRegistrySnapshotForChannel: vi.fn(),
   ensureChannelSetupPluginInstalled: vi.fn(),
   createClackPrompter: vi.fn(() => ({}) as never),
@@ -26,6 +27,7 @@ vi.mock("../../channels/plugins/catalog.js", () => ({
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: mocks.getChannelPlugin,
+  getLoadedChannelPlugin: mocks.getLoadedChannelPlugin,
   normalizeChannelId: (value: unknown) => (typeof value === "string" ? value.trim() || null : null),
 }));
 
@@ -78,12 +80,102 @@ function firstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown
 describe("resolveInstallableChannelPlugin", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/workspace");
+    mocks.resolveDefaultAgentId.mockReturnValue("default");
     mocks.getChannelPlugin.mockReturnValue(undefined);
+    mocks.getLoadedChannelPlugin.mockReturnValue(undefined);
     mocks.getChannelPluginCatalogEntry.mockReturnValue(undefined);
     mocks.ensureChannelSetupPluginInstalled.mockResolvedValue({
       cfg: {},
       installed: false,
     });
+  });
+
+  it("returns a registered plugin before resolving a multi-agent workspace owner", async () => {
+    const registeredPlugin = {
+      ...createPlugin("telegram"),
+      directory: { self: vi.fn() },
+    } as ChannelPlugin;
+    mocks.getLoadedChannelPlugin.mockReturnValue(registeredPlugin);
+    mocks.resolveDefaultAgentId.mockImplementation(() => {
+      throw new Error("agent selection required");
+    });
+
+    const result = await resolveInstallableChannelPlugin({
+      cfg: {
+        agents: {
+          list: [{ id: "alpha" }, { id: "beta" }],
+        },
+      },
+      runtime: {} as never,
+      rawChannel: "telegram",
+      allowInstall: true,
+      preferRegisteredPlugin: true,
+      supports: (plugin) => Boolean(plugin.directory),
+    });
+
+    expect(result).toMatchObject({
+      channelId: "telegram",
+      plugin: registeredPlugin,
+      configChanged: false,
+      pluginInstalled: false,
+      supportsRequestedCapability: true,
+    });
+    expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
+    expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("telegram");
+    expect(mocks.getChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.listChannelPluginCatalogEntries).not.toHaveBeenCalled();
+    expect(mocks.loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+  });
+
+  it("requires a workspace owner before falling back to an unloaded bundled plugin", async () => {
+    mocks.getChannelPlugin.mockReturnValue(createPlugin("telegram"));
+    mocks.resolveDefaultAgentId.mockImplementation(() => {
+      throw new Error("agent selection required");
+    });
+
+    await expect(
+      resolveInstallableChannelPlugin({
+        cfg: {
+          agents: {
+            list: [{ id: "alpha" }, { id: "beta" }],
+          },
+        },
+        runtime: {} as never,
+        rawChannel: "telegram",
+        allowInstall: false,
+        preferRegisteredPlugin: true,
+      }),
+    ).rejects.toThrow("agent selection required");
+
+    expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("telegram");
+    expect(mocks.getChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.resolveDefaultAgentId).toHaveBeenCalledTimes(1);
+  });
+
+  it("still requires a workspace owner before resolving an unregistered plugin", async () => {
+    mocks.resolveDefaultAgentId.mockImplementation(() => {
+      throw new Error("agent selection required");
+    });
+
+    await expect(
+      resolveInstallableChannelPlugin({
+        cfg: {
+          agents: {
+            list: [{ id: "alpha" }, { id: "beta" }],
+          },
+        },
+        runtime: {} as never,
+        rawChannel: "workspace-channel",
+        allowInstall: false,
+        preferRegisteredPlugin: true,
+      }),
+    ).rejects.toThrow("agent selection required");
+
+    expect(mocks.getLoadedChannelPlugin).toHaveBeenCalledWith("workspace-channel");
+    expect(mocks.getChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.resolveDefaultAgentId).toHaveBeenCalledTimes(1);
+    expect(mocks.listChannelPluginCatalogEntries).not.toHaveBeenCalled();
   });
 
   it("ignores untrusted workspace channel shadows during setup resolution", async () => {

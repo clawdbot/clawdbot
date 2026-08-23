@@ -1285,7 +1285,14 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const request = vi.fn(async (method: string, _requestParams?: unknown) => {
       if (method === "config/read") {
         return {
-          layers: [],
+          layers: [
+            {
+              name: {
+                type: "packagedDefaults",
+                file: "/managed/codex/defaults.toml",
+              },
+            },
+          ],
           config: {
             mcp_servers: {
               "arbitrary.server": { command: "ignored" },

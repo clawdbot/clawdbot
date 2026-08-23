@@ -59,6 +59,7 @@ export type ResolvedCliBackend = {
   manualCompaction?: CliBackendPlugin["manualCompaction"];
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
+  resolveModelId?: CliBackendPlugin["resolveModelId"];
   parseJsonlEvent?: CliBackendPlugin["parseJsonlEvent"];
   toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
   nativeToolMode?: CliBackendNativeToolMode;
@@ -101,6 +102,7 @@ type FallbackCliBackendPolicy = {
   manualCompaction?: CliBackendPlugin["manualCompaction"];
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
+  resolveModelId?: CliBackendPlugin["resolveModelId"];
   parseJsonlEvent?: CliBackendPlugin["parseJsonlEvent"];
   toolAvailabilityEnforcement?: CliBackendToolAvailabilityEnforcement;
   nativeToolMode?: CliBackendNativeToolMode;
@@ -431,6 +433,7 @@ export function resolveCliBackendConfig(
       manualCompaction: registered.manualCompaction,
       prepareExecution: registered.prepareExecution,
       resolveExecutionArgs: registered.resolveExecutionArgs,
+      resolveModelId: registered.resolveModelId,
       parseJsonlEvent: registered.parseJsonlEvent,
       toolAvailabilityEnforcement: resolveToolAvailabilityEnforcement(registered),
       nativeToolMode: registered.nativeToolMode,
@@ -467,6 +470,7 @@ export function resolveCliBackendConfig(
     manualCompaction: fallbackPolicy.manualCompaction,
     prepareExecution: fallbackPolicy.prepareExecution,
     resolveExecutionArgs: fallbackPolicy.resolveExecutionArgs,
+    resolveModelId: fallbackPolicy.resolveModelId,
     parseJsonlEvent: fallbackPolicy.parseJsonlEvent,
     toolAvailabilityEnforcement: fallbackPolicy.toolAvailabilityEnforcement,
     nativeToolMode: fallbackPolicy.nativeToolMode,

@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
+import { waitForFast } from "../test-helpers/wait-for.ts";
 import { configWithPrefs, createServerPrefsWriter } from "./server-prefs.test-support.ts";
 import {
   applyServerUiPrefs,
@@ -154,7 +155,7 @@ describe("applyServerUiPrefs", () => {
     const client = createServerPrefsWriter(request, scope);
 
     pushServerUiPrefs(client, { themeMode: "dark" });
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(localStorage.getItem(`openclaw.control.serverPrefs.pending.v1:${scope}`)).toBeNull(),
     );
 
@@ -171,7 +172,7 @@ describe("applyServerUiPrefs", () => {
     const request = vi.fn(async () => ({}));
     const client = createServerPrefsWriter(request, scope);
     pushServerUiPrefs(client, { themeMode: "dark" });
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(localStorage.getItem(`openclaw.control.serverPrefs.pending.v1:${scope}`)).toBeNull(),
     );
 
@@ -460,7 +461,7 @@ describe("pushServerUiPrefs", () => {
     expect(onThemeChanged).not.toHaveBeenCalled();
 
     requestGate.resolve({});
-    await vi.waitFor(() => expect(localStorage.getItem(pendingKey(scope))).toBeNull());
+    await waitForFast(() => expect(localStorage.getItem(pendingKey(scope))).toBeNull());
   });
 
   it("keeps a synced default reset as a pending offline null intent", () => {
@@ -526,7 +527,7 @@ describe("pushServerUiPrefs", () => {
 
     pushServerUiPrefs(createClient(request, scope), prefs ?? {}, { afterCommit });
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(afterCommit).toHaveBeenCalledWith({
         needsRefresh: false,
         retainedLocal: true,
@@ -582,7 +583,7 @@ describe("pushServerUiPrefs", () => {
     });
 
     pushServerUiPrefs(createClient(request, scope), prefs ?? {}, { afterCommit });
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(afterCommit).toHaveBeenCalledWith({
         needsRefresh: false,
         retainedLocal: true,
@@ -617,7 +618,7 @@ describe("pushServerUiPrefs", () => {
     const client = createClient(request);
 
     pushServerUiPrefs(client, { themeMode: "dark" }, { afterCommit });
-    await vi.waitFor(() => expect(afterCommit).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(afterCommit).toHaveBeenCalledOnce());
     expect(afterCommit).toHaveBeenCalledWith({ needsRefresh: false });
 
     expect(request).toHaveBeenCalledExactlyOnceWith("config.patch", {
@@ -660,7 +661,7 @@ describe("pushServerUiPrefs", () => {
 
     flight.resolve({});
 
-    await vi.waitFor(() => expect(readPending(scope)).toEqual({ locale: "fr" }));
+    await waitForFast(() => expect(readPending(scope)).toEqual({ locale: "fr" }));
   });
 
   it("drops only this tab's validation-rejected keys from persisted pending", async () => {
@@ -674,7 +675,7 @@ describe("pushServerUiPrefs", () => {
 
     pushServerUiPrefs(client, { theme: "knot" });
 
-    await vi.waitFor(() => expect(readPending(scope)).toEqual({ locale: "fr" }));
+    await waitForFast(() => expect(readPending(scope)).toEqual({ locale: "fr" }));
   });
 
   it("overwrites only a same-key sibling value when this tab persists later", () => {
@@ -711,7 +712,7 @@ describe("pushServerUiPrefs", () => {
     pushServerUiPrefs(client, { themeMode: "light" });
     resolveFirst?.();
 
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     expect(request.mock.calls[1]?.[1]).toEqual({
       raw: JSON.stringify({ ui: { prefs: { themeMode: "light" } } }),
       note: "control-ui prefs sync",
@@ -734,7 +735,7 @@ describe("pushServerUiPrefs", () => {
     request.mockResolvedValue({});
     flushServerUiPrefs(client);
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    await vi.waitFor(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
+    await waitForFast(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
   });
 
   it("retains in-memory pending intent when localStorage is unavailable", async () => {
@@ -777,7 +778,7 @@ describe("pushServerUiPrefs", () => {
 
     flushServerUiPrefs(client);
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
+    await waitForFast(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
   });
 
   it("supersedes a hung prior-connection request on same-client flush", async () => {
@@ -793,7 +794,7 @@ describe("pushServerUiPrefs", () => {
     flushServerUiPrefs(client);
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
+    await waitForFast(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
   });
 
   it("ignores a superseded request rejection while its replacement is pending", async () => {
@@ -815,7 +816,7 @@ describe("pushServerUiPrefs", () => {
 
     expect(localStorage.getItem(pendingKey("ws://gw"))).not.toBeNull();
     second.resolve({});
-    await vi.waitFor(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
+    await waitForFast(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
   });
 
   it("reconciles the refreshed snapshot again after clearing its pending shadow", async () => {
@@ -842,7 +843,7 @@ describe("pushServerUiPrefs", () => {
       },
     );
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    await vi.waitFor(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
+    await waitForFast(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
 
     expect(onApplied).toHaveBeenCalledWith({ themeMode: "light" });
     expect(loadSettings().themeMode).toBe("light");
@@ -858,7 +859,7 @@ describe("pushServerUiPrefs", () => {
 
     pushServerUiPrefs(client, { themeMode: "dark" }, { afterCommit });
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(afterCommit).toHaveBeenCalledWith({
         needsRefresh: true,
       }),
@@ -908,7 +909,7 @@ describe("pushServerUiPrefs", () => {
     });
     resolveRequest?.();
 
-    await vi.waitFor(() => expect(localStorage.getItem(pendingKey("ws://a"))).toBeNull());
+    await waitForFast(() => expect(localStorage.getItem(pendingKey("ws://a"))).toBeNull());
     expect(JSON.parse(localStorage.getItem(pendingKey("ws://b")) ?? "{}")).toEqual({
       locale: "de",
     });
@@ -1074,7 +1075,7 @@ describe("pushServerUiPrefs", () => {
       firstClient;
     (writer.state as { connected: boolean }).connected = true;
     flushServerUiPrefs(writer);
-    await vi.waitFor(() => expect(localStorage.getItem(pendingKey("ws://first"))).toBeNull());
+    await waitForFast(() => expect(localStorage.getItem(pendingKey("ws://first"))).toBeNull());
     expect(localStorage.getItem(pendingKey(""))).toBeNull();
 
     localStorage.setItem(pendingKey("ws://second"), JSON.stringify({ themeMode: "dark" }));
@@ -1102,7 +1103,7 @@ describe("pushServerUiPrefs", () => {
     expect(request.mock.calls[0]?.[1]).toMatchObject({
       raw: JSON.stringify({ ui: { prefs: { locale: "de" } } }),
     });
-    await vi.waitFor(() => expect(localStorage.getItem(pendingKey("ws://first"))).toBeNull());
+    await waitForFast(() => expect(localStorage.getItem(pendingKey("ws://first"))).toBeNull());
     expect(localStorage.getItem(pendingKey(""))).toBeNull();
   });
 });

@@ -140,8 +140,14 @@ internal class WearProxyController(
         "capabilities",
         buildJsonArray {
           WearProxyCapability.entries
-            .filter { capability -> capability != WearProxyCapability.ModelControls || hasOperatorAdminScope() }
-            .forEach { capability -> add(JsonPrimitive(capability.wireValue)) }
+            .filter { capability ->
+              when (capability) {
+                WearProxyCapability.ModelControls,
+                WearProxyCapability.ModelCatalogSearch,
+                -> hasOperatorAdminScope()
+                else -> true
+              }
+            }.forEach { capability -> add(JsonPrimitive(capability.wireValue)) }
         },
       )
       activeAgentId()?.takeIf(String::isNotBlank)?.let { put("activeAgentId", it.takeCodePoints(MAX_AGENT_ID_CHARS)) }
@@ -200,16 +206,24 @@ internal class WearProxyController(
   }
 
   private fun listModels(params: JsonObject): JsonObject {
-    params.requireOnly("selectedModelRef")
+    params.requireOnly("selectedModelRef", "query")
+    val query = params.optionalStringParam("query", MAX_SEARCH_QUERY_CHARS)?.trim().orEmpty()
     val selected =
       canonicalModelRef(params.optionalStringParam("selectedModelRef", MAX_MODEL_REF_CHARS))
         ?: canonicalModelRef(selectedModelRef())
     val availableModels = availableModels()
-    // The Watch picker moves one adjacent model at a time and reloads after each choice.
+    val matchingModels =
+      availableModels.filter { (ref, model) ->
+        query.isBlank() || model.name.contains(query, ignoreCase = true) || ref.contains(query, ignoreCase = true)
+      }
+    // Queries match the full catalog before the bounded transport response.
+    // Blank requests keep the selected model centered in the compact Watch list.
     // Centering keeps both directions reachable without exceeding the message cap.
     val selectedIndex = availableModels.indexOfFirst { (ref) -> ref == selected }
     val boundedModels =
-      if (availableModels.size <= MAX_MODEL_COUNT || selectedIndex < 0) {
+      if (query.isNotBlank()) {
+        matchingModels.take(MAX_MODEL_COUNT)
+      } else if (availableModels.size <= MAX_MODEL_COUNT || selectedIndex < 0) {
         availableModels.take(MAX_MODEL_COUNT)
       } else {
         val start =
@@ -275,8 +289,10 @@ internal class WearProxyController(
   }
 
   private suspend fun listSessions(params: JsonObject): JsonObject {
-    params.requireOnly("limit", "selectedSessionKey")
+    params.requireOnly("limit", "offset", "search", "selectedSessionKey")
     val limit = params.intParam("limit", default = DEFAULT_SESSION_LIMIT, range = 1..MAX_SESSION_LIMIT)
+    val offset = params.optionalIntParam("offset", range = 0..MAX_SESSION_OFFSET)
+    val search = params.optionalStringParam("search", MAX_SEARCH_QUERY_CHARS)?.trim()?.takeIf(String::isNotEmpty)
     val selectedSessionKey = params.optionalStringParam("selectedSessionKey", MAX_SESSION_KEY_CHARS)
     val agentId = activeAgentId()?.trim()?.takeIf(String::isNotEmpty)
     val gatewayResult =
@@ -284,6 +300,8 @@ internal class WearProxyController(
         "sessions.list",
         buildJsonObject {
           put("limit", limit)
+          offset?.let { put("offset", it) }
+          search?.let { put("search", it) }
           put("includeGlobal", false)
           put("includeUnknown", false)
           agentId?.let { put("agentId", it.takeCodePoints(MAX_AGENT_ID_CHARS)) }
@@ -320,6 +338,7 @@ internal class WearProxyController(
       put("sessions", JsonArray(sessions))
       agentId?.let { put("activeAgentId", it.takeCodePoints(MAX_AGENT_ID_CHARS)) }
       if (selectedSessionKey != null) put("selectedSessionValid", selectedSessionValid)
+      gatewayResult["nextOffset"].longPrimitiveOrNull()?.let { put("nextOffset", it) }
       gatewayResult["hasMore"].booleanPrimitiveOrNull()?.let { put("hasMore", it) }
       gatewayResult["totalCount"].longPrimitiveOrNull()?.let { put("totalCount", it) }
     }
@@ -386,6 +405,8 @@ internal class WearProxyController(
   private companion object {
     const val DEFAULT_SESSION_LIMIT = 20
     const val MAX_SESSION_LIMIT = 50
+    const val MAX_SESSION_OFFSET = 100_000
+    const val MAX_SEARCH_QUERY_CHARS = 200
     const val DEFAULT_HISTORY_LIMIT = 20
     const val MAX_HISTORY_LIMIT = 20
     const val DEFAULT_HISTORY_CHARS = 2_000

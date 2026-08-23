@@ -17,6 +17,7 @@ import {
   type DeliverOutboundPayloadsParams,
   type OutboundDeliveryIntent,
 } from "../../infra/outbound/deliver.js";
+import { normalizeOutboundReplyFacts } from "../../infra/outbound/reply-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createLiveMessageState, markLiveMessagePreviewUpdated } from "./live.js";
 import { createMessageReceiptFromOutboundResults } from "./receipt.js";
@@ -250,6 +251,7 @@ export async function withDurableMessageSendContextCore<T>(
     abortSignal,
     ...deliveryParams
   } = params;
+  const replyToId = normalizeOutboundReplyFacts(deliveryParams)?.replyToId;
   const effectiveSignal = signal ?? abortSignal;
   const queuePolicy = durability === "best_effort" ? "best_effort" : "required";
   let liveState = preview ?? createLiveMessageState<ReplyPayload>();
@@ -297,7 +299,7 @@ export async function withDurableMessageSendContextCore<T>(
         const receipt = createMessageReceiptFromOutboundResults({
           results,
           threadId: params.threadId == null ? undefined : String(params.threadId),
-          replyToId: params.replyToId ?? undefined,
+          replyToId,
         });
         const failedOutcome = payloadOutcomes.find((outcome) => outcome.status === "failed");
         if (failedOutcome) {
@@ -344,7 +346,7 @@ export async function withDurableMessageSendContextCore<T>(
             const receipt = createMessageReceiptFromOutboundResults({
               results: error.results,
               threadId: params.threadId == null ? undefined : String(params.threadId),
-              replyToId: params.replyToId ?? undefined,
+              replyToId,
             });
             return {
               status: "partial_failed",

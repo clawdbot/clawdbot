@@ -10,6 +10,14 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "build": {
+      "staticAssets": [
+        {
+          "source": "./assets/openclaw-worker-wallpaper.png",
+          "output": "assets/openclaw-worker-wallpaper.png"
+        }
+      ]
+    }
   }
 }

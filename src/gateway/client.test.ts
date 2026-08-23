@@ -1362,6 +1362,45 @@ describe("GatewayClient connect auth payload", () => {
     },
   );
 
+  it.each([
+    { name: "default operator clients", options: {} },
+    {
+      name: "TUI clients",
+      options: {
+        clientName: GATEWAY_CLIENT_NAMES.TUI,
+        mode: GATEWAY_CLIENT_MODES.UI,
+        minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+      },
+    },
+  ])("pauses $name after a permanent protocol mismatch", async ({ options }) => {
+    const onReconnectPaused = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: null,
+      onReconnectPaused,
+      ...options,
+    });
+
+    const { ws, connect } = startClientAndConnect({ client });
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws,
+      connectId: connect.id,
+      failureDetails: {
+        code: "PROTOCOL_MISMATCH",
+        expectedProtocol: PROTOCOL_VERSION + 1,
+      },
+      failureMessage: "incompatible gateway version",
+    });
+
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "PROTOCOL_MISMATCH",
+    });
+  });
+
   it("signs device proof with the emitted node client mode", () => {
     const signDevicePayload = vi.fn((_privateKeyPem: string, _payload: string) => "signature");
     const client = createClientWithIdentity("device-node-mode", vi.fn(), {
@@ -1415,7 +1454,7 @@ describe("GatewayClient connect auth payload", () => {
       emitConnectFailure(
         currentWs,
         currentConnect.id,
-        { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
+        { code: "PROTOCOL_MISMATCH", expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
         "protocol mismatch",
       );
       const legacyWs = await advanceToNextReconnect();
@@ -1467,7 +1506,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectFailure(
       currentWs,
       currentConnect.id,
-      { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
+      { code: "PROTOCOL_MISMATCH", expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
       "protocol mismatch",
     );
     const v3Ws = await advanceToNextReconnect();
@@ -1489,7 +1528,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectFailure(
       upgradedProbeWs,
       upgradedProbeConnect.id,
-      { expectedProtocol: PROTOCOL_VERSION },
+      { code: "PROTOCOL_MISMATCH", expectedProtocol: PROTOCOL_VERSION },
       "protocol mismatch",
     );
 
@@ -1518,7 +1557,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectFailure(
       rolledBackProbeWs,
       rolledBackProbeConnect.id,
-      { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
+      { code: "PROTOCOL_MISMATCH", expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
       "protocol mismatch",
     );
     const rolledBackLegacyWs = await advanceToNextReconnect();
@@ -1569,7 +1608,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectFailure(
       initialWs,
       initialConnect.id,
-      { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
+      { code: "PROTOCOL_MISMATCH", expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
       "protocol mismatch",
     );
     const v3Ws = await advanceToNextReconnect();
@@ -1587,7 +1626,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectFailure(
       v3UpgradeProbeWs,
       v3UpgradeProbe.id,
-      { expectedProtocol: PROTOCOL_VERSION },
+      { code: "PROTOCOL_MISMATCH", expectedProtocol: PROTOCOL_VERSION },
       "protocol mismatch",
     );
 
@@ -1598,7 +1637,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectFailure(
       v4Ws,
       v4Connect.id,
-      { expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
+      { code: "PROTOCOL_MISMATCH", expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
       "protocol mismatch",
     );
 
@@ -1611,6 +1650,48 @@ describe("GatewayClient connect auth payload", () => {
     });
     expect(onHelloOk).toHaveBeenCalledOnce();
     client.stop();
+  });
+
+  it("pauses a node host after an unsupported protocol mismatch following a supported transition", async () => {
+    const onReconnectPaused = vi.fn();
+    const client = createClientWithIdentity("device-unsupported-node-protocol", vi.fn(), {
+      role: "node",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      onReconnectPaused,
+    });
+
+    const { ws: currentWs, connect: currentConnect } = startClientAndConnect({ client });
+    emitConnectFailure(currentWs, currentConnect.id, {
+      code: "PROTOCOL_MISMATCH",
+      expectedProtocol: MIN_NODE_PROTOCOL_VERSION,
+    });
+    const legacyWs = await advanceToNextReconnect();
+    legacyWs.emitOpen();
+    emitConnectChallenge(legacyWs, "nonce-unsupported-node-protocol");
+    const legacyConnect = connectRequestFrom(legacyWs);
+    expect(legacyConnect.params).toMatchObject({
+      minProtocol: MIN_NODE_PROTOCOL_VERSION,
+      maxProtocol: MIN_NODE_PROTOCOL_VERSION,
+    });
+    expect(onReconnectPaused).not.toHaveBeenCalled();
+
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: legacyWs,
+      connectId: legacyConnect.id,
+      failureDetails: {
+        code: "PROTOCOL_MISMATCH",
+        expectedProtocol: PROTOCOL_VERSION + 1,
+      },
+      failureMessage: "unsupported gateway protocol",
+    });
+
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "PROTOCOL_MISMATCH",
+    });
   });
 
   it("keeps canonical platform metadata for non-node-host node clients", () => {
@@ -1901,6 +1982,7 @@ describe("GatewayClient connect auth payload", () => {
     failureMessage?: string;
   }) {
     vi.useFakeTimers();
+    const socketCount = wsInstances.length;
     try {
       emitConnectFailure(
         params.firstWs,
@@ -1909,7 +1991,7 @@ describe("GatewayClient connect auth payload", () => {
         params.failureMessage,
       );
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(wsInstances).toHaveLength(1);
+      expect(wsInstances).toHaveLength(socketCount);
     } finally {
       params.client.stop();
       vi.useRealTimers();

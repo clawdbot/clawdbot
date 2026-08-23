@@ -40,7 +40,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: plugin-prerelease-${{ inputs.target_ref }}
+  group: plugin-prerelease-${{ inputs.target_ref }}-${{ github.sha }}
   cancel-in-progress: ${{ inputs.target_ref == 'main' }}
 
 env:
@@ -142,6 +142,7 @@ jobs:
       - name: Setup manifest pnpm
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
+          cache-mode: restore
           node-version: "24.x"
 
       - name: Install manifest dependencies
@@ -339,6 +340,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
 
       - name: Run plugin prerelease static shard
@@ -401,6 +403,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
 
       - name: Configure Node test resources
@@ -484,6 +487,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
 
       - name: Run extension shard
@@ -516,6 +520,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
 
       - name: Run plugin inspector advisory sweep

@@ -1010,6 +1010,15 @@ extension GatewayProcessManager {
         let startGeneration = self.gatewayStartGeneration
         if await self.observeCurrentGatewayStart(generation: startGeneration) == true { return true }
         guard !Task.isCancelled, self.isCurrentGatewayStart(startGeneration) else { return false }
+        // Only a real launch candidate/install can recover after its owner reports failure.
+        if case .failed = self.status,
+           !launchAgentInstalled,
+           self.launchAgentReadinessCandidate == nil,
+           self.launchAgentReadinessFailure == nil,
+           self.launchAgentInstallGeneration != startGeneration
+        {
+            return false
+        }
         let readinessPort = self.launchAgentReadinessCandidate?.failure.port
             ?? GatewayEnvironment.gatewayPort()
         let context = self.gatewayReadinessContext(

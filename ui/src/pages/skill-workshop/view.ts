@@ -2,9 +2,11 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
+import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import "../../components/file-preview-modal-registration.ts";
 import "../../components/modal-dialog.ts";
+import "../../components/resizable-divider.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
@@ -246,59 +248,24 @@ function renderBoard(
 }
 
 function renderQueueResizer(props: SkillWorkshopProps) {
-  return html`
-    <div
-      class="sw-queue-resizer"
-      role="separator"
-      aria-label=${t("skillWorkshop.queue.resize")}
-      aria-orientation="vertical"
-      tabindex="0"
-      @pointerdown=${(event: PointerEvent) => startQueueResize(event, props)}
-      @keydown=${(event: KeyboardEvent) => resizeQueueWithKeyboard(event, props)}
-    ></div>
-  `;
-}
-
-function startQueueResize(event: PointerEvent, props: SkillWorkshopProps): void {
-  event.preventDefault();
-  event.stopPropagation();
-
-  const startX = event.clientX;
-  const startWidth = props.queueWidth;
-  const body = document.body;
-  const previousCursor = body.style.cursor;
-  const previousUserSelect = body.style.userSelect;
-  body.style.cursor = "col-resize";
-  body.style.userSelect = "none";
-
-  const cleanup = () => {
-    window.removeEventListener("pointermove", onMove);
-    window.removeEventListener("pointerup", onUp);
-    window.removeEventListener("pointercancel", onUp);
-    body.style.cursor = previousCursor;
-    body.style.userSelect = previousUserSelect;
+  let divider: HTMLElement | undefined;
+  const measureSize = () => {
+    const queue = divider?.previousElementSibling?.getBoundingClientRect().width ?? 0;
+    const detail = divider?.nextElementSibling?.getBoundingClientRect().width ?? 0;
+    return queue + detail;
   };
-
-  const onMove = (moveEvent: PointerEvent) => {
-    props.onQueueWidthChange(startWidth + moveEvent.clientX - startX);
-  };
-
-  const onUp = () => {
-    cleanup();
-  };
-
-  window.addEventListener("pointermove", onMove);
-  window.addEventListener("pointerup", onUp);
-  window.addEventListener("pointercancel", onUp);
-}
-
-function resizeQueueWithKeyboard(event: KeyboardEvent, props: SkillWorkshopProps): void {
-  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
-    return;
-  }
-  event.preventDefault();
-  const delta = event.key === "ArrowLeft" ? -24 : 24;
-  props.onQueueWidthChange(props.queueWidth + delta);
+  return html`<resizable-divider
+    ${ref((element) => (divider = element instanceof HTMLElement ? element : undefined))}
+    class="sw-queue-resizer"
+    .label=${t("skillWorkshop.queue.resize")}
+    .splitRatio=${0.5}
+    .minRatio=${0.2}
+    .maxRatio=${0.8}
+    .measureRatio=${() => props.queueWidth / measureSize()}
+    .measureSize=${measureSize}
+    @resize=${(event: CustomEvent<{ splitRatio: number }>) =>
+      props.onQueueWidthChange(event.detail.splitRatio * measureSize())}
+  ></resizable-divider>`;
 }
 
 function renderLifecycleTabs(props: SkillWorkshopProps) {

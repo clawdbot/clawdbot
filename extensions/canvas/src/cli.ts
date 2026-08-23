@@ -7,6 +7,7 @@ import { runCommandWithRuntime, theme } from "openclaw/plugin-sdk/cli-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   callGatewayFromCli,
+  isGatewayClientRequestError,
   resolveNodeFromNodeList,
   type NodeMatchCandidate,
 } from "openclaw/plugin-sdk/gateway-runtime";
@@ -192,7 +193,15 @@ export function createDefaultCanvasCliDependencies(): CanvasCliDependencies {
       let raw: unknown;
       try {
         raw = await callGatewayCli("node.list", opts, {});
-      } catch {
+      } catch (error) {
+        if (
+          !isGatewayClientRequestError(error) ||
+          error.gatewayCode !== "INVALID_REQUEST" ||
+          error.retryable ||
+          error.message !== "unknown method: node.list"
+        ) {
+          throw error;
+        }
         raw = await callGatewayCli("node.pair.list", opts, {});
       }
       return resolveNodeFromNodeList(parseNodeCandidates(raw), query).nodeId;

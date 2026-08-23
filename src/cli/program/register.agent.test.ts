@@ -80,7 +80,7 @@ vi.mock("../one-shot-exit.js", () => ({
 
 describe("agent command registration", () => {
   async function runCli(args: string[]) {
-    const program = new Command();
+    const program = new Command().enablePositionalOptions();
     registerAgentTurnCommand(program, { agentChannelOptions: "last|telegram|discord" });
     registerAgentsCommands(program);
     await program.parseAsync(args, { from: "user" });
@@ -258,6 +258,29 @@ describe("agent command registration", () => {
     expect(agentExecCommandMock).toHaveBeenCalledWith(
       "fix it",
       expect.objectContaining({ model: "openai/gpt-5.6-sol", json: true }),
+      runtime,
+    );
+  });
+
+  it("resolves nested exec --timeout from the explicit leaf, then the parent, then the default", async () => {
+    await runCli(["agent", "exec", "fix it", "--timeout", "120"]);
+    expect(agentExecCommandMock).toHaveBeenLastCalledWith(
+      "fix it",
+      expect.objectContaining({ timeout: "120" }),
+      runtime,
+    );
+
+    await runCli(["agent", "--timeout", "30", "exec", "fix it"]);
+    expect(agentExecCommandMock).toHaveBeenLastCalledWith(
+      "fix it",
+      expect.objectContaining({ timeout: "30" }),
+      runtime,
+    );
+
+    await runCli(["agent", "--timeout", "30", "exec", "fix it", "--timeout", "120"]);
+    expect(agentExecCommandMock).toHaveBeenLastCalledWith(
+      "fix it",
+      expect.objectContaining({ timeout: "120" }),
       runtime,
     );
   });

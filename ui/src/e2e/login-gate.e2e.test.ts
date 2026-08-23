@@ -322,6 +322,39 @@ suite.define(() => {
     }
   });
 
+  it("copies an exact recovery command from the application gateway snapshot", async () => {
+    const context = await suite.browser.newContext({
+      permissions: ["clipboard-read", "clipboard-write"],
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+
+    try {
+      await page.goto(suite.server.baseUrl);
+      await gateway.waitForRequest("connect");
+      await gateway.rejectDeferred("connect", {
+        code: "INVALID_REQUEST",
+        message: "token missing",
+        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+      });
+
+      const failure = page.locator('.login-gate__failure[data-kind="auth-required"]');
+      await failure.waitFor({ timeout: 10_000 });
+      const command = failure
+        .locator(".login-gate__command")
+        .filter({ hasText: "openclaw gateway auth-token --show" });
+      await command.click();
+
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toBe("openclaw gateway auth-token --show");
+      expect(await command.locator(".chat-copy-btn").getAttribute("aria-label")).toBe("Copied!");
+    } finally {
+      await closeContext(context);
+    }
+  });
+
   it("retires the static startup fallback after rendering auth-required guidance", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
@@ -391,6 +424,9 @@ suite.define(() => {
           document.querySelectorAll<HTMLElement>(".login-gate__form .settings-secret__toggle"),
         );
         const connect = document.querySelector<HTMLElement>(".login-gate__connect");
+        const commands = Array.from(
+          document.querySelectorAll<HTMLElement>(".login-gate__failure-steps .login-gate__command"),
+        );
         if (!gate || !card || !connect) {
           throw new Error("Missing login gate elements");
         }
@@ -399,7 +435,16 @@ suite.define(() => {
         return {
           cardPadding: cardStyle.padding,
           cardTop: card.getBoundingClientRect().top,
+          commandBounds: commands.map((command) => {
+            const bounds = command.getBoundingClientRect();
+            return {
+              left: bounds.left,
+              right: bounds.right,
+            };
+          }),
           connectMinHeight: getComputedStyle(connect).minHeight,
+          documentClientWidth: document.documentElement.clientWidth,
+          documentScrollWidth: document.documentElement.scrollWidth,
           gateClientHeight: gate.clientHeight,
           gateOverflowY: gateStyle.overflowY,
           gatePadding: gateStyle.padding,
@@ -415,6 +460,11 @@ suite.define(() => {
       expect(metrics.gatePadding).toBe("16px 12px");
       expect(metrics.cardPadding).toBe("24px 20px");
       expect(metrics.cardTop).toBeGreaterThanOrEqual(0);
+      expect(metrics.documentScrollWidth).toBe(metrics.documentClientWidth);
+      expect(metrics.commandBounds.length).toBeGreaterThan(0);
+      expect(metrics.commandBounds.every(({ left, right }) => left >= 0 && right <= 375)).toBe(
+        true,
+      );
       expect(metrics.connectMinHeight).toBe("44px");
       expect(metrics.gateOverflowY).toBe("auto");
       expect(metrics.gateScrollHeight).toBeGreaterThan(metrics.gateClientHeight);

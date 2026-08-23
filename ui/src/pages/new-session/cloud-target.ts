@@ -84,10 +84,12 @@ export function renderCloudProfileMenuItems(params: {
   icon?: unknown;
   disabled?: boolean;
   disabledReason?: string;
+  profileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
   onSelect: (profileId: string) => void;
 }) {
-  return params.profiles.map((profile) =>
-    renderSessionMenuItem(
+  return params.profiles.map((profile) => {
+    const profileDisabledReason = params.profileDisabledReason?.(profile);
+    return renderSessionMenuItem(
       {
         value: `cloud:${profile.id}`,
         label: t("newSession.cloudWorker", { profile: profile.id }),
@@ -99,16 +101,15 @@ export function renderCloudProfileMenuItems(params: {
               ? [t("newSession.environmentPersistent")]
               : undefined,
         checked: params.selectedId === profile.id,
-        disabled: params.disabled,
+        disabled: params.disabled || Boolean(profileDisabledReason),
         title:
-          params.disabled && params.disabledReason
-            ? params.disabledReason
-            : t("newSession.cloudWorkerProvider", { provider: profile.providerId }),
+          (params.disabled ? params.disabledReason : profileDisabledReason) ??
+          t("newSession.cloudWorkerProvider", { provider: profile.providerId }),
         onSelect: () => params.onSelect(profile.id),
       },
       params.submitting,
-    ),
-  );
+    );
+  });
 }
 
 /** Machine shape as a picker sub-line; providers may report neither, one, or both numbers. */

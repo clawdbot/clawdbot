@@ -1,7 +1,7 @@
 // Provider-neutral live inference ladder for OpenClaw sessions.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
-import { listAgentIds, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import { listAgentIds } from "../agents/agent-scope.js";
 import { hasAvailableAuthForProvider } from "../agents/model-auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -57,10 +57,7 @@ export async function verifySystemAgentInferenceWithFallback(params: {
 }): Promise<BoundVerifySetupInferenceResult> {
   const deps = params.deps ?? {};
   const config = await (deps.readConfig ?? readCurrentConfig)();
-  const defaultAgentId = params.requestingAgentId
-    ? tryResolveDefaultAgentId(config)
-    : resolveSystemAgentTargetAgentId(config);
-  const requestedAgentId = normalizeAgentId(params.requestingAgentId ?? defaultAgentId);
+  const requestedAgentId = resolveAmbientOwnerAgentId(config, params.requestingAgentId);
   const candidateAgentIds = [
     requestedAgentId,
     ...listAgentIds(config).map((agentId) => normalizeAgentId(agentId)),
