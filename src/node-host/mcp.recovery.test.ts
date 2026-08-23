@@ -274,7 +274,7 @@ describe("node host MCP live lifecycle", () => {
     let maxActiveLists = 0;
     let listCount = 0;
     const pending: Array<(value: { tools: Tool[] }) => void> = [];
-    const refreshStarted = [createDeferred(), createDeferred()];
+    const refreshStarted = [createDeferred(), createDeferred()] as const;
     const client = createClient({
       list: async () => {
         listCount += 1;
