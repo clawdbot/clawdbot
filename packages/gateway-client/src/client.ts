@@ -21,7 +21,6 @@ import {
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { WebSocket } from "ws";
 import {
-  isSensitiveUrlQueryParamName,
   normalizeTlsFingerprint,
   normalizeGatewayErrorText,
   redactSensitiveKeyValuePairs,

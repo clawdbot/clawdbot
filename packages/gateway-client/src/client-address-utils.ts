@@ -53,10 +53,6 @@ export function normalizeGatewayErrorText(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
-export function isSensitiveUrlQueryParamName(key: string): boolean {
-  return /(?:token|password|secret|key|auth|credential)/iu.test(key);
-}
-
 const SHA256_HEX_FINGERPRINT = /^[a-fA-F0-9]{64}$/u;
 const SHA256_COLON_FINGERPRINT = /^(?:[a-fA-F0-9]{2}:){31}[a-fA-F0-9]{2}$/u;
 
