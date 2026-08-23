@@ -27,6 +27,7 @@ import {
   getAgentEventLifecycleGeneration,
   onAgentEvent,
 } from "../infra/agent-events.js";
+import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -158,6 +159,7 @@ type FirstAgentCommandOptions = {
   message?: string;
   messageChannel?: string;
   model?: string;
+  onAdmittedRunContext?: (context: object) => void | Promise<void>;
   senderIsOwner?: boolean;
   sessionKey?: string;
   streamParams?: {
@@ -177,6 +179,29 @@ function firstAgentCommandOptions() {
 }
 
 describe("OpenAI-compatible HTTP API (e2e)", () => {
+  it("binds the Gateway lifecycle resolver to chat-completion runs", async () => {
+    let resolveGatewayContext: ReturnType<typeof getGatewayContextResolver>;
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce(async (opts: unknown) => {
+      const admittedRunContext = {};
+      const onAdmittedRunContext = (opts as FirstAgentCommandOptions).onAdmittedRunContext;
+      expect(onAdmittedRunContext).toBeTypeOf("function");
+      await onAdmittedRunContext?.(admittedRunContext);
+      resolveGatewayContext = getGatewayContextResolver(admittedRunContext);
+      return { payloads: [{ text: "hello" }] } as never;
+    });
+
+    const res = await postChatCompletions(enabledPort, {
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    expect(res.status).toBe(200);
+    await res.text();
+    const context = resolveGatewayContext?.();
+    expect(context?.resolveGatewayContext).toBe(resolveGatewayContext);
+  });
+
   it("returns a typed selection error unless an ownerless fleet request selects an agent", async () => {
     try {
       testState.agentsConfig = {
