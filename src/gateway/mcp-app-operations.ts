@@ -187,6 +187,7 @@ export async function executeMcpAppOperation(
     case "tools/call":
       return await withMcpAppActiveView(active, "tool", async () => {
         await requireCallableTool(runtime, view, operation.params.name);
+        await requireMcpAppInteraction(view);
         return await runtime.callTool(
           view.serverName,
           operation.params.name,
@@ -216,12 +217,14 @@ export async function executeMcpAppOperation(
             )
             .map((tool) => tool.toolName),
         );
-        return {
+        const result = {
           ...listed,
           tools: listed.tools.filter(
             (tool) => allowed.has(tool.name.trim()) && isAppCallableListedTool(tool),
           ),
         };
+        await requireMcpAppInteraction(view);
+        return result;
       });
     case "resources/list":
       return await withMcpAppActiveView(active, "read", async () => {

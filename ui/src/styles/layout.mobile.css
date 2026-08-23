@@ -111,7 +111,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   z-index: 70;
   width: min(86vw, 320px);
   min-width: 0;
-  border-right: none;
+  border-inline-end: none;
   box-shadow: 0 30px 80px color-mix(in srgb, black 40%, transparent);
   transform: translateX(-100%);
   opacity: 0;
@@ -176,7 +176,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 
 .shell--mobile-nav .topnav-shell {
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  grid-template-columns: minmax(40px, 1fr) auto minmax(40px, 1fr);
   gap: 10px;
 }
 
@@ -210,7 +210,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   flex: 1 1 auto;
   flex-direction: column;
   align-items: stretch;
-  border-right: none;
+  border-inline-end: none;
 }
 
 .shell--mobile-nav .sidebar-shell {

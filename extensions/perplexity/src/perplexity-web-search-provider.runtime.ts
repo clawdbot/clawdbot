@@ -298,8 +298,14 @@ async function runPerplexitySearch(params: {
         return await throwWebSearchApiError(res, "Perplexity");
       }
       const data = await readProviderJsonResponse<PerplexitySearchResponse>(res, "Perplexity");
+      const content = data.choices?.[0]?.message?.content;
+      if (typeof content !== "string" || !content.trim()) {
+        throw new Error(
+          "Perplexity search returned no final answer. Retry the query or choose another search provider.",
+        );
+      }
       return {
-        content: data.choices?.[0]?.message?.content ?? "No response",
+        content,
         citations: extractPerplexityCitations(data),
       };
     },
@@ -461,7 +467,7 @@ export async function executePerplexitySearch(
     runtime.baseUrl,
     runtime.model,
     query,
-    resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+    structured ? resolveSearchCount(count, DEFAULT_SEARCH_COUNT) : undefined,
     country,
     language,
     freshness,

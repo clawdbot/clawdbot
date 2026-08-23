@@ -6,6 +6,11 @@ import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "../config/config.js";
+import { resolveConfigForRead } from "../config/io.read-helpers.js";
+import {
+  getAuthoredConfigSecretRef,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
@@ -155,6 +160,85 @@ describe("secrets runtime snapshot core lanes", () => {
     );
     expect(snapshot.config.skills?.entries?.["review-pr"]?.apiKey).toBe("sk-skill-ref");
   });
+
+  it.each([
+    {
+      name: "bare source resolves to a bare-looking literal",
+      authored: "$SOURCE",
+      sourceEnv: {},
+      runtimeEnv: { SOURCE: "$OTHER" },
+      expected: "$OTHER",
+      pendingSourceRef: true,
+    },
+    {
+      name: "bare source resolves to a braced-looking literal",
+      authored: "$SOURCE",
+      sourceEnv: {},
+      runtimeEnv: { SOURCE: "${OTHER}" },
+      expected: "${OTHER}",
+      pendingSourceRef: true,
+    },
+    {
+      name: "substitution resolves to a bare-looking literal",
+      authored: "${SOURCE}",
+      sourceEnv: { SOURCE: "$OTHER" },
+      runtimeEnv: {},
+      expected: "$OTHER",
+      pendingSourceRef: false,
+    },
+    {
+      name: "substitution resolves to a braced-looking literal",
+      authored: "${SOURCE}",
+      sourceEnv: { SOURCE: "${OTHER}" },
+      runtimeEnv: {},
+      expected: "${OTHER}",
+      pendingSourceRef: false,
+    },
+    {
+      name: "escaped source remains a braced-looking literal",
+      authored: "$${OTHER}",
+      sourceEnv: {},
+      runtimeEnv: {},
+      expected: "${OTHER}",
+      pendingSourceRef: false,
+    },
+  ])(
+    "materializes authored provider credentials without reinterpreting literals: $name",
+    async ({ authored, sourceEnv, runtimeEnv, expected, pendingSourceRef }) => {
+      const read = resolveConfigForRead(
+        {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: authored,
+                models: [],
+              },
+            },
+          },
+        },
+        sourceEnv,
+      );
+      const config = asConfig(read.resolvedConfigRaw);
+      setConfigResolutionFacts(config, read.resolutionFacts);
+
+      const snapshot = await prepareSecretsRuntimeSnapshot({
+        config,
+        env: runtimeEnv,
+        includeAuthStoreRefs: false,
+        loadablePluginOrigins: new Map(),
+      });
+
+      expect(snapshot.config.models?.providers?.openai?.apiKey).toBe(expected);
+      expect(
+        getAuthoredConfigSecretRef(snapshot.sourceConfig, "models.providers.openai.apiKey") !==
+          null,
+      ).toBe(pendingSourceRef);
+      expect(
+        getAuthoredConfigSecretRef(snapshot.config, "models.providers.openai.apiKey"),
+      ).toBeNull();
+    },
+  );
 
   it("resolves env refs for memory, talk, and gateway surfaces", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({

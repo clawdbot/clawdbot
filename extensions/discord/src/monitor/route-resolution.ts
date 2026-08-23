@@ -19,10 +19,29 @@ export function buildDiscordRoutePeer(params: {
   conversationId: string;
 }): RoutePeer {
   return {
-    kind: params.isDirectMessage ? "direct" : params.isGroupDm ? "group" : "channel",
-    id: params.isDirectMessage
-      ? params.directUserId?.trim() || params.conversationId
-      : params.conversationId,
+    kind: params.isGroupDm ? "group" : params.isDirectMessage ? "direct" : "channel",
+    id:
+      params.isDirectMessage && !params.isGroupDm
+        ? params.directUserId?.trim() || params.conversationId
+        : params.conversationId,
+  };
+}
+
+export function buildDiscordConversationRouteContext(params: {
+  isDirectMessage: boolean;
+  isGroupDm: boolean;
+  directUserId?: string | null;
+  conversationId: string;
+  isThread: boolean;
+  parentConversationId?: string;
+}) {
+  return {
+    ConversationRouteContextObserved: true as const,
+    ConversationRoutePeerId: buildDiscordRoutePeer(params).id,
+    NativeChannelId: params.conversationId,
+    InboundAccessAuthorized: true as const,
+    MessageThreadId: params.isThread ? params.conversationId : undefined,
+    ThreadParentId: params.isThread ? params.parentConversationId : undefined,
   };
 }
 

@@ -308,24 +308,26 @@ export function throwQaSuiteCleanupErrors(params: {
   runFailed: boolean;
   runError: unknown;
   result?: QaSuiteResult;
+  scenarios?: readonly QaSuiteScenarioResult[];
   evidenceWritten?: boolean;
 }) {
   if (params.cleanupFailures.length === 0) {
     return;
   }
   const result = params.result;
-  const scenarios = result?.scenarios ?? [];
+  const scenarios = result?.scenarios ?? params.scenarios ?? [];
+  const scenariosCompleted = result !== undefined || params.scenarios !== undefined;
   const failed = scenarios.filter((scenario) => scenario.status === "fail").length;
   const skipped = scenarios.filter((scenario) => scenario.status === "skip").length;
   const passed = scenarios.length - failed - skipped;
-  const cleanupHeadline = !result
+  const cleanupHeadline = !scenariosCompleted
     ? "QA suite cleanup failed before scenarios completed"
     : failed === 0 && skipped === 0
       ? "QA scenarios passed, but cleanup failed"
       : "QA scenarios completed, but cleanup failed";
   const message = [
     params.runFailed ? "QA suite and cleanup failed" : cleanupHeadline,
-    ...(result
+    ...(scenariosCompleted
       ? [
           `scenario counts: passed=${passed} failed=${failed} skipped=${skipped} total=${scenarios.length}`,
         ]

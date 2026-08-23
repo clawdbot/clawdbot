@@ -44,6 +44,7 @@ import type {
 } from "./types.js";
 
 const DEFAULT_HEALTH_TIMEOUT_MS = 10_000;
+const HEALTH_RECENT_SESSION_LIMIT = 5;
 const healthLog = createSubsystemLogger("health");
 
 type HealthSnapshotAudience = "public" | "admin";
@@ -113,6 +114,8 @@ export async function buildHealthSessionSummary(storePath: string, agentId?: str
   try {
     listed = listSessionEntriesReadOnly({
       ...(agentId ? { agentId } : {}),
+      clone: false,
+      projection: "list",
       storePath,
     });
   } catch (error) {
@@ -122,18 +125,36 @@ export async function buildHealthSessionSummary(storePath: string, agentId?: str
     // Health is best-effort: an empty snapshot beats failing on a transient lock.
     listed = [];
   }
-  const sessions = listed
-    .filter(({ sessionKey }) => sessionKey !== "global" && sessionKey !== "unknown")
-    .map(({ sessionKey, entry }) => ({ key: sessionKey, updatedAt: entry?.updatedAt ?? 0 }))
-    .toSorted((a, b) => b.updatedAt - a.updatedAt);
-  const recent = sessions.slice(0, 5).map((session) => ({
+  const recentSessions: Array<{ key: string; updatedAt: number }> = [];
+  let sessionCount = 0;
+  for (const { sessionKey, entry } of listed) {
+    if (sessionKey === "global" || sessionKey === "unknown") {
+      continue;
+    }
+    sessionCount += 1;
+    const session = { key: sessionKey, updatedAt: entry?.updatedAt ?? 0 };
+    const insertAt = recentSessions.findIndex(
+      (recentSession) => session.updatedAt > recentSession.updatedAt,
+    );
+    // Health returns only five rows. Keep the projection bounded while scanning
+    // so refreshes never sort the complete session snapshot.
+    if (insertAt >= 0) {
+      recentSessions.splice(insertAt, 0, session);
+      if (recentSessions.length > HEALTH_RECENT_SESSION_LIMIT) {
+        recentSessions.pop();
+      }
+    } else if (recentSessions.length < HEALTH_RECENT_SESSION_LIMIT) {
+      recentSessions.push(session);
+    }
+  }
+  const recent = recentSessions.map((session) => ({
     key: session.key,
     updatedAt: session.updatedAt || null,
     age: session.updatedAt ? Date.now() - session.updatedAt : null,
   }));
   return {
     path: databasePath,
-    count: sessions.length,
+    count: sessionCount,
     recent,
   } satisfies HealthSummary["sessions"];
 }
@@ -232,7 +253,11 @@ export async function collectGatewayHealthSnapshot(params: {
   );
   const heartbeatSummaryAgent =
     (configuredHeartbeatAgentId
-      ? agents.find((agent) => agent.agentId === normalizeAgentId(configuredHeartbeatAgentId))
+      ? agents.find(
+          (agent) =>
+            agent.heartbeat.enabled &&
+            agent.agentId === normalizeAgentId(configuredHeartbeatAgentId),
+        )
       : undefined) ??
     agents.find((agent) => agent.heartbeat.enabled) ??
     summaryAgent;

@@ -457,6 +457,151 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
     }
   });
 
+  it("derives an extension from MIME type when component media has no filename", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.GuildText,
+      id: "chan-1",
+    });
+    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+    loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
+      buffer: Buffer.from("png"),
+      contentType: "image/png",
+    });
+
+    await sendDiscordComponentMessage(
+      "channel:chan-1",
+      {
+        text: "image",
+        modal: {
+          title: "Feedback",
+          fields: [{ type: "text", label: "Notes" }],
+        },
+      },
+      {
+        cfg: DISCORD_TEST_CFG,
+        rest,
+        token: "t",
+        mediaUrl: "https://example.com/unnamed",
+      },
+    );
+
+    expect(sendMessageDiscordMock).not.toHaveBeenCalled();
+    expect(postMock).toHaveBeenCalledTimes(1);
+    const body = readRecordArg(postMock, 0, 1).body as Record<string, unknown>;
+    const files = body.files as Array<{ name?: string }>;
+    expect(files[0]?.name).toBe("upload.png");
+    expect((body.components as Array<{ type?: number }>).length).toBeGreaterThan(0);
+  });
+
+  it("preserves an explicit component attachment name before MIME fallback", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.GuildText,
+      id: "chan-1",
+    });
+    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+    loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
+      buffer: Buffer.from("png"),
+      contentType: "image/png",
+    });
+
+    await sendDiscordComponentMessage(
+      "channel:chan-1",
+      {
+        text: "image",
+        modal: {
+          title: "Feedback",
+          fields: [{ type: "text", label: "Notes" }],
+        },
+        blocks: [{ type: "file", file: "attachment://upload" }],
+      },
+      {
+        cfg: DISCORD_TEST_CFG,
+        rest,
+        token: "t",
+        mediaUrl: "https://example.com/unnamed",
+      },
+    );
+
+    const body = readRecordArg(postMock, 0, 1).body as Record<string, unknown>;
+    const files = body.files as Array<{ name?: string }>;
+    expect(files[0]?.name).toBe("upload");
+  });
+
+  it("keeps explicit filename ahead of loader filename and MIME fallback", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.GuildText,
+      id: "chan-1",
+    });
+    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+    loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
+      buffer: Buffer.from("png"),
+      contentType: "image/png",
+      fileName: "report.pdf",
+    });
+
+    await sendDiscordComponentMessage(
+      "channel:chan-1",
+      {
+        text: "image",
+        modal: {
+          title: "Feedback",
+          fields: [{ type: "text", label: "Notes" }],
+        },
+      },
+      {
+        cfg: DISCORD_TEST_CFG,
+        rest,
+        token: "t",
+        mediaUrl: "https://example.com/unnamed",
+        filename: "operator.bin",
+      },
+    );
+
+    const body = readRecordArg(postMock, 0, 1).body as Record<string, unknown>;
+    const files = body.files as Array<{ name?: string }>;
+    expect(files[0]?.name).toBe("operator.bin");
+  });
+
+  it.each([
+    { label: "unknown MIME", contentType: "application/x-unknown" },
+    { label: "missing MIME", contentType: undefined },
+  ])("keeps generic upload fallback for $label", async ({ contentType }) => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.GuildText,
+      id: "chan-1",
+    });
+    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "chan-1" });
+    loadOutboundMediaFromUrlMock.mockResolvedValueOnce({
+      buffer: Buffer.from("opaque"),
+      ...(contentType ? { contentType } : {}),
+    });
+
+    await sendDiscordComponentMessage(
+      "channel:chan-1",
+      {
+        text: "file",
+        modal: {
+          title: "Feedback",
+          fields: [{ type: "text", label: "Notes" }],
+        },
+      },
+      {
+        cfg: DISCORD_TEST_CFG,
+        rest,
+        token: "t",
+        mediaUrl: "https://example.com/unnamed",
+      },
+    );
+
+    const body = readRecordArg(postMock, 0, 1).body as Record<string, unknown>;
+    const files = body.files as Array<{ name?: string }>;
+    expect(files[0]?.name).toBe("upload");
+  });
+
   it("treats bare numeric component send targets as channels", async () => {
     const { rest, postMock, getMock } = makeDiscordRest();
     getMock.mockResolvedValueOnce({

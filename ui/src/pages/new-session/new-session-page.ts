@@ -375,6 +375,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       cloudProfileId: this.place.cloudProfileId,
       machineClass: this.place.machineClass,
       deviceId: this.place.deviceId,
+      devicePlacement: this.place.devicePlacementRequirement(),
       deviceDisabledReason: this.place.modelControl.devicePlacementUnsupportedReason(),
     });
     const projectState = resolveProjectChip({
@@ -404,6 +405,8 @@ export class NewSessionPage extends OpenClawLightDomElement {
       deviceId: this.place.deviceId,
       worktreeAvailable: this.place.worktreeAvailable(),
       cloudDisabledReason: this.submission.cloudDisabledReason(),
+      cloudProfileDisabledReason: (profile) =>
+        this.place.modelControl.cloudRuntimeUnsupportedReason(profile),
       submitting,
       pendingPlacement,
       isAdmin: this.place.isAdmin(),

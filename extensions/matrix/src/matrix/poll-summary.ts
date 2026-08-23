@@ -35,6 +35,7 @@ async function readAllPollRelations(
   pollEventId: string,
 ): Promise<MatrixRawEvent[]> {
   const relationEvents: MatrixRawEvent[] = [];
+  const seenCursors = new Set<string>();
   let nextBatch: string | undefined;
   do {
     const page = await client.getRelations(roomId, pollEventId, "m.reference", undefined, {
@@ -42,6 +43,13 @@ async function readAllPollRelations(
     });
     relationEvents.push(...page.events);
     nextBatch = page.nextBatch ?? undefined;
+    // Encrypted pages may be empty; only a repeated cursor proves pagination cannot progress.
+    if (nextBatch && seenCursors.has(nextBatch)) {
+      throw new Error("Matrix poll pagination returned a repeated cursor");
+    }
+    if (nextBatch) {
+      seenCursors.add(nextBatch);
+    }
   } while (nextBatch);
   return relationEvents;
 }

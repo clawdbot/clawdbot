@@ -117,14 +117,12 @@ export async function promoteCollectionCreateProposal(params: {
   if (commit.state !== "committed") {
     throw new Error(`Collection create proposal changed before apply: ${record.id}`);
   }
-  if (commit.event) {
-    await dispatchSkillProposalChanged({
-      event: commit.event,
-      record: applied,
-      workspaceDir: params.workspaceDir,
-      ...(record.origin?.agentId ? { agentId: record.origin.agentId } : {}),
-    });
-  }
+  await dispatchSkillProposalChanged({
+    event: commit.event,
+    record: applied,
+    workspaceDir: params.workspaceDir,
+    ...(record.origin?.agentId ? { agentId: record.origin.agentId } : {}),
+  });
   return applied;
 }
 
@@ -163,7 +161,7 @@ export async function retireCollectionCreateProposals(params: {
         operationLabel: "skill-collection.proposal.retire",
       });
       // Already-promoted proposals fail the expected-record guard and stay applied.
-      if (commit.state === "committed" && commit.event) {
+      if (commit.state === "committed") {
         await dispatchSkillProposalChanged({
           event: commit.event,
           record: rejected,

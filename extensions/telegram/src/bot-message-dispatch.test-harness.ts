@@ -45,6 +45,7 @@ const createForumTopicTelegramHoisted = vi.hoisted(() => vi.fn());
 const deleteMessageTelegramHoisted = vi.hoisted(() => vi.fn());
 const editForumTopicTelegramHoisted = vi.hoisted(() => vi.fn());
 const editMessageTelegramHoisted = vi.hoisted(() => vi.fn());
+const editMessageReplyMarkupTelegramHoisted = vi.hoisted(() => vi.fn());
 const reactMessageTelegramHoisted = vi.hoisted(() => vi.fn());
 const sendMessageTelegramHoisted = vi.hoisted(() => vi.fn());
 const sendPollTelegramHoisted = vi.hoisted(() => vi.fn());
@@ -128,6 +129,7 @@ const createForumTopicTelegram = createForumTopicTelegramHoisted;
 const deleteMessageTelegram = deleteMessageTelegramHoisted;
 const editForumTopicTelegram = editForumTopicTelegramHoisted;
 export const editMessageTelegram = editMessageTelegramHoisted;
+export const editMessageReplyMarkupTelegram = editMessageReplyMarkupTelegramHoisted;
 const reactMessageTelegram = reactMessageTelegramHoisted;
 export const sendMessageTelegram = sendMessageTelegramHoisted;
 const sendPollTelegram = sendPollTelegramHoisted;
@@ -239,6 +241,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
             toolsAllow: resolved.toolsAllow,
             replyOptions: resolved.replyOptions,
             replyResolver: resolved.replyResolver,
+            dispatchReplyFromConfig: resolved.dispatchReplyFromConfig,
           });
           return withTelegramTestSettledReceipt(dispatchResult);
         },
@@ -273,6 +276,7 @@ vi.mock("./send.js", () => ({
   createForumTopicTelegram: createForumTopicTelegramHoisted,
   deleteMessageTelegram: deleteMessageTelegramHoisted,
   editForumTopicTelegram: editForumTopicTelegramHoisted,
+  editMessageReplyMarkupTelegram: editMessageReplyMarkupTelegramHoisted,
   editMessageTelegram: editMessageTelegramHoisted,
   reactMessageTelegram: reactMessageTelegramHoisted,
   sendMessageTelegram: sendMessageTelegramHoisted,
@@ -378,6 +382,7 @@ function resetTelegramDispatchTestState() {
   deleteMessageTelegram.mockReset();
   editForumTopicTelegram.mockReset();
   editMessageTelegram.mockReset();
+  editMessageReplyMarkupTelegram.mockReset();
   reactMessageTelegram.mockReset();
   sendMessageTelegram.mockReset();
   sendPollTelegram.mockReset();
@@ -422,6 +427,7 @@ function resetTelegramDispatchTestState() {
   deleteMessageTelegram.mockResolvedValue(true);
   editForumTopicTelegram.mockResolvedValue(true);
   editMessageTelegram.mockResolvedValue({ ok: true });
+  editMessageReplyMarkupTelegram.mockResolvedValue({ ok: true });
   reactMessageTelegram.mockResolvedValue(true);
   sendMessageTelegram.mockResolvedValue({ message_id: 1001 });
   sendPollTelegram.mockResolvedValue({ message_id: 1001 });
@@ -668,6 +674,7 @@ export async function dispatchWithContext(params: {
   textLimit?: number;
   turnAdoptionLifecycle?: Parameters<typeof dispatchTelegramMessage>[0]["turnAdoptionLifecycle"];
   runtime?: Parameters<typeof dispatchTelegramMessage>[0]["runtime"];
+  opts?: Parameters<typeof dispatchTelegramMessage>[0]["opts"];
 }) {
   const bot = params.bot ?? createBot();
   return await dispatchTelegramMessage({
@@ -680,7 +687,7 @@ export async function dispatchWithContext(params: {
     textLimit: params.textLimit ?? 4096,
     telegramCfg: params.telegramCfg ?? {},
     telegramDeps: params.telegramDeps ?? telegramDepsForTest,
-    opts: { token: "token" },
+    opts: params.opts ?? { token: "token" },
     retryDispatchErrors: params.retryDispatchErrors,
     suppressFailureFallback: params.suppressFailureFallback,
     turnAdoptionLifecycle: params.turnAdoptionLifecycle,

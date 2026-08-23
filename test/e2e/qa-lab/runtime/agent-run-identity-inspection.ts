@@ -362,8 +362,9 @@ function assertJsonProjection(result: AuditRunInspectResult, runId: string) {
   ) {
     throw new Error("local agent run did not retain authoritative local-CLI ingress");
   }
-  const admission = result.decisions.find(
-    (receipt) => receipt.action.family === "run" && receipt.action.operation === "admission",
+  const admission = result.decisionDisplays.find(
+    (receipt) =>
+      receipt.provenance.state === "verified" && receipt.provenance.producer === "run-admission",
   );
   if (
     !admission ||
@@ -917,7 +918,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
             contextId: row.context_id,
           })),
           coverage: before.coverage,
-          decision: before.decisions[0]?.decision,
+          decision: before.decisionDisplays[0]?.decision,
           contextSha256: sha256(beforeContext),
           byteEquivalentAfterRestart: true,
           byteEquivalentPersistedReadback: true,

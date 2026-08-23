@@ -120,6 +120,42 @@ describe("OpenClawChannelBridge — Claude permission authorization", () => {
       await bridge.close();
     }
   });
+
+  test("keeps a permission retryable until its notification is delivered", async () => {
+    const bridge = makeBridge();
+    const notification = vi
+      .fn<(notification: unknown) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("transport closed"))
+      .mockResolvedValueOnce(undefined);
+    const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    bridge.server = { server: { notification } };
+    const reply = {
+      sessionKey: "agent:main:telegram:group:-100123",
+      senderIsOwner: true,
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "yes abcde" }],
+      },
+    };
+    try {
+      await bridge.handleClaudePermissionRequest({
+        requestId: "abcde",
+        toolName: "Bash",
+        description: "run npm test",
+        inputPreview: "{}",
+      });
+
+      await bridge.handleSessionMessageEvent(reply);
+      await bridge.handleSessionMessageEvent(reply);
+      expect(notification).toHaveBeenCalledTimes(2);
+
+      await bridge.handleSessionMessageEvent(reply);
+      expect(notification).toHaveBeenCalledTimes(2);
+    } finally {
+      writeSpy.mockRestore();
+      await bridge.close();
+    }
+  });
 });
 
 describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals memory bounds", () => {
@@ -430,7 +466,7 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
       expect(resolved).toBe(false);
 
       vi.advanceTimersByTime(1);
-      await expect(waited).resolves.toBeNull();
+      await expect(waited).resolves.toEqual({ event: null });
       expect(resolved).toBe(true);
     } finally {
       await bridge.close();
