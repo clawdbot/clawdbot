@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -134,29 +135,32 @@ describe("ACP background task execution binding", () => {
           throw new Error("expected ACP task and owner flow");
         }
         const db = openOpenClawStateDatabase().db;
-        expect(
-          db
-            .prepare("SELECT context_id, execution_id FROM task_runs WHERE task_id = ?")
-            .get(task.taskId),
-        ).toEqual({ context_id: null, execution_id: null });
-        expect(
-          db
-            .prepare("SELECT context_id, execution_id FROM flow_runs WHERE flow_id = ?")
-            .get(task.parentFlowId),
-        ).toEqual({ context_id: null, execution_id: null });
+        expect(tableExists(db, "execution_owner_lifecycle_bindings")).toBe(false);
 
         bindBackgroundTaskExecution(record, admitted);
 
         expect(
           db
-            .prepare("SELECT context_id, execution_id FROM task_runs WHERE task_id = ?")
-            .get(task.taskId),
-        ).toEqual({ context_id: "context-acp", execution_id: "execution-acp" });
-        expect(
-          db
-            .prepare("SELECT context_id, execution_id FROM flow_runs WHERE flow_id = ?")
-            .get(task.parentFlowId),
-        ).toEqual({ context_id: "context-acp", execution_id: "execution-acp" });
+            .prepare(
+              `SELECT owner_kind, owner_id, context_id, execution_id
+               FROM execution_owner_lifecycle_bindings
+               ORDER BY owner_kind`,
+            )
+            .all(),
+        ).toEqual([
+          {
+            owner_kind: "flow",
+            owner_id: task.parentFlowId,
+            context_id: "context-acp",
+            execution_id: "execution-acp",
+          },
+          {
+            owner_kind: "task",
+            owner_id: task.taskId,
+            context_id: "context-acp",
+            execution_id: "execution-acp",
+          },
+        ]);
       },
     );
   });

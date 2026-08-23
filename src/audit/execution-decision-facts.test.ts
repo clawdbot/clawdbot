@@ -27,6 +27,7 @@ import {
   type ExecutionIdentityAdmissionEnvelope,
 } from "./execution-identity-admission.js";
 import { processExecutionIdentityAdmissionWork } from "./execution-identity-context.js";
+import { bindExecutionOwnerLifecycleMetadata } from "./execution-owner-lifecycle-binding-store.js";
 import {
   configureMessageActionDecisionSink,
   recordMessageActionDecision,
@@ -263,8 +264,8 @@ describe("execution decision facts", () => {
     db.prepare(
       `INSERT INTO cron_run_receipts (
          receipt_id, store_key, job_id, config_revision, agent_id, request_run_id,
-         status, owner_pid, started_at_ms, finished_at_ms, context_id, execution_id
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         status, owner_pid, started_at_ms, finished_at_ms
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       "cron-receipt-1",
       "default",
@@ -276,14 +277,12 @@ describe("execution decision facts", () => {
       1,
       60,
       70,
-      context.contextId,
-      context.executionId,
     );
     db.prepare(
       `INSERT INTO task_runs (
          task_id, runtime, owner_key, scope_kind, task, status, delivery_status,
-         notify_policy, created_at, context_id, execution_id
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         notify_policy, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       "task-1",
       "cron",
@@ -294,25 +293,26 @@ describe("execution decision facts", () => {
       "not-requested",
       "never",
       61,
-      context.contextId,
-      context.executionId,
     );
     db.prepare(
       `INSERT INTO flow_runs (
-         flow_id, owner_key, status, notify_policy, goal, created_at, updated_at,
-         context_id, execution_id
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      "flow-1",
-      "owner-1",
-      "succeeded",
-      "never",
-      "private flow goal",
-      62,
-      70,
-      context.contextId,
-      context.executionId,
-    );
+         flow_id, owner_key, status, notify_policy, goal, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run("flow-1", "owner-1", "succeeded", "never", "private flow goal", 62, 70);
+    for (const [ownerKind, ownerId] of [
+      ["cron", "cron-receipt-1"],
+      ["task", "task-1"],
+      ["flow", "flow-1"],
+    ] as const) {
+      expect(
+        bindExecutionOwnerLifecycleMetadata({
+          db,
+          ownerKind,
+          ownerId,
+          binding: { contextId: context.contextId, executionId: context.executionId },
+        }),
+      ).toBe("bound");
+    }
 
     const result = presentExecutionDecisionReceipts({
       context,
