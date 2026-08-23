@@ -4255,14 +4255,19 @@ openclaw-sidebar-attention {
   min-height: 28px;
 }
 
-.sidebar-approval-row__action--allow-once {
-  border-color: color-mix(in srgb, var(--ok) 48%, var(--border));
-  background: color-mix(in srgb, var(--ok) 34%, var(--bg-elevated));
+.sidebar-approval-row__action.sidebar-approval-row__action--allow-once {
+  border-color: color-mix(in srgb, var(--ok) 36%, var(--border));
+  background: color-mix(in srgb, var(--ok) 18%, var(--bg-elevated));
   color: var(--ok);
 }
 
-.sidebar-approval-row__action--allow-once:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--ok) 44%, var(--bg-elevated));
+.sidebar-approval-row__action.sidebar-approval-row__action--allow-once:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ok) 25%, var(--bg-elevated));
+  color: var(--ok);
+}
+
+.sidebar-approval-row__action.sidebar-approval-row__action--allow-once:active:not(:disabled) {
+  background: color-mix(in srgb, var(--ok) 29%, var(--bg-elevated));
   color: var(--ok);
 }
 
