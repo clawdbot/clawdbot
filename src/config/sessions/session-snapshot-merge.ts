@@ -251,7 +251,15 @@ export function projectSessionSnapshotChanges(params: {
       continue;
     }
     if (field === "updatedAt") {
-      patch.updatedAt = Math.max(params.current.updatedAt, params.next.updatedAt);
+      // The legacy updatedAt=0 pending-reset marker (see evaluateSessionFreshness)
+      // is a one-time reset contract: a same-identity snapshot merge must not
+      // lift it, or the required reset is silently skipped once the active run
+      // completes. Only the rollover that performs the reset mints a fresh
+      // updatedAt (see resolveBookkeepingUpdatedAt).
+      patch.updatedAt =
+        params.current.updatedAt === 0 && params.current.sessionId === params.next.sessionId
+          ? 0
+          : Math.max(params.current.updatedAt, params.next.updatedAt);
       continue;
     }
     if (

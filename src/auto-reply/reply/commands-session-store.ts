@@ -1,5 +1,6 @@
 // Shared session-store helpers for command handlers that mutate sessions.
 import { resolveSessionStoreEntryCore, type SessionEntry } from "../../config/sessions.js";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { sessionSnapshotChangesApplied } from "../../config/sessions/session-snapshot-merge.js";
 import { applyAbortCutoffToSessionEntry, type AbortCutoff } from "./abort-cutoff.js";
@@ -42,7 +43,9 @@ export async function persistCommandSession(params: PersistSessionEntryParams): 
   const sessionEntry = params.sessionEntry;
   const creatingSession = params.allowCreateSessionEntry === true;
   const initialEntry = params.initialSessionEntry ?? { ...sessionEntry };
-  sessionEntry.updatedAt = Date.now();
+  // Command persistence is bookkeeping: it must not consume the legacy
+  // updatedAt=0 pending-reset marker, or the deferred rollover never runs.
+  sessionEntry.updatedAt = resolveBookkeepingUpdatedAt(sessionEntry.updatedAt);
   params.sessionStore[params.sessionKey] = sessionEntry;
   if (params.storePath) {
     // Slash commands mutate one known session entry; skipping global session
@@ -95,7 +98,9 @@ export async function persistAbortTargetEntry(params: {
 
   entry.abortedLastRun = true;
   applyAbortCutoffToSessionEntry(entry, abortCutoff);
-  entry.updatedAt = Date.now();
+  // Abort persistence is bookkeeping: it must not consume the legacy
+  // updatedAt=0 pending-reset marker, in memory or in the replacement write.
+  entry.updatedAt = resolveBookkeepingUpdatedAt(entry.updatedAt);
   sessionStore[key] = entry;
 
   if (storePath) {
@@ -104,7 +109,7 @@ export async function persistAbortTargetEntry(params: {
       (nextEntry) => {
         nextEntry.abortedLastRun = true;
         applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
-        nextEntry.updatedAt = Date.now();
+        nextEntry.updatedAt = resolveBookkeepingUpdatedAt(nextEntry.updatedAt);
         return nextEntry;
       },
       {

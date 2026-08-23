@@ -668,4 +668,27 @@ describe("pending-reset marker retention", () => {
     });
     expect(next.updatedAt).toBeGreaterThan(0);
   });
+
+  it("keeps the legacy updatedAt=0 marker through same-identity snapshot merges", () => {
+    const tombstoned: SessionEntry = { sessionId: "session-1", updatedAt: 0 };
+    const next: SessionEntry = { sessionId: "session-1", updatedAt: Date.now(), label: "touched" };
+    const merged = mergeSessionSnapshotChanges({
+      initial: tombstoned,
+      next,
+      current: { ...tombstoned },
+    });
+    expect(merged.updatedAt).toBe(0);
+    expect(merged.label).toBe("touched");
+  });
+
+  it("mints a fresh updatedAt when a snapshot merge rotates the session identity", () => {
+    const tombstoned: SessionEntry = { sessionId: "session-1", updatedAt: 0 };
+    const next: SessionEntry = { sessionId: "session-2", updatedAt: Date.now() };
+    const merged = mergeSessionSnapshotChanges({
+      initial: tombstoned,
+      next,
+      current: { ...tombstoned },
+    });
+    expect(merged.updatedAt).toBeGreaterThan(0);
+  });
 });

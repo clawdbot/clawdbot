@@ -11,6 +11,7 @@ import {
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveBookkeepingUpdatedAt } from "../../config/sessions/reset.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/auth-profile-preservation.js";
@@ -489,7 +490,9 @@ export async function handleDirectiveOnly(
       const appliedRuntime = applyModelRuntimeDirective(sessionEntry, modelRuntimeResolution);
       modelSelectionUpdated = applied.updated || appliedRuntime.updated;
     }
-    sessionEntry.updatedAt = Date.now();
+    // Directive persistence is bookkeeping: it must not consume the legacy
+    // updatedAt=0 pending-reset marker while a rollover is deferred.
+    sessionEntry.updatedAt = resolveBookkeepingUpdatedAt(sessionEntry.updatedAt);
     sessionStore[sessionKey] = sessionEntry;
     if (storePath) {
       const persistence = await persistSessionDirectiveSnapshot({

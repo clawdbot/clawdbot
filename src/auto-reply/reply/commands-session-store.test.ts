@@ -301,6 +301,70 @@ describe("commands session store persistence", () => {
     });
   });
 
+  it("preserves the legacy pending-reset marker through command persistence", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "agent:main:command";
+      const tombstoned: SessionEntry = {
+        sessionId: "command-session",
+        updatedAt: 0,
+        responseUsage: "tokens",
+      };
+      await replaceSessionEntry({ storePath, sessionKey }, { ...tombstoned });
+      const entry: SessionEntry = { ...tombstoned, responseUsage: "off" };
+      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
+
+      await expect(
+        persistCommandSession({
+          initialSessionEntry: { ...tombstoned },
+          sessionEntry: entry,
+          sessionStore,
+          sessionKey,
+          storePath,
+          touchedFields: ["responseUsage"],
+        }),
+      ).resolves.toBe(true);
+
+      expect(entry.updatedAt).toBe(0);
+      expect(sessionStore[sessionKey]?.updatedAt).toBe(0);
+      expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+        sessionId: "command-session",
+        responseUsage: "off",
+        updatedAt: 0,
+      });
+    });
+  });
+
+  it("preserves the legacy pending-reset marker through abort target persistence", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "agent:main:abort-target";
+      const tombstoned: SessionEntry = {
+        sessionId: "abort-session",
+        updatedAt: 0,
+      };
+      await replaceSessionEntry({ storePath, sessionKey }, { ...tombstoned });
+      const entry: SessionEntry = { ...tombstoned };
+      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
+
+      await expect(
+        persistAbortTargetEntry({
+          entry,
+          key: sessionKey,
+          sessionStore,
+          storePath,
+        }),
+      ).resolves.toBe(true);
+
+      expect(entry.abortedLastRun).toBe(true);
+      expect(entry.updatedAt).toBe(0);
+      expect(sessionStore[sessionKey]?.updatedAt).toBe(0);
+      expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+        sessionId: "abort-session",
+        abortedLastRun: true,
+        updatedAt: 0,
+      });
+    });
+  });
+
   it("falls back to the supplied abort target when the persisted row is missing", async () => {
     await withTempStore(async (storePath) => {
       const sessionKey = "agent:main:abort-target";
