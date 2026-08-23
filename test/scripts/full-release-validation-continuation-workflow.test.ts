@@ -65,4 +65,28 @@ describe("full release continuation workflow", () => {
     expect(validate).toContain("(.publicationEnabled == false)");
     expect(validate).toContain('(.sourceEvent == "workflow_dispatch")');
   });
+
+  it("keeps every historical continuation input visible in one source job log", () => {
+    expect(step("evidence_reuse", "Find reusable validation evidence").env).toMatchObject({
+      ALLOW_UNRELEASED_CHANGELOG:
+        "${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}",
+      CODEX_PLUGIN_SPEC: "${{ inputs.codex_plugin_spec }}",
+      CROSS_OS_SUITE_FILTER: "${{ needs.resolve_target.outputs.cross_os_suite_filter }}",
+      LIVE_SUITE_FILTER: "${{ needs.resolve_target.outputs.live_suite_filter }}",
+      MODE: "${{ inputs.mode }}",
+      NPM_TELEGRAM_PACKAGE_SPEC: "${{ inputs.npm_telegram_package_spec }}",
+      NPM_TELEGRAM_PROVIDER_MODE: "${{ inputs.npm_telegram_provider_mode }}",
+      NPM_TELEGRAM_SCENARIO: "${{ inputs.npm_telegram_scenario }}",
+      PACKAGE_ACCEPTANCE_PACKAGE_SPEC: "${{ inputs.package_acceptance_package_spec }}",
+      PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON:
+        "${{ inputs.plugin_prerelease_node_exclude_patterns_json }}",
+      PROVIDER: "${{ inputs.provider }}",
+      RELEASE_PACKAGE_SPEC: "${{ inputs.release_package_spec }}",
+      RELEASE_PROFILE: "${{ inputs.release_profile }}",
+      RUN_RELEASE_SOAK:
+        "${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}",
+      SKIP_PACKAGE_TELEGRAM_E2E: "${{ inputs.skip_package_telegram_e2e }}",
+      TARGET_CONTEXT_REF: "${{ inputs.target_context_ref }}",
+    });
+  });
 });

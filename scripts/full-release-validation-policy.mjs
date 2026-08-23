@@ -10,6 +10,8 @@ const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
 const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
 export const HISTORICAL_CONTINUATION_SOURCE_MODE = "historical-exact-tuple";
+const RELEASE_CI_SHA_PINNED_BRANCH_PATTERN = /^release-ci\/[a-f0-9]{12}-[1-9][0-9]*$/u;
+const HISTORICAL_SOURCE_INPUT_JOB_NAME = "Check for reusable validation evidence";
 const HARD_GH_TRANSPORT_PATTERN =
   /HTTP (?:400|401|403|404|422)\b|Bad credentials|authentication required|not authenticated|gh auth login|unknown (?:command|flag)|Usage: gh\b|ENOENT|EACCES/iu;
 const TRANSIENT_GH_TRANSPORT_PATTERN =
@@ -123,6 +125,10 @@ export const RELEASE_VALIDATION_INPUT_KEYS = Object.freeze(
     "targetContextRef",
   ].toSorted(),
 );
+
+function releaseValidationInputEnvironmentKey(key) {
+  return key.replaceAll(/([a-z0-9])([A-Z])/gu, "$1_$2").toUpperCase();
+}
 
 function releaseGhTransportErrorText(error) {
   const values = [error];
@@ -265,6 +271,80 @@ export function normalizeReleaseValidationInputs(value) {
   return inputs;
 }
 
+export function isCanonicalReleaseContinuationWorkflowRef(workflowRef, workflowSha) {
+  const ref = boundedString(workflowRef, MAX_LABEL_LENGTH);
+  const sha = boundedString(workflowSha, MAX_LABEL_LENGTH);
+  return (
+    ref === "main" ||
+    (SHA_PATTERN.test(sha) &&
+      RELEASE_CI_SHA_PINNED_BRANCH_PATTERN.test(ref) &&
+      ref.startsWith(`release-ci/${sha.slice(0, 12)}-`))
+  );
+}
+
+export function requireCanonicalReleaseContinuationWorkflowRef(workflowRef, workflowSha) {
+  if (!isCanonicalReleaseContinuationWorkflowRef(workflowRef, workflowSha)) {
+    throw new Error(
+      "legacy continuation source workflow ref is not a canonical trusted main or release-ci/<sha12>-<digits> route; run a new all-group FRV before continuing",
+    );
+  }
+  return boundedString(workflowRef, MAX_LABEL_LENGTH);
+}
+
+export function selectHistoricalReleaseSourceInputJob(parentJobs, sourceRunAttempt) {
+  const attempt = positiveInteger(sourceRunAttempt);
+  const matches = Array.isArray(parentJobs)
+    ? parentJobs.filter(
+        (job) =>
+          job?.name === HISTORICAL_SOURCE_INPUT_JOB_NAME &&
+          positiveInteger(job?.run_attempt) === attempt,
+      )
+    : [];
+  if (
+    matches.length !== 1 ||
+    matches[0].status !== "completed" ||
+    matches[0].conclusion !== "success"
+  ) {
+    throw new Error("historical continuation source input job is missing or ambiguous");
+  }
+  return matches[0];
+}
+
+function verifyHistoricalReleaseSourceInputLog(log, continuation) {
+  const source = normalizedContinuation(continuation);
+  const expected = {
+    RELEASE_PROFILE: source.releaseProfile,
+    RUN_RELEASE_SOAK: source.runReleaseSoak,
+    ...Object.fromEntries(
+      RELEASE_VALIDATION_INPUT_KEYS.map((key) => [
+        releaseValidationInputEnvironmentKey(key),
+        source.validationInputs[key],
+      ]),
+    ),
+  };
+  const observed = new Map();
+  for (const rawLine of String(log ?? "").split(/\r?\n/gu)) {
+    const line = rawLine.replace(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+/u, "");
+    const match = line.match(/^\s*([A-Z][A-Z0-9_]+):(?: (.*))?$/u);
+    if (!match || !(match[1] in expected)) {
+      continue;
+    }
+    if (observed.has(match[1])) {
+      throw new Error(`historical continuation source input is duplicated: ${match[1]}`);
+    }
+    observed.set(match[1], match[2] ?? "");
+  }
+  for (const [key, value] of Object.entries(expected)) {
+    if (!observed.has(key)) {
+      throw new Error(`historical continuation source input is missing: ${key}`);
+    }
+    if (observed.get(key) !== value) {
+      throw new Error(`historical continuation source input changed: ${key}`);
+    }
+  }
+  return canonicalValue(Object.fromEntries(observed));
+}
+
 function normalizedContinuation(value) {
   if (value === undefined || value === null) {
     return undefined;
@@ -299,6 +379,12 @@ function normalizedContinuation(value) {
     toolingSha: boundedString(value.toolingSha, MAX_LABEL_LENGTH),
     validationInputs,
   };
+  if (sourceEvidenceMode === HISTORICAL_CONTINUATION_SOURCE_MODE) {
+    requireCanonicalReleaseContinuationWorkflowRef(
+      continuation.sourceWorkflowRef,
+      continuation.sourceWorkflowSha,
+    );
+  }
   if (
     continuation.publicationEnabled ||
     candidate.packageSourceSha === "" ||
@@ -407,6 +493,7 @@ export function verifyReleaseContinuationSource({
   recordedContinuation,
   repository,
   sourceChildLogs,
+  sourceInputLog,
   sourceManifest,
   sourceRun,
   targetSha,
@@ -455,6 +542,7 @@ export function verifyReleaseContinuationSource({
     if (source.sourceEvidenceMode !== HISTORICAL_CONTINUATION_SOURCE_MODE) {
       throw new Error("continuation source manifest is missing");
     }
+    verifyHistoricalReleaseSourceInputLog(sourceInputLog, source);
     return {
       children: normalizedChildren,
       continuation: source,

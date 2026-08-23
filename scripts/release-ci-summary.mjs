@@ -15,7 +15,9 @@ import {
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
   HISTORICAL_CONTINUATION_SOURCE_MODE,
+  isCanonicalReleaseContinuationWorkflowRef,
   releaseCompositeJobsSha256,
+  selectHistoricalReleaseSourceInputJob,
   terminalPolicyPass,
   validateReleaseChildDispatchBinding,
   validateReleaseExecutionPlanArtifact,
@@ -27,7 +29,6 @@ import { execGhRead, plainGhEnv, resolvePlainGhBin } from "./lib/plain-gh.mjs";
 
 const DEFAULT_REPO = process.env.OPENCLAW_RELEASE_REPO || "openclaw/openclaw";
 const RELEASE_EVIDENCE_SCHEMA = "openclaw.release-validation-evidence/v3";
-const SHA_PINNED_BRANCH_PATTERN = /^release-ci\/[a-f0-9]{12}-[1-9][0-9]*$/u;
 const TRUSTED_RELEASE_PUBLISH_TAG_PATTERN =
   /^refs\/tags\/release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u;
 const RELEASE_EVIDENCE_SCRIPT = "scripts/release-ci-summary.mjs";
@@ -1501,8 +1502,10 @@ export function validateTrustedProducerIdentity(
     trustedWorkflowFullRef,
     trustedWorkflowSha,
   );
-  // Keep this predicate local: verifier source identity covers this file only.
-  const shaPinned = SHA_PINNED_BRANCH_PATTERN.test(manifest.workflowRef ?? "");
+  // Continuation and publication share the same immutable SHA-pinned branch contract.
+  const shaPinned =
+    manifest.workflowRef !== "main" &&
+    isCanonicalReleaseContinuationWorkflowRef(manifest.workflowRef, manifest.workflowSha);
   const protectedTagRoute = trustedIdentity.type === "tag";
   let protectedTagWorkflowRefProof = "manifest-v3-protected-tag-exact-sha";
   if (protectedTagRoute) {
@@ -2055,12 +2058,18 @@ export function validateReleaseRunEvidence(
         return [child.manifestKey, evidenceClient.getJobLog(parentJob.id)];
       }),
     );
+    const sourceInputLog = !sourceManifest
+      ? evidenceClient.getJobLog(
+          selectHistoricalReleaseSourceInputJob(parentJobs, source.sourceRunAttempt).id,
+        )
+      : undefined;
     verifyReleaseContinuationSource({
       children: executionPlan.children.filter((child) => child.selected),
       continuation: source,
       recordedContinuation: rootEvidence.manifest.continuationSource,
       repository: normalizedRepository,
       sourceChildLogs,
+      sourceInputLog,
       sourceManifest,
       sourceRun,
       targetSha: executionPlan.targetSha,

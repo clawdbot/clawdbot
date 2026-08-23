@@ -125,11 +125,21 @@ the newest similarly named run.
 Historical legacy plans use `sourceEvidenceMode: historical-exact-tuple`.
 Their failed source root may omit the validation manifest that newer roots
 always emit, but only when the source has no canonical execution-plan artifact.
-The exact reviewed source, candidate, inputs, children, attempts, and dispatch
-logs remain mandatory. A historical manifest that does exist is verified in
-full. Canonical continuation sources still require it. The source FRV SHA and
-the continuation Tooling SHA are each checked independently against protected
-`main`.
+Manifestless recovery also requires the exact successful
+`Check for reusable validation evidence` job log from the source attempt. That
+log must bind `releaseProfile`, `runReleaseSoak`, and every normalized validation
+input, including provider/mode, suite filters, package and plugin specs, plugin
+exclusions, Telegram package/provider/scenario inputs, and skip flags. Missing,
+duplicated, or changed values fail closed. The exact reviewed source, candidate,
+children, attempts, and child dispatch logs remain mandatory. A historical
+manifest that does exist is verified in full. Canonical continuation sources
+still require it.
+
+Historical source workflows must use protected `main` or the canonical
+`release-ci/<source-sha12>-<digits>` route. Older ad hoc branch names are rejected
+up front; run a new all-group FRV rather than granting a compatibility
+exception. The source FRV SHA and the continuation Tooling SHA are each checked
+independently against protected `main`.
 
 The helper creates a temporary `release-ci/*` ref pinned to the Tooling SHA,
 passes the Validation SHA as both the candidate ref and `expected_sha`, and

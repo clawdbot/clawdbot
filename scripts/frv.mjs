@@ -13,6 +13,8 @@ import {
   normalizeReleaseCandidate,
   normalizeReleaseValidationInputs,
   releaseChildSpec,
+  requireCanonicalReleaseContinuationWorkflowRef,
+  selectHistoricalReleaseSourceInputJob,
   terminalPolicyPass,
   validateReleaseChildDispatchBinding,
   validateReleaseChildRunProvenance,
@@ -312,6 +314,10 @@ export function validateLegacySource(
     toolingSha: requiredValue(value.toolingSha, "continuation tooling SHA"),
     validationInputs,
   };
+  requireCanonicalReleaseContinuationWorkflowRef(
+    continuation.sourceWorkflowRef,
+    continuation.sourceWorkflowSha,
+  );
   if (
     continuation.sourceRunId !== expectedRunId ||
     continuation.sourceRepository !== expectedRepository ||
@@ -489,11 +495,19 @@ export async function preflightContinuation(
       source.sourceRunId,
       source.sourceRunAttempt,
     );
+    const sourceInputLog =
+      !sourceManifest &&
+      plan.continuation.sourceEvidenceMode === HISTORICAL_CONTINUATION_SOURCE_MODE
+        ? await client.getJobLog(
+            selectHistoricalReleaseSourceInputJob(parentJobs, source.sourceRunAttempt).id,
+          )
+        : undefined;
     verifyReleaseContinuationSource({
       children: selectedChildren(plan),
       continuation: plan.continuation,
       repository,
       sourceChildLogs,
+      sourceInputLog,
       sourceManifest,
       sourceRun,
       targetSha: plan.targetSha,

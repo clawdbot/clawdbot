@@ -23,6 +23,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SHA = "a".repeat(40);
 const TARGET_SHA = "b".repeat(40);
+const SOURCE_REF = `release-ci/${SHA.slice(0, 12)}-77`;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const VALIDATION_INPUTS = {
   allowUnreleasedChangelog: "false",
@@ -80,7 +81,7 @@ function continuation() {
     sourceRunAttempt: 1,
     sourceRunId: "77",
     sourceWorkflowPath: ".github/workflows/full-release-validation.yml",
-    sourceWorkflowRef: "release-ci/tooling",
+    sourceWorkflowRef: SOURCE_REF,
     sourceWorkflowSha: SHA,
     sourceEvidenceMode: HISTORICAL_CONTINUATION_SOURCE_MODE,
     toolingSha: SHA,
@@ -140,7 +141,7 @@ function child(key: string, runId: string) {
     sourceParentAttempt: 1,
     url: `https://example.invalid/runs/${runId}`,
     workflow: spec.workflow,
-    workflowRef: "release-ci/tooling",
+    workflowRef: SOURCE_REF,
     workflowSha: SHA,
   };
 }
@@ -171,7 +172,7 @@ function plan(children: ReturnType<typeof child>[]) {
     releaseProfile: "beta",
     rerunGroup: "all",
     targetSha: TARGET_SHA,
-    workflowRef: "release-ci/tooling",
+    workflowRef: SOURCE_REF,
     workflowSha: SHA,
   };
 }
@@ -221,10 +222,36 @@ function sourceManifest(children: ReturnType<typeof child>[], source = continuat
   };
 }
 
+function historicalSourceInputLog(source = continuation()) {
+  const environment = {
+    ALLOW_UNRELEASED_CHANGELOG: source.validationInputs.allowUnreleasedChangelog,
+    CODEX_PLUGIN_SPEC: source.validationInputs.codexPluginSpec,
+    CROSS_OS_SUITE_FILTER: source.validationInputs.crossOsSuiteFilter,
+    LIVE_SUITE_FILTER: source.validationInputs.liveSuiteFilter,
+    MODE: source.validationInputs.mode,
+    NPM_TELEGRAM_PACKAGE_SPEC: source.validationInputs.npmTelegramPackageSpec,
+    NPM_TELEGRAM_PROVIDER_MODE: source.validationInputs.npmTelegramProviderMode,
+    NPM_TELEGRAM_SCENARIO: source.validationInputs.npmTelegramScenario,
+    PACKAGE_ACCEPTANCE_PACKAGE_SPEC: source.validationInputs.packageAcceptancePackageSpec,
+    PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON:
+      source.validationInputs.pluginPrereleaseNodeExcludePatternsJson,
+    PROVIDER: source.validationInputs.provider,
+    RELEASE_PACKAGE_SPEC: source.validationInputs.releasePackageSpec,
+    RELEASE_PROFILE: source.releaseProfile,
+    RUN_RELEASE_SOAK: source.runReleaseSoak,
+    SKIP_PACKAGE_TELEGRAM_E2E: source.validationInputs.skipPackageTelegramE2e,
+    TARGET_CONTEXT_REF: source.validationInputs.targetContextRef,
+  };
+  return Object.entries(environment)
+    .map(([key, value]) => `2026-08-22T00:00:00Z   ${key}: ${value}`)
+    .join("\n");
+}
+
 function preflightMethods(
   children: ReturnType<typeof child>[],
   childRun: (entry: ReturnType<typeof child>) => Record<string, unknown>,
   candidateIdentity?: ReturnType<typeof candidate>,
+  sourceInputLog = historicalSourceInputLog(),
 ) {
   const byRunId = new Map(children.map((entry) => [entry.runId, entry]));
   const jobs = [
@@ -235,9 +262,16 @@ function preflightMethods(
       run_attempt: 1,
       status: "completed",
     },
+    {
+      conclusion: "success",
+      id: 2,
+      name: "Check for reusable validation evidence",
+      run_attempt: 1,
+      status: "completed",
+    },
     ...children.map((entry, index) => ({
       conclusion: "failure",
-      id: index + 2,
+      id: index + 3,
       name: releaseChildSpec(entry.key).parentJobName,
       run_attempt: entry.sourceParentAttempt,
       status: "completed",
@@ -248,7 +282,10 @@ function preflightMethods(
       if (jobId === 1) {
         return `RERUN_GROUP: all\nTARGET_SHA: ${TARGET_SHA}`;
       }
-      const entry = children[jobId - 2]!;
+      if (jobId === 2) {
+        return sourceInputLog;
+      }
+      const entry = children[jobId - 3]!;
       return [
         `TARGET_SHA: ${TARGET_SHA}`,
         ...(entry.key === "productPerformance" ? ["-f publish_reports=false"] : []),
@@ -265,7 +302,7 @@ function preflightMethods(
         return {
           display_title: "Full Release Validation",
           event: "workflow_dispatch",
-          head_branch: "release-ci/tooling",
+          head_branch: SOURCE_REF,
           head_sha: SHA,
           id: 77,
           path: ".github/workflows/full-release-validation.yml",
@@ -448,7 +485,7 @@ describe("frv continuation controller", () => {
       sourceRunAttempt: 1,
       sourceRunId: "77",
       sourceWorkflowPath: ".github/workflows/full-release-validation.yml",
-      sourceWorkflowRef: "release-ci/tooling",
+      sourceWorkflowRef: SOURCE_REF,
       sourceWorkflowSha: SHA,
       toolingSha: SHA,
       validationInputs: VALIDATION_INPUTS,
@@ -527,7 +564,7 @@ describe("frv continuation controller", () => {
         displayTitle: `${spec.displayName} full-release-validation-77-1${spec.suffix}`,
         url: `https://github.com/openclaw/openclaw/actions/runs/${runId}`,
         workflow: spec.workflow,
-        workflowRef: "release-ci/legacy",
+        workflowRef: SOURCE_REF,
       };
     };
     const normalCi = legacyChild("normalCi", "101");
@@ -554,7 +591,7 @@ describe("frv continuation controller", () => {
         runAttempt: 1,
         runId: "77",
         workflowPath: ".github/workflows/full-release-validation.yml",
-        workflowRef: "release-ci/legacy",
+        workflowRef: SOURCE_REF,
         workflowSha: SHA,
       },
       targetSha: TARGET_SHA,
@@ -620,6 +657,20 @@ describe("frv continuation controller", () => {
         "77",
       ),
     ).toThrow("legacy continuation validation inputs are incomplete");
+    expect(() =>
+      validateLegacySource(
+        {
+          ...legacy,
+          source: {
+            ...legacy.source,
+            workflowRef: "release-ci/legacy",
+          },
+        },
+        "77",
+      ),
+    ).toThrow(
+      "legacy continuation source workflow ref is not a canonical trusted main or release-ci/<sha12>-<digits> route; run a new all-group FRV before continuing",
+    );
   });
 
   it("reports the effective attempt and composite digest", async () => {
@@ -694,7 +745,7 @@ describe("frv continuation controller", () => {
           ? {
               display_title: "Full Release Validation",
               event: "workflow_dispatch",
-              head_branch: "release-ci/tooling",
+              head_branch: SOURCE_REF,
               head_sha: SHA,
               id: 77,
               path: ".github/workflows/ci.yml",
@@ -858,6 +909,89 @@ describe("frv continuation controller", () => {
         loadSourceManifest: async () => undefined,
       }),
     ).resolves.toMatchObject({ conclusion: "failure", id: 77 });
+  });
+
+  it.each([
+    ["releaseProfile", "RELEASE_PROFILE"],
+    ["runReleaseSoak", "RUN_RELEASE_SOAK"],
+    ["allowUnreleasedChangelog", "ALLOW_UNRELEASED_CHANGELOG"],
+    ["codexPluginSpec", "CODEX_PLUGIN_SPEC"],
+    ["crossOsSuiteFilter", "CROSS_OS_SUITE_FILTER"],
+    ["liveSuiteFilter", "LIVE_SUITE_FILTER"],
+    ["mode", "MODE"],
+    ["npmTelegramPackageSpec", "NPM_TELEGRAM_PACKAGE_SPEC"],
+    ["npmTelegramProviderMode", "NPM_TELEGRAM_PROVIDER_MODE"],
+    ["npmTelegramScenario", "NPM_TELEGRAM_SCENARIO"],
+    ["packageAcceptancePackageSpec", "PACKAGE_ACCEPTANCE_PACKAGE_SPEC"],
+    ["pluginPrereleaseNodeExcludePatternsJson", "PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON"],
+    ["provider", "PROVIDER"],
+    ["releasePackageSpec", "RELEASE_PACKAGE_SPEC"],
+    ["skipPackageTelegramE2e", "SKIP_PACKAGE_TELEGRAM_E2E"],
+    ["targetContextRef", "TARGET_CONTEXT_REF"],
+  ])("rejects manifestless historical source log drift: %s", async (_field, environmentKey) => {
+    const source = continuation();
+    source.validationInputs = {
+      allowUnreleasedChangelog: "true",
+      codexPluginSpec: "@openclaw/codex@beta",
+      crossOsSuiteFilter: "windows/packaged-upgrade",
+      liveSuiteFilter: "qa-live-telegram",
+      mode: "fresh",
+      npmTelegramPackageSpec: "openclaw@beta",
+      npmTelegramProviderMode: "live-frontier",
+      npmTelegramScenario: "send-text",
+      packageAcceptancePackageSpec: "openclaw@beta",
+      pluginPrereleaseNodeExcludePatternsJson: '["extensions/example"]',
+      provider: "anthropic",
+      releasePackageSpec: "openclaw@beta",
+      skipPackageTelegramE2e: "true",
+      targetContextRef: "release/2026.8.1",
+    };
+    const children = [
+      child("normalCi", "101"),
+      child("pluginPrerelease", "202"),
+      child("releaseChecks", "303"),
+      child("productPerformance", "404"),
+      child("npmTelegram", "505"),
+    ];
+    const tamperedLog = historicalSourceInputLog(source)
+      .split("\n")
+      .map((line) => (line.includes(` ${environmentKey}:`) ? `${line}tampered` : line))
+      .join("\n");
+    await expect(
+      preflightContinuation(continuationPlan(children, source), "77", {
+        ...preflightMethods(
+          children,
+          (entry) => runFor(entry, 1, "failure"),
+          candidate(),
+          tamperedLog,
+        ),
+        loadSourceManifest: async () => undefined,
+      }),
+    ).rejects.toThrow(`historical continuation source input changed: ${environmentKey}`);
+  });
+
+  it("rejects a missing manifestless historical source input", async () => {
+    const children = [
+      child("normalCi", "101"),
+      child("pluginPrerelease", "202"),
+      child("releaseChecks", "303"),
+      child("productPerformance", "404"),
+    ];
+    const inputLog = historicalSourceInputLog()
+      .split("\n")
+      .filter((line) => !line.includes(" NPM_TELEGRAM_SCENARIO:"))
+      .join("\n");
+    await expect(
+      preflightContinuation(continuationPlan(children), "77", {
+        ...preflightMethods(
+          children,
+          (entry) => runFor(entry, 1, "failure"),
+          candidate(),
+          inputLog,
+        ),
+        loadSourceManifest: async () => undefined,
+      }),
+    ).rejects.toThrow("historical continuation source input is missing: NPM_TELEGRAM_SCENARIO");
   });
 
   it("keeps a canonical continuation source manifest mandatory", async () => {

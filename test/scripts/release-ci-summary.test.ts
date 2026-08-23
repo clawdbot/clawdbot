@@ -725,9 +725,11 @@ function trustedMainPackageFixture({
 function strictContinuationFixture({
   sourceLineageDiverged = false,
   sourceManifestPresent = true,
+  sourceInputLogTransform,
 }: {
   sourceLineageDiverged?: boolean;
   sourceManifestPresent?: boolean;
+  sourceInputLogTransform?: (log: string) => string;
 } = {}) {
   const sourceRunId = "77";
   const rootRunId = "88";
@@ -892,31 +894,68 @@ function strictContinuationFixture({
       },
     ]),
   );
-  const sourceJobs = selected
-    .filter((child) => child.manifestKey in runIds)
-    .map((child, index) => ({
-      conclusion: "success",
-      id: 900 + index,
-      name: child.parentJobName,
-      run_attempt: 1,
-      status: "completed",
-    }));
+  const sourceInputJob = {
+    conclusion: "success",
+    id: 899,
+    name: "Check for reusable validation evidence",
+    run_attempt: 1,
+    status: "completed",
+  };
+  const sourceJobs = [
+    sourceInputJob,
+    ...selected
+      .filter((child) => child.manifestKey in runIds)
+      .map((child, index) => ({
+        conclusion: "success",
+        id: 900 + index,
+        name: child.parentJobName,
+        run_attempt: 1,
+        status: "completed",
+      })),
+  ];
+  const sourceInputLog = Object.entries({
+    ALLOW_UNRELEASED_CHANGELOG: validationInputs.allowUnreleasedChangelog,
+    CODEX_PLUGIN_SPEC: validationInputs.codexPluginSpec,
+    CROSS_OS_SUITE_FILTER: validationInputs.crossOsSuiteFilter,
+    LIVE_SUITE_FILTER: validationInputs.liveSuiteFilter,
+    MODE: validationInputs.mode,
+    NPM_TELEGRAM_PACKAGE_SPEC: validationInputs.npmTelegramPackageSpec,
+    NPM_TELEGRAM_PROVIDER_MODE: validationInputs.npmTelegramProviderMode,
+    NPM_TELEGRAM_SCENARIO: validationInputs.npmTelegramScenario,
+    PACKAGE_ACCEPTANCE_PACKAGE_SPEC: validationInputs.packageAcceptancePackageSpec,
+    PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON:
+      validationInputs.pluginPrereleaseNodeExcludePatternsJson,
+    PROVIDER: validationInputs.provider,
+    RELEASE_PACKAGE_SPEC: validationInputs.releasePackageSpec,
+    RELEASE_PROFILE: continuation.releaseProfile,
+    RUN_RELEASE_SOAK: continuation.runReleaseSoak,
+    SKIP_PACKAGE_TELEGRAM_E2E: validationInputs.skipPackageTelegramE2e,
+    TARGET_CONTEXT_REF: validationInputs.targetContextRef,
+  })
+    .map(([key, value]) => `2026-08-22T00:00:00Z   ${key}: ${value}`)
+    .join("\n");
   const logByJobId = new Map(
-    sourceJobs.map((job) => {
-      const child = selected.find((entry) => entry.parentJobName === job.name)!;
-      const runId = runIds[child.manifestKey as keyof typeof runIds];
-      return [
-        job.id,
-        [
-          `TARGET_SHA: ${targetSha}`,
-          ...(["pluginPrerelease", "releaseChecks"].includes(child.manifestKey)
-            ? [`CANDIDATE_ARTIFACT_JSON: ${JSON.stringify(candidate)}`]
-            : []),
-          ...(child.manifestKey === "productPerformance" ? ["-f publish_reports=false"] : []),
-          `Dispatched ${child.workflow}: https://github.com/openclaw/openclaw/actions/runs/${runId} (attempt 1)`,
-        ].join("\n"),
-      ];
-    }),
+    sourceJobs
+      .filter((job) => job.id !== sourceInputJob.id)
+      .map((job) => {
+        const child = selected.find((entry) => entry.parentJobName === job.name)!;
+        const runId = runIds[child.manifestKey as keyof typeof runIds];
+        return [
+          job.id,
+          [
+            `TARGET_SHA: ${targetSha}`,
+            ...(["pluginPrerelease", "releaseChecks"].includes(child.manifestKey)
+              ? [`CANDIDATE_ARTIFACT_JSON: ${JSON.stringify(candidate)}`]
+              : []),
+            ...(child.manifestKey === "productPerformance" ? ["-f publish_reports=false"] : []),
+            `Dispatched ${child.workflow}: https://github.com/openclaw/openclaw/actions/runs/${runId} (attempt 1)`,
+          ].join("\n"),
+        ];
+      }),
+  );
+  logByJobId.set(
+    sourceInputJob.id,
+    sourceInputLogTransform ? sourceInputLogTransform(sourceInputLog) : sourceInputLog,
   );
   const artifact = (runId: string, ref: string, workflowSha: string, id: number) => ({
     digest: `sha256:${String(id).padStart(64, "0")}`,
@@ -1638,6 +1677,24 @@ describe("release CI summary child correlation", () => {
         fixture.client,
       ).children,
     ).toHaveLength(4);
+  });
+
+  it("rejects manifestless historical source input drift during strict publication", () => {
+    const fixture = strictContinuationFixture({
+      sourceInputLogTransform: (log) => log.replace("  PROVIDER: openai", "  PROVIDER: anthropic"),
+      sourceManifestPresent: false,
+    });
+    expect(() =>
+      validateReleaseRunEvidence(
+        {
+          repository: "openclaw/openclaw",
+          runId: fixture.rootRunId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        fixture.client,
+      ),
+    ).toThrow("historical continuation source input changed: PROVIDER");
   });
 
   it("rejects manifestless historical mode when the source has a canonical plan", () => {
