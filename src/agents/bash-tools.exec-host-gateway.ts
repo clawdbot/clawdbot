@@ -287,7 +287,11 @@ function resolveGatewayAutoReviewPlan(params: {
     if (params.segmentSatisfiedBy[index] === "safeBuiltins") {
       continue;
     }
-    if (segment.resolution?.policyBlocked === true || isBlockedShellWrapperCommand(segment.argv)) {
+    if (
+      segment.resolution?.policyBlocked === true ||
+      (segment.resolution?.wrapperChain?.length ?? 0) > 0 ||
+      isBlockedShellWrapperCommand(segment.argv)
+    ) {
       return undefined;
     }
     const resolvedPath = resolveExecutionTargetTrustPath(segment.resolution, params.workdir);

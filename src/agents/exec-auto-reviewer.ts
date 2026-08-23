@@ -26,6 +26,8 @@ import { coerceToolModelConfig } from "./tools/model-config.helpers.js";
 
 const DEFAULT_EXEC_REVIEWER_TIMEOUT_MS = 30_000;
 const EXEC_REVIEWER_MAX_TOKENS = 360;
+const MAX_EXEC_REVIEWER_INPUT_CHARS = 16_000;
+const MAX_EXEC_REVIEWER_PLAN_STEPS = 64;
 const EXEC_REVIEWER_TIMEOUT = Symbol("exec-reviewer-timeout");
 
 const execAutoReviewResponseSchema = z
@@ -64,6 +66,13 @@ function stringifyInput(input: ExecAutoReviewInput): string {
     },
     null,
     2,
+  );
+}
+
+function exceedsReviewerInputLimits(input: ExecAutoReviewInput): boolean {
+  return (
+    (input.executionPlan?.length ?? 0) > MAX_EXEC_REVIEWER_PLAN_STEPS ||
+    stringifyInput(input).length > MAX_EXEC_REVIEWER_INPUT_CHARS
   );
 }
 
@@ -363,6 +372,13 @@ export function createModelExecAutoReviewer(params: {
     let completionController: AbortController | undefined;
     try {
       params.signal?.throwIfAborted();
+      if (exceedsReviewerInputLimits(input)) {
+        return {
+          decision: "ask",
+          risk: "unknown",
+          rationale: "exec reviewer deferred because the request exceeds review input limits",
+        };
+      }
       if (hasReviewerDirective(input)) {
         return {
           decision: "ask",

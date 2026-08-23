@@ -1857,6 +1857,27 @@ describe("processGatewayAllowlist", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "keeps dispatch-wrapper compound plans on the human approval path",
+    async () => {
+      const command = "timeout 5 node --version && node --version";
+      const { authorizationPlan } = await configurePlanBackedCommand({ command });
+      const wrapperChain =
+        authorizationPlan.groups[0]?.candidates[0]?.sourceSegment.resolution?.wrapperChain;
+      expect(wrapperChain).toContain("timeout");
+
+      const result = await runGatewayAllowlist({
+        command,
+        ask: "on-miss",
+        autoReview: true,
+      });
+
+      expect(defaultExecAutoReviewerMock).not.toHaveBeenCalled();
+      expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+      expect(result.pendingResult?.details.status).toBe("approval-pending");
+    },
+  );
+
   it("fails closed before approval when the executable cannot be resolved", async () => {
     const command = "openclaw-definitely-missing-executable --version";
     const { resolvedPath } = await configurePlanBackedCommand({ command });
