@@ -38,6 +38,26 @@ const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS = new Map<string, nu
   ["@openclaw/voice-call:dangerous-exec:src/tunnel.ts", 1],
 ]);
 
+const OPTIONAL_REVIEWED_PUBLISHABLE_SOURCE_CRITICAL_FINDING_CONTRACTS = new Map<
+  string,
+  { count: number; evidence: string }
+>([
+  [
+    "@openclaw/codex:dangerous-exec:src/node-cli-sessions.ts",
+    {
+      count: 1,
+      evidence: "const child = spawn(invocation.command, invocation.args, {",
+    },
+  ],
+  [
+    "@openclaw/opencode-provider:dangerous-exec:session-catalog.ts",
+    {
+      count: 1,
+      evidence: "const child = spawn(invocation.command, invocation.argv, {",
+    },
+  ],
+]);
+
 const REVIEWED_CODEX_LEGACY_SOURCE_CRITICAL_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/http.ts", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/processes.ts", 1],
@@ -167,6 +187,7 @@ function requiredReviewedFindingsForPackage(
 function isReviewedPublishableCriticalFinding(key: string): boolean {
   return (
     REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS.has(key) ||
+    OPTIONAL_REVIEWED_PUBLISHABLE_SOURCE_CRITICAL_FINDING_CONTRACTS.has(key) ||
     REVIEWED_CODEX_SOURCE_CRITICAL_FINDING_COUNTS.has(key) ||
     OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDING_COUNTS.has(key)
   );
@@ -184,6 +205,27 @@ function expectedOptionalReviewedFindingsForPackedPath(
       ? Array.from({ length: count }, () => key)
       : [],
   );
+}
+
+function expectedReviewedSourceFindingsForPackedPath(
+  packageDir: string,
+  packageName: string,
+  packedPath: string,
+): string[] {
+  const key = `${packageName}:dangerous-exec:${packedPath}`;
+  const contract = OPTIONAL_REVIEWED_PUBLISHABLE_SOURCE_CRITICAL_FINDING_CONTRACTS.get(key);
+  if (!contract) {
+    return [];
+  }
+  const source = readFileSync(resolve(packageDir, packedPath), "utf8");
+  const count = source.split(contract.evidence).length - 1;
+  if (count === 0) {
+    return [];
+  }
+  if (count !== contract.count) {
+    throw new Error(`${key}: reviewed execution evidence count changed from ${contract.count}.`);
+  }
+  return Array.from({ length: contract.count }, () => key);
 }
 
 function stageScannerRelevantPackedFiles(
@@ -296,6 +338,13 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
   const unexpectedCriticalFindings: string[] = [];
   const packedFiles = await collectNpmPackedFiles(plugin.packageDir, plugin.packageName);
   for (const packedFile of packedFiles) {
+    expectedReviewedCriticalFindings.push(
+      ...expectedReviewedSourceFindingsForPackedPath(
+        plugin.packageDir,
+        plugin.packageName,
+        packedFile,
+      ),
+    );
     for (const key of expectedOptionalReviewedFindingsForPackedPath(
       plugin.packageName,
       packedFile,
@@ -412,6 +461,61 @@ describe("publishable plugin npm package install security scan", () => {
     expect(
       expectedOptionalReviewedFindingsForPackedPath("@openclaw/codex", "dist/client-retired.js"),
     ).toEqual([]);
+  });
+
+  it("requires exact count-one reviewed CLI execution boundaries", () => {
+    const codexFinding = "@openclaw/codex:dangerous-exec:src/node-cli-sessions.ts";
+    const openCodeFinding = "@openclaw/opencode-provider:dangerous-exec:session-catalog.ts";
+
+    expect(
+      OPTIONAL_REVIEWED_PUBLISHABLE_SOURCE_CRITICAL_FINDING_CONTRACTS.get(codexFinding),
+    ).toEqual({
+      count: 1,
+      evidence: "const child = spawn(invocation.command, invocation.args, {",
+    });
+    expect(
+      OPTIONAL_REVIEWED_PUBLISHABLE_SOURCE_CRITICAL_FINDING_CONTRACTS.get(openCodeFinding),
+    ).toEqual({
+      count: 1,
+      evidence: "const child = spawn(invocation.command, invocation.argv, {",
+    });
+    expect(isReviewedPublishableCriticalFinding(`${openCodeFinding}.relocated`)).toBe(false);
+  });
+
+  it("accepts only one occurrence of an optional reviewed source boundary", () => {
+    const packageDir = mkdtempSync(join(tmpdir(), "openclaw-reviewed-source-"));
+    const packedPath = "session-catalog.ts";
+    const evidence = "const child = spawn(invocation.command, invocation.argv, {";
+    try {
+      fs.writeFileSync(join(packageDir, packedPath), "export {};\n");
+      expect(
+        expectedReviewedSourceFindingsForPackedPath(
+          packageDir,
+          "@openclaw/opencode-provider",
+          packedPath,
+        ),
+      ).toEqual([]);
+
+      fs.writeFileSync(join(packageDir, packedPath), `${evidence}\n`);
+      expect(
+        expectedReviewedSourceFindingsForPackedPath(
+          packageDir,
+          "@openclaw/opencode-provider",
+          packedPath,
+        ),
+      ).toEqual(["@openclaw/opencode-provider:dangerous-exec:session-catalog.ts"]);
+
+      fs.writeFileSync(join(packageDir, packedPath), `${evidence}\n${evidence}\n`);
+      expect(() =>
+        expectedReviewedSourceFindingsForPackedPath(
+          packageDir,
+          "@openclaw/opencode-provider",
+          packedPath,
+        ),
+      ).toThrow("reviewed execution evidence count changed from 1");
+    } finally {
+      rmSync(packageDir, { recursive: true, force: true });
+    }
   });
 
   it("accepts either complete reviewed Codex source layout", () => {

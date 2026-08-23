@@ -96,24 +96,58 @@ function readSharedAuthProfileStoreText(stateDir) {
   }
 }
 
+function assertNoLegacyPrimaryAuthRows(stateDir) {
+  const dbPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  if (!fs.existsSync(dbPath)) {
+    return;
+  }
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const legacyRows = [
+      {
+        table: "auth_profile_store",
+        query: "SELECT 1 AS present FROM auth_profile_store WHERE store_key = ? LIMIT 1",
+      },
+      {
+        table: "auth_profile_state",
+        query: "SELECT 1 AS present FROM auth_profile_state WHERE state_key = ? LIMIT 1",
+      },
+    ];
+    for (const entry of legacyRows) {
+      const schema = db
+        .prepare("SELECT type FROM sqlite_schema WHERE name = ? LIMIT 1")
+        .get(entry.table);
+      if (!schema) {
+        continue;
+      }
+      if (schema.type !== "table") {
+        throw new Error(`${entry.table} is ${String(schema.type)}, not a table`);
+      }
+      if (db.prepare(entry.query).get("primary")) {
+        throw new Error(`onboard preserved a retired primary row in ${entry.table}`);
+      }
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("onboard preserved a retired")) {
+      throw error;
+    }
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`could not validate the main-agent auth database: ${detail}`);
+  } finally {
+    db?.close();
+  }
+}
+
 function assertOnboardState() {
   const home = process.argv[3];
   const stateDir = path.join(home, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
-  const legacyAuthDatabase = path.join(
-    stateDir,
-    "agents",
-    "main",
-    "agent",
-    "openclaw-agent.sqlite",
-  );
 
   if (!fs.existsSync(configPath)) {
     throw new Error("onboard did not write openclaw.json");
   }
-  if (fs.existsSync(legacyAuthDatabase)) {
-    throw new Error("onboard created the retired main-agent auth database");
-  }
+  assertNoLegacyPrimaryAuthRows(stateDir);
   const authStoreText = readSharedAuthProfileStoreText(stateDir);
   if (!authStoreText) {
     throw new Error("onboard did not persist auth profile store");

@@ -739,6 +739,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       "${{ fromJson(needs.preflight.outputs.plugin_prerelease_extension_matrix) }}",
     );
     expect(
+      extensionShard.steps.find((step: WorkflowStep) => step.name === "Checkout").with?.[
+        "fetch-depth"
+      ],
+    ).toBe("${{ inputs.full_release_validation && '0' || '1' }}");
+    expect(
       extensionShard.steps.find((step: WorkflowStep) => step.name === "Run extension shard").run,
     ).toContain("--retry=1");
     expect(inspector.name).toBe("plugin-prerelease-inspector");
