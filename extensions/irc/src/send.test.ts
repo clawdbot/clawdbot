@@ -75,7 +75,8 @@ vi.mock("openclaw/plugin-sdk/text-chunking", async () => {
   };
 });
 
-import { ircMessageAdapter } from "./message-adapter.js";
+import { ircMessageAdapter, sendFormattedIrcText } from "./message-adapter.js";
+import { ircOutboundBaseAdapter } from "./outbound-base.js";
 import { sendMessageIrc } from "./send.js";
 
 function resetHoistedMocks() {
@@ -325,6 +326,53 @@ describe("sendMessageIrc cfg threading", () => {
 
     expect(client.sendPrivmsg).not.toHaveBeenCalled();
     expect(hoisted.record).not.toHaveBeenCalled();
+  });
+
+  it("uses one transient connection for a chunked outbound message", async () => {
+    const providedCfg = {
+      channels: {
+        irc: {
+          host: "irc.example.com",
+          nick: "openclaw",
+        },
+      },
+    } as unknown as CoreConfig;
+    const client = {
+      isReady: vi.fn(() => true),
+      join: vi.fn(),
+      sendPrivmsg: vi.fn(),
+      quit: vi.fn(),
+    } as unknown as IrcClient & {
+      join: ReturnType<typeof vi.fn>;
+      sendPrivmsg: ReturnType<typeof vi.fn>;
+      quit: ReturnType<typeof vi.fn>;
+    };
+    hoisted.connectIrcClient.mockResolvedValue(client);
+    const onDeliveryResult = vi.fn();
+    const onPlatformSendDispatch = vi.fn();
+    const text = Array.from({ length: 80 }, (_, index) => `word-${index}`).join(" ");
+    const chunks = ircOutboundBaseAdapter.chunker(text, 350);
+
+    const results = await sendFormattedIrcText({
+      cfg: providedCfg,
+      to: "#room",
+      text,
+      replyToId: "parent-1",
+      replyToIdSource: "explicit",
+      replyToMode: "all",
+      onDeliveryResult,
+      onPlatformSendDispatch,
+    });
+
+    expect(hoisted.connectIrcClient).toHaveBeenCalledOnce();
+    expect(client.join).toHaveBeenCalledOnce();
+    expect(client.sendPrivmsg.mock.calls).toEqual(
+      chunks.map((chunk) => ["#room", `${chunk}\n\n[reply:parent-1]`]),
+    );
+    expect(client.quit).toHaveBeenCalledOnce();
+    expect(onPlatformSendDispatch).toHaveBeenCalledTimes(chunks.length);
+    expect(onDeliveryResult).toHaveBeenCalledTimes(chunks.length);
+    expect(results).toHaveLength(chunks.length);
   });
 
   it("declares message adapter durable text, media, and reply with receipt proofs", async () => {
