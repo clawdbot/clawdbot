@@ -1847,6 +1847,8 @@ function normalizedParentTuple(evidence, identity) {
 function continuationSourceProducerEvidence(source, sourceRun, sourceManifest) {
   return {
     manifest: sourceManifest ?? {
+      runAttempt: source.sourceRunAttempt,
+      runId: source.sourceRunId,
       targetRef: source.candidate.packageSourceSha,
       targetSha: source.candidate.packageSourceSha,
       version: 3,

@@ -1861,17 +1861,24 @@ describe("release CI summary child correlation", () => {
 
   it("accepts a manifestless historical source only when no canonical source plan exists", () => {
     const fixture = strictContinuationFixture({ sourceManifestPresent: false });
-    expect(
-      validateReleaseRunEvidence(
-        {
-          repository: "openclaw/openclaw",
-          runId: fixture.rootRunId,
-          verifierSourceContent: readFileSync(SCRIPT),
-          verifierSourceSha: "c".repeat(40),
-        },
-        fixture.client,
-      ).children,
-    ).toHaveLength(4);
+    const evidence = validateReleaseRunEvidence(
+      {
+        repository: "openclaw/openclaw",
+        runId: fixture.rootRunId,
+        verifierSourceContent: readFileSync(SCRIPT),
+        verifierSourceSha: "c".repeat(40),
+      },
+      fixture.client,
+    );
+    expect(evidence.children).toHaveLength(4);
+    expect(evidence.children).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          dispatchNonce: `full-release-validation-${fixture.sourceRunId}-1-release-checks`,
+          sourceParentRunId: fixture.sourceRunId,
+        }),
+      ]),
+    );
   });
 
   it("rejects untrusted historical source lineage before reading source artifacts", () => {
