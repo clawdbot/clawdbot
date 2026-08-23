@@ -802,6 +802,17 @@ describe("convertToOllamaMessages", () => {
     expect(result).toEqual([{ role: "tool", content: "file1.txt\nfile2.txt" }]);
   });
 
+  it("preserves significant boundary whitespace in tool results", () => {
+    const result = convertToOllamaMessages([
+      {
+        role: "toolResult",
+        toolCallId: "call_ws",
+        content: [{ type: "text", text: "  indented\n" }],
+      },
+    ]);
+    expect(result).toEqual([{ role: "tool", content: "  indented\n", tool_call_id: "call_ws" }]);
+  });
+
   it("converts SDK 'toolResult' role to Ollama 'tool' role", () => {
     const messages = [{ role: "toolResult", content: "command output here" }];
     const result = convertToOllamaMessages(messages);
