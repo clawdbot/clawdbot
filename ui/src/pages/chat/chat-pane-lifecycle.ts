@@ -62,7 +62,11 @@ import { clearChatModelSearchOnEscape } from "./components/chat-model-picker.ts"
 import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
-import { admitInitialUserMessageHandoff } from "./history-merge.ts";
+import {
+  admitInitialUserMessageHandoff,
+  readChatSessionProjectionScope,
+  reduceChatSessionProjection,
+} from "./history-merge.ts";
 import { admitInitialTurnHandoff } from "./initial-turn-handoff.ts";
 import {
   applyChatCacheSnapshot,
@@ -105,16 +109,28 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         !snapshot ||
         this.state !== state ||
         !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
-        readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey }) ||
-        state.chatMessages.length > 0
+        readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey })
       ) {
         return;
       }
-      // The memory miss plus empty visible rows is the ordering fence: any
-      // network replacement, live append, or optimistic handoff that landed
-      // while IndexedDB was pending remains authoritative.
-      cacheChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey }, snapshot);
-      applyChatCacheSnapshot(state, snapshot);
+      // The memory miss fences network replacement; the pane projection merges
+      // live and pending rows that arrived while IndexedDB was pending.
+      const projection = reduceChatSessionProjection(
+        state,
+        { type: "snapshotLoaded", messages: snapshot.messages },
+        {
+          scope: readChatSessionProjectionScope(state, {
+            sessionKey,
+            sessionId: snapshot.sessionId,
+            ...(Object.hasOwn(snapshot, "displayedLeafEntryId")
+              ? { activeLeafEntryId: snapshot.displayedLeafEntryId }
+              : {}),
+          }),
+        },
+      );
+      const mergedSnapshot = { ...snapshot, messages: [...projection.messages] };
+      cacheChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey }, mergedSnapshot);
+      applyChatCacheSnapshot(state, mergedSnapshot);
       state.requestUpdate?.();
     });
   }

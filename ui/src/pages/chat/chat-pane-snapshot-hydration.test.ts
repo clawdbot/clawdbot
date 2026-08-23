@@ -12,7 +12,11 @@ import {
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { prepareInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
-import { observeChatCache, type ChatMessageCache } from "./session-message-cache.ts";
+import {
+  observeChatCache,
+  readChatSessionSnapshot,
+  type ChatMessageCache,
+} from "./session-message-cache.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import "./chat-pane.ts";
@@ -133,7 +137,7 @@ describe("stored chat snapshot hydration", () => {
     }
   });
 
-  it("keeps an admitted first-turn prompt visible when stored hydration resolves late", async () => {
+  it("merges stored history with an admitted prompt when hydration resolves late", async () => {
     const targetSessionKey = "agent:main:first-turn-retry";
     const client = {
       addEventListener: vi.fn(() => vi.fn()),
@@ -145,7 +149,8 @@ describe("stored chat snapshot hydration", () => {
     vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
     vi.spyOn(pane, "performUpdate").mockImplementation(() => undefined);
     pane.sessionKey = targetSessionKey;
-    pane.chatMessagesBySession = new Map();
+    const sharedMessages: ChatMessageCache = new Map();
+    pane.chatMessagesBySession = sharedMessages;
     let deliverStoredSnapshot: ((snapshot: unknown) => void) | undefined;
     pane.sessionSnapshotStore = {
       read: () =>
@@ -176,20 +181,41 @@ describe("stored chat snapshot hydration", () => {
           content: [expect.objectContaining({ type: "text", text: "retry the rejected prompt" })],
         }),
       ]);
+      const storedMessage = nativeHistoryMessage(1, "stored transcript");
+      const storedPagination = { hasMore: true as const, nextOffset: 1, totalMessages: 3 };
       deliverStoredSnapshot?.({
-        messages: [nativeHistoryMessage(1, "stale stored transcript")],
-        pagination: { hasMore: false, completeSnapshot: true },
+        deltaCursor: "stored-cursor",
+        displayedLeafEntryId: "stored-leaf",
+        messages: [storedMessage],
+        pagination: storedPagination,
         sessionId: "stored-session",
       });
       await Promise.resolve();
       await Promise.resolve();
       expect(deliverStoredSnapshot).toBeDefined();
       expect(attachedState?.chatMessages).toEqual([
+        storedMessage,
         expect.objectContaining({
           role: "user",
           content: [expect.objectContaining({ type: "text", text: "retry the rejected prompt" })],
         }),
       ]);
+      expect(attachedState).toMatchObject({
+        chatDisplayedLeafEntryId: "stored-leaf",
+        chatHistoryPagination: storedPagination,
+        currentSessionId: "stored-session",
+      });
+      expect(
+        readChatSessionSnapshot(sharedMessages, pane.state, {
+          sessionKey: targetSessionKey,
+        }),
+      ).toEqual({
+        deltaCursor: "stored-cursor",
+        displayedLeafEntryId: "stored-leaf",
+        messages: attachedState?.chatMessages,
+        pagination: storedPagination,
+        sessionId: "stored-session",
+      });
     } finally {
       pane.disconnectedCallback();
     }
