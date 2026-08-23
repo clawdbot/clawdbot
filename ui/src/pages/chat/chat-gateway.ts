@@ -219,7 +219,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     authoritativeHistoryAppliedForRun(state, payload.runId) &&
     chatEventSessionMatches(state, payload),
   );
-  if (!sessionMatches && !activeRunMatches) {
+  if (!sessionMatches) {
     if (payload.state === "final") {
       const finalMessage = normalizedFinalMessage;
       if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {

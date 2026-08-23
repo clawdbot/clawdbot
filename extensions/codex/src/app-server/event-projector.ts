@@ -91,6 +91,7 @@ export class CodexAppServerEventProjector {
   private readonly responseCompletions = new CodexResponseCompletionProjection();
   private completedCompactionCount = 0;
   private lastTranscriptTimestamp = 0;
+  private pendingSteeringAssistantBoundaryItemId: string | undefined;
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
@@ -170,9 +171,19 @@ export class CodexAppServerEventProjector {
     const asyncMessages = this.assistantProjection
       .collectAsyncMessages()
       .filter(({ itemId }) => this.completedItemIds.has(itemId));
+    const assistantMessageOptions = {
+      tokenUsage: undefined,
+      aborted: false,
+      promptError: undefined,
+    };
     const commentaryMessages = this.assistantProjection
       .collectCommentaryMessages()
       .filter(({ itemId }) => this.completedItemIds.has(itemId));
+    const assistantBoundary = this.assistantProjection.createCompletedAssistantBoundaryMessage(
+      this.completedItemIds,
+      assistantMessageOptions,
+    );
+    this.pendingSteeringAssistantBoundaryItemId = assistantBoundary?.itemId;
     return buildCodexMessagesSnapshot({
       runParams: this.params,
       turnId: this.turnId,
@@ -182,10 +193,21 @@ export class CodexAppServerEventProjector {
       asyncMessages,
       commentaryMessages,
       toolMessages: this.toolTranscriptProjection.transcriptMessages,
-      lastAssistant: undefined,
+      lastAssistant: assistantBoundary?.message,
+      ...(assistantBoundary
+        ? { lastAssistantIdentity: `${this.turnId}:assistant:${assistantBoundary.itemId}` }
+        : {}),
       createAssistantMirrorMessage: (title, text) =>
         this.assistantProjection.createAssistantMirrorMessage(title, text),
     }).filter((message) => message.role !== "user");
+  }
+
+  markSteeringTranscriptPersisted(): void {
+    const itemId = this.pendingSteeringAssistantBoundaryItemId;
+    if (itemId) {
+      this.assistantProjection.markAssistantBoundaryPersisted(itemId);
+      this.pendingSteeringAssistantBoundaryItemId = undefined;
+    }
   }
 
   hasCompletedTerminalAssistantText(): boolean {

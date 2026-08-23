@@ -42,6 +42,7 @@ export function buildCodexMessagesSnapshot(params: {
   commentaryMessages: ReadonlyArray<{ itemId: string; message: AssistantMessage }>;
   toolMessages: readonly AgentMessage[];
   lastAssistant: AssistantMessage | undefined;
+  lastAssistantIdentity?: string;
   createAssistantMirrorMessage: (title: string, text: string) => AssistantMessage;
 }): AgentMessage[] {
   const messages = promptSnapshot(params.runParams, params.turnId, params.upstreamUserText);
@@ -80,7 +81,12 @@ export function buildCodexMessagesSnapshot(params: {
   );
   messages.push(...visibleWorkMessages);
   if (params.lastAssistant) {
-    messages.push(attachCodexMirrorIdentity(params.lastAssistant, `${params.turnId}:assistant`));
+    messages.push(
+      attachCodexMirrorIdentity(
+        params.lastAssistant,
+        params.lastAssistantIdentity ?? `${params.turnId}:assistant`,
+      ),
+    );
   }
   return applyStickyTurnTaint(messages).map((message) =>
     projectAgentHarnessTranscriptMessageForDisplay({
