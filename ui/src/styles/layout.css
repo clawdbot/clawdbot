@@ -3594,6 +3594,59 @@ openclaw-sidebar-attention {
   animation: menu-in 140ms var(--ease-out);
 }
 
+.sidebar-issues-panel__backdrop,
+.sidebar-issues-panel__grabber {
+  display: none;
+}
+
+.shell--mobile-nav .sidebar-issues-panel__backdrop {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: color-mix(in srgb, black 42%, transparent);
+  animation: fade-in 140ms var(--ease-out);
+}
+
+.shell--mobile-nav .sidebar-issues-panel {
+  inset: auto 0 0 !important;
+  width: 100%;
+  block-size: 90dvh;
+  max-block-size: calc(100dvh - env(safe-area-inset-top, 0px));
+  padding-block-end: env(safe-area-inset-bottom, 0px);
+  border-width: 1px 0 0;
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  animation: sidebar-issues-sheet-in 180ms var(--ease-out);
+}
+
+.shell--mobile-nav .sidebar-issues-panel__grabber {
+  display: block;
+  width: 36px;
+  height: 4px;
+  flex: none;
+  align-self: center;
+  margin-block: 8px 2px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
+}
+
+@keyframes sidebar-issues-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell--mobile-nav .sidebar-issues-panel,
+  .shell--mobile-nav .sidebar-issues-panel__backdrop {
+    animation: none;
+  }
+}
+
 .sidebar-issues-panel__header {
   display: flex;
   flex: none;

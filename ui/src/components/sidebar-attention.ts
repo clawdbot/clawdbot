@@ -852,70 +852,77 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
           : nothing}
       </button>
       ${this.panelOpen
-        ? html`<openclaw-menu-surface>
-            <section
-              id="sidebar-issues-panel"
-              class="sidebar-issues-panel"
-              role="dialog"
-              aria-labelledby="sidebar-issues-panel-heading"
-              style=${`left:${this.panelPosition.left}px;bottom:${this.panelPosition.bottom}px;--sidebar-issues-panel-bottom:${this.panelPosition.bottom}px`}
-              @keydown=${this.handlePanelKeydown}
-            >
-              <header class="sidebar-issues-panel__header">
-                <h2 id="sidebar-issues-panel-heading" class="sidebar-issues-panel__heading">
-                  <span class="sidebar-issues-panel__heading-icon" aria-hidden="true"
-                    >${icons.inbox}</span
-                  >
-                  ${t("attention.issues")}
-                </h2>
-                ${this.renderAskOpenClawButton(custodianItems.length, custodianSeverity)}
-              </header>
-              <div
-                class="sidebar-issues-panel__tabs"
-                role="tablist"
-                aria-label=${t("attention.tabs.label")}
+        ? html`<button
+              type="button"
+              class="sidebar-issues-panel__backdrop"
+              aria-label=${t("common.close")}
+              @click=${() => this.closePanel(true)}
+            ></button>
+            <openclaw-menu-surface>
+              <section
+                id="sidebar-issues-panel"
+                class="sidebar-issues-panel"
+                role="dialog"
+                aria-labelledby="sidebar-issues-panel-heading"
+                style=${`left:${this.panelPosition.left}px;bottom:${this.panelPosition.bottom}px;--sidebar-issues-panel-bottom:${this.panelPosition.bottom}px`}
+                @keydown=${this.handlePanelKeydown}
               >
-                ${ISSUE_TABS.map((tab) => this.renderTab(tab, tabCounts[tab]))}
-              </div>
-              <div class="sidebar-issues-panel__list-wrap">
+                <div class="sidebar-issues-panel__grabber" aria-hidden="true"></div>
+                <header class="sidebar-issues-panel__header">
+                  <h2 id="sidebar-issues-panel-heading" class="sidebar-issues-panel__heading">
+                    <span class="sidebar-issues-panel__heading-icon" aria-hidden="true"
+                      >${icons.inbox}</span
+                    >
+                    ${t("attention.issues")}
+                  </h2>
+                  ${this.renderAskOpenClawButton(custodianItems.length, custodianSeverity)}
+                </header>
                 <div
-                  id="sidebar-issues-tabpanel"
-                  class="sidebar-issues-panel__list"
-                  role="tabpanel"
-                  aria-labelledby=${`sidebar-issues-tab-${this.selectedTab}`}
-                  tabindex="0"
-                  @scroll=${this.syncOverflowCue}
+                  class="sidebar-issues-panel__tabs"
+                  role="tablist"
+                  aria-label=${t("attention.tabs.label")}
                 >
-                  ${visibleCount === 0
-                    ? html`<div class="sidebar-issues-panel__empty">
-                        <span class="sidebar-issues-panel__empty-icon" aria-hidden="true"
-                          >${icons.inbox}</span
-                        >
-                        <strong>${t("attention.emptyTitle")}</strong>
-                        <span>${t("attention.emptyBody")}</span>
-                      </div>`
-                    : nothing}
-                  ${showApprovals
-                    ? approvalQueue.map((approval) => this.renderApprovalItem(approval))
-                    : nothing}
-                  ${showUpdate && updateError ? this.renderUpdateSurface() : nothing}
-                  ${errorItems.map((item) => this.renderItem(item))}
-                  ${showUpdate && !updateError ? this.renderUpdateSurface() : nothing}
-                  ${warningItems.map((item) => this.renderItem(item))}
+                  ${ISSUE_TABS.map((tab) => this.renderTab(tab, tabCounts[tab]))}
                 </div>
-                <div
-                  class="sidebar-issues-panel__overflow-cue sidebar-issues-panel__overflow-cue--top"
-                  ?hidden=${!this.overflowAbove}
-                  aria-hidden="true"
-                ></div>
-                <div
-                  class="sidebar-issues-panel__overflow-cue sidebar-issues-panel__overflow-cue--bottom"
-                  ?hidden=${!this.overflowBelow}
-                  aria-hidden="true"
-                ></div>
-              </div>
-            </section>
-          </openclaw-menu-surface>`
+                <div class="sidebar-issues-panel__list-wrap">
+                  <div
+                    id="sidebar-issues-tabpanel"
+                    class="sidebar-issues-panel__list"
+                    role="tabpanel"
+                    aria-labelledby=${`sidebar-issues-tab-${this.selectedTab}`}
+                    tabindex="0"
+                    @scroll=${this.syncOverflowCue}
+                  >
+                    ${visibleCount === 0
+                      ? html`<div class="sidebar-issues-panel__empty">
+                          <span class="sidebar-issues-panel__empty-icon" aria-hidden="true"
+                            >${icons.inbox}</span
+                          >
+                          <strong>${t("attention.emptyTitle")}</strong>
+                          <span>${t("attention.emptyBody")}</span>
+                        </div>`
+                      : nothing}
+                    ${showApprovals
+                      ? approvalQueue.map((approval) => this.renderApprovalItem(approval))
+                      : nothing}
+                    ${showUpdate && updateError ? this.renderUpdateSurface() : nothing}
+                    ${errorItems.map((item) => this.renderItem(item))}
+                    ${showUpdate && !updateError ? this.renderUpdateSurface() : nothing}
+                    ${warningItems.map((item) => this.renderItem(item))}
+                  </div>
+                  <div
+                    class="sidebar-issues-panel__overflow-cue sidebar-issues-panel__overflow-cue--top"
+                    ?hidden=${!this.overflowAbove}
+                    aria-hidden="true"
+                  ></div>
+                  <div
+                    class="sidebar-issues-panel__overflow-cue sidebar-issues-panel__overflow-cue--bottom"
+                    ?hidden=${!this.overflowBelow}
+                    aria-hidden="true"
+                  ></div>
+                </div>
+              </section>
+            </openclaw-menu-surface>`
         : nothing}
     `;
   }
