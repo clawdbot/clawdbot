@@ -981,7 +981,7 @@ describe("connected identity health", () => {
     });
     expect(getSlackHandlers().has("reaction_added")).toBe(true);
 
-    await handler({
+    await runSlackHandlerWithDispatch(handler, {
       event: {
         type: "message",
         user: "UOTHER123",
@@ -1003,7 +1003,12 @@ describe("connected identity health", () => {
       expect.objectContaining({ channel: "C12345678" }),
     );
     expect(replyMock).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => expect(sendMock).toHaveBeenCalledTimes(1));
+    const dispatchedContext = replyMock.mock.calls[0]?.[0];
+    expect(dispatchedContext).toMatchObject({
+      Body: expect.stringMatching(/<@UENTERPRISE>.*status/u),
+      ChatType: "channel",
+      WasMentioned: true,
+    });
     expect(sendMock).toHaveBeenCalledWith(
       "channel:C12345678",
       "identity restored",
