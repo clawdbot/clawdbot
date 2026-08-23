@@ -83,6 +83,7 @@ export type GatewaySessionRow = Omit<SessionRow, "archivedBy" | "updatedAt" | "w
   verboseLevel?: string;
   traceLevel?: string;
   reasoningLevel?: string;
+  effectiveReasoningLevel?: string;
   elevatedLevel?: string;
   sendPolicy?: "allow" | "deny";
   goal?: SessionGoal;

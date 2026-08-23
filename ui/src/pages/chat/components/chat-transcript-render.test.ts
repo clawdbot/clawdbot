@@ -456,6 +456,133 @@ describe("chat transcript rendering", () => {
       }
     },
   );
+  it("shows completed reasoning when the session inherits an effective reasoning default", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = {
+      ...threadProps("pane-inherited-reasoning", "agent:main:main", [
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "Inherited reasoning stays visible." },
+            { type: "text", text: "Final answer" },
+          ],
+          timestamp: 1_000,
+        },
+      ]),
+      showThinking: true,
+      sessions: {
+        ts: 1,
+        path: "/tmp/openclaw",
+        count: 1,
+        totalCount: 1,
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct" as const,
+            updatedAt: 1_000,
+            effectiveReasoningLevel: "on",
+          },
+        ],
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
+      },
+    };
+
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    expect(container.querySelector(".chat-thinking")?.textContent).toContain(
+      "Inherited reasoning stays visible.",
+    );
+    transcript.hostDisconnected();
+  });
+
+  it("keeps legacy non-off reasoning levels visible for completed transcripts", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = {
+      ...threadProps("pane-legacy-reasoning-level", "agent:main:main", [
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "Legacy high reasoning remains visible." },
+            { type: "text", text: "Final answer" },
+          ],
+          timestamp: 1_000,
+        },
+      ]),
+      showThinking: true,
+      sessions: {
+        ts: 1,
+        path: "/tmp/openclaw",
+        count: 1,
+        totalCount: 1,
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct" as const,
+            updatedAt: 1_000,
+            reasoningLevel: "high",
+          },
+        ],
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
+      },
+    };
+
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    expect(container.querySelector(".chat-thinking")?.textContent).toContain(
+      "Legacy high reasoning remains visible.",
+    );
+    transcript.hostDisconnected();
+  });
+
+  it("does not show completed reasoning for inherited stream mode", async () => {
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const props = {
+      ...threadProps("pane-inherited-stream-reasoning", "agent:main:main", [
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "Stream reasoning is transient." },
+            { type: "text", text: "Final answer" },
+          ],
+          timestamp: 1_000,
+        },
+      ]),
+      showThinking: true,
+      sessions: {
+        ts: 1,
+        path: "/tmp/openclaw",
+        count: 1,
+        totalCount: 1,
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct" as const,
+            updatedAt: 1_000,
+            effectiveReasoningLevel: "stream",
+          },
+        ],
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: 200_000 },
+      },
+    };
+
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    expect(container.querySelector(".chat-thinking")).toBeNull();
+    expect(container.textContent).toContain("Final answer");
+    transcript.hostDisconnected();
+  });
 
   it("resolves persisted replies to their source and highlights it on click", async () => {
     const transcript = createTestTranscript();

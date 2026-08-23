@@ -228,3 +228,19 @@ it.each([
     }),
   ).toMatchObject({ status, hasActiveRun: true, session: { status, hasActiveRun: true } });
 });
+
+it("projects effective reasoning level for session change subscribers", () => {
+  expect(
+    buildGatewaySessionEventFields({
+      sessionRow: {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 5,
+        effectiveReasoningLevel: "stream",
+      },
+    }),
+  ).toMatchObject({
+    reasoningLevel: undefined,
+    effectiveReasoningLevel: "stream",
+  });
+});
