@@ -40,23 +40,16 @@ async function openUpdateCard(page: Page, baseUrl: string, compact = false) {
     await updateButton.waitFor({ timeout: 10_000 });
     return { compact, gateway, updateButton };
   }
-  const updateButton = page.locator(
-    '[data-attention-kind="updateAvailable"] .sidebar-attention__open:visible',
-  );
+  const updateButton = page.locator(".sidebar-footer-update:visible");
   await updateButton.waitFor({ timeout: 10_000 });
   return { compact, gateway, updateButton };
 }
 
-async function openConfirmationFromAlert(page: Page, updateButton: Locator, compact = false) {
+async function openConfirmation(page: Page, updateButton: Locator, compact = false) {
   await updateButton.click();
   if (compact) {
     await page.getByRole("button", { name: "Update now", exact: true }).click();
-    return;
   }
-  const action = page
-    .locator(".custodian__alert-card")
-    .getByRole("button", { name: "Update and restart", exact: true });
-  await action.click();
 }
 
 suite.define(() => {
@@ -70,7 +63,7 @@ suite.define(() => {
           path: path.join(PROOF_DIR, "01-update-affordance-light.png"),
         });
 
-        await openConfirmationFromAlert(page, updateButton);
+        await openConfirmation(page, updateButton);
 
         const dialog = page.getByRole("dialog");
         await dialog.waitFor();
@@ -114,7 +107,7 @@ suite.define(() => {
             suite.server.baseUrl,
             compact,
           );
-          await openConfirmationFromAlert(page, updateButton, compact);
+          await openConfirmation(page, updateButton, compact);
           await page.getByRole("dialog").waitFor();
           expect(
             await confirmationCopy(page)
@@ -139,7 +132,7 @@ suite.define(() => {
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 720, width: 1280 } },
       async ({ page }) => {
         const { gateway, updateButton } = await openUpdateCard(page, suite.server.baseUrl);
-        await openConfirmationFromAlert(page, updateButton);
+        await openConfirmation(page, updateButton);
         await page.getByRole("dialog").waitFor();
 
         if (dismiss === "Escape") {
@@ -161,11 +154,6 @@ suite.define(() => {
         const { gateway, updateButton } = await openUpdateCard(page, suite.server.baseUrl);
 
         await updateButton.focus();
-        await page.keyboard.press("Enter");
-        const alertAction = page
-          .locator(".custodian__alert-card")
-          .getByRole("button", { name: "Update and restart", exact: true });
-        await alertAction.focus();
         await page.keyboard.press("Enter");
         const dialog = page.getByRole("dialog");
         await dialog.waitFor();
@@ -203,7 +191,7 @@ suite.define(() => {
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 720, width: 1280 } },
       async ({ page }) => {
         const { gateway, updateButton } = await openUpdateCard(page, suite.server.baseUrl);
-        await openConfirmationFromAlert(page, updateButton);
+        await openConfirmation(page, updateButton);
         await page.getByRole("dialog").waitFor();
 
         await confirmationCopy(page)

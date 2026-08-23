@@ -275,6 +275,12 @@ export async function handleDiscordMessageAction(
       readStringParam(params, "path", { trim: false }) ??
       readStringParam(params, "media", { trim: false });
     if (!mediaUrl) {
+      // Buffer attachments are send-only; upload-file covers existing file/media sources.
+      if (readStringParam(params, "buffer", { trim: false })) {
+        throw new Error(
+          'Use action: "send" for base64 buffer attachments; upload-file requires filePath, path, or media.',
+        );
+      }
       throw new Error("upload-file requires filePath, path, or media.");
     }
     const content =

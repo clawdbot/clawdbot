@@ -258,6 +258,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     conversationReadOrigin,
     requesterAccountId,
     gatewayClientScopes,
+    deliveryRetryOwner,
   }) => {
     const telegramAction = resolveTelegramMessageActionName(action);
     if (!telegramAction) {
@@ -292,6 +293,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         sessionKey,
         inboundEventKind,
         gatewayClientScopes,
+        deliveryRetryOwner,
         ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
         ...(requesterAccountId ? { requesterAccountId } : {}),
         ...(reply ? { reply } : {}),

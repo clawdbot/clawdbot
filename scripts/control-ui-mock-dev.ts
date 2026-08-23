@@ -17,6 +17,7 @@ import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-
 import { buildBaseHints } from "../src/config/schema.hints.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
+import type { UpdateScheduleState } from "../ui/src/api/types.ts";
 import {
   createControlUiMockBootstrapConfig,
   createControlUiMockGatewayInitScript,
@@ -1541,12 +1542,17 @@ async function createChatPickerScenario(
       childSessions: ["agent:main:subagent:tax-receipts"],
       pinned: true,
     }),
-    sessionRow("agent:main:production-export", "Production export", baseTime - 75_000, {
-      category: "Research",
-      createdActor: MOCK_ACTOR_MIRA,
-      execCwd: "/Users/peter/Projects/clawdbot",
-      owner: { actor: MOCK_ACTOR_MIRA },
-    }),
+    sessionRow(
+      "agent:main:production-export",
+      "Investigate transcript scroll-anchor regression when the final code block expands",
+      baseTime - 75_000,
+      {
+        category: "Research",
+        createdActor: MOCK_ACTOR_MIRA,
+        execCwd: "/Users/peter/Projects/clawdbot",
+        owner: { actor: MOCK_ACTOR_MIRA },
+      },
+    ),
     sessionRow("agent:main:model-budget", "Model budget review", baseTime - 80_000, {
       category: "Research",
       execCwd: "/Users/peter/Projects/openclaw",
@@ -1636,7 +1642,69 @@ async function createChatPickerScenario(
   const profileUsage = buildProfileUsageMocks(Date.now());
   const modelProviders = buildModelProviderMocks(Date.now());
   const skillWorkshop = buildSkillWorkshopMocks(Date.now());
-  const cronMocks = buildCronMocks(Date.now());
+  const richAttention = fixture === "approval";
+  const cronMocks = buildCronMocks(Date.now(), { richAttention });
+  const updateFixtureNow = Date.now();
+  const updateSchedule: UpdateScheduleState | null = richAttention
+    ? {
+        channel: "dev",
+        autoEnabled: true,
+        install: {
+          kind: "git",
+          git: { status: "behind", commitsBehind: 2 },
+        },
+        target: {
+          kind: "git",
+          upstreamRef: "origin/main",
+          upstreamSha: "a".repeat(40),
+          commitsBehind: 2,
+        },
+        campaign: {
+          id: "mock-update-campaign",
+          state: "waiting-for-idle",
+          announcedAtMs: updateFixtureNow - 2 * 60_000,
+          applyAtMs: updateFixtureNow + 15 * 60_000,
+          forceAtMs: updateFixtureNow + 60 * 60_000,
+          updatedAtMs: updateFixtureNow,
+        },
+      }
+    : null;
+  const heldUpdateSchedule: UpdateScheduleState | null = updateSchedule?.campaign
+    ? {
+        ...updateSchedule,
+        campaign: {
+          ...updateSchedule.campaign,
+          holdUntilMs: updateFixtureNow + 60 * 60_000,
+          updatedAtMs: updateFixtureNow,
+        },
+      }
+    : null;
+  const modelAuthStatus = richAttention
+    ? {
+        ...modelProviders.authStatus,
+        providers: modelProviders.authStatus.providers.map((provider) =>
+          provider.provider === "google"
+            ? {
+                ...provider,
+                displayName: "Google Gemini",
+                status: "expired" as const,
+                profiles: [
+                  {
+                    profileId: "shared engineering",
+                    type: "oauth" as const,
+                    status: "expired" as const,
+                    expiry: {
+                      at: updateFixtureNow - 12 * 60_000,
+                      remainingMs: -12 * 60_000,
+                      label: "12m ago",
+                    },
+                  },
+                ],
+              }
+            : provider,
+        ),
+      }
+    : modelProviders.authStatus;
   const channelWizard = buildChannelWizardMocks();
   const configMocks = buildConfigMocks({
     swarmEnabled: fixture === "swarm",
@@ -1724,6 +1792,21 @@ async function createChatPickerScenario(
     assistantName: "Molty",
     defaultAgentId: "main",
     serverBuildId: "mock",
+    updateSchedule,
+    updateAvailable:
+      fixture === "approval"
+        ? {
+            channel: "dev",
+            currentVersion: "2026.8.1",
+            latestVersion: "2026.8.1",
+            upstreamSha: "a".repeat(40),
+            commitsBehind: 2,
+            commits: [
+              { sha: "abcdef1234567", subject: "Unify sidebar notifications" },
+              { sha: "fedcba7654321", subject: "Keep the footer identity compact" },
+            ],
+          }
+        : null,
     // Advertised Gateway methods gate session actions (see
     // ui/src/lib/session-method-access.ts). Omitting the mutation methods left
     // every session context-menu row disabled, so the harness could not show
@@ -1756,6 +1839,7 @@ async function createChatPickerScenario(
       "sessions.create",
       "system.info",
       "terminal.open",
+      ...(richAttention ? ["update.hold", "update.run", "update.status"] : []),
       ...(fixture === "workboard"
         ? [
             "board.get",
@@ -2149,9 +2233,8 @@ async function createChatPickerScenario(
           },
         ],
       },
-      // Pending exec approvals reopen as a blocking modal on every page load
-      // (connect-time exec.approval.list recovery), so the demo approval is
-      // opt-in via --fixture=approval instead of polluting the default mock.
+      // Pending exec approvals recover through the same list seam as the real
+      // Inbox. Keep this fixture small enough to inspect both rows at once.
       "exec.approval.list":
         fixture === "approval"
           ? [
@@ -2159,15 +2242,39 @@ async function createChatPickerScenario(
                 id: "mock-production-export-approval",
                 request: {
                   command: "openclaw export --target production",
+                  agentId: "main",
                   sessionKey: "agent:main:production-export",
+                  host: "peters-mac-studio.local",
+                  cwd: "/Users/peter/Projects/openclaw",
+                  security: "full",
+                  ask: "on-miss",
+                  allowedDecisions: ["allow-once", "allow-always", "deny"],
                 },
-                createdAtMs: baseTime - 75_000,
-                expiresAtMs: ATTENTION_FIXTURE_EXPIRES_AT,
+                createdAtMs: updateFixtureNow - 7 * 60_000,
+                expiresAtMs: updateFixtureNow + 4 * 60 * 60_000,
+              },
+              {
+                id: "mock-worktree-cleanup-approval",
+                request: {
+                  command: "git -C /mock/workspace clean -nd",
+                  agentId: "release",
+                  sessionKey: "agent:main:worktree-cleanup",
+                  host: "peters-mac-studio.local",
+                  cwd: "/mock/workspace",
+                  security: "sandboxed",
+                  ask: "always",
+                  allowedDecisions: ["allow-once", "deny"],
+                },
+                createdAtMs: updateFixtureNow - 6 * 60_000,
+                expiresAtMs: updateFixtureNow + 4 * 60 * 60_000,
               },
             ]
           : [],
       "plugin.approval.list": [],
       "openclaw.approval.list": [],
+      "exec.approval.resolve": { ok: true },
+      "plugin.approval.resolve": { ok: true },
+      "approval.resolve": { ok: true },
       "sessions.patch": { ok: true },
       "sessions.diff": buildSessionDiffMock(),
       // The worktrees page assumes the gateway contract shape; without this
@@ -2247,7 +2354,35 @@ async function createChatPickerScenario(
       "skills.proposals.historyScan": skillWorkshop.historyScan,
       "usage.cost": profileUsage.cost,
       "sessions.usage": profileUsage.sessions,
-      "models.authStatus": modelProviders.authStatus,
+      "models.authStatus": modelAuthStatus,
+      "update.hold": heldUpdateSchedule
+        ? { ok: true, schedule: heldUpdateSchedule }
+        : { ok: false },
+      "update.run": updateSchedule
+        ? { ok: false, result: { status: "error", reason: "build-dirty" } }
+        : {},
+      "update.status": updateSchedule
+        ? {
+            sentinel: {
+              kind: "update",
+              status: "error",
+              ts: updateFixtureNow,
+              stats: {
+                reason: "build-dirty",
+                steps: [
+                  {
+                    name: "build",
+                    log: {
+                      exitCode: 1,
+                      stderrTail:
+                        "generated artifacts differ from the selected revision after the build completed; preserve the checkout and retry only after reconciling the generated files and verifying the target revision",
+                    },
+                  },
+                ],
+              },
+            },
+          }
+        : {},
       "usage.status": modelProviders.usageStatus,
       "device.pair.list": {
         paired: [

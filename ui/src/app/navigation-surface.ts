@@ -43,7 +43,7 @@ export function renderFloatingUpdateCard(params: {
   const showAttention = desktopNavigationHidden && !params.onboarding && !params.compact;
   const showUpdateCard =
     !params.compact &&
-    (params.onboarding ? params.refreshRequired : params.navigationSurfaceHidden);
+    (params.refreshRequired || (!params.onboarding && params.navigationSurfaceHidden));
   if (!showAttention && !showUpdateCard) {
     return nothing;
   }

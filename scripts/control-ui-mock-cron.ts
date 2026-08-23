@@ -46,7 +46,8 @@ function singleJobListCases(jobs: CronJob[], match: Record<string, unknown>) {
   }));
 }
 
-export function buildCronMocks(baseTime: number) {
+export function buildCronMocks(baseTime: number, options: { richAttention?: boolean } = {}) {
+  const richAttention = options.richAttention === true;
   const minute = 60_000;
   const hour = 60 * minute;
   const day = 24 * hour;
@@ -77,6 +78,68 @@ export function buildCronMocks(baseTime: number) {
       lastDeliveryStatus: "not-requested",
     },
   };
+  const extraFailedJobs: CronJob[] = richAttention
+    ? [
+        {
+          id: "mock-cron-release-notify",
+          agentId: "main",
+          name: "Notify release stakeholders about deployment readiness and rollback constraints",
+          description:
+            "Send the release decision, deploy window, rollback owner, and incident contact to every stakeholder group.",
+          enabled: true,
+          createdAtMs: baseTime - 24 * day,
+          updatedAtMs: baseTime - 7 * minute,
+          schedule: { kind: "every", everyMs: 20 * minute, anchorMs: baseTime - 24 * day },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: {
+            kind: "agentTurn",
+            message:
+              "Prepare the release notification, verify the rollback owner, and publish the final deployment readiness summary.",
+          },
+          delivery: { mode: "announce", channel: "slack", to: "#release-operations" },
+          state: {
+            nextRunAtMs: baseTime + 20 * minute,
+            lastRunAtMs: baseTime - 9 * minute,
+            lastRunStatus: "error",
+            lastError:
+              "Delivery failed after the provider accepted the request but closed the stream before the final acknowledgement. The retry queue retained the payload, the release channel has not been notified, and the notification fan-out must be reconciled before another deployment attempt.",
+            lastDurationMs: 18_640,
+            consecutiveErrors: 3,
+            lastDeliveryStatus: "not-delivered",
+          },
+        },
+        {
+          id: "mock-cron-backup-verify",
+          agentId: "main",
+          name: "Verify encrypted backup rotation before the retention window closes",
+          description:
+            "Check the latest encrypted backup, key rotation receipt, and restore manifest before retention pruning.",
+          enabled: true,
+          createdAtMs: baseTime - 42 * day,
+          updatedAtMs: baseTime - 11 * minute,
+          schedule: { kind: "cron", expr: "15 * * * *", tz: "UTC" },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: {
+            kind: "agentTurn",
+            message:
+              "Verify backup rotation and report any missing restore manifest or key receipt.",
+          },
+          delivery: { mode: "none" },
+          state: {
+            nextRunAtMs: baseTime + 15 * minute,
+            lastRunAtMs: baseTime - 13 * minute,
+            lastRunStatus: "error",
+            lastError:
+              "Restore verification could not read the encrypted manifest: checksum mismatch after the object store returned a partial range. Keep the current backup, do not prune the retention window, and retry after the storage replica is healthy.",
+            lastDurationMs: 42_900,
+            consecutiveErrors: 4,
+            lastDeliveryStatus: "not-requested",
+          },
+        },
+      ]
+    : [];
   const overdueJob: CronJob = {
     id: "mock-cron-inbox-triage",
     agentId: "main",
@@ -98,6 +161,31 @@ export function buildCronMocks(baseTime: number) {
       lastDeliveryStatus: "not-requested",
     },
   };
+  const extraOverdueJobs: CronJob[] = richAttention
+    ? [
+        {
+          id: "mock-cron-security-digest",
+          agentId: "main",
+          name: "Prepare the daily security digest",
+          description: "Summarize new security advisories and unresolved remediation work.",
+          enabled: true,
+          createdAtMs: baseTime - 31 * day,
+          updatedAtMs: baseTime - 50 * minute,
+          schedule: { kind: "every", everyMs: hour, anchorMs: baseTime - 31 * day },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "Prepare the daily security digest." },
+          delivery: { mode: "none" },
+          state: {
+            nextRunAtMs: baseTime - 42 * minute,
+            lastRunAtMs: baseTime - 102 * minute,
+            lastRunStatus: "ok",
+            lastDurationMs: 38_420,
+            lastDeliveryStatus: "not-requested",
+          },
+        },
+      ]
+    : [];
   const healthyJob: CronJob = {
     id: "mock-cron-release-digest",
     agentId: "main",
@@ -120,22 +208,23 @@ export function buildCronMocks(baseTime: number) {
       lastDeliveryStatus: "delivered",
     },
   };
-  const jobs = [overdueJob, healthyJob, failedJob];
-  const failedRun: CronRunLogEntry = {
-    ts: baseTime - 5 * minute,
-    runAtMs: baseTime - 5 * minute,
-    jobId: failedJob.id,
-    jobName: failedJob.name,
+  const jobs = [overdueJob, ...extraOverdueJobs, healthyJob, failedJob, ...extraFailedJobs];
+  const failedJobs = [failedJob, ...extraFailedJobs];
+  const failedRuns: CronRunLogEntry[] = failedJobs.map((job, index) => ({
+    ts: baseTime - (5 + index * 4) * minute,
+    runAtMs: baseTime - (5 + index * 4) * minute,
+    jobId: job.id,
+    jobName: job.name,
     action: "finished",
     status: "error",
-    durationMs: failedJob.state?.lastDurationMs,
-    error: failedJob.state?.lastError,
+    durationMs: job.state?.lastDurationMs,
+    error: job.state?.lastError,
     deliveryStatus: "not-requested",
-    model: "gpt-5.6-sol",
-    provider: "openai",
-  };
+    model: index === 1 ? "claude-sonnet-4-6" : "gpt-5.6-sol",
+    provider: index === 1 ? "anthropic" : "openai",
+  }));
   const runs: CronRunLogEntry[] = [
-    failedRun,
+    ...failedRuns,
     {
       ts: baseTime - 30 * minute,
       runAtMs: baseTime - 30 * minute,
@@ -184,22 +273,42 @@ export function buildCronMocks(baseTime: number) {
     enabled: true,
     triggersEnabled: true,
     jobs: jobs.length,
-    nextWakeAtMs: overdueJob.state?.nextRunAtMs,
+    nextWakeAtMs: Math.min(
+      ...jobs.flatMap((job) =>
+        job.state?.nextRunAtMs === undefined ? [] : [job.state.nextRunAtMs],
+      ),
+    ),
   };
   const runByJobId = new Map(runs.map((entry) => [entry.jobId, entry]));
   const sortedJobLists = [
-    { match: { sortBy: "nextRunAtMs", sortDir: "asc" }, jobs },
+    {
+      match: { sortBy: "nextRunAtMs", sortDir: "asc" },
+      jobs: jobs.toSorted(
+        (left, right) => (left.state?.nextRunAtMs ?? 0) - (right.state?.nextRunAtMs ?? 0),
+      ),
+    },
     {
       match: { sortBy: "nextRunAtMs", sortDir: "desc" },
-      jobs: [failedJob, healthyJob, overdueJob],
+      jobs: jobs.toSorted(
+        (left, right) => (right.state?.nextRunAtMs ?? 0) - (left.state?.nextRunAtMs ?? 0),
+      ),
     },
-    { match: { sortBy: "updatedAtMs", sortDir: "asc" }, jobs },
+    {
+      match: { sortBy: "updatedAtMs", sortDir: "asc" },
+      jobs: jobs.toSorted((left, right) => (left.updatedAtMs ?? 0) - (right.updatedAtMs ?? 0)),
+    },
     {
       match: { sortBy: "updatedAtMs", sortDir: "desc" },
-      jobs: [failedJob, healthyJob, overdueJob],
+      jobs: jobs.toSorted((left, right) => (right.updatedAtMs ?? 0) - (left.updatedAtMs ?? 0)),
     },
-    { match: { sortBy: "name", sortDir: "asc" }, jobs: [healthyJob, failedJob, overdueJob] },
-    { match: { sortBy: "name", sortDir: "desc" }, jobs: [overdueJob, failedJob, healthyJob] },
+    {
+      match: { sortBy: "name", sortDir: "asc" },
+      jobs: jobs.toSorted((left, right) => left.name.localeCompare(right.name)),
+    },
+    {
+      match: { sortBy: "name", sortDir: "desc" },
+      jobs: jobs.toSorted((left, right) => right.name.localeCompare(left.name)),
+    },
   ];
 
   return {
@@ -211,7 +320,7 @@ export function buildCronMocks(baseTime: number) {
       cases: [
         {
           match: { enabled: "enabled", lastRunStatus: "error" },
-          response: listResult([failedJob], { limit: 1 }),
+          response: listResult(failedJobs, { limit: failedJobs.length }),
         },
         { match: { enabled: "disabled" }, response: listResult([]) },
         ...singleJobListCases(jobs, {
@@ -247,7 +356,7 @@ export function buildCronMocks(baseTime: number) {
             },
           ];
         }),
-        { match: { statuses: ["error"] }, response: runsResult([failedRun]) },
+        { match: { statuses: ["error"] }, response: runsResult(failedRuns) },
         { response: runsResult(runs) },
       ],
     },

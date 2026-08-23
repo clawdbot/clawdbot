@@ -686,8 +686,16 @@ export function registerSkillsCli(program: Command) {
             return;
           }
           if (isSkillSourceInstallSpec(slug)) {
-            if (opts.version) {
-              defaultRuntime.error("--version is only supported for ClawHub skill installs.");
+            const clawHubOnlyOption = [
+              opts.version && "--version",
+              opts.forceInstall && "--force-install",
+              (opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true) &&
+                "--acknowledge-clawhub-risk",
+            ].find(Boolean);
+            if (clawHubOnlyOption) {
+              defaultRuntime.error(
+                `${clawHubOnlyOption} is only supported for ClawHub skill installs.`,
+              );
               defaultRuntime.exit(1);
               return;
             }

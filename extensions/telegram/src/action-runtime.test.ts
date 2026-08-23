@@ -868,6 +868,7 @@ describe("handleTelegramAction", () => {
       telegramConfig(),
       {
         gatewayClientScopes: ["operator.write"],
+        deliveryRetryOwner: "caller",
         sessionKey: "agent:main:telegram:direct:123",
         reply: {
           replyToId: "456",
@@ -888,6 +889,9 @@ describe("handleTelegramAction", () => {
       to: "@testchannel",
       durability: "required",
       gatewayClientScopes: ["operator.write"],
+      // The gateway-owned plugin send must inherit the caller's retry ownership,
+      // or the failed row stays replay-eligible and duplicates (#124279).
+      deliveryRetryOwner: "caller",
       session: { key: "agent:main:telegram:direct:123", agentId: "main" },
       reply: { replyToId: "456", source: "implicit", mode: "first" },
       payloads: [{ text: "Hello, Telegram!" }],

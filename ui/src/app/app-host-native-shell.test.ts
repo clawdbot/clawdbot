@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import "../components/sidebar-update-card.ts";
 import "./app-host.ts";
 import { resetAppHostTestGlobals, type ShellKeyboardState } from "./app-host.test-support.ts";
 import type { ApplicationContext } from "./context.ts";
@@ -492,7 +493,7 @@ describe("OpenClaw shell update affordance", () => {
       }),
       container,
     );
-    expect(container.querySelector("openclaw-sidebar-update-card")).toBeNull();
+    expect(container.querySelector("openclaw-sidebar-update-card")).not.toBeNull();
     container.remove();
   });
 

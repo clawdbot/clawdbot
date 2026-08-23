@@ -7,6 +7,10 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
+import {
+  NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
+  NATIVE_UPDATE_DECLINED_EVENT,
+} from "../app/native-link-routing.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
 import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
@@ -16,7 +20,6 @@ import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
 import "./sidebar-attention.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
-import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
@@ -27,7 +30,6 @@ import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
 import {
-  renderAppSidebarAttention,
   renderAppSidebarBrand,
   renderAppSidebarFooterBar,
   renderAppSidebarHomeRow,
@@ -64,8 +66,8 @@ import {
   resolveLobsterPetMode,
   resolveLobsterRunOutcome,
 } from "./lobster-pet-contract.ts";
+import { renderPanelRefreshStatus } from "./panel-refresh-status.ts";
 import { SessionOrganizerController } from "./session-organizer-controller.ts";
-import type { SidebarAttentionSummary } from "./sidebar-attention.ts";
 import { SidebarMenusController } from "./sidebar-menus-controller.ts";
 // The shared loader retries transient chunk failures online; a deploy-pruned
 // chunk still stays off until reload when that retry fails, by design.
@@ -77,9 +79,9 @@ const sidebarChromeImport = createIdleImport(() =>
 );
 
 class AppSidebar extends AppSidebarSessionNavigationElement implements SessionListHost {
-  @state() attentionSummary: SidebarAttentionSummary = { count: 0, severity: null };
   @state() sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
   @state() sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest> = new Map();
+  @state() nativeUpdateDeclined = false;
 
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
@@ -215,6 +217,11 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   override disconnectedCallback() {
     window.removeEventListener("openclaw:native-gateways-changed", this.nativeGatewaysChanged);
     window.removeEventListener(
+      NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
+      this.handleNativeUpdateAvailabilityChanged,
+    );
+    window.removeEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
+    window.removeEventListener(
       SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
       this.hiddenSessionCatalogsChanged,
     );
@@ -318,7 +325,13 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override connectedCallback() {
     super.connectedCallback();
+    this.nativeUpdateDeclined = false;
     window.addEventListener("openclaw:native-gateways-changed", this.nativeGatewaysChanged);
+    window.addEventListener(
+      NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
+      this.handleNativeUpdateAvailabilityChanged,
+    );
+    window.addEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
     this.hiddenSessionCatalogsChanged();
     window.addEventListener(
       SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
@@ -329,6 +342,28 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     sidebarChromeImport.schedule();
     this.catalogRendererImport.schedule();
   }
+
+  private readonly handleNativeUpdateDeclined = () => {
+    if (this.nativeUpdateDeclined) {
+      return;
+    }
+    this.nativeUpdateDeclined = true;
+    const campaign = this.updateSchedule?.campaign;
+    const updateBusy = this.updateBusy || campaign?.state === "applying";
+    if (
+      (this.updateAvailable || campaign) &&
+      !updateBusy &&
+      this.canUpdate &&
+      !this.refreshRequired
+    ) {
+      this.onUpdate();
+    }
+  };
+
+  private readonly handleNativeUpdateAvailabilityChanged = () => {
+    this.nativeUpdateDeclined = false;
+    this.requestUpdate();
+  };
 
   protected override firstUpdated() {
     requestAnimationFrame(() => requestAnimationFrame(() => this.classList.add("sidebar-r")));
@@ -492,7 +527,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       catalogRenderer: this.catalogRenderer,
       catalogs: {
         catalogs,
-        refreshStatus: this.sessionData.sessionCatalogRefreshStatus,
         basePath: this.basePath,
         routeSessionKey: isSessionRouteId(this.activeRouteId) ? this.getRouteSessionKey() : "",
         newSessionAgentId: expandedAgentId,
@@ -527,55 +561,51 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       >
         <div class="sidebar-shell" @mousedown=${beginNativeWindowDragFromTopInset}>
           ${renderAppSidebarBrand(this)}
-          <div
-            class="sidebar-shell__body sidebar-shell__body--scroll-${this.sessionData
-              .sessionsScrollState}"
-            @scroll=${(event: Event) =>
-              this.sessionData.updateSessionsScrollState(event.currentTarget as HTMLElement)}
-          >
-            <nav class="sidebar-nav" @contextmenu=${this.sidebarMenus.openCustomizeMenuFromContext}>
-              ${renderAppSidebarPagesHead(this)}
-              <div
-                class="nav-section__items"
-                @dragover=${(event: DragEvent) =>
-                  this.sessionOrganizer.handleSidebarZoneDragOver(event)}
-                @dragleave=${(event: DragEvent) =>
-                  this.sessionOrganizer.handleSidebarZoneDragLeave(event)}
-                @drop=${(event: DragEvent) => this.sessionOrganizer.handleSidebarZoneDrop(event)}
+          <div class="sidebar-shell__content">
+            <div
+              class="sidebar-shell__body sidebar-shell__body--scroll-${this.sessionData
+                .sessionsScrollState}"
+              @scroll=${(event: Event) =>
+                this.sessionData.updateSessionsScrollState(event.currentTarget as HTMLElement)}
+            >
+              <nav
+                class="sidebar-nav"
+                @contextmenu=${this.sidebarMenus.openCustomizeMenuFromContext}
               >
-                ${renderAppSidebarHomeRow(this)}
-                ${sidebarZone.entries.map((entry) =>
-                  renderAppSidebarZoneEntry(
-                    this,
-                    entry,
-                    sidebarZone.sessionRows,
-                    sidebarZone.workboardRows,
-                  ),
-                )}
-                ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs)
-                  .filter((tab) => !tab.placement || !occupiedPluginPlacements.has(tab.placement))
-                  .map((tab) => renderAppSidebarPluginTabEntry(this, tab))}
-              </div>
-            </nav>
-            ${renderAppSidebarOnline(this)} ${this.renderSessions()}
+                ${renderAppSidebarPagesHead(this)}
+                <div
+                  class="nav-section__items"
+                  @dragover=${(event: DragEvent) =>
+                    this.sessionOrganizer.handleSidebarZoneDragOver(event)}
+                  @dragleave=${(event: DragEvent) =>
+                    this.sessionOrganizer.handleSidebarZoneDragLeave(event)}
+                  @drop=${(event: DragEvent) => this.sessionOrganizer.handleSidebarZoneDrop(event)}
+                >
+                  ${renderAppSidebarHomeRow(this)}
+                  ${sidebarZone.entries.map((entry) =>
+                    renderAppSidebarZoneEntry(
+                      this,
+                      entry,
+                      sidebarZone.sessionRows,
+                      sidebarZone.workboardRows,
+                    ),
+                  )}
+                  ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs)
+                    .filter((tab) => !tab.placement || !occupiedPluginPlacements.has(tab.placement))
+                    .map((tab) => renderAppSidebarPluginTabEntry(this, tab))}
+                </div>
+              </nav>
+              ${renderAppSidebarOnline(this)} ${this.renderSessions()}
+            </div>
+            ${this.sessionsStatusFilter === "archived"
+              ? nothing
+              : renderPanelRefreshStatus({
+                  status: this.sessionData.sessionCatalogRefreshStatus,
+                  onRetry: () => void this.sessionData.refreshSessionCatalogs(),
+                  className: "sidebar-session-error sidebar-session-catalog-error",
+                })}
           </div>
           <div class="sidebar-shell__footer">
-            ${renderAppSidebarAttention(this)}
-            <openclaw-sidebar-update-card
-              .updateAvailable=${this.updateAvailable}
-              .updateSchedule=${this.updateSchedule}
-              .heldUpdateCampaignId=${this.heldUpdateCampaignId}
-              .updateBusy=${this.updateBusy}
-              .statusBanner=${this.updateStatusBanner}
-              .watchUpdateProgress=${this.watchUpdateProgress}
-              .canUpdate=${this.canUpdate}
-              .canHoldUpdate=${this.canHoldUpdate}
-              .onUpdate=${this.onUpdate}
-              .refreshRequired=${this.refreshRequired}
-              .onRefresh=${this.onRefresh}
-              .onHoldUpdate=${this.onHoldUpdate}
-              .onReviewUpdate=${this.onReviewUpdate}
-            ></openclaw-sidebar-update-card>
             <openclaw-lobster-pet
               .seed=${lobsterPetSeed(this.sessionKey)}
               .mode=${resolveLobsterPetMode(

@@ -201,6 +201,8 @@ export type DeliverOutboundPayloadsCoreParams = {
   reusePendingDeliveryIntent?: boolean;
   /** @internal Serializable owner state finalized after live or recovered delivery. */
   deliveryCompletion?: DurableDeliveryCompletion;
+  /** @internal The caller resends proven-not-sent payloads itself, so recovery must not. */
+  deliveryRetryOwner?: "caller";
   /** @internal Ephemeral route authority for a recovered attempt; never owns completion. */
   conversationDeliveryAttemptAuthority?: ConversationDeliveryAttemptAuthority;
   /** @internal Revalidates authority once per durable queue execution, before adapter fanout. */
