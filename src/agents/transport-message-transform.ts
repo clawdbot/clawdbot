@@ -1,11 +1,14 @@
 import { resolveModelBoundThinkingReplayMode } from "@openclaw/ai/internal/anthropic";
+import {
+  FAILED_ASSISTANT_REPLAY_TEXT,
+  resolveFailedAssistantReplay,
+} from "@openclaw/ai/internal/shared";
 /**
  * Normalizes transcript messages before provider transport replay. It drops
  * unsafe failed turns, maps tool-call ids across model boundaries, and fills
  * strict provider tool-result gaps when supported.
  */
 import type { Api, Context, Model } from "../llm/types.js";
-import { isReasoningOnlyLengthAssistantTurn } from "./replay-turn-classification.js";
 import { repairToolUseResultPairing } from "./session-transcript-repair.js";
 
 const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
@@ -37,34 +40,6 @@ const OPENAI_RESPONSES_ABORTED_OUTPUT_APIS = new Set<string>([
 
 function defaultAllowSyntheticToolResults(modelApi: Api): boolean {
   return SYNTHETIC_TOOL_RESULT_APIS.has(modelApi);
-}
-
-/**
- * Stands in for a failed assistant turn during replay. Keeps the turn present so the
- * user message before it is not mistaken for a new request, without replaying partial
- * output the provider never finished.
- */
-const FAILED_ASSISTANT_REPLAY_TEXT =
-  "[This turn failed before it completed. Do not redo its work without confirming with the user first.]";
-
-function isFailedAssistantTurn(message: Context["messages"][number]): boolean {
-  if (message.role !== "assistant") {
-    return false;
-  }
-  return (
-    message.stopReason === "error" ||
-    message.stopReason === "aborted" ||
-    isReasoningOnlyLengthAssistantTurn(message)
-  );
-}
-
-function failedAssistantHasToolCalls(message: Context["messages"][number]): boolean {
-  return (
-    message.role === "assistant" &&
-    (message.stopReason === "error" || message.stopReason === "aborted") &&
-    Array.isArray(message.content) &&
-    message.content.some((block) => block.type === "toolCall")
-  );
 }
 
 /** Transforms transcript messages into a provider-safe replay context. */
@@ -187,22 +162,22 @@ export function transformTransportMessages(
   const requiresPairing = allowSyntheticToolResults || hasCrossModelAsyncCalls;
   const replayable = transformed.flatMap((msg, index) => {
     const original = messages[index];
-    if (!original || !isFailedAssistantTurn(original)) {
+    if (!original) {
       return [msg];
     }
-    if (failedAssistantHasToolCalls(original)) {
-      return requiresPairing ? [msg] : [];
+    // Same policy the provider-owned converter applies, so a failed turn replays the
+    // same way whichever boundary handles it. Pairing awareness follows requiresPairing so
+    // cross-model async calls keep their errored frames for shared repair.
+    switch (resolveFailedAssistantReplay(original, { pairingAware: requiresPairing })) {
+      case "drop":
+        return [];
+      case "marker":
+        return [
+          { ...msg, content: [{ type: "text" as const, text: FAILED_ASSISTANT_REPLAY_TEXT }] },
+        ];
+      default:
+        return [msg];
     }
-    if (isReasoningOnlyLengthAssistantTurn(original)) {
-      // Thinking-only length stops carry provider-owned signatures and no answer text,
-      // so they stay dropped rather than replaying an unusable reasoning block.
-      return [];
-    }
-    // A text-only error/abort has no tool call to unpair, so dropping it only hides that
-    // the turn happened: the preceding user message then replays as unanswered and the
-    // model merges it with the next one and can redo a completed side effect. Replace the
-    // partial output with a marker so the failure stays visible without replaying it.
-    return [{ ...msg, content: [{ type: "text" as const, text: FAILED_ASSISTANT_REPLAY_TEXT }] }];
   });
 
   if (!requiresPairing) {
