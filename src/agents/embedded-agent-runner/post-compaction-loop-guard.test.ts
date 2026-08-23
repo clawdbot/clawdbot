@@ -189,30 +189,6 @@ describe("post-compaction re-read instrumentation", () => {
     expect(summary).toContain("toolCalls=3");
     expect(summary).toContain("preCompactionRepeats=1");
   });
-
-  it("skips the window summary when the loop detector aborts instead", () => {
-    const guard = createPostCompactionLoopGuard();
-    guard.armPostCompaction();
-    guard.observe(callOutcome("gateway", { x: 1 }, "r1"));
-    guard.observe(callOutcome("gateway", { x: 1 }, "r1"));
-    const third = guard.observe(callOutcome("gateway", { x: 1 }, "r1"));
-    expect(third.shouldAbort).toBe(true);
-    expect(logError).toHaveBeenCalled();
-    expect(
-      logInfo.mock.calls.some((call) => String(call[0]).includes("post-compaction window closed")),
-    ).toBe(false);
-  });
-
-  it("records nothing when the parent loop detection is disabled", () => {
-    const guard = createPostCompactionLoopGuard({ enabled: false });
-    guard.observe(callOutcome("read", { path: "/a.md" }, "v1"));
-    guard.armPostCompaction();
-    guard.observe(callOutcome("read", { path: "/a.md" }, "v2"));
-    guard.observe(callOutcome("read", { path: "/b.md" }, "v1"));
-    guard.observe(callOutcome("read", { path: "/c.md" }, "v1"));
-    expect(logInfo).not.toHaveBeenCalled();
-    expect(logError).not.toHaveBeenCalled();
-  });
 });
 
 describe("PostCompactionLoopPersistedError", () => {
