@@ -591,7 +591,8 @@ async function readMergedClaudeSessions(
     overlays.set(desktop, merged);
   }
   const skippedFiles = Math.max(cli.budget.skippedFiles, budget.skippedFiles);
-  const complete = cli.context.complete && skippedFiles === 0;
+  const racedFiles = Math.max(cli.budget.racedFiles, budget.racedFiles);
+  const complete = cli.context.complete && skippedFiles === 0 && racedFiles === 0;
   const error = complete
     ? undefined
     : {
@@ -599,6 +600,8 @@ async function readMergedClaudeSessions(
         message:
           skippedFiles > 0
             ? `Some Local Claude session metadata was skipped by the 16 MiB per-file or 64 MiB aggregate safety limit (${skippedFiles} file${skippedFiles === 1 ? "" : "s"}).`
+            : racedFiles > 0
+              ? `Some Local Claude session metadata changed while being read (${racedFiles} file${racedFiles === 1 ? "" : "s"}).`
             : "Some Local Claude session metadata could not be read.",
       };
   return {

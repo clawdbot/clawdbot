@@ -87,12 +87,23 @@ type CatalogJsonCacheEntry = {
 export type CatalogJsonReadBudget = {
   remainingBytes: number;
   skippedFiles: number;
+  racedFiles: number;
 };
 
 function markCatalogJsonSkipped(budget: CatalogJsonReadBudget | undefined): void {
   if (budget) {
     budget.skippedFiles += 1;
   }
+}
+
+function markCatalogJsonRace(
+  budget: CatalogJsonReadBudget | undefined,
+  onIoFailure?: () => void,
+): void {
+  if (budget) {
+    budget.racedFiles += 1;
+  }
+  onIoFailure?.();
 }
 
 export async function reserveCatalogJsonFile(
@@ -162,7 +173,7 @@ const catalogJsonCache = new Map<string, CatalogJsonCacheEntry>();
 let catalogJsonCacheBytes = 0;
 
 export function createCatalogJsonReadBudget(): CatalogJsonReadBudget {
-  return { remainingBytes: MAX_CATALOG_JSON_SCAN_BYTES, skippedFiles: 0 };
+  return { remainingBytes: MAX_CATALOG_JSON_SCAN_BYTES, skippedFiles: 0, racedFiles: 0 };
 }
 
 function deleteCatalogJsonCache(filePath: string): void {
@@ -321,6 +332,7 @@ export async function readJsonFile(
   }
   if (options.reservedBytes !== undefined && stat.size !== options.reservedBytes) {
     deleteCatalogJsonCache(filePath);
+    markCatalogJsonRace(options.budget, options.onIoFailure);
     return undefined;
   }
   const cached = catalogJsonCache.get(filePath);
@@ -355,6 +367,7 @@ export async function readJsonFile(
     if (options.reservedBytes !== undefined) {
       if (openedStat.size !== options.reservedBytes) {
         deleteCatalogJsonCache(filePath);
+        markCatalogJsonRace(options.budget, options.onIoFailure);
         return undefined;
       }
     } else if (!reserveCatalogJsonBytes(options.budget, openedStat.size)) {

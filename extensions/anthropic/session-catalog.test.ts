@@ -2845,6 +2845,39 @@ describe("Claude session catalog", () => {
     expect(replaced).toBe(true);
   });
 
+  it("reports a partial catalog when an admitted JSON file changes size before open", async () => {
+    const home = await createHome();
+    const projectDir = path.join(home, ".claude", "projects", "-workspace");
+    const filePath = path.join(projectDir, "sessions-index.json");
+    const replacementPath = path.join(projectDir, "sessions-index.replacement.json");
+    await fs.mkdir(projectDir, { recursive: true });
+    await fs.writeFile(filePath, JSON.stringify({ version: 1, entries: [] }));
+    await fs.writeFile(
+      replacementPath,
+      JSON.stringify({ version: 1, entries: [], padding: "valid replacement" }),
+    );
+
+    const open = fs.open.bind(fs);
+    let replaced = false;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      if (args[0] === filePath && !replaced) {
+        await fs.rename(replacementPath, filePath);
+        replaced = true;
+      }
+      return await open(...args);
+    });
+
+    const page = await listLocalClaudeSessionPage({}, home, { includeDesktop: false });
+    expect(page).toMatchObject({
+      sessions: [],
+      error: {
+        code: "LOCAL_CATALOG_PARTIAL",
+        message: expect.stringContaining("changed while being read"),
+      },
+    });
+    expect(replaced).toBe(true);
+  });
+
   it("preserves catalog JSON across short descriptor reads", async () => {
     const home = await createHome();
     const projectDir = path.join(home, ".claude", "projects", "-workspace");
