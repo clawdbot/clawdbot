@@ -1471,6 +1471,12 @@ openclaw-chat-video-player {
   padding: 10px 14px;
 }
 
+.chat-assistant-attachment-card__header:has(
+    .chat-attachment-file-icon[data-mode="large-placeholder"]
+  ) {
+  padding-left: 10px;
+}
+
 .chat-assistant-attachment-card--audio .chat-assistant-attachment-card__header,
 .chat-assistant-attachment-card--image .chat-assistant-attachment-card__header,
 .chat-assistant-attachment-card--video .chat-assistant-attachment-card__header,
