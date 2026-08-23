@@ -1205,7 +1205,7 @@ describe("Codex app-server approval bridge", () => {
       ...codexTestTurnIds(),
     });
 
-    expect(result).toEqual({ decision: "accept" });
+    expect(result).toEqual({ decision: "acceptForSession" });
     expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
     expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
       "plugin.approval.request",
@@ -1390,7 +1390,13 @@ describe("Codex app-server approval bridge", () => {
       ...codexTestTurnIds(),
     });
 
-    expect(result).toEqual({ decision: "decline" });
+    expect(result).toEqual({
+      decision: {
+        acceptWithExecpolicyAmendment: {
+          patterns: ["node"],
+        },
+      },
+    });
     expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
     expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
       "plugin.approval.request",
@@ -2398,7 +2404,7 @@ describe("Codex app-server approval bridge", () => {
       ...codexTestTurnIds(),
     });
 
-    expect(result).toEqual({ decision: "accept" });
+    expect(result).toEqual({ decision: "acceptForSession" });
     const description = String(gatewayRequestPayload().description);
     expect(description).toContain("Command: npm install");
     expect(description).toContain("Additional permissions: network, fileSystem");
