@@ -367,6 +367,9 @@ export function createHarness(
     reconcileOnce: vi.fn(async () => {
       log.push("environment:reconcile");
     }),
+    reconcileEnvironment: vi.fn(async () => {
+      log.push("environment:reconcile");
+    }),
   };
   const service = createWorkerPlacementDispatchService({
     placements,

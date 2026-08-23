@@ -8,6 +8,10 @@ import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
+import {
+  NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
+  NATIVE_UPDATE_DECLINED_EVENT,
+} from "../app/native-link-routing.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
 import { createInitialCronState, loadCronJobsPage } from "../lib/cron/index.ts";
@@ -75,6 +79,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   private panelTrigger: HTMLElement | null = null;
   private panelRenderer: SidebarAttentionPanelRenderer | null = null;
   private panelLoad: Promise<SidebarAttentionPanelRenderer> | null = null;
+  private nativeUpdateDeclined = false;
 
   private readonly loadTask = new Task(this, {
     autoRun: false,
@@ -197,14 +202,25 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
 
   override connectedCallback() {
     super.connectedCallback();
+    this.nativeUpdateDeclined = false;
     document.addEventListener("visibilitychange", this.refreshIfStale);
     globalThis.addEventListener("storage", this.syncDismissalsFromStorage);
+    window.addEventListener(
+      NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
+      this.handleNativeUpdateAvailabilityChanged,
+    );
+    window.addEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
     this.idleRefreshTimer = globalThis.setInterval(this.refreshIfStale, IDLE_REFRESH_INTERVAL_MS);
   }
 
   override disconnectedCallback() {
     document.removeEventListener("visibilitychange", this.refreshIfStale);
     globalThis.removeEventListener("storage", this.syncDismissalsFromStorage);
+    window.removeEventListener(
+      NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT,
+      this.handleNativeUpdateAvailabilityChanged,
+    );
+    window.removeEventListener(NATIVE_UPDATE_DECLINED_EVENT, this.handleNativeUpdateDeclined);
     document.removeEventListener("pointerdown", this.closeOnOutsidePointer, true);
     if (this.idleRefreshTimer !== null) {
       globalThis.clearInterval(this.idleRefreshTimer);
@@ -218,6 +234,32 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     this.modelAuthAgentId = null;
     super.disconnectedCallback();
   }
+
+  private readonly handleNativeUpdateAvailabilityChanged = () => {
+    this.nativeUpdateDeclined = false;
+    this.requestUpdate();
+  };
+
+  // This element outlives the lazy panel, so a confirmed native handoff can
+  // always continue through the Gateway when the host declines it.
+  private readonly handleNativeUpdateDeclined = () => {
+    if (this.nativeUpdateDeclined) {
+      return;
+    }
+    this.nativeUpdateDeclined = true;
+    const snapshot = this.context?.overlays.snapshot;
+    const campaign = snapshot?.updateSchedule?.campaign;
+    const busy = snapshot?.updateRunning || campaign?.state === "applying";
+    if (
+      snapshot &&
+      (snapshot.updateAvailable || campaign) &&
+      !busy &&
+      !snapshot.controlUiRefreshRequired &&
+      canCallGatewayMethod(this.context?.gateway.snapshot, "update.run", "operator.admin")
+    ) {
+      void this.context?.overlays.runUpdate();
+    }
+  };
 
   protected override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("activeRouteId") && changed.get("activeRouteId") !== undefined) {
@@ -318,8 +360,20 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
 
   private hasUpdateSurface(): boolean {
     const snapshot = this.context?.overlays.snapshot;
+    if (!snapshot) {
+      return false;
+    }
+    const campaign = snapshot.updateSchedule?.campaign;
+    const canHydrateCampaign = canCallGatewayMethod(
+      this.context?.gateway.snapshot,
+      "update.status",
+      "operator.admin",
+    );
+    if (campaign && !snapshot.updateCampaignStatusHydrated && canHydrateCampaign) {
+      return Boolean(snapshot.updateRunning || snapshot.updateStatusBanner);
+    }
     return Boolean(
-      snapshot?.updateRunning || snapshot?.updateStatusBanner || snapshot?.updateSchedule?.campaign,
+      snapshot.updateRunning || snapshot.updateStatusBanner || snapshot.updateAvailable || campaign,
     );
   }
 

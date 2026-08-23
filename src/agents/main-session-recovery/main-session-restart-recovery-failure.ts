@@ -15,6 +15,7 @@ import { resolveRestartRecoveryDeliveryContext } from "./main-session-restart-di
 import {
   buildRestartRecoveryExpectedState,
   mainSessionRecoveryLog,
+  resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
 
 const TOMBSTONED_SESSION_NOTICE =
@@ -151,6 +152,7 @@ export async function tombstoneMainRestartRecoveryWithNotice(params: {
           abortedLastRun: false,
           endedAt: now,
           lifecycleRunId: undefined,
+          lastRunId: resolveRestartRecoveryTerminalClientRunId(entry),
           mainRestartRecovery: {
             ...recoveryState,
             revision: recoveryState.revision + 1,

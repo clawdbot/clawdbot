@@ -23843,6 +23843,17 @@
       ]
     },
     {
+      "id": "native.apple.55154d93c122c1ac",
+      "source": "Choose the realtime provider, model, voice, and transport in the Control UI.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-named-argument",
+          "path": "apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.e4b13f49bb435884",
       "source": "Choose where the Gateway runs and how this Mac app reaches it.",
       "surface": "apple",
@@ -36503,6 +36514,10 @@
         {
           "kind": "ui-call",
           "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift"
+        },
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift"
         }
       ]
     },
@@ -39387,6 +39402,17 @@
       ]
     },
     {
+      "id": "native.apple.11f6f4fa597f9df4",
+      "source": "Realtime Talk requested an invalid audio sample rate",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/MacRealtimeTalkAudioCapture.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.400963cb08a3c253",
       "source": "Realtime Voice",
       "surface": "apple",
@@ -39505,6 +39531,28 @@
       ]
     },
     {
+      "id": "native.apple.48e407d88c565c02",
+      "source": "Realtime disconnected repeatedly — using native speech",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/TalkModeRuntime+Realtime.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.ab73f15b8147eb41",
+      "source": "Realtime disconnected — reconnecting…",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/TalkModeRuntime+Realtime.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.ca3a762269827f37",
       "source": "Realtime failed",
       "surface": "apple",
@@ -39523,6 +39571,17 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Voice/TalkModeManager.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.b5b843b6a0a96cc5",
+      "source": "Realtime microphone became unavailable: %@",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/MacRealtimeTalkAudioCapture.swift"
         }
       ]
     },
@@ -39556,6 +39615,28 @@
         {
           "kind": "ui-localized-call",
           "path": "apps/ios/Sources/Voice/TalkModeManager.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.babb170df3172374",
+      "source": "Realtime unavailable — native speech could not start",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/TalkModeRuntime+Realtime.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.ddb5344f621cd627",
+      "source": "Realtime unavailable — using native speech",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/TalkModeRuntime+Realtime.swift"
         }
       ]
     },
@@ -42908,6 +42989,28 @@
       ]
     },
     {
+      "id": "native.apple.d40597f2d391f8cf",
+      "source": "Selected audio input has no usable Float32 format",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/MacRealtimeTalkAudioCapture.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.8a4aa2d658ca95a3",
+      "source": "Selected input and system default are unavailable",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-localized-call",
+          "path": "apps/macos/Sources/OpenClaw/MacRealtimeTalkAudioCapture.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.209377172e2dd2aa",
       "source": "Selected reasoning is unavailable for this target.",
       "surface": "apple",
@@ -45539,6 +45642,17 @@
         {
           "kind": "conditional-branch",
           "path": "apps/ios/Sources/Voice/TalkModeGatewayConfig.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.c7d73b77de59d303",
+      "source": "Talk configuration",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-named-argument",
+          "path": "apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift"
         }
       ]
     },
@@ -48329,6 +48443,28 @@
       ]
     },
     {
+      "id": "native.apple.050cddb7d6d24e52",
+      "source": "Use realtime Gateway relay",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-named-argument",
+          "path": "apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.d7c89897a6c2da7f",
+      "source": "Use the Gateway's configured realtime voice session on this Mac. Requires realtime, gateway-relay, and agent-consult in Talk settings.",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-named-argument-multiline",
+          "path": "apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift"
+        }
+      ]
+    },
+    {
       "id": "native.apple.58566125ab806740",
       "source": "Use the panel + Canvas",
       "surface": "apple",
@@ -48802,6 +48938,17 @@
         {
           "kind": "ui-named-argument",
           "path": "apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift"
+        }
+      ]
+    },
+    {
+      "id": "native.apple.2ece20cb05d073cd",
+      "source": "Voice & Talk Settings…",
+      "surface": "apple",
+      "sites": [
+        {
+          "kind": "ui-call",
+          "path": "apps/macos/Sources/OpenClaw/MenuContentView.swift"
         }
       ]
     },

@@ -3288,10 +3288,6 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   padding-inline-end: 44px;
 }
 
-.sidebar-footer-bar--two-actions {
-  padding-inline-end: 88px;
-}
-
 .sidebar-footer-actions {
   position: absolute;
   inset-block-start: 50%;
@@ -3299,7 +3295,6 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   display: flex;
   height: 32px;
   align-items: center;
-  gap: 12px;
   transform: translateY(-50%);
 }
 
@@ -3469,117 +3464,6 @@ openclaw-sidebar-attention {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
-}
-
-.sidebar-footer-update-slot {
-  position: relative;
-  width: 32px;
-  height: 32px;
-  flex: 0 0 32px;
-  transition:
-    width var(--duration-fast) ease,
-    flex-basis var(--duration-fast) ease;
-}
-
-.sidebar-footer-update-slot:has(.sidebar-footer-update:hover:not(:disabled)) {
-  width: 76px;
-  flex-basis: 76px;
-  transition-delay: var(--duration-slow);
-}
-
-.sidebar-footer-update-slot:focus-within {
-  width: 76px;
-  flex-basis: 76px;
-}
-
-.sidebar-footer-update-slot::before {
-  content: "";
-  position: absolute;
-  z-index: 1;
-  inset-block: 0;
-  inset-inline-end: 20px;
-  width: 64px;
-  pointer-events: none;
-  background: linear-gradient(to right, transparent, var(--sidebar-bg));
-  opacity: 0;
-  transition: opacity var(--duration-fast) ease;
-}
-
-.sidebar-footer-update-slot:has(.sidebar-footer-update:hover:not(:disabled))::before {
-  opacity: 1;
-  transition-delay: var(--duration-slow);
-}
-
-.sidebar-footer-update-slot:focus-within::before {
-  opacity: 1;
-}
-
-.sidebar-footer-update {
-  position: absolute;
-  z-index: 2;
-  inset-block-start: 2px;
-  inset-inline-end: 2px;
-  display: inline-flex;
-  width: 28px;
-  height: 28px;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 5px;
-  overflow: hidden;
-  padding: 0 7px;
-  border: 0;
-  border-radius: var(--radius-full);
-  background: var(--inbox-attention);
-  color: var(--inbox-attention-foreground);
-  cursor: var(--cursor-action);
-  transition:
-    width var(--duration-fast) ease,
-    background var(--duration-fast) ease;
-}
-
-.sidebar-footer-update:hover:not(:disabled) {
-  width: 76px;
-  background: var(--inbox-attention-hover);
-  transition-delay: var(--duration-slow);
-}
-
-.sidebar-footer-update:focus-visible {
-  width: 76px;
-  background: var(--inbox-attention-hover);
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-.sidebar-footer-update:disabled {
-  cursor: not-allowed;
-  opacity: 0.56;
-}
-
-.sidebar-footer-update__icon {
-  display: inline-flex;
-  flex: 0 0 14px;
-}
-
-.sidebar-footer-update__icon svg {
-  width: 14px;
-  height: 14px;
-}
-
-.sidebar-footer-update__label {
-  opacity: 0;
-  font-size: var(--control-ui-text-xs);
-  font-weight: 600;
-  white-space: nowrap;
-  transition: opacity var(--duration-fast) ease;
-}
-
-.sidebar-footer-update:hover:not(:disabled) .sidebar-footer-update__label {
-  opacity: 1;
-  transition-delay: var(--duration-slow);
-}
-
-.sidebar-footer-update:focus-visible .sidebar-footer-update__label {
-  opacity: 1;
 }
 
 openclaw-tooltip.sidebar-hover-tooltip {

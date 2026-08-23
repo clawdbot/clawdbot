@@ -1446,7 +1446,11 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     const activeRunAtStart = state.activeChatRunId;
     const result = await loadHistorySnapshot();
     if (result.loaded) {
-      if (reconcileReconnect && activeRunAtStart && activeRunAtStart === state.activeChatRunId) {
+      // History can adopt a newer run before returning; terminal outcomes
+      // still belong only to the unchanged run captured before the request.
+      const recoveredRunId =
+        result.runOutcome.state === "active" ? result.runOutcome.runId : activeRunAtStart;
+      if (reconcileReconnect && recoveredRunId && recoveredRunId === state.activeChatRunId) {
         reconcileReconnectRun(result.runOutcome);
       }
       restoreConnectionNotices();

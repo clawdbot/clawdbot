@@ -3156,6 +3156,9 @@ describe("gateway server chat", () => {
     const dispatchRelease = createDeferred();
     try {
       await writeStoredMainSession(makeDoneSessionEntry());
+      await patchSessionEntryCore({ sessionKey: "agent:main:main", storePath }, () => ({
+        lastRunId: "previous-run",
+      }));
       const context = createDirectChatContext();
       dispatchInboundMessageMock.mockImplementationOnce(async () => dispatchRelease.promise);
       let snapshotAtAck:
@@ -3188,6 +3191,7 @@ describe("gateway server chat", () => {
         sessionId: "sess-main",
         status: "running",
       });
+      expect(snapshotAtAck?.entry?.lastRunId).toBeUndefined();
       expect(snapshotAtAck?.entry?.restartRecoveryDeliveryContext).toBeUndefined();
       expect(snapshotAtAck?.events).toEqual(
         expect.arrayContaining([
@@ -3545,6 +3549,7 @@ describe("gateway server chat", () => {
       const stored = loadSessionEntry(scope);
       expect(stored).toMatchObject({
         abortedLastRun: !retryable,
+        lastRunId: runId,
         sessionId: "sess-main",
         status: "killed",
       });

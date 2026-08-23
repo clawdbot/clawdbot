@@ -625,6 +625,8 @@ export interface SessionEntry extends SessionEntryCore {}
 export type InternalSessionEntryCore = SessionEntryCore & {
   /** Run that owns the current non-terminal Gateway lifecycle projection. */
   lifecycleRunId?: string;
+  /** Exact run that produced the latest terminal Gateway lifecycle projection. */
+  lastRunId?: string;
   /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
   activeWriterRunId?: string;
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */

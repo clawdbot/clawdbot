@@ -4551,6 +4551,33 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
   });
 
+  it("refreshes a cached health snapshot dated after the current clock", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-28T12:00:00Z"));
+    const cached = createHealthSnapshot({ ts: Date.now() + HEALTH_REFRESH_INTERVAL_MS });
+    const fresh = createHealthSnapshot({ ts: Date.now() });
+
+    const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({ cached, fresh });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+  });
+
+  it("restarts request-driven health refreshes when the clock moves backward", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-28T12:00:00Z"));
+    const cached = createHealthSnapshot({});
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
+
+    await requestHealthSnapshot({ cached, refreshHealthSnapshot });
+    expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
+
+    vi.setSystemTime(Date.now() - HEALTH_REFRESH_INTERVAL_MS);
+    await requestHealthSnapshot({ cached: { ...cached, ts: Date.now() }, refreshHealthSnapshot });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
+  });
+
   it("bypasses a fresh cache for explicit admin probes", async () => {
     const cached = createHealthSnapshot({});
     const fresh = createHealthSnapshot({ ts: cached.ts + 1 });

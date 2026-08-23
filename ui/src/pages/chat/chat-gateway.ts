@@ -264,6 +264,49 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (projectedRun) {
     setChatSessionProjection(state, projectedRun.projection);
   }
+  const terminalRunId = payload.runId ?? state.chatRunId;
+  const reconcileOwnedTerminalRun = () => {
+    const terminalStatus = projectedRun?.currentRun?.status;
+    if (
+      !payload.runId ||
+      payload.runId !== state.chatRunId ||
+      !terminalStatus ||
+      terminalStatus === "streaming"
+    ) {
+      return;
+    }
+    clearToolStreamSegments(state);
+    const sessionKeys = sessionMatches ? [state.sessionKey, payload.sessionKey] : [];
+    if (terminalStatus === "yielded") {
+      reconcileChatRunLifecycle(state, {
+        yielded: true,
+        runId: terminalRunId,
+        sessionKey: state.sessionKey,
+        sessionKeys,
+        clearLocalRun: true,
+        clearChatStream: true,
+      });
+      return;
+    }
+    const sessionStatus =
+      terminalStatus === "completed"
+        ? ("done" as const)
+        : terminalStatus === "aborted"
+          ? ("killed" as const)
+          : terminalStatus === "timeout"
+            ? ("timeout" as const)
+            : ("failed" as const);
+    reconcileChatRunLifecycle(state, {
+      outcome: terminalStatus === "completed" ? "done" : "interrupted",
+      sessionStatus,
+      runId: terminalRunId,
+      sessionKey: state.sessionKey,
+      sessionKeys,
+      clearLocalRun: true,
+      clearChatStream: true,
+      armLocalTerminalReconcile: hadActiveRunBeforeEvent && activeRunMatches,
+    });
+  };
   const previousTerminalRun = projectedRun?.previousRun;
   if (previousTerminalRun && previousTerminalRun.status !== "streaming") {
     if (payload.state === "delta") {
@@ -285,6 +328,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         setChatRunError(state, resolveGatewayErrorText(payload, null));
       }
       if (payload.state === "error") {
+        reconcileOwnedTerminalRun();
         return "error";
       }
     }
@@ -296,6 +340,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
           shouldHideAssistantChatMessage(incomingFinal) ||
           hasSessionProjectionAcceptedFinal(previousTerminalRun, incomingFinal)))
     ) {
+      reconcileOwnedTerminalRun();
       return payload.state;
     }
   }
@@ -325,7 +370,6 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     return null;
   }
 
-  const terminalRunId = payload.runId ?? state.chatRunId;
   const terminalAfterBoundaryRunId = latestStreamBoundaryRunId(state);
   const materializeVisibleStream = (
     materializeOpts: Parameters<typeof materializeVisibleAssistantStreamMessages>[2] = {},
@@ -333,21 +377,6 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
       ...materializeOpts,
     });
-  const reconcileTerminalRun = (
-    outcome: "done" | "interrupted",
-    sessionStatus: "done" | "failed" | "killed" | "timeout",
-  ) =>
-    reconcileChatRunLifecycle(state, {
-      outcome,
-      sessionStatus,
-      runId: terminalRunId,
-      sessionKey: state.sessionKey,
-      sessionKeys: sessionMatches ? [state.sessionKey, payload.sessionKey] : [],
-      clearLocalRun: true,
-      clearChatStream: true,
-      armLocalTerminalReconcile: hadActiveRunBeforeEvent && activeRunMatches,
-    });
-
   if (payload.state === "status") {
     if (!payload.runId || payload.runId !== state.chatRunId) {
       return null;
@@ -424,18 +453,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         state.chatMessages = materializeVisibleStream();
       }
     }
-    if (payload.yielded === true && payload.stopReason === "end_turn") {
-      reconcileChatRunLifecycle(state, {
-        yielded: true,
-        runId: terminalRunId,
-        sessionKey: state.sessionKey,
-        sessionKeys: sessionMatches ? [state.sessionKey, payload.sessionKey] : [],
-        clearLocalRun: true,
-        clearChatStream: true,
-      });
-    } else {
-      reconcileTerminalRun("done", "done");
-    }
+    reconcileOwnedTerminalRun();
   } else if (payload.state === "aborted") {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !shouldHideAssistantChatMessage(normalizedMessage)) {
@@ -460,7 +478,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     if (payload.errorMessage?.trim()) {
       setChatRunError(state, resolveGatewayErrorText(payload, null));
     }
-    reconcileTerminalRun("interrupted", "killed");
+    reconcileOwnedTerminalRun();
   } else if (payload.state === "error") {
     const payloadMessage = normalizeFinalAssistantMessage(payload.message);
     const visiblePayloadMessage =
@@ -523,10 +541,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     }
     // The shared Gateway projection owns timeout classification; preserve it
     // when publishing selected-session and sidebar terminal status.
-    reconcileTerminalRun(
-      "interrupted",
-      projectedRun?.currentRun?.status === "timeout" ? "timeout" : "failed",
-    );
+    reconcileOwnedTerminalRun();
     setChatRunError(
       state,
       resolveGatewayErrorText(payload, projectedErrorMessage ? visiblePayloadMessage : null),

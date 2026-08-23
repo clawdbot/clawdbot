@@ -700,6 +700,17 @@ Native dependency policy:
       after 5 minutes with no stdout or stderr output. Set
       `OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=0` to disable the watchdog for
       an intentionally silent investigation.
+    - `scripts/run-tsgo.mjs` leaves tsgo unbounded by default, preserving the
+      behavior of existing local workflows. Set `OPENCLAW_TSGO_TIMEOUT_MS` to
+      a positive millisecond value to make a wedged compiler fail loudly
+      instead of blocking its caller forever. On expiry the whole tsgo process
+      tree is killed and the run fails. Values above Node's timer
+      ceiling saturate at it instead of collapsing to a 1ms deadline; `0`, a
+      negative, a fraction, or anything above `Number.MAX_SAFE_INTEGER` is
+      rejected and fails the run. Surrounding whitespace is trimmed first;
+      the remaining value must use plain decimal digits without leading zeros,
+      so values such as `1e5` or `007` are rejected. Unset the variable to
+      disable the watchdog.
 
   </Accordion>
 

@@ -2138,6 +2138,125 @@ describe("anthropic transport stream", () => {
     expect(result.content.some((block) => block.type === "toolCall")).toBe(false);
   });
 
+  it("refreshes streamed tool argument previews on geometric checkpoints instead of every delta", async () => {
+    // ~1165 chars of argument JSON split into twelve ~100-char deltas: below
+    // the first preview checkpoint for five deltas, crossing it on the sixth.
+    const argsJson = JSON.stringify({ content: "x".repeat(1150) });
+    const deltaSize = 100;
+    const chunks: string[] = [];
+    for (let offset = 0; offset < argsJson.length; offset += deltaSize) {
+      chunks.push(argsJson.slice(offset, offset + deltaSize));
+    }
+    // Frame delivery waits for consumer observation: partial output blocks are
+    // mutated in place by the handler, so a buffered producer would let later
+    // deltas overwrite the state an earlier snapshot wants to capture.
+    const gates: Array<() => void> = [];
+    const deltaObservedGates = chunks.map(
+      () =>
+        new Promise<void>((resolve) => {
+          gates.push(resolve);
+        }),
+    );
+    const encoder = new TextEncoder();
+    const frames: Array<{ encoded: Uint8Array; waitFor?: Promise<void> }> = [
+      {
+        encoded: encoder.encode(
+          `data: ${JSON.stringify({
+            type: "message_start",
+            message: { id: "msg_preview_schedule", usage: { input_tokens: 2, output_tokens: 0 } },
+          })}\n\n`,
+        ),
+      },
+      {
+        encoded: encoder.encode(
+          `data: ${JSON.stringify({
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "tool_use", id: "call_preview", name: "write", input: {} },
+          })}\n\n`,
+        ),
+      },
+      ...chunks.map((chunk, index) => ({
+        encoded: encoder.encode(
+          `data: ${JSON.stringify({
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: chunk },
+          })}\n\n`,
+        ),
+        ...(index > 0 ? { waitFor: deltaObservedGates[index - 1] } : {}),
+      })),
+      ...[
+        `data: ${JSON.stringify({ type: "content_block_stop", index: 0 })}\n\n`,
+        `data: ${JSON.stringify({
+          type: "message_delta",
+          delta: { stop_reason: "tool_use" },
+          usage: { input_tokens: 2, output_tokens: 2 },
+        })}\n\n`,
+        `data: ${JSON.stringify({ type: "message_stop" })}\n\n`,
+      ].map((payload) => ({
+        encoded: encoder.encode(payload),
+        waitFor: deltaObservedGates[chunks.length - 1],
+      })),
+    ];
+    let nextFrame = 0;
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const frame = frames[nextFrame];
+        if (!frame) {
+          controller.close();
+          return;
+        }
+        await frame.waitFor;
+        controller.enqueue(frame.encoded);
+        nextFrame += 1;
+      },
+    });
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(body, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      }),
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        makeAnthropicTransportModel(),
+        { messages: [{ role: "user", content: "write" }] } as AnthropicStreamContext,
+        { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+      ),
+    );
+    const previews: Array<Record<string, unknown>> = [];
+    for await (const event of stream as AsyncIterable<{
+      type: string;
+      partial?: { content?: Array<{ type: string; arguments?: Record<string, unknown> }> };
+    }>) {
+      if (event.type !== "toolcall_delta") {
+        continue;
+      }
+      const block = event.partial?.content?.find((entry) => entry.type === "toolCall");
+      previews.push(structuredClone(block?.arguments ?? {}));
+      gates.shift()?.();
+    }
+    const result = await stream.result();
+
+    // Preview parses are preview-only: below the first checkpoint no parse has
+    // run yet, and the checkpoint refresh keeps later deltas stale until the
+    // next doubling. The terminal parse stays authoritative.
+    expect(previews.length).toBe(chunks.length);
+    for (const snapshot of previews.slice(0, 5)) {
+      expect(snapshot).toEqual({});
+    }
+    expect(previews[5]).not.toEqual({});
+    expect(result.stopReason).toBe("toolUse");
+    const toolCall = result.content.find((block) => block.type === "toolCall");
+    expect(toolCall).toMatchObject({
+      type: "toolCall",
+      name: "write",
+      arguments: { content: "x".repeat(1150) },
+    });
+  });
+
   it("uses seeded Anthropic tool input when no argument deltas arrive", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([

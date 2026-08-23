@@ -139,6 +139,16 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     this.holdingCampaignId = null;
   };
 
+  private hasAvailableUpdate() {
+    const update = this.updateAvailable;
+    const gitTarget = this.updateSchedule?.target;
+    return (
+      (update !== null && update.latestVersion !== update.currentVersion) ||
+      (update?.commitsBehind !== undefined && update.commitsBehind > 0) ||
+      (gitTarget?.kind === "git" && gitTarget.commitsBehind > 0)
+    );
+  }
+
   private compactSummary() {
     if (this.refreshRequired) {
       return {
@@ -151,7 +161,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     const campaign = this.updateSchedule?.campaign;
     const busy = this.updateBusy || campaign?.state === "applying";
     const statusBanner = this.statusBanner;
-    if (!campaign && !busy && !statusBanner) {
+    if (!campaign && !busy && !statusBanner && !this.hasAvailableUpdate()) {
       return null;
     }
     const targetLabel = formatUpdateTargetLabel(this.updateSchedule, this.updateAvailable);
@@ -298,7 +308,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     // metadata while it restarts, and the card must not vanish or fall back to
     // the stale "update available" call to action mid-install.
     const statusBanner = this.statusBanner;
-    if (!campaign && !busy && !statusBanner) {
+    if (!campaign && !busy && !statusBanner && !this.hasAvailableUpdate()) {
       return nothing;
     }
     const title = this.nativeUpdateAvailable
@@ -330,7 +340,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
     );
     // An outcome with nothing left to act on is the whole card: re-offering an
     // update the operator just ran would bury the reason it failed.
-    const actionable = Boolean(campaign || busy || (update && (hasVersionUpdate || hasGitUpdate)));
+    const actionable = Boolean(campaign || busy || hasVersionUpdate || hasGitUpdate);
     return html`
       <div
         class="sidebar-update-card"
