@@ -239,6 +239,11 @@ class TalkModeManager internal constructor(
     private const val realtimePlaybackBufferMs = 240
     private const val realtimePlaybackIdlePollMs = 20L
 
+    // How often the effect is re-measured off the capture read loop. Slow enough that the IPC is
+    // negligible, fast enough that a route that lost its canceller closes the uplink within a
+    // few frames rather than at the next route event.
+    private const val realtimeAecRefreshMs = 500L
+
     // Queue depth is not evidence about the device. The relay forwards provider audio unpaced
     // and a realtime provider generates speech faster than the speaker plays it, so the backlog
     // grows with response length on a perfectly healthy device; a device that has actually
@@ -441,7 +446,9 @@ class TalkModeManager internal constructor(
   // exclusively by [realtimePlaybackOwner]. The two share no lock and no suspension, so an
   // inbound Gateway frame can never wait on hardware backpressure. (They do still share
   // [realtimeCapturePauseLock] on the teardown path, but only for field swaps -- no device
-  // call and no suspension happens under it.)
+  // call and no suspension happens under it. Note that relay teardown itself does make one
+  // synchronous AudioService call from the ingress pump, in stopRealtimeRelay's restore of the
+  // communication mode -- once per teardown, not per frame; see the note there.)
   private val realtimePlaybackCommands =
     Channel<RealtimePlaybackCommand>(
       capacity = realtimePlaybackProviderQueueCapacity + realtimePlaybackControlQueueHeadroom,
@@ -483,30 +490,40 @@ class TalkModeManager internal constructor(
   private val realtimePlaybackOwnerScope = CoroutineScope(scope.coroutineContext + realtimePlaybackOwnerJob)
   private val realtimePlaybackOwner: Job =
     realtimePlaybackOwnerScope.launch(realtimePlaybackDispatcher) {
-      for (command in realtimePlaybackCommands) {
-        if (command is RealtimePlaybackCommand.Audio || command is RealtimePlaybackCommand.Mark) {
-          queuedRealtimeProviderCommands.decrementAndGet()
-        }
-        if (command is RealtimePlaybackCommand.Audio) {
-          queuedRealtimeAudioBytes.addAndGet(-command.bytes.size.toLong())
-        }
-        try {
-          when (command) {
-            is RealtimePlaybackCommand.Audio -> processRealtimeAudioOwnerOnly(command)
-            is RealtimePlaybackCommand.Mark -> processRealtimeMarkOwnerOnly(command)
-            is RealtimePlaybackCommand.Clear -> processRealtimeClearOwnerOnly(command)
-            is RealtimePlaybackCommand.Stop -> processRealtimeStopOwnerOnly(command)
-            RealtimePlaybackCommand.PollIdle -> processRealtimePollIdleOwnerOnly()
+      try {
+        for (command in realtimePlaybackCommands) {
+          if (command is RealtimePlaybackCommand.Audio || command is RealtimePlaybackCommand.Mark) {
+            queuedRealtimeProviderCommands.decrementAndGet()
           }
-        } catch (err: CancellationException) {
-          throw err
-        } catch (err: Throwable) {
-          // One command must never end this loop. The channel is long-lived and never
-          // recreated, so a dead owner would swallow every later command in silence.
-          val message = err.message ?: err::class.simpleName ?: "playback command failed"
-          Log.w(tag, "realtime playback command failed: $message")
-          failRealtimePlaybackOwnerOnly(message)
+          if (command is RealtimePlaybackCommand.Audio) {
+            queuedRealtimeAudioBytes.addAndGet(-command.bytes.size.toLong())
+          }
+          try {
+            when (command) {
+              is RealtimePlaybackCommand.Audio -> processRealtimeAudioOwnerOnly(command)
+              is RealtimePlaybackCommand.Mark -> processRealtimeMarkOwnerOnly(command)
+              is RealtimePlaybackCommand.Clear -> processRealtimeClearOwnerOnly(command)
+              is RealtimePlaybackCommand.Stop -> processRealtimeStopOwnerOnly(command)
+              RealtimePlaybackCommand.PollIdle -> processRealtimePollIdleOwnerOnly()
+            }
+          } catch (err: CancellationException) {
+            throw err
+          } catch (err: Throwable) {
+            // One command must never end this loop. The channel is long-lived and never
+            // recreated, so a dead owner would swallow every later command in silence.
+            val message = err.message ?: err::class.simpleName ?: "playback command failed"
+            Log.w(tag, "realtime playback command failed: $message")
+            failRealtimePlaybackOwnerOnly(message)
+          }
         }
+      } finally {
+        // The owner is the only thing that may touch the device, so it is also the only thing
+        // that can release it. Cancellation (scope completion), an exception escaping the loop,
+        // and channel closure all land here; without it a cancelled owner leaves an AudioTrack
+        // alive with residual audio still presenting, and leaves the capture gate believing the
+        // assistant is still speaking. Idempotent with Stop/Clear: both already emptied the map
+        // and nulled the sink, so this is a no-op on the normal paths.
+        retirePlayoutOnOwnerExitOwnerOnly()
       }
     }
 
@@ -1263,14 +1280,25 @@ class TalkModeManager internal constructor(
     // would make an inbound frame wait on an audio-route reconfiguration.
     val communicationAudioToken = acquireRealtimeCommunicationAudio()
     var captureFailure: String? = null
+    // The claim above is a device call made outside the transition monitor, so a stop can land
+    // between it and the publication below. Whether it was published decides who owns it.
+    var publishedCommunicationAudio = false
     val capturePaused =
       synchronized(realtimeCapturePauseLock) {
+        // Re-tested inside the monitor, not only before the claim above: acquiring communication
+        // audio is a device call made outside this monitor, so a stop can complete in that window
+        // and find nothing to tear down. Publishing a session after that stop would resurrect it
+        // and wedge start(), which refuses while realtimeSessionId is non-null.
+        if (generation != startGeneration.get() || !_isEnabled.value || stopRequested) {
+          return@synchronized null
+        }
         // Session publication and capture installation are one transition. PTT
         // therefore either blocks startup or detaches every installed capture job.
         // The wire contract is published with the session id, not before it: a stop that lands
         // between the two would otherwise leave a live session with no contract to capture under.
         realtimeWireAudioContract = wireAudioContract
         realtimeCommunicationAudioToken = communicationAudioToken
+        publishedCommunicationAudio = true
         realtimeAgentCoordinator.beginSession(
           RealtimeAgentSession(
             relaySessionId = sessionId,
@@ -1291,7 +1319,14 @@ class TalkModeManager internal constructor(
           false
         }
       }
-    if (capturePaused) {
+    if (!publishedCommunicationAudio) {
+      // A stop won the race: nothing holds this token, so it must be handed back here rather than
+      // left standing with the device in communication mode and focus held.
+      realtimeCommunicationAudio.restore(systemAudioManager, communicationAudioToken)
+      closeRealtimeSession(sessionId)
+      throw CancellationException("realtime talk stopped while connecting")
+    }
+    if (capturePaused == true) {
       Log.d(tag, "realtime session ready; capture paused for PTT relaySessionId=$sessionId")
       return
     }
@@ -1462,7 +1497,10 @@ class TalkModeManager internal constructor(
           if (audioInputGeneration.get() == inputGeneration) {
             onAppliedAudioInputChanged(openedAudioInput.appliedPreferredDeviceKey)
           }
-          val aecEnabled = openedAudioInput.communicationEchoCancellationEnabled
+          // Measured off the read loop, and gated on mode ownership: an effect that reports
+          // enabled while some other app owns MODE_IN_COMMUNICATION is not cancelling this
+          // session's downlink, so it must not open the uplink.
+          val aecEnabled = realtimeEchoCancellationGranted(openedAudioInput, measure = true)
           publishRealtimeAecCapability(inputGeneration, aecEnabled)
           val captureHealth =
             RealtimeCaptureHealthReport(
@@ -1481,21 +1519,48 @@ class TalkModeManager internal constructor(
           // uplink pacing follows the negotiated clock rather than the requested one.
           val buffer = ByteArray(selection.captureSampleRateHz * 2 * realtimeAudioFrameMs / 1000)
           audioInput.startRecording()
-          while (coroutineContext.isActive && _isEnabled.value && realtimeSessionId == sessionId) {
-            val read = audioInput.read(buffer, 0, buffer.size)
-            if (read <= 0) continue
-            // Re-read per frame rather than trusting the value this session opened with: a route
-            // can change under a running recorder, and a capability that could only ever be
-            // granted would never let the uplink close again on a route that lost its canceller.
-            publishRealtimeAecCapability(inputGeneration, openedAudioInput.communicationEchoCancellationEnabled)
-            val rms = TalkAudioLevel.pcm16Rms(buffer, read)
-            captureHealth.observe(rms)
-            _inputLevel.value = TalkAudioLevel.smoothed(_inputLevel.value, TalkAudioLevel.normalized(rms))
-            // Converted before the forwarding policy is consulted, so the filter sees one
-            // continuous stream rather than one with the suppressed frames punched out of it.
-            val wireFrame = resampler.convert(buffer, read)
-            if (!shouldAppendRealtimeCapturedFrame(wireFrame.size)) continue
-            audioFrames.trySend(wireFrame)
+          // The effect is re-measured here, not in the read loop below. Measuring takes the
+          // capture session's lifecycle lock, which a route refresh holds across several
+          // AudioManager binder calls; doing that between reads would put a route change on the
+          // critical path of AudioRecord.read and overrun the recorder. This watcher can block
+          // there instead, where blocking costs nothing.
+          val aecWatcher =
+            launch(realtimeCaptureDispatcher) {
+              while (isActive) {
+                delay(realtimeAecRefreshMs)
+                // A transient focus holder at start time must not leave the whole session half
+                // duplex; retrying here costs nothing when the mode is already held. Fenced on
+                // this generation and session: a retry that raced teardown would otherwise claim
+                // the device for a session that has ended.
+                recoverRealtimeCommunicationAudio(inputGeneration, sessionId)
+                publishRealtimeAecCapability(inputGeneration, realtimeEchoCancellationGranted(openedAudioInput, measure = true))
+              }
+            }
+          try {
+            while (coroutineContext.isActive && _isEnabled.value && realtimeSessionId == sessionId) {
+              val read = audioInput.read(buffer, 0, buffer.size)
+              if (read <= 0) continue
+              // Lock-free and IPC-free: the cached capability the watcher above maintains, so a
+              // slow route refresh can never stall forwarding. Still re-read every frame, because
+              // a capability that could only ever be granted would never let the uplink close
+              // again on a route that lost its canceller.
+              publishRealtimeAecCapability(inputGeneration, realtimeEchoCancellationGranted(openedAudioInput, measure = false))
+              val rms = TalkAudioLevel.pcm16Rms(buffer, read)
+              captureHealth.observe(rms)
+              _inputLevel.value = TalkAudioLevel.smoothed(_inputLevel.value, TalkAudioLevel.normalized(rms))
+              // Converted before the forwarding policy is consulted, so the filter sees one
+              // continuous stream rather than one with the suppressed frames punched out of it.
+              val wireFrame = resampler.convert(buffer, read)
+              if (!shouldAppendRealtimeCapturedFrame(wireFrame.size)) continue
+              audioFrames.trySend(wireFrame)
+            }
+          } finally {
+            // Joined, not just cancelled: publishRealtimeAecCapability does not suspend, so an
+            // iteration already past its delay would otherwise land its `true` after the teardown
+            // below published `false` for the same generation, which the guard cannot drop.
+            // NonCancellable because the dominant teardown path cancels this coroutine first, and
+            // a plain join would then return immediately instead of waiting.
+            withContext(NonCancellable) { aecWatcher.cancelAndJoin() }
           }
         } catch (err: Throwable) {
           if (err is CancellationException) throw err
@@ -1510,6 +1575,67 @@ class TalkModeManager internal constructor(
         }
       }
     return null
+  }
+
+  /**
+   * Whether this session may treat the platform as cancelling its own echo.
+   *
+   * Two independent facts, both required. The effect must report enabled -- read back, never
+   * inferred -- and this session must actually own MODE_IN_COMMUNICATION, read-back proven when
+   * it was claimed. An effect attached to a recorder while another app owns the communication
+   * mode is not cancelling this session's downlink, and granting full duplex on it would forward
+   * the assistant's own voice back to the provider.
+   *
+   * [measure] re-measures the effect over IPC under the capture session's lifecycle lock, and may
+   * block behind a route refresh. Only callers that are not the capture read loop may pass true.
+   */
+  private fun realtimeEchoCancellationGranted(
+    session: AndroidAudioInputSession,
+    measure: Boolean,
+  ): Boolean {
+    val effectEnabled =
+      if (measure) session.refreshCommunicationEchoCancellation() else session.communicationEchoCancellationEnabled
+    // The measuring path also re-reads the device mode: acquisition proved it at one instant, and
+    // another app can move it afterwards. The read-loop path consults the flag that verification
+    // maintains, so it stays free of the binder call.
+    val ownsMode =
+      if (measure) {
+        realtimeCommunicationAudio.verifyCommunicationModeActive(systemAudioManager)
+      } else {
+        // Lock-free mirror: the owner monitor is held across AudioService calls, so entering it
+        // once per frame would put an IPC round trip back on the AudioRecord.read path.
+        realtimeCommunicationAudio.communicationModeActiveUnsynchronized
+      }
+    return effectEnabled && ownsMode
+  }
+
+  /**
+   * Re-claims communication audio for a session whose first attempt a transient focus holder
+   * refused, and publishes the token where teardown will find it.
+   *
+   * The claim and its publication cannot be one atomic step -- claiming touches the device and
+   * must not happen under the transition monitor -- so a claim that loses the race to teardown
+   * unwinds itself here. Leaving it published would put the device in communication mode with no
+   * live token to restore it.
+   */
+  private fun recoverRealtimeCommunicationAudio(
+    inputGeneration: Long,
+    sessionId: String,
+  ) {
+    if (audioInputGeneration.get() != inputGeneration || realtimeSessionId != sessionId) return
+    val recovered = realtimeCommunicationAudio.retryIfUnclaimed(systemAudioManager)
+    if (recovered == RealtimeCommunicationAudioOwner.NO_OWNER) return
+    val published =
+      synchronized(realtimeCapturePauseLock) {
+        // Field swap only -- no device call under the monitor the Gateway pump also takes.
+        if (realtimeSessionId == sessionId) {
+          realtimeCommunicationAudioToken = recovered
+          true
+        } else {
+          false
+        }
+      }
+    if (!published) realtimeCommunicationAudio.restore(systemAudioManager, recovered)
   }
 
   /**
@@ -1997,6 +2123,24 @@ class TalkModeManager internal constructor(
     }
   }
 
+  /**
+   * Final owner-only cleanup, on any exit from the command loop.
+   *
+   * Barriers are dropped rather than acknowledged, the same choice terminal Stop makes: the owner
+   * is gone, so there is nothing left to measure a target frame against, and the gateway scope
+   * this would acknowledge through is being torn down with it.
+   */
+  private fun retirePlayoutOnOwnerExitOwnerOnly() {
+    pendingRealtimePlaybackMarks.clear()
+    retireRealtimeAudioSinkOwnerOnly()
+    realtimePlaybackEndsAtMs = 0L
+    setRealtimePlaying(false)
+    _outputLevel.value = null
+    // A Clear still queued when the owner died would otherwise leave cancelOutput waiting out its
+    // whole timeout for a boundary no one is left to reach.
+    pendingRealtimeOutputClear?.complete(Unit)
+  }
+
   /** Owner-only cleanup shared by Clear, Stop, and the command loop's failure path. */
   private fun retireRealtimeAudioSinkOwnerOnly() {
     realtimeAudioSink?.let { sink -> runCatching { sink.close() } }
@@ -2094,7 +2238,10 @@ class TalkModeManager internal constructor(
         currentSessionId to currentCaptureJobs
       }
     // Outside the monitor: changing the device mode is a system call, and the owner declines the
-    // restore anyway if a newer session has taken over since.
+    // restore anyway if a newer session has taken over since. This is still one synchronous
+    // AudioService call on the Gateway ingress pump when teardown arrives as a "close" event --
+    // once per relay teardown rather than per frame, unlike the write backpressure this design
+    // removed, but it is the one remaining device call reachable from ingress.
     realtimeCommunicationAudio.restore(systemAudioManager, communicationAudioToken)
     realtimeOutputSuppressed = false
     realtimeOutputTurnId = null

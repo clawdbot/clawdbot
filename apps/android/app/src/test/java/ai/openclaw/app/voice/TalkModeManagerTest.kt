@@ -17,6 +17,7 @@ import android.content.IntentFilter
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.media.audiofx.AudioEffect
 import android.os.Bundle
 import android.os.Looper
 import android.os.SystemClock
@@ -73,6 +74,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowAudioEffect
 import org.robolectric.shadows.ShadowAudioRecord
 import org.robolectric.shadows.ShadowAudioTrack
 import org.robolectric.shadows.ShadowSystemClock
@@ -1571,6 +1573,90 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun aCommunicationAudioRetryThatLosesToTeardownUnwindsItsOwnClaim() {
+    // The retry touches the device, so it cannot be atomic with publishing its token. A claim
+    // that lands after teardown took the field would otherwise leave the device in communication
+    // mode with no live token left to restore it.
+    val manager = createManager()
+    val audioManager = audioManagerForTest()
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+    val generation = (readPrivateField(manager, "audioInputGeneration") as AtomicLong).get()
+    val owner0 = readPrivateField(manager, "realtimeCommunicationAudio") as RealtimeCommunicationAudioOwner
+    // The retry only acts on a transient focus refusal, so the session must have suffered one.
+    shadowOf(audioManager).setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_FAILED)
+    assertEquals(RealtimeCommunicationAudioOwner.NO_OWNER, owner0.enter(audioManager))
+    shadowOf(audioManager).setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+
+    // The live case publishes the token.
+    recoverRealtimeCommunicationAudio(manager, generation, "relay-1")
+    val published = readPrivateField(manager, "realtimeCommunicationAudioToken") as Long
+    assertTrue("a live session must receive the recovered token", published != RealtimeCommunicationAudioOwner.NO_OWNER)
+    assertEquals(AudioManager.MODE_IN_COMMUNICATION, audioManager.mode)
+
+    // Teardown wins: the session id has moved on, so the claim must undo itself.
+    val owner = owner0
+    owner.restore(audioManager, published)
+    shadowOf(audioManager).setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_FAILED)
+    assertEquals(RealtimeCommunicationAudioOwner.NO_OWNER, owner.enter(audioManager))
+    shadowOf(audioManager).setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
+    setPrivateField(manager, "realtimeCommunicationAudioToken", RealtimeCommunicationAudioOwner.NO_OWNER)
+    setPrivateField(manager, "realtimeSessionId", "relay-2")
+
+    recoverRealtimeCommunicationAudio(manager, generation, "relay-1")
+
+    assertEquals(
+      "a stranded claim must not be published",
+      RealtimeCommunicationAudioOwner.NO_OWNER,
+      readPrivateField(manager, "realtimeCommunicationAudioToken") as Long,
+    )
+    assertFalse("a stranded claim must not leave the device in communication mode", owner.communicationModeActive)
+    assertEquals(AudioManager.MODE_NORMAL, audioManager.mode)
+  }
+
+  @Test
+  @Config(shadows = [ShadowObservableAudioEffect::class])
+  fun anEnabledCancellerDoesNotGrantFullDuplexWithoutCommunicationModeOwnership() {
+    // FIX-1's consequence. The effect can report enabled while another app owns
+    // MODE_IN_COMMUNICATION -- then it is not cancelling this session's downlink, and opening the
+    // uplink would forward the assistant's own voice back to the provider.
+    val manager = createManager()
+    val session = openCommunicationCaptureForTest()
+    try {
+      assertTrue("the effect must report enabled for this test to mean anything", session.refreshCommunicationEchoCancellation())
+
+      // No mode ownership yet: the two inputs disagree, and the conjunction must fail closed.
+      assertFalse(realtimeEchoCancellationGranted(manager, session))
+
+      // Take the mode for real, and the same effect now does grant it.
+      val token = enterCommunicationModeForTest(manager, audioManagerForTest())
+      assertTrue("the mode must actually be owned for the positive half", token != RealtimeCommunicationAudioOwner.NO_OWNER)
+      assertTrue(realtimeEchoCancellationGranted(manager, session))
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  @Config(shadows = [ShadowObservableAudioEffect::class])
+  fun capturePublicationReadsTheCachedCapabilityInsteadOfMeasuringTheEffect() {
+    // FIX-2. Measuring takes the capture session's lifecycle lock, which a route refresh holds
+    // across several AudioManager binder calls; the read loop must never pay that.
+    val manager = createManager()
+    val session = openCommunicationCaptureForTest()
+    try {
+      enterCommunicationModeForTest(manager, audioManagerForTest())
+      session.refreshCommunicationEchoCancellation()
+      val baseline = ShadowObservableAudioEffect.getEnabledCount
+
+      repeat(200) { realtimeEchoCancellationGranted(manager, session) }
+
+      assertEquals("the read-loop path must issue no effect IPC", baseline, ShadowObservableAudioEffect.getEnabledCount)
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
   fun aStaleCaptureGenerationCannotAnswerForItsSuccessor() {
     val manager = createManager()
 
@@ -2018,6 +2104,56 @@ class TalkModeManagerTest {
       )
     method.isAccessible = true
     method.invoke(manager, inputGeneration, enabled)
+  }
+
+  private fun recoverRealtimeCommunicationAudio(
+    manager: TalkModeManager,
+    inputGeneration: Long,
+    sessionId: String,
+  ) {
+    val method =
+      manager.javaClass.getDeclaredMethod(
+        "recoverRealtimeCommunicationAudio",
+        Long::class.javaPrimitiveType,
+        String::class.java,
+      )
+    method.isAccessible = true
+    method.invoke(manager, inputGeneration, sessionId)
+  }
+
+  private fun audioManagerForTest(): AudioManager = RuntimeEnvironment.getApplication().getSystemService(AudioManager::class.java)
+
+  private fun openCommunicationCaptureForTest(): AndroidAudioInputSession {
+    ShadowAudioEffect.addEffect(
+      AudioEffect.Descriptor(
+        AudioEffect.EFFECT_TYPE_AEC.toString(),
+        "9a2f0f34-1c5e-4d3a-9b64-3a1b2c4d5e6f",
+        AudioEffect.EFFECT_INSERT,
+        "Test AEC",
+        "Robolectric",
+      ),
+    )
+    return AndroidAudioInputSession.open(
+      RuntimeEnvironment.getApplication(),
+      48_000,
+      9_600,
+      profile = AndroidAudioInputProfile.VoiceCommunication,
+    )
+  }
+
+  /** Calls the production conjunction rather than reimplementing it here. */
+  private fun realtimeEchoCancellationGranted(
+    manager: TalkModeManager,
+    session: AndroidAudioInputSession,
+  ): Boolean {
+    val method =
+      manager.javaClass.getDeclaredMethod(
+        "realtimeEchoCancellationGranted",
+        AndroidAudioInputSession::class.java,
+        Boolean::class.javaPrimitiveType,
+      )
+    method.isAccessible = true
+    return method.invoke(manager, session, false) as Boolean
   }
 
   private fun enterCommunicationModeForTest(

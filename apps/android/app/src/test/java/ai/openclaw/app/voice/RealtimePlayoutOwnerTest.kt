@@ -495,6 +495,70 @@ class RealtimePlayoutOwnerTest {
       scope.cancel()
     }
   }
+
+  /**
+   * FIX-3. The owner is the only code allowed to touch the device, so it is also the only code
+   * that can release it. Before the finally, a cancelled owner left the AudioTrack alive with
+   * residual audio still presenting, and left the capture gate believing the assistant was
+   * speaking with nothing left running to clear it.
+   */
+  @Test
+  fun cancellingTheOwnerReleasesTheDeviceInsteadOfLeakingIt() {
+    val insideTheDevice = CountDownLatch(1)
+    val releaseTheDevice = CountDownLatch(1)
+    val sinks =
+      FakeRealtimeAudioSinkFactory { offered, _ ->
+        insideTheDevice.countDown()
+        releaseTheDevice.await(10, TimeUnit.SECONDS)
+        offered
+      }
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val talk = realThreadedPlayoutHarness(sinks, scope)
+
+    talk.audioEvent(pcm(480))
+    assertTrue("owner never reached the device", insideTheDevice.await(10, TimeUnit.SECONDS))
+    assertEquals(1, sinks.openCount)
+    assertTrue("playback must be published before the write", talk.isSpeaking())
+
+    // No Stop, no Clear: the scope simply completes, which is what app/node teardown does.
+    scope.cancel()
+    releaseTheDevice.countDown()
+
+    val released = awaitCondition(5_000) { sinks.last.closeCalls == 1 }
+    assertTrue("the cancelled owner leaked its AudioTrack (closeCalls=${sinks.last.closeCalls})", released)
+    assertTrue("speaking must not survive the owner", awaitCondition(5_000) { !talk.isSpeaking() })
+  }
+
+  /** The finally shares its cleanup with Stop, so a normal teardown must not double-release. */
+  @Test
+  fun aNormalStopFollowedByCancellationReleasesTheDeviceExactlyOnce() {
+    val sinks = FakeRealtimeAudioSinkFactory()
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    val talk = realThreadedPlayoutHarness(sinks, scope)
+
+    talk.audioEvent(pcm(480))
+    assertTrue("device never opened", awaitCondition(5_000) { sinks.openCount == 1 })
+    talk.stopRelay()
+    assertTrue("stop must release the device", awaitCondition(5_000) { sinks.last.closeCalls == 1 })
+
+    scope.cancel()
+
+    // Idempotent: the sink was already nulled by Stop, so the finally has nothing left to close.
+    Thread.sleep(200)
+    assertEquals("cancellation must not re-close an already released device", 1, sinks.last.closeCalls)
+  }
+}
+
+private fun awaitCondition(
+  timeoutMs: Long,
+  condition: () -> Boolean,
+): Boolean {
+  val deadline = System.nanoTime() + timeoutMs * 1_000_000
+  while (System.nanoTime() < deadline) {
+    if (condition()) return true
+    Thread.sleep(10)
+  }
+  return condition()
 }
 
 internal const val FAKE_BUFFER_DURATION_MS = 240L

@@ -90,6 +90,11 @@ class RealtimeCaptureTest {
         """{"audio":{"inputEncoding":"pcm16","inputSampleRateHz":"24000"}}""",
         """{"audio":{"inputEncoding":"pcm16","inputSampleRateHz":24000,"outputEncoding":"g711_ulaw"}}""",
         """{"audio":{"inputEncoding":"pcm16","inputSampleRateHz":24000,"outputSampleRateHz":8000}}""",
+        // Present but unreadable is a declaration this endpoint cannot honour, not an absence.
+        // Skipping the comparison because the JSON type was wrong would accept a downlink at a
+        // clock that is then played at 24 kHz -- the input half already fails closed on this.
+        """{"audio":{"inputEncoding":"pcm16","inputSampleRateHz":24000,"outputSampleRateHz":"24000"}}""",
+        """{"audio":{"inputEncoding":"pcm16","inputSampleRateHz":24000,"outputEncoding":42}}""",
       )
 
     for (payload in rejected) {

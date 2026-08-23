@@ -75,13 +75,23 @@ internal fun parseRealtimeWireAudioContract(
   // Playback plays the declared downlink verbatim at a fixed rate. This phase does not make that
   // rate dynamic, so a contract whose downlink half this endpoint cannot honor is rejected rather
   // than accepted and then played at the wrong clock.
-  val outputEncoding = (audio["outputEncoding"] as? JsonPrimitive)?.takeIf { it.isString }?.content
-  if (outputEncoding != null && outputEncoding != REALTIME_WIRE_AUDIO_ENCODING_PCM16) {
-    return RealtimeWireAudioContract.Unsupported("outputEncoding=$outputEncoding")
+  // Absent is fine; present-but-unreadable is not. Skipping the comparison because the value was
+  // the wrong JSON type would accept a downlink at a clock this endpoint then plays at the wrong
+  // rate -- the input half already fails closed on exactly that, and the two must agree.
+  val declaredOutputEncoding = audio["outputEncoding"]
+  if (declaredOutputEncoding != null && declaredOutputEncoding !is JsonNull) {
+    val outputEncoding = (declaredOutputEncoding as? JsonPrimitive)?.takeIf { it.isString }?.content
+    if (outputEncoding != REALTIME_WIRE_AUDIO_ENCODING_PCM16) {
+      return RealtimeWireAudioContract.Unsupported("outputEncoding=$declaredOutputEncoding")
+    }
   }
-  val outputSampleRateHz = (audio["outputSampleRateHz"] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toIntOrNull()
-  if (outputSampleRateHz != null && outputSampleRateHz != playbackSampleRateHz) {
-    return RealtimeWireAudioContract.Unsupported("outputSampleRateHz=$outputSampleRateHz")
+  val declaredOutputSampleRateHz = audio["outputSampleRateHz"]
+  if (declaredOutputSampleRateHz != null && declaredOutputSampleRateHz !is JsonNull) {
+    val outputSampleRateHz =
+      (declaredOutputSampleRateHz as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toIntOrNull()
+    if (outputSampleRateHz != playbackSampleRateHz) {
+      return RealtimeWireAudioContract.Unsupported("outputSampleRateHz=$declaredOutputSampleRateHz")
+    }
   }
   return RealtimeWireAudioContract.Pcm16(sampleRateHz)
 }

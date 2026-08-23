@@ -205,16 +205,37 @@ internal class AndroidAudioInputSession private constructor(
    * Whether the platform reports echo cancellation as actually enabled for this capture session.
    *
    * Read back from the effect, never inferred from the audio source, from `isAvailable`, from the
-   * route, or from `create` succeeding. Read live rather than snapshotted: a route can change
-   * under a running recorder, and a session that could only ever answer with what was true when
-   * it opened could never fall back to half duplex once it had said yes. Guarded by the same lock
-   * [close] takes, so it cannot read a released effect.
+   * route, or from `create` succeeding -- but served from a cached value rather than measured on
+   * the caller's thread. The capture loop consults this once per frame, and the effect read is an
+   * IPC guarded by the same [lock] that [refreshRoute] holds across several `AudioManager` binder
+   * calls; answering it inline would put a route change on the critical path of `AudioRecord.read`
+   * and overrun the recorder. Nothing here blocks, so a slow route refresh cannot stall capture.
+   *
+   * The cache is refreshed by whoever owns the effect's lifecycle -- at open, on every route
+   * change, and by the caller's own watcher -- via [refreshCommunicationEchoCancellation].
    */
+  @Volatile
+  private var cachedEchoCancellationEnabled = false
+
   internal val communicationEchoCancellationEnabled: Boolean
-    get() =
-      synchronized(lock) {
-        if (closed) false else runCatching { acousticEchoCanceler?.enabled == true }.getOrDefault(false)
-      }
+    get() = cachedEchoCancellationEnabled
+
+  /**
+   * Re-measures the effect and republishes the cache. Takes [lock], performs IPC, and may block
+   * behind a route refresh, so it must never be called from the capture read loop.
+   *
+   * Returns the freshly measured value. A closed session always answers false, which is what
+   * makes the capability shrink on teardown rather than linger at its last true reading.
+   */
+  internal fun refreshCommunicationEchoCancellation(): Boolean =
+    // Measured and published under the same lock. Publishing outside it would let a watcher that
+    // measured `true` before a concurrent close overwrite the `false` that close just published,
+    // leaving the capability granted for a released effect.
+    synchronized(lock) {
+      val enabled = if (closed) false else runCatching { acousticEchoCanceler?.enabled == true }.getOrDefault(false)
+      cachedEchoCancellationEnabled = enabled
+      enabled
+    }
 
   /**
    * The communication output this session actually holds, or null when it holds none -- either
@@ -242,6 +263,9 @@ internal class AndroidAudioInputSession private constructor(
     }
     audioRecord.startRecording()
     refreshActualRouteSafely()
+    // Seed the cache from the running recorder. Until this lands the capability reads false, so a
+    // session is half duplex until the effect has actually been measured, never before.
+    refreshCommunicationEchoCancellation()
     Log.d(tag, "capture started preferred=${preferredInputType ?: "default"} routed=${audioRecord.routedDevice?.type ?: "pending"}")
   }
 
@@ -269,11 +293,15 @@ internal class AndroidAudioInputSession private constructor(
 
   private fun refreshRoute() {
     synchronized(lock) {
-      if (closed) return
+      if (closed) return@synchronized
       val inputs = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS).toList()
       val preferredInput = resolvePreferredAudioInput(inputs, preferredInputKey)
       if (preferredInput != null && applyRoute(inputs, preferredInput)) {
-        return
+        // return@synchronized, not return: `synchronized` is inline, so a bare return here would
+        // leave refreshRoute entirely and skip the re-measure below -- on the branch that fires
+        // whenever a preferred input is configured, i.e. the common case for anyone who used the
+        // device picker.
+        return@synchronized
       }
       // A rejected record preference may have set a Bluetooth communication route.
       // Recalculate automatic priority instead of retaining that rejected target.
@@ -281,6 +309,10 @@ internal class AndroidAudioInputSession private constructor(
       setAppliedPreferredInputKey(null)
       applyRoute(inputs, null)
     }
+    // Outside the monitor above, and after it: a route change is the event that can hand the
+    // canceller a different reference signal or none, so the cached capability is re-measured
+    // here rather than left at whatever the previous route reported.
+    refreshCommunicationEchoCancellation()
   }
 
   private fun applyRoute(
@@ -369,28 +401,37 @@ internal class AndroidAudioInputSession private constructor(
   }
 
   private fun refreshActualRoute() {
-    synchronized(lock) {
-      if (closed) return
-      val inputs = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS).toList()
-      val expectedInput = resolvePreferredAudioInput(inputs, preferredInputKey)
-      if (expectedInput == null) {
+    val routeChanged =
+      synchronized(lock) {
+        if (closed) return@synchronized false
+        val inputs = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS).toList()
+        val expectedInput = resolvePreferredAudioInput(inputs, preferredInputKey)
+        if (expectedInput == null) {
+          setAppliedPreferredInputKey(null)
+          applyRoute(inputs, null)
+          return@synchronized true
+        }
+        val routedInput = audioRecord.routedDevice
+        if (sameDevice(routedInput, expectedInput)) {
+          setAppliedPreferredInputKey(preferredInputKey)
+          return@synchronized false
+        }
         setAppliedPreferredInputKey(null)
-        applyRoute(inputs, null)
-        return
+        false
       }
-      val routedInput = audioRecord.routedDevice
-      if (sameDevice(routedInput, expectedInput)) {
-        setAppliedPreferredInputKey(preferredInputKey)
-        return
-      }
-      setAppliedPreferredInputKey(null)
-    }
+    // Only when the route was actually touched. The two no-op exits above -- closed, and the
+    // routed device already matching -- change nothing the canceller depends on, and this call
+    // costs an effect IPC and a second lock acquisition on the main thread.
+    if (routeChanged) refreshCommunicationEchoCancellation()
   }
 
   override fun close() {
     synchronized(lock) {
       if (closed) return
       closed = true
+      // Shrink first: a caller reading the cache during teardown must never be told the effect is
+      // still cancelling for a recorder that is being released.
+      cachedEchoCancellationEnabled = false
       if (callbackRegistered) {
         runCatching { audioManager.unregisterAudioDeviceCallback(deviceCallback) }
         callbackRegistered = false
@@ -455,6 +496,12 @@ private class CommunicationDeviceRoute {
     // claims a route Android did not actually give it.
     val applied = audioManager.communicationDevice
     if (applied == null || applied.id != device.id) {
+      // Reported as "not held" but deliberately NOT torn down. setCommunicationDevice accepted the
+      // request; on Bluetooth the SCO link is established asynchronously, so an immediate
+      // disagreeing read-back is the expected transient rather than a rejection. Clearing here
+      // would cancel a route that was about to come up, and the resulting device callbacks would
+      // drive the same request again -- an audible connect/disconnect cycle that never settles.
+      // The request stays standing; only the reported value is honest about what is confirmed.
       Log.w(tag, "communication device requested id=${device.id} but platform selected id=${applied?.id}")
       return null
     }
