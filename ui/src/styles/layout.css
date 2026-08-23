@@ -3488,11 +3488,28 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
 /* Zone 5: product chrome in one slim footer bar. The shell footer's top
    border is the only divider (and the pet's ledge); no second line here. */
 .sidebar-footer-bar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
   min-height: 44px;
   padding: 3px 8px;
+}
+
+.sidebar-footer-bar--one-action {
+  padding-inline-end: 44px;
+}
+
+.sidebar-footer-bar--two-actions {
+  padding-inline-end: 80px;
+}
+
+.sidebar-footer-actions {
+  position: absolute;
+  inset-inline-end: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 openclaw-sidebar-attention {
@@ -4322,6 +4339,15 @@ openclaw-sidebar-attention {
   width: 32px;
   height: 32px;
   flex: 0 0 32px;
+  transition:
+    width var(--duration-fast) ease,
+    flex-basis var(--duration-fast) ease;
+}
+
+.sidebar-footer-update-slot:hover,
+.sidebar-footer-update-slot:focus-within {
+  width: 76px;
+  flex-basis: 76px;
 }
 
 .sidebar-footer-update-slot::before {
