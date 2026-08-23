@@ -3756,7 +3756,7 @@ openclaw-sidebar-attention {
 
 .sidebar-issues-panel__details {
   margin: 0;
-  border-radius: var(--radius-md);
+  border-radius: 0;
 }
 
 .sidebar-issues-panel__summary {
@@ -3766,7 +3766,7 @@ openclaw-sidebar-attention {
   align-items: center;
   gap: 8px;
   padding: 7px 6px 4px;
-  border-radius: var(--radius-md);
+  border-radius: 0;
   cursor: var(--cursor-action);
   list-style: none;
 }
@@ -3777,10 +3777,12 @@ openclaw-sidebar-attention {
 
 .sidebar-issues-panel__summary:hover,
 .sidebar-issues-panel__details[open] > .sidebar-issues-panel__summary {
+  border-radius: var(--radius-md);
   background: var(--bg-hover);
 }
 
 .sidebar-issues-panel__details[open] {
+  border-radius: var(--radius-md);
   background: var(--bg-hover);
 }
 
@@ -4061,10 +4063,11 @@ openclaw-sidebar-attention {
 
 .sidebar-approval-row {
   min-width: 0;
-  border-radius: var(--radius-md);
+  border-radius: 0;
 }
 
 .sidebar-approval-row--expanded {
+  border-radius: var(--radius-md);
   background: var(--bg-hover);
 }
 
@@ -4081,7 +4084,7 @@ openclaw-sidebar-attention {
   gap: 6px;
   padding: 7px 6px 3px;
   border: 0;
-  border-radius: var(--radius-md);
+  border-radius: 0;
   background: transparent;
   color: var(--text);
   cursor: var(--cursor-action);
@@ -4091,6 +4094,7 @@ openclaw-sidebar-attention {
 
 .sidebar-approval-row__disclosure:hover,
 .sidebar-approval-row__disclosure[aria-expanded="true"] {
+  border-radius: var(--radius-md);
   background: var(--bg-hover);
 }
 
