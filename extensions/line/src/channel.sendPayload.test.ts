@@ -81,7 +81,18 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
   const pushLocationMessage = vi.fn(async () => lineResult("m-loc"));
   const pushTextMessageWithQuickReplies = vi.fn(async () => lineResult("m-quick"));
   const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
-  const buildTemplateMessageFromPayload = vi.fn(() => ({ type: "buttons" }));
+  const buildTemplateMessageFromPayload = vi.fn(() => ({
+    type: "template",
+    altText: "Continue?",
+    template: {
+      type: "confirm",
+      text: "Continue?",
+      actions: [
+        { type: "message", label: "Yes", text: "yes" },
+        { type: "message", label: "No", text: "no" },
+      ],
+    },
+  }));
   const sendMessageLine = vi.fn(async () => lineResult("m-media"));
   const chunkMarkdownText = vi.fn((text: string) => [text]);
   const resolveTextChunkLimit = vi.fn(() => 123);

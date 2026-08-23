@@ -669,9 +669,11 @@ describe("action label/data surrogate-safe truncation", () => {
       actions: [{ type: "uri", label: "Open", uri: `https://e.example/?q=${"u".repeat(1200)}` }],
     });
 
-    const buttonsTemplate = expectDefined(template, "buttons template message").template as {
-      actions: Array<{ type: string; label?: string; text?: string }>;
-    };
+    const message = expectDefined(template, "buttons template message");
+    if (message.type !== "template" || message.template.type !== "buttons") {
+      throw new Error("expected buttons template");
+    }
+    const buttonsTemplate = message.template;
     const uriTemplateAction = expectDefined(
       buttonsTemplate.actions[0],
       "buttons template uri action",
@@ -689,9 +691,11 @@ describe("action label/data surrogate-safe truncation", () => {
       text: "Pick",
       actions: [{ type: "postback", label: "Open", data: `action=open&token=${"x".repeat(300)}` }],
     });
-    const buttonsTemplate = expectDefined(template, "buttons template message").template as {
-      actions: Array<{ type: string; label?: string; text?: string }>;
-    };
+    const message = expectDefined(template, "buttons template message");
+    if (message.type !== "template" || message.template.type !== "buttons") {
+      throw new Error("expected buttons template");
+    }
+    const buttonsTemplate = message.template;
 
     expect(buttonsTemplate.actions[0]).toEqual({
       type: "message",

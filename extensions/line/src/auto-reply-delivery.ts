@@ -21,7 +21,7 @@ import type { LineChannelData, LineTemplateMessagePayload } from "./types.js";
 type LineAutoReplyDeps = {
   buildTemplateMessageFromPayload: (
     payload: LineTemplateMessagePayload,
-  ) => messagingApi.TemplateMessage | null;
+  ) => messagingApi.TemplateMessage | messagingApi.TextMessage | null;
   processLineMessage: (text: string) => ProcessedLineMessage;
   chunkMarkdownText: (text: string, limit: number) => string[];
   createQuickReplyItems: (labels: string[]) => messagingApi.QuickReply;

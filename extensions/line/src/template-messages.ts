@@ -10,6 +10,7 @@ import {
 import type { LineTemplateMessagePayload } from "./types.js";
 
 type TemplateMessage = messagingApi.TemplateMessage;
+type TextMessage = messagingApi.TextMessage;
 type ConfirmTemplate = messagingApi.ConfirmTemplate;
 type ButtonsTemplate = messagingApi.ButtonsTemplate;
 type CarouselTemplate = messagingApi.CarouselTemplate;
@@ -79,12 +80,79 @@ function resolveTemplateAltText(value: string | undefined, fallback: string): st
   return truncateTemplateText(value ?? fallback, TEMPLATE_ALT_TEXT_LIMIT);
 }
 
-function normalizeCarouselColumnActions(column: CarouselColumn): CarouselColumn {
+function normalizeCarouselColumn(column: CarouselColumn): CarouselColumn {
   return {
     ...column,
-    actions: column.actions.map((action) => normalizeLineAction(action)),
+    actions: column.actions
+      .map((action) => normalizeLineAction(action))
+      .filter((action) => action.label !== undefined && action.label !== "")
+      .slice(0, 3),
     defaultAction:
       column.defaultAction === undefined ? undefined : normalizeLineAction(column.defaultAction),
+  };
+}
+
+type CarouselNormalizationOutcome =
+  | { kind: "template"; columns: CarouselColumn[] }
+  | { kind: "text"; text: string };
+
+function describeCarouselColumn(column: CarouselColumn): string {
+  const body = column.title ? `${column.title}: ${column.text}` : column.text;
+  const labels = column.actions
+    .map((action) => action.label)
+    .filter((label): label is string => label !== undefined && label !== "");
+  return labels.length > 0 ? `${body} (${labels.join(" / ")})` : body;
+}
+
+function normalizeCarousel(
+  columns: CarouselColumn[],
+  altText?: string,
+): CarouselNormalizationOutcome {
+  const normalized = columns.slice(0, 10).map(normalizeCarouselColumn);
+  const first = normalized[0];
+  const invalid =
+    !first ||
+    normalized.some(
+      (column) =>
+        column.text === "" ||
+        column.actions.length === 0 ||
+        (column.title === undefined) !== (first.title === undefined) ||
+        (column.thumbnailImageUrl === undefined) !== (first.thumbnailImageUrl === undefined) ||
+        column.actions.length !== first.actions.length,
+    );
+  if (!invalid) {
+    return { kind: "template", columns: normalized };
+  }
+
+  const text = [
+    ...(altText ? [truncateTemplateText(altText, TEMPLATE_ALT_TEXT_LIMIT)] : []),
+    ...normalized.map(describeCarouselColumn).filter((line) => line !== ""),
+  ].join("\n");
+  if (!text) {
+    throw new Error("LINE carousel has no deliverable text or action labels.");
+  }
+  return { kind: "text", text };
+}
+
+function createCarouselMessage(
+  columns: CarouselColumn[],
+  options?: {
+    imageAspectRatio?: "rectangle" | "square";
+    imageSize?: "cover" | "contain";
+    altText?: string;
+  },
+): TemplateMessage {
+  const template: CarouselTemplate = {
+    type: "carousel",
+    columns,
+    imageAspectRatio: options?.imageAspectRatio ?? "rectangle",
+    imageSize: options?.imageSize ?? "cover",
+  };
+
+  return {
+    type: "template",
+    altText: resolveTemplateAltText(options?.altText, "View carousel"),
+    template,
   };
 }
 
@@ -166,18 +234,11 @@ export function createTemplateCarousel(
     altText?: string;
   },
 ): TemplateMessage {
-  const template: CarouselTemplate = {
-    type: "carousel",
-    columns: columns.slice(0, 10).map(normalizeCarouselColumnActions), // LINE limit: max 10 columns
-    imageAspectRatio: options?.imageAspectRatio ?? "rectangle",
-    imageSize: options?.imageSize ?? "cover",
-  };
-
-  return {
-    type: "template",
-    altText: resolveTemplateAltText(options?.altText, "View carousel"),
-    template,
-  };
+  const outcome = normalizeCarousel(columns, options?.altText);
+  if (outcome.kind === "text") {
+    throw new Error("LINE carousel columns violate provider consistency requirements.");
+  }
+  return createCarouselMessage(outcome.columns, options);
 }
 
 /**
@@ -199,7 +260,10 @@ export function createCarouselColumn(params: {
   return {
     title: truncateOptionalTemplateText(params.title, 40),
     text: truncateTemplateText(params.text, textLimit),
-    actions: params.actions.slice(0, 3).map((action) => normalizeLineAction(action)), // LINE limit: max 3 actions per column
+    actions: params.actions
+      .map((action) => normalizeLineAction(action))
+      .filter((action) => action.label !== undefined && action.label !== "")
+      .slice(0, 3), // LINE limit: max 3 actions per column
     thumbnailImageUrl: params.thumbnailImageUrl,
     imageBackgroundColor: params.imageBackgroundColor,
     defaultAction:
@@ -212,7 +276,7 @@ export function createCarouselColumn(params: {
  */
 export function buildTemplateMessageFromPayload(
   payload: LineTemplateMessagePayload,
-): TemplateMessage | null {
+): TemplateMessage | TextMessage | null {
   switch (payload.type) {
     case "confirm": {
       const confirmAction = payload.confirmData.startsWith("http")
@@ -242,10 +306,10 @@ export function buildTemplateMessageFromPayload(
     }
 
     case "carousel": {
-      const columns: CarouselColumn[] = payload.columns.slice(0, 10).map((col) => {
-        const colActions: Action[] = col.actions
-          .slice(0, 3)
-          .map((action) => buildTemplatePayloadAction(action));
+      const columns: CarouselColumn[] = payload.columns.map((col) => {
+        const colActions: Action[] = col.actions.map((action) =>
+          buildTemplatePayloadAction(action),
+        );
 
         return createCarouselColumn({
           title: col.title,
@@ -255,7 +319,10 @@ export function buildTemplateMessageFromPayload(
         });
       });
 
-      return createTemplateCarousel(columns, { altText: payload.altText });
+      const outcome = normalizeCarousel(columns, payload.altText);
+      return outcome.kind === "text"
+        ? { type: "text", text: outcome.text }
+        : createCarouselMessage(outcome.columns, { altText: payload.altText });
     }
 
     default:
