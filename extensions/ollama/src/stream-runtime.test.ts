@@ -1615,13 +1615,19 @@ type OllamaLocalService = NonNullable<
   Parameters<typeof createConfiguredOllamaStreamFn>[0]["localService"]
 >;
 
+type ManagedOllamaTestOptions = NonNullable<
+  Parameters<ReturnType<typeof createConfiguredOllamaStreamFn>>[2]
+> & {
+  requestTimeoutMs?: number;
+};
+
 async function createManagedOllamaTestStream(params: {
   baseUrl: string;
   providerId?: string;
   defaultHeaders?: Record<string, string>;
   model?: Record<string, unknown>;
   context?: Record<string, unknown>;
-  options?: Parameters<ReturnType<typeof createConfiguredOllamaStreamFn>>[2];
+  options?: ManagedOllamaTestOptions;
   acquire: OllamaLocalService["acquire"];
 }) {
   const streamFn = createConfiguredOllamaStreamFn({
@@ -3414,8 +3420,9 @@ describe("createConfiguredOllamaStreamFn", () => {
     try {
       let acquisitionSignal: AbortSignal | undefined;
       const acquire = vi.fn((_request, signal) => {
-        acquisitionSignal = expectDefined(signal, "acquisition timeout signal");
-        return rejectWhenAborted(acquisitionSignal);
+        const timeoutSignal = expectDefined(signal, "acquisition timeout signal");
+        acquisitionSignal = timeoutSignal;
+        return rejectWhenAborted(timeoutSignal);
       });
       const eventsPromise = collectStreamEvents(
         await createManagedOllamaTestStream({
@@ -3447,8 +3454,9 @@ describe("createConfiguredOllamaStreamFn", () => {
     const caller = new AbortController();
     let acquisitionSignal: AbortSignal | undefined;
     const acquire = vi.fn((_request, signal) => {
-      acquisitionSignal = expectDefined(signal, "combined acquisition signal");
-      return rejectWhenAborted(acquisitionSignal);
+      const combinedSignal = expectDefined(signal, "combined acquisition signal");
+      acquisitionSignal = combinedSignal;
+      return rejectWhenAborted(combinedSignal);
     });
     const eventsPromise = collectStreamEvents(
       await createManagedOllamaTestStream({
