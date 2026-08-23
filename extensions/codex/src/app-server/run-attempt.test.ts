@@ -5528,6 +5528,9 @@ describe("runCodexAppServerAttempt", () => {
       buildCodexPluginAppCacheKey({
         appServer,
         agentDir,
+        envApiKeyFingerprint: resolveCodexAppServerFallbackApiKeyCacheKey({
+          startOptions: appServer.start,
+        }),
         runtimeIdentity: getMockRuntimeIdentity(),
       }),
       true,
@@ -5633,6 +5636,9 @@ describe("runCodexAppServerAttempt", () => {
         buildCodexPluginAppCacheKey({
           appServer,
           agentDir,
+          envApiKeyFingerprint: resolveCodexAppServerFallbackApiKeyCacheKey({
+            startOptions: appServer.start,
+          }),
           runtimeIdentity: getMockRuntimeIdentity(),
         }),
       appInventory: (method: "app/installed" | "app/read") =>
