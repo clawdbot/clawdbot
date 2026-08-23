@@ -47,6 +47,7 @@ export type SessionTranscriptMessageEvent = {
 
 export type SessionTranscriptMessageEventPage = {
   activeLeafEntryId?: string | null;
+  deltaCursor?: string;
   events: SessionTranscriptMessageEvent[];
   totalMessages: number;
 };

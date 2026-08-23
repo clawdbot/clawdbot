@@ -7,49 +7,35 @@ import {
   renderConnectMachineMenuItem,
   renderSessionMenuItem,
 } from "./cloud-target.ts";
-import type {
-  DraftCloudProfile,
-  DraftEnvironment,
-  DraftMachineOption,
-  DraftNode,
-} from "./discovery.ts";
-import { draftNodeUpdateIssue, isDraftNodeSessionEligible } from "./discovery.ts";
-import { disambiguate, isPhoneFamily, nodeTooltip } from "./place-labels.ts";
-import { resolvePlacePickerSections } from "./place-picker-sections.ts";
+import {
+  projectDevicePlacements,
+  type DevicePlacementOption,
+  type DevicePlacementRequirement,
+} from "./device-placement.ts";
+import type { DraftCloudProfile, DraftEnvironment, DraftMachineOption } from "./discovery.ts";
 
 type WhereChipState = Readonly<{
-  kind: "local" | "node" | "cloud";
+  kind: "local" | "device" | "cloud";
   label: string;
-  deviceNodes: readonly DraftNode[];
-  deviceFacts: ReadonlyMap<string, readonly string[]>;
+  devices: readonly DevicePlacementOption[];
   cloudProfiles: readonly DraftCloudProfile[];
   cloudMachines: readonly DraftMachineOption[];
   selectedMachineId: string;
+  deviceDisabledReason?: string;
 }>;
 
-function nodeUpdateIssueCopy(node: DraftNode): string | undefined {
-  const issue = draftNodeUpdateIssue(node);
-  return issue
-    ? t("newSession.nodeUpdateRequired", {
-        updateCommand: issue.updateCommand,
-        restartCommand: issue.headlessReconnectCommand,
-      })
-    : undefined;
-}
-
 export function resolveWhereChip(params: {
-  execNodes: readonly DraftNode[];
   environments: readonly DraftEnvironment[] | null;
   cloudProfiles: readonly DraftCloudProfile[];
   cloudProfileId: string;
   machineClass?: string;
-  execNode: string;
+  deviceId: string;
+  devicePlacement?: DevicePlacementRequirement;
+  deviceDisabledReason?: string;
 }): WhereChipState {
-  const sections = resolvePlacePickerSections(params);
-  const node = sections.deviceNodes.find((candidate) => candidate.nodeId === params.execNode);
-  const profile = sections.cloudProfiles.find(
-    (candidate) => candidate.id === params.cloudProfileId,
-  );
+  const devices = projectDevicePlacements(params.environments, params.devicePlacement);
+  const device = devices.find((candidate) => candidate.deviceId === params.deviceId);
+  const profile = params.cloudProfiles.find((candidate) => candidate.id === params.cloudProfileId);
   if (params.cloudProfileId) {
     const cloudMachines = profile?.machines ?? [];
     const defaultMachine = cloudMachines.find((machine) => machine.default === true);
@@ -66,16 +52,20 @@ export function resolveWhereChip(params: {
         : (profile?.id ?? params.cloudProfileId),
       cloudMachines,
       selectedMachineId: selectedMachine?.id ?? "",
-      ...sections,
+      devices,
+      cloudProfiles: params.cloudProfiles,
+      deviceDisabledReason: params.deviceDisabledReason,
     };
   }
-  if (params.execNode) {
+  if (params.deviceId) {
     return {
-      kind: "node",
-      label: node?.displayName ?? params.execNode,
+      kind: "device",
+      label: device?.label ?? params.deviceId,
       cloudMachines: [],
       selectedMachineId: "",
-      ...sections,
+      devices,
+      cloudProfiles: params.cloudProfiles,
+      deviceDisabledReason: params.deviceDisabledReason,
     };
   }
   return {
@@ -83,7 +73,9 @@ export function resolveWhereChip(params: {
     label: t("newSession.local"),
     cloudMachines: [],
     selectedMachineId: "",
-    ...sections,
+    devices,
+    cloudProfiles: params.cloudProfiles,
+    deviceDisabledReason: params.deviceDisabledReason,
   };
 }
 
@@ -92,11 +84,12 @@ export function renderWhereChip(params: {
   gatewayName: string;
   cloudProfileId: string;
   machineClass?: string;
-  execNode: string;
+  deviceId: string;
   worktreeAvailable: boolean;
   cloudDisabledReason?: string;
+  cloudProfileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
   submitting: boolean;
-  pendingCloud: boolean;
+  pendingPlacement: boolean;
   popoverOpen: boolean;
   popoverHiding: boolean;
   isAdmin: boolean;
@@ -104,27 +97,15 @@ export function renderWhereChip(params: {
   onPopoverShow: () => void;
   onPopoverHide: () => void;
   onPopoverAfterHide: () => void;
-  onSelectExecNode: (nodeId: string) => void;
+  onSelectDevice: (deviceId: string) => void;
   onSelectCloudProfile: (profileId: string) => void;
   onSelectCloudMachine?: (machineId: string) => void;
   onConnectMachine: () => void;
 }) {
-  const activeNode = params.state.deviceNodes.find((node) => node.nodeId === params.execNode);
-  const icon =
-    params.state.kind === "cloud"
-      ? icons.server
-      : params.state.kind === "node" && isPhoneFamily(activeNode?.deviceFamily)
-        ? icons.monitorSmartphone
-        : icons.monitor;
+  const icon = params.state.kind === "cloud" ? icons.server : icons.monitor;
   const gatewayTitle = params.gatewayName
     ? t("newSession.gatewayNamed", { name: params.gatewayName })
     : t("newSession.gateway");
-  const nodeSuffixes = disambiguate(params.state.deviceNodes, (node) => node.displayName, [
-    (node) => node.modelIdentifier,
-    (node) => node.remoteIp,
-    (node) => node.nodeId.slice(0, 8),
-  ]);
-
   return html`
     <span class="new-session-page__select">
       <button
@@ -137,10 +118,10 @@ export function renderWhereChip(params: {
         aria-label="${t("newSession.where")}: ${params.state.label}"
         data-cloud-profile=${params.cloudProfileId || nothing}
         data-machine-class=${params.machineClass || nothing}
-        data-exec-node=${params.execNode || nothing}
+        data-device-id=${params.deviceId || nothing}
         aria-haspopup="dialog"
         aria-expanded=${String(params.popoverOpen)}
-        ?disabled=${params.submitting || params.pendingCloud}
+        ?disabled=${params.submitting || params.pendingPlacement}
         @click=${params.onGuardTransition}
       >
         <span class="new-session-page__target-icon" aria-hidden="true">${icon}</span>
@@ -160,43 +141,44 @@ export function renderWhereChip(params: {
       @wa-after-hide=${params.onPopoverAfterHide}
     >
       <div class="new-session-page__picker-root">
+        <div class="new-session-page__menu-title">${t("newSession.environments")}</div>
         ${renderSessionMenuItem(
           {
             value: "gateway",
             label: t("newSession.local"),
             icon: icons.monitor,
             sub: params.gatewayName || undefined,
-            checked: !params.execNode && !params.cloudProfileId,
+            checked: !params.deviceId && !params.cloudProfileId,
             title: gatewayTitle,
-            onSelect: () => params.onSelectExecNode(""),
+            onSelect: () => params.onSelectDevice(""),
           },
           params.submitting,
         )}
-        ${params.state.deviceNodes.length > 0
+        ${params.state.devices.length > 0
           ? html`
               <div class="new-session-page__menu-title">${t("newSession.yourDevices")}</div>
-              ${params.state.deviceNodes.map((node, index) => {
-                const updateIssue = nodeUpdateIssueCopy(node);
+              ${params.state.devices.map((device) => {
+                const disabledReason = params.state.deviceDisabledReason ?? device.disabledReason;
                 return renderSessionMenuItem(
                   {
-                    value: `node:${node.nodeId}`,
-                    label: node.displayName,
-                    icon: isPhoneFamily(node.deviceFamily)
-                      ? icons.monitorSmartphone
-                      : icons.monitor,
-                    sub: nodeSuffixes[index],
-                    facts: updateIssue ? [updateIssue] : params.state.deviceFacts.get(node.nodeId),
-                    checked: params.execNode === node.nodeId,
-                    disabled: !isDraftNodeSessionEligible(node),
-                    title: updateIssue ?? nodeTooltip(node),
-                    onSelect: () => params.onSelectExecNode(node.nodeId),
+                    value: `device:${device.deviceId}`,
+                    label: device.label,
+                    sub: device.subtitle,
+                    icon: icons.monitor,
+                    facts: params.state.deviceDisabledReason
+                      ? [params.state.deviceDisabledReason]
+                      : device.facts,
+                    checked: params.deviceId === device.deviceId,
+                    disabled: Boolean(params.state.deviceDisabledReason) || !device.selectable,
+                    title: disabledReason,
+                    onSelect: () => params.onSelectDevice(device.deviceId),
                   },
                   params.submitting,
                 );
               })}
             `
           : nothing}
-        ${params.state.cloudProfiles.length > 0 || params.cloudProfileId
+        ${params.isAdmin && (params.state.cloudProfiles.length > 0 || params.cloudProfileId)
           ? html`
               <div class="new-session-page__menu-title">${t("newSession.cloud")}</div>
               ${renderCloudProfileMenuItems({
@@ -206,6 +188,7 @@ export function renderWhereChip(params: {
                 icon: icons.server,
                 disabled: !params.worktreeAvailable || Boolean(params.cloudDisabledReason),
                 disabledReason: params.cloudDisabledReason,
+                profileDisabledReason: params.cloudProfileDisabledReason,
                 onSelect: params.onSelectCloudProfile,
               })}
               ${params.cloudProfileId &&
@@ -238,7 +221,7 @@ export function renderWhereChip(params: {
           : nothing}
         ${params.isAdmin
           ? renderConnectMachineMenuItem({
-              disabled: params.submitting || params.pendingCloud,
+              disabled: params.submitting || params.pendingPlacement,
               onSelect: params.onConnectMachine,
             })
           : nothing}

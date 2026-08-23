@@ -11,6 +11,7 @@ import {
   hasPromptSnapshotAffectingChange,
   hasQaSmokeAffectingChange,
   hasSqliteSessionLifecycleAffectingChange,
+  resolveChangedDockerSeedLanes,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import {
   listExtensionTestFilesForRoots,
@@ -20,7 +21,7 @@ import { hasImportGraphImpactOnTargets } from "../../scripts/test-projects.test-
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
 
-const CODEX_TEST_PROCESS_FILE_LIMIT = 40;
+const CODEX_TEST_PROCESS_FILE_LIMIT = 12;
 
 function expectBoundedCodexFallback(
   shards: ReturnType<typeof createChangedExtensionFallbackShards>,
@@ -53,6 +54,30 @@ function expectAllExtensionConfigs(
   expect(configs).toEqual(expectedConfigs);
   expect(configs).toContain("test/vitest/vitest.extension-codex.config.ts");
 }
+
+const allDockerSeedLanes = ["mcp-channels", "cron-mcp-cleanup", "mcp-code-mode-gateway"];
+it.each([
+  [["scripts/e2e/mcp-channels-seed.ts"], ["mcp-channels"]],
+  [["scripts/e2e/cron-mcp-cleanup-seed.ts"], ["cron-mcp-cleanup"]],
+  [["scripts/e2e/mcp-code-mode-gateway-seed.ts"], ["mcp-code-mode-gateway"]],
+  [["scripts/e2e/lib/mcp-code-mode-probe-server.ts"], ["mcp-code-mode-gateway"]],
+  [["scripts/e2e/docker-openai-seed.ts"], allDockerSeedLanes],
+  [
+    [
+      "scripts/e2e/mcp-code-mode-gateway-seed.ts",
+      "scripts/e2e/mcp-channels-seed.ts",
+      "scripts/e2e/lib/mcp-code-mode-probe-server.ts",
+      "scripts/e2e/cron-mcp-cleanup-seed.ts",
+    ],
+    allDockerSeedLanes,
+  ],
+  [[".github/workflows/ci.yml"], allDockerSeedLanes],
+  [["scripts/lib/ci-changed-node-test-plan.mts"], allDockerSeedLanes],
+  [["scripts\\e2e\\lib\\mcp-code-mode-probe-server.ts"], ["mcp-code-mode-gateway"]],
+  [["scripts/e2e/install-e2e.ts", "docs/ci.md"], []],
+])("resolves Docker seed lanes for %j", (changedPaths, expected) => {
+  expect(resolveChangedDockerSeedLanes(changedPaths)).toEqual(expected);
+});
 
 describe("CI changed Node test plan", () => {
   it("routes Control UI style changes through source-scanning policy tests", () => {

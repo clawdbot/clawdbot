@@ -82,6 +82,18 @@ export function createGetReplySessionState(overrides: Record<string, unknown> = 
   };
 }
 
+export function registerGetReplyBaselineBypass(): void {
+  vi.doMock("../../sessions/session-diff-baseline.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../../sessions/session-diff-baseline.js")>();
+    return {
+      ...actual,
+      ensureSessionDiffBaseline: vi.fn(
+        async (params: Parameters<typeof actual.ensureSessionDiffBaseline>[0]) => params.entry,
+      ),
+    };
+  });
+}
+
 export function createGetReplyContinueDirectivesResult(params: {
   body: string;
   abortKey: string;

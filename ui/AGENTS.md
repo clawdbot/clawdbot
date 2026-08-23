@@ -28,6 +28,7 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 ## Stylesheet Policy
 
+- Cursors: links and controls that open a new tab use the pointer; state-changing controls keep the default arrow.
 - Colors: stylesheet colors flow through custom-property tokens defined in `ui/src/styles/base.css`; `color-no-hex` enforces this. Exempt surfaces (token definitions, `lobster-pet.css` sprite artwork, `--theme-chip-*` preview swatches) each carry a stated contract. Lit `css\`\`` templates are not yet gated — prefer tokens there too.
 - Breakpoints: `max-width` media conditions use the canonical ladder 400/560/640/768/900/1100/1320px (plus the 932×500 landscape-phone compound); stylelint's allowed-list enforces it. New thresholds round up to the next rung. Don't add rungs without updating the config comment and this note.
 - Duplicate selectors are lint errors; deliberate topic-section reopens use `stylelint-disable-next-line no-duplicate-selectors -- <reason>`.

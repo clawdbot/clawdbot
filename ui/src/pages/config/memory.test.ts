@@ -52,6 +52,7 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
     onAddonChange: vi.fn(),
     pluginsHref: "/settings/plugins",
     memoryImportHref: "/memory-import",
+    canImportMemory: true,
     overview: html`<div class="test-overview"></div>`,
     memories: html`<div class="test-memories"></div>`,
     dreams: html`<div class="test-dreams"></div>`,
@@ -119,6 +120,13 @@ describe("renderMemory", () => {
 
     expect(container.querySelector(".hub-page-header__actions")?.childElementCount).toBe(0);
     expect(container.querySelector("openclaw-agent-select")).toBeNull();
+  });
+
+  it("replaces the memory-import link with an admin-required note", () => {
+    const container = renderInto(createProps({ canImportMemory: false }));
+
+    expect(container.querySelector('a[href="/memory-import"]')).toBeNull();
+    expect(container.textContent).toContain("Memory import requires operator.admin access.");
   });
 
   it("shows the exclusive engine choice as one radio group over installed engines", () => {

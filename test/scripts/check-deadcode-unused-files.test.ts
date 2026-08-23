@@ -13,6 +13,7 @@ import {
   parseKnipCompactUnusedFiles,
   runKnipUnusedFiles,
 } from "../../scripts/check-deadcode-unused-files.mts";
+import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import {
   isProcessAlive,
   waitForChildClose,
@@ -316,9 +317,7 @@ Delete the files or model their real entrypoints in Knip.`,
         });
         await waitForDead(childPid, 2_000);
       } finally {
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
+        killPidIfAlive(childPid || undefined);
         rmSync(root, { recursive: true, force: true });
       }
     },
@@ -380,9 +379,7 @@ Delete the files or model their real entrypoints in Knip.`,
         if (runner?.pid && isProcessAlive(runner.pid)) {
           runner.kill("SIGKILL");
         }
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
+        killPidIfAlive(childPid || undefined);
         rmSync(root, { recursive: true, force: true });
       }
     },

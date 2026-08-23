@@ -83,19 +83,32 @@ function mergeRemoteModelWithTrustedTransport(
 export function planManifestModelCatalogRows(params: {
   registry: ManifestModelCatalogRegistry;
   providerFilter?: string;
+  providerFilters?: readonly string[];
+  mergeKeyFilter?: ReadonlySet<string>;
   remoteOverlay?: Readonly<Record<string, ModelCatalogProvider>>;
+  resolveRemoteProvider?: (provider: string) => ModelCatalogProvider | undefined;
   selection?: ManifestModelCatalogRowSelection;
 }): ManifestModelCatalogPlan {
-  const providerFilter = params.providerFilter
-    ? normalizeModelCatalogProviderId(params.providerFilter)
+  const hasProviderFilter = Boolean(params.providerFilter) || params.providerFilters !== undefined;
+  const providerFilters = hasProviderFilter
+    ? new Set(
+        normalizeUniqueStringEntries(
+          [
+            ...(params.providerFilter !== undefined ? [params.providerFilter] : []),
+            ...(params.providerFilters ?? []),
+          ].map(normalizeModelCatalogProviderId),
+        ),
+      )
     : undefined;
   const entries: ManifestModelCatalogPlanEntry[] = [];
 
   for (const plugin of params.registry.plugins) {
     for (const entry of planManifestModelCatalogPluginEntries({
       plugin,
-      providerFilter,
+      providerFilters,
+      mergeKeyFilter: params.mergeKeyFilter,
       remoteOverlay: params.remoteOverlay,
+      resolveRemoteProvider: params.resolveRemoteProvider,
     })) {
       entries.push(entry);
     }
@@ -166,8 +179,10 @@ export function planManifestModelCatalogRows(params: {
 
 function planManifestModelCatalogPluginEntries(params: {
   plugin: ManifestModelCatalogPlugin;
-  providerFilter: string | undefined;
+  providerFilters: ReadonlySet<string> | undefined;
+  mergeKeyFilter: ReadonlySet<string> | undefined;
   remoteOverlay: Readonly<Record<string, ModelCatalogProvider>> | undefined;
+  resolveRemoteProvider: ((provider: string) => ModelCatalogProvider | undefined) | undefined;
 }): ManifestModelCatalogPlanEntry[] {
   const providers = params.plugin.modelCatalog?.providers;
   if (!providers) {
@@ -182,19 +197,25 @@ function planManifestModelCatalogPluginEntries(params: {
       return [];
     }
     const providerAliases = aliasesByTargetProvider.get(normalizedProvider) ?? [];
-    const plannedProviders = params.providerFilter
-      ? providerAliases.includes(params.providerFilter) ||
-        normalizedProvider === params.providerFilter
-        ? [params.providerFilter]
-        : []
+    const plannedProviders = params.providerFilters
+      ? normalizeUniqueStringEntries([normalizedProvider, ...providerAliases]).filter(
+          (candidateProvider) => params.providerFilters?.has(candidateProvider),
+        )
       : [normalizedProvider];
     if (plannedProviders.length === 0) {
       return [];
     }
+    const remoteProvider = params.resolveRemoteProvider
+      ? params.resolveRemoteProvider(normalizedProvider)
+      : params.remoteOverlay?.[normalizedProvider];
     return plannedProviders.flatMap((plannedProvider) => {
-      const remoteProvider = params.remoteOverlay?.[normalizedProvider];
-      const remoteModelIds = new Set(remoteProvider?.models.map((model) => model.id) ?? []);
-      const manifestModelsById = new Map(providerCatalog.models.map((model) => [model.id, model]));
+      const includesModel = (model: ModelCatalogModel) =>
+        !params.mergeKeyFilter ||
+        params.mergeKeyFilter.has(buildModelCatalogMergeKey(plannedProvider, model.id));
+      const manifestModels = providerCatalog.models.filter(includesModel);
+      const remoteModels = remoteProvider?.models.filter(includesModel) ?? [];
+      const remoteModelIds = new Set(remoteModels.map((model) => model.id));
+      const manifestModelsById = new Map(manifestModels.map((model) => [model.id, model]));
       const providerDefaults = remoteProvider
         ? {
             ...providerCatalog,
@@ -207,7 +228,7 @@ function planManifestModelCatalogPluginEntries(params: {
         provider: plannedProvider,
         providerCatalog: {
           ...providerDefaults,
-          models: providerCatalog.models.filter((model) => !remoteModelIds.has(model.id)),
+          models: manifestModels.filter((model) => !remoteModelIds.has(model.id)),
         },
         source: "manifest",
       });
@@ -216,7 +237,7 @@ function planManifestModelCatalogPluginEntries(params: {
             provider: plannedProvider,
             providerCatalog: {
               ...providerDefaults,
-              models: remoteProvider.models.map((model) =>
+              models: remoteModels.map((model) =>
                 mergeRemoteModelWithTrustedTransport(model, manifestModelsById.get(model.id)),
               ),
             },

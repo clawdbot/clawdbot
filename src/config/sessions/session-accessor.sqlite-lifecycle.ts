@@ -51,6 +51,7 @@ import {
   planSessionStateAfterEntryRemoval,
   readReferencedSessionIdsAfterTargetMutation,
 } from "./session-accessor.sqlite-lifecycle-state.js";
+import { deleteSessionDeliveryArtifacts } from "./session-accessor.sqlite-node-artifacts.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
   cloneSessionEntry,
@@ -66,8 +67,8 @@ import {
   collectAdmissionProtectedSessionIds,
   kickSessionHistoryDiskBudgetMaintenance,
 } from "./session-history-eviction.js";
-import { buildSessionResetBoundaryPlan } from "./session-reset-boundary-event.js";
-import type { SessionEntry } from "./types.js";
+import { buildSessionResetBoundaryEvent } from "./session-reset-boundary-event.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 // Single-target lifecycle owner: cleanup, reset, guarded delete, and trusted rollback.
 
@@ -188,15 +189,10 @@ export async function resetSessionEntryLifecycle(
         currentEntry: current ? cloneSessionEntry(current.entry) : undefined,
         primaryKey: params.target.canonicalKey,
       });
-      const resetBoundaryPlan =
+      const shouldAppendResetBoundary =
         params.resetBoundaryReason &&
         current?.entry.sessionId &&
-        !sqliteSessionEntriesEqual(current.entry, nextEntry)
-          ? await buildSessionResetBoundaryPlan({
-              events: loadTranscriptEventsFromDatabase(database, current.entry.sessionId),
-              reason: params.resetBoundaryReason,
-            })
-          : undefined;
+        !sqliteSessionEntriesEqual(current.entry, nextEntry);
       const mutation: ResetSessionEntryLifecycleMutation = {
         nextEntry: cloneSessionEntry(nextEntry),
         ...(current ? { previousEntry: cloneSessionEntry(current.entry) } : {}),
@@ -204,8 +200,11 @@ export async function resetSessionEntryLifecycle(
       };
       runOpenClawAgentWriteTransaction((transactionDb) => {
         assertLifecycleTargetUnchanged(transactionDb, params.target, current?.entry, "reset");
-        if (resetBoundaryPlan && current?.entry.sessionId) {
-          const events = [...resetBoundaryPlan.seedEvents, resetBoundaryPlan.event];
+        if (shouldAppendResetBoundary && current?.entry.sessionId && params.resetBoundaryReason) {
+          const event = buildSessionResetBoundaryEvent({
+            events: loadTranscriptEventsFromDatabase(transactionDb, current.entry.sessionId),
+            reason: params.resetBoundaryReason,
+          });
           const appended = appendTranscriptEventsInTransaction(
             transactionDb,
             {
@@ -213,9 +212,9 @@ export async function resetSessionEntryLifecycle(
               sessionId: current.entry.sessionId,
               sessionKey: current.key,
             },
-            events,
+            [event],
           );
-          if (appended !== events.length) {
+          if (appended !== 1) {
             throw new Error(`Failed to append reset boundary for ${current.key}`);
           }
         }
@@ -495,6 +494,12 @@ async function deleteSqliteSessionEntryLifecycleLocked(
         ]),
       );
       deleteLifecycleTargetRows(transactionDb, params.target);
+      if (params.deleteDeliveryArtifacts === true) {
+        deleteSessionDeliveryArtifacts(transactionDb, params.target.canonicalKey, [
+          ...params.target.storeKeys,
+          ...transactionSnapshot.rows.map((row) => row.sessionKey),
+        ]);
+      }
       deleteSessionBoardRows(transactionDb, [
         params.target.canonicalKey,
         ...params.target.storeKeys,

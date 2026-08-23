@@ -1,6 +1,6 @@
 import { sanitizeForPromptLiteral } from "../agents/sanitize-for-prompt.js";
 import { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
-import { normalizeApprovalRequest } from "../infra/approval-types.js";
+import { normalizeApprovalRequest, type ChannelApprovalKind } from "../infra/approval-types.js";
 import { buildPendingApprovalView } from "../infra/approval-view-model.js";
 import type { ApprovalRequest, PendingApprovalView } from "../infra/approval-view-model.types.js";
 import {
@@ -10,10 +10,6 @@ import {
   type ExecApprovalReplyDecision,
 } from "../infra/exec-approval-reply.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-/**
- * @deprecated Compatibility subpath for shipped approval reaction helpers.
- * New plugin code should use the focused approval runtime/reply subpaths.
- */
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
 import {
   buildApprovalPendingReplyPayload,
@@ -32,7 +28,6 @@ export {
   type ApprovalReactionDeliveryBinding,
 } from "./approval-reaction-binding.js";
 
-type ApprovalKind = "exec" | "plugin";
 type KeyedStore<TValue> = {
   register(key: string, value: TValue, opts?: { ttlMs?: number }): Promise<void>;
   lookup(key: string): Promise<TValue | undefined>;
@@ -74,7 +69,7 @@ export type ApprovalReactionDecisionResolution = {
 export type ApprovalReactionTargetRecord<TRoute = unknown> = {
   approvalId: string;
   /** Explicit ownership; omission is supported only by the deprecated resolver. */
-  approvalKind?: ApprovalKind;
+  approvalKind?: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   route?: TRoute;
   expiresAtMs?: number;
@@ -84,7 +79,7 @@ export type ApprovalReactionTargetRecord<TRoute = unknown> = {
 export type ApprovalReactionTargetResolution<TRoute = unknown> =
   ApprovalReactionDecisionResolution & {
     approvalId: string;
-    approvalKind: ApprovalKind;
+    approvalKind: ChannelApprovalKind;
     route?: TRoute;
   };
 
@@ -256,7 +251,7 @@ function resolveApprovalReactionTargetInternal<TRoute>(params: {
 /** Resolve an explicitly typed target without deriving ownership from its id. */
 export function resolveTypedApprovalReactionTarget<TRoute = unknown>(params: {
   target:
-    | (ApprovalReactionTargetRecord<TRoute> & { approvalKind: ApprovalKind })
+    | (ApprovalReactionTargetRecord<TRoute> & { approvalKind: ChannelApprovalKind })
     | null
     | undefined;
   reactionKey: string;
@@ -276,7 +271,7 @@ function buildDecisionText(allowedDecisions: readonly ExecApprovalReplyDecision[
 }
 
 function buildManualInstructionSection(params: {
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
   approvalId: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 }): string[] {

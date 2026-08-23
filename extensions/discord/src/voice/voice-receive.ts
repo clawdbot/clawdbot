@@ -59,7 +59,7 @@ export class DiscordVoiceReceive {
       isFollowOwnedGuild: (guildId: string) => boolean;
       join: (
         params: { guildId: string; channelId: string },
-        options?: { preserveFollowState?: boolean },
+        options?: { preserveFollowState?: boolean; autoJoinWhenOccupied?: boolean },
       ) => Promise<VoiceOperationResult>;
       leave: (
         params: { guildId: string },
@@ -539,7 +539,7 @@ export class DiscordVoiceReceive {
     }
     const result = await this.params.join(
       { guildId: entry.guildId, channelId: entry.channelId },
-      { preserveFollowState },
+      { preserveFollowState, autoJoinWhenOccupied: entry.autoJoinWhenOccupied },
     );
     if (!result.ok) {
       logger.warn(`discord voice: rejoin after decrypt failures failed: ${result.message}`);

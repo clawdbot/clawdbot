@@ -82,6 +82,59 @@ describe("redactTranscriptMessage", () => {
     expect(text).toContain("end");
   });
 
+  it("preserves source assignments in tool results while redacting explicit credentials", () => {
+    const sourceLines = [
+      "        if let token = timeObserverToken {",
+      "        if let token=timeObserverToken {",
+      "        let token = ForwardingCancellableTokenReference",
+      "    token = get_bearer_token()",
+      '        token = "LibraryViewController.swift"',
+      "        secret = resolvedSecret",
+      "        password = getpass()",
+      '        credential = "fixture"',
+      "        jwt = decodedPayload",
+      "        let API_TOKEN = timeObserverToken",
+      "API_TOKEN = computeToken()",
+      "API_KEY: str = computeKey()",
+      "        register(timeObserverToken)",
+      "        struct.timeObserverToken",
+    ];
+    const apiKey = "sk-abcdef1234567890abcdef1234567890";
+    const envToken = "environment-token-value-1234567890";
+    const input = [...sourceLines, `"apiKey": "${apiKey}"`, `API_TOKEN=${envToken}`].join("\n");
+    const msg = castAgentMessage({
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      content: [{ type: "text", text: input }],
+      isError: false,
+      timestamp: Date.now(),
+    });
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+    const text = expectDefined(
+      (msgContent(result) as Array<{ text: string }>)[0],
+      "tool result text block",
+    ).text;
+
+    for (const sourceLine of sourceLines) {
+      expect(text).toContain(sourceLine);
+    }
+    expect(text).not.toContain(apiKey);
+    expect(text).toContain(envToken);
+  });
+
+  it("keeps broad assignment masking for non-tool transcript messages", () => {
+    const credential = "assistant-credential-value-127697";
+    const result = redactTranscriptMessage(textMessage(`password = ${credential}`), cfg("tools"));
+    const text = expectDefined(
+      (msgContent(result) as Array<{ text: string }>)[0],
+      "assistant text block",
+    ).text;
+
+    expect(text).not.toContain(credential);
+  });
+
   it("keeps pagination cursors readable while still masking credential tool args (#104992)", () => {
     const msg = castAgentMessage({
       role: "assistant",
@@ -232,48 +285,54 @@ describe("redactTranscriptMessage", () => {
     expect(JSON.stringify(msgContent(result))).not.toContain("sk-abcdef1234567890xyz");
   });
 
-  it("preserves only validated OpenAI compaction replay state", () => {
-    const msg = castAgentMessage({
-      role: "assistant",
-      api: "openclaw-openai-responses-transport",
-      model: "gpt-5.6-luna",
-      provider: "openai",
-      content: [{ type: "text", text: "visible" }],
-      providerReplay: {
+  it.each([
+    ["streamed", "openai-responses-compaction", 0],
+    ["retained-user", "openai-responses-retained-compaction", undefined],
+  ] as const)(
+    "preserves only validated %s OpenAI compaction replay state",
+    (_name, type, replayIndex) => {
+      const msg = castAgentMessage({
+        role: "assistant",
+        api: "openclaw-openai-responses-transport",
+        model: "gpt-5.6-luna",
+        provider: "openai",
+        content: [{ type: "text", text: "visible" }],
+        providerReplay: {
+          v: 1,
+          type,
+          id: "cmp_1",
+          data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
+          ...(replayIndex === undefined ? {} : { replayIndex }),
+          provider: "openai",
+          api: "openai-responses",
+          model: "gpt-5.6-luna",
+          baseUrlHash: "ozhevd1smnk8s",
+          sessionHash: "171dzdv17gum5g",
+          authProfileHash: "oe8bkr3r8947",
+          secret: "sk-abcdef1234567890xyz",
+        },
+      });
+
+      const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
+        providerReplay: Record<string, unknown>;
+      };
+
+      expect(result.providerReplay).toEqual({
         v: 1,
-        type: "openai-responses-compaction",
+        type,
         id: "cmp_1",
         data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
-        replayIndex: 0,
+        ...(replayIndex === undefined ? {} : { replayIndex }),
         provider: "openai",
         api: "openai-responses",
         model: "gpt-5.6-luna",
         baseUrlHash: "ozhevd1smnk8s",
         sessionHash: "171dzdv17gum5g",
         authProfileHash: "oe8bkr3r8947",
-        secret: "sk-abcdef1234567890xyz",
-      },
-    });
-
-    const result = redactTranscriptMessage(msg, cfg("tools")) as unknown as {
-      providerReplay: Record<string, unknown>;
-    };
-
-    expect(result.providerReplay).toEqual({
-      v: 1,
-      type: "openai-responses-compaction",
-      id: "cmp_1",
-      data: CIPHERTEXT_WITH_TOKEN_SHAPED_BYTES,
-      replayIndex: 0,
-      provider: "openai",
-      api: "openai-responses",
-      model: "gpt-5.6-luna",
-      baseUrlHash: "ozhevd1smnk8s",
-      sessionHash: "171dzdv17gum5g",
-      authProfileHash: "oe8bkr3r8947",
-    });
-    expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
-  });
+      });
+      expect(JSON.stringify(result)).not.toContain("sk-abcdef1234567890xyz");
+    },
+  );
 
   it("preserves validated OpenAI compaction suppression state", () => {
     const msg = castAgentMessage({
@@ -455,6 +514,7 @@ describe("redactTranscriptMessage", () => {
   it.each([
     ["malformed content", { data: "" }],
     ["invalid replay index", { replayIndex: -1 }],
+    ["retained compaction index", { type: "openai-responses-retained-compaction", replayIndex: 0 }],
     ["invalid context hash", { baseUrlHash: "not-a-context-hash" }],
     ["foreign route", { provider: "azure" }],
   ])("omits invalid OpenAI compaction replay state for %s", (_name, override) => {

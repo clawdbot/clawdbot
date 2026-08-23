@@ -1,15 +1,14 @@
 // Control UI modal presents approvals after an explicit operator action.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import { t } from "../i18n/index.ts";
-import { formatCountdown } from "../lib/format.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import {
   approvalRemainingLabel,
   approvalTitle,
+  compactApprovalCommand,
   renderExecApprovalCard,
   resolveApprovalDecisions,
 } from "./exec-approval-card.ts";
@@ -19,20 +18,14 @@ import "./modal-dialog.ts";
 type ExecApprovalProps = {
   queue: readonly ExecApprovalRequest[];
   busy: boolean;
+  canGrant: boolean;
   errors: ReadonlyMap<string, string>;
-  nowMs: number;
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
 };
-
-function compactCommand(command: string): string {
-  const singleLine = command.replace(/\s+/g, " ").trim();
-  return singleLine.length > 64 ? `${truncateUtf16Safe(singleLine, 61)}…` : singleLine;
-}
 
 function renderApprovalQueueList(params: {
   queue: readonly ExecApprovalRequest[];
   activeId: string;
-  nowMs: number;
   onSelect: (approvalId: string) => void;
 }) {
   const others = params.queue.filter((entry) => entry.id !== params.activeId);
@@ -43,9 +36,8 @@ function renderApprovalQueueList(params: {
     <div class="exec-approval-list" aria-label=${t("execApproval.otherPending")}>
       <div class="exec-approval-list__heading">${t("execApproval.otherPending")}</div>
       ${others.map((entry) => {
-        const command = compactCommand(entry.request.command);
+        const command = compactApprovalCommand(entry.request.command);
         const agent = entry.request.agentId?.trim() || "—";
-        const countdown = formatCountdown(entry.expiresAtMs, params.nowMs, true);
         return html`
           <button
             class="exec-approval-list__item"
@@ -55,7 +47,12 @@ function renderApprovalQueueList(params: {
           >
             <span class="exec-approval-list__agent">${agent}</span>
             <span class="exec-approval-list__command mono">${command}</span>
-            <span class="exec-approval-list__expiry" aria-hidden="true">${countdown}</span>
+            <openclaw-approval-countdown
+              class="exec-approval-list__expiry"
+              aria-hidden="true"
+              .expiresAtMs=${entry.expiresAtMs}
+              .compact=${true}
+            ></openclaw-approval-countdown>
           </button>
         `;
       })}
@@ -112,7 +109,7 @@ class ExecApproval extends OpenClawLightDomContentsElement {
   private handleKeydown(event: KeyboardEvent, active: ExecApprovalRequest): void {
     // A held chord auto-repeats: once a decision settles and the queue
     // advances, the repeat would apply the same decision to the next request.
-    if (event.defaultPrevented || event.repeat || this.props?.busy) {
+    if (event.defaultPrevented || event.repeat || this.props?.busy || !this.props?.canGrant) {
       return;
     }
     const decision = shortcutDecision(event);
@@ -160,7 +157,7 @@ class ExecApproval extends OpenClawLightDomContentsElement {
     return html`
       <openclaw-modal-dialog
         label=${approvalTitle(active)}
-        description=${approvalRemainingLabel(active.expiresAtMs, props.nowMs)}
+        description=${approvalRemainingLabel(active.expiresAtMs, Date.now())}
         @keydown=${(event: KeyboardEvent) => this.handleKeydown(event, active)}
         @modal-cancel=${handleCancel}
       >
@@ -168,8 +165,8 @@ class ExecApproval extends OpenClawLightDomContentsElement {
           ${renderExecApprovalCard({
             approval: active,
             busy: props.busy,
+            canGrant: props.canGrant,
             error: props.errors.get(active.id) ?? null,
-            nowMs: props.nowMs,
             variant: "modal",
             queueCount: queue.length,
             onDecision: props.onDecision,
@@ -177,7 +174,6 @@ class ExecApproval extends OpenClawLightDomContentsElement {
           ${renderApprovalQueueList({
             queue,
             activeId: active.id,
-            nowMs: props.nowMs,
             onSelect: (approvalId) => {
               this.selectedApprovalId = approvalId;
             },

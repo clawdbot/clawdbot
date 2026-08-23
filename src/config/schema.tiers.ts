@@ -43,6 +43,7 @@ agents.entries.*.runtime.acp.agent agents.entries.*.runtime.type
 agents.entries.*.sandbox.ssh.workspaceRoot agents.entries.*.sandbox.workspaceRoot
 agents.entries.*.subagents.model agents.entries.*.subagents.model.primary agents.entries.*.workspace
 agents.entries.*.tools.alsoAllow agents.entries.*.tools.deny
+agents.entries.*.tools.github
 agents.entries.*.tools.exec.applyPatch.workspaceOnly agents.entries.*.tools.exec.host
 agents.entries.*.tools.exec.mode agents.entries.*.tools.exec.strictInlineEval
 agents.entries.*.tools.exec.reviewer.model agents.entries.*.tools.exec.reviewer.model.primary
@@ -151,6 +152,7 @@ skills.workshop.autonomous.mode talk.provider talk.providers.*.apiKey
 talk.realtime.brain talk.realtime.mode talk.realtime.provider
 talk.realtime.model talk.realtime.providers.*.apiKey talk.realtime.speakerVoice talk.speechLocale
 tools.alsoAllow tools.deny tools.exec
+tools.github
 tools.fs tools.media.audio tools.media.image tools.media.video tools.message
 tools.exec.reviewer.model.primary tools.media.models.*.model
 tools.media.models.*.request.auth.token tools.profile tools.sessions

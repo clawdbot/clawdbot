@@ -3,15 +3,19 @@
    ============================================= */
 
 /* Chat Group Layout - default (assistant/other on left). Groups without a
-   footer keep the shared 26px rhythm directly. Footer-bearing groups split
+   footer keep the shared turn gap directly. Footer-bearing groups split
    message content and footer into separate rows so each row keeps the avatar
    gutter while only the message row controls avatar alignment. */
 .chat-group {
+  --chat-footer-row-offset: 26px;
   --chat-message-column-max: var(--chat-message-max-width, min(900px, 68%));
+  --chat-run-block-gap: 12px;
+  --chat-touch-row-margin: 14px;
+  --chat-turn-gap: 50px;
   display: flex;
   gap: 10px;
   align-items: flex-start;
-  padding-bottom: 26px;
+  padding-bottom: var(--chat-turn-gap);
   margin-left: 4px;
   margin-right: 16px;
 }
@@ -23,6 +27,9 @@
 }
 
 .chat-group.user.chat-group--peer {
+  /* The left-aligned identity owns the leading edge while hidden details
+     reserve their desktop footprint after it. */
+  --chat-footer-detail-position: static;
   flex-direction: row;
 }
 
@@ -52,7 +59,7 @@
   grid-template-rows: auto auto;
   gap: 2px 10px;
   justify-content: start;
-  padding-bottom: 0;
+  padding-bottom: calc(var(--chat-turn-gap) - var(--chat-footer-row-offset));
 }
 
 .chat-group.user.chat-group--with-footer {
@@ -69,7 +76,7 @@
   justify-content: start;
 }
 
-.chat-group.chat-group--with-footer .chat-avatar {
+.chat-group.chat-group--with-footer > :is(.chat-avatar, .chat-avatar-slot) {
   grid-column: var(--chat-group-avatar-column);
   grid-row: 1;
 }
@@ -87,6 +94,7 @@
 }
 
 .chat-group-messages {
+  --chat-message-type-boundary-gap: var(--space-1);
   position: relative; /* anchors message-local popovers */
   display: flex;
   flex-direction: column;
@@ -96,6 +104,29 @@
   width: 100%;
   max-width: var(--chat-message-column-max);
   min-width: 0;
+}
+
+.chat-group-messages
+  > :is(
+    .chat-bubble--tool-shell + .chat-bubble:not(.chat-bubble--tool-shell),
+    .chat-bubble:not(.chat-bubble--tool-shell) + .chat-bubble--tool-shell
+  ) {
+  margin-block-start: var(--chat-message-type-boundary-gap);
+}
+
+.chat-group
+  > .chat-group-messages
+  > :is(
+    .chat-bubble--tool-shell + .chat-bubble:not(.chat-bubble--tool-shell),
+    .chat-bubble:not(.chat-bubble--tool-shell) + .chat-bubble--tool-shell,
+    .chat-bubble + .chat-activity-group,
+    .chat-activity-group + .chat-bubble,
+    .chat-work-group + .chat-bubble,
+    .chat-work-group + .chat-activity-group,
+    .chat-bubble + .chat-work-group,
+    .chat-activity-group + .chat-work-group
+  ) {
+  margin-block-start: calc(var(--chat-run-block-gap) - 2px);
 }
 
 /* User messages align content right */
@@ -108,7 +139,19 @@
 }
 
 .chat-group.tool {
-  --chat-message-column-max: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
+  --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
+  display: block;
+  margin-inline-start: 4px;
+  padding-inline-start: 46px;
+}
+
+.chat-group.tool.chat-group--with-footer {
+  display: block;
+}
+
+.chat-group.tool.chat-group--with-footer > .chat-group-messages {
+  max-width: var(--chat-message-column-max);
+  margin-inline-start: 1px;
 }
 
 .chat-group.user .chat-group-footer {
@@ -191,9 +234,13 @@
   min-width: 0;
 }
 
+.chat-group.user.chat-group--peer .chat-group-footer__meta {
+  min-height: 24px;
+}
+
 /* Own-message footers are right-aligned, so hover-revealed time/actions must
    slot in to the LEFT of the always-visible name; otherwise the name jumps
-   sideways on hover. Peer footers are left-aligned and already stable. */
+   sideways on hover. */
 .chat-group.user:not(.chat-group--peer) .chat-group-footer--persistent-identity .chat-sender-name {
   order: 1;
 }
@@ -216,6 +263,10 @@
 .chat-group.assistant .chat-message-actions-row {
   justify-content: flex-start;
   margin-left: 0;
+}
+
+.chat-group.user.chat-group--peer .chat-group-footer button:focus-visible {
+  opacity: 1;
 }
 
 .chat-message-actions-row {
@@ -300,7 +351,7 @@
   padding: 4px;
   min-width: 24px;
   min-height: 24px;
-  border-radius: var(--radius-sm, 4px);
+  border-radius: var(--radius-md);
   color: var(--muted);
   opacity: var(--chat-footer-disclosure-opacity, 0);
   pointer-events: var(--chat-footer-disclosure-pointer-events, none);
@@ -328,7 +379,7 @@
 .chat-group-footer button:hover,
 .chat-message-actions-row button:hover {
   opacity: 1 !important;
-  background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  background: transparent;
   color: var(--accent);
 }
 
@@ -347,7 +398,7 @@
 .chat-divider {
   display: grid;
   gap: 7px;
-  margin: 18px 8px;
+  margin: var(--space-7) 8px;
   color: var(--muted);
   font-size: 12px;
   letter-spacing: 0;
@@ -460,6 +511,16 @@
   margin: 0 auto;
 }
 
+.chat-notice--danger {
+  width: min(560px, calc(100% - 32px));
+  margin: 14px auto;
+  text-align: left;
+}
+
+.chat-notice--danger .chat-notice__body {
+  width: 100%;
+}
+
 .chat-notice :where(ul, ol, pre, blockquote) {
   display: inline-block;
   text-align: left;
@@ -502,10 +563,10 @@ img.chat-avatar.user {
   object-fit: cover;
 }
 
-/* Sender avatars pair the route image with an initials fallback; the slot
-   swaps them when the canonical route has no avatar (404). */
+/* Keep the image and initials fallback in one stable grid item. display: contents
+   can lose the avatar column when Lit reconciles an attributed message. */
 .chat-avatar-slot {
-  display: contents;
+  display: grid;
 }
 
 .chat-avatar-slot > .chat-avatar--sender-initials {
@@ -637,8 +698,7 @@ img.chat-avatar.chat-avatar--logo {
 /* Direct (1:1) threads drop avatars entirely: one agent plus one user makes
    the repeated identity icons pure decoration. Group threads (any labeled
    foreign sender) keep avatars as the always-visible identity marker. */
-.chat-thread--direct .chat-avatar,
-.chat-thread--direct img.chat-avatar {
+.chat-thread--direct :is(.chat-avatar, .chat-avatar-slot) {
   display: none;
 }
 
@@ -657,12 +717,17 @@ img.chat-avatar.chat-avatar--logo {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
 }
 
+.chat-thread--direct .chat-group.tool {
+  margin-inline-start: 0;
+  padding-inline-start: 0;
+}
+
 .chat-duplicate-count {
   display: inline-flex;
   align-items: center;
-  align-self: flex-start;
+  align-self: baseline;
   min-height: 22px;
-  margin-top: 8px;
+  margin-top: 0;
   padding: 2px 7px;
   border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
   border-radius: var(--radius-sm);
@@ -671,6 +736,8 @@ img.chat-avatar.chat-avatar--logo {
   font-size: 12px; /* was 11px */
   font-weight: 700;
   line-height: 1;
+  vertical-align: 0.08em;
+  white-space: nowrap;
 }
 
 .chat-group.user .chat-duplicate-count {
@@ -698,11 +765,22 @@ img.chat-avatar.chat-avatar--logo {
   /* Shared message renderers stay touch-readable by default. Transcript rows
      opt into one-at-a-time disclosure through their owning thread. */
   .chat-group {
+    --chat-footer-row-offset: 44px;
     --chat-footer-disclosure-opacity: 1;
     --chat-footer-disclosure-pointer-events: auto;
     --chat-footer-detail-position: static;
+    padding-bottom: calc(var(--chat-turn-gap) - var(--chat-touch-row-margin));
+    margin-bottom: var(--chat-touch-row-margin);
+  }
+
+  .chat-group.chat-group--with-footer:has(
+    .chat-group-footer:not(.chat-group-footer--persistent-identity) .chat-group-footer-actions
+  ),
+  .chat-group.chat-group--with-footer:is(.chat-group--meta-revealed, :focus-within):has(
+    .chat-group-footer--persistent-identity .chat-group-footer-actions
+  ) {
     padding-bottom: 0;
-    margin-bottom: 14px;
+    margin-bottom: 0;
   }
 
   .chat-group-footer {
@@ -721,6 +799,16 @@ img.chat-avatar.chat-avatar--logo {
     --chat-footer-disclosure-pointer-events: auto;
     --chat-footer-detail-position: static;
     --chat-persistent-footer-opacity: 1;
+  }
+
+  :where(.chat-thread)
+    .chat-group.user.chat-group--peer:not(.chat-group--meta-revealed, :focus-within) {
+    --chat-footer-detail-position: absolute;
+  }
+
+  .chat-group.user.chat-group--peer .chat-group-footer-actions {
+    flex-basis: 100%;
+    justify-content: flex-end;
   }
 
   .chat-group-footer-actions .chat-copy-btn,
@@ -807,16 +895,22 @@ img.chat-avatar.chat-avatar--logo {
 }
 
 .chat-group.user .chat-bubble:hover {
-  border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+  border-color: transparent;
+  box-shadow: none;
 }
 
-/* Light mode: restore borders. Order contract: stays below the role variants
-   above; it ties with .chat-group.user .chat-bubble on specificity and the
-   light skin must win (user bubbles render on var(--bg) in light mode). */
+/* Light mode: restore borders for surfaces that retain them. */
 :root[data-theme-mode="light"] .chat-bubble {
   border-color: var(--border);
   background: var(--bg);
   box-shadow: inset 0 1px 0 var(--card-highlight);
+}
+
+:root[data-theme-mode="light"] .chat-group.user .chat-bubble {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg));
+  color: var(--text-strong);
+  box-shadow: none;
 }
 
 :root[data-theme-mode="light"] .chat-bubble--tool-shell,
@@ -836,7 +930,7 @@ img.chat-avatar.chat-avatar--logo {
 }
 
 .chat-group.user.chat-group--sender-tint .chat-bubble:hover {
-  border-color: hsl(var(--chat-sender-hue) 48% 55% / 0.4);
+  border-color: transparent;
 }
 
 .chat-group.user.chat-group--sender-tint .chat-sender-name {
@@ -845,13 +939,13 @@ img.chat-avatar.chat-avatar--logo {
 
 :root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble {
   background: hsl(var(--chat-sender-hue) 65% 94%);
-  border-color: hsl(var(--chat-sender-hue) 45% 82%);
+  border-color: transparent;
 }
 
-/* Outranks the light skin above (it also sets border-color); without this the
-   tinted hover border never applies in light mode. */
+/* Keep tinted user turns borderless when the generic light hover skin applies. */
 :root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble:hover {
-  border-color: hsl(var(--chat-sender-hue) 48% 62%);
+  border-color: transparent;
+  box-shadow: none;
 }
 
 :root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-sender-name {
@@ -1100,7 +1194,7 @@ details.msg-meta:not([open]) .msg-meta__details {
   }
 
   .chat-avatar,
-  img.chat-avatar {
+  .chat-avatar-slot {
     display: none;
   }
 

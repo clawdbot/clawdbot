@@ -9,6 +9,7 @@ import {
 } from "../infra/startup-migration-checkpoint.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  OPENCLAW_STATE_SCHEMA_VERSION,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import type { PluginCandidate } from "./discovery.js";
@@ -715,6 +716,24 @@ describe("installed plugin index persistence", () => {
     insertPersistedIndexRow(stateDir, { version: 999 });
 
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
+  });
+
+  it("preserves newer shared-state schema errors while reading the index", async () => {
+    const stateDir = makeTempDir();
+    await writePersistedInstalledPluginIndex(createIndex(), { stateDir });
+    closeOpenClawStateDatabaseForTest();
+    const databasePath = resolveInstalledPluginIndexStorePath({ stateDir });
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
+    database.close();
+
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).rejects.toMatchObject({
+      name: "SqliteSchemaVersionError",
+      message: expect.stringContaining(
+        `uses newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
+      ),
+    });
   });
 
   it("leaves retired JSON index files to the doctor migration owner", async () => {

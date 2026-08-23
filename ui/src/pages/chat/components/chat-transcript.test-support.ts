@@ -32,20 +32,27 @@ class RecordingResizeObserver implements ResizeObserver {
   }
 
   emit(width: number, height: number): void {
-    const entries = [...this.targets].map(
-      (target) =>
-        ({
-          target,
-          borderBoxSize: [{ inlineSize: width, blockSize: height }],
-        }) as unknown as ResizeObserverEntry,
-    );
+    const entries = [...this.targets].map((target) => this.entry(target, width, height));
     if (entries.length > 0) {
       this.callback(entries, this);
     }
   }
 
+  emitTarget(target: Element, width: number, height: number): void {
+    if (this.targets.has(target)) {
+      this.callback([this.entry(target, width, height)], this);
+    }
+  }
+
   observes(target: Element): boolean {
     return this.targets.has(target);
+  }
+
+  private entry(target: Element, width: number, height: number): ResizeObserverEntry {
+    return {
+      target,
+      borderBoxSize: [{ inlineSize: width, blockSize: height }],
+    } as unknown as ResizeObserverEntry;
   }
 }
 

@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
@@ -12,7 +12,7 @@ import { routeDraft } from "./route-draft.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
-import type { ChatSplitPane } from "./split-layout.ts";
+import type { ChatSplitPane } from "./split-layout-types.ts";
 
 type ChatPagePaneRenderOptions = {
   active: boolean;
@@ -55,6 +55,7 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
       class="chat-split-view__cell ${options.splitMode && options.active
         ? "chat-split-view__cell--active"
         : ""} ${options.narrow && !options.active ? "chat-split-view__cell--narrow-hidden" : ""}"
+      aria-current=${options.splitMode && options.active ? "true" : nothing}
       style="flex: ${options.weight} 1 0"
       @pointerdown=${() => options.onFocusPane(options.pane.id)}
       @focusin=${() => options.onFocusPane(options.pane.id)}
@@ -94,6 +95,7 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
               .sessionSnapshotStore=${options.sessionSnapshotStore}
               .sessionKey=${sessionKey}
               .presented=${presented}
+              .visuallyPresented=${presented}
               .active=${active}
               .draft=${draft}
               .focusComposer=${options.draftFocus.shouldFocusPane(

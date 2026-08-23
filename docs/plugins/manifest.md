@@ -610,7 +610,7 @@ Set `requiresRuntime: false` only when those descriptors are sufficient for the 
 
 Because setup lookup can execute plugin-owned `setup-api` code, normalized `setup.providers[].id` and `setup.cliBackends[]` values must stay unique across discovered plugins. Ambiguous ownership fails closed instead of picking a winner from discovery order.
 
-When setup runtime does execute, setup registry diagnostics report descriptor drift if `setup-api` registers a provider or CLI backend that the manifest descriptors do not declare, or if a descriptor has no matching runtime registration. These diagnostics are additive and do not reject legacy plugins.
+When setup runtime executes, setup registry diagnostics report providers or CLI backends that `setup-api` registers without matching manifest declarations. CLI backend descriptors also report a missing runtime registration because setup lookup needs the registered backend configuration. Provider descriptors may remain metadata-only even when the same setup module contributes migrations, CLI backends, probes, or selected provider runtimes.
 
 ### setup.providers reference
 
@@ -637,12 +637,12 @@ Supported evidence entries:
 
 ### setup fields
 
-| Field              | Required | Type       | What it means                                                                                       |
-| ------------------ | -------- | ---------- | --------------------------------------------------------------------------------------------------- |
-| `providers`        | No       | `object[]` | Provider setup descriptors exposed during setup and onboarding.                                     |
-| `cliBackends`      | No       | `string[]` | Setup-time backend ids used for descriptor-first setup lookup. Keep normalized ids globally unique. |
-| `configMigrations` | No       | `string[]` | Config migration ids owned by this plugin's setup surface.                                          |
-| `requiresRuntime`  | No       | `boolean`  | Whether setup still needs `setup-api` execution after descriptor lookup.                            |
+| Field              | Required | Type       | What it means                                                                                                                                  |
+| ------------------ | -------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `providers`        | No       | `object[]` | Provider setup descriptors exposed during setup and onboarding.                                                                                |
+| `cliBackends`      | No       | `string[]` | Setup-time backend ids used for descriptor-first setup lookup. Keep normalized ids globally unique.                                            |
+| `configMigrations` | No       | `string[]` | Config migration ids owned by this plugin's setup surface.                                                                                     |
+| `requiresRuntime`  | No       | `boolean`  | Whether setup still needs `setup-api` execution after descriptor lookup. Explicit `false` disables it; omission preserves the legacy fallback. |
 
 ## uiHints reference
 
@@ -711,7 +711,7 @@ Use `contracts` only for static capability ownership metadata that OpenClaw can 
 }
 ```
 
-Each list is optional:
+Each list is optional. For `speechProviders` and `realtimeVoiceProviders`, list the canonical provider ID first, followed by any aliases scoped to that capability:
 
 | Field                            | Type       | What it means                                                                                                                        |
 | -------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------ |
@@ -750,7 +750,7 @@ Provider plugins that implement both `resolveUsageAuth` and `fetchUsageSnapshot`
 
 Embedding providers must declare `contracts.embeddingProviders` for each adapter registered with `api.registerEmbeddingProvider(...)`. The same generic contract serves reusable vector generation and memory search. The retired `contracts.memoryEmbeddingProviders` key is no longer accepted.
 
-Worker providers must declare each `api.registerWorkerProvider(...)` id in `contracts.workerProviders`. Core persists durable intent before calling `provision`; providers validate their settings and any optional per-dispatch `machineClass` before external allocation, and repeated calls with the same operation id must adopt the same lease. Providers may implement `listMachineOptions(profile)` to expose process-stable picker metadata; omit it when machine selection is not meaningful. Machine options contain only `id`, `label`, optional `description`, and optional `default`. Providers whose bounded provisioning exceeds core's five-minute default may implement `resolveProvisionTimeoutMs(profile)` and include acquisition, provider-owned setup, and cleanup in the returned positive millisecond budget. Core also persists that validated settings snapshot and passes it with `leaseId` to `inspect({ leaseId, profile })` and `destroy({ leaseId, profile })`, including after the named profile is changed or removed. Destruction is idempotent, inspection returns the closed `active` / `destroyed` / `unknown` status union, and SSH private-key material is referenced only through `SecretRef`. Provisioned SSH endpoints must also include a public `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment, so core can pin the host before connecting. They may include up to 10 ordered, unique `fallbackPorts`, excluding the primary `port`; core persists those candidates and rotates among them only for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed across candidates. A lease may set `sharedHost: true` when the SSH account also owns unrelated processes; core then avoids host-wide process freezing during workspace reconciliation. Omitted or `false` means a dedicated worker host. Active inspection repeats this fact so core can reconcile provider-owned isolation for leases persisted before the field existed; tunnel startup waits for that first authoritative inspection. Optional desktop metadata may advertise up to eight unique closed apps: `browser` with an absolute `executablePath` and a CDP port from 1 through 65535, or `terminal` with an absolute `executablePath`. Core rejects unknown app ids and fields and persists the validated metadata with the existing desktop record. Providers that mint dynamic identity refs may implement authoritative `resolveSshIdentity({ leaseId, profile, keyRef })`; providers without it use core's generic secret resolver. An authoritative `unknown` orphans an active local record; after a persisted destroy request it confirms teardown.
+Worker providers must declare each `api.registerWorkerProvider(...)` id in `contracts.workerProviders`. Core persists durable intent before calling `provision`; providers validate their settings and any optional per-dispatch `machineClass` before external allocation, and repeated calls with the same operation id must adopt the same lease. Providers may implement asynchronous `listMachineOptions(profile)` to expose process-stable picker metadata; omit it when machine selection is not meaningful. Machine options contain only `id`, `label`, optional positive-integer `cpu` and `memoryGb`, and optional `default`. Providers used for session placement must declare exactly one `supportedExecutionModes` value: `worker-turn` providers return node leases and `remote-exec` providers return SSH leases. Omission advertises no session-placement modes while leaving direct lifecycle operations available. Providers whose bounded provisioning exceeds core's five-minute default may implement `resolveProvisionTimeoutMs(profile)` and include acquisition, provider-owned setup, and cleanup in the returned positive millisecond budget. Core also persists that validated settings snapshot and passes it with `leaseId` to `inspect({ leaseId, profile })` and `destroy({ leaseId, profile })`, including after the named profile is changed or removed. Destruction is idempotent, inspection returns the closed `active` / `destroyed` / `unknown` status union, and SSH private-key material is referenced only through `SecretRef`. Provisioned SSH endpoints must also include a public `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment, so core can pin the host before connecting. They may include up to 10 ordered, unique `fallbackPorts`, excluding the primary `port`; core persists those candidates and rotates among them only for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed across candidates. A lease may set `sharedHost: true` when the SSH account also owns unrelated processes; core then avoids host-wide process freezing during workspace reconciliation. Omitted or `false` means a dedicated worker host. Active inspection repeats this fact so core can reconcile provider-owned isolation for leases persisted before the field existed; tunnel startup waits for that first authoritative inspection. Optional desktop metadata may advertise up to eight unique closed apps: `browser` with an absolute `executablePath` and a CDP port from 1 through 65535, or `terminal` with an absolute `executablePath`. Core rejects unknown app ids and fields and persists the validated metadata with the existing desktop record. Providers that mint dynamic identity refs may implement authoritative `resolveSshIdentity({ leaseId, profile, keyRef })`; providers without it use core's generic secret resolver. An authoritative `unknown` orphans an active local record; after a persisted destroy request it confirms teardown.
 
 `contracts.gatewayMethodDispatch` currently accepts `"authenticated-request"`. It is an API hygiene gate for native plugin HTTP routes that intentionally dispatch Gateway control-plane methods in-process, not a sandbox against malicious native plugins. Use it only for tightly reviewed bundled/operator surfaces that already require Gateway HTTP auth. An entitled route remains reachable while Gateway root-work admission is closed only when it also declares `auth: "gateway"` and the route-specific `gatewayRuntimeScopeSurface: "trusted-operator"`; ordinary sibling routes from the same plugin remain behind the admission boundary. This keeps suspension status and resume reachable without granting the whole plugin an admission bypass. Keep parsing and response shaping bounded outside dispatch; substantive or mutating work must go through Gateway method dispatch, which owns admission and scope enforcement.
 
@@ -1033,28 +1033,30 @@ Provider fields:
 
 Model fields:
 
-| Field              | Type                                                           | What it means                                                                        |
-| ------------------ | -------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `id`               | `string`                                                       | Provider-local model id, without the `provider/` prefix.                             |
-| `name`             | `string`                                                       | Optional display name.                                                               |
-| `api`              | `ModelApi`                                                     | Optional per-model API override.                                                     |
-| `baseUrl`          | `string`                                                       | Optional per-model base URL override.                                                |
-| `headers`          | `Record<string, string>`                                       | Optional per-model static headers.                                                   |
-| `input`            | `Array<"text" \| "image" \| "document">`                       | Modalities the model accepts. Other values are silently dropped.                     |
-| `reasoning`        | `boolean`                                                      | Whether the model exposes reasoning behavior.                                        |
-| `contextWindow`    | `number`                                                       | Native provider context window.                                                      |
-| `contextTokens`    | `number`                                                       | Optional effective runtime context cap when different from `contextWindow`.          |
-| `maxTokens`        | `number`                                                       | Maximum output tokens when known.                                                    |
-| `thinkingLevelMap` | `Record<string, string \| null>`                               | Optional per-thinking-level model-id or param overrides.                             |
-| `cost`             | `object`                                                       | Optional USD per million token pricing, including optional `tieredPricing`.          |
-| `compat`           | `object`                                                       | Optional compatibility flags matching OpenClaw model config compatibility.           |
-| `upstreamModel`    | `string`                                                       | Optional `provider/model` ref of the same upstream model in another bundled catalog. |
-| `mediaInput`       | `object`                                                       | Optional per-modality input config, currently image-only.                            |
-| `status`           | `"available"` \| `"preview"` \| `"deprecated"` \| `"disabled"` | Listing status. Suppress only when the row must not appear at all.                   |
-| `statusReason`     | `string`                                                       | Optional reason shown with non-available status.                                     |
-| `replaces`         | `string[]`                                                     | Older provider-local model ids this model supersedes.                                |
-| `replacedBy`       | `string`                                                       | Replacement provider-local model id for deprecated rows.                             |
-| `tags`             | `string[]`                                                     | Stable tags used by pickers and filters.                                             |
+| Field                  | Type                                                           | What it means                                                                        |
+| ---------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `id`                   | `string`                                                       | Provider-local model id, without the `provider/` prefix.                             |
+| `name`                 | `string`                                                       | Optional display name.                                                               |
+| `api`                  | `ModelApi`                                                     | Optional per-model API override.                                                     |
+| `baseUrl`              | `string`                                                       | Optional per-model base URL override.                                                |
+| `headers`              | `Record<string, string>`                                       | Optional per-model static headers.                                                   |
+| `input`                | `Array<"text" \| "image" \| "document">`                       | Modalities the model accepts. Other values are silently dropped.                     |
+| `reasoning`            | `boolean`                                                      | Whether the model exposes reasoning behavior.                                        |
+| `contextWindow`        | `number`                                                       | Native provider context window.                                                      |
+| `contextWindows`       | `Array<{ id: string; label: string; contextWindow: number }>`  | Up to 16 selectable windows, normalized in ascending token-count order.              |
+| `contextWindowDefault` | `string`                                                       | Default selectable-window id; must name an entry in `contextWindows`.                |
+| `contextTokens`        | `number`                                                       | Optional effective runtime context cap when different from `contextWindow`.          |
+| `maxTokens`            | `number`                                                       | Maximum output tokens when known.                                                    |
+| `thinkingLevelMap`     | `Record<string, string \| null>`                               | Optional per-thinking-level model-id or param overrides.                             |
+| `cost`                 | `object`                                                       | Optional USD per million token pricing, including optional `tieredPricing`.          |
+| `compat`               | `object`                                                       | Optional compatibility flags matching OpenClaw model config compatibility.           |
+| `upstreamModel`        | `string`                                                       | Optional `provider/model` ref of the same upstream model in another bundled catalog. |
+| `mediaInput`           | `object`                                                       | Optional per-modality input config, currently image-only.                            |
+| `status`               | `"available"` \| `"preview"` \| `"deprecated"` \| `"disabled"` | Listing status. Suppress only when the row must not appear at all.                   |
+| `statusReason`         | `string`                                                       | Optional reason shown with non-available status.                                     |
+| `replaces`             | `string[]`                                                     | Older provider-local model ids this model supersedes.                                |
+| `replacedBy`           | `string`                                                       | Replacement provider-local model id for deprecated rows.                             |
+| `tags`                 | `string[]`                                                     | Stable tags used by pickers and filters.                                             |
 
 Suppression fields:
 

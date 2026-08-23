@@ -17,8 +17,8 @@ import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.chat.ChatPlanSnapshot
 import ai.openclaw.app.chat.ChatPlanStepStatus
+import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSubagentActivity
@@ -303,7 +303,7 @@ fun ChatScreen(
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val subagentActivities by viewModel.chatSubagentActivities.collectAsState()
   val questions by viewModel.chatQuestions.collectAsState()
-  val planSnapshot by viewModel.chatPlanSnapshot.collectAsState()
+  val progressCard by viewModel.chatProgressCard.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
   val swarmGroups by viewModel.chatSwarmGroups.collectAsState()
   val sessionBranches by viewModel.chatSessionBranches.collectAsState()
@@ -788,8 +788,8 @@ fun ChatScreen(
       modifier = Modifier.weight(1f),
     )
 
-    if (pendingRunCount > 0 && planSnapshot.steps.isNotEmpty()) {
-      PlanChecklistPill(plan = planSnapshot)
+    progressCard?.let { card ->
+      ProgressCardPill(card = card)
     }
 
     ChatSwarmProgress(groups = swarmGroups)
@@ -2126,13 +2126,13 @@ private fun ChatNotice(
 }
 
 @Composable
-private fun PlanChecklistPill(plan: ChatPlanSnapshot) {
+private fun ProgressCardPill(card: ChatProgressCard) {
   var expanded by rememberSaveable { mutableStateOf(false) }
-  val steps = plan.steps
+  val steps = card.steps
   val currentStep =
     steps.firstOrNull { it.status == ChatPlanStepStatus.InProgress }
+      ?: steps.firstOrNull { it.status == ChatPlanStepStatus.Pending }
       ?: steps.lastOrNull { it.status == ChatPlanStepStatus.Completed }
-      ?: steps.first()
   val completedCount = steps.count { it.status == ChatPlanStepStatus.Completed }
 
   Surface(
@@ -2150,24 +2150,26 @@ private fun PlanChecklistPill(plan: ChatPlanSnapshot) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        PlanStepMarker(status = currentStep.status)
+        currentStep?.let { PlanStepMarker(status = it.status) }
         Text(
-          text = currentStep.step,
+          text = currentStep?.step ?: nativeString("Progress note"),
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.text,
           modifier = Modifier.weight(1f),
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
-        Text(
-          text = "$completedCount/${steps.size}",
-          style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textMuted,
-          maxLines = 1,
-        )
+        if (steps.isNotEmpty()) {
+          Text(
+            text = "$completedCount/${steps.size}",
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+            maxLines = 1,
+          )
+        }
         Icon(
           imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-          contentDescription = if (expanded) nativeString("Collapse plan checklist") else nativeString("Expand plan checklist"),
+          contentDescription = if (expanded) nativeString("Collapse progress card") else nativeString("Expand progress card"),
           modifier = Modifier.size(16.dp),
           tint = ClawTheme.colors.textSubtle,
         )
@@ -2176,12 +2178,11 @@ private fun PlanChecklistPill(plan: ChatPlanSnapshot) {
       if (expanded) {
         HorizontalDivider(color = ClawTheme.colors.border)
         Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-          plan.explanation?.let { explanation ->
-            Text(
-              text = explanation,
-              style = ClawTheme.type.caption,
-              color = ClawTheme.colors.textMuted,
-              modifier = Modifier.padding(start = 22.dp),
+          card.markdown?.let { markdown ->
+            ChatMarkdown(
+              text = markdown,
+              textColor = ClawTheme.colors.text,
+              isStreaming = false,
             )
           }
           steps.forEach { step ->

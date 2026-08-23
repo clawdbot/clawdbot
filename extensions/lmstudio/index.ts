@@ -8,7 +8,6 @@ import {
   type ProviderAuthMethod,
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
-  type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
@@ -33,8 +32,6 @@ import { shouldUseLmstudioSyntheticAuth } from "./src/provider-auth.js";
 import { wrapLmstudioInferencePreload } from "./src/stream.js";
 
 const PROVIDER_ID = "lmstudio";
-// Intentional: dynamic models are cached per LM Studio endpoint (`baseUrl`) only.
-const cachedDynamicModels = new Map<string, ProviderRuntimeModel[]>();
 
 type LmstudioNonInteractiveValidationContext = Parameters<
   NonNullable<ProviderAuthMethod["validateNonInteractive"]>
@@ -168,6 +165,10 @@ export default definePluginEntry({
           hint: "Connect to a running LM Studio server and use an already loaded model",
           kind: "custom",
           appGuidedSetup: {
+            detectAvailability: async (ctx) => {
+              const providerSetup = await loadProviderSetup();
+              return await providerSetup.detectAppGuidedLmstudioAvailability(ctx);
+            },
             detect: async (ctx) => {
               const providerSetup = await loadProviderSetup();
               const result = await providerSetup.prepareAppGuidedLmstudioSetup(ctx);
@@ -190,6 +191,7 @@ export default definePluginEntry({
             return await providerSetup.promptAndConfigureLmstudioInteractive({
               config: ctx.config,
               agentDir: ctx.agentDir,
+              workspaceDir: ctx.workspaceDir,
               prompter: ctx.prompter,
               secretInputMode: ctx.secretInputMode,
               allowSecretRefPrompt: ctx.allowSecretRefPrompt,
@@ -228,15 +230,8 @@ export default definePluginEntry({
       normalizeConfig: ({ providerConfig }) => normalizeLmstudioProviderConfig(providerConfig),
       prepareDynamicModel: async (ctx) => {
         const providerSetup = await loadProviderSetup();
-        cachedDynamicModels.set(
-          ctx.providerConfig?.baseUrl ?? "",
-          await providerSetup.prepareLmstudioDynamicModels(ctx),
-        );
+        return await providerSetup.prepareLmstudioDynamicModel(ctx);
       },
-      resolveDynamicModel: (ctx) =>
-        cachedDynamicModels
-          .get(ctx.providerConfig?.baseUrl ?? "")
-          ?.find((model) => model.id === ctx.modelId),
       augmentModelCatalog: (ctx) => resolveLmstudioAugmentedCatalogEntries(ctx.config),
       wrapStreamFn: wrapLmstudioInferencePreload,
       ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),

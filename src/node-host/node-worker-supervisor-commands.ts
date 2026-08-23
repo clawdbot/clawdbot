@@ -1,7 +1,10 @@
+import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   NODE_WORKER_BUNDLE_INSTALL_COMMAND,
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
+  NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
+  NODE_WORKER_DESKTOP_STREAM_COMMAND,
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
@@ -30,6 +33,8 @@ import {
   parseWorkerConnectionEndpoint,
   type WorkerConnectionEndpoint,
 } from "../worker/worker-connection-endpoint.js";
+import { invokeNodeWorkerDesktopLaunch } from "./desktop-launch-command.js";
+import { invokeNodeWorkerDesktopStream } from "./desktop-stream-command.js";
 import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-installer.js";
 import { NodeWorkerCapacityExhaustedError } from "./node-worker-capacity.js";
 import {
@@ -52,6 +57,7 @@ type NodeWorkerSupervisorCommandResult =
         | NodeWorkerSupervisorReceipt
         | NodeWorkerWorkspaceExecResult
         | NodeWorkerWorkspaceRetainResult
+        | { status: "ready" }
         | null;
     }
   | {
@@ -69,6 +75,7 @@ type NodeWorkerSupervisorCommandResult =
 function resolveWorkerConnectionEndpoint(params: {
   gatewayUrl?: string;
   gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: CloudflareAccessCredentials;
 }): WorkerConnectionEndpoint {
   if (!params.gatewayUrl) {
     throw new Error("node worker gateway connection unavailable");
@@ -91,6 +98,7 @@ function resolveWorkerConnectionEndpoint(params: {
     ...(gateway.protocol === "wss:" && params.gatewayTlsFingerprint
       ? { tlsFingerprint: params.gatewayTlsFingerprint }
       : {}),
+    ...(params.gatewayCloudflareAccess ? { cloudflareAccess: params.gatewayCloudflareAccess } : {}),
   });
   if (!endpoint) {
     throw new Error("node worker gateway connection could not form a worker endpoint");
@@ -107,6 +115,7 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
   workspace?: NodeWorkerWorkspaceRuntime;
   gatewayUrl?: string;
   gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: CloudflareAccessCredentials;
   signal?: AbortSignal;
 }): Promise<NodeWorkerSupervisorCommandResult> {
   const recognized =
@@ -115,7 +124,9 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
     params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND ||
     params.command === NODE_WORKER_SUPERVISOR_CANCEL_COMMAND ||
     params.command === NODE_WORKER_WORKSPACE_EXEC_COMMAND ||
-    params.command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND;
+    params.command === NODE_WORKER_WORKSPACE_RETAIN_COMMAND ||
+    params.command === NODE_WORKER_DESKTOP_STREAM_COMMAND ||
+    params.command === NODE_WORKER_DESKTOP_LAUNCH_COMMAND;
   if (!recognized) {
     return { handled: false };
   }
@@ -149,6 +160,9 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
           ...(params.gatewayTlsFingerprint
             ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
             : {}),
+          ...(params.gatewayCloudflareAccess
+            ? { gatewayCloudflareAccess: params.gatewayCloudflareAccess }
+            : {}),
           signal: params.signal,
         }),
       };
@@ -165,6 +179,9 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
                 url: params.gatewayUrl,
                 ...(params.gatewayTlsFingerprint
                   ? { tlsFingerprint: params.gatewayTlsFingerprint }
+                  : {}),
+                ...(params.gatewayCloudflareAccess
+                  ? { cloudflareAccess: params.gatewayCloudflareAccess }
                   : {}),
               }
             : undefined,
@@ -216,6 +233,26 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
                 ...(bundleStatus ? { bundleStatus } : {}),
               }
             : workspace,
+      };
+    }
+    if (params.command === NODE_WORKER_DESKTOP_STREAM_COMMAND) {
+      await invokeNodeWorkerDesktopStream({
+        paramsJSON: params.paramsJSON,
+        gatewayUrl: params.gatewayUrl,
+        gatewayTlsFingerprint: params.gatewayTlsFingerprint,
+        gatewayCloudflareAccess: params.gatewayCloudflareAccess,
+        signal: params.signal,
+      });
+      return { handled: true, ok: true, payload: null };
+    }
+    if (params.command === NODE_WORKER_DESKTOP_LAUNCH_COMMAND) {
+      return {
+        handled: true,
+        ok: true,
+        payload: await invokeNodeWorkerDesktopLaunch({
+          paramsJSON: params.paramsJSON,
+          signal: params.signal,
+        }),
       };
     }
     const receipt =

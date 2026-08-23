@@ -1,12 +1,6 @@
 // Whatsapp plugin module owns inbound message admission and delivery.
 import { createHash } from "node:crypto";
-import type {
-  AnyMessageContent,
-  MiscMessageGenerationOptions,
-  proto,
-  WAMessage,
-  WASocket,
-} from "baileys";
+import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage, WASocket } from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
@@ -27,7 +21,6 @@ import {
   type WhatsAppIngressLifecycle,
   type WhatsAppReadReceiptTarget,
 } from "./durable-receive.js";
-import { extractMentionedJids } from "./extract.js";
 import type { WhatsAppGroupMetadataCacheOwner } from "./group-metadata-cache.js";
 import {
   createWhatsAppInboundMessageDebouncer,
@@ -270,7 +263,7 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
       return normalizeWhatsAppSendResult(result, "media");
     };
     const timestamp = inbound.messageTimestampMs;
-    const mentionedJids = extractMentionedJids(msg.message as proto.IMessage | undefined);
+    const mentionedJids = enriched.mentionedJids;
     const senderName = msg.pushName ?? undefined;
 
     inboundLogger.info(

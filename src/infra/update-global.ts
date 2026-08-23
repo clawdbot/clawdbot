@@ -83,9 +83,9 @@ export type NpmGlobalPrefixLayout = {
   binDir: string;
 };
 
-type NpmLifecyclePolicy = "unsupported-transition" | "unflagged" | "allow-scripts";
+type NpmLifecyclePolicy = "unflagged" | "allow-scripts";
 
-type SupportedNpmLifecyclePolicy = Exclude<NpmLifecyclePolicy, "unsupported-transition">;
+type SupportedNpmLifecyclePolicy = NpmLifecyclePolicy;
 
 type NpmLifecyclePolicyGate =
   | { policy: SupportedNpmLifecyclePolicy | null; error: null }
@@ -97,13 +97,9 @@ function resolveNpmLifecyclePolicy(version: string): NpmLifecyclePolicy | null {
   if (!parsed) {
     return null;
   }
-  if (parsed.major !== 11) {
-    return parsed.major >= 12 ? "allow-scripts" : "unflagged";
-  }
-  if (parsed.minor <= 12) {
-    return "unflagged";
-  }
-  return parsed.minor >= 16 ? "allow-scripts" : "unsupported-transition";
+  return parsed.major >= 12 || (parsed.major === 11 && parsed.minor >= 16)
+    ? "allow-scripts"
+    : "unflagged";
 }
 
 /** Resolves the owning npm policy once, before any update mutation. */
@@ -113,16 +109,9 @@ export function resolveNpmLifecyclePolicyGate(
   if (installTarget.manager !== "npm") {
     return { policy: null, error: null };
   }
-  const version = installTarget.npmOwner?.version ?? "";
   const policy = installTarget.npmOwner?.lifecyclePolicy ?? null;
   if (policy === "unflagged" || policy === "allow-scripts") {
     return { policy, error: null };
-  }
-  if (policy === "unsupported-transition") {
-    return {
-      policy: null,
-      error: `npm ${version} cannot safely approve OpenClaw lifecycle scripts. Upgrade the owning npm to 11.16 or newer before updating; no package changes were made.`,
-    };
   }
   return {
     policy: null,

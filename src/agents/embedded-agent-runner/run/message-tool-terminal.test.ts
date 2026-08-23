@@ -71,7 +71,7 @@ describe("message-tool-only source replies", () => {
       context: createAfterToolCallContext({
         toolName: "message",
         args: { action: "send", message: "visible reply" },
-        result: createSuppressedSendResult(),
+        result: { content: [], details: {} },
       }),
       hookResult: { details: { result: { messageId: "discord-message-2" } } },
       expected: true,
@@ -136,15 +136,6 @@ describe("message-tool-only source replies", () => {
           details: { payload: { deliveryStatus: "dry_run", dryRun: true } },
         },
       }),
-      expected: false,
-    },
-    {
-      label: "dry-run hook result",
-      context: createAfterToolCallContext({
-        toolName: "message",
-        args: { action: "send", message: "preview reply" },
-      }),
-      hookResult: { details: { deliveryStatus: "dry_run" } },
       expected: false,
     },
     {
@@ -316,6 +307,11 @@ function createAfterToolCallContext(params: {
       details: {
         status: "ok",
         deliveryStatus: "sent",
+        messageDelivery: {
+          status: params.args.dryRun ? "dryRun" : params.isError ? "failed" : "settled",
+          partialDelivery: false,
+          createdThreadIds: [],
+        },
         sourceReplySink: "internal-ui",
         sourceReply: { text: params.args.message },
       },
@@ -344,7 +340,15 @@ function createDirectSendResult(params: { messageId: string }): AfterToolCallCon
   };
   return {
     content: [{ type: "text", text: JSON.stringify(payload) }],
-    details: payload,
+    details: {
+      ...payload,
+      messageDelivery: {
+        status: "settled",
+        primaryPlatformMessageId: params.messageId,
+        partialDelivery: false,
+        createdThreadIds: [],
+      },
+    },
   };
 }
 
@@ -359,7 +363,14 @@ function createSuppressedSendResult(): AfterToolCallContext["result"] {
   };
   return {
     content: [{ type: "text", text: JSON.stringify(payload) }],
-    details: payload,
+    details: {
+      ...payload,
+      messageDelivery: {
+        status: "suppressed",
+        partialDelivery: false,
+        createdThreadIds: [],
+      },
+    },
   };
 }
 

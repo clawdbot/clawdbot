@@ -6,7 +6,7 @@ import {
   resolveWindowsExecutablePath,
   resolveWindowsSpawnProgram,
 } from "../plugin-sdk/windows-spawn.js";
-import { signalProcessTree } from "./kill-tree.js";
+import { signalPtySessionTree } from "./kill-tree.js";
 import {
   readPtyTerminalName,
   resolvePtyTerminalName,
@@ -132,7 +132,7 @@ function killPtyTree(pty: Pick<IPty, "pid" | "kill">, signal?: string): void {
     if ((sig === "SIGKILL" || sig === "SIGTERM") && typeof pty.pid === "number" && pty.pid > 0) {
       // forkpty creates a new session/process group; retain descendant cleanup
       // after the shell exits and only its group remains.
-      signalProcessTree(pty.pid, sig, { detached: true });
+      signalPtySessionTree(pty.pid, sig);
     } else if (process.platform === "win32") {
       pty.kill();
     } else {

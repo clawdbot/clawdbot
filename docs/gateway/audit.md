@@ -30,6 +30,14 @@ inspection adapts their existing first-answer-wins rows directly into decision
 receipts; it does not copy approvals into the audit ledger or the generic
 decision-fact table.
 
+This includes operator-routed native Codex command and file prompts. The Codex
+bridge carries the admitted agent, session key, run, tool, context, and
+execution binding into the same approval owner, then returns only the approved
+native scope. Auto-review, full-access policy, native hook decisions, and
+requests rejected before operator routing have no operator-owned row and remain
+unsupported as operator-approval evidence; later tool events never manufacture
+one.
+
 Shared outbound delivery is another owner-native source. Queue admission and
 platform-send start use a lazy progress companion, while terminal message rows
 remain in the activity ledger. Run inspection merges both sources directly;
@@ -54,16 +62,17 @@ their 30-day expiry.
 After session work admission succeeds, OpenClaw validates and freezes
 one bounded identity envelope, immediately offers it to the existing audit
 writer queue, and continues the run without waiting for writer readiness,
-SQLite, or persistence. The worker initializes schema and HMAC-key state,
+SQLite, or persistence. The queue drain initializes schema and HMAC-key state,
 pseudonymizes raw references, constructs the immutable context, validates its
-canonical bytes, and persists it. An accepted envelope can therefore be
-temporarily unavailable to inspection while queued work finishes.
+canonical bytes, and persists it through the process-owned shared-state
+connection. An accepted envelope can therefore be temporarily unavailable to
+inspection while queued work finishes.
 
-Persistence remains best-effort. Queue saturation, worker or storage failure,
-and process crashes can lose evidence; they log only a bounded operational
-warning and never abort the run. Normal Gateway and direct-local CLI shutdown
-flushes accepted work when the writer lifecycle permits, but abrupt termination
-can still lose queued evidence.
+Persistence remains best-effort. Queue saturation, storage failure, shutdown
+timeout, and process crashes can lose evidence; they log only a bounded
+operational warning and never abort the run. Normal Gateway and direct-local
+CLI shutdown flushes accepted work when the writer lifecycle permits, but
+abrupt termination can still lose queued evidence.
 
 When identity collection is enabled, restart recovery stores only the safe
 execution/context/run ids and timestamp with its existing private recovery
@@ -90,6 +99,44 @@ state for these fields:
 - represented subject and sponsor;
 - applicable grants and assurance evidence;
 - parent or child lineage when available.
+
+For a child started through `sessions_spawn`, the child owns a new context; it
+never reuses or mutates the parent context. The lineage projection links the
+parent context, execution, run, and agent when the exact private parent token
+was available. Its delegation reference covers the spawn relation plus the
+requester/controller and evaluated local/target policy inputs. Applicable
+grants and runtime assurance remain separate evidence categories. This reports
+the inputs that could narrow child authority; it does not claim that identity
+changed an allow or deny decision.
+
+If the private parent token was unavailable, the child remains inspectable but
+the missing parent context, execution, and run evidence is explicit. ACP spawn
+itself is observable. Actions performed wholly inside an external ACP runtime
+without a callback are reported as unsupported evidence, never inferred from
+task or transcript text. After admission, the ACP lifecycle owner records that
+receipt when the prompt is submitted, using the exact admitted execution token.
+It does not claim that a native side effect occurred; adapter authors must add
+an authoritative native-action callback to provide stronger evidence.
+
+Registered plugin runtime calls add bounded facts only after exact run
+admission. A `before_tool_call` hook records its own allow or block as an
+enforced plugin gate; fail-closed hook errors are denials, while a configured
+fail-open error remains unknown. Separate owner-native approval rows remain the
+authority when a hook requests approval.
+
+Plugin-owned node actions distinguish the Gateway gate from the action result.
+Pairing, live connection, command capability, plugin policy, and active
+authority checks are enforced. A node-reported success is attribution-only. If
+the plugin policy returns without calling the supplied node callback, the
+action is unknown with `node.action_callback` missing; OpenClaw does not infer a
+send from the plugin result.
+
+An attached worker records its current credential, bundle/version/features,
+owner epoch, and turn-claim admission as one enforced gate. The existing
+placement and worker-operation rows stay authoritative; their hashes,
+credentials, tokens, environment ids, and session ids are not copied into the
+generic receipt. Admission success proves only that the worker may connect, not
+that a later worker action succeeded.
 
 The foundation records direct local CLI ingress, Gateway boot-system ingress,
 and admitted channel participants at their authoritative producers. For a
@@ -211,9 +258,16 @@ facts:
   authorization.
 
 The method requires `operator.read`. Requests are closed and select exactly one
-`executionId` or `runId`. Decision pages contain at most 100 receipts;
+`executionId` or `runId`. The public result always contains a required
+`decisionDisplays` array and never contains the private raw receipt array or a
+`decisions` key. The Gateway builds that result from an explicit safe-field
+allowlist; clients do not classify receipt prose. Decision pages contain at
+most 100 displays;
 ambiguous run-discovery pages contain at most 50 candidate executions. Both use
-bounded cursors.
+bounded cursors. Approval and message-delivery selectors are minted from the
+same owner-query row metadata as their projected receipts, use the
+`approval-decision:` and `message-decision:` namespaces, and never derive from
+receipt, resolution, or event identifiers.
 
 Every client with `operator.read` in the same Gateway operator domain may
 receive this retained identity category. This is intentional: the scope already
@@ -296,9 +350,11 @@ canonical session keys can themselves contain platform account or peer ids.
 Message records intentionally omit both.
 
 Execution identity contexts use the same installation-local key owner with a
-separate HMAC domain. Raw runtime, invoker, ingress-source, assurance, and grant
-references exist only in a deeply frozen, in-process worker message capped at
-16 KiB and 16 entries in each grant/assurance array. The worker replaces them with keyed
+separate HMAC domain. Raw runtime, invoker, ingress-source, assurance, grant,
+and child-delegation references exist only in bounded private admission
+carriers. The deeply frozen queue payload is capped at 16 KiB and 16 entries
+in each bounded evidence array. A structured clone strips prototypes at the
+queue boundary. The queue drain replaces raw references with keyed
 pseudonyms before persistence; they are never stored, exported, inspected, or
 logged. Configured agent ids plus context, execution, and run ids remain
 operator-visible.
@@ -319,8 +375,9 @@ what was recorded, not as proof of what happened:
 - **Absence of a row proves nothing.** Pre-admission inbound drops, sends from
   plugin-local or direct-send paths that bypass shared durable delivery, a
   dropped admission envelope, and crash-lost queued work can leave no record.
-- Writes go through a bounded background worker; worker failure or queue
-  saturation drops records and logs one operational warning.
+- Writes go through a bounded asynchronous process-owned queue; queue
+  saturation, storage failure, or a bounded shutdown timeout can drop records
+  and log one operational warning.
 - Crash-ambiguous outbound sends are recorded as `unknown` rather than
   invented outcomes.
 
@@ -333,8 +390,9 @@ compliance archive; if you need one, use an external system fed by
 Records live in the shared state database (`state/openclaw.sqlite`) and are
 written off the delivery hot path. Queries never return records older than 30
 days, and the ledger is capped at 100,000 rows; expired rows are pruned during
-startup, hourly maintenance, and later writes. Retention maintenance keeps
-running even when collection is disabled.
+startup, hourly maintenance, and later writes. Each ledger or progress cleanup
+transaction deletes at most 1,024 expired rows and schedules more work until
+settled. Retention maintenance keeps running even when collection is disabled.
 
 Outbound `queued` and `platform-started` records live in the narrowly owned
 `outbound_message_progress` table. The table is created idempotently only on
@@ -361,7 +419,9 @@ additive table is created lazily on first use without a schema-version bump.
 Fresh and upgraded installations do not populate identity contexts until an
 operator enables collection.
 First-use schema creation, HMAC-key access, canonical context construction, and
-all SQLite work happen in the audit worker, never in agent admission.
+SQLite persistence happen in the process-owned audit queue drain, never in
+agent admission. Lock attempts fail fast and retry asynchronously with bounded
+backoff so SQLite contention does not synchronously wait on the Gateway thread.
 Contexts are retained for 30 days and capped at 100,000 rows. Exact-execution
 inspection and run discovery never return a context, candidate, or admission
 decision after that context is older than 30 days, even if physical cleanup
@@ -388,7 +448,7 @@ first generic fact write, retains facts for 30 days, caps the table at 250,000
 rows, and prunes at most 1,024 rows per write or maintenance tick. Approval
 paths never write this table. Its facts and approval rows are authoritative for
 their recorded decisions. Delivery to the generic table uses the bounded audit
-worker and remains best-effort until persisted; approval-owner writes do not
+queue and remains best-effort until persisted; approval-owner writes do not
 depend on that queue. The activity ledger cannot recreate either source after
 loss.
 
@@ -407,9 +467,11 @@ correlation alone.
   [Gateway protocol](/gateway/protocol#audit-ledger-rpc).
 - Identity RPC: `audit.run.inspect` (requires `operator.read`) accepts one
   `executionId` for exact inspection or one `runId` for bounded discovery. It
-  returns the immutable V1 context plus paged admission, approval,
-  owner-native outbound message, and generic decision receipts for an exact
-  match, or a typed ambiguous candidate page when a run has multiple executions.
+  returns the immutable V1 context plus paged safe displays for admission,
+  approval, owner-native outbound message, and generic decision records for an
+  exact match, or a typed ambiguous candidate page with an empty display array
+  when a run has multiple executions. Raw owner receipts remain private to the
+  aggregation and storage owners.
 
 ## Related
 

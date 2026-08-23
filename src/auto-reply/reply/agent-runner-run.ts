@@ -137,6 +137,7 @@ export async function runReplyAgent(
     });
   const effectiveShouldSteer = !isHeartbeat && !effectiveResetTriggered && shouldSteer;
   const effectiveShouldFollowup = !effectiveResetTriggered && shouldFollowup;
+  const messageInjectionDisposition = opts?.messageInjectionDisposition ?? "none";
   const incomingToolAuthorityFingerprint = resolveFollowupRunToolAuthorityFingerprint(followupRun);
   const activeReplyOperation = sessionKey
     ? (replyRunRegistry.get(sessionKey) ?? providedReplyOperation)
@@ -251,11 +252,20 @@ export async function runReplyAgent(
     toolProgressDetail,
   });
 
+  if (messageInjectionDisposition === "accepted") {
+    if (replyOperationRunState) {
+      replyOperationRunState.admission = { status: "accepted", mode: "steer" };
+    }
+    releaseAdmissionTicket();
+    typing.cleanup();
+    return undefined;
+  }
+
   if (
     effectiveShouldSteer &&
     isActive &&
     !shouldQueueAuthorityMismatch &&
-    opts?.messageInjectionAttempted !== true
+    messageInjectionDisposition === "none"
   ) {
     replyRunState.bindQueueDispositionToRunState(followupRun, replyOperationRunState);
     await runActiveReplySteer({
@@ -351,12 +361,14 @@ export async function runReplyAgent(
     originatingChannel: sessionCtx.OriginatingChannel,
     provider: sessionCtx.Surface ?? sessionCtx.Provider,
   }) as OriginatingChannelType | undefined;
-  const replyToMode = resolveReplyToMode(
-    followupRun.run.config,
-    replyToChannel,
-    sessionCtx.AccountId,
-    sessionCtx.ChatType,
-  );
+  const replyToMode =
+    followupRun.originatingReplyToMode ??
+    resolveReplyToMode(
+      followupRun.run.config,
+      replyToChannel,
+      sessionCtx.AccountId,
+      sessionCtx.ChatType,
+    );
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   const cfg = followupRun.run.config;
   const replyMediaContext = createReplyMediaContext({

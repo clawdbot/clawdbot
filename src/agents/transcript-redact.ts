@@ -8,9 +8,11 @@ import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provid
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readLoggingConfig } from "../logging/config.js";
 import {
-  getDefaultRedactPatterns,
-  redactSensitiveFieldValue,
+  redactModelVisibleSensitiveFieldValueWithConfig,
+  redactModelVisibleToolPayloadTextWithConfig,
+  redactSensitiveFieldValueWithConfig,
   redactSensitiveText,
+  redactToolPayloadTextWithConfig,
 } from "../logging/redact.js";
 import type { ProviderEndpointClass } from "./provider-attribution.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
@@ -23,22 +25,10 @@ import {
 } from "./transcript-redact-images.js";
 import { sanitizeCompactionReplayState } from "./transcript-redact-replay.js";
 
-function resolveTranscriptRedactPatterns(patterns?: string[]) {
-  return patterns && patterns.length > 0 ? [...patterns, ...getDefaultRedactPatterns()] : undefined;
-}
-
-function redactTranscriptOptions(cfg?: OpenClawConfig) {
+function resolveTranscriptLoggingConfig(cfg?: OpenClawConfig) {
   const configuredLogging = readLoggingConfig();
-  const patterns = resolveTranscriptRedactPatterns(
-    cfg?.logging?.redactPatterns ?? configuredLogging?.redactPatterns,
-  );
-  if (patterns === undefined) {
-    return undefined;
-  }
-  return {
-    mode: "tools" as const,
-    ...(patterns !== undefined ? { patterns } : {}),
-  };
+  const redactPatterns = cfg?.logging?.redactPatterns ?? configuredLogging?.redactPatterns;
+  return redactPatterns ? { redactPatterns } : undefined;
 }
 
 function isTranscriptRedactionDisabled(cfg?: OpenClawConfig): boolean {
@@ -46,19 +36,33 @@ function isTranscriptRedactionDisabled(cfg?: OpenClawConfig): boolean {
   return false;
 }
 
-function redactTranscriptText(value: string, cfg?: OpenClawConfig): string {
-  return redactSensitiveText(value, redactTranscriptOptions(cfg));
+function redactTranscriptText(
+  value: string,
+  cfg?: OpenClawConfig,
+  modelVisibleToolResult = false,
+): string {
+  const loggingConfig = resolveTranscriptLoggingConfig(cfg);
+  return modelVisibleToolResult
+    ? redactModelVisibleToolPayloadTextWithConfig(value, loggingConfig)
+    : redactToolPayloadTextWithConfig(value, loggingConfig);
 }
 
 function redactTranscriptStructuredFieldValue(
   key: string,
   value: string,
   cfg?: OpenClawConfig,
+  modelVisibleToolResult = false,
 ): string {
   // Preserve pagination state only in transcripts; value-pattern and global log redaction remain.
   return /^(?:next[_-]?)?page[_-]?token$|^page[_-]?cursor$/i.test(key)
-    ? redactTranscriptText(value, cfg)
-    : redactSensitiveFieldValue(key, value, redactTranscriptOptions(cfg));
+    ? redactTranscriptText(value, cfg, modelVisibleToolResult)
+    : modelVisibleToolResult
+      ? redactModelVisibleSensitiveFieldValueWithConfig(
+          key,
+          value,
+          resolveTranscriptLoggingConfig(cfg),
+        )
+      : redactSensitiveFieldValueWithConfig(key, value, resolveTranscriptLoggingConfig(cfg));
 }
 
 function isPlainTranscriptObject(value: object): value is Record<string, unknown> {
@@ -483,12 +487,13 @@ function redactTranscriptStructuredValue(
   preserveImageDataUrlFields = false,
   location: TranscriptValueLocation = "nested",
   assistantRoute?: TranscriptAssistantRoute,
+  modelVisibleToolResult = false,
 ): unknown {
   if (typeof value === "string") {
     if (fieldKey) {
-      return redactTranscriptStructuredFieldValue(fieldKey, value, cfg);
+      return redactTranscriptStructuredFieldValue(fieldKey, value, cfg, modelVisibleToolResult);
     }
-    return redactTranscriptText(value, cfg);
+    return redactTranscriptText(value, cfg, modelVisibleToolResult);
   }
   if (Array.isArray(value)) {
     if (seen.has(value)) {
@@ -505,6 +510,7 @@ function redactTranscriptStructuredValue(
         preserveImageDataUrlFields,
         location === "assistant-content-array" ? "assistant-content-block" : "nested",
         assistantRoute,
+        modelVisibleToolResult,
       );
       changed ||= next !== item;
       return next;
@@ -538,6 +544,11 @@ function redactTranscriptStructuredValue(
     next = { ...source };
   }
   for (const [key, item] of Object.entries(source)) {
+    // The append transaction owns this control-plane identity. Redacting it would
+    // make stored dedupe disagree with the admitted message identity.
+    if (location === "root" && key === "idempotencyKey") {
+      continue;
+    }
     if (location === "root" && source.role === "assistant" && key === "providerReplay") {
       const sanitizedReplay = sanitizeCompactionReplayState(
         item,
@@ -656,6 +667,8 @@ function redactTranscriptStructuredValue(
         ? "assistant-content-array"
         : "nested",
       currentAssistantRoute,
+      modelVisibleToolResult ||
+        (location === "root" && source.role === "toolResult" && key === "content"),
     );
     if (redacted === item) {
       continue;

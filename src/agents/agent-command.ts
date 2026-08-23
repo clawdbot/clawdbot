@@ -1,12 +1,16 @@
 /** Main agent command orchestration for sessions, model selection, delivery, and attempts. */
+import path from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
+import {
+  isSessionWorkStartInvalidatedError,
+  resolveSessionWorkStartError,
+} from "../config/sessions/lifecycle.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/sessions/restart-recovery-types.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
@@ -15,6 +19,7 @@ import {
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { isAgentMediatedCompletionSourceTool } from "../sessions/input-provenance.js";
@@ -42,7 +47,10 @@ import { persistAgentSession } from "./command/attempt-execution.shared.js";
 import { emitIngressModelUsageDiagnostic } from "./command/ingress-diagnostics.js";
 import { resolveEmbeddedModelSelection } from "./command/model-selection.js";
 import { finalizeEmbeddedAgentCommand } from "./command/post-run.js";
-import { prepareAgentCommandExecution } from "./command/prepare.js";
+import {
+  prepareAgentCommandExecution,
+  type PreparedAgentCommandRuntimeContext,
+} from "./command/prepare.js";
 import { runEmbeddedAgentAttempt } from "./command/run-embedded-attempt.js";
 import { loadSessionStoreRuntime, resolveAgentCommandDeps } from "./command/runtime-loaders.js";
 import { prepareCurrentRunDelivery } from "./command/session-helpers.js";
@@ -72,6 +80,7 @@ async function agentCommandInternal(
   admissionIngress: AgentCommandAdmissionIngress,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
+  watchSkills = false,
 ) {
   const resolvedDeps = await resolveAgentCommandDeps(deps);
   const isRawModelRun = initialOpts.modelRun === true || initialOpts.promptMode === "none";
@@ -277,7 +286,7 @@ async function agentCommandInternal(
       }
 
       let currentRunDeliveryPrepared = false;
-      const prepareDeliveryForRun = async (candidateSessionEntry?: SessionEntry) => {
+      const prepareDeliveryForRun = async (candidateSessionEntry?: InternalSessionEntry) => {
         if (currentRunDeliveryPrepared || opts.deliver !== true) {
           return;
         }
@@ -335,7 +344,7 @@ async function agentCommandInternal(
             ? runId
             : undefined;
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-        const next: SessionEntry = {
+        const next: InternalSessionEntry = {
           ...entry,
           sessionId,
           updatedAt: now,
@@ -386,6 +395,9 @@ async function agentCommandInternal(
             sessionStore[sessionKey] = sessionEntry;
           }
         } catch (error) {
+          if (isSessionWorkStartInvalidatedError(error)) {
+            throw error;
+          }
           log.warn(
             `session diff baseline capture failed; continuing without attribution filtering: ${coerceErrorMessage(error)}`,
           );
@@ -436,6 +448,11 @@ async function agentCommandInternal(
             lifecycleGeneration,
             runId,
             workspaceDir,
+            executionSkillsDir: path.join(
+              sessionEntry?.worktree?.canonicalWorkspaceDir ?? cwd ?? workspaceDir,
+              "skills",
+            ),
+            watchSkills,
             isNewSession,
             isSubagentLaneTurn,
             suppressVisibleSessionEffects,
@@ -446,6 +463,9 @@ async function agentCommandInternal(
             persistedVerbose,
             verboseDefault: agentCfg?.verboseDefault as VerboseLevel | undefined,
             sessionStateActor,
+            ...(manifestMetadataSnapshot
+              ? { pluginMetadataSnapshot: manifestMetadataSnapshot }
+              : {}),
           }),
         { config: cfg },
       );
@@ -550,7 +570,7 @@ async function agentCommandInternal(
       try {
         const entry = sessionStore[sessionKey] ?? sessionEntry;
         if (entry?.restartRecoveryDeliveryRunId === runId) {
-          const next: SessionEntry = {
+          const next: InternalSessionEntry = {
             ...entry,
             ...buildRestartRecoveryClaimCleanupPatch({
               entry,
@@ -623,47 +643,65 @@ async function agentCommandFromIngressInternal(
   recovery?: {
     restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
   },
+  runtimeContext?: PreparedAgentCommandRuntimeContext,
 ) {
   if (typeof opts.allowModelOverride !== "boolean") {
     throw new Error("allowModelOverride must be explicitly set for ingress agent runs.");
   }
   const lifecycleGeneration =
     opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
-  return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
-    let preparedAgentDir: string | undefined;
-    const result = await runWithAgentCommandRecoveryOwner({
-      lifecycleGeneration,
-      mode: "claim",
-      opts: {
-        ...opts,
+  const generation = runtimeContext?.pluginGeneration;
+  const executeIngress = () =>
+    withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
+      let preparedAgentDir: string | undefined;
+      const result = await runWithAgentCommandRecoveryOwner({
         lifecycleGeneration,
-        senderIsOwner: opts.senderIsOwner === true,
-      },
-      prepare: async (preparedOpts) => await prepareAgentCommandExecution(preparedOpts, runtime),
-      restoreAdmittedRecovery: recovery?.restoreAdmittedRecovery,
-      run: async (prepared) => {
-        preparedAgentDir = prepared.agentDir;
-        return await withAgentPluginRegistry({
-          config: prepared.cfg,
-          workspaceDir: prepared.workspaceDir,
-          run: async () =>
+        mode: "claim",
+        opts: {
+          ...opts,
+          lifecycleGeneration,
+          senderIsOwner: opts.senderIsOwner === true,
+        },
+        prepare: async (preparedOpts) =>
+          await prepareAgentCommandExecution(preparedOpts, runtime, runtimeContext),
+        restoreAdmittedRecovery: recovery?.restoreAdmittedRecovery,
+        run: async (prepared) => {
+          preparedAgentDir = prepared.agentDir;
+          const run = async () =>
             await agentCommandInternal(
               prepared,
               prepared.opts,
               { kind: "api", boundary: "agent-command.from-ingress", state: "unknown" },
               runtime,
               deps,
-            ),
-        });
-      },
+              true,
+            );
+          return generation
+            ? await run()
+            : await withAgentPluginRegistry({
+                config: prepared.cfg,
+                workspaceDir: prepared.workspaceDir,
+                run,
+              });
+        },
+      });
+
+      if (result && preparedAgentDir) {
+        emitIngressModelUsageDiagnostic(result, opts, preparedAgentDir);
+      }
+
+      return result;
     });
-
-    if (result && preparedAgentDir) {
-      emitIngressModelUsageDiagnostic(result, opts, preparedAgentDir);
-    }
-
-    return result;
-  });
+  return generation && runtimeContext
+    ? await withPluginRuntimeGenerationScope(
+        {
+          config: runtimeContext.config,
+          metadataSnapshot: generation.pluginMetadataSnapshot,
+          pluginRegistry: generation.pluginRegistry,
+        },
+        executeIngress,
+      )
+    : await executeIngress();
 }
 
 /** Runs an agent turn from an inbound channel/gateway ingress context. */
@@ -689,6 +727,7 @@ export async function agentCommandFromGatewayIngress(
   recovery: {
     restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
   },
+  runtimeContext?: PreparedAgentCommandRuntimeContext,
 ) {
-  return await agentCommandFromIngressInternal(opts, runtime, deps, recovery);
+  return await agentCommandFromIngressInternal(opts, runtime, deps, recovery, runtimeContext);
 }

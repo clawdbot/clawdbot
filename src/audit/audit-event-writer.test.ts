@@ -1,7 +1,8 @@
-import fs from "node:fs";
-import { afterEach, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -26,7 +27,7 @@ import {
 import type { TrustedMessageAuditEvent } from "./message-audit-events.js";
 
 function defineObjectPrototypeProperties(descriptors: PropertyDescriptorMap): void {
-  // oxlint-disable-next-line no-extend-native -- Exercise hostile prototype pollution across the real worker boundary.
+  // oxlint-disable-next-line no-extend-native -- Exercise hostile prototype pollution across the real clone boundary.
   Object.defineProperties(Object.prototype, descriptors);
 }
 
@@ -144,7 +145,7 @@ afterEach(() => {
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("audit event worker", () => {
+describe("audit event writer", () => {
   it("keeps progress absent while disabled and routes enabled progress off audit_events", async () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -194,6 +195,24 @@ describe("audit event worker", () => {
     ).toBe("message.outbound.finished");
   });
 
+  it("flushes accepted events through the canonical state connection", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-");
+    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const owner = openOpenClawStateDatabase(database).db;
+    const readDataVersion = () =>
+      (owner.prepare("PRAGMA data_version").get() as { data_version: number }).data_version;
+    const dataVersionBefore = readDataVersion();
+    const writer = createAuditEventWriter({ stateDir });
+
+    await writer.ready;
+    expect(writer.record(input())).toBe(true);
+    await writer.stop();
+
+    expect(readDataVersion()).toBe(dataVersionBefore);
+    expect(owner.prepare("SELECT run_id FROM audit_events").get()).toEqual({ run_id: "run-1" });
+    expect(owner.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+  });
+
   it("keeps fresh storage identity-free when recovery evidence is missing", async () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -234,7 +253,38 @@ describe("audit event worker", () => {
     ).toBeUndefined();
   });
 
-  it("persists a generic decision through the bounded worker queue", async () => {
+  it("keeps a cold owner open nonblocking under a held write lock", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-writer-");
+    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    recordAuditEvent(input(), database);
+    const path = openOpenClawStateDatabase(database).path;
+    closeOpenClawStateDatabaseForTest();
+    const contender = new DatabaseSync(path);
+    contender.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    const errors: string[] = [];
+    const probeStartedAt = performance.now();
+    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+
+    try {
+      const eventLoopDelay = await new Promise<number>((resolve) => {
+        setTimeout(() => resolve(performance.now() - probeStartedAt), 25);
+      });
+      expect(eventLoopDelay).toBeLessThan(250);
+      await writer.ready;
+      expect(writer.record({ ...input(), sourceId: "cold-owner", runId: "cold-owner" })).toBe(true);
+    } finally {
+      contender.exec("ROLLBACK");
+      contender.close();
+      await writer.stop();
+    }
+
+    expect(errors).toEqual([]);
+    expect(listAuditEvents({ database, limit: 10 }).events.map((event) => event.runId)).toContain(
+      "cold-owner",
+    );
+  });
+
+  it("persists a generic decision through the bounded queue", async () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const errors: string[] = [];
@@ -283,14 +333,15 @@ describe("audit event worker", () => {
       onError: (error) => errors.push(error),
     });
     await writer.ready;
-    const { db } = openOpenClawStateDatabase(database);
+    const { db, path } = openOpenClawStateDatabase(database);
     expect(
       db
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
         .get("execution_identity_contexts"),
     ).toBeUndefined();
     db.exec("DELETE FROM audit_identity_keys;");
-    db.exec("BEGIN IMMEDIATE");
+    const contender = new DatabaseSync(path);
+    contender.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
     const clearSink = configureExecutionIdentityAdmissionSink(writer.recordExecutionIdentity);
     const admittedAt = Date.now();
 
@@ -329,6 +380,12 @@ describe("audit event worker", () => {
         accepted: true,
       });
       expect(performance.now() - startedAt).toBeLessThan(250);
+      const eventLoopProbeStartedAt = performance.now();
+      const eventLoopDelay = await new Promise<number>((resolve) => {
+        setTimeout(() => resolve(performance.now() - eventLoopProbeStartedAt), 25);
+      });
+      expect(eventLoopDelay).toBeLessThan(250);
+      expect(readSqliteBusyTimeout(db)).toBe(5_000);
       expect(
         writer.recordExecutionIdentity({
           kind: "retry-reference",
@@ -350,7 +407,8 @@ describe("audit event worker", () => {
       });
     } finally {
       try {
-        db.exec("ROLLBACK");
+        contender.exec("ROLLBACK");
+        contender.close();
       } finally {
         clearSink();
         await writer.stop();
@@ -387,42 +445,65 @@ describe("audit event worker", () => {
     }
   });
 
-  it("stops without resetting the WAL owned by an active Gateway reader", async () => {
+  it("reports sustained lock contention once while backing off retries", async () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    recordAuditEvent(input(), database);
-    closeOpenClawStateDatabaseForTest();
+    const contentions: string[] = [];
     const errors: string[] = [];
-    const writer = createAuditEventWriter({ stateDir, onError: (error) => errors.push(error) });
+    const writer = createAuditEventWriter({
+      stateDir,
+      onContention: (message) => contentions.push(message),
+      onError: (error) => errors.push(error),
+    });
     await writer.ready;
-    const gateway = openOpenClawStateDatabase(database);
-    gateway.db.exec("BEGIN;");
-    gateway.db.prepare("SELECT count(*) FROM audit_events").get();
+    const { path } = openOpenClawStateDatabase(database);
+    const contender = new DatabaseSync(path);
+    contender.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
+    let fakeTimersActive = false;
 
     try {
+      vi.useFakeTimers({
+        toFake: ["setImmediate", "clearImmediate", "setTimeout", "clearTimeout"],
+      });
+      fakeTimersActive = true;
       expect(
-        writer.record({ ...input(), sourceId: "worker-before-stop", runId: "worker-before-stop" }),
+        writer.record({
+          ...input(),
+          sourceId: "sustained-contention",
+          runId: "sustained-contention",
+        }),
       ).toBe(true);
-      const stopStartedAt = performance.now();
-      await writer.stop();
-      const stopElapsedMs = performance.now() - stopStartedAt;
-
-      expect(errors).toEqual([]);
-      expect(stopElapsedMs).toBeLessThan(1_000);
-      expect(fs.statSync(`${gateway.path}-wal`).size).toBeGreaterThan(0);
+      await vi.advanceTimersByTimeAsync(1_750);
+      expect(contentions).toEqual(["audit event persistence delayed by SQLite lock contention"]);
     } finally {
-      gateway.db.exec("ROLLBACK;");
-      await writer.stop();
+      try {
+        try {
+          contender.exec("ROLLBACK");
+        } finally {
+          contender.close();
+        }
+      } finally {
+        try {
+          const stopPromise = writer.stop();
+          if (fakeTimersActive) {
+            await vi.advanceTimersToNextTimerAsync();
+          }
+          await stopPromise;
+        } finally {
+          if (fakeTimersActive) {
+            vi.useRealTimers();
+          }
+        }
+      }
     }
 
-    expect(gateway.db.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
-    expect(listAuditEvents({ database, limit: 10 }).events.map((event) => event.runId)).toEqual([
-      "worker-before-stop",
-      "run-1",
-    ]);
+    expect(errors).toEqual([]);
+    expect(listAuditEvents({ database, limit: 10 }).events.map((event) => event.runId)).toContain(
+      "sustained-contention",
+    );
   });
 
-  it("persists owned unknown and omits inherited evidence through the worker clone boundary", async () => {
+  it("persists owned unknown and omits inherited evidence through the queue clone boundary", async () => {
     const stateDir = tempDirs.make("openclaw-audit-writer-");
     const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const errors: string[] = [];
@@ -710,7 +791,7 @@ describe("audit event worker", () => {
     }
   });
 
-  it("keeps unavailable worker, schema, and insert failures off the admission path", async () => {
+  it("keeps schema and insert failures off the admission path", async () => {
     const envelope = captureExecutionIdentityAdmissionEnvelope(
       {
         runId: "nonblocking-failure-run",
@@ -720,18 +801,6 @@ describe("audit event worker", () => {
       },
       { runtimeInstanceId: "runtime-1" },
     );
-
-    const unavailableErrors: string[] = [];
-    const unavailableWriter = createAuditEventWriter({
-      workerUrl: new URL("./missing-audit-event-writer.worker.ts", import.meta.url),
-      onError: (error) => unavailableErrors.push(error),
-    });
-    await unavailableWriter.ready;
-    const unavailableStartedAt = performance.now();
-    expect(unavailableWriter.recordExecutionIdentity(captureWork(envelope))).toBe(false);
-    expect(performance.now() - unavailableStartedAt).toBeLessThan(250);
-    await unavailableWriter.stop();
-    expect(unavailableErrors).toContain("audit event writer is unavailable; dropping metadata");
 
     const schemaStateDir = tempDirs.make("openclaw-audit-writer-");
     const schemaDatabase = { env: { OPENCLAW_STATE_DIR: schemaStateDir } };

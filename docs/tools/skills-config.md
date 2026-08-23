@@ -482,9 +482,13 @@ workspace/skills      (highest)
 workspace/.agents/skills
 ~/.agents/skills
 ~/.openclaw/skills
-bundled skills
+bundled + Custodian skills
 skills.load.extraDirs (lowest)
 ```
+
+Custodian skills share bundled precedence but load only for the agent selected
+by `agents.defaults.systemAgent.agentId` (or the existing sole-agent fallback).
+See [Custodian skills](/tools/custodian-skills).
 
 Changes to skills and config take effect on the next new session when the
 watcher is enabled, or on the next agent turn when the watcher detects a

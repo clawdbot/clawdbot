@@ -750,7 +750,7 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
     const recoveredEnv = { ...serviceEnv, OPENCLAW_PORT: "18790" } as NodeJS.ProcessEnv;
     const readState = vi.fn(async () => ({
       installed: true,
-      loaded: false,
+      loadState: { status: "not-loaded" },
       running: false,
       env: recoveredEnv,
       command: null,
@@ -804,7 +804,7 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
   it("does not recover a loaded LaunchAgent", async () => {
     const readState = vi.fn(async () => ({
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       running: true,
       env: { OPENCLAW_PROFILE: "stomme" } as NodeJS.ProcessEnv,
       command: null,
@@ -829,7 +829,7 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
   it("returns an explicit failed recovery state when bootstrap repair fails", async () => {
     const readState = vi.fn(async () => ({
       installed: true,
-      loaded: false,
+      loadState: { status: "not-loaded" },
       running: false,
       env: { OPENCLAW_PROFILE: "stomme" } as NodeJS.ProcessEnv,
       command: null,
@@ -857,7 +857,7 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
   it("preserves system LaunchDaemon recovery guidance", async () => {
     const readState = vi.fn(async () => ({
       installed: true,
-      loaded: false,
+      loadState: { status: "not-loaded" },
       running: false,
       env: { OPENCLAW_PROFILE: "stomme" } as NodeJS.ProcessEnv,
       command: null,

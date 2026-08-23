@@ -227,7 +227,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     const node = nodes.find(
       (candidate) =>
         candidate.nodeId === params.deviceId &&
-        (!params.requireLaunchAvailability || candidate.workerHost.capacity === "available"),
+        (!params.requireLaunchAvailability || candidate.workerHost.capacity.available > 0),
     );
     if (!node) {
       throw new NodeWorkerLaunchTransportError(

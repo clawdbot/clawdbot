@@ -298,6 +298,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
           {
             guildId: "123456789012345678",
             channelId: "234567890123456789",
+            whenOccupied: true,
           },
         ],
         daveEncryption: true,
@@ -342,6 +343,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for channels and threads (use channel/thread id in `match.peer.id`). Field semantics are shared in [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
 - `channels.discord.agentComponents.ttlMs` controls how long sent Discord component callbacks remain registered. Default `1800000` (30 minutes), maximum `86400000` (24 hours). Per-account overrides live under `channels.discord.accounts.<accountId>.agentComponents.ttlMs`. Prefer the shortest TTL that fits the workflow.
 - `channels.discord.voice` enables Discord voice channel conversations and optional auto-join + LLM + TTS overrides. Text-only Discord configs leave voice off by default; set `channels.discord.voice.enabled=true` to opt in.
+- `channels.discord.voice.autoJoin[].whenOccupied` keeps an auto-managed voice channel disconnected until a human is present, then leaves when the last human departs. It defaults to `false`; bots do not count as occupants, and manual or ad-hoc voice sessions are not managed by this policy.
 - `channels.discord.voice.model` optionally overrides the LLM model used for Discord voice channel responses.
 - `channels.discord.voice.daveEncryption` (default `true`) and `channels.discord.voice.decryptionFailureTolerance` (default `24`) pass through to `@discordjs/voice` DAVE options.
 - `channels.discord.voice.connectTimeoutMs` controls the initial `@discordjs/voice` Ready wait for `/vc join` and auto-join attempts (default `30000`).

@@ -10,6 +10,7 @@ import {
   configureExecutionIdentityAdmissionSink,
   hasExecutionIdentityAdmissionSink,
 } from "../audit/execution-identity-admission.js";
+import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { acquireGatewayLock, type GatewayLockOptions } from "../infra/gateway-lock.js";
@@ -358,6 +359,15 @@ describe("agentCliCommand", () => {
 
   it("uses a timer-safe max gateway timeout when --timeout is 0", () => {
     expect(zeroTimeoutGatewayRequestMs).toBe(2_147_000_000);
+  });
+
+  it("rejects a blank agent before selecting a local or Gateway target", async () => {
+    await expect(agentCliCommand({ message: "hi", agent: "" }, runtime)).rejects.toThrow(
+      "--agent must not be blank",
+    );
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(agentCommand).not.toHaveBeenCalled();
   });
 
   it("clamps oversized gateway timeout seconds at the command boundary", async () => {
@@ -2135,18 +2145,23 @@ describe("agentCliCommand", () => {
 
   it("surfaces duplicate in-flight gateway runs without pretending a reply arrived", async () => {
     await withTempStore(async () => {
+      const signals = createSignalProcess();
       callGateway.mockResolvedValue({
         runId: "idem-1",
         status: "in_flight",
         sessionKey: "agent:main:main",
       });
 
-      await agentCliCommand({ message: "hi", to: "+1555", runId: "idem-1" }, runtime);
+      await agentCliCommand({ message: "hi", to: "+1555", runId: "idem-1" }, runtime, {
+        process: signals.processLike,
+      });
 
       expect(runtime.error).toHaveBeenCalledWith(
         "Agent run idem-1 is already in flight; not starting a duplicate run.",
       );
       expect(runtime.log).not.toHaveBeenCalledWith("No reply from agent.");
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(signals.processLike.exitCode).toBe(1);
     });
   });
 
@@ -2459,6 +2474,27 @@ describe("agentCliCommand", () => {
       expect(localOpts.cleanupCliLiveSessionOnRunEnd).toBe(true);
       expect(localOpts.oneShotCliRun).toBe(true);
       expect(runtime.log).toHaveBeenCalledWith("local");
+    });
+  });
+
+  it("marks a failed local terminal outcome unsuccessful", async () => {
+    await withTempStore(async () => {
+      const signals = createSignalProcess();
+      agentCommand.mockResolvedValueOnce(
+        recordAgentRunTerminalOutcome(
+          {
+            payloads: [{ text: "provider failed", isError: true }],
+            meta: { error: new Error("provider failed") },
+          },
+          "failed",
+        ),
+      );
+
+      await agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
+        process: signals.processLike,
+      });
+
+      expect(signals.processLike.exitCode).toBe(1);
     });
   });
 

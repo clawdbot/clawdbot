@@ -111,6 +111,10 @@ A good infer-based skill maps common user intents to the right subcommand, inclu
   agent; explicit multi-agent fleets with no system owner must pass `--agent`. The provider catalog
   remains aggregate; `--agent` scopes saved-auth and per-agent selection facts. Gateway-owned TTS
   provider state remains Gateway-global, so `tts providers --gateway` does not accept `--agent`.
+- Commands that resolve agent-owned model or auth state (`model run`, `image generate`, `image edit`,
+  `image describe`, `image describe-many`, `audio transcribe`, `video generate`, `video describe`,
+  `embedding create`, and `model auth login/logout/status`) also accept `--agent <id>`. They resolve
+  an explicit id first, then `agents.defaults.systemAgent.agentId`, then the sole configured agent.
 - Generated image and video `--output` files are staged beside the destination and replace it only after the complete buffer is written; a failed write leaves an existing destination unchanged.
 - Local `model run` is a lean one-shot provider completion: it resolves the configured agent model and auth but does not start a chat-agent turn, load tools, or open bundled MCP servers.
 - `model run --file` attaches image files (auto-detected MIME type) to the prompt; repeat `--file` for multiple images. Non-image files are rejected — use `infer audio transcribe` or `infer video describe` instead.
@@ -207,6 +211,7 @@ File transcription (not realtime session management).
 
 ```bash
 openclaw infer audio transcribe --file ./memo.m4a --json
+openclaw infer audio transcribe --agent <id> --file ./memo.m4a --json
 openclaw infer audio transcribe --file ./team-sync.m4a --language en --prompt "Focus on names and action items" --json
 openclaw infer audio transcribe --file ./memo.m4a --model openai/whisper-1 --json
 ```
@@ -241,6 +246,7 @@ Generation and description.
 openclaw infer video generate --prompt "cinematic sunset over the ocean" --json
 openclaw infer video generate --prompt "slow drone shot over a forest lake" --resolution 768P --duration 6 --json
 openclaw infer video describe --file ./clip.mp4 --json
+openclaw infer video describe --agent <id> --file ./clip.mp4 --json
 openclaw infer video describe --file ./clip.mp4 --model openai/gpt-5.4-mini --json
 ```
 

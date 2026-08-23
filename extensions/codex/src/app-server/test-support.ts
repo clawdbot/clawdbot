@@ -3,12 +3,9 @@
  * transports.
  */
 import { EventEmitter } from "node:events";
-import fs from "node:fs";
-import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerClientFactory, CodexAppServerClientOptions } from "./shared-client.js";
@@ -17,13 +14,7 @@ import type { CodexAppServerClientFactory, CodexAppServerClientOptions } from ".
 export function createCodexTestToolTerminalObserver(): NonNullable<
   EmbeddedRunAttemptParams["observeToolTerminal"]
 > {
-  const unresolved = new Map<
-    string,
-    NonNullable<
-      ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>["lastToolError"]
-    >
-  >();
-  let nonMutatingFailure: ReturnType<
+  let lastToolError: ReturnType<
     NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>
   >["lastToolError"];
 
@@ -33,42 +24,22 @@ export function createCodexTestToolTerminalObserver(): NonNullable<
         ? (observation.arguments as Record<string, unknown>)
         : {};
     const action = typeof record.action === "string" ? record.action : undefined;
-    const to = typeof record.to === "string" ? record.to : undefined;
     const mutation = observation.nativeMutation ?? {
       mutatingAction: observation.toolName === "message" && action === "send",
       replaySafe: !(observation.toolName === "message" && action === "send"),
-      actionFingerprint:
-        observation.toolName === "message" && action === "send"
-          ? [`tool=${observation.toolName}`, `action=${action}`, ...(to ? [`to=${to}`] : [])].join(
-              "|",
-            )
-          : undefined,
     };
-    const key = mutation.actionFingerprint ?? `${observation.toolName}:${observation.meta ?? ""}`;
     const executionStarted = observation.executionStarted !== false;
     if (observation.outcome === "failure") {
       const mutatingAction = executionStarted && mutation.mutatingAction;
-      const failure = {
+      lastToolError = {
         toolName: observation.toolName,
         ...(observation.meta ? { meta: observation.meta } : {}),
         ...observation.failure,
         mutatingAction,
-        ...(mutatingAction && mutation.actionFingerprint
-          ? { actionFingerprint: mutation.actionFingerprint }
-          : {}),
       };
-      if (mutatingAction) {
-        unresolved.set(key, failure);
-        nonMutatingFailure = undefined;
-      } else if (unresolved.size === 0) {
-        nonMutatingFailure = failure;
-      }
-    } else if (unresolved.size === 0) {
-      nonMutatingFailure = undefined;
-    } else if (mutation.mutatingAction) {
-      unresolved.delete(key);
+    } else if (lastToolError?.toolName === observation.toolName) {
+      lastToolError = undefined;
     }
-    const lastToolError = [...unresolved.values()].at(-1) ?? nonMutatingFailure;
     return {
       ...(lastToolError ? { lastToolError } : {}),
       executionStarted,
@@ -78,24 +49,7 @@ export function createCodexTestToolTerminalObserver(): NonNullable<
   };
 }
 
-/** Creates temp directories that are removed by the supplied test cleanup hook. */
-export function useAutoCleanupTempDirTracker(registerCleanup: (cleanup: () => void) => unknown) {
-  const dirs = new Set<string>();
-  registerCleanup(() => {
-    for (const dir of dirs) {
-      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-    }
-    dirs.clear();
-  });
-  return {
-    dirs,
-    make(prefix: string): string {
-      const dir = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), prefix));
-      dirs.add(dir);
-      return dir;
-    },
-  };
-}
+export { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 
 /** Positional naked-client injection contract confined to tests. */
 export type CodexTestAppServerClientFactory = (

@@ -31,6 +31,18 @@ const DANGLING_TERMINAL_SEQUENCE_SUFFIX_RE = new RegExp(
 
 export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
 
+export type CodexApprovalKind = "command" | "file-change" | "permissions" | "other";
+const CODEX_APPROVAL_TIMEOUT_SUBJECTS: Record<CodexApprovalKind, string> = {
+  command: "Command approval",
+  "file-change": "File change approval",
+  permissions: "Permission approval",
+  other: "Approval",
+};
+
+export function codexApprovalTimeoutText(kind: CodexApprovalKind): string {
+  return `${CODEX_APPROVAL_TIMEOUT_SUBJECTS[kind]} timed out before an operator responded.`;
+}
+
 /** Normalized Codex app-server approval outcome after a gateway decision. */
 export type AppServerApprovalOutcome =
   | "approved-once"
@@ -89,7 +101,7 @@ export async function waitForPluginApprovalDecision(params: {
   hostCapabilities: AgentHarnessHostCapabilities;
   approvalId: string;
   signal?: AbortSignal;
-}): Promise<ExecApprovalDecision | null | undefined> {
+}): ReturnType<AgentHarnessHostCapabilities["waitForApproval"]> {
   const timeoutMs = DEFAULT_CODEX_APPROVAL_TIMEOUT_MS;
   const waitPromise = params.hostCapabilities
     .waitForApproval({
@@ -100,15 +112,12 @@ export async function waitForPluginApprovalDecision(params: {
     })
     .catch((error: unknown) => {
       if (isApprovalNotFoundError(error)) {
-        return null;
+        return undefined;
       }
       throw error;
     });
-  // Bind the verdict to the approval that parked this prompt. A stale or
-  // misrouted reply maps to "unavailable" instead of releasing another gate.
-  const bindDecision = (result: ExecApprovalDecision | null | undefined) => result;
   if (!params.signal) {
-    return bindDecision(await waitPromise);
+    return await waitPromise;
   }
   let onAbort: (() => void) | undefined;
   const abortPromise = new Promise<never>((_, reject) => {
@@ -120,7 +129,7 @@ export async function waitForPluginApprovalDecision(params: {
     params.signal!.addEventListener("abort", onAbort, { once: true });
   });
   try {
-    return bindDecision(await Promise.race([waitPromise, abortPromise]));
+    return await Promise.race([waitPromise, abortPromise]);
   } finally {
     if (onAbort) {
       params.signal.removeEventListener("abort", onAbort);
@@ -132,16 +141,16 @@ export async function waitForPluginApprovalDecision(params: {
 export function mapExecDecisionToOutcome(
   decision: ExecApprovalDecision | null | undefined,
 ): AppServerApprovalOutcome {
-  if (decision === "allow-once") {
-    return "approved-once";
+  switch (decision) {
+    case "allow-once":
+      return "approved-once";
+    case "allow-always":
+      return "approved-session";
+    case "deny":
+      return "denied";
+    default:
+      return "unavailable";
   }
-  if (decision === "allow-always") {
-    return "approved-session";
-  }
-  if (decision === null || decision === undefined) {
-    return "unavailable";
-  }
-  return "denied";
 }
 
 export function truncateCodexApprovalDisplayText(value: string, maxLength: number): string {

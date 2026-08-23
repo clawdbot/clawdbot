@@ -2,7 +2,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -17,7 +16,6 @@ import type { DeviceIdentityStoreOptions } from "./device-identity-store.js";
 import {
   deriveDeviceIdFromPublicKey,
   loadDeviceIdentityIfPresent,
-  loadDeviceIdentityIfPresentReadOnly,
   loadOrCreateDeviceIdentity,
   loadOrCreateProcessDeviceIdentity,
   normalizeDevicePublicKeyBase64Url,
@@ -276,94 +274,12 @@ describe("device identity SQLite store", () => {
     });
   });
 
-  it("bridges process-temp and state-local coordinator owners", async () => {
-    await withTempDir("openclaw-device-identity-bridge-", async (rawRootDir) => {
-      const rootDir = fs.realpathSync.native(rawRootDir);
-      const databasePath = path.join(rootDir, "selected-state", "state", "openclaw.sqlite");
-      const stateDir = path.join(rootDir, "selected-state");
-      const temporaryDirectory = path.join(rootDir, "process-temp");
-      fs.mkdirSync(temporaryDirectory, { recursive: true });
-      vi.spyOn(os, "tmpdir").mockReturnValue(temporaryDirectory);
-
-      const paths = resolveDeviceIdentityCoordinatorPaths({
-        databasePath,
-        stateDir,
-        temporaryDirectory,
-        uid: typeof process.getuid === "function" ? process.getuid() : undefined,
-      });
-      expect(paths).toHaveLength(2);
-      const processTempPath = paths[0];
-      const stateLocalPath = paths[1];
-      if (!processTempPath || !stateLocalPath) {
-        throw new Error("coordinator bridge paths are unavailable");
-      }
-      const processTempLockDir = path.dirname(processTempPath);
-      const stateLockDir = path.dirname(stateLocalPath);
-
-      const stateOnly = acquireDeviceIdentityCoordinator({
-        databasePath,
-        lockDir: stateLockDir,
-        busyTimeoutMs: 0,
-      });
-      try {
-        expect(() =>
-          acquireDeviceIdentityCoordinator({ databasePath, stateDir, busyTimeoutMs: 0 }),
-        ).toThrow(/migration or creation already owns this state database/);
-        const oldAfterPartialFailure = acquireDeviceIdentityCoordinator({
-          databasePath,
-          lockDir: processTempLockDir,
-          busyTimeoutMs: 0,
-        });
-        oldAfterPartialFailure.release();
-      } finally {
-        stateOnly.release();
-      }
-
-      const dual = acquireDeviceIdentityCoordinator({ databasePath, stateDir, busyTimeoutMs: 0 });
-      try {
-        expect(() =>
-          acquireDeviceIdentityCoordinator({
-            databasePath,
-            lockDir: processTempLockDir,
-            busyTimeoutMs: 0,
-          }),
-        ).toThrow(/migration or creation already owns this state database/);
-        expect(() =>
-          acquireDeviceIdentityCoordinator({
-            databasePath,
-            lockDir: stateLockDir,
-            busyTimeoutMs: 0,
-          }),
-        ).toThrow(/migration or creation already owns this state database/);
-      } finally {
-        dual.release();
-      }
-
-      const oldRuntime = acquireDeviceIdentityCoordinator({
-        databasePath,
-        lockDir: processTempLockDir,
-        busyTimeoutMs: 0,
-      });
-      const transitionalRuntime = acquireDeviceIdentityCoordinator({
-        databasePath,
-        lockDir: stateLockDir,
-        busyTimeoutMs: 0,
-      });
-      transitionalRuntime.release();
-      oldRuntime.release();
-    });
-  });
-
   it("reads a missing database without creating identity state or coordinator locks", async () => {
     await withTempDir("openclaw-device-identity-readonly-", async (rootDir) => {
-      const temporaryDirectory = path.join(rootDir, "tmp");
-      fs.mkdirSync(temporaryDirectory);
-      vi.spyOn(os, "tmpdir").mockReturnValue(temporaryDirectory);
       const options = storeOptions(rootDir);
       const coordinatorPaths = resolveDeviceIdentityCoordinatorPaths({
         databasePath: options.path!,
         stateDir: rootDir,
-        temporaryDirectory,
         uid: typeof process.getuid === "function" ? process.getuid() : undefined,
       });
 
@@ -377,24 +293,6 @@ describe("device identity SQLite store", () => {
     });
   });
 
-  it("reads a missing database without creating coordinator artifacts", async () => {
-    await withTempDir("openclaw-device-identity-artifact-free-", async (rootDir) => {
-      const options = storeOptions(rootDir);
-      const coordinatorPaths = resolveDeviceIdentityCoordinatorPaths({
-        databasePath: options.path!,
-        stateDir: rootDir,
-        temporaryDirectory: os.tmpdir(),
-        uid: typeof process.getuid === "function" ? process.getuid() : undefined,
-      });
-
-      expect(loadDeviceIdentityIfPresentReadOnly(options)).toBeNull();
-      expect(fs.existsSync(options.path!)).toBe(false);
-      for (const coordinatorPath of coordinatorPaths) {
-        expect(fs.existsSync(coordinatorPath)).toBe(false);
-      }
-    });
-  });
-
   it("reads an existing identity without changing canonical SQLite artifacts", async () => {
     await withTempDir("openclaw-device-identity-artifact-preserving-", async (rootDir) => {
       const options = storeOptions(rootDir);
@@ -403,7 +301,7 @@ describe("device identity SQLite store", () => {
       const databaseDirectory = path.dirname(options.path!);
       const artifactsBeforeRead = fs.readdirSync(databaseDirectory).toSorted();
 
-      expect(loadDeviceIdentityIfPresentReadOnly(options)).toEqual(created);
+      expect(loadDeviceIdentityIfPresent(options)).toEqual(created);
       expect(fs.readdirSync(databaseDirectory).toSorted()).toEqual(artifactsBeforeRead);
     });
   });

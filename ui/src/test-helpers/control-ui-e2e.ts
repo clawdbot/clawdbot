@@ -10,7 +10,7 @@ import type { ConsoleMessage, Frame, Locator, Page, Request } from "playwright";
 import type { InlineConfig, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
-import type { ModelCatalogEntry } from "../api/types.ts";
+import type { ModelCatalogEntry, UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 
@@ -203,6 +203,7 @@ export const defaultControlUiFeatureMethods = [
   "chat.startup",
   "config.apply",
   "config.patch",
+  "config.schema",
   "config.set",
   "device.scopes.requestUpgrade",
   "device.scopes.waitUpgrade",
@@ -230,6 +231,12 @@ export const defaultControlUiFeatureMethods = [
   "sessions.reclaim",
   "sessions.reset",
   "sessions.rewind",
+  "sessions.search",
+  "tools.github.status",
+  "tools.github.configure",
+  "tools.github.authorize.start",
+  "tools.github.authorize.poll",
+  "tools.github.authorize.cancel",
   "update.hold",
   "update.run",
   "update.status",
@@ -247,12 +254,14 @@ export type ControlUiMockGatewayScenario = {
   agentModel?: string | null;
   assistantAgentId?: string;
   assistantName?: string;
+  automaticallyFetchFavicons?: boolean;
   basePath?: string;
   controlUiTabs?: Array<{
     group?: string;
     icon?: string;
     id: string;
     label: string;
+    placement?: string;
     pluginId: string;
   }>;
   controlUiWidgetKinds?: Array<{
@@ -269,6 +278,10 @@ export type ControlUiMockGatewayScenario = {
   devGitBranch?: string;
   /** Exact immutable Control UI artifact served by the mocked Gateway. */
   serverBuildId?: string;
+  /** Optional startup update snapshot for rich local mock fixtures. */
+  updateAvailable?: UpdateAvailable | null;
+  /** Optional automatic-update campaign snapshot for rich local mock fixtures. */
+  updateSchedule?: UpdateScheduleState | null;
   controlUiBuildSource?: "bundled" | "configured";
   serverVersion?: string;
   deviceToken?: string;
@@ -298,6 +311,13 @@ export type ControlUiMockGatewayScenario = {
     name?: string;
     email?: string;
     avatarUrl?: string;
+    deviceFamily?: string;
+    host?: string;
+    instanceId?: string;
+    lastInputSeconds?: number;
+    mode?: string;
+    platform?: string;
+    ts?: number;
     watchedSessions?: string[];
   }>;
   /** Subscription-scoped Gateway events replayed on a fixed browser-side cycle. */
@@ -310,6 +330,8 @@ export type ControlUiMockGatewayScenario = {
   /** Partition sessions.list fixtures by archived state after applying patches. */
   sessionArchiveFiltering?: boolean;
   models?: ModelCatalogEntry[];
+  /** Simulate a legacy Gateway whose connect hello predates the auth projection. */
+  omitConnectHelloAuth?: boolean;
   /** Operator scopes returned by the mocked connect handshake. */
   operatorScopes?: string[];
   sessionKey?: string;
@@ -496,7 +518,14 @@ export type MockGatewayControls = {
     allowedSessionVisibilities: Array<"shared" | "read-only" | "suggest" | "draft">;
     hasMultipleSessionSharingIdentities: boolean;
   }) => Promise<void>;
-  waitForRequest: (method: string) => Promise<MockGatewayRequest>;
+  /**
+   * Resolves with a captured request for `method`. Without `after` this is
+   * satisfied by ANY prior request of the method (and returns the latest), so
+   * a second same-method wait can return a stale earlier request on slow
+   * runners; pass `after` = the pre-action count from `getRequests(method)`
+   * to wait for and return the next new request instead.
+   */
+  waitForRequest: (method: string, options?: { after?: number }) => Promise<MockGatewayRequest>;
 };
 
 const chromiumExecutableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
@@ -831,6 +860,7 @@ function normalizeScenario(
       : basePathWithSlash;
   return {
     attachmentMaxBytes: scenario.attachmentMaxBytes ?? DEFAULT_MOCK_ATTACHMENT_MAX_BYTES,
+    automaticallyFetchFavicons: scenario.automaticallyFetchFavicons ?? false,
     agentModel:
       scenario.agentModel === undefined ? "openai/gpt-5.5" : scenario.agentModel?.trim() || null,
     assistantAgentId: scenario.assistantAgentId?.trim() || defaultAgentId,
@@ -850,6 +880,8 @@ function normalizeScenario(
     deferredMethods: scenario.deferredMethods ?? [],
     devGitBranch: scenario.devGitBranch?.trim() || "",
     serverBuildId: scenario.serverBuildId?.trim() || "e2e",
+    updateAvailable: scenario.updateAvailable ?? null,
+    updateSchedule: scenario.updateSchedule ?? null,
     controlUiBuildSource: scenario.controlUiBuildSource ?? "bundled",
     serverVersion: scenario.serverVersion?.trim() || "e2e",
     deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
@@ -864,6 +896,7 @@ function normalizeScenario(
     inFlightRun: scenario.inFlightRun ?? null,
     presenceUsers: scenario.presenceUsers ?? [],
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
+    omitConnectHelloAuth: scenario.omitConnectHelloAuth ?? false,
     operatorScopes: scenario.operatorScopes ?? [
       "operator.admin",
       "operator.read",
@@ -888,6 +921,7 @@ export function createControlUiMockBootstrapConfig(scenario: ControlUiMockGatewa
   const normalizedScenario = normalizeScenario(scenario);
   return {
     allowExternalEmbedUrls: false,
+    automaticallyFetchFavicons: normalizedScenario.automaticallyFetchFavicons,
     assistantAgentId: normalizedScenario.assistantAgentId,
     assistantAvatar: "",
     assistantName: normalizedScenario.assistantName,
@@ -1313,9 +1347,14 @@ function installControlUiMockGateway(
         : "e2e-self-instance";
     return {
       presence: scenario.presenceUsers.map((user, index) => ({
-        instanceId: user.self ? selfInstanceId : `e2e-presence-${index}`,
-        mode: "webchat",
+        instanceId: user.self ? selfInstanceId : (user.instanceId ?? `e2e-presence-${index}`),
+        mode: user.mode ?? "webchat",
         reason: "connect",
+        ts: user.ts ?? Date.now(),
+        ...(user.host ? { host: user.host } : {}),
+        ...(user.platform ? { platform: user.platform } : {}),
+        ...(user.deviceFamily ? { deviceFamily: user.deviceFamily } : {}),
+        ...(user.lastInputSeconds === undefined ? {} : { lastInputSeconds: user.lastInputSeconds }),
         user: {
           id: user.id,
           name: user.name ?? null,
@@ -1633,13 +1672,17 @@ function installControlUiMockGateway(
         const connectedDeviceToken =
           auth && typeof auth.deviceToken === "string" ? auth.deviceToken : scenario.deviceToken;
         return {
-          auth: {
-            deviceToken: connectedDeviceToken,
-            recoveryMigrationAllowed: true as const,
-            recoveryScope: "e2e-recovery-scope",
-            role: "operator",
-            scopes: scenario.operatorScopes,
-          },
+          ...(scenario.omitConnectHelloAuth
+            ? {}
+            : {
+                auth: {
+                  deviceToken: connectedDeviceToken,
+                  recoveryMigrationAllowed: true as const,
+                  recoveryScope: "e2e-recovery-scope",
+                  role: "operator",
+                  scopes: scenario.operatorScopes,
+                },
+              }),
           features: {
             capabilities: scenario.featureCapabilities,
             events: [],
@@ -1667,10 +1710,13 @@ function installControlUiMockGateway(
           },
           snapshot: {
             ...presenceSnapshot(params),
+            ...(scenario.updateAvailable ? { updateAvailable: scenario.updateAvailable } : {}),
+            ...(scenario.updateSchedule ? { updateSchedule: scenario.updateSchedule } : {}),
             sessionDefaults: {
               defaultAgentId: scenario.defaultAgentId,
               mainKey: "main",
               mainSessionKey: scenario.sessionKey,
+              modelConfigured: Boolean(scenario.agentModel),
               scope: "agent",
             },
           },
@@ -1823,6 +1869,8 @@ function installControlUiMockGateway(
           },
           params,
         );
+      case "sessions.search":
+        return { results: [] };
       case "sessions.patchMany": {
         const targets = isRecord(params) && Array.isArray(params.targets) ? params.targets : [];
         const result = {
@@ -2619,12 +2667,13 @@ function createMockGatewayControls(
         gateway.setSessionSharingPolicy(nextPolicy);
       }, policy);
     },
-    async waitForRequest(method) {
+    async waitForRequest(method, options) {
       const deadline = Date.now() + controlUiE2eWaitTimeoutMs;
+      const after = options?.after;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
           await page.waitForFunction(
-            (targetMethod) => {
+            ({ targetMethod, priorCount }) => {
               const gateway = (
                 window as Window & {
                   openclawControlUiE2eGateway?: {
@@ -2632,14 +2681,19 @@ function createMockGatewayControls(
                   };
                 }
               ).openclawControlUiE2eGateway;
-              return Boolean(gateway?.requests.some((request) => request.method === targetMethod));
+              const matching =
+                gateway?.requests.filter((request) => request.method === targetMethod) ?? [];
+              return matching.length > (priorCount ?? 0);
             },
-            method,
+            { targetMethod: method, priorCount: after ?? 0 },
             // Request capture is non-rendering state. Interval polling avoids background-page
             // requestAnimationFrame throttling when CI runs several headless pages concurrently.
             { polling: 25, timeout: Math.max(1, deadline - Date.now()) },
           );
-          const request = (await getRequests(method)).at(-1);
+          const matching = await getRequests(method);
+          // With an `after` cursor, return the first NEW request; otherwise keep
+          // the historical latest-match behavior existing callers rely on.
+          const request = after === undefined ? matching.at(-1) : matching.at(after);
           if (request) {
             return request;
           }

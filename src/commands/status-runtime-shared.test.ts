@@ -448,18 +448,35 @@ describe("status-runtime-shared", () => {
   });
 
   it("requests the typed exporter stability projection", async () => {
-    await resolveStatusGatewayDiagnosticsSafe({
-      config: { gateway: {} },
-      timeoutMs: 4321,
-      gatewayReachable: true,
-      type: "telemetry.exporter",
-    });
+    await expect(
+      resolveStatusGatewayDiagnosticsSafe({
+        config: { gateway: {} },
+        timeoutMs: 4321,
+        gatewayReachable: true,
+        type: "telemetry.exporter",
+      }),
+    ).resolves.toEqual({ ok: true, value: { ok: true } });
 
     expect(mocks.callGateway).toHaveBeenCalledWith({
       method: "diagnostics.stability",
       params: { limit: 1000, type: "telemetry.exporter" },
       timeoutMs: 4321,
       config: { gateway: {} },
+    });
+  });
+
+  it("preserves failed gateway diagnostics as a typed result", async () => {
+    mocks.callGateway.mockRejectedValueOnce(new Error("diagnostics probe timed out"));
+
+    await expect(
+      resolveStatusGatewayDiagnosticsSafe({
+        config: { gateway: {} },
+        timeoutMs: 4321,
+        gatewayReachable: true,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: "Error: diagnostics probe timed out",
     });
   });
 

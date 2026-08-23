@@ -15,9 +15,13 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
-import { DEFAULT_RESOURCE_LIMITS } from "../../scripts/lib/docker-e2e-plan.mts";
+import {
+  DEFAULT_LIVE_RETRIES,
+  DEFAULT_RESOURCE_LIMITS,
+  resolveDockerE2ePlan,
+} from "../../scripts/lib/docker-e2e-plan.mts";
 import {
   appendBoundedShellCapture,
   buildLaneRerunCommand,
@@ -28,6 +32,7 @@ import {
   githubWorkflowRerunCommand,
   LOG_TAIL_MAX_BYTES,
   parseDockerAllCliArgs,
+  preparePrepublishPluginRegistry,
   resolveDockerPreflightPlatform,
   runCleanupSmokePhase,
   runShellCaptureCommand,
@@ -39,6 +44,14 @@ import {
 } from "../../scripts/test-docker-all.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createScriptTestHarness } from "./test-helpers.js";
+
+const { createPrepublishPluginRegistryArtifact } = vi.hoisted(() => ({
+  createPrepublishPluginRegistryArtifact: vi.fn(),
+}));
+vi.mock("../../scripts/prepublish-plugin-registry-artifact.mjs", async (importOriginal) => ({
+  ...(await importOriginal()),
+  createPrepublishPluginRegistryArtifact,
+}));
 
 const limits = {
   resourceLimits: {
@@ -303,22 +316,34 @@ describe("scripts/test-docker-all scheduler", () => {
     expect(parseDockerAllCliArgs([])).toEqual({
       help: false,
       planJson: false,
+      preparePluginRegistry: false,
     });
     expect(parseDockerAllCliArgs(["--plan-json"])).toEqual({
       help: false,
       planJson: true,
+      preparePluginRegistry: false,
     });
     expect(parseDockerAllCliArgs(["--help"])).toEqual({
       help: true,
       planJson: false,
+      preparePluginRegistry: false,
     });
     expect(parseDockerAllCliArgs(["--prepare-only=/tmp/candidate.json"])).toEqual({
       help: false,
       planJson: false,
       prepareOnly: "/tmp/candidate.json",
+      preparePluginRegistry: false,
+    });
+    expect(parseDockerAllCliArgs(["--prepare-plugin-registry"])).toEqual({
+      help: false,
+      planJson: false,
+      preparePluginRegistry: true,
     });
     expect(() =>
       parseDockerAllCliArgs(["--plan-json", "--prepare-only=/tmp/candidate.json"]),
+    ).toThrow("conflicting plan/prep options");
+    expect(() =>
+      parseDockerAllCliArgs(["--prepare-only=/tmp/candidate.json", "--prepare-plugin-registry"]),
     ).toThrow("conflicting plan/prep options");
   });
 
@@ -331,7 +356,49 @@ describe("scripts/test-docker-all scheduler", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("--prepare-only=<manifest>");
+    expect(result.stdout).toContain("--prepare-plugin-registry");
     expect(result.stdout).toContain("OPENCLAW_DOCKER_ALL_* env vars");
+  });
+
+  it("passes the exact planner-selected survivor packages to registry preparation", () => {
+    const root = tempDirs.make("openclaw-standalone-survivor-registry-");
+    const plan = resolveDockerE2ePlan({
+      allowFrozenTargetScenarioOmissions: true,
+      includeOpenWebUI: false,
+      liveMode: "all",
+      liveRetries: DEFAULT_LIVE_RETRIES,
+      orderLanes: <T>(lanes: T[]) => lanes,
+      planReleaseAll: false,
+      profile: "all",
+      releaseChunk: "core",
+      selectedLaneNames: ["published-upgrade-survivor"],
+      timingStore: undefined,
+      upgradeSurvivorBaselines: "openclaw@2026.7.1-2",
+      upgradeSurvivorScenarios: "configured-plugin-installs",
+    }).plan;
+    createPrepublishPluginRegistryArtifact.mockReturnValue({
+      manifestSha256: "b".repeat(64),
+    });
+
+    const registry = preparePrepublishPluginRegistry(plan, root, "a".repeat(40), "2026.8.1");
+
+    expect(createPrepublishPluginRegistryArtifact).toHaveBeenCalledWith({
+      candidateVersion: "2026.8.1",
+      outputDir: path.join(root, "prepublish-plugin-registry"),
+      repoRoot: process.cwd(),
+      requiredPackages: [
+        "@openclaw/codex",
+        "@openclaw/discord",
+        "@openclaw/matrix",
+        "@openclaw/whatsapp",
+      ],
+      sourceSha: "a".repeat(40),
+    });
+    expect(registry).toEqual({
+      candidateVersion: "2026.8.1",
+      dir: path.join(root, "prepublish-plugin-registry"),
+      manifestSha256: "b".repeat(64),
+    });
   });
 
   it("rejects unknown CLI options without a stack trace", () => {
@@ -560,9 +627,11 @@ describe("scripts/test-docker-all scheduler", () => {
     for (const fileName of [
       "docker-e2e-plan.mts",
       "docker-e2e-scenarios.mts",
+      "managed-child-process.mts",
       "official-external-channel-catalog.json",
       "release-version.mjs",
       "sleep.mjs",
+      "windows-taskkill.mjs",
     ]) {
       copyFileSync(path.join("scripts/lib", fileName), path.join(libDir, fileName));
     }

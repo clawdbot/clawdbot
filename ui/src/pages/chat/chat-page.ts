@@ -36,6 +36,7 @@ import {
   type SplitDropRect,
   type SplitDropZone,
 } from "./split-drop-zone.ts";
+import type { ChatSplitLayout } from "./split-layout-types.ts";
 import {
   applyUiCommandToSplitLayout,
   closePane,
@@ -49,7 +50,6 @@ import {
   singlePaneLayout,
   splitRatio,
   splitWeight,
-  type ChatSplitLayout,
 } from "./split-layout.ts";
 
 type DropIndicator = { paneId: string; zone: SplitDropZone; rect: SplitDropRect };
@@ -647,13 +647,16 @@ export class ChatPage extends OpenClawLightDomElement {
                           .maxRatio=${0.85}
                           .label=${t("nav.resize")}
                           @resize=${(event: CustomEvent<{ splitRatio: number }>) => {
-                            const current = this.layout;
-                            if (current) {
-                              this.persistLayout(
-                                resizePanes(current, column.id, paneIndex, event.detail.splitRatio),
-                              );
-                            }
+                            this.layout = this.layout
+                              ? resizePanes(
+                                  this.layout,
+                                  column.id,
+                                  paneIndex,
+                                  event.detail.splitRatio,
+                                )
+                              : undefined;
                           }}
+                          @resize-end=${() => this.persistLayout(this.layout)}
                         ></resizable-divider>
                       `
                     : nothing}
@@ -672,13 +675,11 @@ export class ChatPage extends OpenClawLightDomElement {
                     .maxRatio=${0.85}
                     .label=${t("nav.resize")}
                     @resize=${(event: CustomEvent<{ splitRatio: number }>) => {
-                      const current = this.layout;
-                      if (current) {
-                        this.persistLayout(
-                          resizeColumns(current, columnIndex, event.detail.splitRatio),
-                        );
-                      }
+                      this.layout = this.layout
+                        ? resizeColumns(this.layout, columnIndex, event.detail.splitRatio)
+                        : undefined;
                     }}
+                    @resize-end=${() => this.persistLayout(this.layout)}
                   ></resizable-divider>
                 `
               : nothing}
@@ -705,7 +706,7 @@ export class ChatPage extends OpenClawLightDomElement {
         );
       }),
     );
-    const rendered = html`
+    const renderValue = () => html`
       <div class="chat-split-view__drop-container">
         ${this.renderSplitLayout(layout, Boolean(this.layout), retainedSessions)}
         ${indicator
@@ -724,7 +725,7 @@ export class ChatPage extends OpenClawLightDomElement {
           : nothing}
       </div>
     `;
-    return this.mcpAppUnmountGate.render(JSON.stringify([...nextPaneKeys]), rendered, () =>
+    return this.mcpAppUnmountGate.render(JSON.stringify([...nextPaneKeys]), renderValue, () =>
       [...this.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].filter(
         (pane) => !nextPaneKeys.has(pane.dataset.mcpAppOwnerKey ?? ""),
       ),

@@ -7,6 +7,7 @@ export function writeNpmInstallRetryFixture(path: string) {
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
+      'if [[ "${1:-}" == "--version" ]]; then printf "11.15.0\\n"; exit 0; fi',
       'if [[ "${1:-}" == "config" ]]; then printf "null\\n"; exit 0; fi',
       'if [[ "${1:-}" == "view" ]]; then printf "2026.8.1\\n"; exit 0; fi',
       'if [[ "${1:-}" == "root" ]]; then printf "%s\\n" "${NPM_FAKE_ROOT:-}"; exit 0; fi',
@@ -15,7 +16,7 @@ export function writeNpmInstallRetryFixture(path: string) {
       'if [[ "$is_install" -eq 0 ]]; then exit 0; fi',
       'spec="${!#}"',
       'printf "%s\\n" "$spec" >> "$NPM_FAKE_CALLS"',
-      'attempt="$(wc -l < "$NPM_FAKE_CALLS")"',
+      'attempt="$(awk \'END { print NR }\' "$NPM_FAKE_CALLS")"',
       'if [[ "$NPM_FAKE_OUTCOME" == "success" || "$NPM_FAKE_OUTCOME" == "transient" && "$attempt" -eq 2 ]]; then',
       '  if [[ -n "${NPM_FAKE_PACKAGE_DIR:-}" ]]; then',
       '    mkdir -p "$NPM_FAKE_PACKAGE_DIR/dist"',
@@ -39,6 +40,7 @@ export function writeNpmFreshnessConflictFixture(path: string, argsLog: string) 
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
+      'if [[ "${1:-}" == "--version" ]]; then printf "11.15.0\\n"; exit 0; fi',
       `printf '%s\\n' "$*" >> ${JSON.stringify(argsLog)}`,
       'if [[ "$1" == "config" && "$2" == "get" && "$3" == "min-release-age" ]]; then',
       "  printf 'null\\n'",
@@ -74,6 +76,7 @@ export function writeNpmBeforePolicyFixture(path: string, argsLog: string) {
     [
       "#!/usr/bin/env bash",
       "set -euo pipefail",
+      'if [[ "${1:-}" == "--version" ]]; then printf "11.15.0\\n"; exit 0; fi',
       `printf '%s\\n' "$*" >> ${JSON.stringify(argsLog)}`,
       'if [[ "$1" == "config" && "$2" == "get" && "$3" == "min-release-age" ]]; then',
       "  printf 'null\\n'",
@@ -95,6 +98,30 @@ export function writeNpmBeforePolicyFixture(path: string, argsLog: string) {
       "  fi",
       "done",
       "exit 65",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(path, 0o755);
+}
+
+export function writeNpmLifecycleFixture(path: string) {
+  writeFileSync(
+    path,
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      'if [[ "${1:-}" == "--version" ]]; then',
+      '  [[ "${NPM_FAKE_VERSION_STATUS:-0}" == "0" ]] || exit "$NPM_FAKE_VERSION_STATUS"',
+      '  printf "%s\\n" "$NPM_FAKE_VERSION"',
+      "  exit 0",
+      "fi",
+      'if [[ "${1:-}" == "root" ]]; then printf "%s\\n" "$NPM_FAKE_ROOT"; exit 0; fi',
+      'if [[ "${1:-}" == "config" ]]; then printf "null\\n"; exit 0; fi',
+      'printf "%s\\n" "$*" >> "$NPM_FAKE_ARGS"',
+      'mkdir -p "$NPM_FAKE_PACKAGE_DIR/dist"',
+      'printf "#!/usr/bin/env node\\n" > "$NPM_FAKE_PACKAGE_DIR/dist/entry.js"',
+      'if [[ "${NPM_FAKE_KEEP_GUARD:-0}" == "1" ]]; then : > "$NPM_FAKE_PACKAGE_DIR/dist/openclaw-install-guard"; else rm -f "$NPM_FAKE_PACKAGE_DIR/dist/openclaw-install-guard"; fi',
+      "exit 0",
       "",
     ].join("\n"),
   );

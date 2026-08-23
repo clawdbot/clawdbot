@@ -286,7 +286,6 @@ class GatewayDiscovery(
     val lanHost = txt(resolved, "lanHost")
     val tailnetDns = txt(resolved, "tailnetDns")
     val gatewayPort = txtInt(resolved, "gatewayPort")
-    val canvasPort = txtInt(resolved, "canvasPort")
     val tlsEnabled = txtBool(resolved, "gatewayTls")
     val tlsFingerprint = txt(resolved, "gatewayTlsSha256")
     val id = stableId(serviceName, "local.")
@@ -300,7 +299,6 @@ class GatewayDiscovery(
         lanHost = lanHost,
         tailnetDns = tailnetDns,
         gatewayPort = gatewayPort,
-        canvasPort = canvasPort,
         tlsEnabled = tlsEnabled,
         tlsFingerprintSha256 = tlsFingerprint,
       )
@@ -408,7 +406,6 @@ class GatewayDiscovery(
       val lanHost = txtValue(txt, "lanHost")
       val tailnetDns = txtValue(txt, "tailnetDns")
       val gatewayPort = txtIntValue(txt, "gatewayPort")
-      val canvasPort = txtIntValue(txt, "canvasPort")
       val tlsEnabled = txtBoolValue(txt, "gatewayTls")
       val tlsFingerprint = txtValue(txt, "gatewayTlsSha256")
       val id = stableId(instanceName, domain)
@@ -421,7 +418,6 @@ class GatewayDiscovery(
           lanHost = lanHost,
           tailnetDns = tailnetDns,
           gatewayPort = gatewayPort,
-          canvasPort = canvasPort,
           tlsEnabled = tlsEnabled,
           tlsFingerprintSha256 = tlsFingerprint,
         )

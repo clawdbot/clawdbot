@@ -294,6 +294,7 @@ describe("command-path-policy", () => {
     ["skills"],
     ["skills", "list"],
     ["skills", "check"],
+    ["gateway", "diagnostics", "export"],
     ["gateway", "stability"],
     ["gateway", "usage-cost"],
   ])("keeps read-only cold path %s out of startup config and plugins", (...commandPath) => {

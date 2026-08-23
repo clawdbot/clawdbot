@@ -20,8 +20,11 @@ import {
 } from "./auth-bridge.js";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
 import {
+  canUseCodexModelBackedApprovalsReviewerForModel,
+  isCodexPairedNodeRemoteExecPlacementSandbox,
   isCodexRemoteExecPlacementSandbox,
   readCodexPluginConfig,
+  readCodexRequirementsToml,
   resolveCodexAppServerHomeScope,
   resolveCodexComputerUseConfig,
   resolveCodexModelBackedReviewerPolicyContext,
@@ -41,25 +44,15 @@ import {
   type CodexAppServerBindingIdentity,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
-import { getLeasedSharedCodexAppServerClient } from "./shared-client.js";
+import {
+  applyCodexSessionPermissionPolicy,
+  resolveCodexSessionPermissionCwd,
+} from "./session-permission-policy.js";
+import {
+  createIsolatedCodexAppServerClient,
+  getLeasedSharedCodexAppServerClient,
+} from "./shared-client.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
-
-function applyStoredBindingPermissions(params: {
-  appServer: ReturnType<typeof resolveCodexBindingAppServerConnection>["appServer"];
-  binding: CodexAppServerThreadBinding | undefined;
-  execPolicyTouched: boolean;
-}) {
-  if (params.execPolicyTouched || params.binding?.connectionScope === "supervision") {
-    return params.appServer;
-  }
-  // `/codex permissions` owns per-session policy. Explicit OpenClaw exec config
-  // and supervised private connections remain authoritative when present.
-  return {
-    ...params.appServer,
-    approvalPolicy: params.binding?.approvalPolicy ?? params.appServer.approvalPolicy,
-    sandbox: params.binding?.sandbox ?? params.appServer.sandbox,
-  };
-}
 
 export async function prepareCodexAttemptConnection({ params, options }: CodexRunAttemptInput) {
   const attemptStartedAt = Date.now();
@@ -80,7 +73,6 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const preDynamicStartupStages = createCodexDynamicToolBuildStageTracker({
     enabled: profilerEnabled,
   });
-  const attemptClientFactory = options.clientFactory ?? getLeasedSharedCodexAppServerClient;
   const runtimeArtifactRequest =
     params.captureRuntimeArtifact || params.expectedRuntimeArtifact
       ? params.expectedRuntimeArtifact
@@ -88,6 +80,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         : {}
       : undefined;
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
+  const requirementsToml = readCodexRequirementsToml({});
   const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
@@ -109,14 +102,51 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
           sessionKey: sandboxSessionKey,
           workspaceDir: resolvedWorkspace,
         });
+  // Upstream cannot remove registered environments, so node leases own one disposable client.
+  const attemptClientFactory =
+    options.clientFactory ??
+    (isCodexPairedNodeRemoteExecPlacementSandbox(sandbox)
+      ? createIsolatedCodexAppServerClient
+      : getLeasedSharedCodexAppServerClient);
   preDynamicStartupStages.mark("sandbox");
   const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
+    // Explicit modes replace legacy fields; full also replaces approval-file floors.
+    permissionMode: params.permissionMode,
     execOverrides: params.execOverrides,
-    approvals: loadExecApprovals(),
+    approvals: params.permissionMode === "full" ? undefined : loadExecApprovals(),
     config: params.config,
     agentId: sessionAgentId,
   });
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
+  const preparedEnvironment = params.hostCapabilities.preparedEnvironment?.();
+  const remoteExec = isCodexRemoteExecPlacementSandbox(sandbox);
+  const preparedShellEnvironment = preparedEnvironment
+    ? {
+        ...preparedEnvironment.credentialScrubEnv,
+        ...(!remoteExec ? preparedEnvironment.localIdentityEnv : undefined),
+      }
+    : undefined;
+  const shellEnvironment =
+    preparedShellEnvironment && Object.keys(preparedShellEnvironment).length > 0
+      ? preparedShellEnvironment
+      : undefined;
+  // An empty system-detected overlay intentionally keeps the runtime user's native shell identity.
+  // Selected, scrubbed, or remote identities must not let a later profile replace that decision.
+  const disableLoginShell =
+    remoteExec ||
+    preparedEnvironment?.managedLocalIdentity === true ||
+    (preparedEnvironment !== undefined &&
+      Object.keys(preparedEnvironment.credentialScrubEnv).length > 0);
+  const withPreparedProcessEnv = <T extends { start: { env?: Record<string, string> } }>(
+    appServer: T,
+  ) => {
+    return shellEnvironment
+      ? {
+          ...appServer,
+          start: { ...appServer.start, env: { ...appServer.start.env, ...shellEnvironment } },
+        }
+      : appServer;
+  };
   let bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -185,23 +215,27 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       "Codex supervision is disabled; refusing to open a native user-home supervised session",
     );
   }
-  const resolveRuntimeOptionsForBinding = (selection: { modelProvider?: string; model?: string }) =>
-    applyStoredBindingPermissions({
-      appServer: resolveCodexBindingAppServerConnection({
-        binding: startupBinding,
-        pluginConfig,
-        execPolicy,
-        modelProvider: selection.modelProvider,
-        model: selection.model,
-        config: params.config,
-        agentDir,
-        openClawSandboxActive: sandbox?.enabled === true,
-      }).appServer,
-      binding: startupBinding,
-      execPolicyTouched: execPolicy.touched,
-    });
+  const resolveRuntimeOptionsForBinding = (
+    binding: CodexAppServerThreadBinding | undefined,
+    selection: { modelProvider?: string; model?: string },
+  ) =>
+    resolveCodexBindingAppServerConnection({
+      binding,
+      pluginConfig,
+      execPolicy,
+      modelProvider: selection.modelProvider,
+      model: selection.model,
+      config: params.config,
+      agentDir,
+      requirementsToml,
+      openClawSandboxActive: sandbox?.enabled === true,
+      sessionPermissionMode: params.permissionMode,
+    }).appServer;
   const initialStartupBindingHadInactiveThreadBootstrap =
     isInactiveThreadBootstrapBinding(startupBinding);
+  const appServerHomeScope = resolveCodexAppServerHomeScope({
+    appServer: pluginConfig.appServer,
+  });
   const preparedAuthRoute = usesSupervisionConnection
     ? undefined
     : params.runtimePlan?.auth.modelRoute;
@@ -235,7 +269,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         authProfileId: resolvedStartupAuthProfileId,
         authProfileStore: params.authProfileStore,
         agentDir,
-        homeScope: resolveCodexAppServerHomeScope({ appServer: pluginConfig.appServer }),
+        homeScope: appServerHomeScope,
         requirePreparedAuth: isCodexRemoteExecPlacementSandbox(sandbox),
         config: params.config,
         subscriptionProfileRequiredError:
@@ -248,7 +282,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     preparedAuth: startupPreparedAuth,
   } = authHandoff;
   const startupClientAuthProfileId =
-    usesSupervisionConnection || startupPreparedAuth?.kind === "api-key"
+    usesSupervisionConnection ||
+    appServerHomeScope === "user" ||
+    startupPreparedAuth?.kind === "api-key"
       ? null
       : startupAuthProfileId;
   const resolveReviewerPolicyContext = (binding: CodexAppServerThreadBinding | undefined) => {
@@ -263,7 +299,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   };
   let reviewerPolicyContext = resolveReviewerPolicyContext(startupBinding);
   preDynamicStartupStages.mark("auth-profile");
-  let configuredAppServer = resolveRuntimeOptionsForBinding({
+  let configuredAppServer = resolveRuntimeOptionsForBinding(startupBinding, {
     modelProvider: reviewerPolicyContext.modelProvider,
     model: reviewerPolicyContext.model,
   });
@@ -278,19 +314,55 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       "cwd override is not supported for sandboxed Codex app-server runs; omit cwd or use the agent workspace as cwd",
     );
   }
-  const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
+  const sessionPermissionCwd = resolveCodexSessionPermissionCwd({
+    permissionMode: params.permissionMode,
+    sessionRoot: params.sessionRoot,
+    requestedCwd,
+    fallbackCwd: effectiveWorkspace,
+  });
+  const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : sessionPermissionCwd;
   if (effectiveWorkspace !== resolvedWorkspace) {
     await ensureCodexWorkspaceDirOnce(effectiveWorkspace);
   }
   preDynamicStartupStages.mark("effective-workspace");
-  let appServer = resolveCodexAppServerForModelProvider({
-    appServer: configuredAppServer,
-    provider: reviewerPolicyContext.modelProvider,
-    model: reviewerPolicyContext.model,
-    config: params.config,
-    env: process.env,
-    agentDir,
-  });
+  const applySessionPermissionPolicy = (
+    appServer: typeof configuredAppServer,
+    selection: { modelProvider?: string; model?: string },
+  ) =>
+    applyCodexSessionPermissionPolicy({
+      appServer,
+      permissionMode: params.permissionMode,
+      sessionRoot: params.sessionRoot,
+      pluginConfig,
+      canUseAutoReview: canUseCodexModelBackedApprovalsReviewerForModel({
+        modelProvider: selection.modelProvider,
+        model: selection.model,
+        config: params.config,
+        env: process.env,
+        agentDir,
+        homeScope: appServer.start.homeScope,
+      }),
+      requirementsToml,
+      policyLocked: startupBinding?.connectionScope === "supervision",
+      execMode: execPolicy.mode,
+    });
+  const resolveFinalAppServer = (
+    configured: typeof configuredAppServer,
+    selection: { modelProvider?: string; model?: string },
+  ) => {
+    const session = applySessionPermissionPolicy(configured, selection);
+    const trusted = resolveCodexAppServerForModelProvider({
+      appServer: session,
+      provider: selection.modelProvider,
+      model: selection.model,
+      config: params.config,
+      env: process.env,
+      agentDir,
+    });
+    return { session, appServer: withPreparedProcessEnv(trusted) };
+  };
+  let resolvedAppServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
+  let appServer = resolvedAppServer.appServer;
   preDynamicStartupStages.mark("app-server-policy");
   preDynamicStartupStages.mark("native-hook-relay");
   const terminalState = {
@@ -348,18 +420,12 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   // cleared or replaced native thread changes its model, policy, or connection.
   if (startupBinding !== startupBindingBeforeRotation) {
     reviewerPolicyContext = resolveReviewerPolicyContext(startupBinding);
-    configuredAppServer = resolveRuntimeOptionsForBinding({
+    configuredAppServer = resolveRuntimeOptionsForBinding(startupBinding, {
       modelProvider: reviewerPolicyContext.modelProvider,
       model: reviewerPolicyContext.model,
     });
-    appServer = resolveCodexAppServerForModelProvider({
-      appServer: configuredAppServer,
-      provider: reviewerPolicyContext.modelProvider,
-      model: reviewerPolicyContext.model,
-      config: params.config,
-      env: process.env,
-      agentDir,
-    });
+    resolvedAppServer = resolveFinalAppServer(configuredAppServer, reviewerPolicyContext);
+    appServer = resolvedAppServer.appServer;
   }
   const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
     configuredEvents: options.nativeHookRelay?.events,
@@ -369,25 +435,18 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     startupBinding,
     startupContextTokens: startupBindingResolution.startupContextTokens,
     pluginAppServer: appServer,
+    // Captured before rotation: a rotated-away thread's observed density is the
+    // best available sample for sizing the fresh thread's continuity projection.
+    continuityCalibration: startupBindingBeforeRotation?.continuityCalibration,
   };
   const resolveRuntimeOptionsForCurrentBinding = (selection: {
     modelProvider?: string;
     model?: string;
   }) =>
-    applyStoredBindingPermissions({
-      appServer: resolveCodexBindingAppServerConnection({
-        binding: mutable.startupBinding,
-        pluginConfig,
-        execPolicy,
-        modelProvider: selection.modelProvider,
-        model: selection.model,
-        config: params.config,
-        agentDir,
-        openClawSandboxActive: sandbox?.enabled === true,
-      }).appServer,
-      binding: mutable.startupBinding,
-      execPolicyTouched: execPolicy.touched,
-    });
+    resolveFinalAppServer(
+      resolveRuntimeOptionsForBinding(mutable.startupBinding, selection),
+      selection,
+    ).appServer;
   return {
     params,
     options,
@@ -409,6 +468,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     contextSessionKey,
     sandbox,
     agentDir,
+    shellEnvironment,
+    disableLoginShell,
     bindingIdentity,
     bindingStore,
     activeContextEngine,

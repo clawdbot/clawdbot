@@ -28,6 +28,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private previousChatLoading = false;
   private previousChatMessages: unknown[] = [];
   private previousChatToolMessages: Record<string, unknown>[] = [];
+  private previousGuardianNotices: ChatPageHost["guardianNotices"] = [];
   private previousChatStream: string | null = null;
   private previousRealtimeConversation: ChatPageHost["realtimeTalkConversation"] = [];
   private scrollAfterUpdate = false;
@@ -81,14 +82,15 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.previousChatLoading = state.chatLoading;
     this.previousChatMessages = state.chatMessages;
     this.previousChatToolMessages = state.chatToolMessages;
+    this.previousGuardianNotices = state.guardianNotices;
     this.previousChatStream = state.chatStream;
     this.previousRealtimeConversation = state.realtimeTalkConversation;
     const renderLifecycle = state.renderLifecycle;
     state.requestUpdate = () => renderLifecycle.invalidate();
     this.cleanups.push(subscribeChatOutboxProjection(state));
     const sendChat = state.handleSendChat;
-    state.handleSendChat = async (messageOverride, options) => {
-      const pending = sendChat(messageOverride, options);
+    state.handleSendChat = async (messageOverride, options, submissionAction) => {
+      const pending = sendChat(messageOverride, options, submissionAction);
       renderLifecycle.invalidate();
       try {
         await pending;
@@ -225,6 +227,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     const messagesChanged =
       this.previousChatMessages !== state.chatMessages ||
       this.previousChatToolMessages !== state.chatToolMessages ||
+      this.previousGuardianNotices !== state.guardianNotices ||
       this.previousRealtimeConversation !== state.realtimeTalkConversation;
     const streamChanged = this.previousChatStream !== state.chatStream;
     const loadingChanged = this.previousChatLoading !== state.chatLoading;
@@ -233,6 +236,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.previousChatLoading = state.chatLoading;
     this.previousChatMessages = state.chatMessages;
     this.previousChatToolMessages = state.chatToolMessages;
+    this.previousGuardianNotices = state.guardianNotices;
     this.previousChatStream = state.chatStream;
     this.previousRealtimeConversation = state.realtimeTalkConversation;
     if (!messagesChanged && !streamChanged && !loadingChanged) {

@@ -31,6 +31,11 @@ import {
   resolveDockerE2ePlan,
 } from "./lib/docker-e2e-plan.mts";
 import type { DockerE2eLane } from "./lib/docker-e2e-scenarios.mts";
+import {
+  inspectManagedProcessGroup,
+  terminateManagedChild,
+  waitForManagedProcessGroupExit,
+} from "./lib/managed-child-process.mts";
 import { sleep } from "./lib/sleep.mjs";
 import {
   createPrepublishPluginRegistryArtifact,
@@ -54,7 +59,6 @@ export const SHELL_CAPTURE_MAX_CHARS = 1024 * 1024;
 export const LOG_TAIL_MAX_BYTES = 1024 * 1024;
 const SHELL_TIMEOUT_KILL_GRACE_MS = 10_000;
 const SHELL_POST_FORCE_KILL_WAIT_MS = 1_000;
-const SHELL_PROCESS_GROUP_EXIT_POLL_MS = 25;
 const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const DEFAULT_TIMINGS_FILE = path.join(ROOT_DIR, ".artifacts/docker-tests/lane-timings.json");
 const DEFAULT_GITHUB_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
@@ -82,10 +86,10 @@ type SchedulerLane = Pick<DockerE2eLane, "name"> &
 type TimingStore = Awaited<ReturnType<typeof loadTimingStore>>;
 
 type ShellCommandResult = Omit<ReturnType<typeof shellCommandSkippedForShutdown>, "signal"> & {
-  signal: NodeJS.Signals | null;
+  signal: ChildProcess["signalCode"];
 };
 type ShellCaptureResult = Omit<ReturnType<typeof shellCaptureSkippedForShutdown>, "signal"> & {
-  signal: NodeJS.Signals | null;
+  signal: ChildProcess["signalCode"];
 };
 
 type ShellCommandOptions = {
@@ -149,21 +153,28 @@ const IS_MAIN = (() => {
 
 function dockerAllUsage() {
   return [
-    "Usage: node scripts/test-docker-all.mjs [--plan-json | --prepare-only=<manifest>]",
+    "Usage: node scripts/test-docker-all.mjs [--plan-json | --prepare-only=<manifest> | --prepare-plugin-registry]",
     "",
     "Options:",
-    "  --plan-json    Print the resolved Docker E2E plan as JSON and exit.",
-    "  --prepare-only Prepare one immutable candidate manifest and exit.",
-    "  -h, --help     Show this help.",
+    "  --plan-json              Print the resolved Docker E2E plan as JSON and exit.",
+    "  --prepare-only=<manifest> Prepare one immutable candidate manifest and exit.",
+    "  --prepare-plugin-registry Prepare only the selected lanes' plugin registry.",
+    "  -h, --help               Show this help.",
     "",
     "Lane selection and scheduler settings are configured with OPENCLAW_DOCKER_ALL_* env vars.",
   ].join("\n");
 }
 
 export function parseDockerAllCliArgs(argv: readonly string[]) {
-  const options: { help: boolean; planJson: boolean; prepareOnly?: string } = {
+  const options: {
+    help: boolean;
+    planJson: boolean;
+    prepareOnly?: string;
+    preparePluginRegistry: boolean;
+  } = {
     help: false,
     planJson: false,
+    preparePluginRegistry: false,
   };
   for (const arg of argv) {
     if (arg === "--plan-json") {
@@ -173,19 +184,26 @@ export function parseDockerAllCliArgs(argv: readonly string[]) {
       if (!options.prepareOnly) {
         throw new Error(`--prepare-only requires a manifest path\n\n${dockerAllUsage()}`);
       }
+    } else if (arg === "--prepare-plugin-registry") {
+      options.preparePluginRegistry = true;
     } else if (arg === "--help" || arg === "-h") {
       options.help = true;
     } else {
       throw new Error(`unknown argument: ${arg}\n\n${dockerAllUsage()}`);
     }
   }
-  assert(!(options.planJson && options.prepareOnly), "conflicting plan/prep options");
+  assert(
+    [options.planJson, Boolean(options.prepareOnly), options.preparePluginRegistry].filter(Boolean)
+      .length <= 1,
+    "conflicting plan/prep options",
+  );
   return options;
 }
 
 let cliOptions: ReturnType<typeof parseDockerAllCliArgs> = {
   help: false,
   planJson: false,
+  preparePluginRegistry: false,
 };
 if (IS_MAIN) {
   try {
@@ -1207,7 +1225,7 @@ async function prepareOpenClawPackage(baseEnv: NodeJS.ProcessEnv, logDir: string
   console.log(`==> OpenClaw package: ${baseEnv.OPENCLAW_CURRENT_PACKAGE_TGZ}`);
 }
 
-function preparePrepublishPluginRegistry(
+export function preparePrepublishPluginRegistry(
   plan: DockerCandidatePlan,
   logDir: string,
   sourceSha: string,
@@ -1611,28 +1629,11 @@ function shellCaptureSkippedForShutdown(label: string, signal: ShutdownSignal | 
 }
 
 function shellProcessGroupAlive(child: ChildProcess) {
-  if (process.platform === "win32" || !child.pid) {
-    return false;
-  }
-  try {
-    process.kill(-child.pid, 0);
-    return true;
-  } catch (error) {
-    return error instanceof Error && "code" in error && error.code === "EPERM";
-  }
+  return inspectManagedProcessGroup(child, { errorPolicy: "alive-on-eperm" }) === "live";
 }
 
-async function waitForShellProcessGroupExit(child: ChildProcess, timeoutMs: number) {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (!shellProcessGroupAlive(child)) {
-      return true;
-    }
-    await new Promise((resolvePoll) => {
-      setTimeout(resolvePoll, SHELL_PROCESS_GROUP_EXIT_POLL_MS);
-    });
-  }
-  return !shellProcessGroupAlive(child);
+function waitForShellProcessGroupExit(child: ChildProcess, timeoutMs: number) {
+  return waitForManagedProcessGroupExit(child, timeoutMs, { errorPolicy: "alive-on-eperm" });
 }
 
 async function finishTimedOutShellProcessTree(
@@ -1655,15 +1656,12 @@ async function finishTimedOutShellProcessTree(
 }
 
 function terminateChild(child: ChildProcess, signal: ShutdownSignal) {
-  if (process.platform !== "win32" && child.pid) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // Fall back to killing the direct child below.
-    }
-  }
-  child.kill(signal);
+  terminateManagedChild(child, signal, {
+    onChildSignalError(error) {
+      throw error;
+    },
+    useWindowsTaskkill: false,
+  });
 }
 
 function terminateActiveChildren(signal: ShutdownSignal) {
@@ -1834,6 +1832,19 @@ async function main() {
   const omittedUnsupportedLanes =
     omittedUnsupportedLaneNames.length > 0 ? omittedUnsupportedLaneNames : undefined;
 
+  if (cliOptions.preparePluginRegistry) {
+    if (!plan.needs.prepublishPluginRegistry) {
+      throw new Error("selected Docker lanes do not require a prepublish plugin registry");
+    }
+    const registry = preparePrepublishPluginRegistry(
+      plan,
+      logDir,
+      gitOutput(ROOT_DIR, ["rev-parse", "HEAD"]),
+      rootPackageVersion(ROOT_DIR),
+    );
+    process.stdout.write(`${JSON.stringify(registry)}\n`);
+    return;
+  }
   if (planJson) {
     process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
     return;

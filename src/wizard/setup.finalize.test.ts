@@ -139,21 +139,8 @@ const inspectWindowsGatewayFirewall = vi.hoisted(() =>
 );
 
 vi.mock("../commands/onboard-helpers.js", () => ({
-  buildOnboardingControlUiUrl: (params: {
-    httpUrl: string;
-    authMode?: "token" | "password";
-    token?: string;
-    suppressTokenOutput?: boolean;
-  }) =>
-    params.authMode === "token" && params.token && !params.suppressTokenOutput
-      ? `${params.httpUrl}#token=${encodeURIComponent(params.token)}`
-      : params.httpUrl,
   probeGatewayReachable,
   resolveAdvertisedControlUiLinks,
-  resolveControlUiLinks: vi.fn(() => ({
-    httpUrl: "http://127.0.0.1:18789",
-    wsUrl: "ws://127.0.0.1:18789",
-  })),
   resolveLocalControlUiProbeLinks,
   waitForGatewayReachable,
 }));
@@ -192,7 +179,7 @@ vi.mock("../commands/health-format.js", () => ({
 }));
 
 vi.mock("../commands/health.js", () => ({
-  healthCommand,
+  healthCommandNonExiting: healthCommand,
 }));
 
 vi.mock("../flows/search-setup.js", () => ({
@@ -1548,8 +1535,12 @@ describe("finalizeSetupWizard", () => {
     expect(gatewayServiceInstall).not.toHaveBeenCalled();
   });
 
-  it("suppresses token-bearing onboarding output when requested", async () => {
+  it("never prints the reusable Gateway token during classic onboarding", async () => {
     const prompter = createLaterPrompter();
+    const runtimeLog = vi.fn();
+    const runtimeError = vi.fn();
+    const runtime = { log: runtimeLog, error: runtimeError, exit: vi.fn() };
+    probeGatewayReachable.mockResolvedValue({ ok: true });
 
     await finalizeSetupWizard({
       flow: "advanced",
@@ -1558,8 +1549,7 @@ describe("finalizeSetupWizard", () => {
         authChoice: "skip",
         installDaemon: false,
         skipHealth: true,
-        skipUi: true,
-        suppressGatewayTokenOutput: true,
+        skipUi: false,
       },
       baseConfig: {},
       nextConfig: {},
@@ -1572,16 +1562,21 @@ describe("finalizeSetupWizard", () => {
         tailscaleMode: "off",
       },
       prompter,
-      runtime: createRuntime(),
+      runtime,
     });
 
-    const output = vi
-      .mocked(prompter.note)
-      .mock.calls.map((call) => call.join("\n"))
+    const terminalOutput = [prompter.note, prompter.outro]
+      .flatMap((writer) => vi.mocked(writer).mock.calls.flat())
       .join("\n");
-    expect(output).toContain("http://127.0.0.1:18789");
-    expect(output).not.toContain("session-token");
-    expect(output).not.toContain("#token=");
+    const runtimeOutput = [runtimeLog, runtimeError]
+      .flatMap((writer) => writer.mock.calls.flat())
+      .join("\n");
+    expect(terminalOutput).toContain("http://127.0.0.1:18789");
+    expect(terminalOutput).toContain("openclaw dashboard --no-open");
+    for (const output of [terminalOutput, runtimeOutput]) {
+      expect(output).not.toContain("session-token");
+      expect(output).not.toContain("#token=");
+    }
   });
 
   it("stops after a scheduled restart instead of reinstalling the service", async () => {
@@ -1879,6 +1874,39 @@ describe("finalizeSetupWizard", () => {
     expect(healthArgs.config?.gateway?.auth?.mode).toBe("token");
     expect(healthArgs.config?.gateway?.auth?.token).toBe("session-token");
     expect(requireMockArg(healthCommand, 0, 1)).toBeTypeOf("object");
+  });
+
+  it("ends with a health-failure outro when the health check exits after a reachable probe", async () => {
+    // importActual yields the ExitError instance the prod graph sees; the test
+    // file's static import can be a second class instance under Vitest.
+    const { ExitError } = await vi.importActual<typeof import("../runtime.js")>("../runtime.js");
+    healthCommand.mockRejectedValueOnce(new ExitError(1));
+    const prompter = createLaterPrompter();
+
+    await finalizeSetupWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: false,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {},
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "session-token",
+        tailscaleMode: "off",
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(prompter.outro).toHaveBeenCalledWith(expect.stringContaining("health check failed"));
   });
 
   it("labels unavailable systemd as container runtime information in containers", async () => {

@@ -127,7 +127,7 @@ export function resolveRenderableMessageImages(
       ? resolveAssistantAttachmentAvailability(
           img.url,
           localMediaPreviewRoots,
-          opts?.basePath,
+          opts?.resourceBasePath,
           opts?.authToken,
           opts?.onRequestUpdate,
         )
@@ -136,7 +136,7 @@ export function resolveRenderableMessageImages(
       return [];
     }
     const displayUrl = canProxyLocalImage
-      ? buildAssistantAttachmentUrl(img.url, opts?.basePath, availability.mediaTicket)
+      ? buildAssistantAttachmentUrl(img.url, opts?.resourceBasePath, availability.mediaTicket)
       : img.url;
     return [{ ...img, displayUrl }];
   });
@@ -272,7 +272,7 @@ function resolveManagedOutgoingImageBlobUrlCacheKey(
   variant: ManagedImageVariant = "thumbnail",
 ): string {
   const authToken = opts?.authToken?.trim() ?? "";
-  return `${buildManagedOutgoingImageVariantUrl(source, variant, opts?.basePath)}::${authToken}::${artifactId?.trim() ?? ""}`;
+  return `${buildManagedOutgoingImageVariantUrl(source, variant, opts?.resourceBasePath)}::${authToken}::${artifactId?.trim() ?? ""}`;
 }
 
 function readManagedOutgoingImageBlobUrl(
@@ -297,7 +297,7 @@ async function resolveManagedOutgoingImageBlobUrl(
     "managed-image",
     cacheKey,
     opts?.onRequestUpdate,
-    `${buildManagedOutgoingImageVariantUrl(source, variant, opts?.basePath)}::${artifactId?.trim() ?? ""}`,
+    `${buildManagedOutgoingImageVariantUrl(source, variant, opts?.resourceBasePath)}::${artifactId?.trim() ?? ""}`,
   );
   const cached = readManagedImageBlobUrl(cacheKey);
   if (cached) {
@@ -358,7 +358,7 @@ async function resolveManagedOutgoingImageBlobUrl(
 function buildManagedOutgoingImageVariantUrl(
   source: string,
   variant: ManagedImageVariant,
-  basePath?: string,
+  resourceBasePath?: string,
 ): string {
   try {
     const parsed = new URL(source, window.location.origin);
@@ -366,7 +366,7 @@ function buildManagedOutgoingImageVariantUrl(
     if (/^https?:\/\//iu.test(source)) {
       return parsed.href;
     }
-    const normalizedBasePath = normalizeBasePath(basePath ?? "");
+    const normalizedBasePath = normalizeBasePath(resourceBasePath ?? "");
     const pathname =
       normalizedBasePath &&
       (parsed.pathname === normalizedBasePath ||
@@ -396,7 +396,7 @@ async function fetchManagedOutgoingImageBlob(
   const requestUrl = buildManagedOutgoingImageVariantUrl(
     artifactDownload?.url ?? source,
     variant,
-    opts?.basePath,
+    opts?.resourceBasePath,
   );
   const headers = new Headers({ Accept: "image/*" });
   const authToken = opts?.authToken?.trim();

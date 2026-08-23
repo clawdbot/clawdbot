@@ -1,15 +1,8 @@
-import { normalizeRouteBasePath } from "@openclaw/uirouter";
 import { html } from "lit";
 import { property, state } from "lit/decorators.js";
-import { CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX } from "../../../src/gateway/control-ui-contract.js";
 import { AuthenticatedAvatarRouteLoader } from "../lib/authenticated-avatar-route.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
-
-/** Same-origin Gateway route serving the project icon of a session's workspace. */
-export function workspaceIconRouteUrl(basePath: string, sessionKey: string): string {
-  return `${normalizeRouteBasePath(basePath)}${CONTROL_UI_WORKSPACE_ICON_PATH_PREFIX}/${encodeURIComponent(sessionKey)}`;
-}
 
 /**
  * Workspace identity mark: the project's own icon when the Gateway found one in
@@ -30,7 +23,7 @@ class WorkspaceIcon extends OpenClawLightDomContentsElement {
         this.requestUpdate();
       }
     },
-    { cacheNotFound: true },
+    { cacheNotFound: true, retryUnavailable: true },
   );
 
   override disconnectedCallback() {

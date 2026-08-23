@@ -87,6 +87,7 @@ export function resolveCodexAppServerRuntimeOptions(
     pluginConfig?: unknown;
     execMode?: OpenClawExecMode;
     execPolicy?: OpenClawExecPolicyForCodexAppServer;
+    sessionPermissionMode?: "read-only" | "guarded" | "workspace" | "full";
     modelProvider?: string;
     model?: string;
     config?: ProviderAuthAliasConfig;
@@ -138,7 +139,10 @@ export function resolveCodexAppServerRuntimeOptions(
     execMode: params.execMode,
     execPolicy: params.execPolicy,
   });
-  assertCodexAppServerAllowedForOpenClawExecMode(execMode);
+  // Session permission tuples delegate containment to Codex; only legacy exec policy preflights.
+  if (!params.sessionPermissionMode) {
+    assertCodexAppServerAllowedForOpenClawExecMode(execMode);
+  }
   const explicitPolicyMode =
     resolvePolicyMode(config.mode) ?? resolvePolicyMode(env.OPENCLAW_CODEX_APP_SERVER_MODE);
   const configuredSandbox =

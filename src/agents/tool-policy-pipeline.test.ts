@@ -7,7 +7,6 @@ import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
 } from "./tool-policy-pipeline.js";
-import { resetToolPolicyWarningCacheForTest } from "./tool-policy-pipeline.test-support.js";
 import { resolveToolProfilePolicy } from "./tool-policy.js";
 
 const { toolPolicyAuditDebug, toolPolicyAuditInfo } = vi.hoisted(() => ({
@@ -59,7 +58,6 @@ function runAllowlistWarningStep(params: {
 
 describe("tool-policy-pipeline", () => {
   beforeEach(() => {
-    resetToolPolicyWarningCacheForTest();
     toolPolicyAuditDebug.mockClear();
     toolPolicyAuditInfo.mockClear();
   });
@@ -125,10 +123,10 @@ describe("tool-policy-pipeline", () => {
   });
 
   test.each([
-    { expected: ["exec", "show_widget"], policy: { deny: ["canvas"] } },
-    { expected: ["canvas"], policy: { allow: ["canvas"] } },
+    { expected: ["exec"], policy: { deny: ["canvas"] } },
+    { expected: ["canvas", "show_widget"], policy: { allow: ["canvas"] } },
   ])(
-    "does not apply the Canvas core alias to Discord-owned show_widget ($policy)",
+    "applies the Canvas family uniformly even when stale metadata claims show_widget ($policy)",
     ({ expected, policy }) => {
       const tools = [{ name: "exec" }, { name: "show_widget" }, { name: "canvas" }];
       const filtered = applyToolPolicyPipeline({
@@ -147,6 +145,24 @@ describe("tool-policy-pipeline", () => {
     },
   );
 
+  test.each([
+    { expected: ["progress_card"], policy: { allow: ["update_plan"] } },
+    { expected: ["exec"], policy: { deny: ["update_plan"] } },
+  ])(
+    "maps the shipped update_plan policy name to progress_card ($policy)",
+    ({ expected, policy }) => {
+      const tools = [{ name: "exec" }, { name: "progress_card" }];
+      const filtered = applyToolPolicyPipeline({
+        tools: asPolicyTools(tools),
+        toolMeta: () => undefined,
+        warn: () => {},
+        steps: [{ policy, label: "tools", stripPluginOnlyAllowlist: true }],
+      });
+
+      expect(filtered.map((tool) => tool.name).toSorted()).toEqual(expected);
+    },
+  );
+
   test("warns about unknown allowlist entries", () => {
     const warnings: string[] = [];
     const tools = [{ name: "exec" }] as unknown as DummyTool[];
@@ -156,14 +172,14 @@ describe("tool-policy-pipeline", () => {
       warn: (msg) => warnings.push(msg),
       steps: [
         {
-          policy: { allow: ["wat"] },
+          policy: { allow: ["warning_case_unknown"] },
           label: "tools.allow",
           stripPluginOnlyAllowlist: true,
         },
       ],
     });
     expect(warnings).toEqual([
-      "tools: tools.allow allowlist contains unknown entries (wat). These entries won't match any tool unless the plugin is enabled.",
+      "tools: tools.allow allowlist contains unknown entries (warning_case_unknown). These entries won't match any tool unless the plugin is enabled.",
     ]);
   });
 
@@ -199,13 +215,13 @@ describe("tool-policy-pipeline", () => {
 
   test("includes the active reason for unavailable core tool warnings", () => {
     const warnings = runAllowlistWarningStep({
-      allow: ["apply_patch", "wat"],
+      allow: ["apply_patch", "reason_case_unknown"],
       label: "tools.allow",
       unavailableCoreToolReason:
         "memory-triggered compaction runs expose only read and append-only write",
     });
     expect(warnings).toEqual([
-      "tools: tools.allow allowlist contains unknown entries (apply_patch, wat). Some entries are shipped core tools but unavailable here: memory-triggered compaction runs expose only read and append-only write; other entries won't match any tool unless the plugin is enabled.",
+      "tools: tools.allow allowlist contains unknown entries (apply_patch, reason_case_unknown). Some entries are shipped core tools but unavailable here: memory-triggered compaction runs expose only read and append-only write; other entries won't match any tool unless the plugin is enabled.",
     ]);
   });
 
@@ -352,6 +368,7 @@ describe("tool-policy-pipeline", () => {
   test.each([
     {
       title: "warns when bundle MCP is denied and allowlisted",
+      serverName: "bundle-source",
       allowEntry: "bundle-mcp",
       expectedUnknownEntry: "bundle-mcp",
       expectedWarning:
@@ -359,6 +376,7 @@ describe("tool-policy-pipeline", () => {
     },
     {
       title: "warns when denied MCP server namespace is allowlisted",
+      serverName: "paperless",
       allowEntry: "paperless__*",
       expectedUnknownEntry: "paperless__*",
       expectedWarning:
@@ -366,23 +384,25 @@ describe("tool-policy-pipeline", () => {
     },
     {
       title: "warns when broad MCP server wildcard deny covers an allowlisted namespace",
-      allowEntry: "paperless*",
-      expectedUnknownEntry: "paperless__*",
+      serverName: "archive",
+      allowEntry: "archive*",
+      expectedUnknownEntry: "archive__*",
       expectedWarning:
-        "tools: tools.allow allowlist contains unknown entries (paperless__*). These entries won't match any tool unless the plugin is enabled.",
+        "tools: tools.allow allowlist contains unknown entries (archive__*). These entries won't match any tool unless the plugin is enabled.",
     },
     {
       title: "warns when plugin group is denied and MCP server namespace is allowlisted",
+      serverName: "records",
       allowEntry: "group:plugins",
-      expectedUnknownEntry: "paperless__*",
+      expectedUnknownEntry: "records__*",
       expectedWarning:
-        "tools: tools.allow allowlist contains unknown entries (paperless__*). These entries won't match any tool unless the plugin is enabled.",
+        "tools: tools.allow allowlist contains unknown entries (records__*). These entries won't match any tool unless the plugin is enabled.",
     },
-  ])("$title", ({ allowEntry, expectedUnknownEntry, expectedWarning }) => {
+  ])("$title", ({ serverName, allowEntry, expectedUnknownEntry, expectedWarning }) => {
     const warnings: string[] = [];
     const declared = buildDeclaredToolAllowlistContext({
       config: {
-        mcp: { servers: { paperless: { command: "paperless-mcp" } } },
+        mcp: { servers: { [serverName]: { command: `${serverName}-mcp` } } },
       },
       workspaceDir: process.cwd(),
       toolDenylist: [allowEntry],
@@ -477,7 +497,7 @@ describe("tool-policy-pipeline", () => {
       warn: (msg: string) => warnings.push(msg),
       steps: [
         {
-          policy: { allow: ["wat"] },
+          policy: { allow: ["dedupe_case_unknown"] },
           label: "tools.allow",
           stripPluginOnlyAllowlist: true,
         },
@@ -503,7 +523,7 @@ describe("tool-policy-pipeline", () => {
         warn: (msg: string) => warnings.push(msg),
         steps: [
           {
-            policy: { allow: [`unknown_${i}`] },
+            policy: { allow: [`bounded_unknown_${i}`] },
             label: "tools.profile (coding)",
             stripPluginOnlyAllowlist: true,
           },
@@ -517,7 +537,7 @@ describe("tool-policy-pipeline", () => {
       warn: (msg: string) => warnings.push(msg),
       steps: [
         {
-          policy: { allow: ["unknown_0"] },
+          policy: { allow: ["bounded_unknown_0"] },
           label: "tools.profile (coding)",
           stripPluginOnlyAllowlist: true,
         },
@@ -538,7 +558,7 @@ describe("tool-policy-pipeline", () => {
         warn: (msg: string) => warnings.push(msg),
         steps: [
           {
-            policy: { allow: [`unknown_${i}`] },
+            policy: { allow: [`eviction_unknown_${i}`] },
             label: "tools.allow",
             stripPluginOnlyAllowlist: true,
           },
@@ -554,7 +574,7 @@ describe("tool-policy-pipeline", () => {
       warn: (msg: string) => warnings.push(msg),
       steps: [
         {
-          policy: { allow: ["unknown_256"] },
+          policy: { allow: ["eviction_unknown_256"] },
           label: "tools.allow",
           stripPluginOnlyAllowlist: true,
         },
@@ -565,13 +585,17 @@ describe("tool-policy-pipeline", () => {
       toolMeta: () => undefined,
       warn: (msg: string) => warnings.push(msg),
       steps: [
-        { policy: { allow: ["unknown_0"] }, label: "tools.allow", stripPluginOnlyAllowlist: true },
+        {
+          policy: { allow: ["eviction_unknown_0"] },
+          label: "tools.allow",
+          stripPluginOnlyAllowlist: true,
+        },
       ],
     });
 
     expect(warnings).toEqual([
-      "tools: tools.allow allowlist contains unknown entries (unknown_256). These entries won't match any tool unless the plugin is enabled.",
-      "tools: tools.allow allowlist contains unknown entries (unknown_0). These entries won't match any tool unless the plugin is enabled.",
+      "tools: tools.allow allowlist contains unknown entries (eviction_unknown_256). These entries won't match any tool unless the plugin is enabled.",
+      "tools: tools.allow allowlist contains unknown entries (eviction_unknown_0). These entries won't match any tool unless the plugin is enabled.",
     ]);
   });
 

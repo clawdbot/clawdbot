@@ -27,6 +27,7 @@ const {
   detectRespawnSupervisorMock,
   getRuntimeConfigMock,
   refreshRemoteModelCatalogMock,
+  runGatewayUpdatePreflightMock,
   scheduleGatewaySigusr1RestartMock,
   startManagedServiceUpdateHandoffMock,
   versionMock,
@@ -41,6 +42,8 @@ const {
     models: 1,
     generatedAt: 1_753_500_000_000,
   })),
+  runGatewayUpdatePreflightMock:
+    vi.fn<typeof import("./update-runner.js").runGatewayUpdatePreflight>(),
   scheduleGatewaySigusr1RestartMock: vi.fn(() => ({ scheduled: true })),
   startManagedServiceUpdateHandoffMock: vi.fn<
     typeof import("./update-managed-service-handoff.js").startManagedServiceUpdateHandoff
@@ -111,6 +114,11 @@ vi.mock("./update-check.js", async () => {
     compareSemverStrings,
     resolveNpmChannelTag: vi.fn(),
   };
+});
+
+vi.mock("./update-runner.js", async () => {
+  const actual = await vi.importActual<typeof import("./update-runner.js")>("./update-runner.js");
+  return { ...actual, runGatewayUpdatePreflight: runGatewayUpdatePreflightMock };
 });
 
 vi.mock("../version.js", () => ({
@@ -287,6 +295,8 @@ describe("update-startup", () => {
     getRuntimeConfigMock.mockReset();
     getRuntimeConfigMock.mockReturnValue({});
     refreshRemoteModelCatalogMock.mockClear();
+    runGatewayUpdatePreflightMock.mockReset();
+    runGatewayUpdatePreflightMock.mockResolvedValue(undefined);
     detectRespawnSupervisorMock.mockReset();
     detectRespawnSupervisorMock.mockReturnValue(null);
     scheduleGatewaySigusr1RestartMock.mockClear();
@@ -1158,7 +1168,6 @@ describe("update-startup", () => {
 
     expect(checkUpdateStatus).toHaveBeenCalledWith({
       root: "/opt/openclaw",
-      timeoutMs: 2500,
       fetchGit: true,
       includeRegistry: false,
       useDetachedDevUpstream: true,
@@ -1277,6 +1286,40 @@ describe("update-startup", () => {
       upstreamRef: "origin/main",
       upstreamSha: "frozen-upstream-sha",
     });
+    expect(runGatewayUpdatePreflightMock).toHaveBeenCalledWith(
+      "/opt/openclaw",
+      45 * 60 * 1000,
+      handoffParams?.devTarget,
+    );
+  });
+
+  it("keeps managed dev auto-update serving when target config preflight fails", async () => {
+    mockDevGitStatus({ upstreamSha: "frozen-upstream-sha" });
+    detectRespawnSupervisorMock.mockReturnValue("launchd");
+    runGatewayUpdatePreflightMock.mockResolvedValueOnce({
+      status: "error",
+      mode: "git",
+      reason: "preflight-no-good-commit",
+      steps: [],
+      durationMs: 1,
+    });
+    const log = { info: vi.fn() };
+
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "dev", auto: { enabled: true } } },
+      log,
+      isNixMode: false,
+      allowInTests: true,
+      activeWorkInspectors: idleActiveWorkInspectors(),
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      "auto-update attempt failed",
+      expect.objectContaining({ reason: "preflight-no-good-commit" }),
+    );
   });
 
   it("continues managed dev campaigns from a detached tracked deployment", async () => {
@@ -1344,7 +1387,6 @@ describe("update-startup", () => {
 
     expect(checkUpdateStatus).toHaveBeenCalledWith({
       root: "/opt/openclaw",
-      timeoutMs: 2500,
       fetchGit: true,
       includeRegistry: false,
       useDetachedDevUpstream: true,
@@ -1684,6 +1726,80 @@ describe("update-startup", () => {
     process.env.NODE_ENV = previousNodeEnv;
   });
 
+  it("returns cleanup before slow dev git discovery schedules a campaign", async () => {
+    const remoteFetchDelayMs = 65_653;
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
+    vi.mocked(checkUpdateStatus).mockImplementation(({ fetchGit, timeoutMs }) => {
+      const isRemoteFetch = fetchGit === true;
+      const effectiveTimeoutMs = timeoutMs ?? (isRemoteFetch ? 120_000 : 6000);
+      const remoteFetchFinished = isRemoteFetch && effectiveTimeoutMs >= remoteFetchDelayMs;
+      const status = {
+        root: "/opt/openclaw",
+        installKind: "git" as const,
+        packageManager: "pnpm" as const,
+        git: {
+          root: "/opt/openclaw",
+          sha: "current-sha",
+          tag: null,
+          branch: "main",
+          upstream: "origin/main",
+          upstreamSource: "tracking" as const,
+          upstreamSha: remoteFetchFinished ? "upstream-sha" : null,
+          commitAtMs: null,
+          dirty: false,
+          ahead: remoteFetchFinished ? 0 : null,
+          behind: remoteFetchFinished ? 2 : null,
+          fetchOk: isRemoteFetch ? remoteFetchFinished : null,
+        },
+      } satisfies UpdateCheckResult;
+      if (!isRemoteFetch) {
+        return Promise.resolve(status);
+      }
+      return new Promise<UpdateCheckResult>((resolve) => {
+        setTimeout(() => resolve(status), Math.min(effectiveTimeoutMs, remoteFetchDelayMs));
+      });
+    });
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    let stop: (() => void) | undefined;
+
+    try {
+      stop = scheduleGatewayUpdateCheck({
+        cfg: { update: { channel: "dev", auto: { enabled: true } } },
+        log: { info: vi.fn() },
+        isNixMode: false,
+        activeWorkInspectors: idleActiveWorkInspectors(),
+      });
+
+      expect(stop).toEqual(expect.any(Function));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(checkUpdateStatus).toHaveBeenCalledTimes(2);
+      expect(checkUpdateStatus).toHaveBeenNthCalledWith(1, {
+        root: "/opt/openclaw",
+        timeoutMs: 2500,
+        fetchGit: false,
+        includeRegistry: false,
+      });
+      expect(checkUpdateStatus).toHaveBeenNthCalledWith(2, {
+        root: "/opt/openclaw",
+        fetchGit: true,
+        includeRegistry: false,
+        useDetachedDevUpstream: true,
+      });
+      expect(getUpdateSchedule()?.campaign).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(remoteFetchDelayMs);
+      expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
+      expect(getUpdateSchedule()?.install?.git).toMatchObject({
+        status: "behind",
+        commitsBehind: 2,
+      });
+    } finally {
+      stop?.();
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+  });
+
   it("defers stable auto-update until rollout window is due", async () => {
     mockPackageUpdateStatus("latest", "2.0.0");
 
@@ -2019,17 +2135,6 @@ describe("update-startup", () => {
       skipCooldown: true,
       skipDeferral: true,
     });
-  });
-
-  it("scheduleGatewayUpdateCheck returns a cleanup function", () => {
-    mockPackageUpdateStatus("latest", "2.0.0");
-
-    const stop = scheduleGatewayUpdateCheck({
-      cfg: { update: { channel: "stable" } },
-      log: { info: vi.fn() },
-      isNixMode: false,
-    });
-    stop();
   });
 
   it("schedules an initial and recurring 24-hour extended-stable hint check with cleanup", async () => {

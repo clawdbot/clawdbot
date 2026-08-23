@@ -24,6 +24,10 @@ const cliProgressMocks = vi.hoisted(() => ({
   })),
 }));
 
+const terminalNoteMocks = vi.hoisted(() => ({
+  note: vi.fn(),
+}));
+
 const clackMocks = vi.hoisted(() => ({
   autocomplete: vi.fn(),
   autocompleteMultiselect: vi.fn(),
@@ -81,6 +85,10 @@ vi.mock("@clack/prompts", () => ({
 
 vi.mock("../cli/progress.js", () => ({
   createCliProgress: cliProgressMocks.createCliProgress,
+}));
+
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
+  noteToStream: terminalNoteMocks.note,
 }));
 
 vi.mock("./clack-navigation-prompts.js", () => ({
@@ -241,6 +249,7 @@ describe("createClackPrompter", () => {
       frames: ["(\\/)", "(||)", "(--)", "(||)"],
       delay: 120,
       styleFrame: theme.accent,
+      output: process.stdout,
     });
   });
 
@@ -253,7 +262,40 @@ describe("createClackPrompter", () => {
 
     prompter.progress("Loading");
 
-    expect(clackMocks.spinner).toHaveBeenCalledWith();
+    expect(clackMocks.spinner).toHaveBeenCalledWith({ output: process.stdout });
+  });
+
+  it("routes Clack UI, prompts, notes, plain text, and progress to the selected output", async () => {
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    clackMocks.confirm.mockResolvedValue(true);
+    const prompter = createClackPrompter(process.stderr);
+
+    await prompter.intro("Add agent");
+    await prompter.note("Details", "Agent");
+    await prompter.plain?.("plain");
+    await prompter.confirm({ message: "Continue?" });
+    await prompter.outro("Ready");
+    const progress = prompter.progress("Loading");
+    progress.update("Still loading");
+    progress.stop();
+
+    expect(clackMocks.intro).toHaveBeenCalledWith(expect.any(String), {
+      output: process.stderr,
+    });
+    expect(terminalNoteMocks.note).toHaveBeenCalledWith("Details", "Agent", process.stderr);
+    expect(stderrWrite).toHaveBeenCalledWith("plain\n");
+    expect(clackMocks.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ output: process.stderr }),
+    );
+    expect(clackMocks.outro).toHaveBeenCalledWith(expect.any(String), {
+      output: process.stderr,
+    });
+    expect(clackMocks.spinner).toHaveBeenCalledWith({ output: process.stderr });
+    expect(cliProgressMocks.createCliProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ stream: process.stderr }),
+    );
+    expect(stdoutWrite).not.toHaveBeenCalled();
   });
 
   it("prints plain output without note framing", async () => {
@@ -508,7 +550,9 @@ describe("createClackPrompter", () => {
       WizardCancelledError,
     );
 
-    expect(clackMocks.cancel).toHaveBeenCalledOnce();
+    expect(clackMocks.cancel).toHaveBeenCalledWith(expect.any(String), {
+      output: process.stdout,
+    });
   });
 
   it("rejects navigation after Clack resolves an aborted prompt", async () => {

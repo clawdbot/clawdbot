@@ -451,6 +451,11 @@ describe("Dockerfile", () => {
     expect(dockerfile).not.toContain(
       `npm install --prefix "${BUNDLED_PLUGIN_ROOT_DIR}/$ext" --omit=dev --silent`,
     );
+    const pluginPruneIndex = dockerfile.indexOf("node scripts/prune-docker-plugin-dist.mjs");
+    const grammyImportIndex = dockerfile.indexOf(
+      `node --input-type=module -e 'await import("grammy")'`,
+    );
+    expect(grammyImportIndex).toBeGreaterThan(pluginPruneIndex);
     expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules",
     );

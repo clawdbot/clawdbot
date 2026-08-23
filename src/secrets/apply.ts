@@ -385,7 +385,7 @@ function applyConfigTargetMutations(params: {
   let configChanged = false;
 
   for (const { target, resolved } of resolvedTargets) {
-    if (resolved.entry.configFile === "auth-profiles.json") {
+    if (resolved.entry.configFile === "auth-profile-store") {
       const authStoreChanged = applyAuthProfileTargetMutation({
         target,
         resolved,
@@ -655,7 +655,7 @@ function applyAuthProfileTargetMutation(params: {
   authStoreTargetByPath: Map<string, AuthProfileStoreTarget>;
   scrubbedValues: Set<string>;
 }): boolean {
-  if (params.resolved.entry.configFile !== "auth-profiles.json") {
+  if (params.resolved.entry.configFile !== "auth-profile-store") {
     return false;
   }
   const { store } = resolveAuthStoreForTarget({

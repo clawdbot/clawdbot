@@ -125,11 +125,11 @@ describe("docsSearchCommand", () => {
     fetchMock.mockResolvedValueOnce(response);
     const runtime = makeRuntime();
 
-    await docsSearchCommand(["browser", "existing-session"], runtime);
+    await expect(docsSearchCommand(["browser", "existing-session"], runtime)).rejects.toThrow(
+      "Docs search failed: HTTP 503",
+    );
 
     expect(cancelled).toBe(true);
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("HTTP 503"));
-    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("reports malformed docs search JSON with CLI context", async () => {
@@ -140,13 +140,9 @@ describe("docsSearchCommand", () => {
     );
     const runtime = makeRuntime();
 
-    await docsSearchCommand(["bad-json"], runtime);
-
-    expect(runtime.error).toHaveBeenCalledWith(
+    await expect(docsSearchCommand(["bad-json"], runtime)).rejects.toThrow(
       "Docs search failed: Docs search response is malformed JSON",
     );
-    expect(runtime.error).toHaveBeenCalledTimes(1);
-    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("reports docs search responses with invalid UTF-8 bytes as malformed", async () => {
@@ -160,12 +156,9 @@ describe("docsSearchCommand", () => {
     );
     const runtime = makeRuntime();
 
-    await docsSearchCommand(["plugin"], runtime);
-
-    expect(runtime.error).toHaveBeenCalledWith(
+    await expect(docsSearchCommand(["plugin"], runtime)).rejects.toThrow(
       "Docs search failed: Docs search response is malformed JSON",
     );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("renders successful results from the Cloudflare docs search API", async () => {
@@ -212,12 +205,9 @@ describe("docsSearchCommand", () => {
     );
     const runtime = makeRuntime();
 
-    await docsSearchCommand(["oversized"], runtime);
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Docs search response exceeds"),
+    await expect(docsSearchCommand(["oversized"], runtime)).rejects.toThrow(
+      "Docs search failed: Docs search response exceeds 8388608 bytes",
     );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(cancel).toHaveBeenCalledOnce();
   });
 });

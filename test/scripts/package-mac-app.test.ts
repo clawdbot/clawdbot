@@ -1217,11 +1217,17 @@ describe("package-mac-app plist stamping", () => {
     const helperBlock = getPackageManagerHelperBlock();
     const tempRoot = tempDirs.make("openclaw-package-pnpm-root-");
     const toolsDir = tempDirs.make("openclaw-package-pnpm-tools-");
+    // Hosts with a system corepack in /usr/bin (plus a cached pnpm) would satisfy
+    // the detection this test needs to fail; an empty cache with network disabled
+    // keeps "corepack pnpm is unavailable" true everywhere.
+    const corepackHome = tempDirs.make("openclaw-package-corepack-home-");
 
     const result = runHelper(`
       set -euo pipefail
       ROOT_DIR=${JSON.stringify(tempRoot)}
       PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      export COREPACK_HOME=${JSON.stringify(corepackHome)}
+      export COREPACK_ENABLE_NETWORK=0
       ${helperBlock}
       run_pnpm build
     `);
@@ -1677,6 +1683,27 @@ describe("package-mac-app plist stamping", () => {
     );
     expect(codesignScript.indexOf("Signing embedded CUA driver")).toBeLessThan(
       codesignScript.indexOf("# Finally sign the bundle"),
+    );
+  });
+
+  it("omits the CUA driver only from elevation-host packages", () => {
+    const packageScript = readFileSync(scriptPath, "utf8");
+    const variantBlock = packageScript.slice(
+      packageScript.indexOf('SIGNING_VARIANT="${OPENCLAW_MAC_SIGNING_VARIANT:-standard}"'),
+      packageScript.indexOf("# OPENCLAW_SKIP_MLX_TTS"),
+    );
+    const cuaBlock = packageScript.slice(
+      packageScript.indexOf('if [[ "$SIGNING_VARIANT" == "elevation-host" ]]'),
+      packageScript.indexOf('echo "📦 Copying CLI installer"'),
+    );
+
+    expect(variantBlock).toContain("standard | elevation-host");
+    expect(variantBlock).toContain("Unknown OPENCLAW_MAC_SIGNING_VARIANT value");
+    expect(cuaBlock).toContain("Omitting embedded CUA driver from elevation-host package");
+    expect(cuaBlock).toContain("else");
+    expect(cuaBlock).toContain("Staging embedded CUA driver");
+    expect(cuaBlock).toContain(
+      '"$ROOT_DIR/scripts/stage-cua-driver-macos.sh" "$APP_ROOT/Contents/Resources/cua-driver"',
     );
   });
 

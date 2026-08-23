@@ -38,7 +38,12 @@ afterEach(() => {
 describe("chat Swarm progress", () => {
   it("groups live collector children and maps their dot states", () => {
     const container = renderProgress([
-      session({ key: "queued", label: "Queued child", subagentRunState: "active" }),
+      session({
+        key: "queued",
+        label: "Queued child",
+        status: "queued",
+        hasActiveRun: true,
+      }),
       session({ key: "running", label: "Running child", status: "running" }),
       session({ key: "done", label: "Done child", status: "done" }),
       session({ key: "failed", label: "Timed out child", status: "timeout" }),
@@ -97,6 +102,21 @@ describe("chat Swarm progress", () => {
     expect(dot?.title).toBe("Worker A: Running");
 
     render(renderChatSwarmProgress({ sessionKey: parentSessionKey, sessions: [] }), container);
+    expect(container.querySelector("[data-test-id=chat-swarm]")).toBeNull();
+  });
+
+  it("keeps registry-active terminal workers completed and hides finished groups", () => {
+    const running = session({ key: "running", status: "running" });
+    const completed = session({ key: "completed", status: "done", hasActiveRun: true });
+    const failed = session({ key: "failed", status: "failed", hasActiveRun: true });
+    const container = renderProgress([running, completed, failed]);
+
+    expect(container.textContent?.replace(/\s+/g, " ")).toContain("1 Running · 1 Done · 1 Failed");
+
+    render(
+      renderChatSwarmProgress({ sessionKey: parentSessionKey, sessions: [completed, failed] }),
+      container,
+    );
     expect(container.querySelector("[data-test-id=chat-swarm]")).toBeNull();
   });
 

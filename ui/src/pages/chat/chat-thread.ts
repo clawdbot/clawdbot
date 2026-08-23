@@ -28,6 +28,7 @@ export {
   coalesceStreamRuns,
   collapseCompletedTurnWork,
 } from "./chat-thread-grouping.ts";
+export { agentRunFrameGroups, coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 
 type CachedChatItems = {
   input: BuildChatItemsProps | null;
@@ -78,6 +79,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
     senderIdentityKey(previous.sender) === senderIdentityKey(next.sender) &&
     senderIdentityKey(previous.replyToSender) === senderIdentityKey(next.replyToSender) &&
     previous.isStreaming === next.isStreaming &&
+    previous.runId === next.runId &&
     previous.messages.length === next.messages.length &&
     previous.messages.every((entry, index) => {
       const candidate = next.messages[index];
@@ -127,18 +129,23 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.kind === "stream" &&
         previous.text === next.text &&
         previous.startedAt === next.startedAt &&
-        previous.isStreaming === next.isStreaming
+        previous.isStreaming === next.isStreaming &&
+        previous.runId === next.runId &&
+        previous.boundaryId === next.boundaryId
       );
     case "reading-indicator":
-      return previous.kind === "reading-indicator" && previous.startedAt === next.startedAt;
+      return (
+        previous.kind === "reading-indicator" &&
+        previous.startedAt === next.startedAt &&
+        previous.runId === next.runId &&
+        previous.boundaryId === next.boundaryId
+      );
     case "question":
       return (
         previous.kind === "question" &&
         previous.questionId === next.questionId &&
         previous.startedAt === next.startedAt
       );
-    case "plan":
-      return previous.kind === "plan";
   }
   return false;
 }
@@ -184,6 +191,7 @@ function stabilizeChatItems(
         !prior ||
         claimedGroupKeys.has(prior.key) ||
         prior.role !== item.role ||
+        prior.runId !== item.runId ||
         prior.senderLabel !== item.senderLabel ||
         senderIdentityKey(prior.sender) !== senderIdentityKey(item.sender)
       ) {
@@ -231,10 +239,13 @@ function sameChatItemsStructuralInput(
 ): boolean {
   return (
     previous.sessionKey === next.sessionKey &&
+    previous.archiveNotice?.key === next.archiveNotice?.key &&
+    previous.archiveNotice?.label === next.archiveNotice?.label &&
     previous.runId === next.runId &&
     previous.locale === next.locale &&
     previous.messages === next.messages &&
     previous.toolMessages === next.toolMessages &&
+    previous.guardianNotices === next.guardianNotices &&
     previous.streamSegments === next.streamSegments &&
     previous.streamStartedAt === next.streamStartedAt &&
     previous.queue === next.queue &&
@@ -243,7 +254,6 @@ function sameChatItemsStructuralInput(
     previous.runWorking === next.runWorking &&
     previous.runActive === next.runActive &&
     previous.questionPrompts === next.questionPrompts &&
-    Boolean(previous.planStatus?.steps.length) === Boolean(next.planStatus?.steps.length) &&
     previous.loading === next.loading &&
     previous.searchOpen === next.searchOpen &&
     previous.searchQuery === next.searchQuery

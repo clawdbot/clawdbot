@@ -12,7 +12,6 @@ import {
   listPluginSdkDeclarationOutputs,
   pluginSdkEntrypoints,
 } from "../../scripts/lib/plugin-sdk-entries.mjs";
-import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
   computeArtifactInputsDigest,
   createPrefixedOutputWriter,
@@ -25,15 +24,10 @@ import {
   runNodeStep,
   runNodeSteps,
   runNodeStepsInParallel,
-  signalNodeStep,
 } from "../../scripts/prepare-extension-package-boundary-artifacts.mts";
 import { makeTempDir } from "../helpers/temp-dir.js";
 
 const tempRoots = new Set<string>();
-
-function expectedTaskkillPath(): string {
-  return resolveWindowsTaskkillPath();
-}
 
 function createMockPipe() {
   const pipe = new EventEmitter() as EventEmitter & {
@@ -204,75 +198,6 @@ describe("prepare-extension-package-boundary-artifacts", () => {
 
     expect(Date.now() - startedAt).toBeLessThan(abortBudgetMs);
   }, 45_000);
-
-  it("signals Windows node step process trees with taskkill", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
-
-    signalNodeStep(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-
-    signalNodeStep(child, "SIGKILL", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
-  it("force-kills Windows node step process trees when graceful taskkill fails", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ error: undefined, status: 1 })
-      .mockReturnValueOnce({ error: undefined, status: 0 });
-
-    signalNodeStep(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
-  });
 
   it.runIf(process.platform !== "win32")(
     "force-kills aborted sibling step process groups",

@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   loadShellEnvFallback,
   resolveShellEnvFallbackTimeoutMs,
@@ -130,6 +131,7 @@ export function loadConfigFromContext(
           hash,
           issues: validated.issues,
           warnings: validated.warnings,
+          resolutionFacts: readResolution.resolutionFacts,
           legacyIssues: [],
         }),
       );
@@ -185,6 +187,7 @@ export function loadConfigFromContext(
         hash,
         issues: [],
         warnings: validated.warnings,
+        resolutionFacts: readResolution.resolutionFacts,
         legacyIssues: [],
       }),
     );
@@ -206,7 +209,7 @@ export function loadConfigFromContext(
     if ((error as { code?: string })?.code === "INVALID_CONFIG") {
       throw error;
     }
-    deps.logger.error(`Failed to read config at ${configPath}`, error);
+    deps.logger.error(`Failed to read config at ${configPath}: ${formatErrorMessage(error)}`);
     throw error;
   }
 }

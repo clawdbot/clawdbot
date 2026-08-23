@@ -116,7 +116,14 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   }
 
   const config = await loadNodeHostConfig();
-  const { host, port, contextPath, tls, tlsFingerprint } = resolveNodeGatewayOptions(opts, config);
+  let gatewayOptions;
+  try {
+    gatewayOptions = resolveNodeGatewayOptions(opts, config);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+    return;
+  }
+  const { host, port, contextPath, tls, tlsFingerprint, cloudflareAccess } = gatewayOptions;
   if (!Number.isFinite(port ?? Number.NaN) || (port ?? 0) <= 0 || (port ?? 0) > 65_535) {
     fail(
       opts.port !== undefined
@@ -127,6 +134,10 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   }
   if (opts.tls === false && opts.tlsFingerprint !== undefined) {
     fail("--no-tls cannot be combined with --tls-fingerprint");
+    return;
+  }
+  if (cloudflareAccess && tls !== true) {
+    fail("Cloudflare Access credentials require --tls for the node Gateway connection");
     return;
   }
 

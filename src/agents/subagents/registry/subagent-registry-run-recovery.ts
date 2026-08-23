@@ -1,9 +1,14 @@
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 /** Owns steer replacement and restart-recovery receipt transitions. */
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import { finalizeTaskRunByRunId } from "../../../tasks/detached-task-runtime.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
@@ -140,6 +145,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     restartRecovery?: SubagentRestartRecoveryReceipt;
     lifecycleGeneration?: string;
     persistenceFailure?: "return-false" | "throw";
+    gatewayContextResolver?: GatewayContextResolver;
   }): boolean => {
     const previousRunId = replaceParams.previousRunId.trim();
     const nextRunId = replaceParams.nextRunId.trim();
@@ -270,6 +276,10 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       archiveAtMs: undefined,
       runTimeoutSeconds,
     });
+    bindGatewayContextResolver(
+      next,
+      replaceParams.gatewayContextResolver ?? getGatewayContextResolver(source),
+    );
     clearDeliveryState(next);
 
     if (previousRunId !== nextRunId) {

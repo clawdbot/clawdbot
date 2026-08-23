@@ -22,6 +22,10 @@ import {
   isLocalCheckEnabled,
   resolveRepoToolBinPath,
 } from "./lib/local-check-runtime.mts";
+import {
+  createManagedCommandInvocation,
+  terminateManagedChild,
+} from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import {
   listPluginSdkDeclarationOutputs,
@@ -29,7 +33,6 @@ import {
   productionPluginSdkEntrypoints,
 } from "./lib/plugin-sdk-entries.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
 const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
 const TYPE_INPUT_EXTENSIONS = new Set([
@@ -93,11 +96,6 @@ type NodeStepParams = {
   env?: NodeJS.ProcessEnv;
   spawnImpl?: SpawnNodeStep;
 };
-type RunTaskkill = (
-  command: string,
-  args: string[],
-  options: { stdio: "ignore" },
-) => { error?: Error; status: number | null };
 const ACTIVE_NODE_STEP_KILLERS = new Map<(signal: NodeStepSignal) => void, number>();
 let nodeStepParentSignalForwardersInstalled = false;
 let exitingAfterParentSignal = false;
@@ -236,11 +234,17 @@ export function resolvePluginSdkTypeInputs(rootDir = repoRoot) {
   }
   const tsgoPath = resolveRepoToolBinPath("tsgo");
   ensureRepoToolNodeModulesLink(tsgoPath);
-  const result = spawnSync(
-    tsgoPath,
-    ["-p", "tsconfig.plugin-sdk.dts.json", "--listFilesOnly", "--noEmit"],
-    { cwd: rootDir, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
-  );
+  const tsgo = createManagedCommandInvocation({
+    args: ["-p", "tsconfig.plugin-sdk.dts.json", "--listFilesOnly", "--noEmit"],
+    bin: tsgoPath,
+  });
+  const result = spawnSync(tsgo.command, tsgo.args, {
+    cwd: rootDir,
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+    shell: tsgo.shell,
+    windowsVerbatimArguments: tsgo.windowsVerbatimArguments,
+  });
   if (result.status !== 0 || result.error) {
     throw new Error(`Failed to derive plugin SDK type inputs: ${result.stderr || result.error}`);
   }
@@ -732,47 +736,6 @@ function abortSiblingSteps(abortController: AbortController | undefined) {
   }
 }
 
-export function signalNodeStep(
-  child: Pick<NodeStepChild, "kill" | "pid">,
-  signal: NodeStepSignal,
-  {
-    platform = process.platform,
-    runTaskkill = spawnSync,
-    useProcessGroup = platform !== "win32",
-  }: {
-    platform?: NodeJS.Platform;
-    runTaskkill?: RunTaskkill;
-    useProcessGroup?: boolean;
-  } = {},
-) {
-  if (useProcessGroup && typeof child.pid === "number") {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // The child process group can already be gone by the time cleanup runs.
-    }
-  }
-  if (platform === "win32" && typeof child.pid === "number") {
-    const args = ["/PID", String(child.pid), "/T"];
-    if (signal === "SIGKILL") {
-      args.push("/F");
-    }
-    const taskkillPath = resolveWindowsTaskkillPath();
-    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
-    if (!result?.error && result?.status === 0) {
-      return;
-    }
-    if (signal !== "SIGKILL") {
-      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
-      if (!forceResult?.error && forceResult?.status === 0) {
-        return;
-      }
-    }
-  }
-  child.kill(signal);
-}
-
 function signalActiveNodeSteps(signal: NodeStepSignal) {
   for (const killNodeStep of ACTIVE_NODE_STEP_KILLERS.keys()) {
     killNodeStep(signal);
@@ -844,7 +807,7 @@ export function runNodeStep(
     const stderrWriter = createPrefixedOutputWriter(label, process.stderr);
     const useProcessGroup = process.platform !== "win32";
     const killNodeStep = (signal: NodeStepSignal) =>
-      signalNodeStep(child, signal, { useProcessGroup });
+      terminateManagedChild(child, signal, { useProcessGroup });
     const processGroupAlive = () => {
       if (!useProcessGroup || !child.pid) {
         return false;

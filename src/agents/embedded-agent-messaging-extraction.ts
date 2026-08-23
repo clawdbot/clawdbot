@@ -74,6 +74,9 @@ export function extractMessagingToolSourceReplyPayload(
   if (idempotencyKey) {
     payload.idempotencyKey = idempotencyKey;
   }
+  if (details.sourceReplyTranscriptOwner === true) {
+    payload.transcriptOwner = true;
+  }
   return Object.keys(payload).length > 0 ? payload : undefined;
 }
 

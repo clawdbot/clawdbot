@@ -1,7 +1,7 @@
 /** Persists, inspects, and refreshes the installed plugin index in the state database. */
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
-import { safeParseJson } from "@openclaw/normalization-core";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { z } from "zod";
 import {
   createPluginInstallRecordMap,
@@ -13,7 +13,8 @@ import {
   setPluginInstallRecordMapEntry,
 } from "../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
@@ -348,15 +349,17 @@ function readPersistedInstalledPluginIndexFromSqlite(
   if (options.filePath?.endsWith(".json")) {
     return null;
   }
-  if (!existsSync(resolveInstalledPluginIndexStorePath(options))) {
-    return null;
-  }
   try {
-    return withOpenClawStateDatabaseReadOnly(
-      ({ db }) => parseInstalledPluginIndexSqliteRow(readInstalledPluginIndexRow(db)),
-      resolveInstalledPluginIndexStateDatabaseOptions(options),
+    return (
+      withExistingOpenClawStateDatabaseReadOnly(
+        ({ db }) => parseInstalledPluginIndexSqliteRow(readInstalledPluginIndexRow(db)),
+        resolveInstalledPluginIndexStateDatabaseOptions(options),
+      ) ?? null
     );
-  } catch {
+  } catch (error) {
+    if (isSqliteSchemaVersionError(error)) {
+      throw error;
+    }
     return null;
   }
 }

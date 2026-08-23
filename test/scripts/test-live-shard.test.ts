@@ -140,6 +140,7 @@ describe("scripts/test-live-shard", () => {
       "extensions/openai/realtime-voice-provider.live.test.ts",
     ]);
     expect(selectLiveShardFiles("native-live-extensions-l-n", allFiles)).toEqual([
+      "extensions/llama-cpp/src/external-server/llama-server.live.test.ts",
       "extensions/memory-lancedb/memory-lancedb.live.test.ts",
       "extensions/meta/meta.live.test.ts",
       "extensions/microsoft/microsoft.live.test.ts",

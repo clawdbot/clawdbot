@@ -106,6 +106,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     shouldInjectGroupIntro,
     typingMode,
     allowEmptyAssistantReplyAsSilent,
+    terminalReplyExpectation,
   } = context;
   const {
     ctx,
@@ -426,6 +427,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
       cwd: normalizeOptionalString(state.sessionEntry?.spawnedCwd),
+      permissionMode: preparedSessionState.sessionEntry?.permissionMode,
+      sessionRoot: normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
       config: cfg,
       toolOverrides: preparedSessionState.sessionEntry?.toolOverrides,
       skillsSnapshot,
@@ -495,7 +498,13 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       cliSessionBindingFacts,
       skipProviderRuntimeHints: useFastReplyRuntime,
       allowEmptyAssistantReplyAsSilent,
+      terminalReplyExpectation,
       suppressTranscriptOnlyAssistantPersistence: isRoomEvent,
+      ...(opts?.skillWorkshopProposalRevision
+        ? {
+            skillWorkshopProposalRevision: { ...opts.skillWorkshopProposalRevision },
+          }
+        : {}),
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, { config: cfg, workspaceDir, modelId: model })
         ? { enforceFinalTag: true }

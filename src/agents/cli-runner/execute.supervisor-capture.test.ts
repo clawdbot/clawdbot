@@ -2120,7 +2120,10 @@ describe("executePreparedCliRun supervisor output capture", () => {
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as SupervisorSpawnInput;
       const captureHandle = markMcpLoopbackRequestStarted(input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY);
-      await resolveMcpLoopbackYieldContext(captureHandle)?.onYield("waiting on subagents");
+      await resolveMcpLoopbackYieldContext(captureHandle)?.onYield(
+        "private continuation",
+        "Research started; results will follow.",
+      );
       markMcpLoopbackRequestFinished(captureHandle);
       input.onStdout?.("yield acknowledged");
       return createManagedRun({
@@ -2138,6 +2141,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     const result = await executePreparedCliRun(context);
 
     expect(result.yielded).toBe(true);
+    expect(result.yieldAcknowledgment).toBe("Research started; results will follow.");
   });
 
   it("keeps mutation delivery out of sent-reply dedupe evidence", async () => {
@@ -2630,6 +2634,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
     const activateCapture = vi.fn<(captureKey: string) => void>();
     const deactivateCapture = vi.fn<(captureKey: string) => void>();
     context.preparedBackend.mcpClientGrantCapture = {
+      transportToken: "capture-test-token",
+      adoptProcessToken: vi.fn(),
+      revokeProcessToken: vi.fn(),
       activate: activateCapture,
       deactivate: deactivateCapture,
     };
@@ -2651,6 +2658,9 @@ describe("executePreparedCliRun supervisor output capture", () => {
     const activateCapture = vi.fn<(captureKey: string) => void>();
     const deactivateCapture = vi.fn<(captureKey: string) => void>();
     context.preparedBackend.mcpClientGrantCapture = {
+      transportToken: "capture-test-token",
+      adoptProcessToken: vi.fn(),
+      revokeProcessToken: vi.fn(),
       activate: activateCapture,
       deactivate: deactivateCapture,
     };

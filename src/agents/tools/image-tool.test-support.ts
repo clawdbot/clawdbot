@@ -14,7 +14,6 @@ import type {
   MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import type { resolveBundledStaticCatalogModel } from "../embedded-agent-runner/model.static-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import type {
   coerceImageAssistantText,
@@ -61,7 +60,6 @@ type ImageToolProviderDeps = {
   describeImagesWithModel: typeof describeImagesWithModel;
   resolveAutoMediaKeyProviders: typeof resolveAutoMediaKeyProviders;
   resolveDefaultMediaModel: typeof resolveDefaultMediaModel;
-  resolveBundledStaticCatalogModel: typeof resolveBundledStaticCatalogModel;
   resolveModelAsync: ResolveModelAsync;
   resolveRegisteredMediaUnderstandingProvider(params: {
     providerId: string;

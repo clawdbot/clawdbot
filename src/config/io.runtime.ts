@@ -188,12 +188,6 @@ export async function recoverConfigFromLastKnownGood(params: {
   return await createConfigIO().recoverConfigFromLastKnownGood(params);
 }
 
-export async function preserveConfigSnapshotAsClobbered(
-  snapshot: ConfigFileSnapshot,
-): Promise<string | null> {
-  return await createConfigIO().preserveConfigSnapshotAsClobbered(snapshot);
-}
-
 export async function recoverConfigFromJsonRootSuffix(
   snapshot: ConfigFileSnapshot,
 ): Promise<boolean> {

@@ -29,7 +29,7 @@ import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AuthStorage, ModelRegistry } from "../../sessions/index.js";
-import type { ToolErrorSummary, ToolRecoverySummary } from "../../tool-error-summary.js";
+import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
@@ -68,16 +68,11 @@ type EmbeddedRunAttemptToolTerminalObservation = {
   meta?: string;
   executionStarted?: boolean;
   outcome: "success" | "failure";
-  failure?: Omit<
-    ToolErrorSummary,
-    "toolName" | "meta" | "mutatingAction" | "ownerKey" | "actionFingerprint" | "fileTarget"
-  >;
+  failure?: Omit<ToolErrorSummary, "toolName" | "meta" | "mutatingAction">;
   /** Protocol-owned mutation facts for native tools that do not use OpenClaw definitions. */
   nativeMutation?: {
     mutatingAction: boolean;
     replaySafe: boolean;
-    actionFingerprint?: string;
-    fileTarget?: ToolErrorSummary["fileTarget"];
   };
   /** Concrete plugin owner; the terminal observer derives mutation facts from executed args. */
   ownerMutation?: {
@@ -87,7 +82,6 @@ type EmbeddedRunAttemptToolTerminalObservation = {
 
 type EmbeddedRunAttemptToolTerminalResolution = {
   lastToolError?: ToolErrorSummary;
-  lastToolRecovery?: ToolRecoverySummary;
   executionStarted: boolean;
   executedArguments?: Record<string, unknown>;
   sideEffectEvidence: boolean;
@@ -285,9 +279,11 @@ export type EmbeddedRunAttemptResult = {
   lastAssistantTextMessageIndex?: number;
   toolMetas: Array<{
     toolName: string;
+    toolCallId?: string;
     meta?: string;
     replaySafe?: boolean;
     isError?: boolean;
+    terminate?: boolean;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
@@ -304,7 +300,6 @@ export type EmbeddedRunAttemptResult = {
   /** Completed message_end snapshot owned by this model attempt. */
   currentAttemptCompletedAssistant?: AssistantMessage | undefined;
   lastToolError?: ToolErrorSummary;
-  lastToolRecovery?: ToolRecoverySummary;
   didSendViaMessagingTool: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
@@ -326,6 +321,8 @@ export type EmbeddedRunAttemptResult = {
   cloudCodeAssistFormatError: boolean;
   /** Effective context window reported by the harness during this attempt. */
   contextTokens?: number;
+  /** Whether the harness observed the window or carried prepared resolution forward. */
+  contextTokensSource?: "runtime" | "runtime-configured" | "resolved";
   attemptUsage?: NormalizedUsage;
   promptCache?: ContextEnginePromptCacheInfo;
   contextBudgetStatus?: SessionContextBudgetStatus;
@@ -341,12 +338,16 @@ export type EmbeddedRunAttemptResult = {
   clientToolCalls?: Array<{ name: string; params: Record<string, unknown> }>;
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
+  /** Explicit user-facing waiting status supplied to sessions_yield. */
+  yieldAcknowledgment?: string;
   /**
    * True when code mode owned this attempt's model tool surface. Absent means
    * the harness did not report engagement (treated as not engaged), which is
    * how config-enabled code mode stays visible as a no-op on harness routes.
    */
   codeModeEngaged?: boolean;
+  /** Host-authenticated request for one bounded post-mutation inspection attempt. */
+  codeModeReconciliationCandidate?: boolean;
   /** Completed assistant round trips observed during this attempt. */
   assistantTurns?: number;
   /** Inner bridge call counts from this attempt's tool-search/code-mode catalog. */

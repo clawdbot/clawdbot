@@ -6,8 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   assertExpectedSha256ForTest,
   cleanupPackageSourceWorktreeForTest,
@@ -21,13 +20,8 @@ import {
   readPackageBuildSourceSha,
   resolveNpmPackageCandidatePackRunner,
   runCommandForTest,
-  signalChildProcessTree,
   validateOpenClawPackageSpec,
 } from "../../scripts/resolve-openclaw-package-candidate.mts";
-
-function expectedTaskkillPath(): string {
-  return resolveWindowsTaskkillPath();
-}
 
 const tempDirs: string[] = [];
 
@@ -309,75 +303,6 @@ describe("resolve-openclaw-package-candidate", () => {
     });
   });
 
-  it("signals Windows package runner process trees with taskkill", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
-
-    signalChildProcessTree(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-
-    signalChildProcessTree(child, "SIGKILL", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
-  it("force-kills Windows package runner process trees when graceful taskkill fails", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ error: undefined, status: 1 })
-      .mockReturnValueOnce({ error: undefined, status: 0 });
-
-    signalChildProcessTree(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
   it("keeps npm pack filenames inside the package candidate output directory", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-npm-pack-"));
     tempDirs.push(dir);
@@ -613,7 +538,6 @@ describe("resolve-openclaw-package-candidate", () => {
       "setInterval(() => {}, 1000);",
     ].join("");
 
-    const startedAt = Date.now();
     const timeoutAssertion = expect(
       runCommandForTest(process.execPath, ["-e", parentScript], {
         env: {
@@ -631,7 +555,6 @@ describe("resolve-openclaw-package-candidate", () => {
     await timeoutAssertion;
 
     expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
-    expect(Date.now() - startedAt).toBeLessThan(900);
   });
 
   it("forwards external termination to package runner process groups", async () => {

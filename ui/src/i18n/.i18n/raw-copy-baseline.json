@@ -5,13 +5,6 @@
       "count": 1,
       "kind": "object-property",
       "name": "label",
-      "path": "ui/src/app/app-shell-view.ts",
-      "text": "device scope upgrade banner"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
       "text": "approval page"
     },
@@ -35,6 +28,13 @@
       "name": "label",
       "path": "ui/src/app/lazy-custom-element.ts",
       "text": "custodian panel"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/lazy-custom-element.ts",
+      "text": "dashboard document"
     },
     {
       "count": 1,
@@ -220,6 +220,41 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/github-identity-view.ts",
+      "text": "agentTools.githubStateConfiguredUnavailable"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/github-identity-view.ts",
+      "text": "agentTools.githubStateRateLimited"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/github-identity-view.ts",
+      "text": "agentTools.githubStateUnavailable"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/github-identity-view.ts",
+      "text": "agentTools.githubStateUnverified"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/agents/github-identity-view.ts",
+      "text": "agentTools.githubStateVerified"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/agents/memory/view.ts",
@@ -343,6 +378,13 @@
       "name": "text",
       "path": "ui/src/pages/config/mcp.ts",
       "text": "openclaw mcp status --verbose"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/config/updates.ts",
+      "text": "openclaw update status --json openclaw update"
     },
     {
       "count": 1,

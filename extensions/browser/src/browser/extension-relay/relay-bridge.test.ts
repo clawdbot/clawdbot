@@ -555,7 +555,57 @@ describe("ExtensionRelayBridge", () => {
     expect(afterDetach.socket.frames().filter((frame) => frame.type === "attach")).toHaveLength(0);
     cdp.onMessage(JSON.stringify({ id: 4, method: "Target.getTargets" }));
     await flush();
-    expect(client.frames().find((frame) => frame.id === 4)?.result).toEqual({ targetInfos: [] });
+    expect(client.frames().find((frame) => frame.id === 4)).toMatchObject({
+      error: { message: expect.stringMatching(/target identit.*unavailable/i) },
+    });
+  });
+
+  it("does not project a disconnected zero-tab extension as authoritative empty", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const extension = wireExtension(bridge);
+    sendHello(extension.handlers, []);
+    extension.handlers.onClose();
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+
+    cdp.onMessage(JSON.stringify({ id: 1, method: "Target.getTargets" }));
+    await flush();
+
+    expect(client.frames().find((frame) => frame.id === 1)).toMatchObject({
+      error: { message: expect.stringMatching(/extension.*disconnected/i) },
+    });
+  });
+
+  it("does not project a mixed attached target list as authoritative", async () => {
+    const bridge = new ExtensionRelayBridge();
+    const extension = wireExtension(bridge);
+    sendHello(extension.handlers);
+    const client = new FakeSocket();
+    const cdp = bridge.attachCdpClientSocket(client);
+    cdp.onMessage(
+      JSON.stringify({ id: 1, method: "Target.setAutoAttach", params: { autoAttach: true } }),
+    );
+    await flush();
+    cdp.onMessage(
+      JSON.stringify({ id: 2, method: "Target.setAutoAttach", params: { autoAttach: false } }),
+    );
+    extension.handlers.onMessage(
+      JSON.stringify({
+        type: "tabs",
+        tabs: [
+          { tabId: 1, url: "https://one.example", title: "One", active: true },
+          { tabId: 2, url: "https://two.example", title: "Two", active: false },
+        ],
+      }),
+    );
+    await flush();
+
+    cdp.onMessage(JSON.stringify({ id: 3, method: "Target.getTargets" }));
+    await flush();
+
+    expect(client.frames().find((frame) => frame.id === 3)).toMatchObject({
+      error: { message: expect.stringMatching(/target identit.*unavailable/i) },
+    });
   });
 
   it("reports malformed CDP client JSON instead of leaving the client waiting", () => {

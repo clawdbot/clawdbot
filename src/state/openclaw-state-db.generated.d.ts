@@ -390,6 +390,11 @@ export interface ConfigMachineState {
   value_json: string;
 }
 
+export interface ConfigRevisionKeys {
+  hmac_key: Uint8Array;
+  id: Generated<number>;
+}
+
 export interface CronJobRuntimeAuthorities {
   authority_input_fingerprint: string | null;
   authority_json: string | null;
@@ -794,6 +799,43 @@ export interface GatewayRestartSentinel {
   version: number;
 }
 
+export interface GithubPublicationRequests {
+  agent_id: string;
+  base_branch: string | null;
+  body: string | null;
+  branch: string;
+  claim_id: string | null;
+  created_at_ms: number;
+  environment_id: string | null;
+  error_code: string | null;
+  gateway_instance_id: string | null;
+  head_commit: string | null;
+  idempotency_key: string;
+  identity_account_id: number;
+  identity_login: string;
+  identity_profile_id: string | null;
+  identity_source: string;
+  next_action: string | null;
+  owner_epoch: number | null;
+  placement_generation: number | null;
+  pull_request_url: string | null;
+  reported_at_ms: number | null;
+  repository: string | null;
+  repository_fingerprint: string;
+  request_digest: string;
+  request_id: string;
+  run_id: string | null;
+  session_id: string;
+  session_key: string;
+  source_head_commit: string | null;
+  source_index_tree: string | null;
+  status: string;
+  title: string | null;
+  updated_at_ms: number;
+  workspace_tree: string | null;
+  worktree_id: string;
+}
+
 export interface InstalledPluginIndex {
   compat_registry_version: string;
   diagnostics_json: string;
@@ -968,6 +1010,7 @@ export interface NativeHookRelayBridges {
 export interface NodeHostConfig {
   config_key: string;
   display_name: string | null;
+  gateway_cloudflare_access_json: string | null;
   gateway_context_path: string | null;
   gateway_host: string | null;
   gateway_port: number | null;
@@ -1293,6 +1336,16 @@ export interface SkillUsage {
   use_count: number;
 }
 
+export interface SkillWorkshopCollectionReviews {
+  backup_id: string;
+  create_time: number;
+  dropped_json: string;
+  kept_names_json: string;
+  review_id: string;
+  workspace_dir: string;
+  written_names_json: string;
+}
+
 export interface SkillWorkshopProposalEvents {
   actor_json: string;
   correlation_id: string | null;
@@ -1325,6 +1378,7 @@ export interface SkillWorkshopProposalRollbacks {
 
 export interface SkillWorkshopProposals {
   applied_at: string | null;
+  claim_released_time: number | null;
   created_at: string;
   draft_hash: string;
   kind: string;
@@ -1561,6 +1615,8 @@ export interface WorkerEnvironments {
   idle_since_at_ms: number | null;
   last_error: string | null;
   lease_id: string | null;
+  node_device_id: string | null;
+  node_setup_id: string | null;
   owner_epoch: Generated<number>;
   profile_id: string;
   profile_snapshot_json: string;
@@ -1592,6 +1648,7 @@ export interface WorkerInferenceTurns {
 }
 
 export interface WorkerSessionPlacementMoves {
+  abandon_source: number | null;
   created_at_ms: number;
   last_error: string | null;
   operation_id: string;
@@ -1601,6 +1658,7 @@ export interface WorkerSessionPlacementMoves {
   source_owner_epoch: number;
   target_id: string | null;
   target_kind: string;
+  target_machine_class: string | null;
   updated_at_ms: number;
 }
 
@@ -1788,6 +1846,7 @@ export interface DB {
   command_log_entries: CommandLogEntries;
   config_health_entries: ConfigHealthEntries;
   config_machine_state: ConfigMachineState;
+  config_revision_keys: ConfigRevisionKeys;
   cron_job_runtime_authorities: CronJobRuntimeAuthorities;
   cron_job_scratch: CronJobScratch;
   cron_jobs: CronJobs;
@@ -1814,6 +1873,7 @@ export interface DB {
   gateway_restart_handoff: GatewayRestartHandoff;
   gateway_restart_intent: GatewayRestartIntent;
   gateway_restart_sentinel: GatewayRestartSentinel;
+  github_publication_requests: GithubPublicationRequests;
   installed_plugin_index: InstalledPluginIndex;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
@@ -1855,6 +1915,7 @@ export interface DB {
   skill_upload_chunks: SkillUploadChunks;
   skill_uploads: SkillUploads;
   skill_usage: SkillUsage;
+  skill_workshop_collection_reviews: SkillWorkshopCollectionReviews;
   skill_workshop_proposal_events: SkillWorkshopProposalEvents;
   skill_workshop_proposal_origin_runs: SkillWorkshopProposalOriginRuns;
   skill_workshop_proposal_rollbacks: SkillWorkshopProposalRollbacks;

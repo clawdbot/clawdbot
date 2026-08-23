@@ -122,7 +122,7 @@ export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPa
     }
   }
   if (index === -1) {
-    return [...payloads, { text: line }];
+    return [...payloads, { text: line, isStatusNotice: true }];
   }
   const existing = expectDefined(payloads[index], "payloads entry at index");
   const existingText = existing.text ?? "";

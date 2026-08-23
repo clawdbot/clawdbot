@@ -157,8 +157,8 @@ describe("GPT-Live offer broker", () => {
         {
           providerConfig: {},
           model: "gpt-realtime-2.1",
+          gaSession: { type: "realtime", model: "gpt-realtime-2.1" },
           gaSideband: {
-            session: { type: "realtime", model: "gpt-realtime-2.1" },
             createBridge,
           },
         },
@@ -243,8 +243,8 @@ describe("GPT-Live offer broker", () => {
         {
           providerConfig: {},
           model: "gpt-realtime-2.1",
+          gaSession: { type: "realtime", model: "gpt-realtime-2.1" },
           gaSideband: {
-            session: { type: "realtime", model: "gpt-realtime-2.1" },
             createBridge: () => bridge,
           },
         },
@@ -295,8 +295,8 @@ describe("GPT-Live offer broker", () => {
         {
           providerConfig: {},
           model: "gpt-realtime-2.1",
+          gaSession: { type: "realtime", model: "gpt-realtime-2.1" },
           gaSideband: {
-            session: { type: "realtime", model: "gpt-realtime-2.1" },
             createBridge: () => bridge,
           },
         },
@@ -342,8 +342,8 @@ describe("GPT-Live offer broker", () => {
           {
             providerConfig: {},
             model: "gpt-realtime-2.1",
+            gaSession: { type: "realtime", model: "gpt-realtime-2.1" },
             gaSideband: {
-              session: { type: "realtime", model: "gpt-realtime-2.1" },
               createBridge: vi.fn(),
             },
           },
@@ -365,61 +365,6 @@ describe("GPT-Live offer broker", () => {
       }
     },
   );
-
-  it("brokers GA OAuth with raw SDP and no sideband while preserving single-use tokens", async () => {
-    const requests: Array<{ url: string; init?: RequestInit }> = [];
-    const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-      requests.push({
-        url: typeof url === "string" ? url : url instanceof URL ? url.href : url.url,
-        init,
-      });
-      return new Response("v=ga-answer\r\n", { status: 201 });
-    }) as unknown as typeof fetch;
-    const { realtime, sockets } = createBroker({ fetchImpl });
-    try {
-      const reservation = await realtime.broker.createBrowserSession(
-        { providerConfig: {}, model: "gpt-realtime-2.1", voice: "cedar" },
-        { type: "oauth", token: "oauth-token", accountId: "account-123" },
-      );
-      expect(reservation).toMatchObject({
-        offerUrl: OPENAI_QUICKSILVER_OFFER_PATH,
-        model: "gpt-realtime-2.1",
-        voice: "cedar",
-      });
-      if (reservation.transport !== "webrtc") {
-        throw new Error("Expected WebRTC reservation");
-      }
-
-      const response = createResponseHarness();
-      await realtime.handler(
-        createRequest({ token: reservation.clientSecret, body: "v=ga-offer\r\n" }),
-        response.res,
-      );
-
-      expect(response.res.statusCode).toBe(201);
-      expect(response.readBody()).toBe("v=ga-answer\r\n");
-      expect(sockets).toEqual([]);
-      expect(requests[0]).toMatchObject({
-        url: "https://api.openai.com/v1/realtime/calls?model=gpt-realtime-2.1",
-        init: {
-          method: "POST",
-          body: "v=ga-offer\r\n",
-          headers: expect.objectContaining({
-            Authorization: "Bearer oauth-token",
-            "chatgpt-account-id": "account-123",
-            "Content-Type": "application/sdp",
-          }),
-        },
-      });
-      expect(requests[0]?.init?.headers).not.toHaveProperty("OpenAI-Alpha");
-
-      const replay = createResponseHarness();
-      await realtime.handler(createRequest({ token: reservation.clientSecret }), replay.res);
-      expect(replay.res.statusCode).toBe(401);
-    } finally {
-      await realtime.cleanup();
-    }
-  });
 
   it.each([
     {
@@ -870,8 +815,8 @@ describe("GPT-Live offer broker", () => {
           providerConfig: {},
           model: "gpt-realtime-2.1",
           gatewayControl: { bindBridge: vi.fn(), onClose },
+          gaSession: { type: "realtime", model: "gpt-realtime-2.1" },
           gaSideband: {
-            session: { type: "realtime", model: "gpt-realtime-2.1" },
             createBridge: vi.fn(),
           },
         },
@@ -922,8 +867,8 @@ describe("GPT-Live offer broker", () => {
       providerConfig: {},
       model: "gpt-realtime-2.1",
       ownerConnId,
+      gaSession: { type: "realtime" as const, model: "gpt-realtime-2.1" },
       gaSideband: {
-        session: { type: "realtime" as const, model: "gpt-realtime-2.1" },
         createBridge: vi.fn(),
       },
     });
@@ -953,14 +898,19 @@ describe("GPT-Live offer broker", () => {
     }
   });
 
-  it("does not apply the GA sideband owner quota to legacy broker sessions", async () => {
+  it("does not apply the GA sideband owner quota to browser-owned GA sessions", async () => {
     const { realtime } = createBroker();
     try {
       await expect(
         Promise.all(
           Array.from({ length: 3 }, () =>
             realtime.broker.createBrowserSession(
-              { providerConfig: {}, model: "gpt-realtime-2.1", ownerConnId: "conn-legacy" },
+              {
+                providerConfig: {},
+                model: "gpt-realtime-2.1",
+                ownerConnId: "conn-browser",
+                gaSession: { type: "realtime", model: "gpt-realtime-2.1" },
+              },
               { type: "api-key", token: "platform-key" },
             ),
           ),

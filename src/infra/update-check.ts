@@ -8,6 +8,7 @@ import {
   isPnpmOwnedPackageRoot,
   resolvePnpmNodeModulesRoot,
 } from "./detect-package-manager.js";
+import { GIT_TIMEOUT_MS } from "./git-exec.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 import {
@@ -238,12 +239,12 @@ async function detectGitRoot(root: string): Promise<string | null> {
 
 async function checkGitUpdateStatus(params: {
   root: string;
-  timeoutMs?: number;
+  timeoutMs: number | undefined;
   fetch?: boolean;
   useDetachedDevUpstream?: boolean;
   upstreamFallback?: { currentSha: string; upstreamRef: string };
 }): Promise<GitUpdateStatus> {
-  const timeoutMs = params.timeoutMs ?? 6000;
+  const timeoutMs = params.timeoutMs ?? (params.fetch ? GIT_TIMEOUT_MS : 6000);
   const root = path.resolve(params.root);
   const runGit = (...args: string[]) =>
     runCommandWithTimeout(["git", "-C", root, ...args], { timeoutMs }).catch(() => null);
@@ -633,7 +634,7 @@ export async function checkUpdateStatus(params: {
     isGit
       ? checkGitUpdateStatus({
           root,
-          timeoutMs,
+          timeoutMs: params.timeoutMs,
           fetch: Boolean(params.fetchGit),
           useDetachedDevUpstream: params.useDetachedDevUpstream,
           upstreamFallback: params.gitUpstreamFallback,

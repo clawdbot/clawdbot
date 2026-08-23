@@ -5,7 +5,6 @@ import { icons } from "./icons.ts";
 import {
   renderSessionAttentionIcon,
   renderSessionState,
-  renderSessionUnreadState,
 } from "./session-attention-presentation.ts";
 import {
   renderSessionGlyph,
@@ -16,11 +15,24 @@ import { resolveSessionIconGlyph } from "./session-icon-glyph-registry.ts";
 import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
 import { renderSessionOwnerChip, type SessionCreatedActor } from "./session-owner-chip.ts";
 
+type SessionAvatarAuth = {
+  authTokens: readonly string[];
+  authReady: boolean;
+};
+
+// Channel avatars stay out of the startup bundle (startup-JS budget): the
+// element registers on the first avatar row, and the owner-chip fallback
+// keeps the lead slot occupied through the one-time upgrade window.
+let channelAvatarElementLoad: Promise<unknown> | undefined;
+function ensureChannelAvatarElement(): void {
+  channelAvatarElementLoad ??= import("./channel-avatar.ts");
+}
+
 function renderGlyphBadge(
   session: SidebarRecentSession,
   pullRequestState: SessionPullRequestIndicatorState,
 ): SessionGlyphContent {
-  if (session.unread) {
+  if (session.unread && !session.hasActiveRun) {
     return renderSessionUnreadBadge();
   }
   if (pullRequestState === "none") {
@@ -68,16 +80,10 @@ function renderSessionTrailingState(
   pullRequestState: SessionPullRequestIndicatorState,
 ) {
   const sessionState = renderSessionState(session, false);
-  const concurrentUnreadState = session.hasActiveRun ? renderSessionUnreadState(session) : nothing;
-  if (
-    pullRequestState === "none" &&
-    sessionState === nothing &&
-    concurrentUnreadState === nothing
-  ) {
+  if (pullRequestState === "none" && sessionState === nothing) {
     return nothing;
   }
-  return html`${renderPullRequestIndicator(pullRequestState, false)} ${sessionState}
-  ${concurrentUnreadState}`;
+  return html`${renderPullRequestIndicator(pullRequestState, false)} ${sessionState}`;
 }
 
 function renderPersistentSessionIcon(icon: string) {
@@ -94,7 +100,9 @@ export function describeSessionTrailingState(
   return [
     session.forkSource ? t("sessionsView.forkedSession") : "",
     pullRequestState === "none" ? "" : pullRequestStateLabel(pullRequestState),
-    session.hasActiveRun ? t("sessionsView.activeRun") : "",
+    session.hasActiveRun
+      ? t(session.status === "queued" ? "sessionsView.statusQueued" : "sessionsView.activeRun")
+      : "",
     session.unread ? t("sessionsView.unread") : "",
   ]
     .filter(Boolean)
@@ -109,6 +117,7 @@ export function renderSessionLeadingState(
   ownerViewing?: boolean,
   participants?: readonly SessionCreatedActor[],
   participantCount?: number,
+  avatarAuth?: SessionAvatarAuth,
 ): {
   running: boolean;
   leadingIndicator: TemplateResult | typeof nothing;
@@ -138,6 +147,23 @@ export function renderSessionLeadingState(
         leadingIndicator: renderSessionGlyph({
           content: renderPersistentSessionIcon(session.icon),
           running,
+          badge: renderGlyphBadge(session, pullRequestState),
+        }),
+        trailingIndicator,
+      };
+    }
+    if (session.channelAvatarUrl) {
+      ensureChannelAvatarElement();
+      return {
+        running,
+        leadingIndicator: renderSessionGlyph({
+          content: html`<openclaw-channel-avatar
+            .routeUrl=${session.channelAvatarUrl}
+            .authTokens=${avatarAuth?.authTokens ?? []}
+            .authReady=${avatarAuth?.authReady ?? false}
+          ></openclaw-channel-avatar>`,
+          running,
+          circular: true,
           badge: renderGlyphBadge(session, pullRequestState),
         }),
         trailingIndicator,
@@ -185,25 +211,48 @@ export function renderSessionLeadingState(
       trailingIndicator,
     };
   }
-  if (!session.isChild && ownerActor?.id?.trim()) {
-    return {
-      running,
-      leadingIndicator: renderSessionGlyph({
-        content: renderSessionOwnerChip(
+  const ownerChip =
+    !session.isChild && ownerActor?.id?.trim()
+      ? renderSessionOwnerChip(
           ownerActor,
           "row",
           attribution,
           ownerViewing,
           participants,
           participantCount,
-        ),
+        )
+      : undefined;
+  if (session.channelAvatarUrl) {
+    ensureChannelAvatarElement();
+    return {
+      running,
+      leadingIndicator: renderSessionGlyph({
+        // The owner chip stays visible until a usable avatar blob loads, so a
+        // slow, unauthenticated, or 404 route never leaves an empty lead slot.
+        content: html`<openclaw-channel-avatar
+          .routeUrl=${session.channelAvatarUrl}
+          .authTokens=${avatarAuth?.authTokens ?? []}
+          .authReady=${avatarAuth?.authReady ?? false}
+          .fallback=${ownerChip ?? nothing}
+        ></openclaw-channel-avatar>`,
+        running: false,
+        circular: true,
+      }),
+      trailingIndicator,
+    };
+  }
+  if (ownerChip) {
+    return {
+      running,
+      leadingIndicator: renderSessionGlyph({
+        content: ownerChip,
         running: false,
         circular: true,
       }),
       trailingIndicator,
       // Single source for facepile dedup: only the identity actually shown in
       // the lead may be excluded, else attention/archived rows hide a viewer.
-      renderedOwnerId: ownerActor.id,
+      renderedOwnerId: ownerActor?.id,
     };
   }
   return {

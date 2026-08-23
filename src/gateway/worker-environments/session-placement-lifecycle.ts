@@ -64,7 +64,7 @@ export function isFailedWorkerPlacementEnvironmentGone(params: {
   }
 }
 
-export function isWorkerPlacementSafeForArchive(
+function isWorkerPlacementSafeForArchive(
   context: SessionWorkerPlacementContext,
   placement: Placement,
 ): boolean {
@@ -75,6 +75,17 @@ export function isWorkerPlacementSafeForArchive(
     });
   }
   return placement.state === "local" || placement.state === "reclaimed";
+}
+
+export function resolveWorkerPlacementArchiveRestoreError(params: {
+  context: SessionWorkerPlacementContext;
+  key: string;
+  placement: WorkerSessionPlacementRecord | undefined;
+}): string | undefined {
+  if (!params.placement || isWorkerPlacementSafeForArchive(params.context, params.placement)) {
+    return undefined;
+  }
+  return `Session ${params.key} cannot change archive state while cloud worker placement is ${params.placement.state}.`;
 }
 
 function retirementGuard(placement: RetirablePlacement): SessionWorkerPlacementMutationGuard {

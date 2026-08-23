@@ -127,7 +127,6 @@ Example roster for a personal-assistant workspace; swap in whichever skills fit 
 - Prefer the `openclaw` CLI for scripting; the desktop app handles permissions.
 - Run installs from the Skills tab; the install button is hidden once a required binary is already present.
 - Keep heartbeats enabled so the assistant can schedule reminders, monitor inboxes, and trigger camera captures.
-- Canvas UI runs full-screen with native overlays. Avoid placing critical controls at the top-left/top-right/bottom edges; add explicit layout gutters instead of relying on safe-area insets.
 - For browser-driven verification, use the `openclaw browser` CLI (bundled `browser` plugin) with the OpenClaw-managed Chrome/Brave/Edge/Chromium profile.
 - Manage: `status`, `doctor [--deep]`, `start [--headless]`, `stop`, `tabs`, `tab [new|select|close]`, `open <url>`, `focus <id>`, `close <id>`.
 - Inspect: `screenshot [--full-page|--ref|--labels]`, `snapshot [--format ai|aria|--interactive|--efficient]`, `console`, `errors`, `requests`, `pdf`, `responsebody`.

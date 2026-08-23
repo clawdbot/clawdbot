@@ -41,16 +41,6 @@ export function sessionAttentionSubtitle(attention: SidebarSessionAttention): st
   }
 }
 
-export function renderSessionUnreadState(session: SidebarRecentSession) {
-  return !session.isChild && session.unread
-    ? html`<span
-        class="session-unread-dot sidebar-recent-session__unread"
-        role="img"
-        aria-label=${t("sessionsView.unread")}
-      ></span>`
-    : nothing;
-}
-
 export function renderSessionRunSpinner(showTitle = true) {
   return html`<span
     class="session-run-spinner sidebar-recent-session__state"
@@ -62,10 +52,26 @@ export function renderSessionRunSpinner(showTitle = true) {
 
 export function renderSessionState(session: SidebarRecentSession, showTitle = true) {
   if (session.hasActiveRun) {
+    if (session.status === "queued") {
+      const label = t("sessionsView.statusQueued");
+      return html`<span
+        class="sidebar-child-session__status sidebar-child-session__status--queued"
+        role="img"
+        aria-label=${label}
+        title=${showTitle ? label : nothing}
+        >${icons.hourglass}</span
+      >`;
+    }
     return renderSessionRunSpinner(showTitle);
   }
   if (!session.isChild) {
-    return renderSessionUnreadState(session);
+    return session.unread
+      ? html`<span
+          class="session-unread-dot sidebar-recent-session__unread"
+          role="img"
+          aria-label=${t("sessionsView.unread")}
+        ></span>`
+      : nothing;
   }
   const status = session.status;
   if (!status) {

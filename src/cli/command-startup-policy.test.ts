@@ -32,6 +32,8 @@ describe("command-startup-policy", () => {
       ["config", "validate"],
       ["config", "schema"],
       ["docs"],
+      ["reset"],
+      ["uninstall"],
       ["agent", "exec"],
       ["status"],
       ["agents", "bindings"],
@@ -47,6 +49,7 @@ describe("command-startup-policy", () => {
       ["hooks", "check"],
       ["memory", "search"],
       ["memory", "status"],
+      ["gateway", "diagnostics", "export"],
       ["gateway", "stability"],
       ["gateway", "usage-cost"],
     ]) {

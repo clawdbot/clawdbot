@@ -1,4 +1,3 @@
-import os from "node:os";
 import path from "node:path";
 import {
   resolveDeviceIdentityCoordinatorPath,
@@ -9,6 +8,11 @@ import {
   ensurePrivateSqliteCoordinatorDirectory,
   SqliteCoordinatorError,
 } from "./sqlite-coordinator.js";
+import {
+  acquireStateDatabaseCoordinator,
+  resolveStateDatabaseCoordinatorPath,
+  resolveStateLifecycleRuntimeDirectory,
+} from "./state-database-coordinator.js";
 
 const DEFAULT_BUSY_TIMEOUT_MS = 5000;
 
@@ -79,22 +83,38 @@ export function acquireDeviceIdentityCoordinator(params: DeviceIdentityCoordinat
       : resolveDeviceIdentityCoordinatorPaths({
           databasePath: params.databasePath,
           stateDir: params.stateDir,
-          temporaryDirectory: os.tmpdir(),
           uid: typeof process.getuid === "function" ? process.getuid() : undefined,
         });
   for (const coordinatorPath of coordinatorPaths) {
     ensurePrivateDeviceIdentityCoordinatorDirectory(path.dirname(coordinatorPath));
   }
+  const stateCoordinatorPath = resolveStateDatabaseCoordinatorPath({
+    databasePath: params.databasePath,
+    runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
+    uid: typeof process.getuid === "function" ? process.getuid() : undefined,
+  });
   const coordinators: Array<{ release: () => void }> = [];
   try {
-    // v2026.7.2-beta.4 through beta.7 use process temp. Keep it first until
-    // those builds are no longer rolling-upgrade peers.
+    // The external lifecycle coordinator remains stable while cleanup detaches state-local locks.
+    coordinators.push(
+      acquireStateDatabaseCoordinator({
+        databasePath: params.databasePath,
+        coordinatorPath: stateCoordinatorPath,
+        busyTimeoutMs: timeout,
+      }),
+    );
     for (const coordinatorPath of coordinatorPaths) {
       coordinators.push(acquireCoordinator(coordinatorPath, timeout));
     }
   } catch (error) {
     const cleanupErrors = releaseCoordinators(coordinators);
     if (cleanupErrors.length === 0) {
+      if (error instanceof SqliteCoordinatorError) {
+        throw new DeviceIdentityCoordinatorError(
+          "device identity migration or creation already owns this state database",
+          error,
+        );
+      }
       throw error;
     }
     const message =

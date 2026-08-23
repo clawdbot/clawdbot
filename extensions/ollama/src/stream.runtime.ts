@@ -1,7 +1,6 @@
 // Ollama stream runtime implements native transport behavior.
 import { randomUUID } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   parseJsonObjectPreservingUnsafeIntegers,
   parseJsonPreservingUnsafeIntegers,
@@ -20,14 +19,23 @@ import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { createPlainTextToolCallCompatWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import {
+  describeUnsupportedToolResultMedia,
+  extractToolResultText,
+  failTransportStream,
+  formatToolResultText,
+  isImageWithMediaPayload,
+  MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+  notifyProviderHttpResponse,
+  parseTerminalToolCallArguments,
+} from "openclaw/plugin-sdk/provider-transport-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { estimateStringChars, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { estimateStringChars } from "openclaw/plugin-sdk/text-utility-runtime";
 import { OLLAMA_CLOUD_BASE_URL, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import { buildOllamaBaseUrlSsrFPolicy, isOllamaCloudModel } from "./provider-models.js";
@@ -52,8 +60,6 @@ export {
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
 } from "./stream-compat.js";
-
-const log = createSubsystemLogger("ollama-stream");
 
 export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
 
@@ -384,28 +390,6 @@ function buildStreamAssistantMessage(params: {
   };
 }
 
-function buildStreamErrorAssistantMessage(params: {
-  model: StreamModelDescriptor;
-  stopReason: Extract<StopReason, "aborted" | "error">;
-  errorMessage: string;
-  timestamp?: number;
-}): AssistantMessage & {
-  stopReason: Extract<StopReason, "aborted" | "error">;
-  errorMessage: string;
-} {
-  return {
-    ...buildStreamAssistantMessage({
-      model: params.model,
-      content: [],
-      stopReason: params.stopReason,
-      usage: buildUsageWithNoCost({}),
-      timestamp: params.timestamp,
-    }),
-    stopReason: params.stopReason,
-    errorMessage: params.errorMessage,
-  };
-}
-
 interface OllamaChatRequest {
   model: string;
   messages: OllamaChatMessage[];
@@ -422,6 +406,7 @@ interface OllamaChatMessage {
   images?: string[];
   tool_calls?: OllamaToolCall[];
   tool_name?: string;
+  tool_call_id?: string;
 }
 
 interface OllamaTool {
@@ -441,7 +426,7 @@ interface OllamaToolCall {
   };
 }
 
-interface OllamaChatResponse {
+interface OllamaChatResponse extends Record<string, unknown> {
   model: string;
   created_at: string;
   message: {
@@ -557,10 +542,6 @@ function extractOllamaImages(content: unknown): string[] {
 
 function ensureArgsObject(value: unknown): Record<string, unknown> {
   return parseJsonObjectPreservingUnsafeIntegers(value) ?? {};
-}
-
-function normalizeOllamaToolCallArguments(value: unknown): Record<string, unknown> {
-  return ensureArgsObject(value);
 }
 
 function inferOllamaSchemaType(schema: Record<string, unknown>): string | undefined {
@@ -744,8 +725,16 @@ function normalizeOllamaToolCallName(
   return trimmed.replace(/^(?:functions?|tools?)[./]+/iu, "").trim();
 }
 
+type OllamaInputMessage = {
+  role: string;
+  content: unknown;
+  toolName?: unknown;
+  toolCallId?: unknown;
+  isError?: unknown;
+};
+
 export function convertToOllamaMessages(
-  messages: Array<{ role: string; content: unknown }>,
+  messages: OllamaInputMessage[],
   system?: string,
   options: OllamaToolCallNameOptions = {},
 ): OllamaChatMessage[] {
@@ -779,14 +768,28 @@ export function convertToOllamaMessages(
     }
 
     if (msg.role === "tool" || msg.role === "toolResult") {
-      const text = extractTextContent(msg.content);
-      const toolName =
-        typeof (msg as { toolName?: unknown }).toolName === "string"
-          ? (msg as { toolName?: string }).toolName
-          : undefined;
+      const content = Array.isArray(msg.content)
+        ? msg.content
+        : [{ type: "text", text: typeof msg.content === "string" ? msg.content : "" }];
+      const text = extractToolResultText(content, { includeStructured: true });
+      const images = content.filter(isImageWithMediaPayload).map((part) => part.data);
+      const omittedMediaPlaceholder = describeUnsupportedToolResultMedia(content, {
+        images: true,
+        audio: false,
+      });
+      const mediaPlaceholder = images.length > 0 ? "(see attached image)" : undefined;
+      const toolName = typeof msg.toolName === "string" ? msg.toolName : undefined;
+      const toolCallId = typeof msg.toolCallId === "string" ? msg.toolCallId : undefined;
       result.push({
         role: "tool",
-        content: text,
+        content: formatToolResultText({
+          text,
+          mediaPlaceholder,
+          omittedMediaPlaceholder,
+          isError: msg.isError === true,
+        }),
+        ...(images.length > 0 ? { images } : {}),
+        ...(toolCallId ? { tool_call_id: toolCallId } : {}),
         ...(toolName ? { tool_name: toolName } : {}),
       });
     }
@@ -849,7 +852,7 @@ export function buildAssistantMessage(
         type: "toolCall",
         id: readOllamaToolCallId(toolCall.id) ?? `ollama_call_${randomUUID()}`,
         name: normalizeOllamaToolCallName(toolCall.function.name, options),
-        arguments: normalizeOllamaToolCallArguments(toolCall.function.arguments),
+        arguments: parseTerminalToolCallArguments(toolCall.function.arguments),
       });
     }
   }
@@ -887,20 +890,12 @@ export async function* parseNdjsonStream(
         if (!trimmed) {
           continue;
         }
-        try {
-          yield parseJsonPreservingUnsafeIntegers(trimmed) as OllamaChatResponse;
-        } catch {
-          log.warn(`Skipping malformed NDJSON line: ${truncateUtf16Safe(trimmed, 120)}`);
-        }
+        yield parseOllamaNdjsonRecord(trimmed);
       }
     }
 
     if (buffer.trim()) {
-      try {
-        yield parseJsonPreservingUnsafeIntegers(buffer.trim()) as OllamaChatResponse;
-      } catch {
-        log.warn(`Skipping malformed trailing data: ${truncateUtf16Safe(buffer.trim(), 120)}`);
-      }
+      yield parseOllamaNdjsonRecord(buffer.trim());
     }
   } finally {
     // Start cancellation best-effort; do not await it — a pending cancel
@@ -908,6 +903,36 @@ export async function* parseNdjsonStream(
     void reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
+}
+
+function parseOllamaNdjsonRecord(value: string): OllamaChatResponse {
+  let parsed: unknown;
+  try {
+    parsed = parseJsonPreservingUnsafeIntegers(value);
+  } catch {
+    throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
+  }
+  if (!isRecord(parsed)) {
+    throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
+  }
+  if (typeof parsed.error === "string") {
+    const status =
+      typeof parsed.status === "number" && Number.isFinite(parsed.status)
+        ? parsed.status
+        : undefined;
+    throw Object.assign(
+      new Error(status === undefined ? parsed.error : `${status}: ${parsed.error}`),
+      {
+        ...(status === undefined ? {} : { status }),
+        body: parsed,
+      },
+    );
+  }
+  if (!isRecord(parsed.message) || typeof parsed.done !== "boolean") {
+    throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
+  }
+  // SAFETY: Required Ollama chat-record fields are validated above; optional fields remain inert.
+  return parsed as OllamaChatResponse;
 }
 
 function resolveOllamaChatUrl(baseUrl: string): string {
@@ -1025,12 +1050,16 @@ function createRawOllamaStreamFn(
         });
 
         try {
+          await notifyProviderHttpResponse({ options, response, model });
           if (!response.ok) {
             const errorText = await readResponseTextLimited(
               response,
               OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES,
             ).catch(() => "unknown error");
-            throw new Error(`${response.status} ${errorText}`);
+            throw Object.assign(new Error(`${response.status} ${errorText}`), {
+              status: response.status,
+              body: errorText,
+            });
           }
           if (!response.body) {
             throw new Error("Ollama API returned empty response body");
@@ -1174,8 +1203,11 @@ function createRawOllamaStreamFn(
 
           for await (const chunk of parseNdjsonStream(reader)) {
             throwIfOllamaStreamAborted(options?.signal);
-            // Keep guarded timeouts tied to stream progress so slow remote
-            // inference is not aborted while Ollama is still emitting tokens.
+            if (finalResponse) {
+              throw new Error(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
+            }
+            // Keep guarded timeouts tied to inference progress. Once done arrives,
+            // trailing validation stays on the existing bounded request deadline.
             refreshTimeout?.();
             const thinkingDelta = chunk.message?.thinking ?? chunk.message?.reasoning;
             if (thinkingDelta && shouldEmitThinking) {
@@ -1229,7 +1261,7 @@ function createRawOllamaStreamFn(
             if (chunk.done) {
               pendingFinalVisibleContent = resolveVisibleContent(true);
               finalResponse = chunk;
-              break;
+              continue;
             }
             await cooperativeScheduler.afterEvent();
           }
@@ -1327,13 +1359,15 @@ function createRawOllamaStreamFn(
         }
       } catch (err) {
         const stopReason = options?.signal?.aborted ? "aborted" : "error";
-        stream.push({
-          type: "error",
-          reason: stopReason,
-          error: buildStreamErrorAssistantMessage({
+        failTransportStream({
+          stream,
+          signal: options?.signal,
+          error: err,
+          output: buildStreamAssistantMessage({
             model,
+            content: [],
             stopReason,
-            errorMessage: formatErrorMessage(err),
+            usage: buildUsageWithNoCost({}),
           }),
         });
       } finally {

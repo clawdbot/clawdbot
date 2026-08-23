@@ -44,7 +44,12 @@ import { runEmbeddedAttemptExecutionPhase } from "./attempt-execution-phase.js";
 
 type ExecutionInput = Parameters<typeof runEmbeddedAttemptExecutionPhase>[0];
 
-function createFixture(options: { aborted?: boolean } = {}) {
+function createFixture(
+  options: {
+    aborted?: boolean;
+    exerciseTerminalMerges?: boolean;
+  } = {},
+) {
   const order: string[] = [];
   const attemptAbortController = new AbortController();
   if (options.aborted) {
@@ -201,15 +206,19 @@ function createFixture(options: { aborted?: boolean } = {}) {
   });
   mocks.prepareStream.mockImplementation((streamInput) => {
     order.push("stream");
-    const idleError = new Error("idle timeout");
-    mocks.installStreamGuards.mock.calls[0]?.[0].onIdleTimeout(idleError);
-    streamInput.markExternalAbort();
+    if (options.exerciseTerminalMerges !== false) {
+      const idleError = new Error("idle timeout");
+      mocks.installStreamGuards.mock.calls[0]?.[0].onIdleTimeout(idleError);
+      streamInput.markExternalAbort();
+    }
     return streamResult;
   });
   mocks.prepareTimeout.mockImplementation((timeoutInput) => {
     order.push("timeout");
-    timeoutInput.markTimedOutDuringCompaction();
-    timeoutInput.markTimedOutByRunBudget();
+    if (options.exerciseTerminalMerges !== false) {
+      timeoutInput.markTimedOutDuringCompaction();
+      timeoutInput.markTimedOutByRunBudget();
+    }
     return timeoutResult;
   });
   mocks.runSettledPhase.mockImplementation(async (settledInput) => {
@@ -351,6 +360,23 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     ).rejects.toThrow("run cancelled");
 
     expect(fixture.activeSession.prompt).not.toHaveBeenCalled();
+  });
+
+  it("attributes an idle timeout during authoritative compaction to compaction", async () => {
+    const fixture = createFixture({ exerciseTerminalMerges: false });
+    fixture.activeSession.isCompacting = true;
+    await runEmbeddedAttemptExecutionPhase(fixture.input);
+    const idleError = new Error("idle timeout");
+    const guardInput = mocks.installStreamGuards.mock.calls[0]?.[0];
+
+    guardInput.onIdleTimeout(idleError);
+
+    expect(fixture.state.terminal).toEqual({
+      kind: "timeout",
+      phase: "compaction",
+      source: "idle",
+    });
+    expect(fixture.runAbort).toHaveBeenCalledWith(true, idleError);
   });
 
   it("flushes pending tool results and disposes the session when history preparation fails", async () => {

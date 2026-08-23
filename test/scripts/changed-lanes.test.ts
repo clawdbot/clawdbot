@@ -26,7 +26,6 @@ import {
   createTargetedScriptLintCommand,
   shouldDelegateChangedCheckToCrabbox,
   shouldRunAppcastOwnerTest,
-  shouldRunCanvasA2uiNativeResourceCheck,
   shouldRunControlUiI18nVerify,
   shouldRunPromptSnapshotCheck,
   shouldRunPromptSnapshotOwnerTest,
@@ -42,8 +41,7 @@ import {
   delegationFailedBeforeRunning,
 } from "../../scripts/check-changed.mts";
 import { resolveOxfmtInvocation } from "../../scripts/format-docs.mts";
-import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
-import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
 const repoRoot = process.cwd();
@@ -220,23 +218,6 @@ afterEach(() => {
 });
 
 describe("scripts/changed-lanes", () => {
-  it("detects direct script execution from Windows argv paths", () => {
-    expect(
-      isDirectRunPath(
-        "C:\\repo\\scripts\\check-changed.mjs",
-        "c:\\repo\\scripts\\check-changed.mjs",
-        "win32",
-      ),
-    ).toBe(true);
-    expect(
-      isDirectRunPath(
-        "C:\\repo\\scripts\\changed-lanes.mjs",
-        "C:\\repo\\scripts\\check-changed.mjs",
-        "win32",
-      ),
-    ).toBe(false);
-  });
-
   it.each([
     {
       name: "prints changed lane help without treating --help as a changed path",
@@ -1392,7 +1373,6 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.name)).toEqual([
       "conflict markers",
-      "environment variable count ratchet",
       "max-lines suppression ratchet",
       "assertion SAFETY comment ratchet",
       "changelog attributions",
@@ -2127,70 +2107,6 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
-    expect(plan.commands).toContainEqual(
-      expect.objectContaining({
-        name: "Canvas A2UI native resource generation",
-        bin: "node",
-        args: ["--import", "tsx", "scripts/sync-native-a2ui.mts", "--check"],
-      }),
-    );
-  });
-
-  it("checks native A2UI resources when the copied resource tree changes", () => {
-    const result = detectChangedLanes([
-      "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/a2ui.bundle.js",
-    ]);
-    const plan = createChangedCheckPlan(result);
-
-    expectLanes(result.lanes, {
-      apps: true,
-    });
-    expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
-    expect(plan.commands).toContainEqual(
-      expect.objectContaining({
-        name: "Canvas A2UI native resource generation",
-        bin: "node",
-        args: ["--import", "tsx", "scripts/sync-native-a2ui.mts", "--check"],
-      }),
-    );
-  });
-
-  it("checks native A2UI resources when bundle inputs or generated outputs change", () => {
-    const result = detectChangedLanes([
-      "extensions/canvas/package.json",
-      "extensions/canvas/src/host/a2ui/.bundle.hash",
-      "extensions/canvas/src/host/a2ui/a2ui.bundle.js",
-      "pnpm-lock.yaml",
-    ]);
-    const plan = createChangedCheckPlan(result);
-
-    expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
-    expect(plan.commands).toContainEqual(
-      expect.objectContaining({
-        name: "Canvas A2UI native resource generation",
-        bin: "node",
-        args: ["--import", "tsx", "scripts/sync-native-a2ui.mts", "--check"],
-      }),
-    );
-  });
-
-  it.each([
-    "apps/android/app/build.gradle.kts",
-    "apps/ios/project.yml",
-    "apps/linux/src-tauri/build.rs",
-    "apps/linux/src-tauri/src/canvas.rs",
-  ])("checks native A2UI ownership when %s changes", (ownerPath) => {
-    const result = detectChangedLanes([ownerPath]);
-    const plan = createChangedCheckPlan(result);
-
-    expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
-    expect(plan.commands).toContainEqual(
-      expect.objectContaining({
-        name: "Canvas A2UI native resource generation",
-        bin: "node",
-        args: ["--import", "tsx", "scripts/sync-native-a2ui.mts", "--check"],
-      }),
-    );
   });
 
   it.each([
@@ -2251,15 +2167,6 @@ describe("scripts/changed-lanes", () => {
       },
     },
     {
-      name: "adds the environment variable count ratchet for production source",
-      commandName: "environment variable count ratchet",
-      worktreeOptions: { base: "main" },
-      expected: {
-        worktree: ["check:env-var-count", "--base", "main"],
-        staged: ["check:env-var-count", "--staged", "--base", "HEAD"],
-      },
-    },
-    {
       name: "adds the assertion SAFETY comment ratchet for production source",
       commandName: "assertion SAFETY comment ratchet",
       worktreeOptions: { base: "main" },
@@ -2281,9 +2188,21 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
-  it("routes the shared ratchet base owner to both ratchets", () => {
+  it.each(["config/env-var-count-budget.txt", "scripts/check-env-var-count.mts"])(
+    "routes %s through the single baseline-ratchet entry",
+    (changedPath) => {
+      const commands = createChangedCheckPlan(detectChangedLanes([changedPath])).commands;
+
+      expect(commands).toContainEqual(
+        expect.objectContaining({ args: ["check:max-lines-ratchet", "--base", "origin/main"] }),
+      );
+      expect(commands.map((command) => command.args[0])).not.toContain("check:env-var-count");
+    },
+  );
+
+  it("routes the shared shrink-ratchet owner through both baseline entries", () => {
     const commands = createChangedCheckPlan(
-      detectChangedLanes(["scripts/lib/ratchet-base.mts"]),
+      detectChangedLanes(["scripts/lib/shrink-ratchet.mts"]),
     ).commands.map((command) => command.args);
 
     expect(commands).toContainEqual(["check:max-lines-ratchet", "--base", "origin/main"]);

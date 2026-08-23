@@ -682,9 +682,7 @@ type LoadedReferenceImage = Awaited<ReturnType<typeof loadReferenceImages>>[numb
 type ExecutedImageGeneration = {
   provider: string;
   model: string;
-  savedPaths: string[];
   count: number;
-  paths: string[];
   attachments: AgentGeneratedAttachment[];
   contentText: string;
   details: Record<string, unknown>;
@@ -819,9 +817,7 @@ async function executeImageGenerationJob(params: {
   return {
     provider: result.provider,
     model: result.model,
-    savedPaths: savedImages.map((image) => image.path),
     count: savedImages.length,
-    paths: savedImages.map((image) => image.path),
     attachments,
     contentText: lines.join("\n"),
     wakeResult: lines.join("\n"),
@@ -1196,7 +1192,6 @@ export function createImageGenerateTool(options?: {
           provider: executed.provider,
           model: executed.model,
           count: executed.count,
-          paths: executed.paths,
         });
         return {
           content: [{ type: "text", text: executed.contentText }],

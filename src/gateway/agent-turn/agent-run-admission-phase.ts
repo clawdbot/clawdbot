@@ -71,6 +71,7 @@ export type PreparedAgentRunDispatch = {
   lifecycleStorePath: string;
   resolvedThreadId?: string | number;
   dispatchTaskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
+  unpersistedOffloadedRefs: OffloadedRef[];
   userTurn: PreparedAgentRunUserTurn;
   restoreAdmittedRestartRecoveryInterrupted?: () => Promise<
     MainSessionRecoveryPendingTarget | undefined
@@ -111,6 +112,7 @@ export async function prepareAgentRunDispatch(params: {
   effectiveTranscriptInputText: string;
   images: ChatImageContent[];
   offloadedRefs: OffloadedRef[];
+  onUserTurnMediaPersisted: () => void;
   requestedPromptPersistenceSuppression: boolean;
   runId: string;
   agentDedupeKeys: readonly string[];
@@ -358,6 +360,7 @@ export async function prepareAgentRunDispatch(params: {
         task: params.request.message.trim(),
         requester: params.client?.internal?.pluginSubagentRequester,
         pluginId: normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId),
+        gatewayContextResolver: params.context.resolveGatewayContext,
       });
     } catch (err) {
       params.context.logGateway.warn(
@@ -477,6 +480,11 @@ export async function prepareAgentRunDispatch(params: {
       client: params.client,
       context: params.context,
     });
+    if (userTurn.recorder) {
+      // The recorder already persisted the media references, so later admission
+      // rejection must preserve the files now owned by durable history.
+      params.onUserTurnMediaPersisted();
+    }
   } catch (err) {
     activeRunAbort.cleanup({ force: true });
     activeGatewayWorkAdmission.release();
@@ -553,6 +561,7 @@ export async function prepareAgentRunDispatch(params: {
     lifecycleStorePath,
     resolvedThreadId,
     dispatchTaskTrackingMode,
+    unpersistedOffloadedRefs: userTurn.recorder ? [] : params.offloadedRefs,
     userTurn,
     restoreAdmittedRestartRecoveryInterrupted,
   };

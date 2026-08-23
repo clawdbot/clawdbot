@@ -1,7 +1,7 @@
 /**
  * Exec security floor tests.
- * Verifies tool config and exec-approvals policy combine by tightening
- * security/ask rather than silently broadening execution.
+ * Verifies host approval floors tighten normal exec policy while explicit
+ * full-session authority remains full/off.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -373,6 +373,24 @@ describe("exec security floor", () => {
 
     expect(result.details.status).toBe("approval-pending");
     expect(calls).toContain("exec.approval.request");
+  });
+
+  it("does not prompt explicit full sessions despite host ask floors", async () => {
+    writeFullAskExecApprovalsFixture(tempRoot ?? os.tmpdir());
+    const tool = createExecTool({
+      host: "gateway",
+      mode: "full",
+      bypassHostApprovalFloors: true,
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-session-full-host-ask-floor", {
+      command: "echo session-full-ok",
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect((result.content[0] as { text?: string }).text).toContain("session-full-ok");
+    expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
   it("honors normalized auto mode before elevated full bypass", async () => {

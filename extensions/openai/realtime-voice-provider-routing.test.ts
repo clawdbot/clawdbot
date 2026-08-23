@@ -29,10 +29,14 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
-  isProviderAuthProfileConfigured: mocks.isProviderAuthProfileConfiguredMock,
-  resolveProviderAuthProfileApiKey: mocks.resolveProviderAuthProfileApiKeyMock,
-}));
+vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>();
+  return {
+    ...actual,
+    isProviderAuthProfileConfigured: mocks.isProviderAuthProfileConfiguredMock,
+    resolveProviderAuthProfileApiKey: mocks.resolveProviderAuthProfileApiKeyMock,
+  };
+});
 import { createOpenAIRealtimeTestSupport } from "./realtime-voice-test-support.js";
 
 const {
@@ -512,7 +516,7 @@ describe("OpenAI realtime voice provider routing", () => {
     ).not.toHaveProperty("supportsGatewayControl");
   });
 
-  it("uses ChatGPT OAuth as the browser-only fallback for GA realtime", async () => {
+  it("gives GA OAuth the same browser session policy as Platform auth", async () => {
     const oauthToken = createTestJwt({
       "https://api.openai.com/auth": { chatgpt_account_id: "account-123" },
     });
@@ -536,6 +540,12 @@ describe("OpenAI realtime voice provider routing", () => {
       providerConfig: {},
       model: "gpt-realtime-2.1",
       voice: "cedar",
+      instructions: "Use the configured tools when needed.",
+      vadThreshold: 0.42,
+      prefixPaddingMs: 240,
+      silenceDurationMs: 620,
+      reasoningEffort: "low",
+      tools: [createRealtimeTool("openclaw_agent_consult")],
       agentId: "main",
       workspaceDir: "/tmp/openclaw-agent-workspace",
       initialItems: [],
@@ -554,10 +564,53 @@ describe("OpenAI realtime voice provider routing", () => {
       offerUrl: "/plugins/openai/realtime/calls",
     });
     expect(createBrowserSession).toHaveBeenCalledWith(
-      expect.objectContaining({ model: "gpt-realtime-2.1", voice: "cedar" }),
+      expect.objectContaining({
+        model: "gpt-realtime-2.1",
+        voice: "cedar",
+        gaSession: {
+          type: "realtime",
+          model: "gpt-realtime-2.1",
+          instructions: "Use the configured tools when needed.",
+          audio: {
+            input: {
+              noise_reduction: { type: "near_field" },
+              turn_detection: {
+                type: "server_vad",
+                create_response: true,
+                interrupt_response: true,
+                threshold: 0.42,
+                prefix_padding_ms: 240,
+                silence_duration_ms: 620,
+              },
+              transcription: { model: "gpt-4o-mini-transcribe" },
+            },
+            output: { voice: "cedar" },
+          },
+          tools: [createRealtimeTool("openclaw_agent_consult")],
+          tool_choice: "auto",
+          reasoning: { effort: "low" },
+        },
+      }),
       { type: "oauth", token: oauthToken, accountId: "account-123" },
     );
+    const brokerRequest = requireRecord(
+      createBrowserSession.mock.calls[0]?.[0],
+      "OAuth broker request",
+    );
+    const gaSession = requireRecord(brokerRequest.gaSession, "OAuth GA session");
+    expect(gaSession).not.toHaveProperty("output_modalities");
+    expect(gaSession).not.toHaveProperty("initial_items");
+    expect(requireRecord(gaSession.audio, "OAuth GA audio").input).not.toHaveProperty("format");
+    expect(requireRecord(gaSession.audio, "OAuth GA audio").output).not.toHaveProperty("format");
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+
+    mockRealtimeClientSecretResponse();
+    await provider.createBrowserSession?.({
+      ...request,
+      providerConfig: { apiKey: "test-api-key-platform" },
+    });
+    expect(gaSession).toEqual(requireFetchJsonBody().session);
+    expect(createBrowserSession).toHaveBeenCalledTimes(1);
   });
 
   it("passes configured gpt-live model and voice to the native broker", async () => {

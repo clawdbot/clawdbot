@@ -57,16 +57,6 @@ export function retireCustodianQuestions(
   return answered;
 }
 
-export function createCustodianSessionId(): string {
-  if (typeof crypto.randomUUID === "function") {
-    return `control-ui-onboarding-${crypto.randomUUID()}`;
-  }
-  const suffix = [...crypto.getRandomValues(new Uint32Array(4))]
-    .map((value) => value.toString(16).padStart(8, "0"))
-    .join("");
-  return `control-ui-onboarding-${suffix}`;
-}
-
 export function custodianErrorMessage(error: unknown): string {
   return formatUiError(error, t("custodian.requestFailed"));
 }

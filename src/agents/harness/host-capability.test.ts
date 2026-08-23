@@ -112,6 +112,7 @@ function bindTool(
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const admission of admissions.splice(0)) {
     admission.close();
   }
@@ -170,6 +171,7 @@ describe("agent harness host capability", () => {
     host.close();
     expect(getAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(authority);
     expect(() => host.capabilities.bindToolSurface([tool])).toThrow("no longer active");
+    expect(() => host.capabilities.createToolSurface?.({} as never)).toThrow("no longer active");
     expect(() => host.capabilities.assertActive()).toThrow("no longer active");
     await expect(bound.execute("call-1", {})).rejects.toThrow("no longer active");
     expect(execute).not.toHaveBeenCalled();
@@ -221,6 +223,109 @@ describe("agent harness host capability", () => {
     }
   });
 
+  it("keeps prepared environment access closure-bound", async () => {
+    vi.stubEnv("GH_TOKEN", "");
+    vi.stubEnv("GITHUB_TOKEN", "");
+    const { attempt } = await admittedAttempt("run-local-env", {
+      config: {
+        tools: { github: { profileId: "ghp_11111111111111111111111111111111" } },
+      },
+    });
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+
+    expect(host.capabilities.preparedEnvironment?.()).toMatchObject({
+      credentialScrubEnv: { GH_TOKEN: "", GITHUB_TOKEN: "" },
+      localIdentityEnv: expect.objectContaining({ GH_CONFIG_DIR: expect.any(String) }),
+      managedLocalIdentity: true,
+    });
+    host.close();
+    expect(() => host.capabilities.preparedEnvironment?.()).toThrow("no longer active");
+  });
+
+  it("delegates trajectory events and rejects a flush that outlives the capability", async () => {
+    const flushStarted = createDeferred();
+    const flushResult = createDeferred();
+    const recordEvent = vi.fn();
+    const flush = vi.fn(async () => {
+      flushStarted.resolve();
+      await flushResult.promise;
+    });
+    const { attempt } = await admittedAttempt("run-trajectory", {
+      trajectoryRecorder: {
+        recordEvent,
+        flush,
+      },
+    });
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    const trajectory = host.capabilities.trajectory;
+    if (!trajectory) {
+      throw new Error("expected trajectory capability");
+    }
+
+    trajectory.recordEvent("plugin.event", { ok: true });
+    expect(recordEvent).toHaveBeenCalledWith("plugin.event", { ok: true });
+    const pending = trajectory.flush();
+    await flushStarted.promise;
+    host.close();
+    flushResult.resolve();
+
+    await expect(pending).rejects.toThrow("no longer active");
+    expect(() => trajectory.recordEvent("late.event")).toThrow("no longer active");
+  });
+
+  it("preserves ambient GitHub service tokens for a native local identity", async () => {
+    vi.stubEnv("GH_TOKEN", "ambient-service-token");
+    vi.stubEnv("GITHUB_TOKEN", "ambient-fallback-token");
+    const { attempt } = await admittedAttempt("run-native-local-env", { config: {} });
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+
+    expect(host.capabilities.preparedEnvironment?.()).toEqual({
+      credentialScrubEnv: {},
+      localIdentityEnv: {},
+      managedLocalIdentity: false,
+    });
+  });
+
+  it.each([
+    { identity: "native", managed: false, source: "env" as const },
+    { identity: "managed", managed: true, source: "env" as const },
+    { identity: "native", managed: false, source: "store" as const },
+    { identity: "managed", managed: true, source: "store" as const },
+  ])(
+    "prepares the $source preview scrub for a $identity local Codex host",
+    async ({ managed, source }) => {
+      const { attempt } = await admittedAttempt(`run-${source}-${managed ? "managed" : "native"}`, {
+        config: {
+          ...(managed
+            ? { tools: { github: { profileId: "ghp_66666666666666666666666666666666" } } }
+            : {}),
+          gateway: {
+            controlUi: {
+              github: {
+                token: { source, provider: "default", id: "PREVIEW_SERVICE_TOKEN" },
+              },
+            },
+          },
+        },
+      });
+      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      const environment = host.capabilities.preparedEnvironment?.();
+
+      if (managed) {
+        expect(environment?.credentialScrubEnv).toMatchObject({
+          GH_TOKEN: "",
+          GITHUB_TOKEN: "",
+        });
+      } else {
+        expect(environment?.credentialScrubEnv).not.toHaveProperty("GH_TOKEN");
+        expect(environment?.credentialScrubEnv).not.toHaveProperty("GITHUB_TOKEN");
+      }
+      expect(environment?.credentialScrubEnv).toHaveProperty("PREVIEW_SERVICE_TOKEN", "");
+      expect(environment?.managedLocalIdentity).toBe(managed);
+      expect(environment?.localIdentityEnv).not.toHaveProperty("PREVIEW_SERVICE_TOKEN");
+    },
+  );
+
   it("binds hooks to the native harness cwd instead of the agent workspace", async () => {
     const { attempt } = await admittedAttempt("run-native-cwd", {
       cwd: "/tmp/agent-workspace",
@@ -269,38 +374,51 @@ describe("agent harness host capability", () => {
     expect(mockRunBefore).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    {
-      name: "lexical host closure",
-      revoke: async ({ host }: { host: ReturnType<typeof createAgentHarnessHostCapabilities> }) => {
-        host.close();
+  it.each(
+    [
+      {
+        name: "lexical host closure",
+        revoke: async ({
+          host,
+        }: {
+          host: ReturnType<typeof createAgentHarnessHostCapabilities>;
+          attempt: HostAttempt;
+        }) => {
+          host.close();
+        },
       },
-    },
-    {
-      name: "exact authority release",
-      revoke: async ({ attempt }: { attempt: HostAttempt }) => {
-        expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
+      {
+        name: "exact authority release",
+        revoke: async ({
+          attempt,
+        }: {
+          host: ReturnType<typeof createAgentHarnessHostCapabilities>;
+          attempt: HostAttempt;
+        }) => {
+          expect(closeAdmittedRunDelegatedAuthority(attempt.admittedRunContext)).toBe(true);
+        },
       },
-    },
-    {
-      name: "outer admission abort",
-      revoke: async ({ admission }: { admission: PreparedAgentRunAdmission }) => {
-        admission.close();
+      {
+        name: "replacement owner",
+        revoke: async ({
+          attempt,
+        }: {
+          host: ReturnType<typeof createAgentHarnessHostCapabilities>;
+          attempt: HostAttempt;
+        }) => {
+          await admittedAttempt(attempt.runId);
+        },
       },
-    },
-    {
-      name: "replacement owner",
-      revoke: async ({ attempt }: { attempt: HostAttempt }) => {
-        await admittedAttempt(attempt.runId);
-      },
-    },
-  ])("rejects an allowed policy result after $name during the hook", async ({ revoke }) => {
-    const { attempt, admission } = await admittedAttempt("run-policy-race");
+    ].flatMap((entry) =>
+      (["resolve", "reject"] as const).map((settlement) => Object.assign({ settlement }, entry)),
+    ),
+  )("rejects a deferred policy $settlement after $name", async ({ revoke, settlement }) => {
+    const { attempt } = await admittedAttempt("run-policy-race");
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-    const hookStarted = createDeferred();
+    const hookStarted = createDeferred<(() => boolean | void) | undefined>();
     const hookResult = createDeferred<{ blocked: false; params: { command: string } }>();
     mockRunBefore.mockImplementationOnce(async () => {
-      hookStarted.resolve();
+      hookStarted.resolve(getGatewayToolCallerIdentity()?.receiptAuthority);
       return await hookResult.promise;
     });
 
@@ -308,11 +426,19 @@ describe("agent harness host capability", () => {
       toolName: "exec",
       params: { command: "true" },
     });
-    await hookStarted.promise;
-    await revoke({ admission, attempt, host });
-    hookResult.resolve({ blocked: false, params: { command: "true" } });
+    const receiptAuthority = await hookStarted.promise;
+    expect(receiptAuthority).toEqual(expect.any(Function));
+    await revoke({ attempt, host });
+    expect(receiptAuthority?.()).toBe(false);
+    if (settlement === "resolve") {
+      hookResult.resolve({ blocked: false, params: { command: "true" } });
+    } else {
+      hookResult.reject(new Error("deferred policy rejected"));
+    }
 
-    await expect(pending).rejects.toThrow("no longer active");
+    await expect(pending).rejects.toThrow(
+      settlement === "resolve" ? "no longer active" : "deferred policy rejected",
+    );
   });
 
   it("keeps a private native policy lease after foreground close but fences replacement", async () => {
@@ -428,6 +554,20 @@ describe("agent harness host capability", () => {
 
       await expect(pending).rejects.toThrow("no longer active");
     }
+  });
+
+  it("preserves the gateway decision and terminal reason at the host boundary", async () => {
+    const { attempt } = await admittedAttempt("run-approval-timeout-result");
+    const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "approval-1",
+      decision: "deny",
+      terminalReason: "timeout",
+    });
+
+    await expect(
+      host.capabilities.waitForApproval({ approvalId: "approval-1", timeoutMs: 1_000 }),
+    ).resolves.toEqual({ decision: "deny", terminalReason: "timeout" });
   });
 
   it("revokes a retained bound tool when the same run id gets a replacement owner", async () => {

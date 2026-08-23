@@ -10,6 +10,7 @@ import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import * as configSessions from "../../config/sessions.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
@@ -22,6 +23,7 @@ import {
 import { resolveAgentRestartRecoveryExecutionIdentityAdmission } from "../../gateway/agent-turn/agent-restart-recovery-context.js";
 import { callGateway } from "../../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
+import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
 import * as gatewaySessionUtils from "../../gateway/session-utils.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -40,9 +42,13 @@ import { addTestHook } from "../../plugins/hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
+  GatewayDrainingError,
   getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
   resetGatewayWorkAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
+  tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import {
   interruptSessionWorkAdmissions,
@@ -56,6 +62,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { deliverAgentCommandResult } from "../command/delivery.js";
 import { setActiveEmbeddedRunLifecycleGeneration } from "../embedded-agent-runner/run-state.js";
 import {
@@ -1038,6 +1045,89 @@ describe("main-session-restart-recovery", () => {
               ?.source === "segment",
         ),
     ).toHaveLength(2);
+  });
+
+  it("resumes a drain-marked turn that settles normally before the replacement starts", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const runId = "drain-overlap-run";
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    await writeStore(sessionsDir, {
+      [sessionKey]: runningSessionEntry("main-session"),
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "finish the admitted work after the restart" },
+    ]);
+
+    const rootAdmission = tryBeginGatewayRootWorkAdmission();
+    expect(rootAdmission).not.toBeNull();
+    await rootAdmission?.run(async () => {
+      await expect(
+        markRestartAbortedMainSessions({
+          stateDir: tmpDir,
+          sessionKeys: [sessionKey],
+          sessionIds: ["main-session"],
+          activeRuns: [{ runId, lifecycleGeneration, sessionKey, sessionId: "main-session" }],
+          reason: "gateway restart drain",
+        }),
+      ).resolves.toEqual({ marked: 1, skipped: 0 });
+      markGatewayRestartDraining();
+      await expect(
+        runWithGatewayIndependentRootWorkAdmission(async () => undefined),
+      ).rejects.toBeInstanceOf(GatewayDrainingError);
+      await writeTranscript(sessionsDir, "main-session", [
+        {
+          role: "toolResult",
+          toolName: "sessions_spawn",
+          isError: true,
+          content: [{ type: "text", text: "Gateway restart admission is closed." }],
+        },
+        makeAssistantTextMessage("The Gateway is restarting; retry after it comes back."),
+      ]);
+      await withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, async () => {
+        await persistGatewaySessionLifecycleEvent({
+          sessionKey,
+          agentId: "main",
+          event: {
+            ts: Date.now(),
+            sessionId: "main-session",
+            runId,
+            lifecycleGeneration,
+            data: { phase: "end", stopReason: "stop" },
+          },
+        });
+      });
+    });
+    rootAdmission?.release();
+
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      status: "running",
+      abortedLastRun: true,
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })?.restartRecoveryRuns).toBeUndefined();
+
+    resetGatewayWorkAdmission();
+    rotateAgentEventLifecycleGeneration();
+    const recovery = scheduleRestartAbortedMainSessionRecovery({
+      delayMs: 0,
+      getConfig: () => ({}),
+      maxRetries: 1,
+      stateDir: tmpDir,
+    });
+    await waitForFast(() => expect(callGateway).toHaveBeenCalledOnce());
+    await recovery.stop();
+
+    expect(gatewayParams()).toMatchObject({
+      expectedExistingSessionId: "main-session",
+      inputProvenance: {
+        kind: "internal_system",
+        sourceSessionKey: sessionKey,
+        sourceTool: "main_session_restart_recovery",
+      },
+      sessionKey,
+    });
+    expect(gatewayParams().idempotencyKey).not.toBe(runId);
   });
 
   it.each([
@@ -2896,6 +2986,70 @@ describe("main-session-restart-recovery", () => {
     expect(customStore["agent:main:main"]?.abortedLastRun).toBe(false);
   });
 
+  it("rediscovers a restored configured store between startup marking and recovery", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeMainSession({ sessionsDir, abortedLastRun: undefined });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "resume the interrupted main session" },
+      { role: "toolResult", content: "main result" },
+    ]);
+
+    const lateSessionsDir = path.join(tmpDir, "agents", "late", "sessions");
+    const lateStorePath = path.join(lateSessionsDir, "sessions.json");
+    const cfg = {
+      agents: { list: [{ id: "main", default: true }, { id: "late" }] },
+    } as OpenClawConfig;
+    const discoverySpy = vi.spyOn(configSessions, "resolveAllAgentSessionStoreTargetsSync");
+    const originalApply = sessionAccessor.applySessionEntryReplacements;
+    let restoredLateStore = false;
+    const replacementSpy = vi
+      .spyOn(sessionAccessor, "applySessionEntryReplacements")
+      .mockImplementation(async (params) => {
+        const result = await originalApply(params);
+        if (params.requireWriteSuccess === true && !restoredLateStore) {
+          restoredLateStore = true;
+          await writeStorePath(lateStorePath, {
+            "agent:late:main": {
+              sessionId: "late-session",
+              updatedAt: 1,
+              status: "running",
+              abortedLastRun: true,
+            },
+          });
+          await writeTranscript(lateSessionsDir, "late-session", [
+            { role: "user", content: "resume the restored session" },
+            { role: "toolResult", content: "late result" },
+          ]);
+        }
+        return result;
+      });
+
+    const recovery = scheduleRestartAbortedMainSessionRecovery({
+      getConfig: () => cfg,
+      delayMs: 0,
+      stateDir: tmpDir,
+    });
+    try {
+      await waitForFast(() => expect(callGateway).toHaveBeenCalledTimes(2));
+      await recovery.stop();
+
+      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+        abortedLastRun: false,
+      });
+      expect(
+        loadSessionEntry({ sessionKey: "agent:late:main", storePath: lateStorePath }),
+      ).toMatchObject({ abortedLastRun: false });
+      expect(discoverySpy.mock.calls.filter(([observedCfg]) => observedCfg === cfg)).toHaveLength(
+        2,
+      );
+    } finally {
+      await recovery.stop();
+      replacementSpy.mockRestore();
+      discoverySpy.mockRestore();
+    }
+  });
+
   it("cancels startup recovery when its gateway lifecycle stops", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeMainSession({
@@ -3223,6 +3377,8 @@ describe("main-session-restart-recovery", () => {
       sessionsDir,
       pendingFinalDelivery: makePendingFinalDelivery(),
     });
+    const cfg = {} as OpenClawConfig;
+    const discoverySpy = vi.spyOn(configSessions, "resolveAllAgentSessionStoreTargetsSync");
     const firstDispatch = createDeferred();
     const secondDispatch = createDeferred();
     let firstAgentDispatch = true;
@@ -3255,7 +3411,7 @@ describe("main-session-restart-recovery", () => {
     let recovery: ReturnType<typeof scheduleRestartAbortedMainSessionRecovery> | undefined;
     try {
       recovery = scheduleRestartAbortedMainSessionRecovery({
-        getConfig: () => ({}),
+        getConfig: () => cfg,
         delayMs: 0,
         maxRetries: 2,
         stateDir: tmpDir,
@@ -3290,9 +3446,13 @@ describe("main-session-restart-recovery", () => {
       });
       expect(lateEntry).toMatchObject({ status: "running" });
       expect(lateEntry?.abortedLastRun).toBeUndefined();
+      expect(discoverySpy.mock.calls.filter(([observedCfg]) => observedCfg === cfg)).toHaveLength(
+        4,
+      );
     } finally {
       await recovery?.stop();
       setTimeoutSpy.mockRestore();
+      discoverySpy.mockRestore();
       vi.useRealTimers();
     }
   });
@@ -3592,7 +3752,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("tombstones when the final owner-release retry consumes the last charge", async () => {
-    const { sessionsDir, storePath } = await makeMainSessionFixture({
+    const { sessionsDir, storePath } = await makeControlUiRecoveryFixture({
       mainRestartRecovery: {
         cycleId: "cycle-final-attempt",
         revision: 1,
@@ -3617,6 +3777,7 @@ describe("main-session-restart-recovery", () => {
     await waitForFast(() => {
       expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
         status: "failed",
+        lastRunId: "control-ui-run",
         mainRestartRecovery: { tombstone: expect.any(Object) },
       });
     });
@@ -3964,6 +4125,7 @@ describe("main-session-restart-recovery", () => {
       restartRecoveryTerminalRunIds: ["discord-message-1"],
     });
     const completed = loadSessionEntry({ sessionKey, storePath });
+    expect(completed?.lastRunId).toBeUndefined();
     expect(completed?.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(completed?.restartRecoveryDeliverySourceRunId).toBeUndefined();
     expect(completed?.restartRecoveryDeliveryContext).toBeUndefined();
@@ -4174,10 +4336,8 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("matches a checkpointed Control UI hook to its run-keyed user turn", async () => {
-    const { sessionsDir, storePath, sessionKey } = await makeMainSessionFixture({
+    const { sessionsDir, storePath, sessionKey } = await makeControlUiRecoveryFixture({
       restartRecoveryBeforeAgentReplyState: "handled-silent",
-      restartRecoveryDeliveryRunId: "control-ui-run",
-      restartRecoveryDeliverySourceRunId: "control-ui-run",
     });
     await writeTranscript(sessionsDir, "main-session", [
       { role: "user", content: "quiet", idempotencyKey: "control-ui-run:user" },
@@ -4189,6 +4349,7 @@ describe("main-session-restart-recovery", () => {
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
       status: "done",
       abortedLastRun: false,
+      lastRunId: "control-ui-run",
       restartRecoveryTerminalRunIds: ["control-ui-run"],
     });
   });
@@ -4792,6 +4953,48 @@ describe("main-session-restart-recovery", () => {
     expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
   });
 
+  it("reports an interrupted native tool outcome as unknown", async () => {
+    await writeMainSessionTranscript([
+      { role: "user", content: "run the command" },
+      createAssistantToolCallMessage([
+        { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "true" } },
+      ]),
+      {
+        role: "toolResult",
+        toolName: "bash",
+        toolCallId: "call-bash-1",
+        content: "native tool call had no matching result",
+        details: { reason: "missing_tool_result" },
+        isError: true,
+      },
+    ]);
+
+    await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
+    expect(gatewayParams().message).toContain("unknown outcome");
+    expect(gatewayParams().message).toContain("never claim completion or success");
+    expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+  });
+
+  it("keeps a confirmed native tool failure distinct from an unknown outcome", async () => {
+    await writeMainSessionTranscript([
+      { role: "user", content: "run the command" },
+      createAssistantToolCallMessage([
+        { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "false" } },
+      ]),
+      {
+        role: "toolResult",
+        toolName: "bash",
+        toolCallId: "call-bash-1",
+        content: "command failed with exit code 1",
+        details: { reason: "nonzero_exit" },
+        isError: true,
+      },
+    ]);
+
+    await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
+    expect(gatewayParams()).not.toHaveProperty("forceRestartSafeTools");
+  });
+
   it("keeps a dangling side-effecting call in an aborted tail restricted", async () => {
     await writeMainSessionTranscript([
       { role: "user", content: "do the thing" },
@@ -4900,31 +5103,57 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
-  it("keeps an unmatched failed wait restricted when its checkpoint is replay-safe", async () => {
-    await writeMainSessionTranscript([
-      { role: "user", content: "do the thing" },
-      codeModeCheckpointMessage(),
-      codeModeWaitCallMessage(),
-      {
-        role: "toolResult",
-        toolName: "wait",
-        toolCallId: "call-other",
-        content: [{ type: "text", text: "Error: The operation was aborted." }],
-        details: {
-          status: "failed",
-          error: "Error: The operation was aborted.",
-          code: "internal_error",
-        },
-        isError: true,
-      },
-    ]);
+  it.each([
+    {
+      label: "matching failed-wait result identity",
+      toolCallIds: ["call-wait-1"],
+      restoresCodeModeTools: true,
+    },
+    {
+      label: "mismatched failed-wait result identity",
+      toolCallIds: ["call-other"],
+      restoresCodeModeTools: false,
+    },
+    {
+      label: "missing failed-wait result identity",
+      toolCallIds: [undefined],
+      restoresCodeModeTools: false,
+    },
+    {
+      label: "duplicate failed-wait result identities",
+      toolCallIds: ["call-wait-1", "call-wait-1"],
+      restoresCodeModeTools: false,
+    },
+  ])(
+    "restores Code Mode tools only for exactly one $label",
+    async ({ toolCallIds, restoresCodeModeTools }) => {
+      await writeMainSessionTranscript([
+        { role: "user", content: "do the thing" },
+        codeModeCheckpointMessage(),
+        codeModeWaitCallMessage(),
+        ...toolCallIds.map((toolCallId) => ({
+          role: "toolResult",
+          toolName: "wait",
+          ...(toolCallId ? { toolCallId } : {}),
+          content: [{ type: "text", text: "Error: The operation was aborted." }],
+          details: {
+            status: "failed",
+            error: "Error: The operation was aborted.",
+            code: "internal_error",
+          },
+          isError: true,
+        })),
+      ]);
 
-    await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
-    expect(gatewayParams()).toMatchObject({
-      forceRestartSafeTools: true,
-      forceCodeModeTools: true,
-    });
-  });
+      await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
+      expect(gatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+      if (restoresCodeModeTools) {
+        expect(gatewayParams()).toMatchObject({ forceCodeModeTools: true });
+      } else {
+        expect(gatewayParams()).not.toHaveProperty("forceCodeModeTools");
+      }
+    },
+  );
 
   it.each([
     {

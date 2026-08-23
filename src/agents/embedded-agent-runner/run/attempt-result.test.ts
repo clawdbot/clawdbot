@@ -5,7 +5,6 @@ import { buildTraceToolSummary, normalizeEmbeddedRunAttemptResult } from "./run-
 function completeResult(params?: {
   successfulNestedToolNames?: string[];
   latestMcpAppChannelView?: { viewId: string };
-  lastToolRecovery?: { toolName: string };
   clientToolCallSlots?: Array<{
     toolCallId: string;
     name: string;
@@ -13,11 +12,15 @@ function completeResult(params?: {
     completed: boolean;
   }>;
   pendingToolMediaReply?: { mediaUrls?: string[]; audioAsVoice?: boolean };
+  yieldDetected?: boolean;
+  yieldAcknowledgment?: string;
   toolMetas?: Array<{
     toolName: string;
+    toolCallId?: string;
     meta?: string;
     replaySafe?: boolean;
     isError?: boolean;
+    terminate?: boolean;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
@@ -44,7 +47,6 @@ function completeResult(params?: {
       getLastAssistantTextMessageIndex: () => undefined,
       getLastCompactionTokensAfter: () => undefined,
       getLastToolError: () => undefined,
-      getLastToolRecovery: () => params?.lastToolRecovery,
       getLatestMcpAppChannelView: () => params?.latestMcpAppChannelView,
       getLatestMcpConnectAction: () => undefined,
       getMessagingToolSentMediaUrls: () => [],
@@ -64,7 +66,8 @@ function completeResult(params?: {
       sessionIdUsed: "session-1",
       messagesSnapshot: [],
       successfulNestedToolNames: params?.successfulNestedToolNames,
-      yieldDetected: false,
+      yieldDetected: params?.yieldDetected ?? false,
+      yieldAcknowledgment: params?.yieldAcknowledgment,
       didDeliverSourceReplyViaMessageTool: false,
       diagnosticTrace: { traceId: "trace-1", spanId: "span-1" },
     } as never,
@@ -83,9 +86,15 @@ function completeResult(params?: {
 }
 
 describe("attempt result projection", () => {
-  it("projects the last recovered tool", () => {
-    expect(completeResult({ lastToolRecovery: { toolName: "write" } }).lastToolRecovery).toEqual({
-      toolName: "write",
+  it("carries the explicit yield acknowledgment separately from continuation context", () => {
+    expect(
+      completeResult({
+        yieldDetected: true,
+        yieldAcknowledgment: "Research started; results will follow.",
+      }),
+    ).toMatchObject({
+      yieldDetected: true,
+      yieldAcknowledgment: "Research started; results will follow.",
     });
   });
 
@@ -162,9 +171,11 @@ describe("attempt result projection", () => {
           { toolName: "read", isError: false },
           {
             toolName: "exec",
+            toolCallId: "tool-current",
             meta: "done",
             replaySafe: true,
             isError: true,
+            terminate: true,
             asyncStarted: true,
             asyncTaskRunId: "run-1",
             asyncTaskId: "task-1",
@@ -180,9 +191,11 @@ describe("attempt result projection", () => {
       },
       {
         toolName: "exec",
+        toolCallId: "tool-current",
         meta: "done",
         replaySafe: true,
         isError: true,
+        terminate: true,
         asyncStarted: true,
         asyncTaskRunId: "run-1",
         asyncTaskId: "task-1",

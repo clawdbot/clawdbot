@@ -47,19 +47,25 @@ enum CommandResolver {
         return ["/bin/sh", "-c", script]
     }
 
-    static func projectRoot() -> URL {
-        if let stored = AppDefaults.standard.string(forKey: projectRootDefaultsKey),
+    static func projectRoot(
+        defaults: UserDefaults = AppDefaults.standard,
+        profile: AppProfile = .current,
+        homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL
+    {
+        if let stored = defaults.string(forKey: projectRootDefaultsKey),
            let url = expandPath(stored),
            FileManager().fileExists(atPath: url.path)
         {
             return url
         }
-        let fallback = FileManager().homeDirectoryForCurrentUser
-            .appendingPathComponent("Projects/openclaw")
+        if profile.isActive {
+            return profile.stateDirectoryURL(homeDirectory: homeDirectory)
+        }
+        let fallback = homeDirectory.appendingPathComponent("Projects/openclaw")
         if FileManager().fileExists(atPath: fallback.path) {
             return fallback
         }
-        return FileManager().homeDirectoryForCurrentUser
+        return homeDirectory
     }
 
     static func setProjectRoot(_ path: String) {

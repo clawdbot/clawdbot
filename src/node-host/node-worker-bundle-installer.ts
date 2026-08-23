@@ -7,6 +7,7 @@ import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import {
   validateWorkerAdmissionHandshake,
   type WorkerAdmissionHandshake,
@@ -65,6 +66,7 @@ async function responseBody(response: IncomingMessage, maxBytes = 64 * 1024): Pr
 async function downloadBundle(params: {
   gatewayUrl: string;
   gatewayTlsFingerprint?: string;
+  gatewayCloudflareAccess?: CloudflareAccessCredentials;
   input: NodeWorkerBundleInstallInput;
   destination: string;
   signal?: AbortSignal;
@@ -72,6 +74,7 @@ async function downloadBundle(params: {
   const response = await openNodeWorkerTransferHttpRequest({
     gatewayUrl: params.gatewayUrl,
     tlsFingerprint: params.gatewayTlsFingerprint,
+    cloudflareAccess: params.gatewayCloudflareAccess,
     routePath: nodeWorkerBundleTransferPath(params.input.build.bundleHash),
     method: "GET",
     token: params.input.archive.token,
@@ -243,6 +246,7 @@ export class NodeWorkerBundleInstaller {
     input: NodeWorkerBundleInstallInput;
     gatewayUrl: string;
     gatewayTlsFingerprint?: string;
+    gatewayCloudflareAccess?: CloudflareAccessCredentials;
     signal?: AbortSignal;
   }): Promise<WorkerAdmissionHandshake> {
     const { input } = params;
@@ -271,6 +275,7 @@ export class NodeWorkerBundleInstaller {
           await downloadBundle({
             gatewayUrl: params.gatewayUrl,
             gatewayTlsFingerprint: params.gatewayTlsFingerprint,
+            gatewayCloudflareAccess: params.gatewayCloudflareAccess,
             input,
             destination: archivePath,
             signal: params.signal,
@@ -308,7 +313,9 @@ export class NodeWorkerBundleInstaller {
           throw new NodeWorkerBundleInstallError(
             error.reason === "tls-fingerprint-mismatch"
               ? "worker-bundle-install-failed: gateway TLS fingerprint mismatch"
-              : "worker-bundle-install-failed: gateway transfer is unavailable",
+              : error.reason === "cloudflare-access-requires-tls"
+                ? "worker-bundle-install-failed: Cloudflare Access credentials require HTTPS"
+                : "worker-bundle-install-failed: gateway transfer is unavailable",
             { cause: error },
           );
         }

@@ -253,7 +253,6 @@
       - any-glob-to-any-file:
           - "apps/linux/**"
           - "docs/platforms/linux.md"
-          - "extensions/linux-canvas/**"
 "app: web-ui":
   - changed-files:
       - any-glob-to-any-file:
@@ -284,6 +283,16 @@
   - changed-files:
       - any-glob-to-any-file:
           - "docs/**"
+
+"r: skill":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "custodian-skills/**"
+          - "skills/**"
+          - "src/skills/**"
+          - "docs/tools/custodian-skills.md"
+          - "docs/tools/skills-config.md"
+          - "docs/tools/skills.md"
 
 "cli":
   - changed-files:

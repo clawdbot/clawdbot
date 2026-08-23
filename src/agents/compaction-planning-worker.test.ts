@@ -2,10 +2,16 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { serializeConversation } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { runCompactionPlanningWorker } from "./compaction-planning-worker-runtime.js";
+import * as compactionPlanningWorkerRuntime from "./compaction-planning-worker-runtime.js";
+import {
+  CompactionPlanningWorkerError,
+  runCompactionPlanningWorker,
+} from "./compaction-planning-worker-runtime.js";
 import {
   buildOversizedFallbackPlanWithWorker,
+  buildStageSplitPlanWithWorker,
   buildSummaryChunksWithWorker,
+  computeAdaptiveChunkRatioWithWorker,
 } from "./compaction-planning-worker.js";
 import { estimateMessagesTokens } from "./compaction-planning.js";
 import { runCompactionPlanningWorkerInput } from "./compaction-planning.worker.js";
@@ -25,6 +31,29 @@ function createSyntheticWorkerUrl(source: string): URL {
   // without relying on a bundled build artifact.
   return new URL(`data:text/javascript,${encodeURIComponent(source)}`);
 }
+
+const cancellablePlanningOperations = [
+  {
+    operation: "summary chunks",
+    run: (messages: AgentMessage[], signal: AbortSignal) =>
+      buildSummaryChunksWithWorker({ messages, maxChunkTokens: 1_200, signal }),
+  },
+  {
+    operation: "oversized fallback",
+    run: (messages: AgentMessage[], signal: AbortSignal) =>
+      buildOversizedFallbackPlanWithWorker({ messages, contextWindow: 1_200, signal }),
+  },
+  {
+    operation: "stage splitting",
+    run: (messages: AgentMessage[], signal: AbortSignal) =>
+      buildStageSplitPlanWithWorker({ messages, maxChunkTokens: 1_200, signal }),
+  },
+  {
+    operation: "adaptive chunk sizing",
+    run: (messages: AgentMessage[], signal: AbortSignal) =>
+      computeAdaptiveChunkRatioWithWorker({ messages, contextWindow: 1_200, signal }),
+  },
+];
 
 describe("compaction planning worker", () => {
   let packagedSummaryChunks: Awaited<ReturnType<typeof runCompactionPlanningWorker>>;
@@ -56,6 +85,69 @@ describe("compaction planning worker", () => {
         status: "failed",
         error: "invalid compaction planning worker input",
       });
+    }
+  });
+
+  it.each(
+    cancellablePlanningOperations.flatMap(({ operation, run }) =>
+      [63, 64].map((messageCount) => ({ operation, run, messageCount })),
+    ),
+  )(
+    "honors cancellation for $operation with $messageCount messages",
+    async ({ run, messageCount }) => {
+      const reason = new Error("operator cancelled compaction");
+      const signal = AbortSignal.abort(reason);
+      const messages = Array.from({ length: messageCount }, (_, index) =>
+        makeMessage(index + 1, "active user request"),
+      );
+
+      await expect(run(messages, signal)).rejects.toBe(reason);
+    },
+  );
+
+  it("does not resume cancelled compaction when its worker becomes unavailable", async () => {
+    const controller = new AbortController();
+    const reason = new Error("operator cancelled compaction");
+    const worker = vi
+      .spyOn(compactionPlanningWorkerRuntime, "runCompactionPlanningWorker")
+      .mockImplementationOnce(async () => {
+        controller.abort(reason);
+        throw new CompactionPlanningWorkerError("worker disappeared", "unavailable");
+      });
+
+    try {
+      await expect(
+        buildSummaryChunksWithWorker({
+          messages: Array.from({ length: 64 }, (_, index) => makeMessage(index + 1, "request")),
+          maxChunkTokens: 1_200,
+          signal: controller.signal,
+        }),
+      ).rejects.toBe(reason);
+    } finally {
+      worker.mockRestore();
+    }
+  });
+
+  it("does not restore a worker plan after its compaction has been cancelled", async () => {
+    const controller = new AbortController();
+    const reason = new Error("operator cancelled compaction");
+    const worker = vi
+      .spyOn(compactionPlanningWorkerRuntime, "runCompactionPlanningWorker")
+      .mockImplementationOnce(async () => {
+        controller.abort(reason);
+        return { kind: "summaryChunks", chunkIndexes: [[0]] };
+      });
+
+    try {
+      await expect(
+        buildSummaryChunksWithWorker({
+          messages: Array.from({ length: 64 }, (_, index) => makeMessage(index + 1, "request")),
+          maxChunkTokens: 1_200,
+          signal: controller.signal,
+        }),
+      ).rejects.toBe(reason);
+    } finally {
+      worker.mockRestore();
     }
   });
 

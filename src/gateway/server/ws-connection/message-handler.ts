@@ -29,6 +29,7 @@ import {
   getGatewaySuspendAdmissionPhase,
   isGatewayRestartDraining,
   runWithGatewayIndependentRootWorkAdmission,
+  tryBeginGatewayRestartStartupRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import { isWebchatClient } from "../../../utils/message-channel.js";
@@ -38,6 +39,7 @@ import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { createGatewayAuthenticatedRequestDispatcher } from "./authenticated-request-dispatch.js";
+import { isStartupNodeConnect } from "./connect-admission.js";
 import { authenticateGatewayConnect } from "./connect-auth.js";
 import { authorizeGatewayConnectDevice } from "./connect-device-pairing.js";
 import { attachAuthenticatedGatewayConnect } from "./connect-session.js";
@@ -385,7 +387,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
   };
 
-  const parsePreauthConnectFrame = (data: RawData) => {
+  const parsePreauthConnectFrame = (
+    data: RawData,
+  ): { id: string; params: ConnectParams } | null => {
     if (isClosed() || rawDataByteLength(data) > MAX_PREAUTH_PAYLOAD_BYTES) {
       return null;
     }
@@ -402,7 +406,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     ) {
       return null;
     }
-    return parsed;
+    return { id: parsed.id, params: parsed.params };
   };
 
   const isPreparedControlConnect = (data: RawData): boolean => {
@@ -412,6 +416,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
     const connectParams = parsed.params as { role?: unknown };
     return connectParams.role !== "node" && !claimsWorkerConnectionIdentity(parsed.params);
+  };
+
+  const isStartupNodePreauth = (data: RawData): boolean => {
+    const parsed = parsePreauthConnectFrame(data);
+    return parsed ? isStartupNodeConnect(parsed.params) : false;
   };
 
   const rejectConnectForClosedAdmission = async (data: RawData): Promise<boolean> => {
@@ -457,6 +466,22 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
     const admission = tryBeginGatewayRootWorkAdmission();
     if (!admission) {
+      if (
+        isGatewayRestartDraining() &&
+        getGatewaySuspendAdmissionPhase() === "accepting" &&
+        params.isStartupPending?.() === true &&
+        isStartupNodePreauth(data)
+      ) {
+        const startupAdmission = tryBeginGatewayRestartStartupRootWorkAdmission();
+        if (startupAdmission) {
+          try {
+            await startupAdmission.run(() => handleMessage(data));
+          } finally {
+            startupAdmission.release();
+          }
+          return;
+        }
+      }
       if (
         !isGatewayRestartDraining() &&
         getGatewaySuspendAdmissionPhase() === "prepared" &&
