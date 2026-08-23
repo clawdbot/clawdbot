@@ -211,8 +211,8 @@ async function createOpenAIRealtimeBrowserSession(
         ...req,
         model,
         voice,
+        gaSession: sessionConfig,
         gaSideband: {
-          session: sessionConfig,
           createBridge: ({ apiKey, callId, onTerminal }) => {
             const bridge = new OpenAIRealtimeBridge({
               cfg: req.cfg,
@@ -271,6 +271,7 @@ async function createOpenAIRealtimeBrowserSession(
     });
     return await quicksilverBroker.createBrowserSession(quicksilverRequest, auth);
   }
+  const { session, voice } = buildOpenAIRealtimeBrowserSessionConfig(req, config, model);
   const auth = await resolveOpenAIRealtimePlatformAuth({
     configuredApiKey: config.apiKey,
     cfg: req.cfg,
@@ -300,13 +301,12 @@ async function createOpenAIRealtimeBrowserSession(
       {
         ...req,
         model,
-        voice: normalizeOpenAIRealtimeVoice(req.voice) ?? config.voice ?? "alloy",
+        voice,
+        gaSession: session,
       },
       subscriptionAuth,
     );
   }
-
-  const { session, voice } = buildOpenAIRealtimeBrowserSessionConfig(req, config, model);
 
   const clientSecret = await createOpenAIRealtimeClientSecret({
     authToken: auth.value,

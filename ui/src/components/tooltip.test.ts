@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installNativeTitleGuard } from "./tooltip.ts";
 
 type TooltipElement = HTMLElement & {
+  closeDelay: number;
   content: string;
+  delay: number;
+  openOnClick: boolean;
   readonly updateComplete: Promise<boolean>;
 };
 
@@ -44,6 +47,12 @@ function focusTrigger(trigger: HTMLElement) {
 function dispatchMousePointer(target: EventTarget, type: "pointerenter" | "pointerleave") {
   const event = new MouseEvent(type, { bubbles: true, buttons: 0 });
   Object.defineProperty(event, "pointerType", { value: "mouse" });
+  target.dispatchEvent(event);
+}
+
+function dispatchTouchPointer(target: EventTarget, type: "pointerdown" | "pointerup") {
+  const event = new MouseEvent(type, { bubbles: true });
+  Object.defineProperty(event, "pointerType", { value: "touch" });
   target.dispatchEvent(event);
 }
 
@@ -129,6 +138,8 @@ describe("openclaw-tooltip", () => {
     expect(styles).toContain("--wa-tooltip-arrow-size: var(--openclaw-tooltip-arrow-size, 0px)");
     expect(styles).toContain("var(--overlay-border, var(--border-strong))");
     expect(styles).toContain("var(--overlay-shadow, var(--shadow-md))");
+    expect(styles).toContain("@media (prefers-reduced-motion: reduce)");
+    expect(styles).toContain("animation: none");
   });
 
   it("projects rich content into the Web Awesome tooltip", async () => {
@@ -250,7 +261,7 @@ describe("openclaw-tooltip", () => {
     expectOpenCount(1);
   });
 
-  it("does not reopen from pointer-origin focus", async () => {
+  it("does not reopen from pointer-origin focus after activation settles", async () => {
     const provider = createProvider();
     const { tooltip, trigger } = createTooltip("Pointer tooltip");
     provider.append(tooltip);
@@ -262,9 +273,70 @@ describe("openclaw-tooltip", () => {
     const pointerDown = new MouseEvent("pointerdown", { bubbles: true });
     Object.defineProperty(pointerDown, "pointerType", { value: "mouse" });
     trigger.dispatchEvent(pointerDown);
+    trigger.dispatchEvent(new MouseEvent("pointerup", { bubbles: true }));
+    trigger.click();
     focusTrigger(trigger);
 
     expectOpenCount(0);
+
+    document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Tab" }));
+    focusTrigger(trigger);
+    expectOpenCount(1);
+  });
+
+  it("keeps touch hints explicit through open-on-click", async () => {
+    const provider = createProvider();
+    const action = createTooltip("Action tooltip");
+    const reveal = createTooltip("Reveal tooltip");
+    reveal.tooltip.openOnClick = true;
+    provider.append(action.tooltip, reveal.tooltip);
+    document.body.append(provider);
+    await Promise.all([action.tooltip.updateComplete, reveal.tooltip.updateComplete]);
+
+    dispatchTouchPointer(action.trigger, "pointerdown");
+    vi.advanceTimersByTime(450);
+    expectOpenCount(0);
+
+    dispatchTouchPointer(reveal.trigger, "pointerdown");
+    dispatchTouchPointer(reveal.trigger, "pointerup");
+    reveal.trigger.click();
+    expectOpenCount(1);
+  });
+
+  it("honors per-tooltip hover intent while keyboard focus stays immediate", async () => {
+    const provider = createProvider();
+    const { tooltip, trigger } = createRichTooltip("Intentional hovercard");
+    tooltip.delay = 600;
+    tooltip.closeDelay = 300;
+    provider.append(tooltip);
+    document.body.append(provider);
+    await tooltip.updateComplete;
+
+    hoverTrigger(trigger);
+    vi.advanceTimersByTime(300);
+    dispatchMousePointer(trigger, "pointerleave");
+    expectOpenCount(0);
+
+    hoverTrigger(trigger);
+    vi.advanceTimersByTime(599);
+    expectOpenCount(0);
+    vi.advanceTimersByTime(1);
+    expectOpenCount(1);
+
+    dispatchMousePointer(trigger, "pointerleave");
+    vi.advanceTimersByTime(299);
+    expectOpenCount(1);
+    vi.advanceTimersByTime(1);
+    expectOpenCount(0);
+
+    focusTrigger(trigger);
+    expectOpenCount(1);
+
+    trigger.dispatchEvent(new FocusEvent("focusout", { bubbles: true, composed: true }));
+    hoverTrigger(trigger);
+    vi.advanceTimersByTime(0);
+    expectOpenCount(0);
+    dispatchMousePointer(trigger, "pointerleave");
   });
 
   it("keeps the accessible description in the trigger document tree", async () => {

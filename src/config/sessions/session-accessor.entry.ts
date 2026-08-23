@@ -12,7 +12,6 @@ import { clearPluginOwnedSessionState } from "./plugin-host-cleanup.js";
 import {
   copySqliteSessionOwnedStateForCanonicalRepair as copySessionOwnedStateForCanonicalRepair,
   ensureSqliteTranscriptGenerationsForCanonicalRepair as ensureTranscriptGenerationsForCanonicalRepair,
-  listSqliteSessionEntriesForCanonicalRepair as listSessionEntriesForCanonicalRepair,
   listSqliteSessionGenerationIdsForCanonicalRepair as listSessionGenerationIdsForCanonicalRepair,
   rehomeSqliteSessionDeliveryReferencesForCanonicalRepair as rehomeSessionDeliveryReferencesForCanonicalRepair,
   rehomeSqliteSessionDeliveryReferencesForCanonicalRepairBatch as rehomeSessionDeliveryReferencesForCanonicalRepairBatch,
@@ -74,7 +73,6 @@ export {
   listSessionGenerationIdsForCanonicalRepair,
   listSessionChildEntriesReadOnly,
   listSessionEntriesReadOnly,
-  listSessionEntriesForCanonicalRepair,
   rehomeSessionDeliveryReferencesForCanonicalRepair,
   rehomeSessionDeliveryReferencesForCanonicalRepairBatch,
   listSessionEntryKeysReadOnly,

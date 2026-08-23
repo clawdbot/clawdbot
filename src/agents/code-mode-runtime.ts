@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { parse, tokenizer } from "acorn";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -282,17 +283,15 @@ export function readCode(args: unknown): {
   restartSafe: boolean;
 } {
   const params = asToolParamsRecord(args);
-  const codeParam = params.code;
-  const commandParam = params.command;
-  if (
-    typeof codeParam === "string" &&
-    typeof commandParam === "string" &&
-    codeParam !== commandParam
-  ) {
+  // Full-schema tool calls can materialize an unused alias as blank.
+  // Only nonblank aliases participate in divergence checks.
+  const codeAlias = readNonBlankString(params.code);
+  const commandAlias = readNonBlankString(params.command);
+  if (codeAlias !== undefined && commandAlias !== undefined && codeAlias !== commandAlias) {
     throw new ToolInputError("code and command must match when both are provided.");
   }
-  const code = typeof commandParam === "string" ? commandParam : codeParam;
-  if (typeof code !== "string" || !code.trim()) {
+  const code = commandAlias ?? codeAlias;
+  if (code === undefined) {
     throw new ToolInputError("code or command must be a non-empty string.");
   }
   const language = params.language;

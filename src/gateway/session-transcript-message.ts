@@ -55,6 +55,7 @@ export function projectSessionMessagePayload(params: {
   messageId?: string;
   messageSeq?: number;
   projectionState?: SessionMessageProjectionState;
+  runId?: string;
   sessionKey: string;
   sessionSnapshot?: Record<string, unknown>;
 }): { payload?: Record<string, unknown>; projectionState: SessionMessageProjectionState } {
@@ -93,6 +94,7 @@ export function projectSessionMessagePayload(params: {
       ...(params.messageId ? { messageId: params.messageId } : {}),
       ...(params.messageSeq !== undefined ? { messageSeq: params.messageSeq } : {}),
       ...params.sessionSnapshot,
+      ...(params.runId ? { runId: params.runId } : {}),
     },
     projectionState,
   };

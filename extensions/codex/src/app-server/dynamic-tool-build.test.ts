@@ -10,11 +10,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  clearMemoryPluginState,
-  type MemoryFlushPlan,
-  registerMemoryCapability,
-} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { readMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
@@ -227,6 +223,69 @@ describe("Codex app-server dynamic tool build", () => {
       { cwd: effectiveCwd },
     );
     expect(tools).toEqual([]);
+  });
+
+  it("keeps host and plugin tools while native paired-device execution owns filesystem and shell", async () => {
+    const workspaceDir = path.join(tempDir, "paired-node-workspace");
+    const params = createParams(path.join(tempDir, "paired-node-session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const factory = vi.fn((options: Parameters<typeof createOpenClawCodingTools>[0]) => [
+      ...createOpenClawCodingTools(options).filter((tool) => tool.name === "message"),
+      createRuntimeDynamicTool("paired_host_plugin"),
+    ]);
+    setOpenClawCodingToolsFactoryForTests(factory);
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      sandbox: {
+        enabled: true,
+        backendId: "node",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/remote/workspace",
+        workspaceAccess: "rw",
+        browserAllowHostControl: false,
+        placementExecutionMode: "remote-exec",
+        placementNodeId: "paired-device-1",
+      } as never,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["message", "paired_host_plugin"]),
+    );
+    expect(factory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: true,
+          includeOpenClawTools: true,
+          includePluginTools: true,
+        },
+      }),
+    );
+  });
+
+  it("fails paired-device execution visibly when native execution is unavailable", async () => {
+    const workspaceDir = path.join(tempDir, "paired-node-workspace");
+    const params = createParams(path.join(tempDir, "paired-node-session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const factory = vi.fn(() => [createRuntimeDynamicTool("exec")]);
+    setOpenClawCodingToolsFactoryForTests(factory);
+
+    await expect(
+      buildDynamicToolsForTest(params, workspaceDir, {
+        sandbox: {
+          enabled: true,
+          backendId: "node",
+          placementExecutionMode: "remote-exec",
+          placementNodeId: "paired-device-1",
+        } as never,
+        nativeToolSurfaceEnabled: false,
+      }),
+    ).rejects.toThrow("requires its native exec-server tool surface");
+    expect(factory).not.toHaveBeenCalled();
   });
 
   it("uses the prepared explicit-policy fact to disable the native surface", () => {
@@ -1914,22 +1973,7 @@ describe("Codex app-server dynamic tool build", () => {
     vi.stubEnv("OPENCLAW_QA_FORCE_RUNTIME", "codex");
     const workspaceDir = path.join(tempDir, "workspace");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
-    const recordWriteProvenance = vi.fn<NonNullable<MemoryFlushPlan["recordWriteProvenance"]>>(
-      async () => undefined,
-    );
-    registerMemoryCapability("memory-core", {
-      flushPlanResolver: () => ({
-        softThresholdTokens: 1,
-        forceFlushTranscriptBytes: 1,
-        reserveTokensFloor: 1,
-        prompt: "flush",
-        systemPrompt: "flush",
-        relativePath: "memory/day.md",
-        recordWriteProvenance,
-      }),
-    });
-
-    try {
+    {
       let turnTainted = false;
       const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
       params.config = { tools: { fs: { workspaceOnly: true } } };
@@ -2011,11 +2055,16 @@ describe("Codex app-server dynamic tool build", () => {
         content: "fresh owner note\n",
       });
 
-      expect(recordWriteProvenance.mock.calls.map(([entry]) => entry.originClass)).toEqual([
-        "agent",
-        "untrusted",
-        "untrusted",
-        "agent",
+      await expect(
+        Promise.all(
+          ["memory/trusted.md", "memory/network.md", "memory/fresh.md"].map((relativePath) =>
+            readMemoryArtifactProvenance({ workspaceDir, relativePath }),
+          ),
+        ),
+      ).resolves.toEqual([
+        expect.objectContaining({ originClass: "untrusted" }),
+        expect.objectContaining({ originClass: "untrusted" }),
+        expect.objectContaining({ originClass: "agent" }),
       ]);
       await expect(fs.readFile(path.join(workspaceDir, "memory/trusted.md"), "utf8")).resolves.toBe(
         "network edit\n",
@@ -2023,8 +2072,6 @@ describe("Codex app-server dynamic tool build", () => {
       await expect(fs.readFile(path.join(workspaceDir, "memory/network.md"), "utf8")).resolves.toBe(
         "network note\n",
       );
-    } finally {
-      clearMemoryPluginState();
     }
   });
 
@@ -2458,6 +2505,20 @@ describe("Codex app-server dynamic tool build", () => {
       shouldEnableCodexAppServerNativeToolSurface(params, sandbox as never, {
         sandboxExecServerEnabled: true,
       }),
+    ).toBe(true);
+
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(
+        params,
+        {
+          ...sandbox,
+          backendId: "node",
+          backend: undefined,
+          placementExecutionMode: "remote-exec",
+          placementNodeId: "device-1",
+        } as never,
+        { sandboxExecServerEnabled: true },
+      ),
     ).toBe(true);
 
     expect(

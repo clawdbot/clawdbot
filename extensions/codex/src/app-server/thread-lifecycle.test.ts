@@ -5,6 +5,8 @@ import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { codexCatalogHomeId } from "../session-catalog-home-id.js";
+import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
@@ -353,11 +355,14 @@ describe("Codex ring-zero thread config", () => {
   it("applies the restriction to both thread start and resume", () => {
     const params = createAttemptParams({ provider: "openai" });
     params.toolsAllow = ["openclaw"];
+    params.pluginHarnessToolPolicyRestricted = true;
     const appServer = createAppServerOptions() as never;
+    const developerInstructions = "Host-authored ring-zero instructions.";
     const start = buildThreadStartParams(params, {
       appServer,
       cwd: "/repo",
       dynamicTools: [],
+      developerInstructions,
       hostSystemAgentActive: true,
       nativeCodeModeEnabled: false,
       config: { project_doc_max_bytes: 64_000 },
@@ -365,6 +370,7 @@ describe("Codex ring-zero thread config", () => {
     const resume = buildThreadResumeParams(params, {
       appServer,
       dynamicTools: [],
+      developerInstructions,
       hostSystemAgentActive: true,
       nativeCodeModeEnabled: false,
       threadId: "thread-1",
@@ -373,6 +379,8 @@ describe("Codex ring-zero thread config", () => {
 
     expect(start.environments).toEqual([]);
     expect(start.baseInstructions).toBe("");
+    expect(start.developerInstructions).toBe(developerInstructions);
+    expect(resume.developerInstructions).toBe(developerInstructions);
     for (const config of [start.config, resume.config]) {
       expect(config?.["agents.enabled"]).toBe(false);
       expect(config?.["tools.experimental_request_user_input.enabled"]).toBe(false);
@@ -399,6 +407,47 @@ describe("Codex ring-zero thread config", () => {
     });
     expect(normal.baseInstructions).toBeUndefined();
     expect(normal.config?.["features.goals"]).toBe(false);
+  });
+
+  it("preserves project documents for ordinary policy-restricted turns", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.pluginHarnessToolPolicyRestricted = true;
+    const appServer = createAppServerOptions() as never;
+    const start = buildThreadStartParams(params, {
+      appServer,
+      cwd: "/repo",
+      dynamicTools: [],
+      hostSystemAgentActive: false,
+      nativeCodeModeEnabled: false,
+    });
+    const resume = buildThreadResumeParams(params, {
+      appServer,
+      dynamicTools: [],
+      hostSystemAgentActive: false,
+      nativeCodeModeEnabled: false,
+      threadId: "thread-1",
+      config: { project_doc_max_bytes: 64_000 },
+    });
+
+    expect(start.config?.project_doc_max_bytes).toBe(131_072);
+    expect(resume.config?.project_doc_max_bytes).toBe(64_000);
+    for (const threadConfig of [start.config, resume.config]) {
+      expect(threadConfig?.["features.multi_agent"]).toBe(false);
+      expect(threadConfig?.["orchestrator.mcp.enabled"]).toBe(false);
+    }
+
+    const toolsDisabled = createAttemptParams({ provider: "openai" });
+    toolsDisabled.disableTools = true;
+    toolsDisabled.pluginHarnessToolPolicyRestricted = true;
+    const disabled = buildThreadStartParams(toolsDisabled, {
+      appServer,
+      cwd: "/repo",
+      dynamicTools: [],
+      hostSystemAgentActive: false,
+      nativeCodeModeEnabled: false,
+      config: { project_doc_max_bytes: 64_000 },
+    });
+    expect(disabled.config?.project_doc_max_bytes).toBe(0);
   });
 });
 
@@ -882,7 +931,7 @@ function threadStartResult(threadId = "thread-1") {
       status: { type: "idle" },
       path: null,
       cwd: tempDir,
-      cliVersion: "0.147.0",
+      cliVersion: "0.148.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -2397,6 +2446,137 @@ describe("Codex plugin binding recovery", () => {
     vi.restoreAllMocks();
   });
 
+  it("records ownership before committing a newly created durable thread", async () => {
+    const params = createThreadLifecycleParams(
+      path.join(tempDir, "session-managed.jsonl"),
+      path.join(tempDir, "workspace-managed"),
+    );
+    params.agentDir = path.join(tempDir, "agent");
+    const mark = vi.fn(async () => undefined);
+    const stateStore = createCodexTestBindingStateStore();
+    const bindingStore = Object.assign(createCodexAppServerBindingStore(stateStore), {
+      managedThreads: { mark, snapshot: vi.fn(async () => new Map()) },
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-managed");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThreadImpl({
+      client: {
+        request,
+        getRuntimeIdentity: () => ({ codexHome: path.join(tempDir, "agent", "codex-home") }),
+      } as never,
+      params,
+      cwd: params.workspaceDir!,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      bindingStore,
+    });
+
+    expect(mark).toHaveBeenCalledOnce();
+    expect(mark).toHaveBeenCalledWith({
+      sourceHomeId: expect.stringMatching(/^[a-f0-9]{64}$/),
+      threadId: "thread-managed",
+    });
+    expect(stateStore.entries().map((entry) => entry.value)).toContainEqual(
+      expect.objectContaining({
+        state: "active",
+        binding: expect.objectContaining({ threadId: "thread-managed" }),
+      }),
+    );
+  });
+
+  it.each([
+    ["a different remote home", "remote"],
+    ["a local-looking remote path", "local-looking"],
+  ])("keys remote ownership to the selected catalog home for %s", async (_label, pathKind) => {
+    const rolloutPath =
+      pathKind === "remote"
+        ? "/remote/codex/sessions/2026/08/thread-managed-remote.jsonl"
+        : path.join(tempDir, "poison", "sessions", "2026", "08", "thread-managed-remote.jsonl");
+    const params = createThreadLifecycleParams(
+      path.join(tempDir, "session-managed-remote.jsonl"),
+      path.join(tempDir, "workspace-managed-remote"),
+    );
+    params.agentDir = path.join(tempDir, "agent");
+    const mark = vi.fn(async () => undefined);
+    const bindingStore = Object.assign(
+      createCodexAppServerBindingStore(createCodexTestBindingStateStore()),
+      { managedThreads: { mark, snapshot: vi.fn(async () => new Map()) } },
+    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        const result = threadStartResult("thread-managed-remote");
+        return { ...result, thread: { ...result.thread, path: rolloutPath } };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const appServer = createThreadLifecycleAppServerOptions();
+    appServer.start = {
+      ...appServer.start,
+      transport: "websocket",
+      url: "wss://codex.example.test/app-server",
+    };
+    appServer.connectionClass = "remote";
+
+    await startOrResumeThreadImpl({
+      client: {
+        request,
+        getRuntimeIdentity: () => ({ codexHome: "/remote/codex" }),
+      } as never,
+      params,
+      cwd: params.workspaceDir!,
+      dynamicTools: [],
+      appServer,
+      bindingStore,
+    });
+
+    expect(mark).toHaveBeenCalledWith({
+      sourceHomeId: codexCatalogHomeId(resolveCodexAppServerHomeDir(params.agentDir)),
+      threadId: "thread-managed-remote",
+      rolloutPath,
+    });
+  });
+
+  it("starts a durable thread when catalog ownership bookkeeping fails", async () => {
+    const params = createThreadLifecycleParams(
+      path.join(tempDir, "session-managed-failure.jsonl"),
+      path.join(tempDir, "workspace-managed-failure"),
+    );
+    const stateStore = createCodexTestBindingStateStore();
+    const bindingStore = Object.assign(createCodexAppServerBindingStore(stateStore), {
+      managedThreads: {
+        mark: vi.fn(async () => {
+          throw new Error("managed ownership unavailable");
+        }),
+        snapshot: vi.fn(async () => new Map()),
+      },
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-managed-without-index");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThreadImpl({
+        client: {
+          request,
+          getRuntimeIdentity: () => ({ codexHome: path.join(tempDir, "codex-home") }),
+        } as never,
+        params,
+        cwd: params.workspaceDir!,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        bindingStore,
+      }),
+    ).resolves.toMatchObject({ threadId: "thread-managed-without-index" });
+  });
+
   it("does not rebuild a binding whose configured plugin is a settled negative", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -3487,6 +3667,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         | { config?: Record<string, unknown> }
         | undefined;
       expect(threadRequest?.config).toMatchObject({
+        project_doc_max_bytes: 0,
         mcp_servers: {
           inherited: { enabled: false },
           "request-only": { enabled: false },

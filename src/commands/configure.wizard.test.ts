@@ -168,7 +168,7 @@ vi.mock("./onboard-helpers.js", () => ({
 }));
 
 vi.mock("./health.js", () => ({
-  healthCommand: mocks.healthCommand,
+  healthCommandNonExiting: mocks.healthCommand,
 }));
 
 vi.mock("./health-format.js", () => ({

@@ -102,6 +102,7 @@ export async function sendGatewayHello(
   const snapshot = buildGatewaySnapshot({
     includeSensitive: scopes.includes(ADMIN_SCOPE),
     includeUpdateDetails: canReadDetailedUpdateMetadata(role, scopes),
+    revisionProjector: buildRequestContext().configRevisionProjector,
   });
   const cachedHealth = getHealthCache();
   if (cachedHealth) {

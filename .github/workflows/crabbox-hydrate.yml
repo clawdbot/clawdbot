@@ -686,8 +686,8 @@ jobs:
         env:
           PNPM_HOME: ${{ runner.temp }}/pnpm-home
         with:
+          cache-mode: off
           install-bun: "false"
-          use-actions-cache: "false"
 
       - name: Prepare Crabbox shell
         shell: bash

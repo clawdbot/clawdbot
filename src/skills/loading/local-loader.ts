@@ -13,7 +13,6 @@ import {
   resolveSkillDisplayName,
   type Skill,
 } from "./skill-contract.js";
-import { computeSkillPromptVersion } from "./skill-version.js";
 
 type LoadedLocalSkill = {
   skill: Skill;
@@ -112,7 +111,6 @@ function loadSingleSkillDirectory(params: {
       description,
       filePath,
       baseDir,
-      promptVersion: computeSkillPromptVersion(raw),
       source: params.source,
       sourceInfo: createSyntheticSourceInfo(filePath, {
         source: params.source,

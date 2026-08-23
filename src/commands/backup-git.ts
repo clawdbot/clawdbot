@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
-import path from "node:path";
+import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -16,7 +17,8 @@ import { recordBackupRunOutcome } from "../state/backup-run-records.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { shortenHomePath } from "../utils.js";
+import { resolveRequiredBackupPath } from "./backup-shared.js";
 
 type BackupGitCreateOptions = {
   repository?: string;
@@ -36,22 +38,29 @@ type BackupGitScopeOptions = {
 export const GIT_BACKUP_PUSH_CREDENTIAL_WARNING =
   "Warning: pushed backup history contains credential material; keep the Git remote private.";
 
-function resolveRequiredPath(value: string | undefined, label: string): string {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    throw new Error(`Missing required ${label} value.`);
-  }
-  return path.resolve(resolveUserPath(trimmed));
-}
-
 async function resolveCreateDatabases(runtime: RuntimeEnv, options: BackupGitCreateOptions) {
-  const agents = [...new Set((options.agents ?? []).map((agent) => normalizeAgentId(agent)))];
-  const explicit = options.global === true || agents.length > 0;
+  const normalizedAgents = [
+    ...new Set(
+      (options.agents ?? []).map((agent) => {
+        const trimmed = agent.trim();
+        if (!trimmed) {
+          throw new Error("--agent must not be blank");
+        }
+        return normalizeAgentId(trimmed);
+      }),
+    ),
+  ];
+  const explicit = options.global === true || normalizedAgents.length > 0;
   if (options.all && explicit) {
     throw new Error("Use --all by itself, or select --global and --agent scopes explicitly.");
   }
   if (!options.all && !explicit) {
     throw new Error("Choose at least one Git backup scope: --all, --global, or --agent <id>.");
+  }
+  let agents: string[] = [];
+  if (normalizedAgents.length > 0) {
+    const config = getRuntimeConfig({ skipPluginValidation: true });
+    agents = normalizedAgents.map((agent) => resolveConfiguredAgentId(config, agent));
   }
   const databases: Array<{
     path: string;
@@ -134,7 +143,7 @@ export async function backupGitInitCommand(
   options: { repository?: string; remote?: string; json?: boolean },
 ): Promise<{ repositoryPath: string }> {
   const result = await initializeGitBackupRepository({
-    repositoryPath: resolveRequiredPath(options.repository, "--repository"),
+    repositoryPath: resolveRequiredBackupPath(options.repository, "--repository"),
     stateDir: resolveStateDir(),
     remote: options.remote,
   });
@@ -147,7 +156,7 @@ export async function backupGitInitCommand(
 }
 
 export async function backupGitCreateCommand(runtime: RuntimeEnv, options: BackupGitCreateOptions) {
-  const repositoryPath = resolveRequiredPath(options.repository, "--repository");
+  const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
   if (options.push && !options.excludeSecrets) {
     runtime.error(GIT_BACKUP_PUSH_CREDENTIAL_WARNING);
   }
@@ -194,7 +203,7 @@ export async function backupGitLogCommand(
   runtime: RuntimeEnv,
   options: { repository?: string; limit?: number; json?: boolean },
 ) {
-  const repositoryPath = resolveRequiredPath(options.repository, "--repository");
+  const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
   const limit = options.limit ?? 20;
   if (!Number.isSafeInteger(limit) || limit < 1) {
     throw new Error("--limit must be a positive integer.");
@@ -217,7 +226,7 @@ export async function backupGitVerifyCommand(
   options: BackupGitScopeOptions & { repository?: string; ref?: string; json?: boolean },
 ) {
   const result = await verifyGitBackupRef({
-    repositoryPath: resolveRequiredPath(options.repository, "--repository"),
+    repositoryPath: resolveRequiredBackupPath(options.repository, "--repository"),
     identity: resolveOneIdentity(options),
     ref: options.ref,
   });
@@ -242,10 +251,10 @@ export async function backupGitRestoreCommand(
   },
 ) {
   const result = await restoreGitBackupRef({
-    repositoryPath: resolveRequiredPath(options.repository, "--repository"),
+    repositoryPath: resolveRequiredBackupPath(options.repository, "--repository"),
     identity: resolveOneIdentity(options),
     ref: options.ref,
-    targetPath: resolveRequiredPath(options.target, "--target"),
+    targetPath: resolveRequiredBackupPath(options.target, "--target"),
   });
   if (options.json) {
     writeRuntimeJson(runtime, result);

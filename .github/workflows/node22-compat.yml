@@ -21,6 +21,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: "22.22.3"
           install-bun: "false"
 

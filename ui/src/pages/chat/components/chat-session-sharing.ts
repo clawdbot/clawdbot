@@ -192,7 +192,7 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps) {
           `
         : nothing}
       ${props.state?.error
-        ? html`<div class="chat-pane__sharing-status chat-pane__sharing-status--error">
+        ? html`<div class="chat-pane__sharing-status chat-pane__sharing-status--error" role="alert">
             ${props.state.error}
           </div>`
         : nothing}

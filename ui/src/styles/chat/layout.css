@@ -1788,13 +1788,62 @@ button.chat-reply-preview--message:disabled {
 
 .agent-chat__typing-indicator {
   display: grid;
+  gap: 10px;
+  min-width: 0;
+  width: fit-content;
+  max-width: calc(100% - 20px);
+  margin: 14px 16px 0 4px;
+  padding-bottom: 26px;
+}
+
+.agent-chat__typing-dots-row,
+.agent-chat__typing-preview-row {
+  display: grid;
   grid-template-columns: max-content minmax(0, auto);
   align-items: center;
   gap: 10px;
   min-width: 0;
-  width: fit-content;
-  margin: 14px 16px 0 4px;
-  padding-bottom: 26px;
+}
+
+.agent-chat__typing-preview-row {
+  align-items: end;
+}
+
+.agent-chat__typing-preview-content {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.agent-chat__typing-preview-label {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.agent-chat__typing-preview-bubble {
+  max-height: 9em;
+  overflow: hidden;
+  /* Preview carries the draft's tail; keep the newest text visible when the
+   * capped bubble overflows (block align-content, harmless where unsupported). */
+  align-content: end;
+  overflow-wrap: anywhere;
+  padding: 8px 12px;
+  border-radius: 15px;
+  background: var(--bg-muted);
+  color: var(--text);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.agent-chat__typing-preview-bubble::after {
+  content: "";
+  display: inline-block;
+  width: 1px;
+  height: 1em;
+  margin-left: 2px;
+  background: var(--accent);
+  vertical-align: -0.15em;
+  animation: chatTypingCaret 1s steps(2, start) infinite;
 }
 
 .agent-chat__typing-avatars {
@@ -1885,10 +1934,20 @@ button.chat-reply-preview--message:disabled {
   }
 }
 
+@keyframes chatTypingCaret {
+  to {
+    opacity: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .agent-chat__typing-bubble > span {
     animation: none;
     opacity: 0.8;
+  }
+
+  .agent-chat__typing-preview-bubble::after {
+    animation: none;
   }
 }
 
@@ -2707,6 +2766,19 @@ button.chat-pr__diff {
   box-shadow: var(--focus-ring);
 }
 
+.chat-pr__publication-outcome {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.chat-pr__publication-outcome[data-state="failed"] {
+  color: var(--danger);
+}
+
 .chat-pr__dismiss {
   display: grid;
   padding: 2px;
@@ -3026,7 +3098,7 @@ button.chat-pr__diff {
   border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
   /* Split the inset evenly so the settings chip sits centered between the
      divider and the card edge instead of hugging the divider. */
-  padding: calc(var(--chat-box-inset) / 2) var(--chat-box-inset);
+  padding: calc(var(--chat-box-inset) / 2) max(var(--chat-box-inset), 8px);
 }
 
 .agent-chat__composer-meta,
@@ -4048,6 +4120,7 @@ button.chat-pr__diff {
     max-height: calc(7em + var(--chat-box-inset) + var(--chat-box-inset));
     padding-top: 10px;
     padding-bottom: 10px;
+    padding-left: var(--chat-box-inset);
     font-size: var(--control-ui-input-text-size);
   }
 
@@ -5457,6 +5530,10 @@ button.chat-pr__diff {
   stroke: currentColor;
 }
 
+.chat-controls__context-window-icon svg {
+  fill: none;
+}
+
 .chat-controls__fast-mode-copy {
   display: grid;
   gap: 1px;
@@ -5477,6 +5554,18 @@ button.chat-pr__diff {
   line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-controls__context-window-options {
+  --settings-control-height: 24px;
+
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}
+
+.chat-controls__context-window-options .settings-segmented__btn {
+  padding: 0 6px;
+  font-size: 10px;
 }
 
 .chat-controls__speed-toggle {

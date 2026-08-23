@@ -2,11 +2,11 @@
 
 Official llama.cpp provider for managed and external OpenClaw model servers.
 
-The `llama-cpp` provider installs a pinned, integrity-verified `llama-server`
-and configures OpenClaw's existing `localService` supervisor. The
-`llama-server` provider connects to a server that you already run and discovers
-its models and capabilities. Both use OpenClaw's normal OpenAI-compatible chat
-transport; managed local embeddings stay on `llama-cpp`.
+The `llama-cpp` provider either installs a pinned, integrity-verified
+`llama-server` under OpenClaw's `localService` supervisor or connects to a
+server that you already operate. Both choices use `llama-cpp/<model>` references
+and OpenClaw's normal OpenAI-compatible chat transport. Local embeddings require
+the managed choice.
 
 ## Install
 
@@ -38,7 +38,7 @@ Choose **Existing llama-server** during setup and enter the endpoint and
 optional API key. OpenClaw passively discovers single-model and router catalogs.
 It never installs, starts, stops, or reconfigures the external process.
 
-See the [llama-server provider guide](https://docs.openclaw.ai/providers/llama-server)
+See the [llama.cpp provider guide](https://docs.openclaw.ai/plugins/llama-cpp)
 for authentication, router behavior, manual configuration, and troubleshooting.
 
 ## Configure embeddings
@@ -50,6 +50,6 @@ the managed server's `/v1/embeddings` endpoint.
 ## Package
 
 - Plugin id: `llama-cpp`
-- Provider ids: `llama-cpp`, `llama-server`
+- Provider id: `llama-cpp`
 - Package: `@openclaw/llama-cpp-provider`
 - Minimum OpenClaw host: `2026.6.2`

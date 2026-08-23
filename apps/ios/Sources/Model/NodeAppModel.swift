@@ -3224,7 +3224,7 @@ extension NodeAppModel {
         true
     }
 
-    static func decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {
+    fileprivate static func decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {
         guard let json, let data = json.data(using: .utf8) else {
             throw NSError(domain: "Gateway", code: 20, userInfo: [
                 NSLocalizedDescriptionKey: "INVALID_REQUEST: paramsJSON required",
@@ -3233,7 +3233,7 @@ extension NodeAppModel {
         return try JSONDecoder().decode(type, from: data)
     }
 
-    static func encodePayload(_ obj: some Encodable) throws -> String {
+    fileprivate static func encodePayload(_ obj: some Encodable) throws -> String {
         let data = try JSONEncoder().encode(obj)
         guard let json = String(bytes: data, encoding: .utf8) else {
             throw NSError(domain: "NodeAppModel", code: 21, userInfo: [

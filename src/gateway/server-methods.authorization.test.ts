@@ -395,7 +395,11 @@ describe("gateway method authorization", () => {
       );
 
       const dispatchRequest = async (
-        method: "sessions.create" | "sessions.fork" | "sessions.recover",
+        method:
+          | "sessions.create"
+          | "sessions.fork"
+          | "sessions.github.publish"
+          | "sessions.recover",
         requestParams: Record<string, unknown>,
         profileId: string,
       ) => {
@@ -442,6 +446,10 @@ describe("gateway method authorization", () => {
         {
           method: "sessions.fork" as const,
           params: { sessionKey, entryId: "user-entry" },
+        },
+        {
+          method: "sessions.github.publish" as const,
+          params: { sessionKey, idempotencyKey: "publication-1" },
         },
         { method: "sessions.recover" as const, params: { key: sessionKey } },
       ];
