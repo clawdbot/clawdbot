@@ -23,16 +23,13 @@ type FormatTimeAgoOptions = {
 };
 
 type FormatRelativeTimestampOptions = {
-  calendarUnits?: boolean;
   dateFallback?: boolean;
   timezone?: string;
   fallback?: string;
   suffix?: boolean;
 };
 
-type DisplayTimeUnit = RelativeTimeUnit | "millisecond" | "week" | "month" | "year";
-
-function formatUnit(value: number, unit: DisplayTimeUnit): string {
+function formatUnit(value: number, unit: RelativeTimeUnit | "millisecond"): string {
   return new Intl.NumberFormat(i18n.getLocale(), {
     style: "unit",
     unit,
@@ -41,39 +38,11 @@ function formatUnit(value: number, unit: DisplayTimeUnit): string {
   }).format(value);
 }
 
-function formatRelative(
-  value: number,
-  unit: RelativeTimeUnit | "week" | "month" | "year",
-  numeric: "always" | "auto" = "auto",
-): string {
+function formatRelative(value: number, unit: RelativeTimeUnit): string {
   return new Intl.RelativeTimeFormat(i18n.getLocale(), {
-    numeric,
+    numeric: "auto",
     style: "narrow",
   }).format(value, unit);
-}
-
-function formatCompactRelativeUnit(
-  value: number,
-  unit: RelativeTimeUnit | "week" | "month" | "year",
-) {
-  if (i18n.getLocale().toLowerCase().startsWith("en")) {
-    const suffixes: Partial<Record<RelativeTimeUnit | "week" | "month" | "year", string>> = {
-      day: "d",
-      week: "w",
-      month: "mo",
-      year: "y",
-    };
-    const suffix = suffixes[unit];
-    if (suffix) {
-      return `${new Intl.NumberFormat(i18n.getLocale(), { maximumFractionDigits: 0 }).format(value)}${suffix}`;
-    }
-  }
-  return new Intl.NumberFormat(i18n.getLocale(), {
-    style: "unit",
-    unit,
-    unitDisplay: "short",
-    maximumFractionDigits: 0,
-  }).format(value);
 }
 
 export function formatTimeAgo(
@@ -105,19 +74,7 @@ export function formatRelativeTimestamp(
 
   const diff = timestampMs - Date.now();
   const isPast = diff <= 0;
-  const absoluteDiff = Math.abs(diff);
-  const days = absoluteDiff / (24 * 60 * 60_000);
-  const calendarBucket =
-    options.calendarUnits && days >= 365
-      ? { value: Math.max(1, Math.round(days / 365)), unit: "year" as const }
-      : options.calendarUnits && days >= 28
-        ? { value: Math.max(1, Math.round(days / 30)), unit: "month" as const }
-        : options.calendarUnits && days >= 7
-          ? { value: Math.max(1, Math.round(days / 7)), unit: "week" as const }
-          : options.calendarUnits && days >= 1
-            ? { value: Math.max(1, Math.round(days)), unit: "day" as const }
-            : bucketRelativeTimeMs(absoluteDiff);
-  const { value, unit } = calendarBucket;
+  const { value, unit } = bucketRelativeTimeMs(Math.abs(diff));
   if (unit === "second") {
     if (options.suffix === false) {
       return formatUnit(value, unit);
@@ -138,11 +95,7 @@ export function formatRelativeTimestamp(
   }
 
   const signedValue = isPast ? -value : value;
-  return options.suffix === false
-    ? options.calendarUnits
-      ? formatCompactRelativeUnit(value, unit)
-      : formatUnit(value, unit)
-    : formatRelative(signedValue, unit, options.calendarUnits ? "always" : "auto");
+  return options.suffix === false ? formatUnit(value, unit) : formatRelative(signedValue, unit);
 }
 
 export function formatDurationCompact(ms?: number | null): string | undefined {

@@ -1,11 +1,11 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
+import { bucketRelativeTimeMs, type RelativeTimeUnit } from "@openclaw/normalization-core";
 import { html, nothing } from "lit";
 import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
 } from "../../../src/gateway/control-ui-contract.js";
 import { i18n, t } from "../i18n/index.ts";
-import { formatRelativeTimestamp } from "../lib/format.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import { sessionOwnerInitials } from "./session-owner-chip.ts";
@@ -14,6 +14,8 @@ import "./viewer-facepile.ts";
 
 const MAX_VISIBLE_PULL_REQUESTS = 4;
 const MAX_VISIBLE_PARTICIPANTS = 3;
+
+type SessionAgeUnit = RelativeTimeUnit | "week" | "month" | "year";
 
 type SessionHovercardAvatarAuth = {
   authTokens: readonly string[];
@@ -84,19 +86,63 @@ function renderDiffStats(item: { additions?: number; deletions?: number; changed
   </span>`;
 }
 
+function sessionAgeBucket(diffMs: number): { value: number; unit: SessionAgeUnit } {
+  const days = Math.abs(diffMs) / (24 * 60 * 60_000);
+  if (days >= 365) {
+    return { value: Math.max(1, Math.round(days / 365)), unit: "year" };
+  }
+  if (days >= 28) {
+    return { value: Math.max(1, Math.round(days / 30)), unit: "month" };
+  }
+  if (days >= 7) {
+    return { value: Math.max(1, Math.round(days / 7)), unit: "week" };
+  }
+  if (days >= 1) {
+    return { value: Math.max(1, Math.round(days)), unit: "day" };
+  }
+  return bucketRelativeTimeMs(Math.abs(diffMs));
+}
+
+function formatSessionAge(timestamp: number | null | undefined, suffix: boolean): string {
+  if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
+    return "";
+  }
+  const diff = timestamp - Date.now();
+  const { value, unit } = sessionAgeBucket(diff);
+  if (suffix) {
+    if (unit === "second" && diff <= 0) {
+      return t("common.justNow");
+    }
+    return new Intl.RelativeTimeFormat(i18n.getLocale(), {
+      numeric: "always",
+      style: "narrow",
+    }).format(diff <= 0 ? -value : value, unit);
+  }
+  if (i18n.getLocale().toLowerCase().startsWith("en")) {
+    const compactSuffix: Partial<Record<SessionAgeUnit, string>> = {
+      day: "d",
+      week: "w",
+      month: "mo",
+      year: "y",
+    };
+    const unitSuffix = compactSuffix[unit];
+    if (unitSuffix) {
+      return `${value}${unitSuffix}`;
+    }
+  }
+  return new Intl.NumberFormat(i18n.getLocale(), {
+    style: "unit",
+    unit,
+    unitDisplay: "short",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
 function renderHeader(row: SidebarSessionHovercardRow) {
   const hasCreatedAt = typeof row.createdAt === "number" && Number.isFinite(row.createdAt);
-  const created = hasCreatedAt
-    ? formatRelativeTimestamp(row.createdAt, { calendarUnits: true, fallback: "" })
-    : "";
-  const age = hasCreatedAt
-    ? formatRelativeTimestamp(row.createdAt, {
-        calendarUnits: true,
-        fallback: "",
-        suffix: false,
-      })
-    : "";
-  const updated = formatRelativeTimestamp(row.updatedAt, { calendarUnits: true, fallback: "" });
+  const created = hasCreatedAt ? formatSessionAge(row.createdAt, true) : "";
+  const age = hasCreatedAt ? formatSessionAge(row.createdAt, false) : "";
+  const updated = formatSessionAge(row.updatedAt, true);
   return html`<header class="session-hovercard__header">
     <span class="session-hovercard__heading">
       <span class="session-hovercard__title">${row.label}</span>
