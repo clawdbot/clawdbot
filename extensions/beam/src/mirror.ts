@@ -285,6 +285,18 @@ export function createBeamMirrorRunner(params: {
   let activeTick: Promise<void> | undefined;
   let stopPromise: Promise<void> | undefined;
 
+  const raceCatalog = <T>(operation: Promise<T>): Promise<T> =>
+    new Promise((resolve, reject) => {
+      const abort = () => reject(new Error("Beam mirror stopped"));
+      signal.addEventListener("abort", abort, { once: true });
+      void operation
+        .then(resolve, reject)
+        .finally(() => signal.removeEventListener("abort", abort));
+      if (signal.aborted) {
+        abort();
+      }
+    });
+
   const warnThrottled = (message: string) => {
     if (now() - lastWarnAt >= MIRROR_WARN_INTERVAL_MS) {
       lastWarnAt = now();
@@ -360,12 +372,14 @@ export function createBeamMirrorRunner(params: {
     candidate: BeamMirrorCandidate,
     completed: boolean,
   ): Promise<BeamMirrorUpload> => {
-    const transcript = await catalog.read({
-      agentId,
-      hostId: candidate.hostId,
-      threadId: candidate.threadId,
-      limit: MIRROR_READ_LIMIT,
-    });
+    const transcript = await raceCatalog(
+      catalog.read({
+        agentId,
+        hostId: candidate.hostId,
+        threadId: candidate.threadId,
+        limit: MIRROR_READ_LIMIT,
+      }),
+    );
     signal.throwIfAborted();
     const reduced = buildBeamMirrorItems(transcript.items);
     const items = reduced.items.length
@@ -441,7 +455,9 @@ export function createBeamMirrorRunner(params: {
       for (const catalog of catalogs) {
         signal.throwIfAborted();
         try {
-          const hosts = await catalog.list({ agentId, limitPerHost: MIRROR_LIST_LIMIT });
+          const hosts = await raceCatalog(
+            catalog.list({ agentId, limitPerHost: MIRROR_LIST_LIMIT }),
+          );
           signal.throwIfAborted();
           candidates.push(...hostCandidates(catalog.id, hosts, activeSinceMs));
         } catch (error) {

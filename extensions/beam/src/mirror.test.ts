@@ -587,7 +587,7 @@ describe("createBeamMirrorRunner", () => {
     }
   });
 
-  it("waits for a paused transcript read and does not upload after stop", async () => {
+  it("stops before a paused transcript read settles without resuming mirror work", async () => {
     const readStarted = createDeferred<void>();
     const releaseRead = createDeferred<void>();
     const list = vi.fn();
@@ -624,11 +624,11 @@ describe("createBeamMirrorRunner", () => {
       const stop = firstStop.then(() => {
         stopSettled = true;
       });
-      await Promise.resolve();
-      expect(stopSettled).toBe(false);
+      await vi.waitFor(() => expect(stopSettled).toBe(true), { timeout: 100 });
+      await tick;
 
       releaseRead.resolve();
-      await Promise.all([tick, stop]);
+      await Promise.all([read.mock.results[0]?.value, stop]);
 
       expect(read).toHaveBeenCalledOnce();
       expect(sent).toEqual([]);
@@ -911,17 +911,18 @@ describe("createBeamMirrorRunner", () => {
 });
 
 describe("createBeamMirrorService", () => {
-  it("does not read or upload after stop while catalog listing is paused", async () => {
+  it("stops before catalog listing settles without starting reads or uploads", async () => {
     const listingStarted = createDeferred<void>();
     const releaseListing = createDeferred<void>();
+    const list = vi.fn(async () => {
+      listingStarted.resolve();
+      await releaseListing.promise;
+    });
     const read = vi.fn();
     const catalog = fakeCatalog({
       id: "claude",
       sessions: [{ threadId: "t1", recencyAt: Date.now() }],
-      onList: async () => {
-        listingStarted.resolve();
-        await releaseListing.promise;
-      },
+      onList: list,
       onRead: read,
     });
     const listCatalogs = vi
@@ -932,10 +933,7 @@ describe("createBeamMirrorService", () => {
       finalUrl: "https://team.example/api/v1/beam/sessions",
       release: vi.fn(async () => undefined),
     });
-    let config = mirrorConfig();
-    const service = createBeamMirrorService({
-      runtime: { config: { current: () => config } } as unknown as PluginRuntime,
-    });
+    const service = createBeamMirrorService({ runtime: fakeRuntime(mirrorConfig()) });
 
     try {
       service.start({ logger: silentLogger });
@@ -945,18 +943,15 @@ describe("createBeamMirrorService", () => {
       const stop = service.stop().then(() => {
         stopSettled = true;
       });
-      await Promise.resolve();
-      const stopSettledWhileListing = stopSettled;
-      config = {};
+      await vi.waitFor(() => expect(stopSettled).toBe(true), { timeout: 100 });
+      expect(read).not.toHaveBeenCalled();
+      expect(upload).not.toHaveBeenCalled();
+
       releaseListing.resolve();
-      if (stopSettledWhileListing) {
-        await vi.waitFor(() => expect(upload).toHaveBeenCalledOnce());
-      }
-      await stop;
+      await Promise.all([list.mock.results[0]?.value, stop]);
 
       expect(read).not.toHaveBeenCalled();
       expect(upload).not.toHaveBeenCalled();
-      expect(stopSettledWhileListing).toBe(false);
     } finally {
       releaseListing.resolve();
       upload.mockRestore();
