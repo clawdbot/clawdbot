@@ -47,6 +47,7 @@ suite.define(() => {
       const firstPage = await context.newPage();
       await installMockGateway(firstPage);
       await firstPage.goto(`${suite.server.baseUrl}new`);
+      await waitForControlUiGatewayReady(firstPage);
       const firstMessage = firstPage.locator(".new-session-page__message");
       await firstMessage.fill(text);
       await waitForCommittedNewSessionDraft(firstPage, text, 0);
