@@ -19,9 +19,11 @@ import {
   buildReleaseStateArtifact,
   classifyReleaseGhTransportError,
   classifyReleaseSnapshot,
+  composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
   releasePlanGateFailures,
   selectReleaseStateArtifacts,
+  validateReleaseChildRunProvenance,
   validateReleaseExecutionPlanArtifact,
   verifyReleaseStateArtifacts,
 } from "./full-release-validation-policy.mjs";
@@ -108,13 +110,13 @@ async function githubJson(path, signal) {
   );
 }
 
-async function githubJobs(runId, signal) {
+async function githubAttemptJobs(runId, runAttempt, signal) {
   return (
     await runGh(
       [
         "api",
         "--paginate",
-        `repos/${process.env.GITHUB_REPOSITORY}/actions/runs/${runId}/jobs?per_page=100`,
+        `repos/${process.env.GITHUB_REPOSITORY}/actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
         "--jq",
         ".jobs[] | @json",
       ],
@@ -137,36 +139,30 @@ function issue(kind, child, message, extra = {}) {
   };
 }
 
-export function validateChildBinding(child, run, jobs) {
+export function validateChildBinding(child, run, composite) {
   const errors = [];
-  const path = stringValue(run.path).split("@", 1)[0];
-  if (String(run.id) !== String(child.runId)) {
-    errors.push(issue("provenance_mismatch", child, `${child.key} run ID changed`));
-  }
-  if (run.event !== "workflow_dispatch") {
-    errors.push(issue("provenance_mismatch", child, `${child.key} event changed`));
-  }
-  if (path !== `.github/workflows/${child.workflow}`) {
-    errors.push(issue("provenance_mismatch", child, `${child.key} workflow path changed`));
-  }
-  if (run.display_title !== child.displayTitle) {
-    errors.push(issue("provenance_mismatch", child, `${child.key} display title changed`));
-  }
-  if (run.head_branch !== child.workflowRef) {
-    errors.push(issue("provenance_mismatch", child, `${child.key} workflow ref changed`));
-  }
-  if (run.head_sha !== child.workflowSha) {
-    errors.push(issue("provenance_mismatch", child, `${child.key} tooling SHA changed`));
-  }
-  if (Number(run.run_attempt) !== Number(child.runAttempt)) {
-    errors.push(issue("provenance_mismatch", child, `${child.key} run attempt changed`));
+  let provenance = {};
+  try {
+    provenance = validateReleaseChildRunProvenance(run, {
+      ...child,
+      plannedRunAttempt: child.runAttempt,
+      repository: process.env.GITHUB_REPOSITORY,
+    });
+  } catch (error) {
+    errors.push(
+      issue("provenance_mismatch", child, error instanceof Error ? error.message : String(error)),
+    );
   }
   return {
     ...child,
+    ...provenance,
+    compositeJobsSha256: stringValue(composite.sha256),
     conclusion: stringValue(run.conclusion),
     createdAt: stringValue(run.created_at),
     errors,
-    jobs,
+    jobs: composite.jobs,
+    observedRunAttempts: composite.observedRunAttempts,
+    plannedRunAttempt: Number(child.runAttempt),
     runAttempt: Number(run.run_attempt),
     runId: String(run.id),
     status: stringValue(run.status),
@@ -191,7 +187,48 @@ async function readChild(child, previous, signal) {
   }
   try {
     const run = await githubJson(`actions/runs/${child.runId}`, signal);
-    return validateChildBinding(child, run, await githubJobs(child.runId, signal));
+    const currentAttempt = positiveInteger(run.run_attempt, `${child.key} run attempt`);
+    const plannedAttempt = positiveInteger(child.runAttempt, `${child.key} planned run attempt`);
+    if (currentAttempt < plannedAttempt) {
+      return validateChildBinding(child, run, {
+        jobs: [],
+        observedRunAttempts: [],
+        sha256: "",
+      });
+    }
+    const attempts = await Promise.all(
+      Array.from({ length: currentAttempt - plannedAttempt + 1 }, async (_, index) => {
+        const runAttempt = plannedAttempt + index;
+        return {
+          jobs: await githubAttemptJobs(child.runId, runAttempt, signal),
+          runAttempt,
+        };
+      }),
+    );
+    if (run.status !== "completed" && attempts.at(-1)?.jobs.length === 0) {
+      if (attempts.slice(0, -1).some((attempt) => attempt.jobs.length === 0)) {
+        throw new Error(`${child.key} child attempt evidence is gapped`);
+      }
+      return validateChildBinding(child, run, {
+        jobs: [],
+        observedRunAttempts: [],
+        sha256: "",
+      });
+    }
+    const evidence = composeReleaseChildAttemptEvidence({
+      attempts,
+      expected: {
+        ...child,
+        plannedRunAttempt: plannedAttempt,
+        repository: process.env.GITHUB_REPOSITORY,
+      },
+      run,
+    });
+    return validateChildBinding(child, run, {
+      jobs: evidence.jobs,
+      observedRunAttempts: evidence.observedRunAttempts,
+      sha256: evidence.compositeJobsSha256,
+    });
   } catch (error) {
     return {
       ...child,
@@ -208,6 +245,12 @@ async function readChild(child, previous, signal) {
         ),
       ],
       jobs: previous?.jobs ?? [],
+      compositeJobsSha256: stringValue(previous?.compositeJobsSha256),
+      observedRunAttempts: previous?.observedRunAttempts ?? [],
+      plannedRunAttempt: positiveInteger(
+        previous?.plannedRunAttempt ?? child.runAttempt,
+        "planned run attempt",
+      ),
       status: stringValue(previous?.status, "unknown"),
       updatedAt: stringValue(previous?.updatedAt),
     };
@@ -494,7 +537,9 @@ async function planMode() {
   const abortController = new AbortController();
   let finished = false;
   let plan = buildReleaseExecutionPlanArtifact({
+    attemptEvidenceVersion: 1,
     children: built.children,
+    continuation: planInputs.continuation,
     evidenceReuse: evidenceReuseFromInputs(planInputs),
     expected: { ...expected, parentRunAttempt: currentAttempt },
     gates: built.gates,
@@ -508,8 +553,10 @@ async function planMode() {
     }
     abortController.abort(new Error("execution plan collection cancelled"));
     plan = buildReleaseExecutionPlanArtifact({
+      attemptEvidenceVersion: 1,
       blockers: plan.blockers,
       children: plan.children,
+      continuation: plan.continuation,
       errors: [
         ...plan.errors,
         {
@@ -537,8 +584,10 @@ async function planMode() {
     return;
   }
   plan = buildReleaseExecutionPlanArtifact({
+    attemptEvidenceVersion: 1,
     blockers: reuse.blockers,
     children: reuse.children,
+    continuation: planInputs.continuation,
     errors: reuse.errors,
     evidenceReuse: evidenceReuseFromInputs(planInputs, reuse.sourceManifest),
     expected: { ...expected, parentRunAttempt: currentAttempt },
@@ -780,24 +829,40 @@ function readStateCandidates(root, prefix, runId, maxParentRunAttempt, filename)
 }
 
 async function validateManifestMode() {
+  const expected = {
+    maxParentRunAttempt: positiveInteger(process.env.GITHUB_RUN_ATTEMPT, "parent run attempt"),
+    parentRunId: requiredString(process.env.GITHUB_RUN_ID, "parent run ID"),
+    releaseProfile: requiredString(process.env.RELEASE_PROFILE, "release profile"),
+    rerunGroup: requiredString(process.env.RERUN_GROUP, "rerun group"),
+    targetSha: requiredString(process.env.TARGET_SHA, "target SHA"),
+    workflowRef: requiredString(process.env.GITHUB_REF_NAME, "workflow ref"),
+    workflowSha: requiredString(process.env.GITHUB_SHA, "workflow SHA"),
+  };
   const manifestPath = requiredString(
     process.env.RELEASE_VALIDATION_MANIFEST_PATH,
     "release validation manifest path",
   );
-  const executionPlan = validateReleaseExecutionPlanArtifact(
-    readArtifact(
-      requiredString(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan path"),
-      "execution plan",
-    ),
-    {
-      parentRunId: requiredString(process.env.GITHUB_RUN_ID, "parent run ID"),
-      releaseProfile: requiredString(process.env.RELEASE_PROFILE, "release profile"),
-      rerunGroup: requiredString(process.env.RERUN_GROUP, "rerun group"),
-      targetSha: requiredString(process.env.TARGET_SHA, "target SHA"),
-      workflowRef: requiredString(process.env.GITHUB_REF_NAME, "workflow ref"),
-      workflowSha: requiredString(process.env.GITHUB_SHA, "workflow SHA"),
-    },
+  const executionPlanPayload = readArtifact(
+    requiredString(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan path"),
+    "execution plan",
   );
+  const executionPlan = validateReleaseExecutionPlanArtifact(executionPlanPayload, expected);
+  const verified =
+    executionPlan.attemptEvidenceVersion === 1
+      ? verifyReleaseStateArtifacts(
+          executionPlanPayload,
+          readArtifact(
+            requiredString(process.env.RELEASE_DECISION_PATH, "release decision path"),
+            "release decision",
+          ),
+          readArtifact(
+            requiredString(process.env.DIAGNOSTIC_DRAIN_PATH, "diagnostic drain path"),
+            "diagnostic drain",
+          ),
+          expected,
+        )
+      : undefined;
+  const drain = verified?.drain;
   const rawManifest = readArtifact(manifestPath, "release validation manifest");
   const { validateParentManifest } = await import("./release-ci-summary.mjs");
   const manifest = validateParentManifest(rawManifest, {
@@ -823,6 +888,32 @@ async function validateManifestMode() {
         selectedRunId: executionPlan.evidenceReuse.selectedRunId,
       }
     : undefined;
+  const expectedChildEvidence = drain
+    ? Object.fromEntries(
+        Object.entries(drain.children).map(([key, child]) => [
+          key,
+          {
+            compositeJobsSha256: child.compositeJobsSha256,
+            dispatchActor: child.dispatchActor,
+            effectiveRunAttempt: child.runAttempt,
+            jobs: child.timing.jobs.map((job) => ({
+              acceptedRunAttempt: job.acceptedRunAttempt,
+              completedAt: job.completedAt,
+              conclusion: job.conclusion,
+              name: job.name,
+              startedAt: job.startedAt,
+              status: job.status,
+              url: job.url,
+            })),
+            observedRunAttempts: child.observedRunAttempts,
+            plannedRunAttempt: child.plannedRunAttempt,
+            repository: child.repository,
+            runId: child.runId,
+            triggeringActor: child.triggeringActor,
+          },
+        ]),
+      )
+    : undefined;
   if (
     manifest.targetSha !== executionPlan.targetSha ||
     manifest.releaseProfile !== executionPlan.releaseProfile ||
@@ -831,6 +922,15 @@ async function validateManifestMode() {
       JSON.stringify(canonicalJson(expectedChildRunIds)) ||
     JSON.stringify(canonicalJson(manifest.evidenceReuse)) !==
       JSON.stringify(canonicalJson(expectedEvidenceReuse)) ||
+    (executionPlan.attemptEvidenceVersion === 1 &&
+      JSON.stringify(canonicalJson(rawManifest.childEvidence)) !==
+        JSON.stringify(canonicalJson(expectedChildEvidence))) ||
+    JSON.stringify(canonicalJson(rawManifest.continuationSource ?? null)) !==
+      JSON.stringify(canonicalJson(executionPlan.continuation ?? null)) ||
+    (executionPlan.continuation &&
+      (JSON.stringify(canonicalJson(rawManifest.validationInputs)) !==
+        JSON.stringify(canonicalJson(executionPlan.continuation.validationInputs)) ||
+        String(rawManifest.runReleaseSoak) !== executionPlan.continuation.runReleaseSoak)) ||
     rawManifest.executionPlanSha256 !== executionPlan.sha256 ||
     Number(rawManifest.sourceParentRunAttempt) !== executionPlan.parentRunAttempt
   ) {

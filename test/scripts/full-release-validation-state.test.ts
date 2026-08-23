@@ -3,7 +3,10 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { releaseExecutionPlanSha256 } from "../../scripts/full-release-validation-policy.mjs";
+import {
+  composeReleaseAttemptJobs,
+  releaseExecutionPlanSha256,
+} from "../../scripts/full-release-validation-policy.mjs";
 import {
   affectedActiveRunIds,
   buildReleaseExecutionPlan,
@@ -15,6 +18,7 @@ import {
   selectReleaseStateArtifacts,
   validateChildBinding,
   validateReleaseExecutionPlanArtifact,
+  validateReleaseStateArtifact,
   verifyReleaseStateArtifacts,
 } from "../../scripts/full-release-validation-state.mjs";
 import { waitForChildClose, waitForFile } from "../helpers/process-wait.js";
@@ -115,7 +119,7 @@ function executionPlan(
     targetSha: TARGET_SHA,
     workflowRef: "release-ci/tooling",
     workflowSha: SHA,
-    ...((artifactOverrides.expected as Record<string, unknown> | undefined) ?? {}),
+    ...(artifactOverrides.expected as Record<string, unknown> | undefined),
   };
   const built = plan({ ...overrides, parentRunAttempt: expected.parentRunAttempt });
   return buildReleaseExecutionPlanArtifact({
@@ -123,7 +127,7 @@ function executionPlan(
     expected,
     gates: built.gates,
     releaseProfile: "stable",
-    rerunGroup: String(overrides.rerunGroup ?? "all"),
+    rerunGroup: typeof overrides.rerunGroup === "string" ? overrides.rerunGroup : "all",
     trustedWorkflow: TRUSTED_MAIN,
     ...artifactOverrides,
   });
@@ -176,12 +180,9 @@ describe("full release execution plan", () => {
     });
     expect(
       classifyReleaseSnapshot({
-        children: result.children.map((entry) => ({
-          ...entry,
-          errors: [],
-          jobs: [],
-          status: "missing",
-        })),
+        children: result.children.map((entry) =>
+          Object.assign({}, entry, { errors: [], jobs: [], status: "missing" }),
+        ),
         releaseProfile: "stable",
         workflowRef: "release-ci/tooling",
       }),
@@ -248,6 +249,62 @@ describe("full release execution plan", () => {
     expect(() => validateReleaseExecutionPlanArtifact(digestValidArtifact)).toThrow(
       "release execution plan evidence reuse binding is invalid",
     );
+  });
+});
+
+describe("release child attempt composition", () => {
+  const job = (name: string, conclusion: string) => ({
+    completed_at: "2026-08-22T00:01:00Z",
+    conclusion,
+    html_url: `https://example.invalid/jobs/${name}`,
+    name,
+    started_at: "2026-08-22T00:00:00Z",
+    status: "completed",
+  });
+
+  it("lets a later failure replace an earlier success", () => {
+    const result = composeReleaseAttemptJobs(
+      [
+        { jobs: [job("test", "success")], runAttempt: 1 },
+        { jobs: [job("test", "failure")], runAttempt: 2 },
+      ],
+      { effectiveRunAttempt: 2, plannedRunAttempt: 1 },
+    );
+    expect(result.jobs).toEqual([
+      expect.objectContaining({ acceptedRunAttempt: 2, conclusion: "failure", name: "test" }),
+    ]);
+  });
+
+  it("lets a later success replace a failure while carrying absent green jobs", () => {
+    const result = composeReleaseAttemptJobs(
+      [
+        { jobs: [job("lint", "success"), job("test", "failure")], runAttempt: 1 },
+        { jobs: [job("test", "success")], runAttempt: 2 },
+      ],
+      { effectiveRunAttempt: 2, plannedRunAttempt: 1 },
+    );
+    expect(result.jobs).toEqual([
+      expect.objectContaining({ acceptedRunAttempt: 1, conclusion: "success", name: "lint" }),
+      expect.objectContaining({ acceptedRunAttempt: 2, conclusion: "success", name: "test" }),
+    ]);
+  });
+
+  it("rejects duplicate logical jobs and gapped attempts", () => {
+    expect(() =>
+      composeReleaseAttemptJobs(
+        [{ jobs: [job("test", "failure"), job("test", "success")], runAttempt: 1 }],
+        { effectiveRunAttempt: 1, plannedRunAttempt: 1 },
+      ),
+    ).toThrow("duplicate job identity");
+    expect(() =>
+      composeReleaseAttemptJobs(
+        [
+          { jobs: [job("test", "failure")], runAttempt: 1 },
+          { jobs: [job("test", "success")], runAttempt: 3 },
+        ],
+        { effectiveRunAttempt: 3, plannedRunAttempt: 1 },
+      ),
+    ).toThrow("gapped");
   });
 });
 
@@ -319,10 +376,11 @@ describe("release decision policy", () => {
     });
   });
 
-  it("binds the exact child attempt and tooling tuple", () => {
+  it("accepts a monotonically newer attempt for the exact child tuple", () => {
     const result = validateChildBinding(
       child("normalCi"),
       {
+        actor: { login: "github-actions[bot]" },
         conclusion: "",
         created_at: "2026-08-21T00:00:00Z",
         display_title: "normalCi",
@@ -332,18 +390,20 @@ describe("release decision policy", () => {
         html_url: "https://example.invalid/runs/101",
         id: 101,
         path: ".github/workflows/ci.yml@refs/heads/release-ci/tooling",
+        repository: { full_name: "openclaw/openclaw" },
         run_attempt: 2,
         status: "in_progress",
         updated_at: "2026-08-21T00:01:00Z",
+        triggering_actor: { login: "release-operator" },
       },
-      [],
+      {
+        jobs: [],
+        observedRunAttempts: [1, 2],
+        sha256: "c".repeat(64),
+      },
     );
-    expect(result.errors).toEqual([
-      expect.objectContaining({
-        kind: "provenance_mismatch",
-        message: expect.stringContaining("attempt"),
-      }),
-    ]);
+    expect(result.errors).toEqual([]);
+    expect(result).toMatchObject({ plannedRunAttempt: 1, runAttempt: 2 });
   });
 
   it("cancels only exact active affected children", () => {
@@ -505,6 +565,66 @@ describe("release state artifacts", () => {
         { ...stateExpected(), parentRunAttempt: 2 },
       ),
     ).toMatchObject({ decision: { state: "passed" }, drain: { state: "passed" } });
+  });
+
+  it("requires Decision and Drain to carry identical accepted attempt evidence", () => {
+    const sealedPlan = executionPlan({ rerunGroup: "ci" });
+    const decision = artifact("decision", 2, sealedPlan);
+    const drain = structuredClone(artifact("drain", 2, sealedPlan));
+    const snapshot = drain.children.normalCi!;
+    snapshot.runAttempt = 2;
+    expect(() =>
+      verifyReleaseStateArtifacts(sealedPlan, decision, drain, {
+        maxParentRunAttempt: 2,
+        parentRunId: "77",
+        releaseProfile: "stable",
+        rerunGroup: "ci",
+        targetSha: TARGET_SHA,
+        workflowRef: "release-ci/tooling",
+        workflowSha: SHA,
+      }),
+    ).toThrow("release decision and diagnostic drain child evidence differ");
+  });
+
+  it.each([
+    [
+      "duplicate active run IDs",
+      (value: Record<string, any>) => (value.activeRunIds = ["101", "101"]),
+    ],
+    [
+      "unordered active run IDs",
+      (value: Record<string, any>) => (value.activeRunIds = ["202", "101"]),
+    ],
+    [
+      "malformed active run IDs",
+      (value: Record<string, any>) => (value.activeRunIds = ["", "101"]),
+    ],
+    [
+      "duplicate observed attempts",
+      (value: Record<string, any>) => (value.children.normalCi.observedRunAttempts = [1, 1]),
+    ],
+    [
+      "unordered observed attempts",
+      (value: Record<string, any>) => (value.children.normalCi.observedRunAttempts = [2, 1]),
+    ],
+    [
+      "gapped observed attempts",
+      (value: Record<string, any>) => (value.children.normalCi.observedRunAttempts = [1, 3]),
+    ],
+  ])("rejects $0 without filtering or cleanup", (_name, mutate) => {
+    const payload = structuredClone(artifact("decision"));
+    mutate(payload);
+    expect(() =>
+      validateReleaseStateArtifact(payload, {
+        parentRunAttempt: 2,
+        parentRunId: "77",
+        releaseProfile: "stable",
+        rerunGroup: "ci",
+        targetSha: TARGET_SHA,
+        workflowRef: "release-ci/tooling",
+        workflowSha: SHA,
+      }),
+    ).toThrow(/invalid|gapped|malformed/u);
   });
 
   it("selects the newest decision and drain independently across asymmetric retries", () => {
@@ -1198,9 +1318,12 @@ console.log(JSON.stringify({
       gh,
       `#!/bin/sh
 case "$*" in
-  *"/jobs?"*) exit 0 ;;
+  *"/attempts/1/jobs?"*)
+    printf '%s\\n' '{"name":"test","status":"completed","conclusion":"success","started_at":"2026-08-21T00:00:00Z","completed_at":"2026-08-21T00:01:00Z","html_url":"https://example.invalid/jobs/1"}'
+    exit 0
+    ;;
 esac
-printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/ci.yml@refs/heads/release-ci/tooling","display_title":"CI full-release-validation-77-1-ci","head_branch":"release-ci/tooling","head_sha":"${SHA}","run_attempt":1,"status":"completed","conclusion":"success","created_at":"2026-08-21T00:00:00Z","updated_at":"2026-08-21T00:01:00Z","html_url":"https://example.invalid/runs/101"}'
+printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/ci.yml@refs/heads/release-ci/tooling","display_title":"CI full-release-validation-77-1-ci","head_branch":"release-ci/tooling","head_sha":"${SHA}","run_attempt":1,"status":"completed","conclusion":"success","created_at":"2026-08-21T00:00:00Z","updated_at":"2026-08-21T00:01:00Z","html_url":"https://example.invalid/runs/101","actor":{"login":"github-actions[bot]"},"triggering_actor":{"login":"github-actions[bot]"},"repository":{"full_name":"openclaw/openclaw"}}'
 `,
     );
     chmodSync(gh, 0o755);
@@ -1598,7 +1721,7 @@ printf ready > "$FRV_GH_READY"
 if [ "$1" = "api" ] && echo "$2" | grep -q '/jobs'; then
   exit 0
 fi
-printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/ci.yml@refs/heads/release-ci/tooling","display_title":"CI full-release-validation-77-1-ci","head_branch":"release-ci/tooling","head_sha":"${SHA}","run_attempt":1,"status":"in_progress","conclusion":null,"created_at":"2026-08-21T00:00:00Z","updated_at":"2026-08-21T00:01:00Z","html_url":"https://example.invalid/runs/101"}'
+printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/ci.yml@refs/heads/release-ci/tooling","display_title":"CI full-release-validation-77-1-ci","head_branch":"release-ci/tooling","head_sha":"${SHA}","run_attempt":1,"status":"in_progress","conclusion":null,"created_at":"2026-08-21T00:00:00Z","updated_at":"2026-08-21T00:01:00Z","html_url":"https://example.invalid/runs/101","actor":{"login":"github-actions[bot]"},"triggering_actor":{"login":"github-actions[bot]"},"repository":{"full_name":"openclaw/openclaw"}}'
 `,
     );
     chmodSync(gh, 0o755);
@@ -1665,7 +1788,7 @@ case "$run_id" in
 esac
 status="completed"
 [ "$run_id" = 101 ] && status="$FRV_FAILED_RUN_STATUS"
-printf '{"id":%s,"event":"workflow_dispatch","path":".github/workflows/%s@refs/heads/release-ci/tooling","display_title":"%s","head_branch":"release-ci/tooling","head_sha":"${SHA}","run_attempt":1,"status":"%s","conclusion":"%s","created_at":"2026-08-21T00:00:00Z","updated_at":"2026-08-21T00:01:00Z","html_url":"https://example.invalid/runs/%s"}\\n' "$run_id" "$workflow" "$title" "$status" "$([ "$run_id" = 101 ] && echo failure || echo success)" "$run_id"
+printf '{"id":%s,"event":"workflow_dispatch","path":".github/workflows/%s@refs/heads/release-ci/tooling","display_title":"%s","head_branch":"release-ci/tooling","head_sha":"${SHA}","run_attempt":1,"status":"%s","conclusion":"%s","created_at":"2026-08-21T00:00:00Z","updated_at":"2026-08-21T00:01:00Z","html_url":"https://example.invalid/runs/%s","actor":{"login":"github-actions[bot]"},"triggering_actor":{"login":"github-actions[bot]"},"repository":{"full_name":"openclaw/openclaw"}}\\n' "$run_id" "$workflow" "$title" "$status" "$([ "$run_id" = 101 ] && echo failure || echo success)" "$run_id"
 `,
     );
     chmodSync(gh, 0o755);

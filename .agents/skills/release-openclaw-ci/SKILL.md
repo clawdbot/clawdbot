@@ -69,6 +69,16 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   exact-child checks before returning `passed`.
 - Parent retries select the newest Decision and Drain artifacts independently;
   both must bind the same immutable plan even when their source attempts differ.
+- Child retries are part of the same immutable plan only when the child run ID,
+  workflow path, ref, Tooling SHA, dispatch title, event, target, candidate, and
+  validation inputs remain exact. Newer child attempts replace matching jobs;
+  jobs absent from a newer attempt carry forward. A duplicate job identity,
+  missing attempt, regressed attempt, or changed tuple fails closed.
+- Use `pnpm frv status|continue --failed|verify` for attempt-aware recovery.
+  The controller is stateless: the immutable execution plan, exact GitHub run
+  attempts, Diagnostic Drain, and final manifest are the only authorities. It
+  never writes a tag, package, registry entry, release candidate, or
+  publication.
 - Use one release operator, one transition-only watcher, and at most one
   investigator for the current failed surface. Do not build audit-review-plan
   trees around a single workflow transition.
@@ -131,6 +141,37 @@ until their dependent enforcement changes land.
 - Recover one failed surface with one diagnosis, one fix when needed, and one
   narrow retry. Then reassess the release decision. Do not automatically
   dispatch `rerun_group=all`.
+- For a supported parent, `pnpm frv continue --failed --run <parent-run-id>`
+  adopts any active newer child attempt, reruns failed child jobs in parallel,
+  leaves green children untouched, then reruns the parent once to restore the
+  immutable plan and seal a trusted all-group manifest. It does not start a
+  second child retry while an attempt is active.
+- Inspect without mutation:
+
+  ```bash
+  pnpm frv status --run <parent-run-id>
+  pnpm frv verify --run <successful-parent-run-id>
+  ```
+
+- A pre-support parent has no execution-plan artifact. Recover it only with an
+  operator-reviewed `--legacy-plan <json>` that freezes the source parent tuple,
+  source repository, exact child tuples, target SHA, complete candidate
+  identity, release profile, soak value, complete validation inputs, and the
+  reviewed continuation Tooling SHA. The controller reruns only those child
+  run IDs, then dispatches one continuation parent from that frozen Tooling SHA
+  with every candidate and child-producing job disabled:
+
+  ```bash
+  pnpm frv continue --failed \
+    --run <legacy-parent-run-id> \
+    --legacy-plan <reviewed-source-plan.json>
+  ```
+
+  The continuation parent records the legacy source in its immutable plan and
+  emits a normal `rerunGroup=all` manifest. If a canonical plan artifact exists,
+  legacy mode is rejected. Never infer missing legacy identity from a nearby
+  title, branch, latest run, or current `main`.
+
 - Controller retries are `ci`, `plugin-prerelease`, `install-smoke`,
   `cross-os`, `live-e2e`, `package`, `qa-parity`, `qa-live`, `npm-telegram`,
   or `performance`. Never use the removed `release-checks` handle. `qa` is

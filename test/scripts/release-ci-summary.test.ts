@@ -7,6 +7,10 @@ import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildReleaseExecutionPlanArtifact,
+  releaseCompositeJobsSha256,
+} from "../../scripts/full-release-validation-policy.mjs";
+import {
   artifactDownloadArgs,
   expectedChildDispatches,
   expectedSelectedChildDispatches,
@@ -818,7 +822,7 @@ describe("release CI summary child correlation", () => {
       {
         attempt: 1,
         conclusion: "",
-        jobs: [...jobs].reverse().map((job) => ({ ...job, url: `${job.url}-changed` })),
+        jobs: jobs.toReversed().map((job) => Object.assign({}, job, { url: `${job.url}-changed` })),
         status: "queued",
         url: "changed",
       },
@@ -1132,11 +1136,174 @@ describe("release CI summary child correlation", () => {
     });
   });
 
+  it("recomputes mixed-attempt child evidence and binds the original dispatch attempt", () => {
+    const fixture = trustedMainPackageFixture({
+      manifestVersion: 3,
+      workflowSha: "a".repeat(40),
+    });
+    const manifest = fixture.manifest as typeof fixture.manifest & {
+      childEvidence: Record<
+        string,
+        {
+          compositeJobsSha256: string;
+          effectiveRunAttempt: number;
+          jobs: Array<{
+            acceptedRunAttempt: number;
+            completedAt: string;
+            conclusion: string;
+            name: string;
+            startedAt: string;
+            status: string;
+            url: string;
+          }>;
+          observedRunAttempts: number[];
+          plannedRunAttempt: number;
+          runId: string;
+        }
+      >;
+      executionPlanSha256: string;
+      sourceParentRunAttempt: number;
+    };
+    const client = fixture.client as typeof fixture.client & {
+      getRunAttemptJobs: (runId: string, runAttempt: number) => Array<Record<string, unknown>>;
+      loadExecutionPlan: () => Record<string, unknown>;
+    };
+    const plannedChild = {
+      dispatchName: "Dispatch release checks",
+      displayTitle: fixture.childRun.display_title,
+      key: "releaseChecks",
+      required: true,
+      result: "success",
+      runAttempt: 1,
+      runId: String(fixture.childRun.id),
+      selected: true,
+      source: "fresh",
+      url: fixture.childRun.html_url,
+      workflow: "openclaw-release-checks.yml",
+      workflowRef: fixture.childRun.head_branch,
+      workflowSha: fixture.childRun.head_sha,
+    };
+    const executionPlan = buildReleaseExecutionPlanArtifact({
+      attemptEvidenceVersion: 1,
+      children: [plannedChild],
+      evidenceReuse: { requested: false },
+      expected: {
+        parentRunAttempt: 1,
+        parentRunId: fixture.runId,
+        targetSha: fixture.targetSha,
+        workflowRef: fixture.parentRun.head_branch,
+        workflowSha: fixture.workflowSha,
+      },
+      gates: [{ name: "Resolve target ref", required: true, result: "success" }],
+      releaseProfile: "full",
+      rerunGroup: "package",
+      trustedWorkflow: {
+        fullRef: "refs/heads/main",
+        ref: "main",
+        sha: fixture.workflowSha,
+      },
+    });
+    fixture.childRun.run_attempt = 2;
+    fixture.childRun.triggering_actor = { login: "release-operator" };
+    const firstAttemptJob = {
+      completed_at: "2026-08-22T00:01:00Z",
+      conclusion: "failure",
+      html_url: "https://example.invalid/jobs/test",
+      name: "test",
+      started_at: "2026-08-22T00:00:00Z",
+      status: "completed",
+    };
+    const secondAttemptJob = { ...firstAttemptJob, conclusion: "success" };
+    const compositeJobs = [
+      {
+        acceptedRunAttempt: 2,
+        completedAt: secondAttemptJob.completed_at,
+        conclusion: "success",
+        name: "test",
+        startedAt: secondAttemptJob.started_at,
+        status: "completed",
+        url: secondAttemptJob.html_url,
+      },
+    ];
+    const releaseChecksEvidence = {
+      compositeJobsSha256: releaseCompositeJobsSha256({
+        effectiveRunAttempt: 2,
+        jobs: compositeJobs,
+        plannedRunAttempt: 1,
+      }),
+      dispatchActor: "github-actions[bot]",
+      effectiveRunAttempt: 2,
+      jobs: compositeJobs,
+      observedRunAttempts: [1, 2],
+      plannedRunAttempt: 1,
+      repository: "openclaw/openclaw",
+      runId: String(fixture.childRun.id),
+      triggeringActor: "release-operator",
+    };
+    manifest.executionPlanSha256 = String(executionPlan.sha256);
+    manifest.sourceParentRunAttempt = 1;
+    manifest.childEvidence = {
+      releaseChecks: releaseChecksEvidence,
+    };
+    client.loadExecutionPlan = () => executionPlan;
+    client.getRunAttemptJobs = (_runId: string, attempt: number) =>
+      attempt === 1 ? [firstAttemptJob] : [secondAttemptJob];
+    fixture.client.getJobLog = () =>
+      [
+        `TARGET_SHA: ${fixture.targetSha}`,
+        `Dispatched openclaw-release-checks.yml: ${fixture.childRun.html_url} (attempt 1)`,
+      ].join("\n");
+
+    const evidence = validateReleaseRunEvidence(
+      {
+        repository: "openclaw/openclaw",
+        runId: fixture.runId,
+        verifierSourceContent: readFileSync(SCRIPT),
+        verifierSourceSha: "c".repeat(40),
+      },
+      fixture.client,
+    );
+    expect(evidence.children).toEqual([
+      expect.objectContaining({
+        compositeJobsSha256: releaseChecksEvidence.compositeJobsSha256,
+        plannedRunAttempt: 1,
+        runAttempt: 2,
+      }),
+    ]);
+
+    releaseChecksEvidence.jobs[0]!.conclusion = "failure";
+    expect(() =>
+      validateReleaseRunEvidence(
+        {
+          repository: "openclaw/openclaw",
+          runId: fixture.runId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        fixture.client,
+      ),
+    ).toThrow("composite digest is invalid");
+
+    releaseChecksEvidence.jobs[0]!.conclusion = "success";
+    fixture.childRun.actor = { login: "release-operator" };
+    expect(() =>
+      validateReleaseRunEvidence(
+        {
+          repository: "openclaw/openclaw",
+          runId: fixture.runId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        fixture.client,
+      ),
+    ).toThrow("execution plan child dispatch tuple mismatch");
+  });
+
   it("accepts beta advisory release-check failures through canonical policy", () => {
     const fixture = trustedMainPackageFixture();
     fixture.manifest.releaseProfile = "beta";
     fixture.childRun.conclusion = "failure";
-    const getParentJobs = fixture.client.getParentJobs;
+    const originalClient = { ...fixture.client };
     fixture.client.getParentJobs = (requestedRunId: string) =>
       requestedRunId === String(fixture.childRun.id)
         ? [
@@ -1161,7 +1328,7 @@ describe("release CI summary child correlation", () => {
               steps: [],
             },
           ]
-        : getParentJobs(requestedRunId);
+        : originalClient.getParentJobs(requestedRunId);
 
     const evidence = validateReleaseRunEvidence(
       {
@@ -1907,7 +2074,7 @@ describe("release CI summary child correlation", () => {
       runId: "29090000000",
     });
     const selected = requiredChildKeysForRerunGroup(manifest.rerunGroup, manifest.validationInputs);
-    expect([...selected].toSorted()).toEqual([
+    expect([...selected].toSorted((left, right) => left.localeCompare(right))).toEqual([
       "normalCi",
       "npmTelegram",
       "pluginPrerelease",
@@ -2442,7 +2609,7 @@ describe("release CI summary child correlation", () => {
             parentJobs,
             parentLog.replace("-f publish_reports=false\n", ""),
           ),
-        ).toThrow("manifest performance child is not dispatched in artifact-only mode");
+        ).toThrow("release performance child is not dispatched in artifact-only mode");
       }
     }
 

@@ -6,6 +6,7 @@ const MAX_SUMMARY_ISSUES = 5;
 const MAX_LABEL_LENGTH = 200;
 const MAX_MESSAGE_LENGTH = 500;
 const MAX_URL_LENGTH = 1024;
+const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
 const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
 const HARD_GH_TRANSPORT_PATTERN =
@@ -28,6 +29,7 @@ const CHILD_SPECS = Object.freeze([
     dispatchName: "Dispatch CI",
     displayName: "CI",
     key: "normalCi",
+    parentJobName: "Run normal full CI",
     rerunGroups: ["all", "ci"],
     suffix: "-ci",
     workflow: "ci.yml",
@@ -36,6 +38,7 @@ const CHILD_SPECS = Object.freeze([
     dispatchName: "Dispatch plugin prerelease",
     displayName: "Plugin Prerelease",
     key: "pluginPrerelease",
+    parentJobName: "Run plugin prerelease validation",
     rerunGroups: ["all", "plugin-prerelease"],
     suffix: "-plugin-prerelease",
     workflow: "plugin-prerelease.yml",
@@ -44,6 +47,7 @@ const CHILD_SPECS = Object.freeze([
     dispatchName: "Dispatch release checks",
     displayName: "OpenClaw Release Checks",
     key: "releaseChecks",
+    parentJobName: "Run release/live/Docker/QA validation",
     rerunGroups: [
       "all",
       "install-smoke",
@@ -60,6 +64,7 @@ const CHILD_SPECS = Object.freeze([
     dispatchName: "Dispatch npm Telegram E2E",
     displayName: "NPM Telegram Beta E2E",
     key: "npmTelegram",
+    parentJobName: "Run package Telegram E2E",
     rerunGroups: ["npm-telegram"],
     suffix: "-npm-telegram",
     workflow: "npm-telegram-beta-e2e.yml",
@@ -68,11 +73,37 @@ const CHILD_SPECS = Object.freeze([
     dispatchName: "Dispatch OpenClaw Performance",
     displayName: "OpenClaw Performance",
     key: "productPerformance",
+    parentJobName: "Run product performance evidence",
     rerunGroups: ["all", "performance"],
     suffix: "",
     workflow: "openclaw-performance.yml",
   },
 ]);
+const RELEASE_CANDIDATE_KEYS = Object.freeze(
+  [
+    "imageArchiveSha256",
+    "imageArtifactDigest",
+    "imageArtifactId",
+    "imageArtifactName",
+    "imageArtifactRunAttempt",
+    "imageArtifactRunId",
+    "packageArtifactDigest",
+    "packageArtifactId",
+    "packageArtifactName",
+    "packageArtifactRunAttempt",
+    "packageArtifactRunId",
+    "packageFileName",
+    "packageSha256",
+    "packageSourceSha",
+    "packageVersion",
+    "prepublishPluginRegistryArtifactDigest",
+    "prepublishPluginRegistryArtifactId",
+    "prepublishPluginRegistryArtifactName",
+    "prepublishPluginRegistryArtifactRunAttempt",
+    "prepublishPluginRegistryArtifactRunId",
+    "prepublishPluginRegistryManifestSha256",
+  ].toSorted(),
+);
 
 function releaseGhTransportErrorText(error) {
   const values = [error];
@@ -126,12 +157,328 @@ function positiveInteger(value) {
   return Number.isSafeInteger(normalized) && normalized > 0 ? normalized : undefined;
 }
 
+function canonicalValue(value) {
+  if (Array.isArray(value)) {
+    return value.map(canonicalValue);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entry]) => entry !== undefined)
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, canonicalValue(entry)]),
+    );
+  }
+  return value;
+}
+
 function booleanValue(value) {
   return value === true || value === "true";
 }
 
+export function releaseChildSpec(key) {
+  const spec = CHILD_SPECS.find((entry) => entry.key === key);
+  if (!spec) {
+    throw new Error(`release child key is invalid: ${key}`);
+  }
+  return spec;
+}
+
+export function normalizeReleaseCandidate(value, expected = {}) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("release candidate identity is invalid");
+  }
+  const candidate = canonicalValue(value);
+  if (
+    JSON.stringify(Object.keys(candidate).toSorted()) !== JSON.stringify(RELEASE_CANDIDATE_KEYS) ||
+    !SHA_PATTERN.test(String(candidate.packageSourceSha ?? "")) ||
+    !/^[a-f0-9]{64}$/u.test(String(candidate.packageSha256 ?? "")) ||
+    !/^[a-f0-9]{64}$/u.test(String(candidate.imageArchiveSha256 ?? "")) ||
+    !/^[a-f0-9]{64}$/u.test(String(candidate.prepublishPluginRegistryManifestSha256 ?? "")) ||
+    !/^[a-f0-9]{64}$/u.test(String(candidate.packageArtifactDigest ?? "")) ||
+    !/^[a-f0-9]{64}$/u.test(String(candidate.imageArtifactDigest ?? "")) ||
+    !/^[a-f0-9]{64}$/u.test(String(candidate.prepublishPluginRegistryArtifactDigest ?? "")) ||
+    !/^[1-9][0-9]*$/u.test(String(candidate.packageArtifactId ?? "")) ||
+    !/^[1-9][0-9]*$/u.test(String(candidate.imageArtifactId ?? "")) ||
+    !/^[1-9][0-9]*$/u.test(String(candidate.prepublishPluginRegistryArtifactId ?? "")) ||
+    !/^[1-9][0-9]*$/u.test(String(candidate.packageArtifactRunId ?? "")) ||
+    !/^[1-9][0-9]*$/u.test(String(candidate.imageArtifactRunId ?? "")) ||
+    !/^[1-9][0-9]*$/u.test(String(candidate.prepublishPluginRegistryArtifactRunId ?? "")) ||
+    positiveInteger(candidate.packageArtifactRunAttempt) === undefined ||
+    positiveInteger(candidate.imageArtifactRunAttempt) === undefined ||
+    positiveInteger(candidate.prepublishPluginRegistryArtifactRunAttempt) === undefined ||
+    !stringValue(candidate.packageArtifactName) ||
+    !stringValue(candidate.imageArtifactName) ||
+    !stringValue(candidate.prepublishPluginRegistryArtifactName) ||
+    !stringValue(candidate.packageFileName) ||
+    !stringValue(candidate.packageVersion) ||
+    (expected.targetSha !== undefined && candidate.packageSourceSha !== expected.targetSha) ||
+    (expected.parentRunId !== undefined &&
+      [
+        candidate.packageArtifactRunId,
+        candidate.imageArtifactRunId,
+        candidate.prepublishPluginRegistryArtifactRunId,
+      ].some((runId) => String(runId) !== String(expected.parentRunId))) ||
+    (expected.parentRunAttempt !== undefined &&
+      [
+        candidate.packageArtifactRunAttempt,
+        candidate.imageArtifactRunAttempt,
+        candidate.prepublishPluginRegistryArtifactRunAttempt,
+      ].some((attempt) => Number(attempt) !== Number(expected.parentRunAttempt)))
+  ) {
+    throw new Error("release candidate identity is invalid");
+  }
+  return candidate;
+}
+
+function normalizedContinuation(value) {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("release execution plan continuation is invalid");
+  }
+  const candidate = normalizeReleaseCandidate(value.candidate, {
+    parentRunAttempt: value.sourceRunAttempt,
+    parentRunId: value.sourceRunId,
+  });
+  const validationInputs =
+    value.validationInputs &&
+    typeof value.validationInputs === "object" &&
+    !Array.isArray(value.validationInputs)
+      ? canonicalValue(value.validationInputs)
+      : null;
+  const continuation = {
+    candidate,
+    publicationEnabled: value.publicationEnabled === true,
+    releaseProfile: boundedString(value.releaseProfile, MAX_LABEL_LENGTH),
+    rerunGroup: boundedString(value.rerunGroup, MAX_LABEL_LENGTH),
+    runReleaseSoak: boundedString(value.runReleaseSoak, MAX_LABEL_LENGTH),
+    sourceDisplayTitle: boundedString(value.sourceDisplayTitle, MAX_LABEL_LENGTH),
+    sourceEvent: boundedString(value.sourceEvent, MAX_LABEL_LENGTH),
+    sourceRepository: boundedString(value.sourceRepository, MAX_LABEL_LENGTH),
+    sourceRunAttempt: positiveInteger(value.sourceRunAttempt),
+    sourceRunId: boundedString(value.sourceRunId, MAX_LABEL_LENGTH),
+    sourceWorkflowPath: boundedString(value.sourceWorkflowPath, MAX_LABEL_LENGTH),
+    sourceWorkflowRef: boundedString(value.sourceWorkflowRef, MAX_LABEL_LENGTH),
+    sourceWorkflowSha: boundedString(value.sourceWorkflowSha, MAX_LABEL_LENGTH),
+    toolingSha: boundedString(value.toolingSha, MAX_LABEL_LENGTH),
+    validationInputs,
+  };
+  if (
+    continuation.publicationEnabled ||
+    !validationInputs ||
+    Object.keys(validationInputs).length === 0 ||
+    candidate.packageSourceSha === "" ||
+    !["beta", "stable", "full"].includes(continuation.releaseProfile) ||
+    continuation.rerunGroup !== "all" ||
+    !["true", "false"].includes(continuation.runReleaseSoak) ||
+    !continuation.sourceDisplayTitle ||
+    continuation.sourceEvent !== "workflow_dispatch" ||
+    !/^[^/]+\/[^/]+$/u.test(continuation.sourceRepository) ||
+    !/^[1-9][0-9]*$/u.test(continuation.sourceRunId) ||
+    continuation.sourceRunAttempt === undefined ||
+    continuation.sourceWorkflowPath !== ".github/workflows/full-release-validation.yml" ||
+    !continuation.sourceWorkflowRef ||
+    !SHA_PATTERN.test(continuation.sourceWorkflowSha) ||
+    !SHA_PATTERN.test(continuation.toolingSha)
+  ) {
+    throw new Error("release execution plan continuation binding is invalid");
+  }
+  return continuation;
+}
+
+function normalizedAttemptJob(job, runAttempt) {
+  const name = boundedString(job?.name, MAX_LABEL_LENGTH);
+  if (!name) {
+    throw new Error(`release child attempt ${runAttempt} contains an unnamed job`);
+  }
+  return {
+    acceptedRunAttempt: runAttempt,
+    completedAt: stringValue(job?.completed_at ?? job?.completedAt),
+    conclusion: boundedString(job?.conclusion, MAX_LABEL_LENGTH),
+    name,
+    startedAt: stringValue(job?.started_at ?? job?.startedAt),
+    status: boundedString(job?.status, MAX_LABEL_LENGTH),
+    url: boundedString(job?.html_url ?? job?.url, MAX_URL_LENGTH),
+  };
+}
+
+export function validateReleaseChildRunProvenance(run, expected = {}) {
+  const plannedRunAttempt = positiveInteger(expected.plannedRunAttempt);
+  const effectiveRunAttempt = positiveInteger(run?.run_attempt);
+  const path = stringValue(run?.path).split("@", 1)[0];
+  const dispatchActor = boundedString(run?.actor?.login, MAX_LABEL_LENGTH);
+  const triggeringActor = boundedString(run?.triggering_actor?.login, MAX_LABEL_LENGTH);
+  if (
+    plannedRunAttempt === undefined ||
+    effectiveRunAttempt === undefined ||
+    effectiveRunAttempt < plannedRunAttempt ||
+    String(run?.id ?? "") !== String(expected.runId ?? "") ||
+    run?.event !== "workflow_dispatch" ||
+    path !== `.github/workflows/${expected.workflow}` ||
+    run?.display_title !== expected.displayTitle ||
+    run?.head_branch !== expected.workflowRef ||
+    run?.head_sha !== expected.workflowSha ||
+    (expected.repository !== undefined &&
+      run?.repository?.full_name !== String(expected.repository)) ||
+    dispatchActor !== "github-actions[bot]" ||
+    !triggeringActor ||
+    (effectiveRunAttempt === plannedRunAttempt && triggeringActor !== "github-actions[bot]")
+  ) {
+    throw new Error(`release child provenance changed: ${expected.key ?? expected.runId}`);
+  }
+  return {
+    dispatchActor,
+    effectiveRunAttempt,
+    repository: stringValue(run?.repository?.full_name, stringValue(expected.repository)),
+    triggeringActor,
+  };
+}
+
+function compositeJobsDigestPayload(value) {
+  return {
+    effectiveRunAttempt: value.effectiveRunAttempt,
+    jobs: value.jobs,
+    plannedRunAttempt: value.plannedRunAttempt,
+  };
+}
+
+export function releaseCompositeJobsSha256(value) {
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalValue(compositeJobsDigestPayload(value))))
+    .digest("hex");
+}
+
+export function composeReleaseAttemptJobs(attempts, expected = {}) {
+  const plannedRunAttempt = positiveInteger(expected.plannedRunAttempt);
+  const effectiveRunAttempt = positiveInteger(expected.effectiveRunAttempt);
+  if (
+    plannedRunAttempt === undefined ||
+    effectiveRunAttempt === undefined ||
+    effectiveRunAttempt < plannedRunAttempt
+  ) {
+    throw new Error("release child attempt range is invalid");
+  }
+  if (!Array.isArray(attempts)) {
+    throw new Error("release child attempt evidence is invalid");
+  }
+  const normalizedAttempts = attempts.map((attempt) => ({
+    jobs: Array.isArray(attempt?.jobs) ? attempt.jobs : [],
+    runAttempt: positiveInteger(attempt?.runAttempt),
+  }));
+  const expectedCount = effectiveRunAttempt - plannedRunAttempt + 1;
+  if (normalizedAttempts.length !== expectedCount) {
+    throw new Error("release child attempt evidence is gapped");
+  }
+
+  const accepted = new Map();
+  for (let index = 0; index < normalizedAttempts.length; index += 1) {
+    const attempt = normalizedAttempts[index];
+    const expectedAttempt = plannedRunAttempt + index;
+    if (attempt.runAttempt !== expectedAttempt || attempt.jobs.length === 0) {
+      throw new Error("release child attempt evidence is gapped");
+    }
+    const names = new Set();
+    for (const rawJob of attempt.jobs) {
+      const job = normalizedAttemptJob(rawJob, expectedAttempt);
+      if (names.has(job.name)) {
+        throw new Error(
+          `release child attempt ${expectedAttempt} contains duplicate job identity: ${job.name}`,
+        );
+      }
+      names.add(job.name);
+      accepted.set(job.name, job);
+    }
+  }
+
+  const composite = {
+    effectiveRunAttempt,
+    jobs: [...accepted.values()].toSorted((left, right) => left.name.localeCompare(right.name)),
+    plannedRunAttempt,
+  };
+  return { ...composite, sha256: releaseCompositeJobsSha256(composite) };
+}
+
+export function composeReleaseChildAttemptEvidence({ attempts, expected, run }) {
+  const provenance = validateReleaseChildRunProvenance(run, expected);
+  const composite = composeReleaseAttemptJobs(attempts, {
+    effectiveRunAttempt: provenance.effectiveRunAttempt,
+    plannedRunAttempt: expected.plannedRunAttempt,
+  });
+  return {
+    compositeJobsSha256: composite.sha256,
+    dispatchActor: provenance.dispatchActor,
+    effectiveRunAttempt: composite.effectiveRunAttempt,
+    jobs: composite.jobs,
+    observedRunAttempts: attempts.map((attempt) => attempt.runAttempt),
+    plannedRunAttempt: composite.plannedRunAttempt,
+    repository: provenance.repository,
+    runId: String(run.id),
+    triggeringActor: provenance.triggeringActor,
+  };
+}
+
+export function validateReleaseChildDispatchBinding({
+  candidate,
+  child,
+  log,
+  plannedRunAttempt,
+  repository,
+  targetSha,
+}) {
+  const escapedRepo = String(repository).replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const exactPattern = new RegExp(
+    `https://github\\.com/${escapedRepo}/actions/runs/([1-9][0-9]*) \\(attempt ([1-9][0-9]*)\\)`,
+    "gu",
+  );
+  const urlPattern = new RegExp(
+    `https://github\\.com/${escapedRepo}/actions/runs/([1-9][0-9]*)`,
+    "gu",
+  );
+  const exact = Array.from(String(log).matchAll(exactPattern), (match) => ({
+    runAttempt: Number(match[2]),
+    runId: match[1],
+  }));
+  const runIds = [...new Set(Array.from(String(log).matchAll(urlPattern), (match) => match[1]))];
+  const exactBound =
+    exact.length === 1 &&
+    exact[0].runId === String(child.runId) &&
+    exact[0].runAttempt === Number(plannedRunAttempt);
+  const historicalUrlBound =
+    exact.length === 0 && runIds.length === 1 && runIds[0] === String(child.runId);
+  if (!exactBound && !historicalUrlBound) {
+    throw new Error(`release child is not uniquely emitted by its parent job: ${child.key}`);
+  }
+  if (child.key !== "npmTelegram" && !String(log).includes(`TARGET_SHA: ${targetSha}`)) {
+    throw new Error(`release child parent target SHA changed: ${child.key}`);
+  }
+  if (child.key === "productPerformance" && !String(log).includes("-f publish_reports=false")) {
+    throw new Error("release performance child is not dispatched in artifact-only mode");
+  }
+  if (candidate && ["pluginPrerelease", "releaseChecks"].includes(child.key)) {
+    const matches = Array.from(
+      String(log).matchAll(/CANDIDATE_ARTIFACT_JSON:\s*(\{[^\r\n]+\})/gu),
+      (match) => match[1],
+    );
+    if (matches.length !== 1) {
+      throw new Error(`release child candidate binding is missing or duplicated: ${child.key}`);
+    }
+    let observed;
+    try {
+      observed = canonicalValue(JSON.parse(matches[0]));
+    } catch {
+      throw new Error(`release child candidate binding is invalid: ${child.key}`);
+    }
+    if (JSON.stringify(observed) !== JSON.stringify(canonicalValue(candidate))) {
+      throw new Error(`release child candidate identity changed: ${child.key}`);
+    }
+  }
+}
+
 function candidatePreparationRequired(input) {
   if (
+    input.continuation ||
     booleanValue(input.evidenceReuse) ||
     stringValue(input.releasePackageSpec).trim() ||
     stringValue(input.packageAcceptancePackageSpec).trim()
@@ -152,6 +499,7 @@ export function buildReleaseExecutionPlan(input) {
     throw new Error("release execution plan identity is invalid");
   }
   const reused = booleanValue(input.evidenceReuse);
+  const continuation = input.continuation !== undefined && input.continuation !== null;
   const childInputs =
     input.children && typeof input.children === "object" && !Array.isArray(input.children)
       ? input.children
@@ -171,18 +519,25 @@ export function buildReleaseExecutionPlan(input) {
     const dispatchId = `full-release-validation-${parentRunId}-${parentRunAttempt}${spec.suffix}`;
     return {
       dispatchName: spec.dispatchName,
-      displayTitle: `${spec.displayName} ${dispatchId}`,
+      displayTitle: continuation
+        ? stringValue(raw.displayTitle).trim()
+        : `${spec.displayName} ${dispatchId}`,
       key: spec.key,
       required,
-      result: stringValue(raw.result, "skipped"),
+      result: continuation && required ? "success" : stringValue(raw.result, "skipped"),
       runAttempt: positiveInteger(raw.runAttempt) ?? null,
       runId: stringValue(raw.runId).trim(),
       selected: required,
-      source: reused ? "reused" : "fresh",
+      source: continuation ? "continuation" : reused ? "reused" : "fresh",
+      sourceParentAttempt: continuation ? (positiveInteger(raw.sourceParentAttempt) ?? null) : null,
       url: stringValue(raw.url).trim(),
-      workflow: spec.workflow,
-      workflowRef: stringValue(input.workflowRef).trim(),
-      workflowSha: stringValue(input.workflowSha).trim(),
+      workflow: continuation ? stringValue(raw.workflow).trim() : spec.workflow,
+      workflowRef: continuation
+        ? stringValue(raw.workflowRef).trim()
+        : stringValue(input.workflowRef).trim(),
+      workflowSha: continuation
+        ? stringValue(raw.workflowSha).trim()
+        : stringValue(input.workflowSha).trim(),
     };
   });
   const gates = [
@@ -193,7 +548,7 @@ export function buildReleaseExecutionPlan(input) {
     },
     {
       name: "Verify Docker runtime image assets",
-      required: !reused && rerunGroup === "all",
+      required: !continuation && !reused && rerunGroup === "all",
       result: stringValue(input.dockerPreflightResult, "skipped"),
     },
     {
@@ -273,8 +628,10 @@ function normalizedTrustedWorkflow(identity) {
 
 function executionPlanDigestPayload(plan) {
   return {
+    attemptEvidenceVersion: plan.attemptEvidenceVersion,
     blockers: plan.blockers,
     children: plan.children,
+    continuation: plan.continuation,
     errors: plan.errors,
     evidenceReuse: plan.evidenceReuse,
     gates: plan.gates,
@@ -298,8 +655,10 @@ export function releaseExecutionPlanSha256(plan) {
 }
 
 export function buildReleaseExecutionPlanArtifact({
+  attemptEvidenceVersion,
   blockers = [],
   children,
+  continuation,
   errors = [],
   evidenceReuse,
   expected,
@@ -312,23 +671,61 @@ export function buildReleaseExecutionPlanArtifact({
   if (!validEvidenceReuseIdentity(normalizedReuse)) {
     throw new Error("release execution plan evidence reuse binding is invalid");
   }
+  const normalizedPlanContinuation = normalizedContinuation(continuation);
+  const normalizedChildren = children.map(normalizedPlanChild);
+  if (
+    normalizedPlanContinuation &&
+    normalizedChildren
+      .filter((child) => child.selected)
+      .some(
+        (child) =>
+          !/^[1-9][0-9]*$/u.test(child.runId) ||
+          child.runAttempt === null ||
+          child.sourceParentAttempt === null ||
+          child.sourceParentAttempt > normalizedPlanContinuation.sourceRunAttempt ||
+          !child.workflowRef ||
+          !SHA_PATTERN.test(child.workflowSha),
+      )
+  ) {
+    throw new Error("release execution plan continuation child binding is invalid");
+  }
+  if (
+    normalizedPlanContinuation?.candidate?.packageSourceSha !== undefined &&
+    normalizedPlanContinuation.candidate.packageSourceSha !== expected.targetSha
+  ) {
+    throw new Error("release execution plan continuation candidate target is invalid");
+  }
+  if (
+    normalizedPlanContinuation &&
+    (normalizedPlanContinuation.releaseProfile !== releaseProfile ||
+      normalizedPlanContinuation.rerunGroup !== rerunGroup ||
+      normalizedPlanContinuation.toolingSha !== expected.workflowSha)
+  ) {
+    throw new Error("release execution plan continuation inputs are invalid");
+  }
   const plan = {
     version: 1,
     kind: "openclaw.full-release-execution-plan",
+    attemptEvidenceVersion:
+      attemptEvidenceVersion === undefined ? undefined : Number(attemptEvidenceVersion),
     parentRunId: String(expected.parentRunId),
     parentRunAttempt: positiveInteger(expected.parentRunAttempt),
     workflowRef: boundedString(expected.workflowRef, MAX_LABEL_LENGTH),
     workflowSha: boundedString(expected.workflowSha, MAX_LABEL_LENGTH),
     targetSha: boundedString(expected.targetSha, MAX_LABEL_LENGTH),
     trustedWorkflow: normalizedTrustedWorkflow(trustedWorkflow),
+    continuation: normalizedPlanContinuation,
     releaseProfile: boundedString(releaseProfile, MAX_LABEL_LENGTH),
     rerunGroup: boundedString(rerunGroup, MAX_LABEL_LENGTH),
     evidenceReuse: normalizedReuse,
     gates: gates.map(normalizedGate),
-    children: children.map(normalizedPlanChild),
+    children: normalizedChildren,
     blockers: normalizeIssues(blockers, "release_blocker"),
     errors: normalizeIssues(errors, "orchestration_error"),
   };
+  if (plan.attemptEvidenceVersion !== undefined && plan.attemptEvidenceVersion !== 1) {
+    throw new Error("release execution plan attempt evidence version is invalid");
+  }
   return { ...plan, sha256: releaseExecutionPlanSha256(plan) };
 }
 
@@ -360,17 +757,55 @@ export function validateReleaseExecutionPlanArtifact(payload, expected = {}) {
     throw new Error("release execution plan evidence reuse binding is invalid");
   }
   const trustedWorkflow = normalizedTrustedWorkflow(payload.trustedWorkflow);
+  const continuation = normalizedContinuation(payload.continuation);
+  const children = validatePlan(payload.children);
+  if (
+    continuation &&
+    children
+      .filter((child) => child.selected)
+      .some(
+        (child) =>
+          !/^[1-9][0-9]*$/u.test(child.runId) ||
+          child.runAttempt === null ||
+          !child.workflowRef ||
+          !SHA_PATTERN.test(child.workflowSha),
+      )
+  ) {
+    throw new Error("release execution plan continuation child binding is invalid");
+  }
+  if (
+    continuation?.candidate?.packageSourceSha !== undefined &&
+    continuation.candidate.packageSourceSha !== payload.targetSha
+  ) {
+    throw new Error("release execution plan continuation candidate target is invalid");
+  }
+  if (
+    continuation &&
+    (continuation.releaseProfile !== payload.releaseProfile ||
+      continuation.rerunGroup !== payload.rerunGroup ||
+      continuation.toolingSha !== payload.workflowSha)
+  ) {
+    throw new Error("release execution plan continuation inputs are invalid");
+  }
   const plan = {
     ...payload,
+    attemptEvidenceVersion:
+      payload.attemptEvidenceVersion === undefined
+        ? undefined
+        : Number(payload.attemptEvidenceVersion),
     parentRunAttempt: positiveInteger(payload.parentRunAttempt),
     parentRunId: String(payload.parentRunId),
-    children: validatePlan(payload.children),
+    children,
     blockers: normalizeIssues(payload.blockers, "release_blocker"),
     errors: normalizeIssues(payload.errors, "orchestration_error"),
     evidenceReuse,
     gates: Array.isArray(payload.gates) ? payload.gates.map(normalizedGate) : [],
+    continuation,
     trustedWorkflow,
   };
+  if (plan.attemptEvidenceVersion !== undefined && plan.attemptEvidenceVersion !== 1) {
+    throw new Error("release execution plan attempt evidence version is invalid");
+  }
   const sha256 = releaseExecutionPlanSha256(plan);
   if (payload.sha256 !== sha256) {
     throw new Error("release execution plan artifact digest is invalid");
@@ -577,7 +1012,7 @@ export function classifyReleaseSnapshot({
   );
   const errors = normalizeIssues([...extraErrors, ...childErrors], "orchestration_error");
 
-  const activeRunIds = active.map((child) => String(child.runId));
+  const activeRunIds = active.map((child) => String(child.runId)).toSorted();
   return {
     activeRunIds,
     blockers,
@@ -595,16 +1030,20 @@ function childTiming(child) {
         ? Math.round(((updated - started) / 60_000) * 10) / 10
         : null,
     jobs: child.jobs.map((job) => {
-      const jobStarted = Date.parse(job.started_at);
-      const jobCompleted = Date.parse(job.completed_at);
+      const startedAt = stringValue(job.started_at ?? job.startedAt);
+      const completedAt = stringValue(job.completed_at ?? job.completedAt);
+      const jobStarted = Date.parse(startedAt);
+      const jobCompleted = Date.parse(completedAt);
       return {
+        acceptedRunAttempt: positiveInteger(job.acceptedRunAttempt),
+        completedAt,
         conclusion: stringValue(job.conclusion),
         durationMinutes:
           Number.isFinite(jobStarted) && Number.isFinite(jobCompleted)
             ? Math.round(((jobCompleted - jobStarted) / 60_000) * 10) / 10
             : null,
         name: boundedString(job.name, MAX_LABEL_LENGTH),
-        startedAt: stringValue(job.started_at),
+        startedAt,
         status: stringValue(job.status),
         url: boundedString(job.html_url ?? job.url, MAX_URL_LENGTH),
       };
@@ -622,7 +1061,8 @@ function normalizedPlanChild(child) {
     runAttempt: positiveInteger(child.runAttempt) ?? null,
     runId: boundedString(child.runId, MAX_LABEL_LENGTH),
     selected: child.selected === true,
-    source: child.source === "reused" ? "reused" : "fresh",
+    source: ["continuation", "reused"].includes(child.source) ? child.source : "fresh",
+    sourceParentAttempt: positiveInteger(child.sourceParentAttempt) ?? null,
     url: boundedString(child.url, MAX_URL_LENGTH),
     workflow: boundedString(child.workflow, MAX_LABEL_LENGTH),
     workflowRef: boundedString(child.workflowRef, MAX_LABEL_LENGTH),
@@ -640,6 +1080,14 @@ export function buildReleaseStateArtifact({
   releaseProfile,
   rerunGroup,
 }) {
+  const activeRunIds = (decision.activeRunIds ?? []).map(String);
+  if (
+    activeRunIds.some((runId) => !/^[1-9][0-9]*$/u.test(runId)) ||
+    new Set(activeRunIds).size !== activeRunIds.length ||
+    JSON.stringify(activeRunIds) !== JSON.stringify(activeRunIds.toSorted())
+  ) {
+    throw new Error("release state active run IDs are malformed, duplicated, or unordered");
+  }
   return {
     version: 2,
     kind:
@@ -657,7 +1105,7 @@ export function buildReleaseStateArtifact({
     rerunGroup,
     executionPlanSha256: executionPlan.sha256,
     state: decision.state,
-    activeRunIds: decision.activeRunIds,
+    activeRunIds,
     blockers: decision.blockers,
     errors: decision.errors,
     cancellation: {
@@ -670,17 +1118,31 @@ export function buildReleaseStateArtifact({
         .map((child) => [
           child.key,
           {
+            compositeJobsSha256: boundedString(child.compositeJobsSha256, MAX_LABEL_LENGTH),
             conclusion: stringValue(child.conclusion),
+            dispatchActor: boundedString(child.dispatchActor, MAX_LABEL_LENGTH),
             displayTitle: boundedString(child.displayTitle, MAX_LABEL_LENGTH),
             errors: normalizeIssues(child.errors, "orchestration_error"),
+            observedRunAttempts: Array.isArray(child.observedRunAttempts)
+              ? child.observedRunAttempts.map((value) => {
+                  const attempt = positiveInteger(value);
+                  if (attempt === undefined) {
+                    throw new Error(`release state child attempt is invalid: ${child.key}`);
+                  }
+                  return attempt;
+                })
+              : [],
+            plannedRunAttempt: positiveInteger(child.plannedRunAttempt ?? child.runAttempt),
             runAttempt: positiveInteger(child.runAttempt),
             runId: String(child.runId),
+            repository: boundedString(child.repository, MAX_LABEL_LENGTH),
             status: stringValue(child.status),
             timing: childTiming(child),
             url: boundedString(child.url, MAX_URL_LENGTH),
             workflow: boundedString(child.workflow, MAX_LABEL_LENGTH),
             workflowRef: boundedString(child.workflowRef, MAX_LABEL_LENGTH),
             workflowSha: boundedString(child.workflowSha, MAX_LABEL_LENGTH),
+            triggeringActor: boundedString(child.triggeringActor, MAX_LABEL_LENGTH),
           },
         ]),
     ),
@@ -748,9 +1210,17 @@ export function validateReleaseStateArtifact(payload, expected, expectedMode) {
   }
   const blockers = normalizeIssues(payload.blockers, "release_blocker");
   const errors = normalizeIssues(payload.errors, "orchestration_error");
-  const activeRunIds = Array.isArray(payload.activeRunIds)
-    ? payload.activeRunIds.map(String).filter((runId) => /^[1-9][0-9]*$/u.test(runId))
-    : [];
+  if (!Array.isArray(payload.activeRunIds)) {
+    throw new Error("release state active run IDs are invalid");
+  }
+  const activeRunIds = payload.activeRunIds.map(String);
+  if (
+    activeRunIds.some((runId) => !/^[1-9][0-9]*$/u.test(runId)) ||
+    new Set(activeRunIds).size !== activeRunIds.length ||
+    JSON.stringify(activeRunIds) !== JSON.stringify(activeRunIds.toSorted())
+  ) {
+    throw new Error("release state active run IDs are malformed, duplicated, or unordered");
+  }
   const children =
     payload.children && typeof payload.children === "object" && !Array.isArray(payload.children)
       ? Object.fromEntries(
@@ -758,25 +1228,71 @@ export function validateReleaseStateArtifact(payload, expected, expectedMode) {
             if (!child || typeof child !== "object" || Array.isArray(child)) {
               throw new Error(`release state child snapshot is invalid: ${key}`);
             }
-            const timingJobs = Array.isArray(child.timing?.jobs)
-              ? child.timing.jobs.map((job) => ({
-                  conclusion: stringValue(job?.conclusion),
-                  durationMinutes:
-                    typeof job?.durationMinutes === "number" ? job.durationMinutes : null,
-                  name: boundedString(job?.name, MAX_LABEL_LENGTH),
-                  startedAt: stringValue(job?.startedAt),
-                  status: stringValue(job?.status),
-                  url: boundedString(job?.url, MAX_URL_LENGTH),
-                }))
-              : [];
+            if (!Array.isArray(child.timing?.jobs)) {
+              throw new Error(`release state child jobs are invalid: ${key}`);
+            }
+            const plannedRunAttempt = positiveInteger(child.plannedRunAttempt);
+            const runAttempt = positiveInteger(child.runAttempt);
+            const observedRunAttempts = Array.isArray(child.observedRunAttempts)
+              ? child.observedRunAttempts.map((value) => positiveInteger(value))
+              : undefined;
+            const expectedRunAttempts =
+              plannedRunAttempt === undefined || runAttempt === undefined
+                ? []
+                : Array.from(
+                    { length: runAttempt - plannedRunAttempt + 1 },
+                    (_, index) => plannedRunAttempt + index,
+                  );
+            if (
+              (child.compositeJobsSha256 || (observedRunAttempts?.length ?? 0) > 0) &&
+              (plannedRunAttempt === undefined ||
+                runAttempt === undefined ||
+                !observedRunAttempts ||
+                observedRunAttempts.some((value) => value === undefined) ||
+                JSON.stringify(observedRunAttempts) !== JSON.stringify(expectedRunAttempts))
+            ) {
+              throw new Error(`release state child attempt evidence is invalid: ${key}`);
+            }
+            const timingJobs = child.timing.jobs.map((job) => ({
+              acceptedRunAttempt: positiveInteger(job?.acceptedRunAttempt),
+              completedAt: stringValue(job?.completedAt),
+              conclusion: stringValue(job?.conclusion),
+              durationMinutes:
+                typeof job?.durationMinutes === "number" ? job.durationMinutes : null,
+              name: boundedString(job?.name, MAX_LABEL_LENGTH),
+              startedAt: stringValue(job?.startedAt),
+              status: stringValue(job?.status),
+              url: boundedString(job?.url, MAX_URL_LENGTH),
+            }));
+            const jobNames = timingJobs.map((job) => job.name);
+            if (
+              child.compositeJobsSha256 &&
+              (timingJobs.length === 0 ||
+                timingJobs.some(
+                  (job) =>
+                    !job.name ||
+                    job.acceptedRunAttempt === undefined ||
+                    job.acceptedRunAttempt < plannedRunAttempt ||
+                    job.acceptedRunAttempt > runAttempt,
+                ) ||
+                new Set(jobNames).size !== jobNames.length ||
+                JSON.stringify(jobNames) !== JSON.stringify(jobNames.toSorted()))
+            ) {
+              throw new Error(`release state child composite jobs are invalid: ${key}`);
+            }
             return [
               key,
               {
+                compositeJobsSha256: boundedString(child.compositeJobsSha256, MAX_LABEL_LENGTH),
                 conclusion: stringValue(child.conclusion),
+                dispatchActor: boundedString(child.dispatchActor, MAX_LABEL_LENGTH),
                 displayTitle: boundedString(child.displayTitle, MAX_LABEL_LENGTH),
                 errors: normalizeIssues(child.errors, "orchestration_error"),
-                runAttempt: positiveInteger(child.runAttempt),
+                observedRunAttempts: observedRunAttempts ?? [],
+                plannedRunAttempt,
+                runAttempt,
                 runId: String(child.runId ?? ""),
+                repository: boundedString(child.repository, MAX_LABEL_LENGTH),
                 status: stringValue(child.status),
                 timing: {
                   durationMinutes:
@@ -789,6 +1305,7 @@ export function validateReleaseStateArtifact(payload, expected, expectedMode) {
                 workflow: boundedString(child.workflow, MAX_LABEL_LENGTH),
                 workflowRef: boundedString(child.workflowRef, MAX_LABEL_LENGTH),
                 workflowSha: boundedString(child.workflowSha, MAX_LABEL_LENGTH),
+                triggeringActor: boundedString(child.triggeringActor, MAX_LABEL_LENGTH),
               },
             ];
           }),
@@ -817,6 +1334,31 @@ export function releasePlanGateFailures(gates) {
     }));
 }
 
+export function releaseStateChildEvidence(child) {
+  return canonicalValue({
+    compositeJobsSha256: child.compositeJobsSha256,
+    dispatchActor: child.dispatchActor,
+    effectiveRunAttempt: child.runAttempt,
+    jobs: child.timing.jobs.map((job) => ({
+      acceptedRunAttempt: job.acceptedRunAttempt,
+      completedAt: job.completedAt,
+      conclusion: job.conclusion,
+      name: job.name,
+      startedAt: job.startedAt,
+      status: job.status,
+      url: job.url,
+    })),
+    observedRunAttempts: child.observedRunAttempts,
+    plannedRunAttempt: child.plannedRunAttempt,
+    repository: child.repository,
+    runId: child.runId,
+    triggeringActor: child.triggeringActor,
+    workflow: child.workflow,
+    workflowRef: child.workflowRef,
+    workflowSha: child.workflowSha,
+  });
+}
+
 function verifyStateStructure(state, executionPlan, label) {
   const selected = executionPlan.children.filter((entry) => entry.selected);
   const expectedKeys = selected.map((child) => child.key).toSorted();
@@ -831,13 +1373,59 @@ function verifyStateStructure(state, executionPlan, label) {
     if (
       !snapshot ||
       snapshot.runId !== child.runId ||
-      snapshot.runAttempt !== child.runAttempt ||
+      snapshot.plannedRunAttempt !== child.runAttempt ||
+      snapshot.runAttempt < child.runAttempt ||
       snapshot.displayTitle !== child.displayTitle ||
       snapshot.workflow !== child.workflow ||
       snapshot.workflowRef !== child.workflowRef ||
       snapshot.workflowSha !== child.workflowSha
     ) {
       throw new Error(`${label} child provenance differs from the immutable plan: ${child.key}`);
+    }
+    if (executionPlan.attemptEvidenceVersion === 1) {
+      if (
+        snapshot.dispatchActor !== "github-actions[bot]" ||
+        !snapshot.triggeringActor ||
+        !snapshot.repository
+      ) {
+        throw new Error(`${label} child rerun provenance is invalid: ${child.key}`);
+      }
+      const expectedAttempts = Array.from(
+        { length: snapshot.runAttempt - child.runAttempt + 1 },
+        (_, index) => child.runAttempt + index,
+      );
+      if (JSON.stringify(snapshot.observedRunAttempts) !== JSON.stringify(expectedAttempts)) {
+        throw new Error(`${label} child attempt evidence is gapped: ${child.key}`);
+      }
+      const composite = {
+        effectiveRunAttempt: snapshot.runAttempt,
+        jobs: snapshot.timing.jobs.map((job) => {
+          const acceptedRunAttempt = positiveInteger(job.acceptedRunAttempt);
+          if (
+            acceptedRunAttempt === undefined ||
+            acceptedRunAttempt < child.runAttempt ||
+            acceptedRunAttempt > snapshot.runAttempt
+          ) {
+            throw new Error(`${label} child job attempt is invalid: ${child.key}`);
+          }
+          return {
+            acceptedRunAttempt,
+            completedAt: job.completedAt,
+            conclusion: job.conclusion,
+            name: job.name,
+            startedAt: job.startedAt,
+            status: job.status,
+            url: job.url,
+          };
+        }),
+        plannedRunAttempt: child.runAttempt,
+      };
+      if (
+        snapshot.compositeJobsSha256 !== releaseCompositeJobsSha256(composite) ||
+        new Set(composite.jobs.map((job) => job.name)).size !== composite.jobs.length
+      ) {
+        throw new Error(`${label} child composite job evidence is invalid: ${child.key}`);
+      }
     }
     return Object.assign({}, child, snapshot, {
       jobs: snapshot.timing.jobs.map((job) => ({
@@ -933,6 +1521,14 @@ function verifyReleaseStatePair(planPayload, decisionPayload, drainPayload, expe
   verifyStateStructure(decision, executionPlan, "release decision");
   verifyStateStructure(drain, executionPlan, "diagnostic drain");
   verifyStateTransition(decision, drain);
+  for (const child of executionPlan.children.filter((entry) => entry.selected)) {
+    if (
+      JSON.stringify(releaseStateChildEvidence(decision.children[child.key])) !==
+      JSON.stringify(releaseStateChildEvidence(drain.children[child.key]))
+    ) {
+      throw new Error(`release decision and diagnostic drain child evidence differ: ${child.key}`);
+    }
+  }
   return {
     decision,
     drain,

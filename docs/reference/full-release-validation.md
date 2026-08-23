@@ -65,6 +65,63 @@ Decision and Diagnostic Drain artifacts independently. Both must bind the same
 immutable plan and exact child tuple; their source attempts remain recorded in
 the artifacts and may differ when only one collector needed a retry.
 
+## Continue failed child jobs
+
+Full Release Validation can adopt monotonically newer attempts of the exact
+child runs recorded in its immutable plan. A newer attempt is accepted only
+when the run ID, workflow path, workflow ref, Tooling SHA, dispatch title, and
+event are unchanged. For each logical job, the newest observed attempt wins,
+including a newer failure; a job absent from a newer attempt carries forward
+from the last attempt that included it. Duplicate job names within one attempt,
+missing attempts, or provenance drift fail closed.
+
+Inspect or continue an existing parent:
+
+```bash
+pnpm frv status --run <parent-run-id>
+pnpm frv continue --failed --run <parent-run-id>
+pnpm frv verify --run <successful-parent-run-id>
+```
+
+`continue --failed` waits for active child attempts instead of starting a
+duplicate. Once every active attempt is terminal, it reruns failed child jobs
+in parallel, leaves green child workflows untouched, and reruns the parent
+once. The parent restores its immutable execution plan, observes the effective
+child attempts, and writes the final all-group manifest. The manifest records
+the planned and effective attempt, accepted attempt for every logical job, and
+a digest of the composite job evidence.
+
+The command stores no continuation ledger or local journal. GitHub run
+attempts, the immutable execution plan, Decision/Drain artifacts, and the final
+manifest are the complete state model. It never tags, publishes, changes a
+registry, or prepares a new candidate.
+
+A parent created before immutable execution plans requires an explicit,
+reviewed legacy source plan:
+
+```bash
+pnpm frv continue --failed \
+  --run <legacy-parent-run-id> \
+  --legacy-plan <reviewed-source-plan.json>
+```
+
+The JSON must freeze:
+
+- `source`: exact run ID and attempt, display title, event, workflow path, ref,
+  Tooling SHA, and repository
+- `targetSha`, complete `candidate`, `releaseProfile`, `runReleaseSoak`,
+  complete `validationInputs`, and the reviewed continuation `toolingSha`
+- `children`: exact child run ID and planned attempt, display title, workflow
+  path, ref, Tooling SHA, and URL
+
+After the exact failed child jobs pass, the controller dispatches one
+continuation parent from the frozen reviewed Tooling SHA. That parent dispatches
+no children, prepares no candidate, disables release-evidence dispatch, and
+emits a normal all-group manifest bound to the legacy source. If the source run
+already has a canonical execution-plan artifact, legacy mode is rejected.
+Missing identity is an error; the command does not guess from current `main` or
+the newest similarly named run.
+
 The helper creates a temporary `release-ci/*` ref pinned to the Tooling SHA,
 passes the Validation SHA as both the candidate ref and `expected_sha`, and
 deletes the temporary ref after successful validation and strict evidence
@@ -208,8 +265,9 @@ immutable execution plan owns child identity across collector attempts. The
 decision state is one of `qualifying`, `blocked_diagnostics_running`, `passed`,
 `blocked_complete`, `orchestration_error`, or `cancelled_with_children`.
 Persistent GitHub API failures are orchestration errors. A child whose workflow
-path, display title, ref, Tooling SHA, run ID, or attempt changes is a distinct
-provenance mismatch.
+path, display title, ref, Tooling SHA, or run ID changes is a distinct
+provenance mismatch. A monotonically newer attempt is accepted only through the
+composite-attempt rules above.
 
 `blocked_diagnostics_running` is safe for immediate diagnosis but not for a
 retry until Diagnostic Drain is terminal. `orchestration_error` authorizes
