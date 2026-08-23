@@ -100,18 +100,25 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun stopTtsCancelsTrackedPlaybackJob() {
-    val manager = createManager()
-    val playbackJob = Job()
+  fun stopTtsWithoutOutputIdentityCancelsPlaybackWithoutReplacingCancellationWaiter() =
+    runTest {
+      val manager = createManager(scope = this)
+      val playbackJob = Job()
+      val pendingClear = CompletableDeferred<String?>()
 
-    setPrivateField(manager, "ttsJob", playbackJob)
-    playbackGeneration(manager).set(7L)
+      setPrivateField(manager, "ttsJob", playbackJob)
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(manager, "realtimeOutputTurnId", " ")
+      setPrivateField(manager, "pendingRealtimeOutputClear", pendingClear)
+      playbackGeneration(manager).set(7L)
 
-    manager.stopTts()
+      manager.stopTts()
+      runCurrent()
 
-    assertTrue(playbackJob.isCancelled)
-    assertEquals(8L, playbackGeneration(manager).get())
-  }
+      assertTrue(playbackJob.isCancelled)
+      assertEquals(8L, playbackGeneration(manager).get())
+      assertTrue(readPrivateField(manager, "pendingRealtimeOutputClear") === pendingClear)
+    }
 
   @Test
   fun disablingPlaybackCancelsTrackedJobOnce() {
@@ -829,7 +836,7 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun unconfirmedOutputCancellationClosesRealtimeRelay() =
+  fun pushToTalkWithoutOutputIdentityClosesRealtimeRelayWithoutWaitingForClear() =
     runTest {
       var stoppedByRelay = false
       val manager =
@@ -843,6 +850,7 @@ class TalkModeManagerTest {
       manager.pauseRealtimeCaptureForPushToTalk("capture-1")
 
       assertNull(readPrivateField(manager, "realtimeSessionId"))
+      assertNull(readPrivateField(manager, "pendingRealtimeOutputClear"))
       val pause = readPrivateField(manager, "realtimeCapturePause")!!
       assertEquals("capture-1", readPrivateField(pause, "pttCaptureId"))
       assertTrue(readPrivateField(pause, "restartRelay") as Boolean)

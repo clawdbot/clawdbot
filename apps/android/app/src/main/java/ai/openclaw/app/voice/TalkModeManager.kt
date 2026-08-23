@@ -2927,7 +2927,7 @@ class TalkModeManager internal constructor(
   private suspend fun cancelRealtimeOutput(reason: String): Boolean =
     realtimeOutputCancellationMutex.withLock {
       val sessionId = realtimeSessionId ?: return@withLock true
-      val turnId = realtimeOutputTurnId
+      val turnId = realtimeOutputTurnId?.trim()?.takeIf(String::isNotEmpty) ?: return@withLock false
       val clear = CompletableDeferred<String?>()
       pendingRealtimeOutputClear = clear
       try {
@@ -2935,7 +2935,7 @@ class TalkModeManager internal constructor(
           buildJsonObject {
             put("sessionId", JsonPrimitive(sessionId))
             put("reason", JsonPrimitive(reason))
-            if (turnId != null) put("turnId", JsonPrimitive(turnId))
+            put("turnId", JsonPrimitive(turnId))
           }
         val response = requestGateway("talk.session.cancelOutput", params.toString(), timeoutMs = 5_000)
         val result = requireAcceptedRealtimeOutputCancellation(response, turnId)
@@ -2943,8 +2943,7 @@ class TalkModeManager internal constructor(
         // The response confirms provider cancellation; clear confirms that the
         // old playback boundary reached Android before capture can resume.
         val clearedTurnId = withTimeout(2_000) { clear.await() }
-        val expectedTurnId = turnId ?: result.turnId
-        check(expectedTurnId == null || clearedTurnId == expectedTurnId) {
+        check(clearedTurnId == turnId) {
           "talk.session.cancelOutput clear turnId did not match"
         }
         true
