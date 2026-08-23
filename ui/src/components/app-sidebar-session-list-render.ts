@@ -8,6 +8,7 @@ import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.t
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
 import {
+  renderChildSessionLoadError,
   renderRecentSession,
   renderSessionTree,
   type SessionListHost,
@@ -451,6 +452,7 @@ export function renderSessionList(params: {
   catalogRenderer: SessionCatalogGroupsRenderer | null;
 }) {
   const { host } = params;
+  const hiddenMainSessionKey = host.mainSessionRow()?.key;
   return html`
     <section
       class="sidebar-sessions ${host.sessionOrganizer.sessionListRemovalDrop
@@ -461,6 +463,7 @@ export function renderSessionList(params: {
       @drop=${(event: DragEvent) => host.handleSessionListDrop(event)}
     >
       ${renderSessionListToolbar(host)}
+      ${hiddenMainSessionKey ? renderChildSessionLoadError(host, hiddenMainSessionKey) : nothing}
       ${host.sessionData.sessionMutationError
         ? html`
             <div
