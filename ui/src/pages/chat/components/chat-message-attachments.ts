@@ -7,6 +7,7 @@ import {
   openAttachmentCardFromClick,
   renderAttachmentCardHeader,
 } from "./chat-attachment-card.ts";
+import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 import {
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES,
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS,
@@ -361,6 +362,24 @@ function renderAttachmentDocumentPreview(
   attachmentUrl: string,
   previewText: string | null | undefined,
 ) {
+  const updatePreviewState = (event: Event, state: "ready" | "failed") => {
+    const card = (event.currentTarget as Element).closest<HTMLElement>(
+      ".chat-assistant-attachment-card",
+    );
+    if (!card) {
+      return;
+    }
+    if (state === "ready") {
+      card.dataset.previewRendered = "";
+      return;
+    }
+    card.dataset.previewFailed = "";
+    card.classList.remove("chat-assistant-attachment-card--preview");
+    card.classList.add("chat-assistant-attachment-card--compact");
+    card
+      .querySelector<HTMLElement>(".chat-attachment-file-icon")
+      ?.setAttribute("data-mode", "large-placeholder");
+  };
   if (previewKind === "html") {
     return html`<div class="chat-assistant-attachment-card__html-preview">
       <iframe
@@ -369,6 +388,8 @@ function renderAttachmentDocumentPreview(
         sandbox
         loading="lazy"
         scrolling="no"
+        @load=${(event: Event) => updatePreviewState(event, "ready")}
+        @error=${(event: Event) => updatePreviewState(event, "failed")}
       ></iframe>
       <span class="chat-assistant-attachment-card__preview-fade" aria-hidden="true"></span>
     </div>`;
@@ -378,7 +399,13 @@ function renderAttachmentDocumentPreview(
   }
   const previewUrl = `${attachmentUrl.split("#", 1)[0]}#toolbar=0&navpanes=0&scrollbar=0&view=FitH`;
   return html`<div class="chat-assistant-attachment-card__page-preview">
-    <iframe src=${previewUrl} title=${attachment.label} loading="lazy"></iframe>
+    <iframe
+      src=${previewUrl}
+      title=${attachment.label}
+      loading="lazy"
+      @load=${(event: Event) => updatePreviewState(event, "ready")}
+      @error=${(event: Event) => updatePreviewState(event, "failed")}
+    ></iframe>
   </div>`;
 }
 
@@ -481,6 +508,7 @@ export function renderAssistantAttachments(
         return renderAssistantAttachmentStatusCard({
           kind: "image",
           label: attachment.label,
+          mimeType: attachment.mimeType,
           badge:
             availability.status === "checking"
               ? t("chat.attachments.checking")
@@ -490,7 +518,7 @@ export function renderAssistantAttachments(
         });
       }
       const title = attachment.label.trim() || t("chat.imageLightbox.untitled");
-      return html`
+      return html`<span class="chat-image-frame">
         <button
           type="button"
           class="chat-message-image-button"
@@ -506,13 +534,21 @@ export function renderAssistantAttachments(
         >
           <img src=${attachmentUrl} alt=${title} class="chat-message-image" />
         </button>
-      `;
+        <span class="chat-image-file-icon">
+          ${renderAttachmentFileIcon({
+            filename: attachment.label,
+            mimeType: attachment.mimeType,
+            mode: "preview-with-favicon",
+          })}
+        </span>
+      </span>`;
     }
     if (attachment.kind === "audio") {
       if (!attachmentUrl) {
         return renderAssistantAttachmentStatusCard({
           kind: "audio",
           label: attachment.label,
+          mimeType: attachment.mimeType,
           badge:
             availability.status === "checking"
               ? t("chat.attachments.checking")
@@ -542,6 +578,7 @@ export function renderAssistantAttachments(
         return renderAssistantAttachmentStatusCard({
           kind: "video",
           label: attachment.label,
+          mimeType: attachment.mimeType,
           badge:
             availability.status === "checking"
               ? t("chat.attachments.checking")
@@ -574,6 +611,7 @@ export function renderAssistantAttachments(
       return renderAssistantAttachmentStatusCard({
         kind: "document",
         label: attachment.label,
+        mimeType: attachment.mimeType,
         badge:
           availability.status === "checking"
             ? t("chat.attachments.checking")
@@ -588,10 +626,15 @@ export function renderAssistantAttachments(
       previewKind === "table" && isTextyDocumentAttachment(attachment)
         ? resolveDocumentPreviewText(attachmentUrl, attachment.url, sizeBytes, onRequestUpdate)
         : null;
+    const tablePreviewFailed =
+      previewKind === "table" &&
+      previewText !== undefined &&
+      parseDelimitedPreview(previewText ?? "").length === 0;
+    const showPreview = previewKind !== null && !tablePreviewFailed;
     return html`
       <div
         class="chat-assistant-attachment-card chat-assistant-attachment-card--document ${
-          previewKind
+          showPreview
             ? "chat-assistant-attachment-card--preview"
             : "chat-assistant-attachment-card--compact"
         }"
@@ -607,9 +650,9 @@ export function renderAssistantAttachments(
           downloadHref,
           showExpandAction: true,
           onExpand: openAttachmentSidebar,
-          compact: previewKind === null,
+          visualMode: showPreview ? "preview-with-favicon" : "large-placeholder",
         })}
-        ${previewKind
+        ${showPreview && previewKind
           ? renderAttachmentDocumentPreview(previewKind, attachment, attachmentUrl, previewText)
           : null}
       </div>

@@ -474,6 +474,7 @@ class ChatAudioPlayer extends OpenClawLightDomContentsElement {
           downloadHref,
           showExpandAction: true,
           onExpand: this.onExpand,
+          visualMode: failed ? "large-placeholder" : "preview-with-favicon",
           voiceNote: this.voiceNote,
         })}
         ${failed

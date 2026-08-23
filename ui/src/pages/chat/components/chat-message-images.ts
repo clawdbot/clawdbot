@@ -11,6 +11,7 @@ import {
 } from "../../../lib/open-external-url.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
+import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import {
   buildAssistantAttachmentUrl,
@@ -224,6 +225,13 @@ export function renderMessageImages(images: RenderableImageBlock[], opts?: Image
         ${managed
           ? renderManagedImageActions(img, opts, () => openImage(img, previewUrl))
           : nothing}
+        <span class="chat-image-file-icon">
+          ${renderAttachmentFileIcon({
+            filename: resolveImageFileName(img),
+            mimeType: "image/png",
+            mode: "preview-with-favicon",
+          })}
+        </span>
       </span>
     `;
   };
@@ -236,6 +244,26 @@ export function renderMessageImages(images: RenderableImageBlock[], opts?: Image
   };
 
   return html` <div class="chat-message-images">${images.map((img) => renderImage(img))}</div> `;
+}
+
+function resolveImageFileName(image: ImageBlock): string {
+  for (const candidate of [image.alt, image.url]) {
+    if (!candidate) {
+      continue;
+    }
+    try {
+      const pathname = new URL(candidate, "https://openclaw.invalid").pathname;
+      for (const segment of pathname.split("/").reverse()) {
+        const filename = decodeURIComponent(segment);
+        if (/\.[a-z0-9]+$/iu.test(filename)) {
+          return filename;
+        }
+      }
+    } catch {
+      // Fall through to the known image-family fallback.
+    }
+  }
+  return "image.png";
 }
 
 function isManagedOutgoingImageSource(source: string): boolean {

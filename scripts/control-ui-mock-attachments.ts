@@ -142,6 +142,13 @@ const chatAttachmentAssets: Record<string, FixtureAsset> = {
     `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"><defs><linearGradient id="g" x1="0" x2="1"><stop stop-color="#064e3b"/><stop offset="1" stop-color="#1d4ed8"/></linearGradient></defs><rect width="640" height="360" rx="24" fill="url(#g)"/><circle cx="488" cy="106" r="58" fill="#a7f3d0" opacity=".9"/><path d="M0 310 150 198l112 72 132-122 246 162H0Z" fill="#082f49" opacity=".82"/></svg>`,
     "image/svg+xml",
   ),
+  "sample-image.png": {
+    body: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64",
+    ),
+    contentType: "image/png",
+  },
   "sample-video.mp4": {
     ...buildVideoAsset(),
   },
@@ -204,6 +211,11 @@ const chatAttachmentAssets: Record<string, FixtureAsset> = {
   ),
   "deploy.yaml": textAsset("name: attachment-fixture\nready: true\n", "application/yaml"),
   "worker.py": textAsset("def ready():\n    return True\n", "text/x-python"),
+  "vector.svg": textAsset(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="24" fill="#e76f3c"/></svg>',
+    "image/svg+xml",
+  ),
+  "mystery.blob": textAsset("Unknown attachment family fixture.\n", "application/octet-stream"),
   "readme.rtf": textAsset("{\\rtf1\\ansi Attachment fixture document}", "application/rtf"),
   "bundle.zip": zipAsset(
     { "README.txt": "Attachment fixture archive\n", "data.json": '{"ready":true}\n' },
@@ -270,13 +282,27 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
       ],
       timestamp: baseTime + 2,
     },
-    sectionTitle("HTML", baseTime + 3),
+    sectionTitle("File icon families", baseTime + 3),
+    {
+      role: "assistant",
+      content: [
+        documentAttachment("mystery.blob", "application/octet-stream"),
+        documentAttachment("sample-image.png", "image/png"),
+        documentAttachment("config.xml", "application/xml"),
+        documentAttachment("deploy.yaml", "application/yaml"),
+        documentAttachment("worker.py", "text/x-python"),
+        documentAttachment("vector.svg", "image/svg+xml"),
+        documentAttachment("readme.rtf", "application/rtf"),
+      ],
+      timestamp: baseTime + 4,
+    },
+    sectionTitle("HTML", baseTime + 5),
     {
       role: "assistant",
       content: [documentAttachment("preview.html", "text/html")],
-      timestamp: baseTime + 4,
+      timestamp: baseTime + 6,
     },
-    sectionTitle("CSV / XLSX", baseTime + 5),
+    sectionTitle("CSV / XLSX", baseTime + 7),
     {
       role: "assistant",
       content: [
@@ -286,9 +312,9 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ),
       ],
-      timestamp: baseTime + 6,
+      timestamp: baseTime + 8,
     },
-    sectionTitle("Audio", baseTime + 7),
+    sectionTitle("Audio", baseTime + 9),
     {
       role: "assistant",
       content: [
@@ -315,9 +341,9 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
           },
         },
       ],
-      timestamp: baseTime + 8,
+      timestamp: baseTime + 10,
     },
-    sectionTitle("Video", baseTime + 9),
+    sectionTitle("Video", baseTime + 11),
     {
       role: "assistant",
       content: [
@@ -335,15 +361,15 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
           },
         },
       ],
-      timestamp: baseTime + 10,
+      timestamp: baseTime + 12,
     },
-    sectionTitle("Archive", baseTime + 11),
+    sectionTitle("Archive", baseTime + 13),
     {
       role: "assistant",
       content: [documentAttachment("bundle.zip", "application/zip")],
-      timestamp: baseTime + 12,
+      timestamp: baseTime + 14,
     },
-    sectionTitle("Link", baseTime + 13),
+    sectionTitle("Link", baseTime + 15),
     {
       role: "assistant",
       content: [
@@ -352,9 +378,9 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
           text: "[OpenClaw documentation](https://docs.openclaw.ai)",
         },
       ],
-      timestamp: baseTime + 14,
+      timestamp: baseTime + 16,
     },
-    sectionTitle("Unavailable", baseTime + 15),
+    sectionTitle("Unavailable / failed / removed", baseTime + 17),
     {
       role: "assistant",
       content: [
@@ -362,22 +388,32 @@ export function buildChatAttachmentHistory(baseTime: number): unknown[] {
           type: "attachment",
           attachment: {
             kind: "document",
-            label: "download-failed.txt",
-            mimeType: "text/plain",
-            url: fixtureUrl("download-failed.txt"),
+            label: "temporarily-unavailable.pdf",
+            mimeType: "application/pdf",
+            url: fixtureUrl("temporarily-unavailable.pdf"),
           },
         },
         {
           type: "attachment",
           attachment: {
             kind: "document",
-            label: "removed-file.txt",
-            mimeType: "text/plain",
-            url: fixtureUrl("removed-file.txt"),
+            label: "download-failed.zip",
+            mimeType: "application/zip",
+            url: fixtureUrl("download-failed.zip"),
+          },
+        },
+        {
+          type: "attachment",
+          attachment: {
+            kind: "document",
+            label: "removed-file.docx",
+            mimeType:
+              "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            url: fixtureUrl("removed-file.docx"),
           },
         },
       ],
-      timestamp: baseTime + 16,
+      timestamp: baseTime + 18,
     },
   ];
 }
@@ -447,11 +483,16 @@ function serveAssistantMedia(
     res.setHeader("content-type", "application/json");
     res.setHeader("cache-control", "no-store");
     if (!asset) {
-      const removed = fileName === "removed-file.txt";
+      const removed = fileName === "removed-file.docx";
+      const temporarilyUnavailable = fileName === "temporarily-unavailable.pdf";
       res.end(
         JSON.stringify({
           available: false,
-          reason: removed ? "file was removed" : "download failed",
+          reason: removed
+            ? "file was removed"
+            : temporarilyUnavailable
+              ? "temporarily unavailable"
+              : "download failed",
           retryable: !removed,
         }),
       );

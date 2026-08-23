@@ -2,7 +2,6 @@ import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
-import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
@@ -95,6 +94,7 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
   override render() {
     const downloadHref = safeAttachmentHref(this.src);
     const preparing = this.sourceController.readiness === "preparing";
+    const unavailable = this.sourceController.readiness === "unavailable";
     const dimensions =
       this.mediaWidth && this.mediaHeight
         ? { "aspect-ratio": `${this.mediaWidth} / ${this.mediaHeight}` }
@@ -115,6 +115,7 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
           downloadHref,
           showExpandAction: true,
           onExpand: this.onExpand,
+          visualMode: unavailable ? "large-placeholder" : "preview-with-favicon",
         })}
         ${preparing
           ? html`<div class="chat-assistant-attachment-card__reason chat-media-preparing">
@@ -122,9 +123,6 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
             </div>`
           : null}
         <div class="chat-assistant-video-frame" style=${styleMap(dimensions)} ?hidden=${preparing}>
-          <span class="chat-assistant-video-frame__placeholder" aria-hidden="true"
-            >${icons.monitor}</span
-          >
           <video
             controls
             preload="auto"

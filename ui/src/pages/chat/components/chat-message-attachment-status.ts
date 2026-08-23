@@ -7,6 +7,7 @@ import type { AttachmentItem } from "./chat-message-media.ts";
 export function renderAssistantAttachmentStatusCard(params: {
   kind: AttachmentItem["attachment"]["kind"];
   label: string;
+  mimeType?: string;
   badge: string;
   reason?: string;
   onRetry?: () => void;
@@ -27,7 +28,8 @@ export function renderAssistantAttachmentStatusCard(params: {
           ${renderAttachmentCardIcon({
             kind: params.kind,
             label: params.label,
-            compact: true,
+            mimeType: params.mimeType,
+            visualMode: "large-placeholder",
             unavailable,
           })}
           <span class="chat-assistant-attachment-card__details">
