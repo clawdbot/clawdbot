@@ -1,7 +1,10 @@
 /** Sends cron announce payloads and best-effort failure notifications. */
 
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
-import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
+import {
+  durableMessageBatchMayHaveReachedRecipient,
+  sendDurableMessageBatchCore,
+} from "../channels/message/runtime.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -92,6 +95,7 @@ async function deliverCronAnnouncePayload(params: {
   };
   payload: ReplyPayload;
   abortSignal: AbortSignal;
+  onDeliveryAttempt?: (reachedRecipient: boolean) => void;
 }): Promise<void> {
   // Cron delivery is durable and non-best-effort for primary announces; partial
   // channel failure must surface as a cron run failure.
@@ -108,6 +112,7 @@ async function deliverCronAnnouncePayload(params: {
     deps: createOutboundSendDeps(params.deps),
     signal: params.abortSignal,
   });
+  params.onDeliveryAttempt?.(durableMessageBatchMayHaveReachedRecipient(send));
   if (send.status === "failed" || send.status === "partial_failed") {
     throw send.error;
   }
@@ -122,6 +127,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
   target: CronAnnounceTarget;
   payload: ReplyPayload;
   abortSignal: AbortSignal;
+  onDeliveryAttempt?: (reachedRecipient: boolean) => void;
 }): Promise<void> {
   const delivery = await resolveCronAnnounceDelivery(params);
   if (!delivery.ok) {
@@ -136,5 +142,6 @@ export async function sendCronAnnouncePayloadStrict(params: {
     delivery,
     payload: params.payload,
     abortSignal: params.abortSignal,
+    onDeliveryAttempt: params.onDeliveryAttempt,
   });
 }
