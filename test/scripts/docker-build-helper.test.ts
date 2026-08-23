@@ -5121,6 +5121,8 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 
     expectTextToIncludeAll(runner, [
       "--reporter=verbose -t",
+      "src/auto-reply/reply/dispatch-from-config.lifecycle-and-bindings.test.ts",
+      "src/auto-reply/reply/dispatch-from-config.test.ts",
       'DOCKER_RUN_TIMEOUT="${OPENCLAW_PLUGIN_BINDING_COMMAND_ESCAPE_DOCKER_RUN_TIMEOUT:-900s}"',
       'DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run --rm',
       'docker_e2e_docker_cmd rm -f "$CONTAINER_NAME"',

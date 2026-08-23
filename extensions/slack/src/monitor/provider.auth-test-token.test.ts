@@ -18,6 +18,7 @@ import {
   resetSlackTestState,
   startSlackMonitor as startSlackMonitorUntracked,
   stopSlackMonitor,
+  useSlackChannelInboundDispatchOnce,
   useSlackStartupAuthClientOnce,
 } from "../monitor.test-helpers.js";
 import { getSlackRuntime } from "../runtime.js";
@@ -360,6 +361,28 @@ describe("auth.test boot call", () => {
     });
     const { replyMock, sendMock } = getSlackTestState();
     replyMock.mockResolvedValue({ text: "identity preserved" });
+    let dispatchedContext: Record<string, unknown> | undefined;
+    useSlackChannelInboundDispatchOnce(async (params) => {
+      dispatchedContext = params.ctxPayload;
+      const reply = await params.replyResolver?.(
+        params.ctxPayload,
+        params.replyOptions,
+        params.cfg,
+      );
+      for (const payload of Array.isArray(reply) ? reply : reply ? [reply] : []) {
+        await params.delivery.deliver(payload, { kind: "final" });
+      }
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: params.ctxPayload,
+        routeSessionKey: params.route.sessionKey,
+        dispatchResult: {
+          queuedFinal: Boolean(reply),
+          counts: { tool: 0, block: 0, final: reply ? 1 : 0 },
+        },
+      };
+    });
 
     const monitor = startSlackMonitor(monitorSlackProvider, {
       appToken: "xapp-1-A1-opaque",
@@ -394,6 +417,11 @@ describe("auth.test boot call", () => {
     });
 
     expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(dispatchedContext).toMatchObject({
+      Body: expect.stringMatching(/<@UENTERPRISE>.*status/u),
+      ChatType: "channel",
+      WasMentioned: true,
+    });
     await vi.waitFor(() => expect(sendMock).toHaveBeenCalledTimes(1));
     await expect(stopSlackMonitor(monitor)).resolves.toBeUndefined();
     expect(getSlackInstallationKind("default")).toBeUndefined();

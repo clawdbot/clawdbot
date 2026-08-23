@@ -25,6 +25,8 @@ type SlackProviderMonitor = (params: {
   setStatus?: (next: Record<string, unknown>) => void;
 }) => Promise<unknown>;
 type SlackStartupAuthClientFactory = typeof import("./client.js").createSlackStartupAuthClient;
+type SlackChannelInboundDispatch =
+  typeof import("openclaw/plugin-sdk/channel-inbound").dispatchChannelInboundTurn;
 
 const SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY = "openclawIngressLifecycle";
 
@@ -77,6 +79,7 @@ type SlackTestState = {
   >;
   socketModeLogger?: { error: (...args: unknown[]) => void };
   createSlackStartupAuthClientMock: Mock<SlackStartupAuthClientFactory>;
+  channelInboundDispatchOnce?: SlackChannelInboundDispatch;
 };
 
 // globalThis-backed singleton: with isolate=false, a vi.resetModules() in any
@@ -103,6 +106,7 @@ const slackTestState: SlackTestState = vi.hoisted(() => {
     resolveSlackUserAllowlistMock: vi.fn(),
     socketModeLogger: undefined,
     createSlackStartupAuthClientMock: vi.fn(),
+    channelInboundDispatchOnce: undefined,
   } as SlackTestState;
   return globalState["__slackTestState"];
 });
@@ -111,6 +115,10 @@ export const getSlackTestState = (): SlackTestState => slackTestState;
 
 export function useSlackStartupAuthClientOnce(factory: SlackStartupAuthClientFactory): void {
   slackTestState.createSlackStartupAuthClientMock.mockImplementationOnce(factory);
+}
+
+export function useSlackChannelInboundDispatchOnce(dispatch: SlackChannelInboundDispatch): void {
+  slackTestState.channelInboundDispatchOnce = dispatch;
 }
 
 type SlackClient = {
@@ -340,6 +348,7 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
   slackTestState.config = config;
   slackTestState.appConstructorArgs = undefined;
   slackTestState.socketModeLogger = undefined;
+  slackTestState.channelInboundDispatchOnce = undefined;
   slackTestState.appStartMock.mockReset().mockResolvedValue(undefined);
   slackTestState.appStopMock.mockReset().mockResolvedValue(undefined);
   slackTestState.interactionRegistrations.length = 0;
@@ -404,8 +413,15 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
     slackTestState.replyMock(...args) as ReturnType<ReplyResolver>;
   return {
     ...actual,
-    dispatchChannelInboundTurn: (params: DispatchParams) =>
-      actual.dispatchChannelInboundTurn({ ...params, replyResolver }),
+    dispatchChannelInboundTurn: (params: DispatchParams) => {
+      const enrichedParams = { ...params, replyResolver };
+      const dispatchOnce = slackTestState.channelInboundDispatchOnce;
+      if (dispatchOnce) {
+        slackTestState.channelInboundDispatchOnce = undefined;
+        return dispatchOnce(enrichedParams);
+      }
+      return actual.dispatchChannelInboundTurn(enrichedParams);
+    },
   };
 });
 

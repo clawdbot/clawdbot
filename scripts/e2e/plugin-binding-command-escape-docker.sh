@@ -33,7 +33,7 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run --rm 
   -e "FOCUSED_TEST_REGEX=$FOCUSED_TEST_REGEX" \
   -e OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/tmp/openclaw-vitest-cache \
   "$IMAGE_NAME" \
-  bash -lc 'set -euo pipefail; corepack enable; node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-from-config.test.ts --reporter=verbose -t "$FOCUSED_TEST_REGEX"' \
+  bash -lc 'set -euo pipefail; corepack enable; node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-from-config.lifecycle-and-bindings.test.ts src/auto-reply/reply/dispatch-from-config.test.ts --reporter=verbose -t "$FOCUSED_TEST_REGEX"' \
   >"$RUN_LOG" 2>&1
 status=$?
 set -e
