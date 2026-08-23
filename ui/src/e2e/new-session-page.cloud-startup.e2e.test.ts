@@ -12,10 +12,11 @@ import {
   replaceGatewayClient,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
+import { waitForCommittedState } from "./settle.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
-const CLOUD_STARTUP_RUNTIME_REQUEST =
-  /\/assets\/cloud-session-startup\.runtime-[^/?]+\.js(?:\?.*)?$/;
+const SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST =
+  /\/assets\/session-placement-startup\.runtime-[^/?]+\.js(?:\?.*)?$/;
 
 suite.define(() => {
   it("clears cloud placement when the selected agent changes", async () => {
@@ -98,9 +99,7 @@ suite.define(() => {
         .click();
       await page.getByRole("heading", { name: "Local" }).waitFor();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBeNull();
-      await expect
-        .poll(() => page.locator("#new-session-detail-trigger").getAttribute("data-worktree"))
-        .toBe("false");
+      await expect.poll(() => page.locator("#new-session-detail-trigger").count()).toBe(0);
     } finally {
       await context.close();
     }
@@ -182,7 +181,7 @@ suite.define(() => {
         const originalSetItem = sessionStorage.setItem.bind(sessionStorage);
         Storage.prototype.setItem = function (key: string, value: string) {
           if (
-            key.startsWith("openclaw.new-session.cloud-recovery.v2:") ||
+            key.startsWith("openclaw.new-session.session-placement-recovery.v1:") ||
             key.startsWith("openclaw.control-ui-e2e.")
           ) {
             originalSetItem(key, value);
@@ -196,6 +195,7 @@ suite.define(() => {
       await pastePng(page.locator(".new-session-page__message"));
       await page.getByRole("button", { name: "Start session" }).click();
       const firstSend = await gateway.waitForRequest("sessions.send");
+      const messageId = (firstSend.params as { idempotencyKey: string }).idempotencyKey;
       expect(firstSend.params).toMatchObject({
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
       });
@@ -203,8 +203,89 @@ suite.define(() => {
         code: "UNAVAILABLE",
         message: "send outcome unknown",
       });
-      await pollLocatorText(page.locator(".chat-cloud-startup-error")).toContain(
-        "send outcome unknown",
+      const startupError = await page.evaluate(
+        (key) =>
+          new Promise<string>((resolve, reject) => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime?: {
+                context: {
+                  placementStartup: {
+                    get: (sessionKey: string) => { error?: string; phase: string } | null;
+                    subscribe: (listener: () => void) => () => void;
+                  };
+                };
+              };
+            };
+            const placementStartup = app.runtime?.context.placementStartup;
+            if (!placementStartup) {
+              reject(new Error("session placement startup unavailable"));
+              return;
+            }
+            let settled = false;
+            const subscription: { stop?: () => void } = {};
+            const resolveFailed = () => {
+              const status = placementStartup.get(key);
+              if (settled || status?.phase !== "failed") {
+                return;
+              }
+              settled = true;
+              subscription.stop?.();
+              resolve(status.error ?? "");
+            };
+            subscription.stop = placementStartup.subscribe(resolveFailed);
+            if (settled) {
+              subscription.stop();
+            } else {
+              resolveFailed();
+            }
+          }),
+        sessionKey,
+      );
+      expect(startupError).toContain("send outcome unknown");
+      await waitForCommittedChatRoute(page);
+      await waitForCommittedState(
+        page,
+        ({ messageId: expectedMessageId, recoveryPrefix, sessionKey: expectedSessionKey }) => {
+          if (
+            typeof expectedMessageId !== "string" ||
+            typeof recoveryPrefix !== "string" ||
+            typeof expectedSessionKey !== "string"
+          ) {
+            return false;
+          }
+          for (let index = 0; index < sessionStorage.length; index += 1) {
+            const key = sessionStorage.key(index);
+            if (!key?.startsWith(recoveryPrefix)) {
+              continue;
+            }
+            const raw = sessionStorage.getItem(key);
+            if (!raw) {
+              continue;
+            }
+            try {
+              const value: unknown = JSON.parse(raw);
+              if (typeof value !== "object" || value === null || Array.isArray(value)) {
+                continue;
+              }
+              const recovery = value as Record<string, unknown>;
+              if (
+                recovery.sessionKey === expectedSessionKey &&
+                recovery.messageId === expectedMessageId &&
+                recovery.phase === "sending"
+              ) {
+                return true;
+              }
+            } catch {
+              // Ignore unrelated malformed rows in the current recovery namespace.
+            }
+          }
+          return false;
+        },
+        {
+          messageId,
+          recoveryPrefix: "openclaw.new-session.session-placement-recovery.v1:",
+          sessionKey,
+        },
       );
       await gateway.setMethodResponse("sessions.send", {
         runId: "run-reload-recovery",
@@ -213,7 +294,7 @@ suite.define(() => {
 
       const recoveryRuntimeLoad = createDeferred();
       let recoveryRuntimeRequested = false;
-      await page.route(CLOUD_STARTUP_RUNTIME_REQUEST, async (route) => {
+      await page.route(SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST, async (route) => {
         recoveryRuntimeRequested = true;
         await recoveryRuntimeLoad.promise;
         await route.continue();
@@ -235,7 +316,7 @@ suite.define(() => {
       const resumedSend = await gateway.waitForRequest("sessions.send");
       expect(resumedSend.params).toMatchObject({
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
-        idempotencyKey: (firstSend.params as { idempotencyKey: string }).idempotencyKey,
+        idempotencyKey: messageId,
         key: sessionKey,
         message,
       });
@@ -310,7 +391,12 @@ suite.define(() => {
         const legacyScope = Array.from(new Uint8Array(digest), (byte) =>
           byte.toString(16).padStart(2, "0"),
         ).join("");
-        return { gatewayUrl, legacyScope };
+        const sessionKey = "agent:cloud:offline-recovery";
+        const frame = (value: string) => `${value.length}:${value}`;
+        const storageKey =
+          `openclaw.new-session.session-placement-recovery.v1:${frame(gatewayUrl)}:` +
+          `${frame(legacyScope)}:${frame(sessionKey)}`;
+        return { gatewayUrl, legacyScope, storageKey };
       });
 
       await gateway.setOnline(false);
@@ -324,14 +410,14 @@ suite.define(() => {
           }),
         )
         .toBe(false);
-      await page.evaluate(({ gatewayUrl, legacyScope }) => {
+      await page.evaluate(({ gatewayUrl, legacyScope, storageKey }) => {
         sessionStorage.setItem(
-          `openclaw.new-session.cloud-recovery.v1:${gatewayUrl}:${legacyScope}`,
+          storageKey,
           JSON.stringify({
             sessionKey: "agent:cloud:offline-recovery",
             messageId: "message-offline-recovery",
             message: "restore after reconnect",
-            profileId: "aws",
+            target: { kind: "profile", profileId: "aws" },
             agentId: "cloud",
             gatewayUrl,
             recoveryScope: legacyScope,
@@ -349,10 +435,7 @@ suite.define(() => {
       });
       expect(
         await page.evaluate(
-          ({ gatewayUrl, legacyScope }) =>
-            sessionStorage.getItem(
-              `openclaw.new-session.cloud-recovery.v1:${gatewayUrl}:${legacyScope}`,
-            ),
+          ({ storageKey }) => sessionStorage.getItem(storageKey),
           recoveryIdentity,
         ),
       ).toBeNull();

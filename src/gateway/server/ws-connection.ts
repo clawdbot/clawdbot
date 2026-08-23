@@ -15,6 +15,7 @@ import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { resolvePreauthHandshakeTimeoutMs } from "../handshake-timeouts.js";
 import { resolveHostedPluginSurfaceUrl } from "../hosted-plugin-surface-url.js";
+import { readPreparedGatewayIngressAttribution } from "../ingress-attribution.js";
 import type { GatewayMethodRegistry } from "../methods/registry.js";
 import { isLoopbackAddress } from "../net.js";
 import type { NodeReapprovalCoordinator } from "../node-reapproval-coordinator.js";
@@ -61,10 +62,8 @@ import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js
 import {
   GATEWAY_WS_CONNECTION_KIND_PROPERTY,
   GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
-  GATEWAY_WS_WORKER_INGRESS_PROPERTY,
   WS_HANDSHAKE_PHASES,
   type GatewayIngressWebSocket,
-  type GatewayWorkerIngress,
   type GatewayWsClient,
   type WsHandshakePhase,
 } from "./ws-types.js";
@@ -73,7 +72,6 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const MAX_QUEUED_MESSAGE_HANDLER_FRAMES = 16;
 const unauthorizedCloseBeforeConnectLogLimiter = new HandshakeAuthLogLimiter();
-
 type GatewayWsSharedHandlerParams = {
   wss: WebSocketServer;
   clients: Set<GatewayWsClient>;
@@ -96,7 +94,7 @@ type GatewayWsSharedHandlerParams = {
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
   preauthHandshakeTimeoutMs?: number;
   isStartupPending?: () => boolean;
-  isControlUiDeviceAuthMigrationPending?: () => boolean;
+  isPendingWorkerNodeSetup?: (setupId: string, deviceId: string) => boolean;
   gatewayMethods: string[];
   events: string[];
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
@@ -190,7 +188,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     browserRateLimiter,
     nodeReapprovalCoordinator,
     isStartupPending,
-    isControlUiDeviceAuthMigrationPending,
+    isPendingWorkerNodeSetup,
     gatewayMethods,
     events,
     refreshHealthSnapshot,
@@ -212,10 +210,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     const connId = randomUUID();
     const ingressSocket = socket as GatewayIngressWebSocket;
     const connectionKind = ingressSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] ?? "gateway";
-    const workerIngress: GatewayWorkerIngress =
-      ingressSocket[GATEWAY_WS_WORKER_INGRESS_PROPERTY] ?? "loopback";
     const publicWorkerIngress =
-      workerIngress === "public" ? takePublicWorkerIngress(socket) : undefined;
+      connectionKind === "worker" ? takePublicWorkerIngress(socket) : undefined;
     const connectionPreauthBudget =
       ingressSocket[GATEWAY_WS_PREAUTH_BUDGET_PROPERTY] ?? preauthConnectionBudget;
     const { remoteAddr, remotePort, localAddr, localPort, endpoint } = resolveSocketAddress(socket);
@@ -665,7 +661,6 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         connId,
         service: workerConnectionService,
         isStartupPending,
-        ingress: workerIngress,
         send,
         close,
         isClosed: () => closed,
@@ -685,9 +680,18 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       return;
     }
 
+    const ingressAttribution = readPreparedGatewayIngressAttribution(upgradeReq);
+    if (!ingressAttribution || ingressAttribution.kind === "unattributable-proxy") {
+      setCloseCause("missing-ingress-attribution");
+      logWsControl.warn(`gateway websocket missing prepared ingress attribution conn=${connId}`);
+      close(1008, "gateway ingress attribution required");
+      return;
+    }
+
     attachGatewayWsMessageHandlerOnDemand({
       socket,
       upgradeReq,
+      ingressAttribution,
       connId,
       remoteAddr,
       remotePort,
@@ -708,7 +712,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       browserRateLimiter,
       nodeReapprovalCoordinator,
       isStartupPending,
-      isControlUiDeviceAuthMigrationPending,
+      isPendingWorkerNodeSetup,
       gatewayMethods,
       events,
       extraHandlers,

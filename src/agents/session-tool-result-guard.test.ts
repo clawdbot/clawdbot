@@ -3,7 +3,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import { createOpenClawReadTool } from "./agent-tools.read.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
 import { redactTranscriptMessage } from "./transcript-redact.js";
@@ -610,6 +612,43 @@ describe("installSessionToolResultGuard", () => {
     expect(toolResult.details.password).toBe("***");
     expect(toolResult.details.nested.accessToken[0]).toBe("***");
     expect(serializedToolResult).toContain("visible");
+  });
+
+  it("persists env reads only after owner-context redaction", async () => {
+    const credential = "persisted-env-credential-1234567890";
+    const text = `api_key: ${credential}`;
+    const readTool = createOpenClawReadTool({
+      name: "read",
+      label: "read",
+      description: "test read",
+      parameters: Type.Object({ path: Type.String() }),
+      execute: async () => ({
+        content: [{ type: "text" as const, text }],
+        details: { kind: "text", content: text },
+      }),
+    });
+    const result = await readTool.execute("call_1", { path: ".env.production" });
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      beforeMessageWriteHook: ({ message }) => ({
+        message: redactTranscriptMessage(message, {}),
+      }),
+    });
+
+    sm.appendMessage(toolCallMessage);
+    sm.appendMessage(
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: result.content,
+        details: result.details,
+        isError: false,
+        timestamp: Date.now(),
+      }),
+    );
+
+    expect(JSON.stringify(getPersistedMessages(sm))).not.toContain(credential);
   });
 
   it("applies before_message_write to synthetic tool-result flushes", () => {

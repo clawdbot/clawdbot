@@ -104,11 +104,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     resetPreparedModelRuntimeStateForHotReload();
 
-    let hooksReloadResolved = false;
-    if (plan.reloadHooks) {
+    if (plan.reloadHooks || plan.refreshHooksPolicy) {
       try {
         nextState.hooksConfig = resolveHooksConfig(nextConfig);
-        hooksReloadResolved = true;
       } catch (err) {
         params.logHooks.warn(`hooks config reload failed: ${String(err)}`);
         throw err;
@@ -122,6 +120,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         deps: params.deps,
         broadcast: params.broadcast,
         env: publication?.runtimeEnv ?? process.env,
+        // Without this a cron hot reload silently drops scheduler gateway
+        // context, so scheduled runs regress to contextless after any reload.
+        ...(params.resolveGatewayContext
+          ? { resolveGatewayContext: params.resolveGatewayContext }
+          : {}),
       });
     }
 
@@ -166,7 +169,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         `${action} suppressed by crash-loop breaker for channels: ${[...channels].join(", ")}`,
       );
     };
-    const commitRuntime = async () => {
+    const commitRuntime = async (onCommit?: () => void) => {
       if (runtimeCommitted) {
         return;
       }
@@ -188,11 +191,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         params.setState(nextState);
         // All rejecting work is complete. Publish pre-resolved lane limits at
         // the final synchronous commit edge, alongside the accepted state.
-        if (hooksReloadResolved) {
+        if (plan.reloadHooks) {
           commitHooksConfigReload();
         }
         applyGatewayLaneConcurrency(laneConcurrency);
         runtimeCommitted = true;
+        onCommit?.();
         setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
         if (plan.restartCron) {
           params.cronReconciliation.invalidate();
@@ -303,7 +307,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         });
         return;
       }
-      params.logReload.warn(`${surface} failed after config commit${detail}; restarting gateway`);
+      const commitState = runtimeCommitted ? "after config commit" : "before config commit";
+      params.logReload.warn(`${surface} failed ${commitState}${detail}; restarting gateway`);
       if (recoveryRestartScheduled) {
         return;
       }
@@ -505,14 +510,22 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         try {
           pluginReloadResult = await params.reloadPlugins({
             nextConfig,
+            // Without a managed publication, the direct caller's input is itself authored.
+            sourceConfig: publication ? publication.sourceConfig : nextConfig,
             changedPaths: plan.changedPaths,
             beforeReplace: stopChannelsBeforePluginReplace,
             commitRuntime,
+            onReplacementTeardownFailure: (error) =>
+              scheduleRecoveryRestart("plugin service replacement teardown", error),
             env: publication?.runtimeEnv ?? process.env,
             isAborted: isPluginReloadAborted,
           });
         } catch (err) {
           if (!runtimeCommitted) {
+            // Once replacement teardown begins, old services cannot safely be rolled back.
+            if (recoveryRestartScheduled) {
+              throw err;
+            }
             const rollbackFailures = await rollbackStoppedPluginTargets(
               "failed plugin runtime publication",
             );
@@ -537,12 +550,16 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         }
         // beforeReplace may have set pluginReloadAborted inside reloadPlugins;
         // skip metadata/runtime updates when the reload was cancelled mid-flight.
-        if (!pluginReloadAborted) {
+        if (!pluginReloadAborted && !isLifecycleReloadAborted()) {
           for (const channel of pluginReloadResult.restartChannels) {
             channelsToRestart.add(channel);
           }
           activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
+          // Only a successfully published replacement can authoritatively retire channel owners.
+          params.pruneInactiveChannelAccountState(activePluginChannelsAfterReload);
           resetPreparedModelRuntimeStateForHotReload();
+        } else {
+          pluginReloadAborted = true;
         }
       }
     }
@@ -578,9 +595,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     try {
+      const pluginMetadataSnapshot = params.getPluginMetadataSnapshot?.();
       await refreshPreparedModelRuntimeSnapshots(nextConfig, {
         catalogMode: "static",
         allowGatewaySubagentBinding: true,
+        ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
       });
     } catch (err) {
       scheduleRecoveryRestart("prepared model runtime reload", err);

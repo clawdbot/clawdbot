@@ -54,6 +54,20 @@ function humanClient(): GatewayClient {
   };
 }
 
+function isWholeSessionStoreProjection(normalizedSql: string): boolean {
+  const source = ' from "session_nodes" order by "session_key"';
+  if (!normalizedSql.startsWith("select ") || !normalizedSql.endsWith(source)) {
+    return false;
+  }
+  const selection = normalizedSql.slice("select ".length, -source.length);
+  return (
+    selection === "*" ||
+    ['"current_session_id"', '"entry_json"', '"session_key"', '"updated_at"'].every((column) =>
+      selection.includes(column),
+    )
+  );
+}
+
 test("single non-label sessions.patch avoids a whole-store projection", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const targetKey = "agent:main:single-patch-target";
@@ -74,13 +88,7 @@ test("single non-label sessions.patch avoids a whole-store projection", async ()
       ["whole-store-projection"] as const,
       (sql) => {
         const normalized = sql.toLowerCase().replaceAll(/\s+/g, " ").trim();
-        return normalized.includes(
-          'select "current_session_id", "entry_json", "session_key", "updated_at"',
-        ) &&
-          normalized.includes('from "session_nodes"') &&
-          normalized.includes('order by "session_key"')
-          ? "whole-store-projection"
-          : null;
+        return isWholeSessionStoreProjection(normalized) ? "whole-store-projection" : null;
       },
     );
     const respond = vi.fn();
@@ -159,13 +167,7 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
       ["whole-store-projection", "transcript-full-hydration"] as const,
       (sql) => {
         const normalized = sql.toLowerCase().replaceAll(/\s+/g, " ").trim();
-        if (
-          normalized.includes(
-            'select "current_session_id", "entry_json", "session_key", "updated_at"',
-          ) &&
-          normalized.includes('from "session_nodes"') &&
-          normalized.includes('order by "session_key"')
-        ) {
+        if (isWholeSessionStoreProjection(normalized)) {
           return "whole-store-projection";
         }
         const fromIndex = normalized.indexOf(" from ");

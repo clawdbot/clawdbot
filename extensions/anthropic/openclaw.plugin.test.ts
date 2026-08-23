@@ -15,6 +15,8 @@ type AnthropicCatalogModel = {
     };
   };
   contextWindow?: number;
+  contextWindows?: Array<{ id: string; label: string; contextWindow: number }>;
+  contextWindowDefault?: string;
   maxTokens?: number;
   cost?: {
     input?: number;
@@ -41,6 +43,13 @@ type AnthropicManifest = {
 const manifest = JSON.parse(
   readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
 ) as AnthropicManifest;
+const selectableContextWindowMetadata = {
+  contextWindows: [
+    { id: "200k", label: "200K", contextWindow: 200_000 },
+    { id: "1m", label: "1M", contextWindow: 1_000_000 },
+  ],
+  contextWindowDefault: "1m",
+};
 
 describe("Anthropic plugin manifest", () => {
   it("flags every static Anthropic API model as code-mode preferred", () => {
@@ -63,6 +72,7 @@ describe("Anthropic plugin manifest", () => {
       },
       cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
       contextWindow: 1_000_000,
+      ...selectableContextWindowMetadata,
       maxTokens: 128_000,
       thinkingLevelMap: { xhigh: "xhigh", max: "max" },
       compat: { codeMode: "preferred" },
@@ -81,6 +91,7 @@ describe("Anthropic plugin manifest", () => {
       },
       cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
       contextWindow: 1_000_000,
+      ...selectableContextWindowMetadata,
       maxTokens: 128_000,
       thinkingLevelMap: { xhigh: "xhigh", max: "max" },
       compat: { codeMode: "preferred" },
@@ -91,6 +102,17 @@ describe("Anthropic plugin manifest", () => {
       contextWindow: 1_000_000,
       maxTokens: 128_000,
     });
+  });
+
+  it("declares selectable context windows on both canonical Fable catalog rows", () => {
+    const providers = manifest.modelCatalog?.providers;
+
+    expect(
+      providers?.anthropic?.models?.find((model) => model.id === "claude-fable-5"),
+    ).toMatchObject(selectableContextWindowMetadata);
+    expect(
+      providers?.["claude-cli"]?.models?.find((model) => model.id === "claude-fable-5"),
+    ).toMatchObject(selectableContextWindowMetadata);
   });
 
   it("declares Opus 4.8 limits without overstating bare Claude CLI context", () => {

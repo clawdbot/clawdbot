@@ -39,12 +39,6 @@ export function prepareEmbeddedAttemptClientTools(params: {
   uncompactedEffectiveTools: AgentTool[];
   clientTools: EmbeddedRunAttemptParams["clientTools"];
 }) {
-  const { customTools } = splitSdkTools({
-    tools: params.effectiveTools,
-    sandboxEnabled: params.sandboxEnabled,
-    toolHookContext: params.catalogToolHookContext,
-  });
-
   // Reserve synchronously so parallel client-tool batches preserve assistant source order.
   const clientToolCallSlots: EmbeddedAttemptClientToolCallSlot[] = [];
   const clientToolCallSlotIndexes = new Map<string, number>();
@@ -171,11 +165,17 @@ export function prepareEmbeddedAttemptClientTools(params: {
     );
   }
 
+  const { customTools } = splitSdkTools({
+    tools: params.effectiveTools,
+    sandboxEnabled: params.sandboxEnabled,
+    toolHookContext: params.catalogToolHookContext,
+  });
   const allCustomTools = [...customTools, ...clientToolDefs];
   const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(allCustomTools));
   return {
     allCustomTools,
     builtinToolNames,
+    coreBuiltinToolNames,
     clientToolCallSlots,
     clientToolDefs,
     clientToolLoopDetection,

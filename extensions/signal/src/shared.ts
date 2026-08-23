@@ -75,6 +75,7 @@ export const signalSecurityAdapter = createRestrictSendersChannelSecurity<Resolv
   groupPolicyPath: "channels.signal.groupPolicy",
   groupAllowFromPath: "channels.signal.groupAllowFrom",
   mentionGated: false,
+  findingTitle: "Signal security warning",
   policyPathSuffix: "dmPolicy",
   normalizeDmEntry: (raw) => normalizeE164(raw.replace(/^signal:/i, "").trim()),
 });

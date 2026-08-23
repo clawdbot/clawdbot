@@ -766,7 +766,7 @@ suite.define(() => {
     });
   });
 
-  it("sends /stop to the exact selected channel session and clears its working indicator", async () => {
+  it("sends annotated /stop to the exact selected channel session and clears its working indicator", async () => {
     await withChatPage(async (page) => {
       const channelSessionKey = "agent:main:openclaw-weixin:direct:wechat-user";
       const gateway = await installMockGateway(page, {
@@ -791,6 +791,27 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.list");
       const workingIndicator = page.locator(".chat-working-indicator");
       await workingIndicator.waitFor({ state: "visible", timeout: 10_000 });
+
+      await page.evaluate(() => {
+        window.dispatchEvent(
+          new CustomEvent("openclaw:browser-annotation", {
+            cancelable: true,
+            detail: {
+              modelContext: "Review the annotated page",
+              dataUrl:
+                "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+              fileName: "annotated-page.png",
+              card: {
+                title: "Annotated page",
+                displayUrl: "example.com",
+                markedRegionCount: 1,
+                inspectedElement: false,
+              },
+            },
+          }),
+        );
+      });
+      await page.locator(".chat-attachment-thumb--browser-annotation").waitFor();
 
       await composer.fill("/stop");
       await page.getByRole("option", { name: /\/stop/ }).waitFor();
@@ -824,6 +845,7 @@ suite.define(() => {
         updatedAt: Date.now(),
       });
       await workingIndicator.waitFor({ state: "detached", timeout: 10_000 });
+      await page.locator(".chat-attachment-thumb--browser-annotation").waitFor();
       await expectRequestCountStable(gateway, "chat.abort", 0);
       await expectRequestCountStable(gateway, "chat.send", 0);
       await expect.poll(() => page.getByRole("listbox").count()).toBe(0);
@@ -888,7 +910,7 @@ suite.define(() => {
     });
   });
 
-  it("steers the exact run with the current leaf reported by the session row", async () => {
+  it("sends /steer for the selected session without resolving a run or leaf", async () => {
     await withChatPage(async (page) => {
       const sessionKey = "main";
       const gateway = await installMockGateway(page, {
@@ -929,8 +951,9 @@ suite.define(() => {
       expect(params.sessionKey).toBe(sessionKey);
       expect(params.message).toBe("use the smaller fix");
       expect(params.deliver).toBe(false);
-      expect(params.expectedRunId).toBe("active-run");
-      expect(params.expectedLeafEntryId).toBe("leaf-before-steer");
+      expect(params.queueMode).toBe("steer");
+      expect(params).not.toHaveProperty("expectedRunId");
+      expect(params).not.toHaveProperty("expectedLeafEntryId");
 
       await page.getByText("Steered.", { exact: true }).waitFor({ timeout: 10_000 });
       expect(await page.getByText("No active run").count()).toBe(0);

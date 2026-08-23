@@ -117,10 +117,12 @@ function resolvePreferredBuiltRuntimeArtifact(params: {
     }
     return { source, rootDir };
   }
-  if (params.packageManifest?.build?.bundledDist === false) {
-    return { source, rootDir };
-  }
-  const packageLocalArtifactSource = resolvePackageLocalDistRuntimeArtifact({ source, rootDir });
+  // Source-external plugins keep source authoritative over package-local output;
+  // only the lifecycle-owned canonical root build may replace that pair.
+  const sourceExternal = params.packageManifest?.build?.bundledDist === false;
+  const packageLocalArtifactSource = sourceExternal
+    ? null
+    : resolvePackageLocalDistRuntimeArtifact({ source, rootDir });
   if (packageLocalArtifactSource) {
     return { source: packageLocalArtifactSource, rootDir };
   }
@@ -137,7 +139,9 @@ function resolvePreferredBuiltRuntimeArtifact(params: {
     return { source, rootDir };
   }
   const artifactRelativePath = rewriteBundledRuntimeArtifactRelativePath(relativeSource);
-  for (const artifactRootName of ["dist-runtime", "dist"] as const) {
+  // Source-external packaging can replace the flat root build while leaving its
+  // staging wrapper behind, so only bundled artifacts may fall back to dist-runtime.
+  for (const artifactRootName of sourceExternal ? ["dist"] : ["dist-runtime", "dist"]) {
     const artifactRoot = path.join(
       packageRoot,
       artifactRootName,

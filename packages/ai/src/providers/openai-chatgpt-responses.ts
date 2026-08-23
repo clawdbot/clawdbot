@@ -1,36 +1,17 @@
 // OpenAI ChatGPT Responses provider handles ChatGPT-authenticated response streams.
 import type * as NodeOs from "node:os";
 import type * as NodeZlib from "node:zlib";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import {
+  resolveTimerTimeoutMs,
+  clampTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type {
   Tool as OpenAITool,
   ResponseCreateParamsStreaming,
   ResponseInput,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
-
-type DynamicImport = (specifier: string) => Promise<unknown>;
-
-const dynamicImport: DynamicImport = (specifier) => import(specifier);
-
-type ProcessWithOsBuiltinModule = typeof process & {
-  getBuiltinModule?: (id: "node:os") => typeof NodeOs;
-};
-
-function loadNodeOs(): typeof NodeOs | null {
-  if (typeof process === "undefined" || !(process.versions?.node || process.versions?.bun)) {
-    return null;
-  }
-  return (process as ProcessWithOsBuiltinModule).getBuiltinModule?.("node:os") ?? null;
-}
-
-// NEVER convert to top-level runtime imports - breaks browser/Vite builds
-const os = loadNodeOs();
-
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import {
-  resolveTimerTimeoutMs,
-  clampTimerTimeoutMs,
-} from "@openclaw/normalization-core/number-coercion";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { parseRetryAfterHttpDateMs } from "../internal/retry-after.js";
@@ -52,8 +33,12 @@ import {
   type ResponsesEncryptedContentAttempt,
 } from "../transports/openai-responses-replay-internal.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
-import { createOpenAIResponseHook } from "../transports/openai-transport-shared.js";
 import {
+  createOpenAIProviderAcceptanceHook,
+  createOpenAIResponseHook,
+} from "../transports/openai-transport-shared.js";
+import {
+  notifyProviderStreamOpened,
   transportAbortError,
   withProviderResponseHook,
 } from "../transports/transport-stream-shared.js";
@@ -96,6 +81,24 @@ import {
   resolveResponsesReasoningEffort,
 } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
+
+type DynamicImport = (specifier: string) => Promise<unknown>;
+
+const dynamicImport: DynamicImport = (specifier) => import(specifier);
+
+type ProcessWithOsBuiltinModule = typeof process & {
+  getBuiltinModule?: (id: "node:os") => typeof NodeOs;
+};
+
+function loadNodeOs(): typeof NodeOs | null {
+  if (typeof process === "undefined" || !(process.versions?.node || process.versions?.bun)) {
+    return null;
+  }
+  return (process as ProcessWithOsBuiltinModule).getBuiltinModule?.("node:os") ?? null;
+}
+
+// NEVER convert to top-level runtime imports - breaks browser/Vite builds
+const os = loadNodeOs();
 
 // ============================================================================
 // Configuration
@@ -361,8 +364,10 @@ export const streamOpenAICodexResponses: StreamFunction<
               stream,
               model,
               () => {
-                commitSemanticAttempt(activeAttempt);
                 websocketStarted = true;
+              },
+              () => {
+                commitSemanticAttempt(activeAttempt);
               },
               requestOptions,
               firstEventAbort.abort,
@@ -583,7 +588,7 @@ export const streamOpenAICodexResponses: StreamFunction<
         stream: mapCodexEvents(parseOpenAIChatGptResponsesSse(response)),
         signal: firstEventAbort.signal,
         abort: firstEventAbort.abort,
-        hook: createOpenAIResponseHook(options?.onResponse, response, model),
+        hook: createOpenAIProviderAcceptanceHook(options, response, model),
         onReady: () => stream.push({ type: "start", partial: output }),
       });
       await processResponsesStream(hookedResponseStream, output, stream, model, {
@@ -1454,13 +1459,17 @@ async function* startWebSocketOutputOnFirstEvent(
   events: AsyncIterable<ResponseStreamEvent>,
   output: AssistantMessage,
   stream: AssistantMessageEventStream,
+  onFirstProviderEvent: () => void,
+  reportStreamOpened: () => Promise<void>,
   onStart: () => void,
 ): AsyncGenerator<ResponseStreamEvent> {
   let started = false;
   for await (const event of events) {
     if (!started) {
       started = true;
+      onFirstProviderEvent();
       onStart();
+      await reportStreamOpened();
       stream.push({ type: "start", partial: output });
     }
     yield event;
@@ -1474,6 +1483,7 @@ async function processWebSocketStream(
   output: AssistantMessage,
   stream: AssistantMessageEventStream,
   model: Model<"openai-chatgpt-responses">,
+  onFirstProviderEvent: () => void,
   onStart: () => void,
   options?: OpenAICodexResponsesOptions,
   abortFirstEventStream?: (reason: Error) => void,
@@ -1510,6 +1520,15 @@ async function processWebSocketStream(
         mapCodexEvents(parseWebSocket(socket, options?.signal)),
         output,
         stream,
+        onFirstProviderEvent,
+        () =>
+          notifyProviderStreamOpened({
+            options,
+            cancelStream: () => {
+              keepConnection = false;
+              closeWebSocketSilently(socket);
+            },
+          }),
         onStart,
       ),
       output,

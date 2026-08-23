@@ -7,14 +7,16 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { trimToUndefined } from "../gateway/credentials.js";
 import { resolveRequiredConfiguredSecretRefInputString } from "../gateway/resolve-configured-secret-input-string.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { renderQrTerminal } from "../media/qr-terminal.ts";
 import { resolvePairingSetupFromConfig, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
-import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
-import { VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
+import {
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+} from "../shared/device-bootstrap-profile.js";
+import { runCommandWithRuntime } from "./cli-utils.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
 import { getQrRemoteCommandSecretTargetIds } from "./command-secret-targets.js";
 
@@ -123,7 +125,7 @@ export function registerQrCli(program: Command) {
     .option("--no-ascii", "Skip ASCII QR rendering")
     .option("--json", "Output JSON", false)
     .action(async (opts: QrCliOptions) => {
-      try {
+      await runCommandWithRuntime(defaultRuntime, async () => {
         if (opts.token && opts.password) {
           throw new Error("Use either --token or --password, not both.");
         }
@@ -282,9 +284,6 @@ export function registerQrCli(program: Command) {
         );
 
         defaultRuntime.log(lines.join("\n"));
-      } catch (err) {
-        defaultRuntime.error(formatErrorMessage(err));
-        defaultRuntime.exit(1);
-      }
+      });
     });
 }

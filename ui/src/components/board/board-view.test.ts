@@ -58,6 +58,9 @@ describe("openclaw-board-view", () => {
 
     const frame = view.querySelector("iframe");
     expect(frame?.getAttribute("src")).toContain(":18790/mcp-app-sandbox");
+    expect(frame?.getAttribute("sandbox")).toBe(
+      "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox",
+    );
     expect(frame?.getAttribute("loading")).toBe("eager");
     expect(view.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
   });
@@ -94,7 +97,7 @@ describe("openclaw-board-view", () => {
     const fetchMock = vi.fn(async () => new Response("<!doctype html><p>weather</p>"));
     vi.stubGlobal("fetch", fetchMock);
     const view = await mount({
-      context: gatewayContext({ request: firstRequest }),
+      context: gatewayContext({ request: firstRequest }, "/control"),
       snapshot: snapshot({
         widgets: [
           boardWidget({
@@ -125,7 +128,7 @@ describe("openclaw-board-view", () => {
     });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     const bridgeChannel = new MessageChannel();
-    const initialized = new Promise<void>((resolve) => {
+    const initialized = new Promise<{ controlUiBaseUrl?: string }>((resolve) => {
       bridgeChannel.port2.addEventListener("message", (event) => {
         if (event.data?.type !== "openclaw:widget-host-init") {
           return;
@@ -137,12 +140,13 @@ describe("openclaw-board-view", () => {
           },
           [],
         );
-        resolve();
+        resolve(event.data as { controlUiBaseUrl?: string });
       });
     });
     bridgeChannel.port2.start();
     send({ type: "openclaw:widget-bridge-port-offer" }, [bridgeChannel.port1]);
-    await initialized;
+    const hostInit = await initialized;
+    expect(hostInit.controlUiBaseUrl).toBe(`${window.location.origin}/control`);
     bridgeChannel.port2.postMessage(
       {
         type: "openclaw:widget-bridge-request",
@@ -161,7 +165,7 @@ describe("openclaw-board-view", () => {
     );
 
     const provider = view.parentElement as ReturnType<typeof createApplicationContextProvider>;
-    provider.setContext(gatewayContext({ request: secondRequest }));
+    provider.setContext(gatewayContext({ request: secondRequest }, "/control"));
     await cell.updateComplete;
     bridgeChannel.port2.postMessage(
       {
@@ -772,20 +776,34 @@ describe("openclaw-board-view", () => {
     await vi.waitFor(() => expect(allow?.disabled).toBe(false));
   });
 
-  it("keeps approval controls after a failed decision and clears the error on refresh", async () => {
-    const grant = vi.fn(async () => {
-      throw new Error("approval service unavailable");
+  it("toasts failed rejection while keeping controls and leaves successful decisions quiet", async () => {
+    const toastHost = document.createElement("openclaw-toast-host");
+    document.body.append(toastHost);
+    const grant = vi.fn(async (_name: string, decision: "granted" | "rejected") => {
+      if (decision === "rejected") {
+        throw new Error("approval service unavailable");
+      }
     });
     const source = snapshot({ widgets: [boardWidget({ grantState: "pending" })] });
     const view = await mount({ snapshot: source, callbacks: callbacks({ grant }) });
-    view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]')?.click();
+    const allow = view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]');
+    const reject = view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-reject"]');
+    allow?.click();
+    await vi.waitFor(() => expect(grant).toHaveBeenCalledWith("alpha", "granted"));
+    await vi.waitFor(() => expect(reject?.disabled).toBe(false));
+    expect(toastHost.querySelector(".app-toast")).toBeNull();
+
+    reject?.click();
     await vi.waitFor(() => {
       expect(
         view.querySelector('[data-test-id="board-widget-action-error"]')?.textContent,
       ).toContain("approval service unavailable");
+      expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain(
+        "Could not reject widget access. Try again.",
+      );
     });
-    expect(view.querySelector('[data-test-id="board-grant-allow"]')).not.toBeNull();
-    expect(view.querySelector('[data-test-id="board-grant-reject"]')).not.toBeNull();
+    expect(allow?.disabled).toBe(false);
+    expect(reject?.disabled).toBe(false);
 
     view.snapshot = structuredClone({ ...source, revision: source.revision + 1 });
     await settleCells(view);

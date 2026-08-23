@@ -1,5 +1,13 @@
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const spawnMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", () => ({
+  spawn: spawnMock,
+}));
 
 const profileMocks = vi.hoisted(() => ({
   buildCellRunArgs: vi.fn((_profile: unknown, options: { environmentFile: string }) => [
@@ -32,6 +40,23 @@ function successfulExecutor() {
     stderr: "",
     code: 0,
   }));
+}
+
+function createStreamChild(pid?: number): ChildProcess {
+  const stdout = Object.assign(new EventEmitter(), {
+    pause: vi.fn(),
+    resume: vi.fn(),
+  });
+  const stderr = Object.assign(new EventEmitter(), {
+    pause: vi.fn(),
+    resume: vi.fn(),
+  });
+  return Object.assign(new EventEmitter(), {
+    pid,
+    stdout,
+    stderr,
+    kill: vi.fn(() => true),
+  }) as unknown as ChildProcess;
 }
 
 describe("fleet container runtime", () => {
@@ -462,6 +487,39 @@ describe("fleet container runtime", () => {
     await expect(
       runtime.logs("podman", "cell-acme", { follow: true, redactValues: [] }),
     ).rejects.toThrow(/podman logs failed with signal SIGSEGV/iu);
+  });
+
+  it("rejects a log stream spawn error when the child has no pid", async () => {
+    const child = createStreamChild();
+    spawnMock.mockReturnValue(child);
+    const runtime = createFleetContainerRuntime(successfulExecutor());
+
+    const logs = runtime.logs("podman", "cell-acme", { follow: true, redactValues: [] });
+    child.emit("error", new Error("spawn failed"));
+
+    await expect(logs).rejects.toThrow("spawn failed");
+    child.emit("close", -2, null);
+  });
+
+  it("waits for log stream close across repeated operational errors", async () => {
+    const child = createStreamChild(4242);
+    spawnMock.mockReturnValue(child);
+    const runtime = createFleetContainerRuntime(successfulExecutor());
+    let settled = false;
+
+    const logs = runtime
+      .logs("podman", "cell-acme", { follow: true, redactValues: [] })
+      .finally(() => {
+        settled = true;
+      });
+    child.emit("error", new Error("first signal delivery failed"));
+    child.emit("error", new Error("second signal delivery failed"));
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+
+    child.emit("close", 0, null);
+    await expect(logs).resolves.toBeUndefined();
   });
 
   it("creates and removes a labeled per-cell network", async () => {

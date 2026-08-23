@@ -4,8 +4,10 @@ import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseMusicGenerationModelRef } from "../media-generation/model-ref.js";
-import { getMusicGenerationProvider } from "../media-generation/registry.js";
-import { listMusicGenerationProviders } from "../media-generation/registry.js";
+import {
+  getMusicGenerationProvider,
+  listMusicGenerationProviders,
+} from "../media-generation/registry.js";
 import {
   buildMediaGenerationNormalizationMetadata,
   buildNoCapabilityModelConfiguredMessage,

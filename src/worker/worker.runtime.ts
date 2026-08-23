@@ -1,6 +1,8 @@
 import { chmod, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { isPathInside } from "../infra/path-guards.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
@@ -38,11 +40,11 @@ function fencedResult(state: WorkerConnectionState): WorkerRuntimeResult | undef
   return undefined;
 }
 
-async function assertWorkspaceDirectory(workspaceDir: string): Promise<string> {
-  const resolved = await realpath(workspaceDir);
+async function assertWorkerDirectory(pathname: string, label: string): Promise<string> {
+  const resolved = await realpath(pathname);
   const workspaceStat = await stat(resolved);
   if (!workspaceStat.isDirectory()) {
-    throw new Error("worker workspace path must be a directory");
+    throw new Error(`worker ${label} path must be a directory`);
   }
   return resolved;
 }
@@ -55,7 +57,26 @@ export async function runWorkerDescriptor(
     browserRuntime?: WorkerBrowserRuntime;
   } = {},
 ): Promise<WorkerRuntimeResult> {
-  const workspaceDir = await assertWorkspaceDirectory(descriptor.assignment.workspaceDir);
+  if (
+    descriptor.connectionEndpoint.kind === "websocket" &&
+    descriptor.connectionEndpoint.cloudflareAccess
+  ) {
+    registerSecretValueForRedaction(descriptor.connectionEndpoint.cloudflareAccess.clientId);
+    registerSecretValueForRedaction(descriptor.connectionEndpoint.cloudflareAccess.clientSecret);
+  }
+  const workspaceDir = await assertWorkerDirectory(descriptor.assignment.workspaceDir, "workspace");
+  const workerContainmentRoot = descriptor.assignment.workerContainmentRoot
+    ? await assertWorkerDirectory(descriptor.assignment.workerContainmentRoot, "containment root")
+    : workspaceDir;
+  if (
+    descriptor.assignment.permissionMode &&
+    workspaceDir !== workerContainmentRoot &&
+    !isPathInside(workerContainmentRoot, workspaceDir)
+  ) {
+    throw new Error(
+      "worker workspace path escapes its assigned containment root; reprovision the worker workspace and retry",
+    );
+  }
   const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-"));
   await chmod(stateDir, 0o700);
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -134,6 +155,10 @@ export async function runWorkerDescriptor(
         operationalRunInstance: descriptor.assignment.operationalRunInstance,
         agentRuntimeIdentityToken: descriptor.assignment.agentRuntimeIdentityToken,
         cwd: workspaceDir,
+        workerContainmentRoot,
+        ...(descriptor.assignment.permissionMode
+          ? { permissionMode: descriptor.assignment.permissionMode }
+          : {}),
         stateDir,
         sessionId: descriptor.admission.sessionId,
         sessionKey: `worker:${descriptor.admission.sessionId}`,

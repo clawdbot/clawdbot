@@ -13,8 +13,9 @@ export type {
   SidebarSlotId,
 } from "./sidebar-layout-types.ts";
 
-const SIDEBAR_DEFAULT_WIDTH_PX = 360;
+const SIDEBAR_DEFAULT_WIDTH_PX = 480;
 const SIDEBAR_DEFAULT_HEIGHT_PX = 360;
+export const SIDEBAR_GEOMETRY_COMMIT_EVENT = "openclaw-sidebar-geometry-commit";
 export const SIDEBAR_MIN_WIDTH_PX = 260;
 export const SIDEBAR_MIN_HEIGHT_PX = 220;
 const SIDEBAR_MAX_WIDTH_PX = 1_200;
@@ -37,6 +38,16 @@ function clampHeight(height: number): number {
 
 export function sidebarDock(layout: SidebarLayout): SidebarDock {
   return layout.dock === "bottom" ? "bottom" : "right";
+}
+
+export function isSidebarSlotVisible(layout: SidebarLayout, slot: SidebarSlotId): boolean {
+  if (layout.open !== true) {
+    return false;
+  }
+  return layout.columns.some((column) => {
+    const active = column.panels.find((panel) => panel.id === column.activePanelId);
+    return active?.slot === slot;
+  });
 }
 
 function nextPanelId(layout: SidebarLayout, slot: SidebarSlotId): string {
@@ -111,7 +122,6 @@ export function closeSlot(layout: SidebarLayout, slot: SidebarSlotId): SidebarLa
     .find((entry) => entry.slot === slot);
   if (panel) {
     removePanel(next, panel.id);
-    next.open = true;
   }
   return next;
 }

@@ -6,7 +6,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command as CommanderCommand, Option as CommanderOption } from "commander";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveGatewayPort, resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { isLoopbackAddress, isSecureWebSocketUrl } from "../gateway/net.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
@@ -44,6 +44,7 @@ import {
 } from "./gateway-run-argv.js";
 import {
   hasJsonOutputFlag,
+  isJsonOutputModeActive,
   withConsoleLogsRoutedToStderr,
   withConsoleLogsRoutedToStderrForJson,
 } from "./json-output-mode.js";
@@ -51,7 +52,6 @@ import { isMachineOutputStdoutTTY } from "./machine-output-argv.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { tryOutputPrecomputedCommandHelp } from "./precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
-import { formatCliCommandSuggestions } from "./program/command-suggestions.js";
 import {
   getCoreCliCommandDescriptors,
   getCoreCliCommandNamesCore,
@@ -172,7 +172,6 @@ async function tryRunGatewayRunFastPath(
     { addGatewayRunCommand },
     { VERSION },
     { emitCliBanner },
-    { resolveCliStartupPolicy },
     { ensureCliExecutionBootstrap },
     { defaultRuntime },
   ] = await startupTrace.measure("gateway-run-imports", () =>
@@ -181,13 +180,12 @@ async function tryRunGatewayRunFastPath(
       import("./gateway-cli/run-command.js"),
       import("../version.js"),
       import("./banner.js"),
-      import("./command-startup-policy.js"),
       import("./command-execution-startup.js"),
       import("../runtime.js"),
     ]),
   );
   const commandPath = resolveGatewayCatalogCommandPath(argv) ?? ["gateway"];
-  const startupPolicy = resolveCliStartupPolicy({
+  const startupPolicy = resolveCliStartupPolicyForArgv({
     argv,
     commandPath,
     jsonOutputMode: hasJsonOutputFlag(argv),
@@ -444,9 +442,9 @@ async function resolveConfiguredTuiLaunchTarget(
     }
     return { kind: "onboarding" };
   }
-  const { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } =
+  const { listAgentIds, resolveAgentEffectiveModelPrimary } =
     await import("../agents/agent-scope.js");
-  if (!resolveAgentEffectiveModelPrimary(config, resolveDefaultAgentId(config))) {
+  if (!listAgentIds(config).some((agentId) => resolveAgentEffectiveModelPrimary(config, agentId))) {
     return { kind: "onboarding" };
   }
   return { kind: "tui", local: true };
@@ -512,11 +510,15 @@ async function resolveReachableGateway(
     }
     const probeOptions: {
       url: string;
+      config?: OpenClawConfig;
       token?: string;
       password?: string;
       tlsFingerprint?: string;
       preauthHandshakeTimeoutMs?: number;
     } = { url: target.url };
+    if (config.gateway?.remote?.edgeAuth) {
+      probeOptions.config = config;
+    }
     if (auth.token) {
       probeOptions.token = auth.token;
     }
@@ -629,12 +631,10 @@ async function resolveLocalGatewayProbeTargets(
   config: OpenClawConfig,
 ): Promise<{ targets: GatewayProbeTarget[]; auth: GatewayProbeAuth }> {
   const [
-    { resolveGatewayPort },
     { resolveControlUiLinks },
     { resolveGatewayClientBootstrap },
     { readActiveGatewayLockPort },
   ] = await Promise.all([
-    import("../config/paths.js"),
     import("../gateway/control-ui-links.js"),
     import("../gateway/client-bootstrap.js"),
     import("../infra/gateway-lock.js"),
@@ -995,10 +995,11 @@ async function resolveUnownedCliPrimary(params: {
   return primary;
 }
 
-async function resolveUnownedCliPrimaryMessage(params: {
+async function resolveUnownedCliPrimaryError(params: {
+  argv: string[];
   primary: string;
   config: OpenClawConfig;
-}): Promise<string> {
+}): Promise<Error> {
   const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
     await loadManifestCommandAliasesRuntimeModule();
   const cliCommandSurfaceOwner = await resolveCliCommandSurfaceOwner(params);
@@ -1008,21 +1009,23 @@ async function resolveUnownedCliPrimaryMessage(params: {
     resolveCliCommandSurfaceOwner: () => cliCommandSurfaceOwner,
   });
   if (pluginPolicyMessage) {
-    return pluginPolicyMessage;
+    return await createExpectedPluginPolicyError(pluginPolicyMessage);
   }
   const sanitizedPrimary = sanitizeTerminalText(params.primary);
   const displayPrimary =
     sanitizedPrimary.length <= UNKNOWN_COMMAND_DISPLAY_LIMIT
       ? sanitizedPrimary
       : `${truncateUtf16Safe(sanitizedPrimary, UNKNOWN_COMMAND_DISPLAY_LIMIT - 1)}…`;
-  const suggestion =
-    displayPrimary === params.primary ? formatCliCommandSuggestions(params.primary) : "";
-  return [
-    `Unknown command: openclaw ${displayPrimary}. No built-in command or plugin CLI metadata owns "${displayPrimary}".`,
-    suggestion,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const { createCliUnknownCommandError } = await import("./program/error-output.js");
+  return createCliUnknownCommandError(displayPrimary, {
+    argv: params.argv,
+    ...(displayPrimary === params.primary ? {} : { commandNames: [] }),
+  });
+}
+
+async function createExpectedPluginPolicyError(message: string): Promise<Error> {
+  const { ExpectedCliError } = await import("./failure-output.js");
+  return new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
 }
 
 async function bootstrapCliProxyCaptureAndDispatcher(
@@ -1202,12 +1205,12 @@ async function runCliWithPreparedOutputMode(
   let unregisterProxySignalExitBarrier: (() => void) | null = null;
   let bestEffortConfigPromise: Promise<OpenClawConfig> | null = null;
   const isolateProxyConfigEnv = isGatewayRunInvocation;
-  const skipBestEffortConfigObservation = resolveCliStartupPolicyForArgv({
+  const bestEffortConfigStartupPolicy = resolveCliStartupPolicyForArgv({
     argv: normalizedArgv,
     commandPath: normalizedInvocation.commandPath,
     jsonOutputMode: options.builtInMachineOutput || hasJsonOutputFlag(normalizedArgv),
     env: process.env,
-  }).skipConfigGuard;
+  });
   const useSourceOnlyBestEffortConfig =
     normalizedInvocation.primary === "update" ||
     (normalizedInvocation.primary === "doctor" && hasFlag(normalizedArgv, "--lint"));
@@ -1218,7 +1221,10 @@ async function runCliWithPreparedOutputMode(
           ? configIo.readSourceConfigBestEffort()
           : configIo.readBestEffortConfig({
               ...(isolateProxyConfigEnv ? { isolateEnv: true, observe: false } : {}),
-              ...(skipBestEffortConfigObservation ? { observe: false } : {}),
+              ...(bestEffortConfigStartupPolicy.skipConfigGuard ||
+              bestEffortConfigStartupPolicy.validateConfigOnly
+                ? { observe: false }
+                : {}),
               skipPluginValidation: true,
             }),
       );
@@ -1311,7 +1317,11 @@ async function runCliWithPreparedOutputMode(
     if (!bareSessionInvocation) {
       const unownedPrimary = await resolveUnownedCliPrimary({ argv: normalizedArgv, config });
       if (unownedPrimary) {
-        throw new Error(await resolveUnownedCliPrimaryMessage({ primary: unownedPrimary, config }));
+        throw await resolveUnownedCliPrimaryError({
+          argv: normalizedArgv,
+          primary: unownedPrimary,
+          config,
+        });
       }
     }
     await replaceStartedProxy(config?.proxy ?? undefined);
@@ -1384,9 +1394,11 @@ async function runCliWithPreparedOutputMode(
         const config = await readBestEffortCliConfig();
         const unownedPrimary = await resolveUnownedCliPrimary({ argv: normalizedArgv, config });
         if (unownedPrimary) {
-          throw new Error(
-            await resolveUnownedCliPrimaryMessage({ primary: unownedPrimary, config }),
-          );
+          throw await resolveUnownedCliPrimaryError({
+            argv: normalizedArgv,
+            primary: unownedPrimary,
+            config,
+          });
         }
       }
     }
@@ -1520,14 +1532,14 @@ async function runCliWithPreparedOutputMode(
       const [
         { buildProgram },
         { formatUncaughtError },
-        { formatCliFailureLines },
+        { formatCliFailureLines, formatCliJsonFailure },
         { runFatalErrorHooks },
         {
           installUnhandledRejectionHandler,
           isBenignUncaughtExceptionError,
           isUncaughtExceptionHandled,
         },
-        { restoreRuntimeTerminalState },
+        { defaultRuntime, restoreRuntimeTerminalState },
       ] = await startupTrace.measure("core-imports", () =>
         Promise.all([
           import("./program.js"),
@@ -1554,6 +1566,9 @@ async function runCliWithPreparedOutputMode(
             formatUncaughtError(error),
           );
           return;
+        }
+        if (isJsonOutputModeActive(normalizedArgv)) {
+          defaultRuntime.writeJson(formatCliJsonFailure(error));
         }
         for (const line of formatCliFailureLines({
           title: "OpenClaw hit an unexpected runtime error.",
@@ -1598,9 +1613,9 @@ async function runCliWithPreparedOutputMode(
       });
       if (!shouldSkipPluginRegistration) {
         const config = await startupTrace.measure("register-plugin-commands", async () => {
-          const [{ registerPluginCliCommandsFromValidatedConfig }, { resolveCliStartupPolicy }] =
-            await Promise.all([import("../plugins/cli.js"), import("./command-startup-policy.js")]);
-          const startupPolicy = resolveCliStartupPolicy({
+          const { registerPluginCliCommandsFromValidatedConfig } =
+            await import("../plugins/cli.js");
+          const startupPolicy = resolveCliStartupPolicyForArgv({
             argv: parseArgv,
             commandPath: invocation.commandPath,
             jsonOutputMode: suppressStartupProgress,
@@ -1634,7 +1649,7 @@ async function runCliWithPreparedOutputMode(
               },
             );
             if (missingPluginCommandMessage) {
-              throw new Error(missingPluginCommandMessage);
+              throw await createExpectedPluginPolicyError(missingPluginCommandMessage);
             }
           }
         }
@@ -1654,6 +1669,9 @@ async function runCliWithPreparedOutputMode(
         completedHelpOrVersion = isHelpOrVersionInvocation;
       } catch (error) {
         if (!isCommanderParseExit(error)) {
+          throw error;
+        }
+        if (isJsonOutputModeActive(parseArgv) && error.exitCode !== 0) {
           throw error;
         }
         process.exitCode = error.exitCode;

@@ -19,10 +19,13 @@ import {
 } from "../transports/openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "../transports/openai-reasoning-compat.js";
 import {
-  createOpenAIResponseHook,
+  createOpenAIProviderAcceptanceHook,
   isOpenAICompletionsThinkingEnabled,
   parseOpenAICompletionsUsage,
   readOpenAICompletionsContentDeltas,
+  readOpenAICompletionsReasoningBatch,
+  type OpenAICompletionsContentDelta,
+  type OpenAICompletionsTextSource,
 } from "../transports/openai-transport-shared.js";
 import {
   transportAbortError,
@@ -43,7 +46,9 @@ import type {
 import {
   clearPendingCommentaryText,
   rememberPendingCommentaryTags,
+  tagInterruptedTextPhases,
   tagPendingCommentaryText,
+  tagUnresolvedTextAsCommentary,
   type PendingCommentaryTags,
 } from "../utils/assistant-text-phase.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -149,6 +154,12 @@ export const streamOpenAICompletions: StreamFunction<
     try {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       const compat = resolveOpenAICompletionsCompat(model);
+      const visibleReasoningDetailTypes = new Set(compat.visibleReasoningDetailTypes);
+      const shouldEmitReasoning = Boolean(
+        model.reasoning &&
+        options?.reasoningEffort &&
+        isOpenAICompletionsThinkingEnabled(options.reasoningEffort),
+      );
       const cacheRetention = resolveCacheRetention(options?.cacheRetention);
       const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
       const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, compat);
@@ -173,7 +184,7 @@ export const streamOpenAICompletions: StreamFunction<
         stream: openaiStream,
         signal: firstEventAbort.signal,
         abort: firstEventAbort.abort,
-        hook: createOpenAIResponseHook(options?.onResponse, response, model),
+        hook: createOpenAIProviderAcceptanceHook(options, response, model),
         onReady: () => stream.push({ type: "start", partial: output }),
       });
 
@@ -187,7 +198,10 @@ export const streamOpenAICompletions: StreamFunction<
       >[number];
 
       let textBlock: TextContent | null = null;
+      let textBlockSource: OpenAICompletionsTextSource | undefined;
       let thinkingBlock: ThinkingContent | null = null;
+      let pendingInterruptedTextBlock: TextContent | null = null;
+      let confirmedInterruptedTextBlock: TextContent | null = null;
       let hasFinishReason = false;
       const toolCallBlocksByIndex = new Map<number, StreamingToolCallBlock>();
       const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
@@ -200,6 +214,7 @@ export const streamOpenAICompletions: StreamFunction<
       // *_end event is emitted exactly once.
       const finishedBlocks = new Set<StreamingBlock>();
       const contentIndices = new WeakMap<StreamingBlock, number>();
+      let explicitVisibleTextBlocks: Set<TextContent> | undefined;
       const appendBlock = (block: StreamingBlock) => {
         contentIndices.set(block, blocks.length);
         blocks.push(block);
@@ -247,9 +262,24 @@ export const streamOpenAICompletions: StreamFunction<
           });
         }
       };
-      const ensureTextBlock = () => {
+      const finishTextBlock = () => {
+        if (!textBlock) {
+          return;
+        }
+        finishBlock(textBlock);
+        textBlock = null;
+        textBlockSource = undefined;
+      };
+      const ensureTextBlock = (source: OpenAICompletionsTextSource | undefined) => {
+        if (textBlock && textBlockSource !== source) {
+          finishTextBlock();
+        }
         if (!textBlock) {
           textBlock = { type: "text", text: "" };
+          textBlockSource = source;
+          if (source === "reasoning_detail") {
+            (explicitVisibleTextBlocks ??= new Set()).add(textBlock);
+          }
           appendBlock(textBlock);
           stream.push({
             type: "text_start",
@@ -286,10 +316,14 @@ export const streamOpenAICompletions: StreamFunction<
           thinkingBlock = null;
         }
       };
-      const appendTextDelta = (delta: string) => {
+      const appendTextDelta = (delta: string, source?: OpenAICompletionsTextSource) => {
         sealNativeReasoningBeforeText();
-        const block = ensureTextBlock();
+        const block = ensureTextBlock(source);
         block.text += delta;
+        if (pendingInterruptedTextBlock && delta.trim()) {
+          confirmedInterruptedTextBlock = pendingInterruptedTextBlock;
+          pendingInterruptedTextBlock = null;
+        }
         stream.push({
           type: "text_delta",
           contentIndex: getContentIndex(block),
@@ -306,6 +340,24 @@ export const streamOpenAICompletions: StreamFunction<
           delta,
           partial: output,
         });
+      };
+      const appendReasoningDeltas = (reasoningDeltas: readonly OpenAICompletionsContentDelta[]) => {
+        for (const reasoningDelta of reasoningDeltas) {
+          if (reasoningDelta.kind === "thinking") {
+            if (!shouldEmitReasoning) {
+              continue;
+            }
+            finishTextBlock();
+            const signature = reasoningDelta.signature;
+            const thinkingSignature =
+              model.provider === "opencode-go" && signature === "reasoning"
+                ? "reasoning_content"
+                : signature;
+            appendThinkingDelta(thinkingSignature, reasoningDelta.text);
+          } else {
+            appendTextDelta(reasoningDelta.text, reasoningDelta.source);
+          }
+        }
       };
       const ensureToolCallBlock = (toolCall: StreamingToolCallDelta) => {
         const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
@@ -361,6 +413,37 @@ export const streamOpenAICompletions: StreamFunction<
           if (delta.kind === "text") {
             appendTextDelta(delta.text);
           }
+        }
+      };
+      const sealTextBeforeReasoning = () => {
+        if (!textBlock && !reasoningTagTextPartitioner.hasPending()) {
+          return;
+        }
+        flushPartitionedContent();
+        if (!textBlock) {
+          return;
+        }
+        // Resumed reasoning makes the preceding visible text interim. Preserve
+        // the candidate boundary only if later text confirms a final answer.
+        if (textBlockSource !== "reasoning_detail" && textBlock.text.trim()) {
+          pendingInterruptedTextBlock = textBlock;
+        }
+        finishTextBlock();
+      };
+      const beginReasoning = (hasFollowingVisibleText: boolean, forceStrict = false) => {
+        if (!output.openclawDelivery?.textPhaseRequiresTerminal) {
+          output.openclawDelivery = {
+            ...output.openclawDelivery,
+            textPhaseRequiresTerminal: true,
+          };
+        }
+        if (forceStrict || reasoningTagTextPartitioner.hasPending()) {
+          reasoningTagTextPartitioner.markStrict();
+        }
+        // Let following text finish syntax already owned by the Markdown
+        // parser; otherwise packet batching cannot erase a lane boundary.
+        if (!hasFollowingVisibleText || !reasoningTagTextPartitioner.hasPendingSyntax()) {
+          sealTextBeforeReasoning();
         }
       };
 
@@ -432,53 +515,40 @@ export const streamOpenAICompletions: StreamFunction<
             choice.finish_reason,
           )) {
             const choiceDelta = normalizedDelta.delta;
-            // Some endpoints return reasoning in reasoning_content (llama.cpp),
-            // or reasoning (other openai compatible endpoints)
-            // Use the first non-empty reasoning field to avoid duplication
-            // (e.g., chutes.ai returns both reasoning_content and reasoning with same content)
-            const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"];
             const deltaFields = choiceDelta as Record<string, unknown>;
-            const shouldEmitReasoning = Boolean(
-              model.reasoning &&
-              options?.reasoningEffort &&
-              isOpenAICompletionsThinkingEnabled(options.reasoningEffort),
+            const reasoningBatch = readOpenAICompletionsReasoningBatch(
+              deltaFields,
+              visibleReasoningDetailTypes,
             );
-            let foundReasoningField: string | null = null;
-            for (const field of reasoningFields) {
-              const value = deltaFields[field];
-              if (typeof value === "string" && value.length > 0) {
-                foundReasoningField = field;
-                break;
-              }
-            }
-            if (foundReasoningField) {
-              reasoningTagTextPartitioner.markStrict();
-            }
-            if (shouldEmitReasoning && foundReasoningField) {
-              const delta = deltaFields[foundReasoningField];
-              if (typeof delta === "string" && delta.length > 0) {
-                const thinkingSignature =
-                  model.provider === "opencode-go" && foundReasoningField === "reasoning"
-                    ? "reasoning_content"
-                    : foundReasoningField;
-                appendThinkingDelta(thinkingSignature, delta);
-              }
-            }
-            for (const contentDelta of readOpenAICompletionsContentDeltas(
+            const reasoningDeltas = reasoningBatch.deltas;
+            const hasReasoningThinking = reasoningBatch.hasThinking;
+            const contentDeltas = readOpenAICompletionsContentDeltas(
               choiceDelta.content,
               choiceDelta.refusal,
-              foundReasoningField ? [deltaFields[foundReasoningField] as string] : [],
-            )) {
+              reasoningBatch.mirroredThinking,
+            );
+            const lastVisibleTextIndex = contentDeltas.findLastIndex(
+              (delta) => delta.kind === "text",
+            );
+            const hasSameChunkVisibleText =
+              reasoningBatch.hasVisibleText || lastVisibleTextIndex !== -1;
+            if (hasReasoningThinking) {
+              beginReasoning(hasSameChunkVisibleText, true);
+              appendReasoningDeltas(reasoningDeltas);
+            }
+            for (const [contentDeltaIndex, contentDelta] of contentDeltas.entries()) {
               if (contentDelta.kind === "thinking") {
-                if (reasoningTagTextPartitioner.hasPending()) {
-                  reasoningTagTextPartitioner.markStrict();
-                }
+                const hasLaterVisibleText = contentDeltaIndex < lastVisibleTextIndex;
+                beginReasoning(hasLaterVisibleText);
                 if (shouldEmitReasoning) {
                   appendThinkingDelta(contentDelta.signature, contentDelta.text);
                 }
               } else {
-                appendPartitionedContent(contentDelta.text, Boolean(foundReasoningField));
+                appendPartitionedContent(contentDelta.text, hasReasoningThinking);
               }
+            }
+            if (!hasReasoningThinking) {
+              appendReasoningDeltas(reasoningDeltas);
             }
 
             const toolCallDeltas = normalizedDelta.toolCalls;
@@ -572,6 +642,13 @@ export const streamOpenAICompletions: StreamFunction<
               : "Provider returned an invalid tool call"),
         );
       }
+      if (output.stopReason !== "toolUse" && confirmedInterruptedTextBlock) {
+        tagInterruptedTextPhases(
+          output.content,
+          confirmedInterruptedTextBlock,
+          explicitVisibleTextBlocks,
+        );
+      }
       // Tool completion is irreversible: confirm the terminal before closing
       // blocks, then preserve their original text/thinking/tool event order.
       for (const block of blocks) {
@@ -592,6 +669,8 @@ export const streamOpenAICompletions: StreamFunction<
       const terminal = projectProviderError(error, options?.signal);
       Object.assign(output, terminal);
       finalizeOpenAICompletionsToolCalls(output, { allowSilentToolCallPromotion: false });
+      clearPendingCommentaryText(provisionalCommentaryTags);
+      tagUnresolvedTextAsCommentary(output);
       for (const block of output.content) {
         delete (block as { index?: number }).index;
         // Streaming scratch buffers are only used during parsing; never persist them.

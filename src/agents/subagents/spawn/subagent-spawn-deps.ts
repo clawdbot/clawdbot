@@ -8,6 +8,7 @@ import {
   getRuntimeConfig,
   hasInProcessGatewayContext,
   loadPreparedModelCatalog,
+  resolveProviderRefOwnership,
   resolveContextEngine,
 } from "./subagent-spawn.runtime.js";
 
@@ -20,6 +21,7 @@ type SubagentSpawnDeps = {
   hasInProcessGatewayContext: typeof hasInProcessGatewayContext;
   ensureContextEnginesInitialized: typeof ensureContextEnginesInitialized;
   loadPreparedModelCatalog: typeof loadPreparedModelCatalog;
+  resolveProviderRefOwnership: typeof resolveProviderRefOwnership;
   resolveContextEngine: typeof resolveContextEngine;
 };
 
@@ -32,6 +34,7 @@ const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   hasInProcessGatewayContext,
   ensureContextEnginesInitialized,
   loadPreparedModelCatalog,
+  resolveProviderRefOwnership,
   resolveContextEngine,
 };
 

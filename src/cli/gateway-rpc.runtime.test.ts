@@ -41,6 +41,19 @@ describe("addGatewayClientOptions", () => {
       });
     },
   );
+
+  it("registers and parses a local Gateway port", async () => {
+    const program = new Command().exitOverride();
+    const action = vi.fn((_opts: GatewayRpcOpts) => {});
+    addGatewayClientOptions(program.command("gateway-command")).action(action);
+
+    await program.parseAsync(["gateway-command", "--port", "19083"], { from: "user" });
+
+    expect(action).toHaveBeenCalledWith(
+      expect.objectContaining({ port: "19083" }),
+      expect.anything(),
+    );
+  });
 });
 
 describe("callGatewayFromCliRuntime", () => {
@@ -93,6 +106,25 @@ describe("callGatewayFromCliRuntime", () => {
         requireLocalBackendSharedAuth: true,
       }),
     );
+  });
+
+  it("projects --port to the canonical local Gateway override", async () => {
+    await callGatewayFromCliRuntime("cron.status", { port: "19083" });
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({ localPortOverride: 19_083 }),
+    );
+  });
+
+  it("rejects combining --url and --port before opening a Gateway connection", async () => {
+    await expect(
+      callGatewayFromCliRuntime("cron.status", {
+        url: "ws://127.0.0.1:19083",
+        port: "19083",
+      }),
+    ).rejects.toThrow("Use either --url or --port, not both.");
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it.each([

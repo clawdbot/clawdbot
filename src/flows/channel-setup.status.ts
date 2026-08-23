@@ -1,12 +1,7 @@
 // Channel setup status helpers format channel setup progress and docs links.
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import {
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-  tryResolveLegacyCompatibilityAgentId,
-  tryResolveSystemAgentTargetAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
 import { listChatChannels } from "../channels/chat-meta.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import { listChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
@@ -19,8 +14,10 @@ import type {
 import type { ChannelMeta } from "../channels/plugins/types.core.js";
 import { formatChannelPrimerLine, formatChannelSelectionLine } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveChannelSetupEntries } from "../commands/channel-setup/discovery.js";
-import { shouldShowChannelInSetup } from "../commands/channel-setup/discovery.js";
+import {
+  resolveChannelSetupEntries,
+  shouldShowChannelInSetup,
+} from "../commands/channel-setup/discovery.js";
 import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-setup/registry.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
@@ -61,13 +58,10 @@ type ChannelSetupSelectionEntry = {
 };
 
 export function resolveChannelSetupWorkspaceDir(cfg: OpenClawConfig): string {
-  const agentId =
-    tryResolveLegacyCompatibilityAgentId(cfg) ??
-    tryResolveSystemAgentTargetAgentId(cfg) ??
-    resolveDefaultAgentId(cfg, {
-      surface: "channel setup",
-      hint: "Set agents.defaults.systemAgent.agentId before configuring channels.",
-    });
+  const agentId = resolveAmbientOwnerAgentId(cfg, undefined, {
+    surface: "channel setup",
+    hint: "Set agents.defaults.systemAgent.agentId before configuring channels.",
+  });
   return resolveAgentWorkspaceDir(cfg, agentId);
 }
 

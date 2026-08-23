@@ -12,7 +12,6 @@ import {
   resolveMediaToolInboundRoots,
   resolveCapabilityModelConfigForTool,
   resolveMediaToolReferenceAccess,
-  resolveModelFromRegistry,
 } from "./media-tool-shared.js";
 
 // Keep media-tool-shared tests focused on root separation; channel-inbound
@@ -42,22 +41,6 @@ vi.mock("../../media/channel-inbound-roots.js", () => ({
 
 function normalizeHostPath(value: string): string {
   return path.normalize(path.resolve(value));
-}
-
-function createModelRegistryStub(resolve: (provider: string, modelId: string) => unknown): {
-  calls: Array<[string, string]>;
-  registry: { find: (provider: string, modelId: string) => unknown };
-} {
-  const calls: Array<[string, string]> = [];
-  return {
-    calls,
-    registry: {
-      find(provider, modelId) {
-        calls.push([provider, modelId]);
-        return resolve(provider, modelId);
-      },
-    },
-  };
 }
 
 describe("readBooleanToolParam", () => {
@@ -192,55 +175,6 @@ describe("resolveMediaToolReferenceAccess", () => {
       }),
     ).rejects.toThrow(expected);
   });
-});
-
-describe("resolveModelFromRegistry", () => {
-  it("normalizes provider and model refs before registry lookup", () => {
-    const foundModel = { provider: "ollama", id: "qwen3.5:397b-cloud" };
-    const { calls, registry } = createModelRegistryStub(() => foundModel);
-
-    const result = resolveModelFromRegistry({
-      modelRegistry: registry,
-      provider: " OLLAMA ",
-      modelId: " qwen3.5:397b-cloud ",
-    });
-
-    expect(calls).toEqual([["ollama", "qwen3.5:397b-cloud"]]);
-    expect(result).toBe(foundModel);
-  });
-
-  it("reports the normalized ref when the registry lookup misses", () => {
-    const { registry } = createModelRegistryStub(() => null);
-
-    expect(() =>
-      resolveModelFromRegistry({
-        modelRegistry: registry,
-        provider: " OLLAMA ",
-        modelId: " qwen3.5:397b-cloud ",
-      }),
-    ).toThrow("Unknown model: ollama/qwen3.5:397b-cloud");
-  });
-
-  it("falls back to provider-prefixed custom model IDs", () => {
-    // Custom providers can store ids with provider prefixes; try both forms so
-    // callers can pass the short local model id.
-    const foundModel = { provider: "kimchi", id: "kimchi/claude-opus-4-6" };
-    const { calls, registry } = createModelRegistryStub((_, modelId) =>
-      modelId === "kimchi/claude-opus-4-6" ? foundModel : null,
-    );
-
-    const result = resolveModelFromRegistry({
-      modelRegistry: registry,
-      provider: "kimchi",
-      modelId: "claude-opus-4-6",
-    });
-
-    expect(calls).toEqual([
-      ["kimchi", "claude-opus-4-6"],
-      ["kimchi", "kimchi/claude-opus-4-6"],
-    ]);
-    expect(result).toBe(foundModel);
-  }, 180_000);
 });
 
 describe("hasGenerationToolAvailability", () => {

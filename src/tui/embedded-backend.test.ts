@@ -18,6 +18,7 @@ const agentCommandFromIngressMock = vi.fn();
 const queueEmbeddedAgentMessageWithOutcomeAsyncMock = vi.fn();
 const resolveActiveEmbeddedRunSessionIdMock = vi.fn();
 const runBtwSideQuestionMock = vi.fn();
+const formatSessionUsageCostSummaryMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
 const applySessionPatchProjectionMock = vi.fn();
 const projectSessionsPatchEntryMock = vi.fn();
@@ -61,6 +62,9 @@ const getRuntimeConfigMock = vi.fn(() => ({}));
 const loadGatewayModelCatalogMock = vi.fn(
   (_params?: unknown): Array<{ id: string; name: string; provider: string }> => [],
 );
+const buildAllowedModelSetMock = vi.fn(({ catalog }: { catalog: unknown[] }) => ({
+  allowedCatalog: catalog,
+}));
 const readChatHistoryPageMock = vi.fn(
   async (_params?: unknown): Promise<{ messages: unknown[] }> => ({
     messages: [],
@@ -98,6 +102,10 @@ vi.mock("../agents/embedded-agent-runner/runs.js", () => ({
 
 vi.mock("../agents/btw.js", () => ({
   runBtwSideQuestion: (...args: unknown[]) => runBtwSideQuestionMock(...args),
+}));
+
+vi.mock("../auto-reply/reply/commands-session-cost.runtime.js", () => ({
+  formatSessionUsageCostSummary: (...args: unknown[]) => formatSessionUsageCostSummaryMock(...args),
 }));
 
 vi.mock("../infra/agent-events.js", () => ({
@@ -170,7 +178,8 @@ vi.mock("../agents/defaults.js", () => ({
 }));
 
 vi.mock("../agents/model-selection.js", () => ({
-  buildAllowedModelSet: ({ catalog }: { catalog: unknown[] }) => ({ allowedCatalog: catalog }),
+  buildAllowedModelSet: (params: { catalog: unknown[]; agentId?: string }) =>
+    buildAllowedModelSetMock(params),
   buildConfiguredModelCatalog: ({ cfg }: { cfg: { models?: { providers?: unknown } } }) =>
     Object.entries(
       (cfg.models?.providers as Record<string, { models?: Array<{ id: string }> }>) ?? {},
@@ -213,7 +222,6 @@ vi.mock("../gateway/server-constants.js", () => ({
 vi.mock("../gateway/server-methods/chat.js", () => ({
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: 100_000,
   augmentChatHistoryWithCanvasBlocks: (messages: unknown[]) => messages,
-  enforceChatHistoryFinalBudget: ({ messages }: { messages: unknown[] }) => ({ messages }),
   replaceOversizedChatHistoryMessages: ({ messages }: { messages: unknown[] }) => ({ messages }),
 }));
 
@@ -316,6 +324,8 @@ describe("EmbeddedTuiBackend", () => {
     resolveActiveEmbeddedRunSessionIdMock.mockReset();
     resolveActiveEmbeddedRunSessionIdMock.mockReturnValue(undefined);
     runBtwSideQuestionMock.mockReset();
+    formatSessionUsageCostSummaryMock.mockReset();
+    formatSessionUsageCostSummaryMock.mockResolvedValue("💸 Usage cost\nSession $1.23");
     updateSessionStoreMock.mockReset();
     updateSessionStoreMock.mockImplementation(
       async (_storePath: string, update: (store: Record<string, unknown>) => unknown) =>
@@ -386,6 +396,7 @@ describe("EmbeddedTuiBackend", () => {
     getRuntimeConfigMock.mockReturnValue({});
     loadGatewayModelCatalogMock.mockReset();
     loadGatewayModelCatalogMock.mockReturnValue([]);
+    buildAllowedModelSetMock.mockClear();
     readChatHistoryPageMock.mockReset();
     readChatHistoryPageMock.mockResolvedValue({ messages: [] });
     loadSessionEntryMock.mockReset();
@@ -432,6 +443,7 @@ describe("EmbeddedTuiBackend", () => {
         key: "tui-created",
         agentId: "main",
         parentSessionKey: "agent:main:main",
+        armSessionDiffBaselineCapture: true,
         emitCommandHooks: true,
         commandSource: "tui:embedded",
         loadGatewayModelCatalog: expect.any(Function),
@@ -714,6 +726,35 @@ describe("EmbeddedTuiBackend", () => {
       },
     ]);
     expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ readOnly: false });
+  });
+
+  it("passes the selected agent into model filtering", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: {
+        ownership: "explicit",
+        entries: {
+          main: { modelPolicy: { allow: ["fixture/main-model"] } },
+          work: { modelPolicy: { allow: ["fixture/work-model"] } },
+        },
+      },
+      models: {
+        mode: "replace",
+        providers: {
+          fixture: {
+            models: [{ id: "main-model" }, { id: "work-model" }],
+          },
+        },
+      },
+    });
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await backend.listModels({ agentId: "work" });
+
+    expect(buildAllowedModelSetMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "work" }),
+    );
   });
 
   it("patches wildcard replace-mode sessions against the same full catalog as model listing", async () => {
@@ -1086,6 +1127,35 @@ describe("EmbeddedTuiBackend", () => {
       sessionKey: "global",
       storePath: "/tmp/openclaw-work-sessions.json",
     });
+  });
+
+  it("runs local usage cost with the canonical session entry and selected agent", async () => {
+    const cfg = { session: { scope: "global" } };
+    const sessionEntry = { sessionId: "session-work", updatedAt: embeddedEventTimestamp };
+    loadSessionEntryMock.mockReturnValueOnce({
+      cfg,
+      canonicalKey: "global",
+      storePath: "/tmp/openclaw-work-sessions.json",
+      entry: sessionEntry,
+    });
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(
+      backend.runUsageCostCommand({ sessionKey: "global", agentId: "work" }),
+    ).resolves.toEqual({
+      text: "💸 Usage cost\nSession $1.23",
+    });
+
+    expect(loadSessionEntryMock).toHaveBeenCalledWith("global", { agentId: "work" });
+    expect(formatSessionUsageCostSummaryMock).toHaveBeenCalledWith({
+      cfg,
+      sessionKey: "global",
+      agentId: "work",
+      sessionEntry,
+      storePath: "/tmp/openclaw-work-sessions.json",
+    });
+    expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
   });
 
   it("loads history thinking defaults from configured replace-mode models", async () => {

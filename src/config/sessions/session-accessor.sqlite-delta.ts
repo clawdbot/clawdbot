@@ -5,11 +5,11 @@ import {
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type {
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptRawDeltaResult,
   SessionTranscriptReadScope,
-  TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import { coerceSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import {
@@ -36,6 +36,15 @@ type RawTranscriptCursor = {
   version: typeof RAW_TRANSCRIPT_CURSOR_VERSION;
 };
 
+type SessionTranscriptRawDeltaPage = Extract<SessionTranscriptRawDeltaResult, { kind: "page" }>;
+
+export type SessionTranscriptDisplayDeltaResult =
+  | (Omit<SessionTranscriptRawDeltaPage, "events"> & {
+      activeLeafEntryId: string | null;
+      events: Array<SessionTranscriptRawDeltaPage["events"][number] & { messageSeq?: number }>;
+    })
+  | Exclude<SessionTranscriptRawDeltaResult, { kind: "page" }>;
+
 type ResolvedTranscriptReadScope = ReturnType<typeof resolveSqliteTranscriptReadScope>;
 
 function normalizeRawDeltaLimit(
@@ -53,6 +62,16 @@ function normalizeRawDeltaLimit(
 
 function encodeRawTranscriptCursor(cursor: RawTranscriptCursor): string {
   return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+/** Mint the raw-delta cursor for a generation-consistent transcript snapshot. */
+export function createTranscriptRawDeltaCursor(params: {
+  agentId: string;
+  generation: string;
+  lastSeq: number;
+  sessionId: string;
+}): string {
+  return encodeRawTranscriptCursor({ ...params, version: RAW_TRANSCRIPT_CURSOR_VERSION });
 }
 
 function parseRawTranscriptCursor(value: string): RawTranscriptCursor | undefined {
@@ -125,6 +144,7 @@ export function readTranscriptRawDelta(
         maxEvents,
         maxBytes,
         beforeEventSeq,
+        false,
       );
     },
     {
@@ -134,6 +154,40 @@ export function readTranscriptRawDelta(
   );
 }
 
+/** Read raw cursor progress with the active message ordinals used by session.message. */
+export function readTranscriptDisplayDelta(
+  scope: SessionTranscriptReadScope,
+  limits: SessionTranscriptRawDeltaLimits = {},
+): SessionTranscriptDisplayDeltaResult {
+  const maxEvents = normalizeRawDeltaLimit(
+    limits.maxEvents,
+    DEFAULT_RAW_TRANSCRIPT_MAX_EVENTS,
+    MAX_RAW_TRANSCRIPT_EVENTS,
+    "maxEvents",
+  );
+  const maxBytes = normalizeRawDeltaLimit(
+    limits.maxBytes,
+    DEFAULT_RAW_TRANSCRIPT_MAX_BYTES,
+    MAX_RAW_TRANSCRIPT_BYTES,
+    "maxBytes",
+  );
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const beforeEventSeq = resolveSqliteSessionTranscriptReadFence({
+      database: projection.database,
+      ...projection.resolved,
+    })?.beforeRawSeq;
+    return readRawDeltaInTransaction(
+      projection.database.db,
+      projection.resolved,
+      limits.cursor,
+      maxEvents,
+      maxBytes,
+      beforeEventSeq,
+      true,
+    );
+  });
+}
+
 function readRawDeltaInTransaction(
   database: import("node:sqlite").DatabaseSync,
   scope: ResolvedTranscriptReadScope,
@@ -141,7 +195,26 @@ function readRawDeltaInTransaction(
   maxEvents: number,
   maxBytes: number,
   beforeEventSeq: number | undefined,
-): SessionTranscriptRawDeltaResult {
+  includeMessageSequences: false,
+): SessionTranscriptRawDeltaResult;
+function readRawDeltaInTransaction(
+  database: import("node:sqlite").DatabaseSync,
+  scope: ResolvedTranscriptReadScope,
+  encodedCursor: string | undefined,
+  maxEvents: number,
+  maxBytes: number,
+  beforeEventSeq: number | undefined,
+  includeMessageSequences: true,
+): SessionTranscriptDisplayDeltaResult;
+function readRawDeltaInTransaction(
+  database: import("node:sqlite").DatabaseSync,
+  scope: ResolvedTranscriptReadScope,
+  encodedCursor: string | undefined,
+  maxEvents: number,
+  maxBytes: number,
+  beforeEventSeq: number | undefined,
+  includeMessageSequences: boolean,
+): SessionTranscriptDisplayDeltaResult | SessionTranscriptRawDeltaResult {
   const db = getSessionKysely(database);
   const state = executeSqliteQueryTakeFirstSync(
     database,
@@ -228,23 +301,59 @@ function readRawDeltaInTransaction(
   const rows =
     selectedCount === 0
       ? []
-      : executeSqliteQuerySync(
-          database,
-          db
-            .selectFrom("transcript_events")
-            .select(["event_json", "seq"])
-            .where("session_id", "=", scope.sessionId)
-            .where("seq", ">", cursor.lastSeq)
-            .where("seq", "<=", lastSeq)
-            .orderBy("seq", "asc"),
-        ).rows.map((row) => ({
-          event: JSON.parse(row.event_json) as TranscriptEvent,
-          seq: coerceSqliteNumber(row.seq),
-        }));
+      : includeMessageSequences
+        ? executeSqliteQuerySync(
+            database,
+            db
+              .selectFrom("transcript_events as event")
+              .leftJoin("session_transcript_active_events as active", (join) =>
+                join
+                  .onRef("active.session_id", "=", "event.session_id")
+                  .onRef("active.event_seq", "=", "event.seq"),
+              )
+              .select(["event.event_json", "event.seq", "active.message_position"])
+              .where("event.session_id", "=", scope.sessionId)
+              .where("event.seq", ">", cursor.lastSeq)
+              .where("event.seq", "<=", lastSeq)
+              .orderBy("event.seq", "asc"),
+          ).rows.map((row) => {
+            const eventRow: SessionTranscriptRawDeltaPage["events"][number] & {
+              messageSeq?: number;
+            } = {
+              event: JSON.parse(row.event_json),
+              seq: coerceSqliteNumber(row.seq),
+            };
+            if (row.message_position !== null) {
+              eventRow.messageSeq = coerceSqliteNumber(row.message_position) + 1;
+            }
+            return eventRow;
+          })
+        : executeSqliteQuerySync(
+            database,
+            db
+              .selectFrom("transcript_events")
+              .select(["event_json", "seq"])
+              .where("session_id", "=", scope.sessionId)
+              .where("seq", ">", cursor.lastSeq)
+              .where("seq", "<=", lastSeq)
+              .orderBy("seq", "asc"),
+          ).rows.map((row) => ({
+            event: JSON.parse(row.event_json),
+            seq: coerceSqliteNumber(row.seq),
+          }));
   const nextCursor = encodeRawTranscriptCursor({ ...cursor, lastSeq });
   const requiredBytes =
     selectedCount === 0 && metadata[0] ? metadata[0].serializedBytes : undefined;
-  return {
+  const activeLeafEntryId = includeMessageSequences
+    ? (executeSqliteQueryTakeFirstSync(
+        database,
+        db
+          .selectFrom("session_transcript_index_state")
+          .select("leaf_event_id")
+          .where("session_id", "=", scope.sessionId),
+      )?.leaf_event_id ?? null)
+    : null;
+  const page: SessionTranscriptRawDeltaPage = {
     kind: "page",
     cursor: nextCursor,
     events: rows,
@@ -252,4 +361,5 @@ function readRawDeltaInTransaction(
     ...(requiredBytes !== undefined ? { requiredBytes } : {}),
     serializedBytes,
   };
+  return includeMessageSequences ? { ...page, activeLeafEntryId } : page;
 }

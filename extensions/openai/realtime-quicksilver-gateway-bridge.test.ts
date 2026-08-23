@@ -249,7 +249,11 @@ describe("GPT-Live werift audio peer", () => {
 
       expect(decodeOrder).toEqual([20, "plc", 22, 23, 24, 25]);
       expect(decodePacketLoss).toHaveBeenCalledWith(960);
-      expect(Buffer.concat(onAudio.mock.calls.map(([audio]) => audio))).toHaveLength(6 * 480 * 2);
+      // The centered streaming filter retains seven 24 kHz samples of right-edge
+      // context until the next packet instead of fabricating a boundary per packet.
+      expect(Buffer.concat(onAudio.mock.calls.map(([audio]) => audio))).toHaveLength(
+        (6 * 480 - 7) * 2,
+      );
       expect(onError).not.toHaveBeenCalled();
     } finally {
       peer.close();

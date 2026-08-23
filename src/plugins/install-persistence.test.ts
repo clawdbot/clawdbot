@@ -403,6 +403,7 @@ describe("persistPluginInstall", () => {
           kind: "npm",
           npmRoot: previousProjectRoot,
           packageName: "@openclaw/codex",
+          rootKind: "isolated-project",
         },
       },
     });

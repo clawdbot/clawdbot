@@ -1,5 +1,9 @@
 import path from "node:path";
-import { removePathWithinRoot, root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
+import {
+  isPathInside,
+  removePathWithinRoot,
+  root as fsRoot,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import {
   createWritableRenameTargetResolver,
   type SandboxBackendHandle,
@@ -7,7 +11,7 @@ import {
   type SandboxFsStat,
   type SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
-import { FsSafeError, isPathInside } from "openclaw/plugin-sdk/security-runtime";
+import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
 import {
   resolveMxcReadOnlySkillMounts,
   type MxcReadOnlySkillMount,

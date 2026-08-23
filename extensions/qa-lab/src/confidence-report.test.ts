@@ -25,8 +25,48 @@ describe("qa confidence report", () => {
   async function writeJson(relativePath: string, payload: unknown) {
     const filePath = path.join(tempRoot, relativePath);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    const value =
+      relativePath.endsWith("qa-suite-summary.json") &&
+      payload &&
+      typeof payload === "object" &&
+      !Array.isArray(payload) &&
+      !("run" in payload)
+        ? { run: { status: "completed" }, ...payload }
+        : payload;
+    await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
     return filePath;
+  }
+
+  async function buildStrictSuiteReport(payload: Record<string, unknown>, withBackfill = false) {
+    await writeJson("report-only/qa-suite-summary.json", payload);
+    const lanes: QaConfidenceManifest["lanes"] = [
+      {
+        id: "report-only",
+        title: "Report-only",
+        kind: "qa-suite-summary",
+        artifact: "report-only/qa-suite-summary.json",
+        required: true,
+        ...(withBackfill ? { skipBackfillLane: "backfill" } : {}),
+      },
+    ];
+    if (withBackfill) {
+      await writeJson("backfill/qa-suite-summary.json", {
+        counts: { total: 1, passed: 1, failed: 0, skipped: 0 },
+      });
+      lanes.push({
+        id: "backfill",
+        title: "Passing backfill",
+        kind: "qa-suite-summary",
+        artifact: "backfill/qa-suite-summary.json",
+        required: true,
+      });
+    }
+    return buildQaConfidenceReport({
+      manifest: { version: 1, profile: "confidence-regression", lanes },
+      artifactRoot: tempRoot,
+      strictZeroUnknowns: true,
+      strictGlobalPass: true,
+    });
   }
 
   it("passes strict zero-unknowns when every lane passes or has an allowed blocked verdict", async () => {
@@ -91,6 +131,44 @@ describe("qa confidence report", () => {
     expect(report.lanes[0]?.details).toContain("counts.skipped=2");
     expect(renderQaConfidenceMarkdownReport(report)).toContain("Zero unknowns: yes");
     expect(renderQaConfidenceMarkdownReport(report)).toContain("Global pass: no");
+  });
+
+  it("uses suite lifecycle status before terminal outcome counts", async () => {
+    const manifest: QaConfidenceManifest = {
+      version: 1,
+      profile: "codex-100",
+      lanes: [
+        {
+          id: "suite",
+          title: "Suite",
+          kind: "qa-suite-summary",
+          artifact: "suite/qa-suite-summary.json",
+          required: true,
+        },
+      ],
+    };
+    for (const [runStatus, expectedPass, expectedLaneStatus, expectedDetails] of [
+      ["missing", false, "unknown", "missing run.status"],
+      ["running", false, "unknown", "still running"],
+      ["completed", true, "pass", "counts.failed=0"],
+      ["paused", false, "unknown", "unsupported run.status=paused"],
+    ] as const) {
+      await writeJson("suite/qa-suite-summary.json", {
+        run: runStatus === "missing" ? {} : { status: runStatus },
+        counts: { total: 1, passed: 1, skipped: 0, failed: 0 },
+        scenarios: [{ name: "completed prefix", status: "pass" }],
+      });
+
+      const report = await buildQaConfidenceReport({
+        manifest,
+        artifactRoot: tempRoot,
+        strictGlobalPass: true,
+      });
+
+      expect(report.pass).toBe(expectedPass);
+      expect(report.lanes[0]).toMatchObject({ status: expectedLaneStatus });
+      expect(report.lanes[0]?.details).toContain(expectedDetails);
+    }
   });
 
   it("does not let optional lanes block strict gates", async () => {
@@ -230,29 +308,9 @@ describe("qa confidence report", () => {
   });
 
   it("fails strict global pass for skipped suite rows until a backfill lane passes", async () => {
-    await writeJson("report-only/qa-suite-summary.json", {
+    const report = await buildStrictSuiteReport({
       counts: { total: 3, passed: 2, skipped: 1, failed: 0 },
       scenarios: [],
-    });
-
-    const report = await buildQaConfidenceReport({
-      manifest: {
-        version: 1,
-        profile: "codex-100",
-        lanes: [
-          {
-            id: "report-only",
-            title: "Report-only",
-            kind: "qa-suite-summary",
-            artifact: "report-only/qa-suite-summary.json",
-            required: true,
-          },
-        ],
-      },
-      artifactRoot: tempRoot,
-      strictZeroUnknowns: true,
-      strictGlobalPass: true,
-      generatedAt: "2026-05-12T00:00:00.000Z",
     });
 
     expect(report.zeroUnknowns).toBe(true);
@@ -260,6 +318,82 @@ describe("qa confidence report", () => {
     expect(report.failures).toEqual([
       "report-only has 1 skipped row(s) with no passing backfill lane",
     ]);
+  });
+
+  it.each([
+    ["count-backed", "skip"],
+    ["count-backed", "skipped"],
+    ["legacy", "skip"],
+    ["legacy", "skipped"],
+    ["unverified-pass-count", "skip"],
+    ["unverified-pass-count", "skipped"],
+  ] as const)(
+    "rejects %s suites containing only %s scenarios despite a passing backfill",
+    async (format, skippedStatus) => {
+      const report = await buildStrictSuiteReport(
+        {
+          ...(format === "count-backed"
+            ? { counts: { total: 1, passed: 0, failed: 0, skipped: 1 } }
+            : format === "unverified-pass-count"
+              ? { counts: { passed: 1, failed: 0 } }
+              : {}),
+          scenarios: [{ name: "never executed", status: skippedStatus }],
+        },
+        true,
+      );
+
+      expect(report.pass).toBe(false);
+      expect(report.globalPass).toBe(false);
+      expect(report.lanes[0]).toMatchObject({ status: "unknown" });
+      expect(report.lanes[0]?.details).toContain("no executed scenarios");
+      expect(report.lanes[1]).toMatchObject({ status: "pass" });
+    },
+  );
+
+  it.each([
+    ["skip", undefined],
+    ["skipped", undefined],
+    ["count-reported skip", 1],
+  ] as const)(
+    "requires a passing backfill for legacy suites containing a pass and %s",
+    async (skippedStatus, explicitSkippedCount) => {
+      const artifact = {
+        ...(explicitSkippedCount === undefined
+          ? {}
+          : { counts: { skipped: explicitSkippedCount } }),
+        scenarios: [
+          { name: "executed", status: "pass" },
+          ...(explicitSkippedCount === undefined
+            ? [{ name: "not executed", status: skippedStatus }]
+            : []),
+        ],
+      };
+
+      for (const hasBackfill of [false, true]) {
+        const report = await buildStrictSuiteReport(artifact, hasBackfill);
+
+        expect(report.pass).toBe(hasBackfill);
+        expect(report.globalPass).toBe(hasBackfill);
+        expect(report.lanes[0]).toMatchObject({ status: "pass", skippedCount: 1 });
+        if (hasBackfill) {
+          expect(report.lanes[0]).toMatchObject({ skipBackfilled: true });
+        } else {
+          expect(report.failures).toEqual([
+            "report-only has 1 skipped row(s) with no passing backfill lane",
+          ]);
+        }
+      }
+    },
+  );
+
+  it("accepts a positive count-only suite without scenario rows", async () => {
+    const report = await buildStrictSuiteReport({
+      counts: { total: 1, passed: 1, failed: 0, skipped: 0 },
+    });
+
+    expect(report.pass).toBe(true);
+    expect(report.globalPass).toBe(true);
+    expect(report.lanes[0]).toMatchObject({ status: "pass" });
   });
 
   it("infers skipped suite rows from totals and scenario status", async () => {
@@ -276,27 +410,7 @@ describe("qa confidence report", () => {
         "counts.skipped=1",
       ],
     ] as const) {
-      await writeJson("report-only/qa-suite-summary.json", artifact);
-
-      const report = await buildQaConfidenceReport({
-        manifest: {
-          version: 1,
-          profile: "codex-100",
-          lanes: [
-            {
-              id: "report-only",
-              title: "Report-only",
-              kind: "qa-suite-summary",
-              artifact: "report-only/qa-suite-summary.json",
-              required: true,
-            },
-          ],
-        },
-        artifactRoot: tempRoot,
-        strictZeroUnknowns: true,
-        strictGlobalPass: true,
-        generatedAt: "2026-05-12T00:00:00.000Z",
-      });
+      const report = await buildStrictSuiteReport(artifact);
 
       expect(report.globalPass).toBe(false);
       expect(report.failures).toEqual([
@@ -323,27 +437,7 @@ describe("qa confidence report", () => {
         "unsupported non-pass status",
       ],
     ] as const) {
-      await writeJson("report-only/qa-suite-summary.json", artifact);
-
-      const report = await buildQaConfidenceReport({
-        manifest: {
-          version: 1,
-          profile: "codex-100",
-          lanes: [
-            {
-              id: "report-only",
-              title: "Report-only",
-              kind: "qa-suite-summary",
-              artifact: "report-only/qa-suite-summary.json",
-              required: true,
-            },
-          ],
-        },
-        artifactRoot: tempRoot,
-        strictZeroUnknowns: true,
-        strictGlobalPass: true,
-        generatedAt: "2026-05-12T00:00:00.000Z",
-      });
+      const report = await buildStrictSuiteReport(artifact);
 
       expect(report.pass).toBe(false);
       expect(report.globalPass).toBe(false);
@@ -422,49 +516,17 @@ describe("qa confidence report", () => {
   });
 
   it("passes strict global pass when skipped suite rows are backfilled by a passing lane", async () => {
-    await writeJson("report-only/qa-suite-summary.json", {
-      counts: { total: 3, passed: 2, skipped: 1, failed: 0 },
-      scenarios: [],
-    });
-    await writeJson("live-backfill/qa-suite-summary.json", {
-      counts: { total: 1, passed: 1, skipped: 0, failed: 0 },
-      scenarios: [],
-    });
-
-    const report = await buildQaConfidenceReport({
-      manifest: {
-        version: 1,
-        profile: "codex-100",
-        lanes: [
-          {
-            id: "report-only",
-            title: "Report-only",
-            kind: "qa-suite-summary",
-            artifact: "report-only/qa-suite-summary.json",
-            required: true,
-            skipBackfillLane: "live-backfill",
-          },
-          {
-            id: "live-backfill",
-            title: "Live backfill",
-            kind: "qa-suite-summary",
-            artifact: "live-backfill/qa-suite-summary.json",
-            required: true,
-          },
-        ],
-      },
-      artifactRoot: tempRoot,
-      strictZeroUnknowns: true,
-      strictGlobalPass: true,
-      generatedAt: "2026-05-12T00:00:00.000Z",
-    });
+    const report = await buildStrictSuiteReport(
+      { counts: { total: 3, passed: 2, skipped: 1, failed: 0 }, scenarios: [] },
+      true,
+    );
 
     expect(report.pass).toBe(true);
     expect(report.zeroUnknowns).toBe(true);
     expect(report.globalPass).toBe(true);
     expect(report.lanes[0]).toMatchObject({
       skippedCount: 1,
-      skipBackfillLane: "live-backfill",
+      skipBackfillLane: "backfill",
       skipBackfilled: true,
     });
   });
@@ -750,7 +812,7 @@ describe("qa confidence report", () => {
     for (const [artifact, expectedDetail] of [
       [
         { counts: { total: 1, passed: -1, skipped: 0, failed: 0 } },
-        "counts.passed must be a non-negative integer",
+        "counts.passed must be a non-negative safe integer",
       ],
       [
         { counts: { total: 1, passed: 2, failed: 0 } },

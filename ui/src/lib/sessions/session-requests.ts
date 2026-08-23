@@ -1,3 +1,4 @@
+import type { SessionsDeleteResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../../src/shared/session-archive-timeout.ts";
 import type {
   SessionBranch,
@@ -18,11 +19,9 @@ import type { SessionPatch } from "./patch.ts";
 import type {
   SessionCompactResult,
   SessionDeleteOptions,
-  SessionDeleteResponse,
   SessionListOptions,
   SessionRequestClient,
   SessionResetOptions,
-  SessionSteerResult,
 } from "./session-capability.ts";
 
 /** Gateway rosters omit recency so Chat and Settings agree; the cap bounds list work. */
@@ -60,7 +59,7 @@ function buildTranscriptMutationParams(
   };
 }
 
-function buildSessionListParams(options: SessionListOptions = {}): Record<string, unknown> {
+export function buildSessionListParams(options: SessionListOptions = {}): Record<string, unknown> {
   const params: Record<string, unknown> = { ...SESSION_LIST_PARAMS };
   if (options.limit === undefined) {
     params.limit = DEFAULT_SESSION_LIST_QUERY.limit;
@@ -99,7 +98,10 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   const agentId = options.agentId?.trim();
   const spawnedBy = options.spawnedBy?.trim();
   const search = options.search?.trim();
-  const creatorId = options.creatorId?.trim();
+  const ownerId = options.ownerId?.trim();
+  if (options.involvingMe === true) {
+    params.involvingMe = true;
+  }
   if (options.boardFace) {
     params.boardFace = options.boardFace;
   }
@@ -112,8 +114,8 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   if (search) {
     params.search = search;
   }
-  if (creatorId) {
-    params.creatorId = creatorId;
+  if (ownerId) {
+    params.ownerId = ownerId;
   }
   if (typeof options.offset === "number" && options.offset > 0) {
     params.offset = Math.floor(options.offset);
@@ -125,10 +127,14 @@ export async function requestSessionList(
   client: SessionRequestClient,
   options: SessionListOptions = {},
 ): Promise<SessionsListResult | null> {
-  const result = await client.request<SessionsListResult | undefined>(
-    "sessions.list",
-    buildSessionListParams(options),
-  );
+  return requestSessionListParams(client, buildSessionListParams(options));
+}
+
+export async function requestSessionListParams(
+  client: SessionRequestClient,
+  params: Readonly<Record<string, unknown>>,
+): Promise<SessionsListResult | null> {
+  const result = await client.request<SessionsListResult | undefined>("sessions.list", params);
   return result ?? null;
 }
 
@@ -153,8 +159,8 @@ export function requestSessionDelete(
   client: SessionRequestClient,
   key: string,
   options: SessionDeleteOptions = {},
-): Promise<SessionDeleteResponse> {
-  return client.request<SessionDeleteResponse>("sessions.delete", {
+): Promise<SessionsDeleteResult> {
+  return client.request<SessionsDeleteResult>("sessions.delete", {
     ...buildSessionRequestParams(key, options.agentId),
     deleteTranscript: options.deleteTranscript ?? true,
     ...(options.expectedSessionId ? { expectedSessionId: options.expectedSessionId } : {}),
@@ -162,7 +168,7 @@ export function requestSessionDelete(
   });
 }
 
-export function confirmsSessionDeletion(response: SessionDeleteResponse): boolean {
+export function confirmsSessionDeletion(response: SessionsDeleteResult): boolean {
   // A successful RPC may be a lifecycle no-op; only confirmed deletion removes state.
   return response.deleted;
 }
@@ -186,18 +192,6 @@ export function requestSessionCompact(
     "sessions.compact",
     buildSessionRequestParams(key, options.agentId),
   );
-}
-
-export function requestSessionSteer(
-  client: SessionRequestClient,
-  key: string,
-  message: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionSteerResult> {
-  return client.request<SessionSteerResult>("sessions.steer", {
-    ...buildSessionRequestParams(key, options.agentId),
-    message,
-  });
 }
 
 export function requestSessionFilesList(

@@ -38,6 +38,7 @@ type ForkSessionFromParentParams = {
   parentSessionKey: string;
   parentEntry: SessionEntry;
   agentId: string;
+  commitGuard?: () => void;
   config?: OpenClawConfig;
   sessionKey: string;
   storePath?: string;
@@ -119,6 +120,7 @@ export async function forkSessionFromParent(
   const storePath = resolveParentForkStorePath(params);
   const fork = await forkSessionFromParentTranscript({
     agentId: params.agentId,
+    ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
     parentEntry: params.parentEntry,
     parentSessionKey: params.parentSessionKey,
     sessionKey: params.sessionKey,
@@ -135,6 +137,7 @@ export async function forkSessionFromParentWithDecision(
   assertParentSessionForkAllowed(params.parentEntry);
   return await forkSessionFromParentTranscript({
     agentId: params.agentId,
+    ...(params.commitGuard ? { commitGuard: params.commitGuard } : {}),
     enforceTokenLimit: true,
     parentEntry: params.parentEntry,
     parentSessionKey: params.parentSessionKey,

@@ -8,10 +8,10 @@ import {
   resolveHeartbeatPromptCore as resolveHeartbeatPromptText,
 } from "../auto-reply/heartbeat.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { tryResolveAmbientOwnerAgentId } from "./agent-scope-config.js";
 import { listAgentEntries, resolveAgentConfig } from "./agent-scope.js";
 
 type HeartbeatConfig = AgentDefaultsConfig["heartbeat"];
@@ -25,10 +25,7 @@ function isHeartbeatSharedAcrossAgents(config: OpenClawConfig): boolean {
 }
 
 function tryResolveHeartbeatOwnerAgentId(config?: OpenClawConfig): string | undefined {
-  return (
-    normalizeOptionalString(config?.agents?.defaults?.heartbeat?.agentId) ??
-    tryResolveLegacyCompatibilityAgentId(config ?? {})
-  );
+  return tryResolveAmbientOwnerAgentId(config ?? {}, config?.agents?.defaults?.heartbeat?.agentId);
 }
 
 // System prompt heartbeat config inherits defaults, then per-agent overrides,

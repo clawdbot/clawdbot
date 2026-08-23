@@ -660,7 +660,8 @@ private func makeRestartingAISetupSession(
     suiteName: String,
     recorder: AISetupRequestRecorder,
     ownerObservation: ActivationOwnerObservation,
-    postRestartConfiguredModel: String?) -> GatewayTestWebSocketSession
+    postRestartConfiguredModel: String?,
+    replacementGate: AISetupRequestGate? = nil) -> GatewayTestWebSocketSession
 {
     let socketGeneration = AISetupSocketGeneration()
     return GatewayTestWebSocketSession(taskFactory: {
@@ -693,6 +694,9 @@ private func makeRestartingAISetupSession(
             }
             switch request.method {
             case "openclaw.setup.detect":
+                if let replacementGate {
+                    await replacementGate.wait()
+                }
                 let response = postRestartConfiguredModel.map {
                     persistedDetectedSetupResponse(id: request.id, configuredModel: $0)
                 } ?? detectedSetupResponse(
@@ -713,11 +717,17 @@ private func failedActivationResponse(id: String) -> Data {
     Data(#"{"type":"res","id":"\#(id)","ok":true,"payload":{"ok":false,"status":"auth","error":"rejected"}}"#.utf8)
 }
 
-private func successfulActivationResponse(id: String, modelRef: String, latencyMs: Int) -> Data {
-    Data(
+private func successfulActivationResponse(
+    id: String,
+    modelRef: String,
+    latencyMs: Int,
+    gatewayRestartRequired: Bool = false) -> Data
+{
+    let restartField = gatewayRestartRequired ? ",\"gatewayRestartRequired\":true" : ""
+    return Data(
         """
         {"type":"res","id":"\(id)","ok":true,"payload":{
-          "ok":true,"modelRef":"\(modelRef)","latencyMs":\(latencyMs),"lines":["Model ready"]}}
+          "ok":true,"modelRef":"\(modelRef)","latencyMs":\(latencyMs),"lines":["Model ready"]\(restartField)}}
         """.utf8)
 }
 
@@ -736,6 +746,11 @@ private func verifiedSetupResponse(id: String) -> Data {
 
 private func rejectedSetupVerificationResponse(id: String) -> Data {
     Data(#"{"type":"res","id":"\#(id)","ok":true,"payload":{"ok":false,"status":"auth","error":"expired login"}}"#.utf8)
+}
+
+private func unconfiguredSetupVerificationResponse(id: String) -> Data {
+    Data(
+        #"{"type":"res","id":"\#(id)","ok":true,"payload":{"ok":false,"status":"unavailable","error":"No agent model is configured."}}"#.utf8)
 }
 
 private func unavailableGatewayResponse(id: String) -> Data {
@@ -812,6 +827,16 @@ struct OnboardingAISetupTests {
 
     @Test func `provider auth transport outlives device code windows`() {
         #expect(OnboardingAISetupModel.providerAuthRequestTimeoutMs > 15 * 60 * 1000)
+    }
+
+    @Test func `reconciliation deadline recomputes each RPC budget`() async throws {
+        let deadline = OnboardingAISetupModel.ReconciliationDeadline(timeout: .seconds(2))
+        let detectionBudget = deadline.remainingMilliseconds(cappedAt: 10000)
+
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let verificationBudget = deadline.remainingMilliseconds(cappedAt: 10000)
+        #expect(verificationBudget < detectionBudget)
     }
 
     @Test func `prepare choices use wire presentation and hide usable local models`() {
@@ -1267,19 +1292,34 @@ struct OnboardingAISetupTests {
         let defaults = try #require(isolatedAISetupDefaults(suiteName: suiteName))
         let recorder = AISetupRequestRecorder()
         let ownerObservation = ActivationOwnerObservation()
+        let replacementGate = AISetupRequestGate()
         let session = makeRestartingAISetupSession(
             suiteName: suiteName,
             recorder: recorder,
             ownerObservation: ownerObservation,
-            postRestartConfiguredModel: "openai/gpt-5.5")
+            postRestartConfiguredModel: "openai/gpt-5.5",
+            replacementGate: replacementGate)
         let url = try #require(URL(string: "ws://example.invalid"))
         let gateway = makeAISetupGateway(url: url, token: "route-token", session: session)
-        let model = makeAISetupModel(gateway: gateway, defaults: defaults)
-        var handoffCount = 0
-        model.onConnected = { handoffCount += 1 }
+        let appState = AppState(preview: true)
+        appState.connectionMode = .local
+        var handoffs: [OnboardingDashboardHandoff] = []
+        let view = OnboardingView(
+            state: appState,
+            aiSetupGateway: gateway,
+            systemAgentDefaults: defaults,
+            aiSetupRouteIdentityProvider: { "local" },
+            dashboardHandoffOpener: { handoffs.append($0) })
 
-        await model.detectAndAutoConnect()
-        await model.activate(kind: "codex-cli")
+        await view.aiSetup.detectAndAutoConnect()
+        let activation = Task { await view.aiSetup.activate(kind: "codex-cli") }
+        await replacementGate.waitUntilStarted()
+        guard case .activating = pendingState(defaults) else {
+            Issue.record("expected restart-required activation to remain pending")
+            return
+        }
+        await replacementGate.release()
+        await activation.value
 
         let activationOwner = try #require(ownerObservation.value())
         #expect(session.snapshotMakeCount() >= 2)
@@ -1289,11 +1329,12 @@ struct OnboardingAISetupTests {
             "openclaw.setup.detect",
             "openclaw.setup.verify",
         ])
-        #expect(model.connected)
-        #expect(model.selectedKind == "codex-cli")
-        #expect(handoffCount == 1)
+        #expect(view.aiSetup.connected)
+        #expect(view.aiSetup.selectedKind == "codex-cli")
         #expect(storedActivationOwner(defaults) == activationOwner)
         #expect(pendingState(defaults) == .completed)
+        #expect(view.finish())
+        #expect(handoffs == [.custodianOnboarding])
     }
 
     @Test func `managed Gateway restart rejects mismatched persisted transition`() async throws {
@@ -1442,51 +1483,6 @@ struct OnboardingAISetupTests {
         #expect(!model.showManualEntry)
     }
 
-    @Test func `configured gateway result is accepted only for the visible selected route`() {
-        #expect(OnboardingView.shouldOpenConfiguredGatewayDashboard(
-            onboardingVisible: true,
-            expectedMode: .remote,
-            currentMode: .remote,
-            systemAgentResumePending: false,
-            setupOwnsInferenceTransition: false))
-        #expect(!OnboardingView.shouldOpenConfiguredGatewayDashboard(
-            onboardingVisible: false,
-            expectedMode: .remote,
-            currentMode: .remote,
-            systemAgentResumePending: false,
-            setupOwnsInferenceTransition: false))
-        #expect(!OnboardingView.shouldOpenConfiguredGatewayDashboard(
-            onboardingVisible: true,
-            expectedMode: .remote,
-            currentMode: .local,
-            systemAgentResumePending: false,
-            setupOwnsInferenceTransition: false))
-        #expect(!OnboardingView.shouldOpenConfiguredGatewayDashboard(
-            onboardingVisible: true,
-            expectedMode: .unconfigured,
-            currentMode: .unconfigured,
-            systemAgentResumePending: false,
-            setupOwnsInferenceTransition: false))
-    }
-
-    @Test func `fresh inference transition owns the OpenClaw handoff`() {
-        #expect(!OnboardingView.shouldOpenConfiguredGatewayDashboard(
-            onboardingVisible: true,
-            expectedMode: .local,
-            currentMode: .local,
-            systemAgentResumePending: false,
-            setupOwnsInferenceTransition: true))
-    }
-
-    @Test func `pending OpenClaw handoff cannot be mistaken for an existing install`() {
-        #expect(!OnboardingView.shouldOpenConfiguredGatewayDashboard(
-            onboardingVisible: true,
-            expectedMode: .local,
-            currentMode: .local,
-            systemAgentResumePending: true,
-            setupOwnsInferenceTransition: false))
-    }
-
     @Test func `configured model label stays pending until live verification`() async throws {
         // Isolated defaults + fixed route: the default init reads the machine's
         // real resume store, whose leftover activation leases fail this test on
@@ -1511,6 +1507,63 @@ struct OnboardingAISetupTests {
         #expect(model.connected)
         #expect(!model.pendingActivationVerification)
         #expect(model.selectedKind == "existing-model")
+    }
+
+    @Test func `implicit model label falls through verification to automatic setup`() async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingImplicitModelTests"))
+        let recorder = AISetupRequestRecorder()
+        let session = makeAISetupRequestSession(recorder: recorder) { task, request in
+            let response: Data? = switch request.method {
+            case "agents.list": configuredModelResponse(id: request.id)
+            case "openclaw.setup.verify": unconfiguredSetupVerificationResponse(id: request.id)
+            case "openclaw.setup.detect": actionableDetectedSetupResponse(id: request.id)
+            case "openclaw.setup.activate": successfulActivationResponse(
+                    id: request.id,
+                    modelRef: "claude-cli/claude-opus-4-8",
+                    latencyMs: 42)
+            default: nil
+            }
+            if let response {
+                task.emitReceiveSuccess(.data(response))
+            }
+        }
+        let url = try #require(URL(string: "ws://localhost:18789"))
+        let gateway = makeAISetupGateway(url: url, session: session)
+        let appState = AppState(preview: true)
+        appState.connectionMode = .local
+        var handoffs: [OnboardingDashboardHandoff] = []
+        let view = OnboardingView(
+            state: appState,
+            aiSetupGateway: gateway,
+            systemAgentDefaults: defaults,
+            aiSetupRouteIdentityProvider: { "local" },
+            dashboardHandoffOpener: { handoffs.append($0) })
+        view.onboardingVisible = true
+        view.currentPage = try #require(view.pageOrder.firstIndex(of: view.aiPageIndex))
+
+        let probe = try #require(view.probeConfiguredGatewayForDashboard(
+            startAISetupWhenMissing: true,
+            knownVisible: true,
+            knownAISetupPage: true))
+        await probe.value
+        for _ in 0..<200 {
+            if view.aiSetup.connected {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        #expect(view.aiSetup.connected)
+        #expect(view.aiSetup.selectedKind == "claude-cli")
+        #expect(view.finishState.didFinish)
+        // Fresh activation hands off to the custodian first-run flow.
+        #expect(handoffs == [.custodianOnboarding])
+        #expect(await (recorder.snapshot()).methods == [
+            "agents.list",
+            "openclaw.setup.verify",
+            "openclaw.setup.detect",
+            "openclaw.setup.activate",
+        ])
     }
 
     @Test func `pending handoff connects only after route-bound live verification`() async throws {

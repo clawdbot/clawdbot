@@ -1,7 +1,11 @@
 // Shared runtime probes used by status text and JSON commands.
 // Heavy modules stay lazily loaded so fast status output avoids security/provider/gateway costs.
 
-import { listAgentIds, resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
+import type { Result } from "@openclaw/normalization-core/result";
+import {
+  resolveAmbientOwnerAgentId,
+  resolveConfiguredAgentId,
+} from "../agents/agent-scope-config.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
@@ -125,15 +129,16 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
     throw new Error("--agent must not be blank");
   }
   const agentId = rawAgentId ? normalizeAgentId(rawAgentId) : undefined;
-  if (agentId && !listAgentIds(params.config).includes(agentId)) {
-    throw new Error(
-      `Unknown agent id "${agentId}". Run \`openclaw agents list\` to see configured agents.`,
-    );
+  if (agentId) {
+    resolveConfiguredAgentId(params.config, agentId);
   }
   let resolvedAgentId = agentId;
   let agentDir = params.agentDir;
   if (!agentDir) {
-    resolvedAgentId ??= resolveSystemAgentTargetAgentId(params.config);
+    resolvedAgentId ??= resolveAmbientOwnerAgentId(params.config, undefined, {
+      surface: "status usage credentials",
+      hint: "Set agents.defaults.systemAgent.agentId.",
+    });
     agentDir = resolveAgentDir(params.config, resolvedAgentId);
   }
   const usage = await loadProviderUsageSummary({
@@ -205,7 +210,9 @@ export async function resolveStatusGatewayHealthSafe(params: {
   }).catch((err: unknown) => ({ error: String(err) }));
 }
 
-/** Reads gateway delivery diagnostics when reachable, returning null on failures. */
+export type StatusGatewayDiagnosticsResult = Result<unknown, string>;
+
+/** Reads gateway diagnostics while preserving whether data or an unavailable outcome was observed. */
 export async function resolveStatusGatewayDiagnosticsSafe(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
@@ -216,9 +223,9 @@ export async function resolveStatusGatewayDiagnosticsSafe(params: {
     token?: string;
     password?: string;
   };
-}) {
+}): Promise<StatusGatewayDiagnosticsResult> {
   if (!params.gatewayReachable) {
-    return null;
+    return { ok: false, error: "gateway unreachable" };
   }
   const { callGateway } = await loadGatewayCallModule();
   return await callGateway<unknown>({
@@ -227,7 +234,10 @@ export async function resolveStatusGatewayDiagnosticsSafe(params: {
     timeoutMs: params.timeoutMs,
     config: params.config,
     ...params.callOverrides,
-  }).catch(() => null);
+  }).then<StatusGatewayDiagnosticsResult, StatusGatewayDiagnosticsResult>(
+    (value) => ({ ok: true, value }),
+    (error: unknown) => ({ ok: false, error: String(error) }),
+  );
 }
 
 /** Reads the most recent gateway heartbeat only when the gateway probe succeeded. */

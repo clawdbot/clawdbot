@@ -1,56 +1,62 @@
 /**
- * Read-only session reads reuse a handle this process already holds.
- * Opening a connection per call made sessions.list cost scale with row count,
- * because row projection and sharing resolution each read per row.
+ * sessions.list resolves row owners through the session SQLite target path.
+ * That owner read must reuse a process-held handle instead of opening per row.
  */
-import { expect, test, vi } from "vitest";
-import * as nodeSqlite from "../infra/node-sqlite.js";
-import { writeSessionStore } from "./test-helpers.js";
-import {
-  directSessionReq,
-  sessionStoreEntry,
-  setupGatewaySessionsHandlerTestHarness,
-} from "./test/server-sessions.test-helpers.js";
+import { execFile } from "node:child_process";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
+import { expect, test } from "vitest";
 
-const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+const execFileAsync = promisify(execFile);
+const repoRoot = path.resolve(import.meta.dirname, "../..");
 
-const LIST_PARAMS = {
-  agentId: "main",
-  configuredAgentsOnly: true,
-  includeDerivedTitles: true,
-  includeGlobal: true,
-  includeUnknown: true,
-  limit: 100,
-};
-
-async function countConnectionOpensForRows(rows: number): Promise<number> {
-  await createSessionStoreDir();
-  const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {
-    main: sessionStoreEntry("sess-main"),
-  };
-  for (let index = 0; index < rows; index++) {
-    entries[`agent:main:row-${index}`] = sessionStoreEntry(`sess-row-${index}`, {
-      updatedAt: 1_781_000_000_000 - index * 1_000,
-    });
+function buildConnectionReuseProbe(): string {
+  const agentDbUrl = pathToFileURL(path.join(repoRoot, "src/state/openclaw-agent-db.ts")).href;
+  const stateDbUrl = pathToFileURL(path.join(repoRoot, "src/state/openclaw-state-db.ts")).href;
+  return `
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+const agentDb = await import(${JSON.stringify(agentDbUrl)});
+const stateDb = await import(${JSON.stringify(stateDbUrl)});
+const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-connection-reuse-"));
+const env = { OPENCLAW_STATE_DIR: stateDir };
+let databasePath;
+let movedPath;
+try {
+  const database = agentDb.openOpenClawAgentDatabase({ agentId: "main", env });
+  databasePath = database.path;
+  movedPath = databasePath + ".connection-reuse-probe";
+  // The live handle survives this rename; a fresh pathname open does not.
+  fs.renameSync(databasePath, movedPath);
+  const inspections = Array.from({ length: 40 }, () =>
+    agentDb.inspectOpenClawAgentDatabaseOwner(databasePath),
+  );
+  if (inspections.some((entry) => entry.status !== "owned" || entry.agentId !== "main")) {
+    throw new Error("unexpected ownership inspections: " + JSON.stringify(inspections));
   }
-  await writeSessionStore({ entries });
-  // Warm lazily-initialized module state so only steady-state reads are counted.
-  await directSessionReq("sessions.list", LIST_PARAMS);
-
-  const spy = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
-  try {
-    const result = await directSessionReq("sessions.list", LIST_PARAMS);
-    expect(result.ok).toBe(true);
-    return spy.mock.calls.length;
-  } finally {
-    spy.mockRestore();
+  process.stdout.write(JSON.stringify({ inspections: inspections.length }) + "\\n");
+} finally {
+  if (databasePath && movedPath && fs.existsSync(movedPath)) {
+    fs.renameSync(movedPath, databasePath);
   }
+  agentDb.closeOpenClawAgentDatabasesForTest();
+  stateDb.closeOpenClawStateDatabaseForTest();
+  fs.rmSync(stateDir, { recursive: true, force: true });
+}
+`;
 }
 
-test("sessions.list connection opens do not scale with row count", async () => {
-  const small = await countConnectionOpensForRows(5);
-  const large = await countConnectionOpensForRows(40);
+test.runIf(process.platform !== "win32")(
+  "sessions.list owner reads reuse the process-held connection",
+  async () => {
+    const result = await execFileAsync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "--eval", buildConnectionReuseProbe()],
+      { cwd: repoRoot, maxBuffer: 1024 * 1024 },
+    );
 
-  // A connection per read would put `large` roughly 35 opens above `small`.
-  expect(large).toBeLessThanOrEqual(small + 2);
-});
+    expect(JSON.parse(result.stdout) as unknown).toEqual({ inspections: 40 });
+  },
+);

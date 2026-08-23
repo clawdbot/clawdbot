@@ -11,7 +11,7 @@ afterEach(() => {
 });
 
 async function withIsolatedLifecycleState(
-  run: (params: { agentDir: string }) => Promise<void>,
+  run: (params: { agentDir: string; configPath: string }) => Promise<void>,
 ): Promise<void> {
   await withTestDir({ prefix: "openclaw-lifecycle-action-preflight-" }, async (root) => {
     const stateDir = path.join(root, "state");
@@ -23,7 +23,7 @@ async function withIsolatedLifecycleState(
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
     resetConfigRuntimeState();
-    await run({ agentDir });
+    await run({ agentDir, configPath });
     await expect(fs.access(path.join(stateDir, "state", "openclaw.sqlite"))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -31,23 +31,11 @@ async function withIsolatedLifecycleState(
 }
 
 describe("getServiceActionPreflightFailure", () => {
-  it.each(["start", "restart"] as const)(
-    "blocks %s when a legacy credential file exists",
-    async (action) => {
-      await withIsolatedLifecycleState(async ({ agentDir }) => {
-        await fs.writeFile(path.join(agentDir, "auth-profiles.json"), "{}\n");
-
-        await expect(getServiceActionPreflightFailure(action)).resolves.toEqual({
-          message:
-            "Auth profile store ~/state/agents/main/agent/openclaw-agent.sqlite requires legacy credential migration.",
-          hints: ["Run `openclaw doctor --fix`, then retry this command."],
-        });
-      });
-    },
-  );
-
-  it.each(["stop", "uninstall"] as const)(
-    "allows %s with the same pending migration",
+  // A retired credential file no longer blocks the service: the Gateway boots and
+  // marks that auth owner configured-unavailable, so one stale file cannot keep
+  // every other channel and provider offline.
+  it.each(["start", "restart", "stop", "uninstall"] as const)(
+    "allows %s when a legacy credential file exists",
     async (action) => {
       await withIsolatedLifecycleState(async ({ agentDir }) => {
         await fs.writeFile(path.join(agentDir, "auth-profiles.json"), "{}\n");
@@ -62,6 +50,28 @@ describe("getServiceActionPreflightFailure", () => {
     async (action) => {
       await withIsolatedLifecycleState(async () => {
         await expect(getServiceActionPreflightFailure(action)).resolves.toBeNull();
+      });
+    },
+  );
+
+  it.each(["start", "restart"] as const)(
+    "renders actionable invalid-config diagnostics before %s",
+    async (action) => {
+      await withIsolatedLifecycleState(async ({ configPath }) => {
+        await fs.writeFile(
+          configPath,
+          '{\n  meta: { lastTouchedVersion: "9999.1.1" },\n  gateway: { mode: "nope" },\n}\n',
+        );
+        resetConfigRuntimeState();
+
+        const failure = await getServiceActionPreflightFailure(action);
+
+        expect(failure?.message).toContain(
+          'openclaw.json:3 — gateway.mode: Invalid input (allowed: "local", "remote"), got: "nope"',
+        );
+        expect(failure?.message).toContain(
+          "Config was last written by OpenClaw 9999.1.1, but you are running",
+        );
       });
     },
   );

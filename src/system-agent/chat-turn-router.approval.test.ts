@@ -13,6 +13,7 @@ import {
 } from "./chat-engine.test-support.js";
 import { ChatTurnRouter } from "./chat-turn-router.js";
 import { ChatWizardHost } from "./chat-wizard-host.js";
+import { describeSystemAgentPersistentOperation } from "./operations.js";
 
 function createRouterHarness(options: ConstructorParameters<typeof ChatTurnRouter>[0]) {
   const verifiedInference = expectDefined(
@@ -43,6 +44,36 @@ function createRouterHarness(options: ConstructorParameters<typeof ChatTurnRoute
 }
 
 describe("SystemAgentChatEngine approval", () => {
+  it("records the delegated requester before hashing a model-tool proposal", async () => {
+    const unrecordedOperation = {
+      kind: "create-agent" as const,
+      agentId: "researcher",
+      workspace: "/tmp/researcher",
+    };
+    const unrecordedHash = hashSystemAgentOperation(unrecordedOperation);
+    const router = createRouterHarness({
+      operatorApprovalOnly: true,
+      requesterAgentId: "research",
+      runAgentTurn: async ({ session }) => {
+        session.proposalRef.current = unrecordedHash;
+        session.proposalRef.operation = unrecordedOperation;
+        return { text: "Creation needs operator approval." };
+      },
+    });
+
+    await router.resolveTurn("Create a research agent.");
+    const proposal = expectDefined(router.getPendingOperatorProposal(), "delegated proposal");
+
+    expect(proposal.operation).toEqual({
+      ...unrecordedOperation,
+      requesterAgentId: "research",
+    });
+    expect(proposal.hash).not.toBe(unrecordedHash);
+    expect(describeSystemAgentPersistentOperation(proposal.operation)).toContain(
+      "requested by agent research",
+    );
+  });
+
   it("lets only an operator arm delegated persistent writes", async () => {
     useTempStateDir();
     const operation = { kind: "config-set" as const, path: "gateway.port", value: "19001" };
@@ -211,34 +242,73 @@ describe("SystemAgentChatEngine approval", () => {
     expect(reply.text).toContain("Settings → Ask OpenClaw");
   });
 
-  it("hatches into a newly created agent and carries its id", async () => {
-    useTempStateDir();
-    const createAgent = vi.fn(async () => ({
-      status: "created" as const,
-      agentId: "researcher",
-      name: "researcher",
-      workspace: "/tmp/researcher",
-      agentDir: "/tmp/agent-researcher",
-      bootstrapPending: true,
-    }));
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
-      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
-      deps: { createAgent, loadOverview: fakeOverviewLoader() },
-    });
-    engine.propose({ kind: "create-agent", agentId: "researcher" });
+  it.each([
+    {
+      origin: "custodian",
+      requesterAgentId: undefined,
+      expectedCreatorAgentId: "openclaw",
+      expectedDescription: "create agent researcher with workspace /tmp/researcher",
+    },
+    {
+      origin: "delegated agent",
+      requesterAgentId: "research",
+      expectedCreatorAgentId: "research",
+      expectedDescription:
+        "create agent researcher with workspace /tmp/researcher, requested by agent research",
+    },
+  ])(
+    "hatches an agent requested by the $origin with approval-bound provenance",
+    async ({ requesterAgentId, expectedCreatorAgentId, expectedDescription }) => {
+      useTempStateDir();
+      const createAgent = vi.fn(async () => ({
+        status: "created" as const,
+        agentId: "researcher",
+        name: "researcher",
+        workspace: "/tmp/researcher",
+        agentDir: "/tmp/agent-researcher",
+        bootstrapPending: true,
+        config: {},
+      }));
+      const engine = new SystemAgentChatEngine({
+        runAgentTurn: async () => null,
+        planWithAssistant: async () => null,
+        classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
+        deps: { createAgent, loadOverview: fakeOverviewLoader() },
+        ...(requesterAgentId ? { requesterAgentId, operatorApprovalOnly: true } : {}),
+      });
+      engine.propose({
+        kind: "create-agent",
+        agentId: "researcher",
+        workspace: "/tmp/researcher",
+      });
+      const proposal = expectDefined(engine.getPendingOperatorProposal(), "create-agent proposal");
 
-    const reply = await engine.handle("yes");
+      expect(proposal.operation).toEqual({
+        kind: "create-agent",
+        agentId: "researcher",
+        workspace: "/tmp/researcher",
+        ...(requesterAgentId ? { requesterAgentId } : {}),
+      });
+      expect(describeSystemAgentPersistentOperation(proposal.operation)).toBe(expectedDescription);
 
-    expect(createAgent).toHaveBeenCalledWith({ name: "researcher" });
-    expect(reply.action).toBe("open-tui");
-    expect(reply.handoff).toMatchObject({
-      kind: "open-tui",
-      agentId: "researcher",
-      agentDraft: "hatch",
-    });
-  });
+      const reply = expectDefined(
+        await engine.resolveOperatorApproval("allow-once", proposal.hash),
+        "approved create-agent reply",
+      );
+
+      expect(createAgent).toHaveBeenCalledWith({
+        name: "researcher",
+        workspace: "/tmp/researcher",
+        provenance: { createdVia: "agent", creatorAgentId: expectedCreatorAgentId },
+      });
+      expect(reply.action).toBe("open-tui");
+      expect(reply.handoff).toMatchObject({
+        kind: "open-tui",
+        agentId: "researcher",
+        agentDraft: "hatch",
+      });
+    },
+  );
 
   it("stays in setup when an established workspace has no bootstrap pending", async () => {
     useTempStateDir();

@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
-import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
+import { formatErrorMessage, isErrno, isMissingPathError } from "../infra/errors.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { root as createFsRoot, type Root as FsSafeRoot } from "../infra/fs-safe.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
@@ -22,8 +22,7 @@ import {
   applyUnsetPathsForWrite,
   resolveManagedUnsetPathsForWrite,
 } from "./config-path-mutation.js";
-import { restoreEnvVarRefs } from "./env-preserve.js";
-import { resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
+import { restoreEnvVarRefs, resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
 import {
@@ -214,16 +213,51 @@ async function withConfigMutationLock<T>(
     return await fn();
   }
   assertConfigWriteAllowedInCurrentMode({ configPath });
-  await fs.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
+  const configDir = path.dirname(configPath);
+  await fs.mkdir(configDir, { recursive: true, mode: 0o700 });
 
   const nextActiveLocks = new Set(activeLocks ?? []);
   nextActiveLocks.add(configPath);
-  return await configMutationQueue.enqueue(configPath, () =>
-    activeConfigMutationLocks.run(
-      nextActiveLocks,
-      async () => await withFileLock(configPath, CONFIG_MUTATION_LOCK_OPTIONS, fn),
-    ),
-  );
+  return await configMutationQueue
+    .enqueue(configPath, () =>
+      activeConfigMutationLocks.run(
+        nextActiveLocks,
+        async () => await withFileLock(configPath, CONFIG_MUTATION_LOCK_OPTIONS, fn),
+      ),
+    )
+    .catch(async (error: unknown) => {
+      // Only relabel a permission failure on the config directory itself. The caller's mutation
+      // runs inside this scope, so an unrelated EACCES from its own work must not be misdiagnosed.
+      if (!(await isPermissionErrorInDirectory(error, configDir))) {
+        throw error;
+      }
+      throw new Error(
+        `OpenClaw cannot write to the config directory ${configDir}. Fix its ownership or permissions, then try again. Underlying error: ${formatErrorMessage(error)}`,
+        { cause: error },
+      );
+    });
+}
+
+async function isPermissionErrorInDirectory(error: unknown, directory: string): Promise<boolean> {
+  if (
+    !isErrno(error) ||
+    (error.code !== "EACCES" && error.code !== "EPERM" && error.code !== "EROFS")
+  ) {
+    return false;
+  }
+  const failedPath = error.path;
+  if (typeof failedPath !== "string") {
+    return false;
+  }
+  const failedDir = path.dirname(path.resolve(failedPath));
+  if (failedDir === directory) {
+    return true;
+  }
+  // Node reports the canonical path, so a config directory reached through a symlink (a macOS
+  // /var -> /private/var home, for one) never matches the raw string. Resolve only on mismatch to
+  // keep the successful write path free of an extra syscall.
+  const canonicalDirectory = await fs.realpath(directory).catch(() => undefined);
+  return canonicalDirectory !== undefined && failedDir === canonicalDirectory;
 }
 
 function markActiveConfigMutationPath(configPath: string): void {

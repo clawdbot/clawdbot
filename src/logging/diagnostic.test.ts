@@ -13,10 +13,12 @@ import {
   setDiagnosticsEnabledForProcess,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { emitCoreModelRequestStartedDiagnosticEvent } from "../infra/diagnostic-model-request.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
   getDiagnosticSessionActivitySnapshot,
+  createDiagnosticEmbeddedRunOwner,
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
   resetDiagnosticRunActivityForTest,
@@ -711,11 +713,9 @@ describe("stuck session diagnostics threshold", () => {
     }
 
     // Warning stays throttled: still only the single 60s warning.
-    expect(stuckEvents).toHaveLength(1);
     expect(stuckEvents.map((event) => event.ageMs)).toEqual([60_000]);
     // Recovery was not suppressed by the warning backoff on the 90s tick.
     expect(recoverStuckSession).toHaveBeenCalledTimes(2);
-    expect(recoveryRequests).toHaveLength(2);
     expect(recoveryRequests.map((event) => event.ageMs)).toEqual([60_000, 90_000]);
   });
 
@@ -1331,6 +1331,60 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("defers direct and repeated recovery until the latest model request allowance expires", async () => {
+    const recoverStuckSession = vi.fn(() => new Promise<never>(() => {}));
+    const ref = { sessionId: "allowance-session", sessionKey: "agent:main:allowance" };
+    const runId = "allowance-run";
+    const requestTimeoutMs = 150_000;
+    const owner = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
+    startDiagnosticHeartbeat(
+      { diagnostics: { enabled: true } },
+      {
+        recoverStuckSession,
+        testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
+      },
+    );
+    logSessionStateChange({ ...ref, state: "processing" });
+    markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner });
+    emitCoreModelRequestStartedDiagnosticEvent(
+      {
+        ...ref,
+        runId,
+        callId: "call-1",
+        provider: "mock",
+        model: "slow-model",
+      },
+      owner.generation,
+      requestTimeoutMs,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    vi.advanceTimersByTime(120_000);
+    emitCoreModelRequestStartedDiagnosticEvent(
+      {
+        ...ref,
+        runId,
+        callId: "call-2",
+        provider: "mock",
+        model: "slow-model",
+      },
+      owner.generation,
+      requestTimeoutMs,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The first request has exceeded the provider allowance, but the active
+    // retry has not. Recovery must honor the exact request currently in flight.
+    vi.advanceTimersByTime(30_000);
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(120_000);
+
+    expectRecoveryCall(recoverStuckSession, { ...ref, queueDepth: 0, allowActiveAbort: true }, [
+      "ageMs",
+      "stateGeneration",
+    ]);
+  });
+
   it("recovers stale model calls without active embedded-run ownership", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
@@ -1751,57 +1805,65 @@ describe("stuck session diagnostics threshold", () => {
     expect(s2Call!.allowActiveAbort).toBeUndefined();
   });
 
-  it("preserves queued idle work when abort reset releases active lane work", async () => {
-    const events: DiagnosticEventPayload[] = [];
-    const recoverStuckSession = vi.fn().mockResolvedValue({
+  it.each([
+    {
       status: "aborted",
       action: "abort_embedded_run",
-      sessionId: "s1",
-      sessionKey: "main",
-      activeSessionId: "s1",
-      activeWorkKind: "embedded_run",
       aborted: true,
       drained: false,
       forceCleared: true,
-      released: 1,
-      queuedCount: 1,
-    });
-    const unsubscribe = onDiagnosticEvent((event) => {
-      events.push(event);
-    });
-    try {
-      startDiagnosticHeartbeat(
-        {
-          diagnostics: {
-            enabled: true,
+    },
+    { status: "released", action: "release_lane", reason: "stale_lane_task" },
+  ] as const)(
+    "preserves queued idle work when $status recovery releases active lane work",
+    async (outcome) => {
+      const events: DiagnosticEventPayload[] = [];
+      const recoverStuckSession = vi.fn().mockResolvedValue({
+        sessionId: "s1",
+        sessionKey: "main",
+        activeSessionId: "s1",
+        activeWorkKind: "embedded_run",
+        released: 1,
+        queuedCount: 1,
+        ...outcome,
+      });
+      const unsubscribe = onDiagnosticEvent((event) => {
+        events.push(event);
+      });
+      try {
+        startDiagnosticHeartbeat(
+          {
+            diagnostics: {
+              enabled: true,
+            },
           },
+          { recoverStuckSession },
+        );
+        logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+        markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+        logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "idle" });
+
+        vi.advanceTimersByTime(59_000);
+        logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test-followup" });
+        vi.advanceTimersByTime(1_000);
+        await Promise.resolve();
+      } finally {
+        unsubscribe();
+      }
+
+      requireMatchingRecord(
+        events,
+        {
+          type: "session.state",
+          state: "idle",
+          reason: `stuck_recovery:${outcome.status}`,
+          queueDepth: 1,
         },
-        { recoverStuckSession },
+        `idle ${outcome.status} preserves queued work`,
       );
-      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
-      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
-      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "idle" });
-
-      vi.advanceTimersByTime(59_000);
-      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test-followup" });
-      vi.advanceTimersByTime(1_000);
-      await Promise.resolve();
-    } finally {
-      unsubscribe();
-    }
-
-    requireMatchingRecord(
-      events,
-      {
-        type: "session.state",
-        state: "idle",
-        reason: "stuck_recovery:aborted",
-        queueDepth: 1,
-      },
-      "idle abort preserves queued work",
-    );
-    expect(getDiagnosticSessionState({ sessionId: "s1", sessionKey: "main" }).queueDepth).toBe(1);
-  });
+      expect(getDiagnosticSessionState({ sessionId: "s1", sessionKey: "main" }).queueDepth).toBe(1);
+    },
+  );
 
   it("marks diagnostic session state idle only after a mutating recovery outcome", async () => {
     const events: DiagnosticEventPayload[] = [];
@@ -1846,9 +1908,10 @@ describe("stuck session diagnostics threshold", () => {
   it("clears queued diagnostic state after no-active-work recovery", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn().mockResolvedValue({
-      status: "noop",
-      action: "none",
+      status: "released",
+      action: "release_lane",
       reason: "no_active_work",
+      released: 0,
       sessionId: "s1",
       sessionKey: "main",
     });
@@ -1878,8 +1941,8 @@ describe("stuck session diagnostics threshold", () => {
     expect(state.queueDepth).toBe(0);
     requireMatchingRecord(
       events,
-      { type: "session.state", state: "idle", reason: "stuck_recovery:noop", queueDepth: 0 },
-      "noop state clear event",
+      { type: "session.state", state: "idle", reason: "stuck_recovery:released", queueDepth: 0 },
+      "released state clear event",
     );
   });
 
@@ -1930,9 +1993,10 @@ describe("stuck session diagnostics threshold", () => {
     const events: DiagnosticEventPayload[] = [];
     let resolveRecovery:
       | ((outcome: {
-          status: "noop";
-          action: "none";
+          status: "released";
+          action: "release_lane";
           reason: "no_active_work";
+          released: number;
           sessionId: string;
           sessionKey: string;
         }) => void)
@@ -1940,9 +2004,10 @@ describe("stuck session diagnostics threshold", () => {
     const recoverStuckSession = vi.fn(
       () =>
         new Promise<{
-          status: "noop";
-          action: "none";
+          status: "released";
+          action: "release_lane";
           reason: "no_active_work";
+          released: number;
           sessionId: string;
           sessionKey: string;
         }>((resolve) => {
@@ -1979,9 +2044,10 @@ describe("stuck session diagnostics threshold", () => {
       );
 
       resolveRecovery?.({
-        status: "noop",
-        action: "none",
+        status: "released",
+        action: "release_lane",
         reason: "no_active_work",
+        released: 0,
         sessionId: "s1",
         sessionKey: "main",
       });

@@ -33,6 +33,27 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
     expect(buildGrant().sourceReplyOnly).toBe(true);
   });
 
+  it("carries the prepared model vision capability into the loopback grant", () => {
+    expect(buildGrant({ modelHasVision: true }).modelHasVision).toBe(true);
+  });
+
+  it("carries the prepared reply mode into loopback message tools", () => {
+    expect(buildGrant({ replyToMode: "all" }).replyToMode).toBe("all");
+  });
+
+  it("carries the exact Skill Workshop revision into the loopback grant", () => {
+    const proposalRevision = {
+      agentId: "proposal-owner",
+      workspaceDir: "/proposal-workspace",
+      proposalId: "proposal-h1",
+      expectedRevisionHash: "1".repeat(64),
+    };
+
+    expect(buildGrant({ skillWorkshopProposalRevision: proposalRevision }).skillWorkshop).toEqual({
+      proposalRevision,
+    });
+  });
+
   it.each([
     { label: "the provider", overrides: { messageProvider: undefined } },
     { label: "the destination", overrides: { currentChannelId: undefined } },

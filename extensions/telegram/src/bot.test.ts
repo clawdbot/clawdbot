@@ -37,6 +37,7 @@ import {
 import {
   createTelegramCallbackContext,
   createTelegramReactionContext,
+  makeTelegramKeyedStoreTestMock,
   runTelegramChannelInboundEventWithHarness,
 } from "./bot.test-helpers.js";
 import {
@@ -193,12 +194,12 @@ const TELEGRAM_POLL_REGISTRY_MAX_ENTRIES = 10_000;
 type TelegramPollRegistryEntry = Omit<
   Parameters<typeof recordTelegramPollRegistryEntry>[0],
   "accountId" | "env"
-> & { createdAt: number };
+>;
 
 function makeTelegramPollRegistryEntry(
   overrides: Pick<TelegramPollRegistryEntry, "messageId" | "pollId"> &
-    Partial<Omit<TelegramPollRegistryEntry, "createdAt" | "messageId" | "pollId">>,
-): Omit<TelegramPollRegistryEntry, "createdAt"> {
+    Partial<Omit<TelegramPollRegistryEntry, "messageId" | "pollId">>,
+): TelegramPollRegistryEntry {
   return {
     chat: { id: 9876, type: "private", first_name: "Ada" },
     threadSpec: { scope: "dm" },
@@ -427,9 +428,7 @@ function createTelegramTestStorePath(label: string): string {
   return telegramTestState.path(`${label}-${telegramTestStoreSequence}.json`);
 }
 
-async function installTelegramPollRegistryForTests(
-  entry?: Omit<TelegramPollRegistryEntry, "createdAt">,
-) {
+async function installTelegramPollRegistryForTests(entry?: TelegramPollRegistryEntry) {
   setTelegramPluginStateRuntimeForTests();
   const store = createPluginStateKeyedStoreForTests<TelegramPollRegistryEntry>("telegram", {
     namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
@@ -500,11 +499,11 @@ function mockCall(source: MockCallSource, callIndex: number, label: string) {
 }
 
 function firstEditMessageTextArg(argIndex: number) {
-  return mockArg(editMessageTextSpy as unknown as MockCallSource, 0, argIndex, "edit message text");
+  return mockArg(editMessageTextSpy, 0, argIndex, "edit message text");
 }
 
 function firstSystemEventArg(argIndex: number) {
-  return mockArg(enqueueSystemEventSpy as unknown as MockCallSource, 0, argIndex, "system event");
+  return mockArg(enqueueSystemEventSpy, 0, argIndex, "system event");
 }
 
 function mockMsgContextArg(
@@ -540,6 +539,7 @@ async function writeDirectTelegramTranscriptMessages(params: {
     accountId: "default",
     chatId: params.chatId,
     isGroup: false,
+    threadSpec: { scope: "none" },
     senderId: params.senderId,
   }).route;
   const sessionKey = resolveTelegramConversationBaseSessionKey({
@@ -600,12 +600,7 @@ async function writeDirectTelegramTranscriptContext(params: {
 }
 
 function latestConversationContextMessages(): Record<string, unknown>[] {
-  const payload = mockMsgContextArg(
-    replySpy as unknown as MockCallSource,
-    replySpy.mock.calls.length - 1,
-    0,
-    "replySpy call",
-  );
+  const payload = mockMsgContextArg(replySpy, replySpy.mock.calls.length - 1, 0, "replySpy call");
   const [conversationContext] = requireArray(
     payload.ChannelStructuredContext,
     "structured context",
@@ -661,7 +656,7 @@ async function seedTelegramPromptContextMessages(params: {
 
 function execApprovalCall(index = 0) {
   return requireRecord(
-    mockArg(resolveExecApprovalSpy as unknown as MockCallSource, index, 0, "exec approval call"),
+    mockArg(resolveExecApprovalSpy, index, 0, "exec approval call"),
     "exec approval call",
   );
 }
@@ -682,7 +677,7 @@ function execApprovalTargetConfig(call = execApprovalCall()) {
 
 function systemEventOptions(index = 0) {
   return requireRecord(
-    mockArg(enqueueSystemEventSpy as unknown as MockCallSource, index, 1, "system event options"),
+    mockArg(enqueueSystemEventSpy, index, 1, "system event options"),
     "system event options",
   );
 }
@@ -1239,10 +1234,12 @@ describe("createTelegramBot", () => {
       messageId: 44,
     });
     const register = vi.fn(async () => {});
-    setTelegramPollRegistryRuntimeForTests({
-      lookup: async () => entry,
-      register,
-    } as unknown as PluginStateKeyedStore<TelegramPollRegistryEntry>);
+    setTelegramPollRegistryRuntimeForTests(
+      makeTelegramKeyedStoreTestMock<TelegramPollRegistryEntry>({
+        lookup: async () => entry,
+        register,
+      }),
+    );
 
     try {
       createTelegramBot({ token: "tok" });
@@ -1292,9 +1289,9 @@ describe("createTelegramBot", () => {
     const lookup = vi.fn(async () => {
       throw new Error("registry should not be read");
     });
-    setTelegramPollRegistryRuntimeForTests({
-      lookup,
-    } as unknown as PluginStateKeyedStore<TelegramPollRegistryEntry>);
+    setTelegramPollRegistryRuntimeForTests(
+      makeTelegramKeyedStoreTestMock<TelegramPollRegistryEntry>({ lookup }),
+    );
 
     try {
       createTelegramBot({ token: "tok" });
@@ -1311,11 +1308,13 @@ describe("createTelegramBot", () => {
     onSpy.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
     const readError = new Error("registry db unavailable");
-    setTelegramPollRegistryRuntimeForTests({
-      lookup: async () => {
-        throw readError;
-      },
-    } as unknown as PluginStateKeyedStore<TelegramPollRegistryEntry>);
+    setTelegramPollRegistryRuntimeForTests(
+      makeTelegramKeyedStoreTestMock<TelegramPollRegistryEntry>({
+        lookup: async () => {
+          throw readError;
+        },
+      }),
+    );
 
     try {
       createTelegramBot({ token: "tok" });
@@ -1401,7 +1400,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
     expect(payload.InboundEventKind).toBe("room_event");
     expect(payload.InboundHistory).toEqual(
       expect.arrayContaining([
@@ -1548,12 +1547,7 @@ describe("createTelegramBot", () => {
       });
 
       expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = mockMsgContextArg(
-        replySpy as unknown as MockCallSource,
-        0,
-        0,
-        "replySpy call",
-      );
+      const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
       expect(payload.ReplyChain).toEqual([
         expect.objectContaining({
           messageId: String(replyMessageId),
@@ -1838,7 +1832,7 @@ describe("createTelegramBot", () => {
 
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     const [chatId, messageId, terminalText, editOptions] = mockCall(
-      editMessageTextSpy as unknown as MockCallSource,
+      editMessageTextSpy,
       0,
       "edit terminal approval message",
     );
@@ -2470,11 +2464,7 @@ describe("createTelegramBot", () => {
       messageId: 14,
     },
   ])("$name", async ({ callbackId, callbackData, messageId }) => {
-    (
-      listSkillCommandsForAgents as unknown as {
-        mockImplementationOnce(implementation: TelegramBotDeps["listSkillCommandsForAgents"]): void;
-      }
-    ).mockImplementationOnce(({ agentIds }) => {
+    listSkillCommandsForAgents.mockImplementationOnce(({ agentIds }) => {
       if (agentIds?.length !== 1 || agentIds[0] !== "main") {
         throw new Error("pagination queried commands for the wrong agent");
       }
@@ -2494,7 +2484,7 @@ describe("createTelegramBot", () => {
     expect(listSkillCommandsForAgents).toHaveBeenCalledOnce();
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     const [chatId, renderedMessageId, text, params] = mockCall(
-      editMessageTextSpy as unknown as MockCallSource,
+      editMessageTextSpy,
       0,
       "edit message text",
     );
@@ -2619,6 +2609,7 @@ describe("createTelegramBot", () => {
       accountId: "default",
       chatId: 1234,
       isGroup: false,
+      threadSpec: { scope: "none" },
       senderId: 9,
     }).route;
     const sessionKey = resolveTelegramConversationBaseSessionKey({
@@ -2726,6 +2717,7 @@ describe("createTelegramBot", () => {
           accountId: "default",
           chatId: 1234,
           isGroup: false,
+          threadSpec: { scope: "none" },
           senderId: 9,
         }).route;
         const sessionKey = resolveTelegramConversationBaseSessionKey({
@@ -2858,11 +2850,7 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).not.toHaveBeenCalled();
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    const editCall = mockCall(
-      editMessageTextSpy as unknown as MockCallSource,
-      0,
-      "edit message text",
-    );
+    const editCall = mockCall(editMessageTextSpy, 0, "edit message text");
     expect(editCall[0]).toBe(1234);
     expect(editCall[1]).toBe(17);
     expect(editCall[2]).toBe(
@@ -3012,7 +3000,7 @@ describe("createTelegramBot", () => {
 
     expect(loadConfig).toHaveBeenCalledTimes(2);
     const dispatchParams = mockArg(
-      dispatchReplyWithBufferedBlockDispatcher as unknown as MockCallSource,
+      dispatchReplyWithBufferedBlockDispatcher,
       0,
       0,
       "buffered dispatch",
@@ -3089,7 +3077,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
     const { expectChannelInboundContextContract: expectInboundContextContract } =
       await loadInboundContextContract();
     const { escapeRegExp, formatEnvelopeTimestamp } = await loadEnvelopeTimestampHelpers();
@@ -3168,7 +3156,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
     const [conversationContext] = requireArray(
       payload.ChannelStructuredContext,
       "structured context",
@@ -3232,7 +3220,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
     expect(payload.ChannelStructuredContext).toEqual([
       {
         label: "Conversation context",
@@ -3333,12 +3321,7 @@ describe("createTelegramBot", () => {
       });
 
       expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = mockMsgContextArg(
-        replySpy as unknown as MockCallSource,
-        0,
-        0,
-        "replySpy call",
-      );
+      const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
       const [conversationContext] = requireArray(
         payload.ChannelStructuredContext,
         "structured context",
@@ -3400,7 +3383,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
     expect(payload.ChannelStructuredContext).toBeUndefined();
     expect(payload.Body).not.toContain("Do not include this cached group line.");
   });
@@ -3474,7 +3457,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
     const [conversationContext] = requireArray(
       payload.ChannelStructuredContext,
       "structured context",
@@ -3530,7 +3513,7 @@ describe("createTelegramBot", () => {
     );
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
     const [conversationContext] = requireArray(
       payload.ChannelStructuredContext,
       "structured context",
@@ -3705,12 +3688,7 @@ describe("createTelegramBot", () => {
       );
 
       expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = mockMsgContextArg(
-        replySpy as unknown as MockCallSource,
-        0,
-        0,
-        "replySpy call",
-      );
+      const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
       const [conversationContext] = requireArray(
         payload.ChannelStructuredContext,
         "structured context",
@@ -4125,7 +4103,7 @@ describe("createTelegramBot", () => {
     );
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
     expect(JSON.stringify(payload.ChannelStructuredContext ?? [])).not.toContain(
       "old private transcript text",
     );
@@ -4156,7 +4134,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
     expect(payload.Body).toContain("[Reply chain - nearest first]");
     expect(payload.Body).toContain("[1. Ada id:9001]");
     expect(payload.Body).toContain('"summarize this"');
@@ -4190,7 +4168,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
     expect(payload.Body).toContain("[Reply chain - nearest first]");
     expect(payload.Body).toContain("[1. Ada id:9001]");
     expect(payload.Body).not.toContain("PK");
@@ -4229,12 +4207,7 @@ describe("createTelegramBot", () => {
         me: { username: "openclaw_bot" },
         getFile: async () => ({}),
       });
-      replyGetFileSignal = mockArg(
-        getFileSpy as unknown as MockCallSource,
-        0,
-        1,
-        "reply getFile signal",
-      ) as AbortSignal;
+      replyGetFileSignal = mockArg(getFileSpy, 0, 1, "reply getFile signal") as AbortSignal;
       expect(replyGetFileSignal.aborted).toBe(false);
     } finally {
       mediaAbort.abort();
@@ -4242,12 +4215,7 @@ describe("createTelegramBot", () => {
     }
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(
-      replySpy as unknown as MockCallSource,
-      0,
-      0,
-      "replySpy call",
-    ) as {
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call") as {
       MediaPath?: string;
       MediaPaths?: string[];
       ReplyToBody?: string;
@@ -4289,7 +4257,7 @@ describe("createTelegramBot", () => {
     expect(mediaFetch).toHaveBeenCalledTimes(1);
     expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1", expect.any(AbortSignal));
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
     expect(payload.Body).toContain("continue without the old image");
   });
 
@@ -4314,7 +4282,7 @@ describe("createTelegramBot", () => {
     expect(result).toEqual({ kind: "completed" });
     expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1", expect.any(AbortSignal));
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
     expect(payload.Body).toContain("continue after polling restart");
   });
 
@@ -4353,6 +4321,65 @@ describe("createTelegramBot", () => {
     expect(result).toEqual({ kind: "failed-retryable", error: expect.any(Error) });
     expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1", expect.any(AbortSignal));
     expect(replySpy).not.toHaveBeenCalled();
+  });
+
+  it("durably retries when primary media hydration outlives its claim owner", async () => {
+    const claimOwner = new AbortController();
+    const timeoutError = new Error("claim adoption stalled");
+    const mediaFetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      claimOwner.abort(timeoutError);
+      expect(init?.signal?.aborted).toBe(true);
+      return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      });
+    });
+    const ssrfMock = mockPinnedHostnameResolution();
+
+    try {
+      createTelegramBot({
+        token: "tok",
+        telegramTransport: makeTelegramTransport(mediaFetch as typeof fetch),
+      });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      const update = {
+        update_id: 98083,
+        message: {
+          chat: { id: 7, type: "private" },
+          message_id: 9002,
+          caption: "inspect this image",
+          date: 1_736_380_800,
+          from: { id: 42, first_name: "Ada" },
+          photo: [{ file_id: "primary-photo-1" }],
+        },
+      };
+
+      const { result } = await runWithTelegramUpdateProcessingFrame(() =>
+        runWithTelegramSpooledReplayUpdate(
+          update,
+          () =>
+            handler({
+              update,
+              message: update.message,
+              me: { username: "openclaw_bot" },
+              getFile: async () => ({ file_path: "media/primary-photo.jpg" }),
+            }),
+          {
+            abortSignal: claimOwner.signal,
+            onAdopted: vi.fn(),
+            onDeferred: vi.fn(),
+            onAdoptionFinalizing: vi.fn(),
+            onAbandoned: vi.fn(),
+          },
+        ),
+      );
+
+      expect(result).toEqual({ kind: "failed-retryable", error: timeoutError });
+      expect(mediaFetch).toHaveBeenCalledTimes(1);
+      expect(replySpy).not.toHaveBeenCalled();
+    } finally {
+      ssrfMock.mockRestore();
+    }
   });
 
   it("reuses resolved media when hydrating cached Telegram reply chains", async () => {
@@ -4426,12 +4453,7 @@ describe("createTelegramBot", () => {
     }
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(
-      replySpy as unknown as MockCallSource,
-      0,
-      0,
-      "replySpy call",
-    ) as {
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call") as {
       ReplyChain?: Array<{
         messageId?: string;
         body?: string;
@@ -4555,12 +4577,7 @@ describe("createTelegramBot", () => {
     }
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(
-      replySpy as unknown as MockCallSource,
-      0,
-      0,
-      "replySpy call",
-    ) as {
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call") as {
       ReplyChain?: Array<{
         messageId?: string;
         sender?: string;
@@ -4688,12 +4705,7 @@ describe("createTelegramBot", () => {
     }
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(
-      replySpy as unknown as MockCallSource,
-      0,
-      0,
-      "replySpy call",
-    ) as {
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call") as {
       ReplyChain?: unknown[];
       ChannelStructuredContext?: unknown[];
     };
@@ -4780,12 +4792,9 @@ describe("createTelegramBot", () => {
     }
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(
-      replySpy as unknown as MockCallSource,
-      0,
-      0,
-      "replySpy call",
-    ) as { ChannelStructuredContext?: unknown[] };
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call") as {
+      ChannelStructuredContext?: unknown[];
+    };
     const [conversationContext] = requireArray(
       payload.ChannelStructuredContext,
       "structured context",
@@ -4914,12 +4923,7 @@ describe("createTelegramBot", () => {
 
       expect(runtimeError).not.toHaveBeenCalled();
       expect(replySpy).toHaveBeenCalledTimes(1);
-      const payload = mockMsgContextArg(
-        replySpy as unknown as MockCallSource,
-        0,
-        0,
-        "replySpy call",
-      ) as {
+      const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call") as {
         ChannelStructuredContext?: unknown[];
       };
       const [conversationContext] = requireArray(
@@ -5079,7 +5083,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
     expect(payload.Body).toContain("[Reply chain - nearest first]");
     expect(payload.Body).toContain("[1. unknown sender");
     expect(payload.Body).toContain('"summarize this"');
@@ -5111,7 +5115,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
     expect(payload.Body).toContain("[Reply chain - nearest first]");
     expect(payload.Body).toContain("[1. Ada id:9002");
     expect(payload.Body).toContain('"summarize this"');
@@ -5162,12 +5166,9 @@ describe("createTelegramBot", () => {
     }
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(
-      replySpy as unknown as MockCallSource,
-      0,
-      0,
-      "replySpy call",
-    ) as { ReplyChain?: Array<{ messageId?: string; mediaPath?: string }> };
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call") as {
+      ReplyChain?: Array<{ messageId?: string; mediaPath?: string }>;
+    };
     expect(payload.ReplyChain?.[0]).toMatchObject({ messageId: "9003" });
     expect(payload.ReplyChain?.[0]?.mediaPath).toBeTypeOf("string");
     expect(getFileSpy).toHaveBeenCalledWith("external-photo-1", expect.any(AbortSignal));
@@ -5212,7 +5213,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
     expect(payload.ReplyToForwardedFrom).toBe("Bob Smith (@bobsmith)");
     expect(payload.ReplyToForwardedFromType).toBe("user");
     expect(payload.ReplyToForwardedFromId).toBe("999");
@@ -5259,7 +5260,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
     expect(payload.ReplyToForwardedFrom).toBe("Bob Smith (@bobsmith)");
     expect(payload.Body).toContain("[Forwarded from Bob Smith (@bobsmith)]");
     expect(payload.Body).not.toContain("+275760");
@@ -5307,7 +5308,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
     expect(payload.ReplyToId).toBe("9003");
     expect(payload.ReplyToBody).toBe("forwarded text");
     expect(payload.ReplyToSender).toBe("Ada");
@@ -5341,7 +5342,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
     expect(payload.WasMentioned).toBe(true);
   });
 
@@ -5555,7 +5556,7 @@ describe("createTelegramBot", () => {
       reply_markup: { inline_keyboard: [] },
     });
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
     expect(payload.Body).toContain("Fix a broken tool");
     expect(payload.SenderId).toBe("9");
     expect(payload.SenderUsername).toBe("ada_bot");
@@ -5588,7 +5589,7 @@ describe("createTelegramBot", () => {
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
     expect(payload.Body).toContain("callback_data: openclaw-smart-replies");
     expect(payload.Body).not.toContain("Ignore this");
     expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
@@ -5676,7 +5677,7 @@ describe("createTelegramBot", () => {
       reply_markup: { inline_keyboard: [] },
     });
     expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = mockMsgContextArg(replySpy as unknown as MockCallSource, 0, 0, "replySpy call");
+    const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
     expect(payload.Body).toContain("Investigate topic callback");
     expect(payload.MessageSid).toBe("cbq-smart-reply-topic-submit");
     expect(payload.WasMentioned).toBe(true);
@@ -5732,12 +5733,7 @@ describe("createTelegramBot", () => {
     expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(9, 11, {
       reply_markup: { inline_keyboard: [] },
     });
-    const payload = mockMsgContextArg(
-      replySpy as unknown as MockCallSource,
-      1,
-      0,
-      "replySpy retry call",
-    );
+    const payload = mockMsgContextArg(replySpy, 1, 0, "replySpy retry call");
     expect(payload.Body).toContain("Make Alice funnier");
   });
 
@@ -6072,12 +6068,7 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     if (expectedSessionKey) {
-      const payload = mockMsgContextArg(
-        replySpy as unknown as MockCallSource,
-        0,
-        0,
-        "replySpy call",
-      );
+      const payload = mockMsgContextArg(replySpy, 0, 0, "replySpy call");
       expect(payload.CommandTargetSessionKey).toBe(expectedSessionKey);
     }
     if (assertAuthorized) {

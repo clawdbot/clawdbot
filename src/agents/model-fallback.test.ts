@@ -2248,6 +2248,46 @@ describe("runWithModelFallback", () => {
     expect(onFallbackStep).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      "direct",
+      () =>
+        Object.assign(new Error("device worker capacity remained full"), {
+          name: "WorkerRunnerCapacityError",
+        }),
+    ],
+    [
+      "wrapped",
+      () =>
+        new Error("worker turn failed", {
+          cause: Object.assign(new Error("device worker capacity remained full"), {
+            name: "WorkerRunnerCapacityError",
+          }),
+        }),
+    ],
+  ])("aborts fallback on %s device capacity failures", async (_label, makeError) => {
+    const error = makeError();
+    const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("too late");
+    const onError = vi.fn();
+    const onFallbackStep = vi.fn();
+
+    await expect(
+      runWithModelFallback({
+        cfg: undefined,
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        fallbacksOverride: ["openai/gpt-5.4-mini"],
+        skipAuthProfileRuntime: true,
+        run,
+        onError,
+        onFallbackStep,
+      }),
+    ).rejects.toBe(error);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
+    expect(onFallbackStep).not.toHaveBeenCalled();
+  });
+
   it("still advances after a genuine provider rate limit", async () => {
     const rateLimit = Object.assign(new Error("rate limit exceeded"), { status: 429 });
     const run = vi.fn().mockRejectedValueOnce(rateLimit).mockResolvedValueOnce("fallback ok");
@@ -3203,6 +3243,78 @@ describe("runWithModelFallback", () => {
       { provider: "xai", model: "grok-4-fast" },
       { provider: "openai", model: "gpt-5.4" },
     ]);
+  });
+
+  it("executes fallback aliases in the selected agent scope", async () => {
+    const cfg = makeCfg({
+      agents: {
+        list: [
+          { id: "main", default: true },
+          {
+            id: "worker",
+            models: {
+              "anthropic/worker-fallback": { alias: "fast" },
+            },
+          },
+        ],
+        defaults: {
+          model: {
+            primary: "openai/primary",
+            fallbacks: ["fast"],
+          },
+          models: {
+            "openai/global-fallback": { alias: "fast" },
+          },
+        },
+      },
+    });
+
+    expect(
+      testing.resolveFallbackCandidates({
+        cfg,
+        agentId: "worker",
+        provider: "openai",
+        model: "primary",
+      }),
+    ).toEqual([
+      { provider: "openai", model: "primary" },
+      { provider: "anthropic", model: "worker-fallback" },
+    ]);
+    expect(
+      testing.resolveFallbackCandidates({
+        cfg,
+        agentId: "main",
+        provider: "openai",
+        model: "primary",
+      }),
+    ).toEqual([
+      { provider: "openai", model: "primary" },
+      { provider: "openai", model: "global-fallback" },
+    ]);
+
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FailoverError("primary rate limited", {
+          reason: "rate_limit",
+          provider: "openai",
+          model: "primary",
+        }),
+      )
+      .mockResolvedValueOnce("worker fallback");
+    const result = await runWithModelFallback({
+      cfg,
+      agentId: "worker",
+      provider: "openai",
+      model: "primary",
+      skipAuthProfileRuntime: true,
+      run,
+    });
+
+    expect(result.result).toBe("worker fallback");
+    expect(run).toHaveBeenNthCalledWith(2, "anthropic", "worker-fallback", {
+      isFinalFallbackAttempt: true,
+    });
   });
 
   it("tries configured fallbacks before primary for override credential validation errors", async () => {

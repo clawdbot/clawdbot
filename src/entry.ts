@@ -47,6 +47,13 @@ async function writeCapturedCliArgumentError(message: string): Promise<void> {
   await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
   const { enableConsoleCapture } = await import("./logging.js");
   enableConsoleCapture();
+  const [{ formatCliJsonFailure }, { isJsonOutputModeActive }] = await Promise.all([
+    import("./cli/failure-output.js"),
+    import("./cli/json-output-mode.js"),
+  ]);
+  if (isJsonOutputModeActive(process.argv)) {
+    defaultRuntime.writeJson(formatCliJsonFailure(message));
+  }
   console.error(`[openclaw] ${message}`);
 }
 
@@ -307,7 +314,11 @@ export async function runMainOrRootHelp(
       await configureGatewayStartupTraceConsoleFormatting(gatewayEntryStartupTrace);
       const { enableConsoleCapture } = await import("./logging.js");
       enableConsoleCapture();
-      const { formatCliFailureLines } = await import("./cli/failure-output.js");
+      const [{ formatCliFailureLines, formatCliJsonFailure }, { isJsonOutputModeActive }] =
+        await Promise.all([import("./cli/failure-output.js"), import("./cli/json-output-mode.js")]);
+      if (isJsonOutputModeActive(argv)) {
+        defaultRuntime.writeJson(formatCliJsonFailure(error));
+      }
       for (const line of formatCliFailureLines({
         title: "Could not start the CLI.",
         error,

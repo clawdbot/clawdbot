@@ -179,7 +179,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability(gateway);
 
     await expect(sessions.groupsRename("Alpha", "Beta")).rejects.toThrow("rename failed");
-    expect(sessions.state.error).toBe("Error: rename failed");
+    expect(sessions.state.error).toBe("rename failed");
     sessions.dispose();
   });
 
@@ -195,7 +195,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability(gateway);
 
     await expect(sessions.groupsPut(["Alpha"])).rejects.toThrow("group catalog rejected");
-    expect(sessions.state.error).toBe("Error: group catalog rejected");
+    expect(sessions.state.error).toBe("group catalog rejected");
     sessions.dispose();
   });
 
@@ -211,7 +211,7 @@ describe("createSessionCapability", () => {
     const sessions = createSessionCapability(gateway);
 
     await expect(sessions.groupsDelete("Alpha")).rejects.toThrow("delete failed");
-    expect(sessions.state.error).toBe("Error: delete failed");
+    expect(sessions.state.error).toBe("delete failed");
     sessions.dispose();
   });
 
@@ -490,36 +490,6 @@ describe("createSessionCapability", () => {
 
     currentList.resolve(sessionsResult([{ key: "current", kind: "direct", updatedAt: 2 }], 2));
     await waitForFast(() => expect(sessions.state.result?.sessions[0]?.key).toBe("current"));
-    sessions.dispose();
-  });
-
-  it("does not publish a created session from a retired same-client epoch", async () => {
-    const staleCreate = createDeferred<{ key: string }>();
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.create") {
-        return await staleCreate.promise;
-      }
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      if (method === "sessions.list") {
-        return sessionsResult([], 2);
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { gateway, publish } = createGatewayHarness(client);
-    const sessions = createSessionCapability(gateway);
-    const created = vi.fn();
-    sessions.subscribeCreated(created);
-
-    const operation = sessions.create({ agentId: "main" });
-    publish(false);
-    publish(true);
-    staleCreate.resolve({ key: "agent:main:stale" });
-
-    await expect(operation).resolves.toBeNull();
-    expect(created).not.toHaveBeenCalled();
     sessions.dispose();
   });
 

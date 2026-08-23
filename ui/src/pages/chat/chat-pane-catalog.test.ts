@@ -236,7 +236,7 @@ describe("chat pane catalog session lifecycle", () => {
     const readPage: SessionsCatalogReadResult = {
       hostId: "gateway:local",
       threadId: "thread-1",
-      items: [{ id: "u1", type: "userMessage", text: "hi" }],
+      items: [{ id: "x1", type: "other" }],
       // Same cursor the request was made with: a stale provider that would loop.
       nextCursor: "cursor-1",
     };
@@ -256,6 +256,31 @@ describe("chat pane catalog session lifecycle", () => {
 
     expect(progressed).toBe(false);
     // Cursor cleared → hasOlderMessages() is false, so the observer will not refire.
+    expect(pane.catalogCursor).toBeUndefined();
+  });
+
+  it("counts visible messages on an exhausted final page as progress", async () => {
+    const readPage: SessionsCatalogReadResult = {
+      hostId: "gateway:local",
+      threadId: "thread-1",
+      items: [{ id: "u1", type: "userMessage", text: "oldest message" }],
+    };
+    const client = {
+      request: vi.fn(async () => readPage),
+    } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const key = "catalog:claude:gateway%3Alocal:thread-1";
+    state.sessionKey = key;
+    pane.sessionKey = key;
+    pane.catalogCursor = "final-page";
+
+    const progressed = await pane.loadCatalogSession(
+      { catalogId: "claude", hostId: "gateway:local", threadId: "thread-1" },
+      true,
+    );
+
+    expect(progressed).toBe(true);
+    expect(pane.catalogMessages).toHaveLength(1);
     expect(pane.catalogCursor).toBeUndefined();
   });
 

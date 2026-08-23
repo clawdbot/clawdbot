@@ -14,6 +14,7 @@ import { isCloudWorkerPlacementState } from "../../components/session-row-badges
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { openEditor } from "../../lib/editor-links.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
@@ -111,6 +112,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
         sidebarSessionStatusFilter: () => "active",
       };
       switch (action.kind) {
+        case "assign-owner":
+          await operations.assignSessionOwner(host, session, action.owner, scope);
+          break;
         case "fork":
           await operations.forkSession(host, session, scope);
           break;
@@ -243,11 +247,12 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       this.publishHeaderError(access.reason);
       return;
     }
-    const customLabel = row.label?.trim() || null;
+    const customLabel = normalizeOptionalString(row.label) ?? null;
     this.headerRenameSessionKey = row.key;
     this.headerRenameInitialLabel = customLabel;
-    this.headerRenameInitialValue = customLabel ?? this.paneTitle;
-    this.headerRenameValue = this.headerRenameInitialValue;
+    // Editable session names come only from persisted user data. Seeding from
+    // paneTitle would let display decoration become the next stored label.
+    this.headerRenameValue = customLabel ?? "";
     this.headerEditing = true;
     void this.updateComplete.then(() => {
       const input = this.querySelector<HTMLInputElement>(".chat-pane__session-title-input");
@@ -268,13 +273,11 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     const key = this.headerRenameSessionKey;
     const trimmed = this.headerRenameValue.trim();
     const label = trimmed || null;
-    const unchangedDerivedTitle =
-      this.headerRenameInitialLabel === null && trimmed === this.headerRenameInitialValue.trim();
     const unchangedLabel = label === this.headerRenameInitialLabel;
     this.headerEditing = false;
     this.headerRenameSessionKey = "";
     const state = this.state;
-    if (!key || !state || unchangedDerivedTitle || unchangedLabel) {
+    if (!key || !state || unchangedLabel) {
       return;
     }
     const access = readSessionMethodAccess(this.context.gateway.snapshot, {
@@ -411,8 +414,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (!this.state || !this.ownsHeaderOutcome(owner)) {
       return;
     }
-    this.state.chatError = this.state.lastError =
-      error instanceof Error ? error.message : String(error);
+    this.state.chatError = this.state.lastError = formatUiError(error);
     this.state.requestUpdate?.();
   }
 

@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   getCurrentPluginMetadataSnapshot,
   installTemporaryCurrentPluginMetadataSnapshot,
+  isCurrentPluginMetadataSnapshotRuntimeGeneration,
   setCurrentPluginMetadataSnapshot,
   withPluginMetadataSnapshotScope,
 } from "./current-plugin-metadata-snapshot.js";
@@ -166,23 +167,39 @@ describe("current plugin metadata snapshot", () => {
     ).toBe(globalSnapshot);
   });
 
-  it("carries prepared metadata and registry as one runtime generation", async () => {
+  it("carries prepared metadata and registry across nested agent workspaces", async () => {
     const config = { plugins: { allow: ["scoped"] } };
-    const workspaceDir = "/workspace/scoped";
-    const metadataSnapshot = createSnapshot({ config, workspaceDir });
+    const pluginWorkspaceDir = "/workspace/plugins";
+    const agentWorkspaceDir = "/workspace/agent-run";
+    const metadataSnapshot = createSnapshot({ config, workspaceDir: pluginWorkspaceDir });
     const pluginRegistry = createEmptyPluginRegistry();
     setCurrentPluginMetadataSnapshot(undefined);
 
     await withPluginRuntimeGenerationScope(
-      { config, metadataSnapshot, pluginRegistry, workspaceDir },
+      { config, metadataSnapshot, pluginRegistry },
       async () => {
         await Promise.resolve();
-        expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBe(metadataSnapshot);
+        expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir: agentWorkspaceDir })).toBe(
+          metadataSnapshot,
+        );
+        expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir: pluginWorkspaceDir })).toBe(
+          metadataSnapshot,
+        );
+        expect(
+          getCurrentPluginMetadataSnapshot({
+            config: { plugins: { allow: ["derived-run-policy"] } },
+            workspaceDir: agentWorkspaceDir,
+          }),
+        ).toBe(metadataSnapshot);
+        expect(isCurrentPluginMetadataSnapshotRuntimeGeneration(metadataSnapshot)).toBe(true);
         expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(pluginRegistry);
       },
     );
 
-    expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBeUndefined();
+    expect(isCurrentPluginMetadataSnapshotRuntimeGeneration(metadataSnapshot)).toBe(false);
+    expect(
+      getCurrentPluginMetadataSnapshot({ config, workspaceDir: agentWorkspaceDir }),
+    ).toBeUndefined();
     expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
   });
 
@@ -217,7 +234,6 @@ describe("current plugin metadata snapshot", () => {
           config: outerConfig,
           metadataSnapshot: outerSnapshot,
           pluginRegistry: outerRegistry,
-          workspaceDir: "/workspace/outer",
         },
         async () => {
           await expect(
@@ -225,7 +241,6 @@ describe("current plugin metadata snapshot", () => {
               {
                 config: innerConfig,
                 metadataSnapshot: innerSnapshot,
-                workspaceDir: "/workspace/inner",
               },
               async () => {
                 await Promise.resolve();
@@ -391,6 +406,34 @@ describe("current plugin metadata snapshot", () => {
         compatibleConfigs: [runtimeConfig],
       },
     );
+  });
+
+  it("invalidates a generic scope when the config identity has a different policy", () => {
+    const config = { plugins: { allow: ["source"] } };
+    const workspaceDir = "/workspace";
+    const snapshot = createSnapshot({ config, workspaceDir });
+    config.plugins.allow = ["runtime"];
+
+    withPluginMetadataSnapshotScope(
+      snapshot,
+      () => {
+        expect(getCurrentPluginMetadataSnapshot({ config, workspaceDir })).toBeUndefined();
+      },
+      { config },
+    );
+  });
+
+  it("trusts the config identity paired with an immutable runtime generation", () => {
+    const sourceConfig = { plugins: { allow: ["source"] } };
+    const runtimeConfig = { plugins: { allow: ["runtime"] } };
+    const workspaceDir = "/workspace";
+    const snapshot = createSnapshot({ config: sourceConfig, workspaceDir });
+
+    withPluginRuntimeGenerationScope({ config: runtimeConfig, metadataSnapshot: snapshot }, () => {
+      expect(getCurrentPluginMetadataSnapshot({ config: runtimeConfig, workspaceDir })).toBe(
+        snapshot,
+      );
+    });
   });
 
   it("rejects a workspace-scoped snapshot when the caller does not provide workspace scope", () => {

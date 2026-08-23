@@ -9,9 +9,9 @@ import {
   formatValidationErrors,
   type ValidationError,
 } from "../../../packages/gateway-protocol/src/validation-errors.js";
-export { parseGatewayPayload } from "../server-json.js";
 import { formatForLog } from "../ws-log.js";
 import type { RespondFn } from "./types.js";
+export { parseGatewayPayload } from "../server-json.js";
 
 /**
  * Shared response adapters for node-related gateway methods.

@@ -6,6 +6,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash, randomUUID } from "node:crypto";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
@@ -16,6 +17,8 @@ import {
   normalizeToolPolicyName,
   readToolAllowlistIntersection,
 } from "../agents/tool-policy.js";
+import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
+import { recordRuntimeActionDecision } from "../audit/runtime-action-decision.js";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -94,6 +97,7 @@ import type {
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
+  PluginHookToolAuthority,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
   PluginHookBeforeInstallContext,
@@ -223,6 +227,13 @@ type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
   shouldStop?: (result: TResult) => boolean;
   terminalLabel?: string;
   onTerminal?: (params: { hookName: K; pluginId: string; result: TResult }) => void;
+  includeRegistration?: (registration: PluginHookRegistration<K>) => boolean;
+  assertHandlerBoundaryActive?: () => void;
+  onHandlerResult?: (params: {
+    hook: PluginHookRegistration<K>;
+    result: TResult | undefined;
+  }) => void;
+  onHandlerError?: (hook: PluginHookRegistration<K>, failOpen: boolean) => void;
 };
 
 type PluginTargetedInboundClaimOutcome =
@@ -321,9 +332,78 @@ export function createHookRunner(
   // Prompt-build hooks may start nested agent runs through any caller. The
   // mutable token lets detached descendants dispatch after the outer run settles.
   const beforePromptBuildDispatch = new AsyncLocalStorage<{ active: boolean }>();
+  const runtimeDecisionScopeId = randomUUID();
+  let runtimeDecisionOrdinal = 0;
 
   const shouldCatchHookErrors = (hookName: PluginHookName): boolean =>
     catchErrors && (failurePolicyByHook[hookName] ?? "fail-open") === "fail-open";
+
+  const recordBeforeToolCallDecision = (params: {
+    event: PluginHookBeforeToolCallEvent;
+    hook: PluginHookRegistration<"before_tool_call">;
+    token?: ExecutionIdentityAdmissionToken;
+    result?: PluginHookBeforeToolCallResult;
+    failOpen?: boolean;
+    receiptAuthority?: () => boolean | void;
+  }): void => {
+    if (!params.receiptAuthority) {
+      return;
+    }
+    try {
+      if (params.receiptAuthority() === false) {
+        return;
+      }
+    } catch {
+      return;
+    }
+    const failed = params.failOpen !== undefined;
+    const blocked = params.result?.block === true || params.failOpen === false;
+    recordRuntimeActionDecision({
+      token: params.token,
+      family: "plugin",
+      operation: "before_tool_call",
+      outcome: blocked ? "denied" : params.failOpen ? "unknown" : "allowed",
+      coverageState: blocked || !failed ? "enforced" : "unknown",
+      reasonCode: failed
+        ? params.failOpen
+          ? "plugin_hook_failed_open"
+          : "plugin_hook_failed_closed"
+        : blocked
+          ? "plugin_hook_blocked"
+          : params.result?.requireApproval
+            ? "plugin_hook_approval_required"
+            : "plugin_hook_allowed",
+      owner: "plugin-hook",
+      decisionBoundary: "plugin.before-tool-call",
+      policyRefs: ["plugin-hook:before-tool-call"],
+      summary: failed
+        ? params.failOpen
+          ? "A plugin hook failed open, so its policy outcome is unknown."
+          : "A plugin hook failed closed before tool execution."
+        : blocked
+          ? "A registered plugin hook denied tool execution."
+          : params.result?.requireApproval
+            ? "A registered plugin hook required a separate owner-native approval decision."
+            : "A registered plugin hook allowed tool execution to continue.",
+      missingEvidence: params.failOpen ? ["plugin.hook_decision"] : [],
+      remediation: params.failOpen
+        ? [
+            {
+              code: "repair_plugin_hook",
+              text: "Inspect the registered plugin hook failure before relying on this action.",
+            },
+          ]
+        : [],
+      discriminator: JSON.stringify([
+        params.hook.pluginId,
+        params.hook.registrationId ?? null,
+        params.event.toolCallId ?? null,
+        ++runtimeDecisionOrdinal,
+        params.event.toolName,
+        runtimeDecisionScopeId,
+      ]),
+    });
+  };
 
   const firstDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => prev ?? next;
   const lastDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => next ?? prev;
@@ -713,15 +793,20 @@ export function createHookRunner(
     matcherToolName?: string,
   ): Promise<TResult | undefined> {
     const hooks = getHooksForName(registry, hookName, undefined, matcherToolName);
-    if (hooks.length === 0) {
+    const selectedHooks = policy.includeRegistration
+      ? hooks.filter(policy.includeRegistration)
+      : hooks;
+    if (selectedHooks.length === 0) {
       return undefined;
     }
 
-    logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, sequential)`);
+    logger?.debug?.(`[hooks] running ${hookName} (${selectedHooks.length} handlers, sequential)`);
 
     let result: TResult | undefined;
 
-    for (const hook of hooks) {
+    for (const hook of selectedHooks) {
+      policy.assertHandlerBoundaryActive?.();
+      let shouldStop = false;
       try {
         const handler = hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>;
         const handlerEvent = policy.isolateEventPerHandler
@@ -730,6 +815,8 @@ export function createHookRunner(
         const promise = Promise.resolve(handler(handlerEvent, ctx));
         const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
         const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+
+        policy.onHandlerResult?.({ hook, result: handlerResult });
 
         const shouldMergeResult =
           handlerResult !== undefined && (handlerResult !== null || policy.mergeNullResults);
@@ -746,14 +833,20 @@ export function createHookRunner(
               `[hooks] ${hookName}${terminalLabel} decided by ${hook.pluginId} (priority=${priority}); skipping remaining handlers`,
             );
             policy.onTerminal?.({ hookName, pluginId: hook.pluginId, result });
-            break;
+            shouldStop = true;
           }
         }
       } catch (err) {
+        const failOpen = !(err instanceof HookIsolationError) && shouldCatchHookErrors(hookName);
+        policy.onHandlerError?.(hook, failOpen);
         if (err instanceof HookIsolationError) {
           throw err;
         }
         handleHookError({ hookName, pluginId: hook.pluginId, error: err });
+      }
+      policy.assertHandlerBoundaryActive?.();
+      if (shouldStop) {
+        break;
       }
     }
 
@@ -934,12 +1027,78 @@ export function createHookRunner(
           "before_prompt_build",
           event,
           ctx,
-          { mergeResults: mergeBeforePromptBuild },
+          {
+            mergeResults: mergeBeforePromptBuild,
+            includeRegistration: (registration) => registration.requiresToolAuthority !== true,
+          },
         );
       } finally {
         token.active = false;
       }
     });
+  }
+
+  /** Runs context enrichment only after the host has finalized the turn's tool surface. */
+  async function runAuthorizedPromptBuild(
+    event: PluginHookBeforePromptBuildEvent,
+    ctx: PluginHookAgentContext,
+    params: {
+      toolAuthorityFingerprint: string;
+      activeToolNames: readonly string[];
+      assertHostActive: () => void;
+    },
+  ): Promise<PluginHookBeforePromptBuildResult | undefined> {
+    const sourceFingerprint = params.toolAuthorityFingerprint.trim();
+    if (!sourceFingerprint) {
+      return undefined;
+    }
+    const activeToolNames = [
+      ...new Set(params.activeToolNames.map(normalizeToolPolicyName).filter(Boolean)),
+    ].toSorted();
+    const activeToolNameSet = new Set(activeToolNames);
+    const token = { active: true };
+    const assertActive = () => {
+      if (!token.active) {
+        throw new Error("prompt tool authority is no longer active");
+      }
+      params.assertHostActive();
+    };
+    const authority: PluginHookToolAuthority = Object.freeze({
+      fingerprint: createHash("sha256")
+        .update(sourceFingerprint)
+        .update("\0")
+        .update(activeToolNames.join("\0"))
+        .digest("hex"),
+      allows(toolName: string): boolean {
+        assertActive();
+        return activeToolNameSet.has(normalizeToolPolicyName(toolName));
+      },
+      assertActive,
+    });
+    try {
+      const result = await runModifyingHook<
+        "before_prompt_build",
+        PluginHookBeforePromptBuildResult
+      >(
+        "before_prompt_build",
+        event,
+        { ...ctx, toolAuthority: authority },
+        {
+          mergeResults: mergeBeforePromptBuild,
+          includeRegistration: (registration) => registration.requiresToolAuthority === true,
+          assertHandlerBoundaryActive: assertActive,
+        },
+      );
+      if (!result) {
+        return undefined;
+      }
+      return {
+        ...(result.prependContext ? { prependContext: result.prependContext } : {}),
+        ...(result.appendContext ? { appendContext: result.appendContext } : {}),
+      };
+    } finally {
+      token.active = false;
+    }
   }
 
   async function runAgentTurnPrepare(
@@ -1256,6 +1415,10 @@ export function createHookRunner(
   async function runBeforeToolCall(
     event: PluginHookBeforeToolCallEvent,
     ctx: PluginHookToolContext,
+    receipt?: Readonly<{
+      token: ExecutionIdentityAdmissionToken;
+      assertAuthority: () => boolean | void;
+    }>,
   ): Promise<PluginHookBeforeToolCallResult | undefined> {
     return runModifyingHook<"before_tool_call", PluginHookBeforeToolCallResult>(
       "before_tool_call",
@@ -1291,6 +1454,22 @@ export function createHookRunner(
         },
         shouldStop: (result) => result.block === true,
         terminalLabel: "block=true",
+        onHandlerResult: ({ hook, result }) =>
+          recordBeforeToolCallDecision({
+            event,
+            hook,
+            token: receipt?.token,
+            result,
+            receiptAuthority: receipt?.assertAuthority,
+          }),
+        onHandlerError: (hook, failOpen) =>
+          recordBeforeToolCallDecision({
+            event,
+            hook,
+            token: receipt?.token,
+            failOpen,
+            receiptAuthority: receipt?.assertAuthority,
+          }),
       },
       event.toolName,
     );
@@ -1585,6 +1764,7 @@ export function createHookRunner(
     runBeforeModelResolve,
     runAgentTurnPrepare,
     runBeforePromptBuild,
+    runAuthorizedPromptBuild,
     runBeforeAgentReply,
     runModelCallStarted: async (
       event: PluginHookModelCallStartedEvent,

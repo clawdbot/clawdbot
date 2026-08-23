@@ -60,7 +60,7 @@ let resetPluginToolDescriptorCacheForTest: typeof import("./tools.test-fixtures.
 let getActivePluginRegistry: typeof import("./runtime.js").getActivePluginRegistry;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
-let clearCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-state.js").clearCurrentPluginMetadataSnapshot;
+let clearPluginMetadataLifecycleCaches: typeof import("./plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
 let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
 let getPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").getPluginRuntimeGatewayRequestScope;
 let withPluginRuntimeGatewayRequestScope: typeof import("./runtime/gateway-request-scope.js").withPluginRuntimeGatewayRequestScope;
@@ -550,7 +550,7 @@ describe("resolvePluginTools optional tools", () => {
       await import("./runtime.js"));
     ({ getPluginRuntimeGatewayRequestScope, withPluginRuntimeGatewayRequestScope } =
       await import("./runtime/gateway-request-scope.js"));
-    ({ clearCurrentPluginMetadataSnapshot } = await import("./current-plugin-metadata-state.js"));
+    ({ clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js"));
     ({ setCurrentPluginMetadataSnapshot } = await import("./current-plugin-metadata-snapshot.js"));
     ({ resetPluginToolDescriptorCacheForTest } = await import("./tools.test-fixtures.js"));
   });
@@ -574,13 +574,13 @@ describe("resolvePluginTools optional tools", () => {
       return loadContextMocks.actualResolve(...(args as [never]));
     });
     resetPluginRuntimeStateForTest?.();
-    clearCurrentPluginMetadataSnapshot?.();
+    clearPluginMetadataLifecycleCaches?.();
     resetPluginToolDescriptorCacheForTest?.();
   });
 
   afterEach(() => {
     resetPluginRuntimeStateForTest?.();
-    clearCurrentPluginMetadataSnapshot?.();
+    clearPluginMetadataLifecycleCaches?.();
     resetPluginToolDescriptorCacheForTest?.();
     setLoggerOverride(null);
     loggingState.rawConsole = null;
@@ -1035,6 +1035,7 @@ describe("resolvePluginTools optional tools", () => {
     const context = createContext();
     const config = context.config;
     const registry = createToolRegistry([createOptionalDemoEntry()]);
+    const preparedConfig = structuredClone(config);
     const metadataSnapshot = installToolManifestSnapshots({
       config,
       plugins: [
@@ -1048,11 +1049,11 @@ describe("resolvePluginTools optional tools", () => {
       ...createResolveToolsParams({ context, toolAllowlist: ["optional_tool"] }),
       preparedRuntime: {
         loadContext: {
-          rawConfig: config,
-          config,
-          activationSourceConfig: config,
+          rawConfig: preparedConfig,
+          config: preparedConfig,
+          activationSourceConfig: preparedConfig,
           autoEnabledReasons: {},
-          workspaceDir: "/tmp",
+          workspaceDir: "/gateway/plugin-runtime",
           env: process.env,
           logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
           manifestRegistry: metadataSnapshot.manifestRegistry as never,
@@ -1985,40 +1986,6 @@ describe("resolvePluginTools optional tools", () => {
     expect(registry.diagnostics).toHaveLength(0);
   });
 
-  it("keeps the Discord-owned show_widget contextual to Discord sessions", () => {
-    const registry = setRegistry([
-      {
-        pluginId: "discord",
-        optional: false,
-        source: "/tmp/discord.js",
-        names: ["show_widget"],
-        factory: (context) =>
-          (context as { messageChannel?: string }).messageChannel === "discord"
-            ? { ...makeTool("show_widget"), description: "discord implementation" }
-            : null,
-      },
-    ]);
-
-    const discordTools = resolvePluginTools(
-      createResolveToolsParams({
-        context: { ...createContext(), messageChannel: "discord" },
-        clientCaps: ["inline-widgets"],
-      }),
-    );
-    expect(discordTools.map((tool) => [tool.name, tool.description])).toEqual([
-      ["show_widget", "discord implementation"],
-    ]);
-
-    const webTools = resolvePluginTools(
-      createResolveToolsParams({
-        context: { ...createContext(), messageChannel: "webchat" },
-        clientCaps: ["inline-widgets"],
-      }),
-    );
-    expect(webTools).toHaveLength(0);
-    expect(registry.diagnostics).toHaveLength(0);
-  });
-
   it("isolates tools with malformed required client capabilities", () => {
     const registry = setRegistry([
       {
@@ -2302,6 +2269,47 @@ describe("resolvePluginTools optional tools", () => {
     expect(factory).toHaveBeenCalledTimes(2);
   });
 
+  it("executes cached plugin tools from the published generation without rescanning manifests", async () => {
+    const context = createContext();
+    const runtimeConfig: OpenClawConfig = {
+      ...context.config,
+      channels: { telegram: { enabled: false } },
+    };
+    const getRuntimeConfig = vi.fn(() => runtimeConfig);
+    const toolContext = { ...context, getRuntimeConfig };
+    const factory = vi.fn(() => makeTool("cached_generation_tool"));
+    setRegistry(
+      [
+        createNamedToolEntry("cache-generation", "cached_generation_tool", {
+          factory,
+        }),
+      ],
+      context.config,
+    );
+
+    resolvePluginTools(createResolveToolsParams({ context: toolContext }));
+    const [cachedTool] = resolvePluginTools(createResolveToolsParams({ context: toolContext }));
+    expect(cachedTool?.name).toBe("cached_generation_tool");
+    expect(getRuntimeConfig).toHaveBeenCalledTimes(2);
+
+    const manifestRegistry = await import("./manifest-registry-installed.js");
+    const manifestScan = vi
+      .spyOn(manifestRegistry, "loadPluginManifestRegistryForInstalledIndex")
+      .mockImplementation(() => {
+        throw new Error("cached plugin execution rescanned manifests");
+      });
+    try {
+      await expect(cachedTool?.execute("call", {}, undefined)).resolves.toEqual({
+        content: [{ type: "text", text: "ok" }],
+      });
+      expect(manifestScan).not.toHaveBeenCalled();
+      expect(getRuntimeConfig).toHaveBeenCalledTimes(2);
+      expect(factory).toHaveBeenCalledTimes(2);
+    } finally {
+      manifestScan.mockRestore();
+    }
+  });
+
   it("keeps cached ordinary plugin tools free of network provenance", async () => {
     const factory = vi.fn(() => makeTool("cached_ordinary_tool"));
     setRegistry([
@@ -2386,7 +2394,7 @@ describe("resolvePluginTools optional tools", () => {
 
     let result = await expectDefined(controls[0], "Code Mode exec tool").execute(
       "code-call-cached-network",
-      { code: 'return await tools.callValue("cached_network_tool", {});' },
+      { code: "return await cached_network_tool({});" },
     );
     for (
       let index = 0;

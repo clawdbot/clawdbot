@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/api.js";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { resolveDefaultAgentId, resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import { getActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
@@ -10,7 +11,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import pMap, { pMapSkip } from "p-map";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 import { assessClaimFreshness, isClaimContestedStatus } from "./claim-health.js";
@@ -30,6 +31,7 @@ import { initializeMemoryWikiVault } from "./vault.js";
 
 const QUERY_DIRS = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
 const QUERY_PAGE_READ_CONCURRENCY = 16;
+const WIKI_SNIPPET_MAX_CHARS = 700;
 const RELATED_BLOCK_PATTERN =
   /<!-- openclaw:wiki:related:start -->[\s\S]*?<!-- openclaw:wiki:related:end -->/g;
 const MARKDOWN_FRONTMATTER_PATTERN = /^\s*---\r?\n[\s\S]*?\r?\n---\r?\n?/;
@@ -230,16 +232,18 @@ async function readQueryableWikiPagesByPaths(
   rootDir: string,
   files: string[],
 ): Promise<QueryableWikiPage[]> {
-  return await pMap(
-    files,
-    async (relativePath) => {
+  const { results } = await runTasksWithConcurrency({
+    tasks: files.map((relativePath) => async () => {
       const absolutePath = path.join(rootDir, relativePath);
       const raw = await fs.readFile(absolutePath, "utf8");
       const summary = toWikiPageSummary({ absolutePath, relativePath, raw });
-      return summary ? { ...summary, raw } : pMapSkip;
-    },
-    { concurrency: QUERY_PAGE_READ_CONCURRENCY, stopOnError: true },
-  );
+      return summary ? { ...summary, raw } : null;
+    }),
+    limit: QUERY_PAGE_READ_CONCURRENCY,
+    errorMode: "stop",
+    throwOnError: true,
+  });
+  return results.filter((page): page is QueryableWikiPage => page !== null);
 }
 
 async function readQueryDigestBundle(
@@ -817,10 +821,10 @@ function getMatchingClaims(page: QueryableWikiPage, queryLower: string): WikiCla
 function buildPageSnippet(page: QueryableWikiPage, query: string): string {
   const queryLower = normalizeLowercaseStringOrEmpty(query);
   const matchingClaim = getMatchingClaims(page, queryLower)[0];
-  if (matchingClaim) {
-    return matchingClaim.text;
-  }
-  return buildSnippet(page.raw, query);
+  return truncateUtf16Safe(
+    matchingClaim?.text ?? buildSnippet(page.raw, query),
+    WIKI_SNIPPET_MAX_CHARS,
+  );
 }
 
 function scorePage(page: QueryableWikiPage, query: string, mode: WikiSearchMode): number {
@@ -1463,7 +1467,7 @@ export async function getMemoryWikiPage(input: {
       from: fromLine,
       lines: lineCount,
     });
-    if (result.path === relPath && result.text === "" && result.from === undefined) {
+    if (result.status === "not_found") {
       continue;
     }
     return {

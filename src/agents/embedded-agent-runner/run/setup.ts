@@ -29,6 +29,7 @@ import {
 } from "../../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { FailoverError } from "../../failover-error.js";
+import { resolveModelContextWindowProfile } from "../../model-context-window.js";
 import { log } from "../logger.js";
 import { readAgentModelContextTokens } from "../model-context-tokens.js";
 
@@ -210,18 +211,24 @@ function resolveEffectiveRuntimeModel(params: {
   contextConfigProvider?: string;
   modelId: string;
   runtimeModel: ProviderRuntimeModel;
-  agentContextTokens?: number;
+  contextWindow?: string;
 }): {
   ctxInfo: ContextWindowInfo;
   effectiveModel: ProviderRuntimeModel;
 } {
+  // The session-selected context-window option caps native runs too; the CLI
+  // backend maps the option id to argv/env separately, but budget and payload
+  // sizing must honor the selection on every runtime path.
+  const selectedWindowTokens = resolveModelContextWindowProfile({
+    catalogEntry: params.runtimeModel,
+    selected: params.contextWindow,
+  }).contextTokens;
   const ctxInfo = resolveContextWindowInfo({
     cfg: params.cfg,
     provider: params.contextConfigProvider ?? params.provider,
     modelId: params.modelId,
     modelContextTokens: readAgentModelContextTokens(params.runtimeModel),
-    modelContextWindow: params.runtimeModel.contextWindow,
-    agentContextTokens: params.agentContextTokens,
+    modelContextWindow: selectedWindowTokens,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
 
@@ -275,7 +282,7 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
   modelId: string;
   runtimeModel: ProviderRuntimeModel;
   nativeModelOwned: boolean;
-  agentContextTokens?: number;
+  contextWindow?: string;
 }): {
   contextWindowInfo?: ContextWindowInfo;
   contextTokenBudget?: number;

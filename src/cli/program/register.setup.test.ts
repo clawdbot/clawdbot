@@ -317,14 +317,20 @@ describe("registerSetupCommand", () => {
 
     expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
     expect(lastWizardOptions()?.workspace).toBe("/tmp/ws");
-    expect(lastWizardOptions()?.tailscaleResetOnExit).toBeUndefined();
+    expect(lastWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
-  it("forwards explicit --no-tailscale-reset-on-exit", async () => {
+  it("accepts retired --no-tailscale-reset-on-exit as a no-op", async () => {
     await runCli(["setup", "--no-tailscale-reset-on-exit"]);
 
-    expect(lastWizardOptions()?.tailscaleResetOnExit).toBe(false);
+    expect(lastWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
+  });
+
+  it("accepts retired --tailscale-reset-on-exit as a no-op", async () => {
+    await runCli(["setup", "--tailscale-reset-on-exit"]);
+
+    expect(lastWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
   });
 
   it("runs baseline setup command when --baseline is set", async () => {
@@ -339,6 +345,7 @@ describe("registerSetupCommand", () => {
   it.each([
     ["onboarding mode", ["--mode", "remote"]],
     ["remote Gateway", ["--remote-url", "wss://example.invalid"]],
+    ["remote Gateway password", ["--remote-password", "fixture-password"]],
     ["reset", ["--reset"]],
     ["daemon", ["--daemon-runtime", "node"]],
     ["auth", ["--auth-choice", "skip"]],
@@ -351,8 +358,11 @@ describe("registerSetupCommand", () => {
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
-  it("runs setup wizard command when --wizard is set", async () => {
-    const remoteToken = ["fixture", "value"].join("-");
+  it.each([
+    { flag: "--remote-token", optionKey: "remoteToken" },
+    { flag: "--remote-password", optionKey: "remotePassword" },
+  ])("forwards $flag to the setup wizard", async ({ flag, optionKey }) => {
+    const credential = ["fixture", "value"].join("-");
     await runCli([
       "setup",
       "--wizard",
@@ -360,14 +370,14 @@ describe("registerSetupCommand", () => {
       "remote",
       "--remote-url",
       "wss://example",
-      "--remote-token",
-      remoteToken,
+      flag,
+      credential,
     ]);
 
     expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
     expect(lastWizardOptions()?.mode).toBe("remote");
     expect(lastWizardOptions()?.remoteUrl).toBe("wss://example");
-    expect(lastWizardOptions()?.remoteToken).toBe(remoteToken);
+    expect(lastWizardOptions()?.[optionKey]).toBe(credential);
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
@@ -437,7 +447,6 @@ describe("registerSetupCommand", () => {
       "--skip-search",
       "--skip-skills",
       "--skip-bootstrap",
-      "--tailscale-reset-on-exit",
       "--node-manager",
       "pnpm",
       "--json",
@@ -456,7 +465,6 @@ describe("registerSetupCommand", () => {
       skipSearch: true,
       skipSkills: true,
       skipBootstrap: true,
-      tailscaleResetOnExit: true,
       nodeManager: "pnpm",
       json: true,
     });
@@ -520,6 +528,30 @@ describe("registerSetupCommand", () => {
       customImageInput: false,
     });
     expect(setupCommandMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["guided", ["--wizard"]],
+    ["classic", ["--classic"]],
+    ["non-interactive", ["--non-interactive", "--accept-risk"]],
+  ])("forwards --agent-name through %s setup", async (_mode, modeArgs) => {
+    await runCli([
+      "setup",
+      ...modeArgs,
+      "--agent-name",
+      "robby",
+      "--workspace",
+      "/tmp/robby",
+      "--skip-bootstrap",
+    ]);
+
+    expect(lastWizardOptions()).toMatchObject({
+      agentName: "robby",
+      workspace: "/tmp/robby",
+      skipBootstrap: true,
+    });
+    expect(setupCommandMock).not.toHaveBeenCalled();
+    expect(runSystemAgentMock).not.toHaveBeenCalled();
   });
 
   it("runs setup wizard command for migration import flags", async () => {

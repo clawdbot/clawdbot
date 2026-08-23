@@ -38,7 +38,7 @@ describe('spawnSubagentDirect mode="session" diagnostics (#67400)', () => {
     if (result.status === "error") {
       expect(result.error).toContain("thread: true");
       expect(result.error).toContain('mode="run"');
-      expect(result.error).toContain("sessions_send");
+      expect(result.error).not.toContain("sessions_send");
     }
   });
 
@@ -60,7 +60,7 @@ describe('spawnSubagentDirect mode="session" diagnostics (#67400)', () => {
     if (result.status === "error") {
       expect(result.error).toContain("not running on a channel");
       expect(result.error).toContain('mode="run"');
-      expect(result.error).toContain("sessions_send");
+      expect(result.error).not.toContain("sessions_send");
     }
   });
 });
@@ -96,7 +96,7 @@ describe('spawnSubagentDirect mode="session" with thread binding-capable channel
     if (result.status === "error") {
       expect(result.error).toContain("thread: true");
       expect(result.error).toContain('mode="run"');
-      expect(result.error).toContain("sessions_send");
+      expect(result.error).not.toContain("sessions_send");
     }
   });
 });

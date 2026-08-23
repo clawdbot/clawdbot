@@ -8,7 +8,11 @@ import type {
 import type { ApplicationContext } from "../../app/context.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
-import type { ChatComposerMemoryFallback } from "../../lib/chat/chat-types.ts";
+import type {
+  ChatComposerMemoryFallback,
+  ChatGuardianNotice,
+  ChatStreamSegment,
+} from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ChatState } from "./chat-history.ts";
 import type { ChatRealtimeState } from "./chat-realtime.ts";
@@ -26,7 +30,6 @@ import type { SidebarLayout } from "./sidebar-layout.ts";
 import type {
   CompactionStatus,
   FallbackStatus,
-  PlanStatus,
   ToolStreamEntry,
   WaitingApprovalStatus,
 } from "./tool-stream.ts";
@@ -52,11 +55,14 @@ export type ChatPageHost = ChatHost &
     localMediaPreviewRoots: string[];
     embedSandboxMode: EmbedSandboxMode;
     allowExternalEmbedUrls: boolean;
+    automaticallyFetchFavicons: boolean;
     chatToolMessages: Record<string, unknown>[];
+    guardianNotices: ChatGuardianNotice[];
     chatComposerFallbackByScope: Record<string, ChatComposerMemoryFallback>;
     chatSendingScopeKey: string | null;
     chatMessagesBySession: ChatMessageCache;
     basePath: string;
+    resourceBasePath: string;
     chatAvatarUrl: string | null;
     chatAvatarSource: string | null;
     chatAvatarStatus: "none" | "local" | "remote" | "data" | null;
@@ -71,19 +77,19 @@ export type ChatPageHost = ChatHost &
     sessionsError: string | null;
     sessionsArchivedFilter: "active" | "archived" | "all";
     selectedChatSessionArchived: boolean;
+    selectedChatSessionIncognito: boolean;
     agentsList: AgentsListResult | null;
     agentsSelectedId: string | null;
     pendingAbort: PendingChatAbort | null;
     pendingSessionMessageReloadSessionKey: string | null;
     chatSubmitGuards: Map<string, Promise<void>>;
     chatSendTimingsByRun: Map<string, ChatSendTimingEntry>;
-    chatStreamSegments: Array<{ text: string; ts: number }>;
+    chatStreamSegments: ChatStreamSegment[];
     toolStreamById: Map<string, ToolStreamEntry>;
     toolStreamOrder: string[];
     toolStreamSyncTimer: number | null;
     compactionStatus: CompactionStatus | null;
     fallbackStatus: FallbackStatus | null;
-    planStatus: PlanStatus | null;
     observerDigest: SessionObserverDigest | null;
     knownAgentRunIds: Set<string>;
     /** `sessionKey|runId` scopes that already forced a PR-chips refresh mid-stream. */
@@ -129,13 +135,19 @@ export type ChatPageHost = ChatHost &
     handleChatScroll: (event: Event) => void;
     handleChatDraftChange: (next: string) => void;
     handleChatInputHistoryKey: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
-    handleSendChat: (messageOverride?: string, options?: unknown) => Promise<void>;
+    handleSendChat: (
+      messageOverride?: string,
+      options?: unknown,
+      submissionAction?: Event,
+    ) => Promise<void>;
     handleAbortChat: (options?: unknown) => Promise<void>;
     removeQueuedMessage: (id: string) => void;
     retryQueuedChatMessage: (id: string) => Promise<void>;
     steerQueuedChatMessage: (id: string) => Promise<void>;
     moveQueuedChatMessage: (id: string, toIndex: number) => void;
     editQueuedChatMessage: (id: string) => void;
+    updateQueuedChatMessageEdit: (draftText: string) => void;
+    submitQueuedChatMessageEdit: () => void;
     cancelQueuedChatMessageEdit: () => void;
     handleCloseSidebar: () => void;
     updateSidebarLayout: (layout: SidebarLayout) => void;

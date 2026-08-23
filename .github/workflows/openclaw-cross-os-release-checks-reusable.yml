@@ -467,7 +467,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-file: ${{ inputs.candidate_artifact_name == '' && 'source/package.json' || 'workflow/package.json' }}
           lockfile-path: ${{ inputs.candidate_artifact_name == '' && 'source/pnpm-lock.yaml' || 'workflow/pnpm-lock.yaml' }}
-          use-actions-cache: ${{ inputs.candidate_artifact_name == '' && 'true' || 'false' }}
+          cache-mode: ${{ inputs.candidate_artifact_name == '' && 'restore' || 'off' }}
 
       - name: Resolve provider-owned companion requirements
         id: provider_requirements
@@ -907,7 +907,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-file: workflow/package.json
           lockfile-path: workflow/pnpm-lock.yaml
-          use-actions-cache: "false"
+          cache-mode: off
 
       - name: Download candidate artifact
         id: download_candidate

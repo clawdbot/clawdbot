@@ -92,6 +92,10 @@
       "types": "./dist/src/plugin-sdk/model-session-runtime.d.ts",
       "default": "./src/model-session-runtime.ts"
     },
+    "./node-selection-runtime": {
+      "types": "./dist/src/plugin-sdk/node-selection-runtime.d.ts",
+      "default": "./src/node-selection-runtime.ts"
+    },
     "./number-runtime": {
       "types": "./dist/src/plugin-sdk/number-runtime.d.ts",
       "default": "./src/number-runtime.ts"
