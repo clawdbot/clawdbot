@@ -84,10 +84,7 @@ function renderDiffStats(item: { additions?: number; deletions?: number; changed
   </span>`;
 }
 
-function renderHeader(row: SidebarSessionHovercardRow | undefined) {
-  if (!row) {
-    return nothing;
-  }
+function renderHeader(row: SidebarSessionHovercardRow) {
   const hasCreatedAt = typeof row.createdAt === "number" && Number.isFinite(row.createdAt);
   const created = hasCreatedAt
     ? formatRelativeTimestamp(row.createdAt, { calendarUnits: true, fallback: "" })
@@ -110,18 +107,9 @@ function renderHeader(row: SidebarSessionHovercardRow | undefined) {
         : nothing}
     </span>
     ${age
-      ? html`<span
-          class="session-hovercard__created-age"
-          data-created-at=${String(row.createdAt)}
-          title=${created}
-          >${age}</span
-        >`
+      ? html`<span class="session-hovercard__created-age" title=${created}>${age}</span>`
       : nothing}
   </header>`;
-}
-
-function sessionWorkContext(row: SidebarSessionHovercardRow | undefined) {
-  return row?.workContext;
 }
 
 function renderSessionContext(
@@ -137,7 +125,7 @@ function renderSessionContext(
         >${creatorInitials}</span
       >`
     : nothing;
-  const context = sessionWorkContext(row);
+  const context = row?.workContext;
   const participantIds = new Set<string>();
   let excludedProjectedCount = 0;
   const participants = (row?.participants ?? []).filter((participant) => {
@@ -370,7 +358,7 @@ export function renderSessionHovercard(input: {
   const hasContext = Boolean(
     input.row?.channelAvatarUrl ||
     input.row?.createdActor ||
-    sessionWorkContext(input.row) ||
+    input.row?.workContext ||
     hasOtherParticipant,
   );
   const lastMessagePreview = input.progressCard

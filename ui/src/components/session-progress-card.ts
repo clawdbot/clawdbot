@@ -41,6 +41,7 @@ function progressStepMarker(status: ProgressCardStep["status"]) {
     case "pending":
       return icons.clock;
   }
+  return status satisfies never;
 }
 
 function renderMarkdown(markdown: string | undefined) {

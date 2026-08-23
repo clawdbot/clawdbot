@@ -31,12 +31,10 @@ const SKIP_DELAY_MS = 300;
 const ROW_CARD_BRIDGE_MS = 220;
 const CLOSE_DELAY_MS = 100;
 const EXIT_DURATION_MS = 100;
-const HOVER_SUPPRESSED_SCOPE = "[data-hover-suppressed]";
 let nextHovercardId = 0;
 
-function sessionHovercardSuppressed(target: HTMLElement, owner: ParentNode = target): boolean {
+function sessionHovercardMenuOpen(owner: ParentNode): boolean {
   return (
-    target.closest(HOVER_SUPPRESSED_SCOPE) !== null ||
     owner.querySelector(
       '[data-session-menu][aria-expanded="true"], [data-catalog-session-menu][aria-expanded="true"]',
     ) !== null
@@ -70,7 +68,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   private readonly activeTargetObserver = new MutationObserver(() => {
     if (
       this.activeTarget &&
-      (!this.contains(this.activeTarget) || sessionHovercardSuppressed(this.activeTarget, this))
+      (!this.contains(this.activeTarget) || sessionHovercardMenuOpen(this))
     ) {
       this.close();
       return;
@@ -189,7 +187,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       return;
     }
     const target = sessionProgressHoverTargetFromEvent(event);
-    if (!target || sessionHovercardSuppressed(target, this)) {
+    if (!target || sessionHovercardMenuOpen(this)) {
       return;
     }
     const delayed = this.delayed;
@@ -227,7 +225,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     const trigger = target?.matches(".sidebar-recent-session")
       ? focused?.closest<HTMLElement>("a.sidebar-recent-session__link")
       : focused;
-    if (!target || !trigger || sessionHovercardSuppressed(target, this)) {
+    if (!target || !trigger || sessionHovercardMenuOpen(this)) {
       return;
     }
     this.activate(target, trigger, 0, false);
@@ -306,7 +304,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     this.hovercard.markTrigger(trigger);
     this.activeTargetObserver.observe(this, {
       attributes: true,
-      attributeFilter: ["aria-expanded", "data-hover-suppressed"],
+      attributeFilter: ["aria-expanded"],
       childList: true,
       subtree: true,
     });
@@ -323,7 +321,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       generation !== this.loadGeneration ||
       this.activeSessionKey !== sessionKey ||
       !target ||
-      sessionHovercardSuppressed(target, this) ||
+      sessionHovercardMenuOpen(this) ||
       !this.hovercard.held
     ) {
       return;

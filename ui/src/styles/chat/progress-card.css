@@ -1,5 +1,6 @@
 .session-progress-card {
   --session-progress-neutral: var(--muted);
+  --session-progress-marker-size: 14px;
 
   box-sizing: border-box;
   min-width: 0;
@@ -16,7 +17,7 @@
 
 .session-hovercard__section {
   min-width: 0;
-  padding: 12px 16px;
+  padding: var(--space-3) var(--space-4);
   background: transparent;
 }
 
@@ -131,10 +132,6 @@
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.session-hovercard__context-label {
-  color: var(--muted);
 }
 
 .session-hovercard__context-value {
@@ -364,7 +361,7 @@
 
 .session-hovercard__branch-row + .session-hovercard__no-pr {
   margin-top: var(--space-2);
-  padding-left: calc(16px + var(--space-2));
+  padding-left: calc(var(--session-hovercard-context-icon-size) + var(--space-2));
 }
 
 .session-hovercard__excerpt {
@@ -478,12 +475,8 @@
 .session-progress-card__step-marker {
   display: inline-flex;
   box-sizing: border-box;
-  width: 14px;
-  height: 14px;
-  min-width: 14px;
-  min-height: 14px;
-  max-width: 14px;
-  max-height: 14px;
+  width: var(--session-progress-marker-size);
+  height: var(--session-progress-marker-size);
   align-items: center;
   justify-content: center;
   align-self: start;
@@ -492,19 +485,13 @@
   margin: 0;
   font-size: 0;
   line-height: 0;
-  transform: none;
 }
 
 .session-progress-card__current-marker svg,
 .session-progress-card__step-marker svg {
-  width: 14px;
-  height: 14px;
-  min-width: 14px;
-  min-height: 14px;
-  max-width: 14px;
-  max-height: 14px;
+  width: var(--session-progress-marker-size);
+  height: var(--session-progress-marker-size);
   margin: 0;
-  transform: none;
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
@@ -516,8 +503,8 @@
 
 .session-progress-card__current-marker > .session-run-spinner,
 .session-progress-card__step-marker > .session-run-spinner {
-  width: 14px;
-  height: 14px;
+  width: var(--session-progress-marker-size);
+  height: var(--session-progress-marker-size);
   border-color: color-mix(in srgb, var(--session-progress-neutral) 28%, transparent);
   border-top-color: var(--session-progress-neutral);
 }
@@ -598,7 +585,7 @@
 
 .session-progress-card__step {
   display: grid;
-  grid-template-columns: 14px minmax(0, 1fr);
+  grid-template-columns: var(--session-progress-marker-size) minmax(0, 1fr);
   align-items: start;
   gap: var(--space-2);
   color: var(--muted);
