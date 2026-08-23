@@ -383,7 +383,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       const session = getUnifiedTalkSession(params.sessionId);
       if (session.kind === "realtime-relay") {
         const connId = requireUnifiedTalkSessionConn(session, client?.connId);
-        sendTalkRealtimeRelayAudio({
+        await sendTalkRealtimeRelayAudio({
           relaySessionId: session.relaySessionId,
           connId,
           audioBase64: params.audioBase64,
@@ -428,12 +428,13 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         return;
       }
       const connId = requireUnifiedTalkSessionConn(session, client?.connId);
-      cancelTalkRealtimeRelayTurn({
+      const result = await cancelTalkRealtimeRelayTurn({
         relaySessionId: session.relaySessionId,
         connId,
         reason: normalizeOptionalString(params.reason) ?? "output-cancelled",
+        turnId: normalizeOptionalString(params.turnId),
       });
-      respondOk(respond);
+      respondOk(respond, { ok: true, ...result });
     } catch (err) {
       respondUnavailable(respond, err);
     }

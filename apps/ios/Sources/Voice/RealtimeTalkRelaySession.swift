@@ -166,6 +166,7 @@ final class RealtimeTalkRelaySession {
     private var outputContinuation: AsyncThrowingStream<Data, Error>.Continuation?
     private var outputIdleTask: Task<Void, Never>?
     private var outputSessionId = 0
+    private var activeOutputTurnId: String?
     private var pendingOutputChunks: [Data] = []
     private var pendingOutputDone = false
     private var pendingPlaybackMarks: [String] = []
@@ -333,19 +334,42 @@ final class RealtimeTalkRelaySession {
         let json = data.flatMap { String(data: $0, encoding: .utf8) }
         _ = try? await transport.request("talk.session.close", json, 8)
     }
+}
 
-    func cancelOutput(reason: String = "user") {
+extension RealtimeTalkRelaySession {
+    @discardableResult
+    func cancelOutput(reason: String = "user") -> Bool {
+        let turnId = self.activeOutputTurnId
         self.stopOutputPlayback()
-        guard let relaySessionId, let startupTransport else { return }
-        Task { [startupTransport] in
-            let payload: [String: Any] = [
-                "sessionId": relaySessionId,
-                "reason": reason,
-            ]
-            let data = try? JSONSerialization.data(withJSONObject: payload)
-            let json = data.flatMap { String(data: $0, encoding: .utf8) }
-            _ = try? await startupTransport.request("talk.session.cancelOutput", json, 8)
+        guard let relaySessionId, self.startupTransport != nil, let turnId else { return false }
+        Task { [weak self, lifecycleGeneration = self.lifecycleGeneration] in
+            guard let self else { return }
+            do {
+                let payload = ["sessionId": relaySessionId, "reason": reason, "turnId": turnId]
+                let result = try await self.requestJSON(
+                    method: "talk.session.cancelOutput",
+                    payload: payload,
+                    decodeAs: TalkSessionCancelOutputResult.self,
+                    timeoutSeconds: 8,
+                    lifecycleGeneration: lifecycleGeneration)
+                let validStatus = result.status == nil ||
+                    ["applied", "stale", "idle"].contains(result.status?.stringValue ?? "")
+                let validTurn = result.turnid == nil || self.nonEmpty(result.turnid) == turnId
+                guard result.ok, validStatus, validTurn else { throw URLError(.badServerResponse) }
+            } catch {
+                guard self.isCurrentLifecycleLocally(lifecycleGeneration) else { return }
+                let message = "Realtime output cancellation failed: \(error.localizedDescription)"
+                self.onIssue(.realtimeUnavailable(
+                    message: message,
+                    provider: self.options.provider,
+                    model: self.options.model,
+                    transport: "gateway-relay",
+                    phase: "output-cancel"))
+                self.onStatus(message)
+                self.close(sendClose: true)
+            }
         }
+        return true
     }
 
     private func createRelaySession() async throws -> TalkSessionCreateResult {
@@ -424,6 +448,8 @@ final class RealtimeTalkRelaySession {
             guard let base64 = payload["audioBase64"]?.stringValue,
                   let data = Data(base64Encoded: base64)
             else { return }
+            self.activeOutputTurnId =
+                self.nonEmpty(payload["talkEvent"]?.dictionaryValue?["turnId"]?.stringValue)
             self.recordOutputAudioChunk(byteCount: data.count)
             self.markOutputAudioStarted(byteCount: data.count, nowMs: ProcessInfo.processInfo.systemUptime * 1000)
             self.onSpeakingChanged(true)
@@ -437,9 +463,7 @@ final class RealtimeTalkRelaySession {
         case "audioDone":
             self.finishOutputPlaybackStream()
         case "clear":
-            let marks = self.takePendingPlaybackMarks()
-            self.stopOutputPlayback()
-            self.acknowledgePlaybackMarks(marks)
+            self.handleOutputClear(payload)
         case "mark":
             self.handlePlaybackMark(payload)
         case "transcript":
@@ -480,6 +504,14 @@ final class RealtimeTalkRelaySession {
         default:
             return
         }
+    }
+
+    private func handleOutputClear(_ payload: [String: AnyCodable]) {
+        let turnId = self.nonEmpty(payload["talkEvent"]?.dictionaryValue?["turnId"]?.stringValue)
+        guard turnId == nil || turnId == self.activeOutputTurnId else { return }
+        let marks = self.takePendingPlaybackMarks()
+        self.stopOutputPlayback()
+        self.acknowledgePlaybackMarks(marks)
     }
 
     private func waitForStartupResult(
@@ -895,6 +927,7 @@ final class RealtimeTalkRelaySession {
             self.outputIdleTask = nil
         }
         self.isOutputPlaying = false
+        self.activeOutputTurnId = nil
         self.outputStartedAtMs = nil
         self.outputPlaybackExpectedEndMs = 0
         self.outputEnvelope?.cancel()
@@ -952,6 +985,7 @@ final class RealtimeTalkRelaySession {
         self.pendingOutputDone = false
         _ = self.pcmPlayer.stop()
         self.isOutputPlaying = false
+        self.activeOutputTurnId = nil
         self.outputStartedAtMs = nil
         self.outputPlaybackExpectedEndMs = 0
         self.outputEnvelope?.cancel()

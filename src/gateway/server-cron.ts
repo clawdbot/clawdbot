@@ -37,6 +37,7 @@ import { runCronCommandJob } from "../cron/command-runner.js";
 import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
+import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { toPublicCronJob } from "../cron/public-job.js";
 import { resolveCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
@@ -256,21 +257,33 @@ async function finalizeCronCompletionAnnouncement(params: {
   }
 
   const { agentId, cfg } = params.resolveCronAgent(params.job.agentId);
+  const abortSignal = params.abortSignal ?? new AbortController().signal;
+  let deliveryMayHaveReachedRecipient = false;
   try {
-    await sendCronAnnouncePayloadStrict({
-      deps: params.deps,
-      cfg,
-      agentId,
+    await retryTransientDirectCronDelivery({
       jobId: params.job.id,
-      target: {
-        channel: plan.channel,
-        to: plan.to,
-        threadId: plan.threadId,
-        accountId: plan.accountId,
-        sessionKey: resolveCronDeliverySessionKey(params.job),
-      },
-      payload: { text: params.text },
-      abortSignal: params.abortSignal ?? new AbortController().signal,
+      label: params.label,
+      signal: abortSignal,
+      shouldRetryError: () => !deliveryMayHaveReachedRecipient,
+      run: () =>
+        sendCronAnnouncePayloadStrict({
+          deps: params.deps,
+          cfg,
+          agentId,
+          jobId: params.job.id,
+          target: {
+            channel: plan.channel,
+            to: plan.to,
+            threadId: plan.threadId,
+            accountId: plan.accountId,
+            sessionKey: resolveCronDeliverySessionKey(params.job),
+          },
+          payload: { text: params.text },
+          abortSignal,
+          onDeliveryAttempt: (reachedRecipient) => {
+            deliveryMayHaveReachedRecipient ||= reachedRecipient;
+          },
+        }),
     });
     return {
       deliveryAttempted: true,
