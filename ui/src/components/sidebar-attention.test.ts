@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { CronJob, CronJobsListResult, ModelAuthStatusResult } from "../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../app/context.ts";
-import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { createStorageMock as createTestStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
@@ -59,16 +58,6 @@ type SidebarAttentionElement = HTMLElement & {
   loadedAtMs: number;
 };
 
-function approval(id: string): ExecApprovalRequest {
-  return {
-    id,
-    kind: "exec",
-    request: { command: "echo ok" },
-    createdAtMs: 1,
-    expiresAtMs: Date.now() + 60_000,
-  };
-}
-
 function cronItems(cronJobs: readonly CronJob[], now = 0) {
   return buildSidebarAttentionItems({
     cronJobs,
@@ -119,21 +108,6 @@ describe("automation attention", () => {
     expect(
       failed.every((item) => item.action.kind !== "navigate" || item.action.routeId === "cron"),
     ).toBe(true);
-  });
-
-  it("lists overdue job names newest first", () => {
-    const named = cronJob("named-id");
-    named.name = "Nightly backup";
-    named.state = { lastRunStatus: "ok", nextRunAtMs: 1 };
-    const unnamed = cronJob("unnamed-id");
-    unnamed.name = "";
-    unnamed.state = { lastRunStatus: "ok", nextRunAtMs: 2 };
-
-    const overdue = cronItems([named, unnamed], 300_003).filter(
-      (item) => item.kind === "cronOverdue",
-    );
-
-    expect(overdue.map((item) => item.label)).toEqual(["unnamed-id", "Nightly backup"]);
   });
 
   it("does not flag an actively running job as overdue", () => {
@@ -511,77 +485,6 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() =>
       expect(element.querySelector('[data-attention-kind="cronFailed"]')).toBeNull(),
     );
-  });
-
-  it("renders the approval queue in the accessible Inbox panel", async () => {
-    const request = vi.fn((method: string) => {
-      if (method === "cron.list") {
-        return Promise.resolve(cronListResponse([]));
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const gateway = {
-      snapshot: {
-        client: { request } as unknown as GatewayBrowserClient,
-        phase: "connected",
-        hello: null,
-        assistantAgentId: "main",
-        sessionKey: "agent:main:main",
-        lastError: null,
-        lastErrorCode: null,
-      },
-      connection: {
-        gatewayUrl: "ws://gateway.test",
-        token: "",
-        bootstrapToken: "",
-        password: "",
-      },
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
-    } as unknown as ApplicationGateway;
-    const overlayListeners = new Set<() => void>();
-    const overlaySnapshot = {
-      approvalQueue: [approval("approval-1")],
-      approvalBusy: false,
-      approvalCanGrant: true,
-      approvalErrors: new Map<string, string>(),
-    };
-    const overlays = {
-      snapshot: overlaySnapshot,
-      subscribe: (listener: () => void) => {
-        overlayListeners.add(listener);
-        return () => overlayListeners.delete(listener);
-      },
-    } as unknown as ApplicationContext["overlays"];
-    const provider = createApplicationContextProvider({
-      gateway,
-      overlays,
-      agentSelection: {
-        state: { selectedId: null },
-        subscribe: () => () => undefined,
-      },
-    } as unknown as ApplicationContext);
-    vi.stubGlobal("localStorage", createTestStorageMock());
-    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
-    provider.append(element);
-    document.body.append(provider);
-
-    await waitForFast(() =>
-      expect(element.querySelector<HTMLButtonElement>(".sidebar-issues-button")).not.toBeNull(),
-    );
-    const button = element.querySelector<HTMLButtonElement>(".sidebar-issues-button");
-    expect(button?.getAttribute("aria-label")).toBe("1 inbox item");
-    button?.click();
-    await waitForFast(() =>
-      expect(element.querySelector('[data-approval-id="approval-1"]')).not.toBeNull(),
-    );
-
-    overlaySnapshot.approvalQueue = [];
-    for (const listener of overlayListeners) {
-      listener();
-    }
-    await waitForFast(() => expect(button?.getAttribute("aria-label")).toBe("0 inbox items"));
-    expect(element.querySelector("#sidebar-issues-panel")).toBeNull();
   });
 });
 

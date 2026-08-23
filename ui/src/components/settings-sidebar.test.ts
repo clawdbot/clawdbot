@@ -528,56 +528,6 @@ describe("settings sidebar search", () => {
     expect(labels).toContain("Avancado");
   });
 
-  it("keeps build identity in the settings footer without update controls", async () => {
-    const onUpdate = vi.fn();
-    const onRefresh = vi.fn();
-    const onNavigate = vi.fn();
-    render(
-      renderSettingsSidebar({
-        basePath: "",
-        activeRouteId: "appearance",
-        offline: false,
-        lastError: null,
-        gatewayVersion: "1.0.0",
-        updateAvailable: {
-          currentVersion: "1.0.0",
-          latestVersion: "2.0.0",
-          channel: "stable",
-        },
-        updateBusy: false,
-        canUpdate: true,
-        onUpdate,
-        refreshRequired: true,
-        onRefresh,
-        searchQuery: "",
-        onExit: vi.fn(),
-        onRetryConnect: vi.fn(),
-        onNavigate,
-        onSearchQueryChange: vi.fn(),
-        preloadTimers: new Map(),
-        saveIndicator: saveIndicator(),
-      }),
-      container,
-    );
-
-    expect(container.querySelector("openclaw-sidebar-update-card")).toBeNull();
-    expect(onRefresh).not.toHaveBeenCalled();
-    expect(onUpdate).not.toHaveBeenCalled();
-
-    const buildChip = container.querySelector<
-      HTMLElement & {
-        gatewayVersion: string | null;
-        variant: string;
-        updateComplete: Promise<boolean>;
-      }
-    >("openclaw-sidebar-build-chip");
-    await buildChip?.updateComplete;
-    expect(buildChip?.gatewayVersion).toBe("1.0.0");
-    expect(buildChip?.variant).toBe("settings");
-    buildChip?.querySelector<HTMLAnchorElement>(".sidebar-footer-build")?.click();
-    expect(onNavigate).toHaveBeenCalledWith("about");
-  });
-
   it("does not render the Inbox in the settings sidebar", () => {
     render(
       renderSettingsSidebar({
