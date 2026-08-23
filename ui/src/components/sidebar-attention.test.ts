@@ -533,6 +533,24 @@ describe("update attention", () => {
     expect(element.hasUpdateSurface()).toBe(true);
   });
 
+  it("keeps restart reconciliation visible after update metadata clears", () => {
+    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    element.context = {
+      gateway: { snapshot: { phase: "connected" } },
+      overlays: {
+        snapshot: {
+          updateAvailable: null,
+          updateSchedule: null,
+          updateRunning: false,
+          updateReconciliationPending: true,
+          updateStatusBanner: null,
+        },
+      },
+    } as unknown as ApplicationContext;
+
+    expect(element.hasUpdateSurface()).toBe(true);
+  });
+
   it("dismisses one target for one Gateway boot and resurfaces on either change", () => {
     vi.stubGlobal("localStorage", createTestStorageMock());
     const overlaySnapshot = {

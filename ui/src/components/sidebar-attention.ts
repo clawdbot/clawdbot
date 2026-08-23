@@ -370,6 +370,9 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       return false;
     }
     const campaign = snapshot.updateSchedule?.campaign;
+    if (snapshot.updateReconciliationPending) {
+      return true;
+    }
     const canHydrateCampaign = canCallGatewayMethod(
       this.context?.gateway.snapshot,
       "update.status",
