@@ -6,6 +6,7 @@ import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
   expectDefined,
+  expectRequestCountStable,
   installMockGateway,
   pauseVirtualClock,
   requireRecord,
@@ -205,13 +206,12 @@ suite.define(() => {
         },
         messageId: "terminal-sidebar-reply",
         messageSeq: 2,
+        session: expectDefined(completed.sessions[0], "completed sidebar session fixture"),
         sessionKey: key,
         status: "done",
       });
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
-        .toBeGreaterThan(listCount);
       await row.getByText("Repair landed cleanly").waitFor();
+      await expectRequestCountStable(gateway, "sessions.list", listCount);
       expect(await row.textContent()).not.toContain("[[");
       if (captureUiProofEnabled) {
         await page.screenshot({

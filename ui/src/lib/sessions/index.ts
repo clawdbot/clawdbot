@@ -415,22 +415,33 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       resultAgentId: state.agentId,
       archivedFilter: roster.lastOptions().archivedFilter,
     });
-    if (eventInfo?.archived !== null) {
+    const payload = event.payload as {
+      agentId?: unknown;
+      reason?: unknown;
+      session?: unknown;
+    } | null;
+    const hasActiveRun = reconciled.hasActiveRun ?? eventInfo?.hasActiveRun;
+    const status = reconciled.status ?? eventInfo?.status;
+    const runEnded =
+      hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
+    const reconciledTerminalSession =
+      event.event === "session.message" &&
+      runEnded &&
+      reconciled.applied &&
+      typeof payload?.session === "object" &&
+      payload.session !== null;
+    if (eventInfo?.archived !== null || reconciledTerminalSession) {
       const result = decorateRows(reconciled.result);
       if (result !== state.result) {
         publishReconciledState({ ...state, result });
       }
     }
-    const eventReason = (event.payload as { reason?: unknown } | null)?.reason;
-    const payloadAgentId = (event.payload as { agentId?: unknown } | null)?.agentId;
+    const eventReason = payload?.reason;
+    const payloadAgentId = payload?.agentId;
     if (eventReason === "groups") {
       groups.invalidate();
       void groups.load();
     }
-    const hasActiveRun = reconciled.hasActiveRun ?? eventInfo?.hasActiveRun;
-    const status = reconciled.status ?? eventInfo?.status;
-    const runEnded =
-      hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
     if (event.event === "session.message" && !runEnded) {
       return;
     }
@@ -463,12 +474,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         publish({ ...state, deletedSessions: remainingDeletedSessions });
       }
     }
-    // Gateway lists own filtering/order; authoritative events invalidate every matching roster.
+    // Terminal snapshots own the primary row; filtered rosters still need server-side evaluation.
     roster.scheduleEvent({
       agentId:
         eventInfo?.agentId ??
         parseAgentSessionKey(eventInfo?.key)?.agentId ??
         (typeof payloadAgentId === "string" ? payloadAgentId : undefined),
+      refreshPrimary: !reconciledTerminalSession,
     });
   });
 

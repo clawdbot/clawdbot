@@ -245,12 +245,27 @@ describe("event-driven session list refresh", () => {
       emitEvent({
         type: "event",
         event: "session.message",
-        payload: { sessionKey: key, updatedAt: 1, status: "done" },
+        payload: {
+          sessionKey: key,
+          hasActiveRun: false,
+          status: "done",
+          session: {
+            key,
+            kind: "direct",
+            updatedAt: 2,
+            hasActiveRun: false,
+            status: "done",
+          },
+        },
       });
       await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
 
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(calls).toEqual({ canonical: 2, main: 2, research: 1 });
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(request).toHaveBeenCalledWith(
+        "sessions.list",
+        expect.objectContaining({ agentId: "main", includeUnknown: false }),
+      );
+      expect(calls).toEqual({ canonical: 1, main: 2, research: 1 });
       expect(sessions.state.result?.sessions[0]).toMatchObject({
         key,
         hasActiveRun: false,
