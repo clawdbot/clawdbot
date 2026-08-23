@@ -120,18 +120,46 @@ describe("resolveMcpTransportConfig", () => {
   });
 
   it("warns once per blocked stdio env key and server", () => {
-    for (let index = 0; index < 3; index += 1) {
+    const repeatedResolutions = Array.from({ length: 3 }, () =>
       resolveMcpTransportConfig("repeat-server", {
         command: "node",
         env: {
           PYTHONPATH: "/tmp/workspace",
         },
-      });
-    }
+      }),
+    );
+    const sameKeyDifferentServer = resolveMcpTransportConfig("other-server", {
+      command: "node",
+      env: {
+        PYTHONPATH: "/tmp/other-workspace",
+      },
+    });
+    const sameServerDifferentKey = resolveMcpTransportConfig("repeat-server", {
+      command: "node",
+      env: {
+        NODE_OPTIONS: "--require=./evil.js",
+      },
+    });
 
-    expect(logWarn).toHaveBeenCalledTimes(1);
-    expect(logWarn).toHaveBeenCalledWith(
+    for (const resolved of [
+      ...repeatedResolutions,
+      sameKeyDifferentServer,
+      sameServerDifferentKey,
+    ]) {
+      expect(resolved).toEqual(expect.objectContaining({ env: {} }));
+    }
+    expect(logWarn).toHaveBeenCalledTimes(3);
+    expect(logWarn).toHaveBeenNthCalledWith(
+      1,
       'bundle-mcp: server "repeat-server": env "PYTHONPATH" is blocked for stdio startup safety and was ignored.',
+    );
+    expect(logWarn).toHaveBeenNthCalledWith(
+      2,
+      'bundle-mcp: server "other-server": env "PYTHONPATH" is blocked for stdio startup safety and was ignored.',
+    );
+    expect(logWarn).toHaveBeenNthCalledWith(
+      3,
+      'bundle-mcp: server "repeat-server": env "NODE_OPTIONS" is blocked for stdio startup safety and was ignored.',
     );
   });
 
