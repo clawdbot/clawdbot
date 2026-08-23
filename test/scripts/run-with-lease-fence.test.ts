@@ -43,13 +43,13 @@ describe("run-with-lease-fence", () => {
       fs.writeFileSync(lostMarker, "lost\n");
 
       try {
-        await expect(waitForChildClose(child, 12_000)).resolves.toEqual({
+        await expect(waitForChildClose(child)).resolves.toEqual({
           code: 97,
           signal: null,
         });
-        const ticksAfterFence = fs.readFileSync(ticksFile, "utf8");
-        await new Promise((resolve) => setTimeout(resolve, 1_200));
-        expect(fs.readFileSync(ticksFile, "utf8")).toBe(ticksAfterFence);
+        expect(() => process.kill(-commandPid, 0)).toThrow(
+          expect.objectContaining({ code: "ESRCH" }),
+        );
         expect(stderr).toContain("::error::Telegram QA lease lost mid-run; fencing proof");
       } finally {
         if (child.exitCode === null) {
