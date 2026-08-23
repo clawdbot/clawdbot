@@ -1,4 +1,4 @@
-// Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
+// Imported by dispatch-from-config.lifecycle-and-bindings.test.ts as an isolated Vitest module graph.
 import { AsyncResource } from "node:async_hooks";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -501,6 +501,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("records the routing channel id ahead of surface and provider", async () => {
     setNoAbort();
+    installThreadingTestPlugin({ id: "clickclack" });
     // SDK plugin channels may set only OriginatingChannel, and it is the id
     // outbound rows record; it must win over Surface/Provider variants.
     await dispatchReplyFromConfig({

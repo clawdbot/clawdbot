@@ -446,21 +446,26 @@ export const describe0BeforeEach0 = () => {
         ),
     },
   };
-  const passiveThreadingTestPlugins = ["slack", "telegram", "feishu", "mattermost", "imessage"].map(
-    (id) => {
-      const plugin = createChannelTestPluginBase({ id });
-      return {
-        pluginId: id,
-        source: "test" as const,
-        plugin: {
-          ...plugin,
-          threading: {
-            resolveReplyToMode: () => "all" as const,
-          },
+  const passiveThreadingTestPlugins = [
+    "slack",
+    "telegram",
+    "feishu",
+    "mattermost",
+    "imessage",
+    "whatsapp",
+  ].map((id) => {
+    const plugin = createChannelTestPluginBase({ id });
+    return {
+      pluginId: id,
+      source: "test" as const,
+      plugin: {
+        ...plugin,
+        threading: {
+          resolveReplyToMode: () => "all" as const,
         },
-      };
-    },
-  );
+      },
+    };
+  });
   setActivePluginRegistry(
     createTestRegistry([
       {
