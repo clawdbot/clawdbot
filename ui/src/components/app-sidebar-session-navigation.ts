@@ -642,12 +642,9 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     const lineageRouteAgentId = normalizeAgentId(
       parseAgentSessionKey(navigationState.routeSessionKey)?.agentId ?? "",
     );
-    const lineageSelected = Boolean(
-      lineageRoot && areUiSessionKeysEquivalent(lineageRoot.key, navigationState.routeSessionKey),
-    );
     if (
       lineageRoot &&
-      (lineageSelected || sessionMatchesArchivedFilter(lineageRoot, this.sessionsStatusFilter)) &&
+      sessionMatchesArchivedFilter(lineageRoot, this.sessionsStatusFilter) &&
       (lineageAgentId === selected || lineageRouteAgentId === selected) &&
       !adopted.has(lineageRoot.key) &&
       !areUiSessionKeysEquivalent(lineageRoot.key, mainSessionKey) &&
@@ -690,6 +687,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       roots: orderedRootRows.filter((row) => !adopted.has(row.key)),
       agentRows: rows,
       childRowsByParent: this.sessionData.childSessionRowsByParent,
+      archivedFilter: this.sessionsStatusFilter,
       loadingChildKeys: this.sessionData.loadingChildSessionKeys,
       knownSessionAttention: this.attention.knownSessionAttention(),
       toSidebarSession: navigationState.toSidebarSession,

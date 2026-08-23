@@ -295,8 +295,7 @@ export function filterVisibleSessionRows(
   return rows.filter((row) => {
     if (
       row.key === options.currentSessionKey &&
-      ((options.archivedFilter ?? "active") === "active" ||
-        sessionMatchesArchivedFilter(row, options.archivedFilter))
+      sessionMatchesArchivedFilter(row, options.archivedFilter)
     ) {
       return true;
     }
@@ -366,14 +365,17 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
     showSystem: input.showSystem,
     archivedFilter: input.archivedFilter,
   }).toSorted(input.compareSessions ?? compareSessionRowsByUpdatedAt);
-  // The sidebar is the session list, not a recent-session preview. Keep every
-  // active row in its sorted slot so selecting a session never reshuffles or
-  // hides another one behind a separate route.
+  // Keep every active row in its sorted slot.
   let visibleSessions = sortedSessions;
   let activeRow = visibleSessions.find(matchesCurrentSession);
-  if (!activeRow && activeSession && input.archivedFilter !== "archived") {
-    // Deep-linked and archived sessions still need a visible selected row.
-    activeRow = sortedSessions.find(matchesCurrentSession) ?? activeSession;
+  if (
+    !activeRow &&
+    activeSession &&
+    input.archivedFilter !== "archived" &&
+    sessionMatchesArchivedFilter(activeSession, input.archivedFilter)
+  ) {
+    // Deep-linked active sessions still need a visible selected row.
+    activeRow = activeSession;
     visibleSessions = [activeRow, ...visibleSessions.filter((row) => row !== activeRow)];
   }
   return {

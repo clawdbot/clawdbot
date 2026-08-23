@@ -1,4 +1,5 @@
 import type { GatewaySessionRow } from "../api/types.ts";
+import { sessionMatchesArchivedFilter, type SessionArchivedFilter } from "../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
   resolveUiSessionNavigationParentKey,
@@ -22,6 +23,7 @@ export function projectSessionTree(params: {
   roots: readonly GatewaySessionRow[];
   agentRows: readonly GatewaySessionRow[];
   childRowsByParent: Readonly<Record<string, readonly GatewaySessionRow[]>>;
+  archivedFilter: SessionArchivedFilter;
   loadingChildKeys: ReadonlySet<string>;
   knownSessionAttention: readonly SidebarKnownSessionAttention[];
   toSidebarSession: (row: GatewaySessionRow, isChild?: boolean) => SidebarRecentSession;
@@ -30,6 +32,7 @@ export function projectSessionTree(params: {
     roots,
     agentRows,
     childRowsByParent,
+    archivedFilter,
     loadingChildKeys,
     knownSessionAttention,
     toSidebarSession,
@@ -87,7 +90,9 @@ export function projectSessionTree(params: {
     nextAncestors.add(row.key);
     const children = childSessionKeys.flatMap((key) => {
       const child = rowsByKey.get(key);
-      return child && !nextAncestors.has(key) ? [build(child, true, nextAncestors)] : [];
+      return child && sessionMatchesArchivedFilter(child, archivedFilter) && !nextAncestors.has(key)
+        ? [build(child, true, nextAncestors)]
+        : [];
     });
     const projected = toSidebarSession(row, isChild);
     const projectedRunningChildCount = children.reduce(

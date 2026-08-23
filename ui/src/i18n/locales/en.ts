@@ -5071,7 +5071,7 @@ export const en: TranslationMap = {
       preparingContext: "Preparing this turn…",
       startingModel: "Waiting for a response…",
     },
-    archivedSessionDisabled: "This session is archived. Unarchive it to continue the conversation.",
+    archivedSessionDisabled: "This session has been archived.",
     sessionRoute: {
       chooseTitle: "Choose a session",
       multipleMatches: "More than one session matches {shortId}.",

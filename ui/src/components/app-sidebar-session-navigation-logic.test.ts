@@ -336,6 +336,7 @@ describe("sidebar navigation lineage ownership", () => {
       roots: [navigationParent, controlParent],
       agentRows: [navigationParent, controlParent, child],
       childRowsByParent: {},
+      archivedFilter: "active",
       loadingChildKeys: new Set(),
       knownSessionAttention: [],
       toSidebarSession: (row, isChild) =>
@@ -405,6 +406,7 @@ describe("sidebar navigation lineage ownership", () => {
         roots: [navigationParent],
         agentRows: [navigationParent, childRow],
         childRowsByParent: {},
+        archivedFilter: "active",
         loadingChildKeys: new Set(),
         knownSessionAttention: [],
         toSidebarSession: (row, isChild) => ({
@@ -441,6 +443,7 @@ describe("sidebar navigation lineage ownership", () => {
       roots: [controlParent],
       agentRows: [controlParent, childWithBlankParent],
       childRowsByParent: {},
+      archivedFilter: "active",
       loadingChildKeys: new Set(),
       knownSessionAttention: [],
       toSidebarSession: (row, isChild) =>

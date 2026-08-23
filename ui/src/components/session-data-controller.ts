@@ -378,7 +378,9 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.childSessionGeneration += 1;
     this.childSessionRowsByParent = options.preserveActiveLineage
       ? preserveActiveSessionLineageRows(
-          this.activeSessionLineageRouteKey,
+          this.activeSessionLineageSelectedRow?.archived === true
+            ? null
+            : this.activeSessionLineageRouteKey,
           this.childSessionRowsByParent,
         )
       : {};

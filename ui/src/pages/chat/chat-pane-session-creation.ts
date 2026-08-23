@@ -48,7 +48,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       return {
         kind: "composer-replacement" as const,
         text: t("chat.archivedSessionDisabled"),
-        actionLabel: t("common.unarchive"),
+        actionLabel: t("common.undo"),
         disabledReason: !params.selectedSessionId
           ? "Session lifecycle action requires a durable session identity."
           : params.unarchiveAccess.allowed

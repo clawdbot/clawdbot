@@ -15,8 +15,8 @@ describe("archived session composer banner", () => {
       canSend: false,
       disabledBanner: {
         kind: "composer-replacement",
-        text: "This session is archived. Unarchive it to continue the conversation.",
-        actionLabel: "Unarchive",
+        text: "This session has been archived.",
+        actionLabel: "Undo",
         disabledReason: reason,
         onAction,
       },

@@ -516,7 +516,7 @@ describe("AppSidebar agent chip", () => {
     );
   });
 
-  it("keeps the selected archived child when its archived parent is filtered out", async () => {
+  it("hides a selected archived child while keeping its active parent", async () => {
     const request = vi.fn(async (_method: string, params: { key: string }) => ({
       session:
         params.key === "agent:worker:child"
@@ -531,8 +531,8 @@ describe("AppSidebar agent chip", () => {
           : {
               key: "agent:main:parent",
               kind: "direct" as const,
-              label: "Archived parent",
-              archived: true,
+              label: "Active parent",
+              archived: false,
               updatedAt: 1,
               childSessions: ["agent:worker:child"],
             },
@@ -547,19 +547,9 @@ describe("AppSidebar agent chip", () => {
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     await waitForFast(() =>
-      expect(sidebar.querySelector('[data-session-key="agent:worker:child"]')).not.toBeNull(),
+      expect(sidebar.querySelector('[data-session-key="agent:main:parent"]')).not.toBeNull(),
     );
-    expect(sidebar.querySelector('[data-session-key="agent:main:parent"]')).toBeNull();
-    expect(
-      sidebar.querySelector(
-        '[data-session-key="agent:worker:child"] .sidebar-session__archive-glyph',
-      ),
-    ).not.toBeNull();
-    expect(
-      sidebar
-        .querySelector('[data-session-key="agent:worker:child"]')
-        ?.classList.contains("sidebar-recent-session--active"),
-    ).toBe(true);
+    expect(sidebar.querySelector('[data-session-key="agent:worker:child"]')).toBeNull();
   });
 
   it("retries a failed child load after collapsing and reopening the parent", async () => {

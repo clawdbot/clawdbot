@@ -285,7 +285,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps the selected session through archive refreshes and restores the composer", async () => {
+  it("keeps the selected chat open, removes its archived row, and restores the composer", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -453,6 +453,7 @@ suite.define(() => {
       await gateway.setMethodResponse("sessions.describe", {
         session: { ...selectedWithoutDerivedTitle, archived: true },
       });
+      await captureUiProof(page, "archived-session-before.png");
       await selectedRow.hover();
       await selectedRow.getByRole("button", { name: "Open session menu" }).click();
       await activateSelfRemovingControl(
@@ -472,11 +473,11 @@ suite.define(() => {
         reason: "update",
         sessionKey: selected.key,
       });
-      await expect.poll(() => selectedRow.textContent()).toContain("Archive refresh 2");
 
-      await assertSelectedRoute();
-      await selectedRow.locator(".sidebar-session__archive-glyph").waitFor({ state: "visible" });
-      await expect.poll(() => selectedRow.textContent()).toContain("Archive refresh 2");
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath(selected.key));
+      await selectedRow.waitFor({ state: "detached", timeout: 10_000 });
       expect(
         await page.evaluate(
           () => (window as Window & { archiveTitleHistory?: string[] }).archiveTitleHistory ?? [],
@@ -522,16 +523,20 @@ suite.define(() => {
       ).not.toContain("New session — OpenClaw");
       const archivedNotice = activePane.locator(".agent-chat__disabled-banner");
       await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
-      await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
+      await expect
+        .poll(() => archivedNotice.textContent())
+        .toContain("This session has been archived.");
       await expect.poll(() => activePane.locator(".agent-chat__input").count()).toBe(0);
+      await captureUiProof(page, "archived-session-hidden-with-undo.png");
 
       await archiveToast.getByRole("button", { name: "Dismiss" }).click();
       await archiveToast.waitFor({ state: "detached" });
-      await activateSelfRemovingControl(archivedNotice.getByRole("button", { name: "Unarchive" }));
+      await activateSelfRemovingControl(archivedNotice.getByRole("button", { name: "Undo" }));
       await waitForPatch(
         gateway,
         (params) => params.key === selected.key && params.archived === false,
       );
+      await archivedNotice.waitFor({ state: "detached", timeout: 10_000 });
       await gateway.emitGatewayEvent("sessions.changed", {
         ...selected,
         archived: false,
@@ -540,7 +545,6 @@ suite.define(() => {
       });
 
       await assertSelectedRoute();
-      await archivedNotice.waitFor({ state: "detached", timeout: 10_000 });
       await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
       await expect
         .poll(() =>
@@ -652,8 +656,10 @@ suite.define(() => {
         .poll(() => new URL(page.url()).pathname)
         .toBe(controlUiSessionPath(archived.key));
       await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
-      await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
-      await archivedRow.locator(".sidebar-session__archive-glyph").waitFor({ state: "visible" });
+      await expect
+        .poll(() => archivedNotice.textContent())
+        .toContain("This session has been archived.");
+      await expect.poll(() => archivedRow.count()).toBe(0);
     } finally {
       await context.close();
     }
@@ -691,22 +697,20 @@ suite.define(() => {
       const selectedRow = page.locator(
         `.sidebar-recent-session[data-session-key="${archived.key}"]`,
       );
-      await selectedRow.waitFor({ state: "visible", timeout: 10_000 });
-      await expect
-        .poll(() => selectedRow.getAttribute("class"))
-        .toContain("sidebar-recent-session--active");
-      await selectedRow.locator(".sidebar-session__archive-glyph").waitFor({ state: "visible" });
-      await expect.poll(() => page.getByText("Archived planning", { exact: true }).count()).toBe(2);
+      await expect.poll(() => selectedRow.count()).toBe(0);
+      await expect.poll(() => page.getByText("Archived planning", { exact: true }).count()).toBe(1);
 
       const archivedNotice = activePane.locator(".agent-chat__disabled-banner");
       await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
-      await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
+      await expect
+        .poll(() => archivedNotice.textContent())
+        .toContain("This session has been archived.");
       await expect.poll(() => activePane.locator(".agent-chat__input").count()).toBe(0);
 
       await gateway.setMethodResponse("sessions.describe", {
         session: { ...archived, archived: false },
       });
-      await activateSelfRemovingControl(archivedNotice.getByRole("button", { name: "Unarchive" }));
+      await activateSelfRemovingControl(archivedNotice.getByRole("button", { name: "Undo" }));
       await waitForPatch(
         gateway,
         (params) => params.key === archived.key && params.archived === false,
@@ -719,6 +723,10 @@ suite.define(() => {
       });
 
       await archivedNotice.waitFor({ state: "detached", timeout: 10_000 });
+      await selectedRow.waitFor({ state: "visible", timeout: 10_000 });
+      await expect
+        .poll(() => selectedRow.getAttribute("class"))
+        .toContain("sidebar-recent-session--active");
       await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
       await expect
         .poll(() =>
