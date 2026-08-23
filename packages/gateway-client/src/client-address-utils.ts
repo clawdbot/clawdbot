@@ -21,8 +21,30 @@ const SENSITIVE_KEY_VALUE_PAIR_RE = /(^|[?&\s;,])([^=&\s;,?#]+)=([^&#\s"'<>)]*)/
 // host sinks such as node-host stderr, so the producer boundary has to redact
 // them too. The key may be quoted or bare; the value is matched as a quoted
 // string or an unquoted run, and only the value is replaced.
+//
+// A quoted key may also contain JSON escapes: `"X-Amz-\u0053ignature"` is a
+// valid spelling of the same property name, so the key alternative accepts
+// escape sequences and the name is decoded before classification. Matching the
+// raw text alone would let an escaped spelling walk past the classifier.
 const SENSITIVE_COLON_PAIR_RE =
-  /("?)([A-Za-z0-9_.\-[\]]+)\1(\s*:\s*)("(?:[^"\\]|\\.)*"|[^,;}\]\s]*)/g;
+  /"((?:[^"\\]|\\.)*)"(\s*:\s*)("(?:[^"\\]|\\.)*"|[^,;}\]\s]*)|([A-Za-z0-9_.\-[\]]+)(\s*:\s*)("(?:[^"\\]|\\.)*"|[^,;}\]\s]*)/g;
+
+/**
+ * Decodes JSON string escapes in a property name so the classifier sees the
+ * real name. Falls back to the raw text when the escape sequence is not valid
+ * JSON, which keeps malformed peer input from throwing at a logging boundary.
+ */
+function decodeJsonPropertyName(rawKey: string): string {
+  if (!rawKey.includes("\\")) {
+    return rawKey;
+  }
+  try {
+    const decoded: unknown = JSON.parse(`"${rawKey}"`);
+    return typeof decoded === "string" ? decoded : rawKey;
+  } catch {
+    return rawKey;
+  }
+}
 
 /**
  * Masks the values of credential-named `key=value` pairs anywhere in diagnostic
@@ -38,13 +60,29 @@ export function redactSensitiveKeyValuePairs(value: string): string {
   );
   return formRedacted.replace(
     SENSITIVE_COLON_PAIR_RE,
-    (match, quote: string, key: string, separator: string, rawValue: string) => {
-      if (!isSensitiveUrlQueryParamNameForDiagnostics(key)) {
+    (
+      match,
+      quotedKey: string | undefined,
+      quotedSeparator: string | undefined,
+      quotedValue: string | undefined,
+      bareKey: string | undefined,
+      bareSeparator: string | undefined,
+      bareValue: string | undefined,
+    ) => {
+      const isQuoted = quotedKey !== undefined;
+      const rawKey = isQuoted ? quotedKey : bareKey;
+      const separator = (isQuoted ? quotedSeparator : bareSeparator) ?? "";
+      const rawValue = (isQuoted ? quotedValue : bareValue) ?? "";
+      if (rawKey === undefined) {
         return match;
       }
-      // Keep the value's original quoting so a redacted JSON body still parses.
+      if (!isSensitiveUrlQueryParamNameForDiagnostics(decodeJsonPropertyName(rawKey))) {
+        return match;
+      }
+      // Keep the value's original quoting so a redacted JSON body still parses,
+      // and keep the key spelled exactly as the peer sent it.
       const masked = rawValue.startsWith('"') ? '"***"' : "***";
-      return `${quote}${key}${quote}${separator}${masked}`;
+      return isQuoted ? `"${rawKey}"${separator}${masked}` : `${rawKey}${separator}${masked}`;
     },
   );
 }

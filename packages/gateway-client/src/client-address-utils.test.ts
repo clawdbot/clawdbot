@@ -134,3 +134,40 @@ describe("structured rejected-upgrade body redaction", () => {
     expect(redactSensitiveKeyValuePairs(message)).toBe(message);
   });
 });
+
+describe("escaped JSON credential keys", () => {
+  // Regression: `"X-Amz-\u0053ignature"` is a valid JSON spelling of the same
+  // property name. Matching only the raw key text let the escaped spelling walk
+  // past the classifier and keep its value in host-facing diagnostics.
+  it("redacts a credential key written with JSON unicode escapes", () => {
+    // Escaped spelling of "X-Amz-Signature"; JSON.parse sees the same name.
+    const body =
+      '{"X-Amz-\\u0053ignature":"ESCAPEDSIGNATUREVALUE","X-Amz-Date":"20260813T000000Z"}';
+    expect(Object.keys(JSON.parse(body))).toContain("X-Amz-Signature");
+
+    const redacted = redactSensitiveKeyValuePairs(body);
+
+    expect(redacted).not.toContain("ESCAPEDSIGNATUREVALUE");
+    expect(redacted).toContain("20260813T000000Z");
+    expect(JSON.parse(redacted)).toEqual({
+      "X-Amz-Signature": "***",
+      "X-Amz-Date": "20260813T000000Z",
+    });
+  });
+
+  it("redacts a credential key written with an escaped solidus", () => {
+    const body = '{"X-Amz-Credential\\/id":"ESCAPEDSOLIDUSCREDENTIAL"}';
+
+    const redacted = redactSensitiveKeyValuePairs(body);
+
+    expect(redacted).not.toContain("ESCAPEDSOLIDUSCREDENTIAL");
+    expect(JSON.parse(redacted)).toEqual({ "X-Amz-Credential/id": "***" });
+  });
+
+  it("leaves a malformed escape sequence intact instead of throwing", () => {
+    // `\uZZZZ` is not valid JSON; the boundary must not throw while logging.
+    const text = '{"X-Amz-\\uZZZZignature":"value"}';
+
+    expect(() => redactSensitiveKeyValuePairs(text)).not.toThrow();
+  });
+});

@@ -302,3 +302,71 @@ describe("GatewayClient structured rejected-upgrade diagnostics", () => {
     );
   }, 30_000);
 });
+
+const UPGRADE_ESCAPED_SIGNATURE = "ESCAPEDUPGRADESIGNATUREVALUE";
+// A valid JSON spelling of `X-Amz-Signature` that uses a unicode escape for the
+// `S`. A peer can send this instead of the plain name, and matching only the raw
+// key text let it walk past the classifier.
+const UPGRADE_ESCAPED_REJECTION_BODY = `{"X-Amz-\\u0053ignature":"${UPGRADE_ESCAPED_SIGNATURE}","X-Amz-Date":"20260813T000000Z"}`;
+
+describe("GatewayClient escaped-key rejected-upgrade diagnostics", () => {
+  const servers: http.Server[] = [];
+  const clients: GatewayClient[] = [];
+
+  afterEach(async () => {
+    for (const client of clients.splice(0)) {
+      client.stop();
+    }
+    await Promise.all(
+      servers.splice(0).map(
+        async (server) =>
+          await new Promise<void>((resolve) => {
+            server.closeAllConnections();
+            server.close(() => resolve());
+          }),
+      ),
+    );
+  });
+
+  it("redacts an escaped JSON credential key before hosts see the error", async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(UPGRADE_ESCAPED_REJECTION_BODY);
+    });
+    servers.push(server);
+    const port = await new Promise<number>((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        resolve((server.address() as AddressInfo).port);
+      });
+    });
+
+    const loggedLines: string[] = [];
+    const connectErrorMessage = await new Promise<string>((resolve) => {
+      const client = new GatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        onConnectError: (error) => resolve(error.message),
+        hostDeps: {
+          logDebug: (message) => loggedLines.push(message),
+          logError: (message) => loggedLines.push(message),
+        },
+      });
+      clients.push(client);
+      client.start();
+    });
+
+    expect(connectErrorMessage).toContain("gateway rejected websocket upgrade (HTTP 403)");
+    expect(connectErrorMessage).toContain("20260813T000000Z");
+
+    const everythingSurfaced = [connectErrorMessage, ...loggedLines].join("\n");
+    expect(everythingSurfaced).not.toContain(UPGRADE_ESCAPED_SIGNATURE);
+
+    console.log(
+      `[gateway-client escaped-key redaction proof] head=${resolveHeadSha()} ` +
+        "escaped_signature=redacted non_credential_field=preserved " +
+        `secret-output=${everythingSurfaced.includes(UPGRADE_ESCAPED_SIGNATURE)}\n` +
+        `[gateway-client escaped-key redaction proof] server_sent=${UPGRADE_ESCAPED_REJECTION_BODY}\n` +
+        `[gateway-client escaped-key redaction proof] host_saw=${connectErrorMessage}\n` +
+        "proof_marker_verified=true",
+    );
+  }, 30_000);
+});
