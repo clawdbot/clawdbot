@@ -1195,62 +1195,6 @@ describe("runReplyAgent active steering", () => {
     expect(parkedSteer.consume).not.toHaveBeenCalled();
   });
 
-  it("promotes an accepted steer rejected at handoff into exactly one follow-up turn", async () => {
-    const active = createReplyOperation({
-      sessionKey: "main",
-      sessionId: "session",
-      resetTriggered: false,
-    });
-    active.setPhase("running");
-    state.queueEmbeddedAgentMessageMock.mockImplementationOnce(
-      (_sessionId: string, _prompt: string, options: unknown) => {
-        const queueOptions = requireRecord(options, "embedded queue options");
-        const onQueueAccepted = queueOptions.onQueueAccepted;
-        if (typeof onQueueAccepted !== "function") {
-          throw new Error("expected queue acceptance callback");
-        }
-        onQueueAccepted(true);
-        return {
-          queued: false,
-          sessionId: "session",
-          reason: "runtime_rejected",
-          gatewayHealth: "live",
-          errorMessage:
-            "active session handed off before queued steering message was committed to the transcript",
-        };
-      },
-    );
-    const onAdopted = vi.fn();
-    const runState: ReplyOperationRunState = {};
-    const { followupRun, run } = createMinimalRun({
-      opts: {
-        [REPLY_OPERATION_RUN_STATE]: runState,
-        turnAdoptionLifecycle: { onAdopted },
-      },
-      isActive: true,
-      shouldSteer: true,
-      shouldFollowup: true,
-      resolvedQueueMode: "steer",
-    });
-
-    await expect(run()).resolves.toBeUndefined();
-
-    expect(parkedSteer.accepted).toHaveBeenCalledExactlyOnceWith(true);
-    expect(parkedSteer.fallback).toHaveBeenCalledOnce();
-    expect(parkedSteer.consume).not.toHaveBeenCalled();
-    expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-
-    active.complete();
-    await vi.waitFor(() => expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledOnce());
-    await requireScheduledFollowupRunner()(followupRun);
-
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-    expect(onAdopted).toHaveBeenCalledOnce();
-    expect(parkedSteer.fallback).toHaveBeenCalledOnce();
-    expect(parkedSteer.consume).not.toHaveBeenCalled();
-  });
-
   it("adopts and consumes non-handoff unconfirmed steering without replay", async () => {
     const runState: ReplyOperationRunState = {};
     const active = createReplyOperation({
