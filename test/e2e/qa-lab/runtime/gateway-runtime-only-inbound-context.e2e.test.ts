@@ -60,6 +60,7 @@ type ProofInbound = {
 
 type ProofDispatch = (input: ProofInbound) => Promise<void>;
 type ProofRecorderFactory = (input: {
+  body: string;
   messageId: string;
 }) => ReturnType<typeof createUserTurnTranscriptRecorder>;
 
@@ -214,7 +215,7 @@ async function writeInboundProofPlugin(params: {
       '                route: { agentId: "main", sessionKey },',
       "                ctxPayload,",
       "                replyOptions: {",
-      "                  userTurnTranscriptRecorder: createRecorder({ messageId }),",
+      "                  userTurnTranscriptRecorder: createRecorder({ body, messageId }),",
       "                },",
       "                delivery: {",
       "                  deliver: async (payload) => ({",
@@ -391,7 +392,7 @@ describe("Gateway runtime-only inbound context", () => {
           },
         } satisfies OpenClawConfig;
 
-        (globalThis as Record<string, unknown>)[recorderKey] = (({ messageId }) => {
+        (globalThis as Record<string, unknown>)[recorderKey] = (({ body, messageId }) => {
           const sourceTurnId = buildChannelSourceTurnId({
             provider: PROOF_CHANNEL_ID,
             accountId: "default",
@@ -402,7 +403,7 @@ describe("Gateway runtime-only inbound context", () => {
             throw new Error("runtime-only proof source turn id was not created");
           }
           return createUserTurnTranscriptRecorder({
-            input: { text: "", idempotencyKey: sourceTurnId },
+            input: { text: body, idempotencyKey: sourceTurnId },
             target: () => undefined,
           });
         }) satisfies ProofRecorderFactory;
