@@ -8,6 +8,7 @@ vi.mock("./code-mode-typescript-runtime.js", () => ({
   loadCodeModeTypeScriptRuntime,
 }));
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { CodeModeNamespaceDescriptor } from "./code-mode-namespaces.js";
 import { prepareSource } from "./code-mode-runtime.js";
 import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
@@ -92,8 +93,8 @@ describe("headless Code Mode", () => {
       await runCodeModeScriptHeadless({
         ctx,
         code: `
-          const first = await tools.callValue("openclaw:core:headless_first", {});
-          const second = await tools.callValue("openclaw:core:headless_second", {
+          const first = await headless_first({});
+          const second = await headless_second({
             value: first.value,
           });
           return second;
@@ -144,10 +145,10 @@ describe("headless Code Mode", () => {
       await runCodeModeScriptHeadless({
         ctx: createHeadlessHarness([first, second, release]),
         code: `const value = await Promise.race([
-            tools.callValue("openclaw:core:headless_first_race", {}),
-            tools.callValue("openclaw:core:headless_second_race", {}),
+            headless_first_race({}),
+            headless_second_race({}),
           ]);
-          void tools.callValue("openclaw:core:headless_first_race_release", {});
+          void headless_first_race_release({});
           return value;`,
         wallClockMs: 5_000,
       }),
@@ -198,10 +199,10 @@ describe("headless Code Mode", () => {
       await runCodeModeScriptHeadless({
         ctx: createHeadlessHarness([never, fast, release]),
         code: `const value = await Promise.race([
-            Promise.all([tools.callValue("openclaw:core:headless_nested_race_never", {})]),
-            tools.callValue("openclaw:core:headless_nested_race_fast", {}),
+            Promise.all([headless_nested_race_never({})]),
+            headless_nested_race_fast({}),
           ]);
-          void tools.callValue("openclaw:core:headless_nested_race_release", {});
+          void headless_nested_race_release({});
           return value;`,
         wallClockMs: 5_000,
       }),
@@ -219,29 +220,27 @@ describe("headless Code Mode", () => {
   it.each([
     {
       label: "directly",
-      auditCode: 'void tools.callValue("openclaw:core:headless_early_audit", {});',
+      auditCode: "void headless_early_audit({});",
     },
     {
       label: "in a detached already-settled Promise.race",
-      auditCode:
-        'void Promise.race([tools.callValue("openclaw:core:headless_early_audit", {}), Promise.resolve()]);',
+      auditCode: "void Promise.race([headless_early_audit({}), Promise.resolve()]);",
     },
     {
       label: "in a detached Promise.all",
-      auditCode: 'void Promise.all([tools.callValue("openclaw:core:headless_early_audit", {})]);',
+      auditCode: "void Promise.all([headless_early_audit({})]);",
     },
     {
       label: "in a detached Promise.allSettled",
-      auditCode:
-        'void Promise.allSettled([tools.callValue("openclaw:core:headless_early_audit", {})]);',
+      auditCode: "void Promise.allSettled([headless_early_audit({})]);",
     },
     {
       label: "in a detached Promise.any",
-      auditCode: 'void Promise.any([tools.callValue("openclaw:core:headless_early_audit", {})]);',
+      auditCode: "void Promise.any([headless_early_audit({})]);",
     },
     {
       label: "in a detached Promise.race",
-      auditCode: 'void Promise.race([tools.callValue("openclaw:core:headless_early_audit", {})]);',
+      auditCode: "void Promise.race([headless_early_audit({})]);",
     },
   ])(
     "drains a headless detached audit started $label before an awaited nested call",
@@ -283,8 +282,8 @@ describe("headless Code Mode", () => {
         await runCodeModeScriptHeadless({
           ctx: createHeadlessHarness([audit, fast, release]),
           code: `${auditCode}
-          const value = await tools.callValue("openclaw:core:headless_awaited_fast", {});
-          void tools.callValue("openclaw:core:headless_early_audit_release", {});
+          const value = await headless_awaited_fast({});
+          void headless_early_audit_release({});
           return value;`,
           wallClockMs: 5_000,
         }),
@@ -344,11 +343,11 @@ describe("headless Code Mode", () => {
       await runCodeModeScriptHeadless({
         ctx: createHeadlessHarness([winner, loser, audit, release]),
         code: `const value = await Promise.race([
-            tools.callValue("openclaw:core:headless_race_winner", {}),
-            tools.callValue("openclaw:core:headless_race_loser", {}),
+            headless_race_winner({}),
+            headless_race_loser({}),
           ]);
-          void tools.callValue("openclaw:core:headless_race_audit", {});
-          void tools.callValue("openclaw:core:headless_race_loser_release", {});
+          void headless_race_audit({});
+          void headless_race_loser_release({});
           return value;`,
         wallClockMs: 5_000,
       }),
@@ -377,8 +376,8 @@ describe("headless Code Mode", () => {
     const result = expectCompleted(
       await runCodeModeScriptHeadless({
         ctx: createHeadlessHarness([first, second]),
-        code: `void tools.callValue("openclaw:core:headless_detached_first", {});
-          void tools.callValue("openclaw:core:headless_detached_second", {});
+        code: `void headless_detached_first({});
+          void headless_detached_second({});
           return "done";`,
         wallClockMs: 5_000,
       }),
@@ -430,10 +429,10 @@ describe("headless Code Mode", () => {
         await runCodeModeScriptHeadless({
           ctx: createHeadlessHarness([fast, slow, release]),
           code: `const value = await Promise.${combinator}([
-              tools.callValue("openclaw:core:headless_slow", {}),
-              tools.callValue("openclaw:core:headless_fast", {}),
+              headless_slow({}),
+              headless_fast({}),
             ]);
-            void tools.callValue("openclaw:core:headless_slow_release", {});
+            void headless_slow_release({});
             return value;`,
           wallClockMs: 5_000,
         }),
@@ -490,12 +489,12 @@ describe("headless Code Mode", () => {
         ctx: createHeadlessHarness([failed, slow, release]),
         code: `try {
           await Promise.all([
-            tools.callValue("openclaw:core:headless_failed", {}),
-            tools.callValue("openclaw:core:headless_slow", {}),
+            headless_failed({}),
+            headless_slow({}),
           ]);
           return "unexpected success";
         } catch (error) {
-          void tools.callValue("openclaw:core:headless_slow_release", {});
+          void headless_slow_release({});
           return error.message;
         }`,
         wallClockMs: 5_000,
@@ -699,6 +698,49 @@ describe("headless Code Mode", () => {
     ]);
   });
 
+  it("keeps an injected namespace while calling a colliding tool by its advertised global", async () => {
+    const tool = fakeTool("trigger", async () => jsonResult({ owner: "tool" }));
+    const ctx = createHeadlessHarness([tool]);
+    const extraNamespaces: CodeModeNamespaceDescriptor[] = [
+      {
+        id: "cron:trigger",
+        globalName: "trigger",
+        scope: {
+          kind: "object",
+          entries: [["owner", { kind: "value", value: "namespace" }]],
+        },
+      },
+    ];
+    const run = async () =>
+      expectCompleted(
+        await runCodeModeScriptHeadless({
+          ctx,
+          extraNamespaces,
+          code: `
+            const handle = catalog.all().find((entry) => entry.toolName === "trigger");
+            if (!handle) throw new Error("trigger tool missing");
+            return {
+              namespaceOwner: trigger.owner,
+              callableName: handle.callableName,
+              toolResult: await globalThis[handle.callableName]({}),
+            };
+          `,
+          wallClockMs: 120_000,
+        }),
+      );
+
+    const first = await run();
+    const second = await run();
+
+    expect(first.value).toEqual({
+      namespaceOwner: "namespace",
+      callableName: expect.stringMatching(/^trigger_[a-f0-9]{8}$/u),
+      toolResult: { owner: "tool" },
+    });
+    expect(second.value).toEqual(first.value);
+    expect(tool.execute).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects colliding injected namespace globals", async () => {
     const result = expectFailed(
       await runCodeModeScriptHeadless({
@@ -729,8 +771,8 @@ describe("headless Code Mode", () => {
       await runCodeModeScriptHeadless({
         ctx: createHeadlessHarness([tool]),
         code: `
-          await tools.call("openclaw:core:budgeted", {});
-          await tools.call("openclaw:core:budgeted", {});
+          await budgeted({});
+          await budgeted({});
           return true;
         `,
         maxToolCalls: 1,
@@ -786,7 +828,7 @@ describe("headless Code Mode", () => {
         ctx: createHeadlessHarness([tool]),
         code: `
           text("x".repeat(700));
-          await tools.call("openclaw:core:output_boundary", {});
+          await output_boundary({});
           return "y".repeat(700);
         `,
         overrides: { maxOutputBytes: 1_024 },
@@ -808,7 +850,7 @@ describe("headless Code Mode", () => {
         ctx: createHeadlessHarness([tool]),
         code: `
           const calls = Array.from({ length: 129 }, () => () =>
-            tools.call("openclaw:core:budgeted", {}),
+            budgeted({}),
           );
           // Keep each leg within the default 16-call pending cap while proving the cumulative budget.
           for (let offset = 0; offset < calls.length; offset += 16) {
@@ -847,7 +889,7 @@ describe("headless Code Mode", () => {
     const resultPromise = runCodeModeScriptHeadless({
       ctx: createHeadlessHarness([slow]),
       code: `
-        await tools.call("openclaw:core:slow_leg", {});
+        await slow_leg({});
         return true;
       `,
       wallClockMs: 15_000,
@@ -875,7 +917,7 @@ describe("headless Code Mode", () => {
     const resultPromise = runCodeModeScriptHeadless({
       ctx: createHeadlessHarness([slow]),
       code: `
-        await tools.call("openclaw:core:slow_leg", {});
+        await slow_leg({});
         return true;
       `,
       wallClockMs: 360_000,

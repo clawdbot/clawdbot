@@ -29,11 +29,12 @@ import {
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
-import type {
-  WorkerTunnelStatus,
-  WorkerTurnLaunchRequest,
-  WorkerTurnTunnelHandle,
-  WorkerWorkspaceCommand,
+import {
+  WorkerTunnelOwnerDisconnectedError,
+  type WorkerTunnelStatus,
+  type WorkerTurnLaunchRequest,
+  type WorkerTurnTunnelHandle,
+  type WorkerWorkspaceCommand,
 } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
@@ -210,10 +211,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
   const findNode = async (
     entry: NodeTunnelEntry,
     signal: AbortSignal,
-  ): Promise<{
-    transport: NodeWorkerSupervisorTransport;
-    node: NodeWorkerSupervisorNodeProof;
-  }> => {
+  ): Promise<{ transport: NodeWorkerSupervisorTransport; node: NodeWorkerSupervisorNodeProof }> => {
     const transport = options.getTransport();
     if (!transport) {
       throw new Error("device worker node transport is unavailable");
@@ -222,7 +220,9 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       (candidate) => candidate.nodeId === entry.deviceId,
     );
     if (!node) {
-      throw new Error("device worker node is not connected with the supervisor dialect");
+      throw new WorkerTunnelOwnerDisconnectedError(
+        "device worker node is not connected with the supervisor dialect",
+      );
     }
     return { transport, node };
   };

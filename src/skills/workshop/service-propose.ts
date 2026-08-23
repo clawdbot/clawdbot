@@ -11,17 +11,18 @@ import { stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import { isWorkshopOwnedSkillDir } from "./ownership.js";
 import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { prepareSkillProposalDraft, resolveUpdateProposalDescription } from "./proposal-draft.js";
+import { createSkillProposalGenerationDraftFile } from "./proposal-generation.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
 import {
   createSkillProposalId,
   hashSkillProposalContent,
   resolveSkillProposalTarget,
   writeSkillProposal,
-  type PreparedSkillProposalSupportFile,
 } from "./store.js";
 import {
   MAX_SKILL_PROPOSAL_ORIGIN_RUN_IDS,
   SKILL_WORKSHOP_SCHEMA,
+  type PreparedSkillProposalSupportFile,
   type SkillProposalCreateInput,
   type SkillProposalOrigin,
   type SkillProposalReadResult,
@@ -141,7 +142,7 @@ export async function proposeCreateSkill(
     ...(origin ? { origin } : {}),
     ...originRunProvenance,
     proposedVersion: "v1",
-    draftFile: "PROPOSAL.md",
+    draftFile: createSkillProposalGenerationDraftFile(),
     draftHash,
     target: {
       skillName: name,
@@ -171,14 +172,12 @@ export async function proposeCreateSkill(
     }),
     store: proposalStoreOptions(input.env),
   });
-  if (event) {
-    await dispatchSkillProposalChanged({
-      event,
-      record,
-      workspaceDir: input.workspaceDir,
-      ...(input.agentId ? { agentId: input.agentId } : {}),
-    });
-  }
+  await dispatchSkillProposalChanged({
+    event,
+    record,
+    workspaceDir: input.workspaceDir,
+    ...(input.agentId ? { agentId: input.agentId } : {}),
+  });
   return { record, revisionHash: hashSkillProposalRevision(record), content: proposalContent };
 }
 
@@ -296,7 +295,7 @@ export async function proposeUpdateSkill(
     ...(origin ? { origin } : {}),
     ...originRunProvenance,
     proposedVersion: "v1",
-    draftFile: "PROPOSAL.md",
+    draftFile: createSkillProposalGenerationDraftFile(),
     draftHash,
     target: {
       skillName: targetSkill.name,
@@ -327,14 +326,12 @@ export async function proposeUpdateSkill(
     }),
     store: proposalStoreOptions(input.env),
   });
-  if (event) {
-    await dispatchSkillProposalChanged({
-      event,
-      record,
-      workspaceDir: input.workspaceDir,
-      ...(input.agentId ? { agentId: input.agentId } : {}),
-    });
-  }
+  await dispatchSkillProposalChanged({
+    event,
+    record,
+    workspaceDir: input.workspaceDir,
+    ...(input.agentId ? { agentId: input.agentId } : {}),
+  });
   return { record, revisionHash: hashSkillProposalRevision(record), content: proposalContent };
 }
 

@@ -54,16 +54,18 @@ export function collectPluginConfigAssignments(params: {
       config: params.config,
       env: params.context.env,
     });
-  const bundledLoadablePluginIds = [...(params.loadablePluginOrigins?.entries() ?? [])]
-    .filter(([, origin]) => origin === "bundled")
-    .map(([pluginId]) => pluginId);
+  const bundledLoadablePluginIds = params.context.manifestRegistry
+    ? []
+    : [...(params.loadablePluginOrigins?.entries() ?? [])]
+        .filter(([, origin]) => origin === "bundled")
+        .map(([pluginId]) => pluginId);
   const pluginSecretInputs = new Map(
     [
       ...resolvePluginConfigContractsById({
         config: params.config,
         env: params.context.env,
         fallbackToBundledMetadata: true,
-        fallbackToBundledMetadataForResolvedBundled: true,
+        fallbackToBundledMetadataForResolvedBundled: !params.context.manifestRegistry,
         fallbackBundledPluginIds: bundledLoadablePluginIds,
         pluginIds: Object.keys(entries),
         manifestRegistry,

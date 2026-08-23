@@ -3,7 +3,7 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
-import type { UpdateHoldResult, UpdateScheduleState } from "../api/types.ts";
+import type { UpdateHoldResult } from "../api/types.ts";
 import { controlUiBuildDiffersFrom } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import {
@@ -26,7 +26,7 @@ import {
   enqueueExecApprovalPrompt,
   isStaleApprovalResolutionError,
   parseApprovalRequestedEvent,
-  parseExecApprovalResolved,
+  parseApprovalResolvedEvent,
   resolveApprovalRequest,
   type ExecApprovalPromptState,
 } from "./exec-approval.ts";
@@ -53,12 +53,12 @@ import {
   type UpdateRestartStatusResponse,
   type UpdateRunResponse,
 } from "./update-overlay-helpers.ts";
+import { readUpdateScheduleValue } from "./update-schedule-dto.ts";
 import {
-  readUpdateAvailable,
-  readUpdateAvailableValue,
-  readUpdateSchedule,
-  readUpdateScheduleValue,
-} from "./update-schedule-dto.ts";
+  projectConnectedUpdateSnapshot,
+  projectUpdateAvailableEvent,
+  resolveHeldUpdateCampaignId,
+} from "./update-schedule-projection.ts";
 import {
   announceRecordedUpdateSuccess,
   announceVerifiedUpdateInstall,
@@ -82,6 +82,7 @@ export function createApplicationOverlays(
     heldUpdateCampaignId: null,
     updateRunning: false,
     updateStatusRefreshing: false,
+    updateCampaignStatusHydrated: true,
     updateReconciliationPending: false,
     updateStatusBanner: null,
     recordedUpdateAttempt: null,
@@ -90,7 +91,6 @@ export function createApplicationOverlays(
     approvalBusy: false,
     approvalCanGrant: false,
     approvalErrors: new Map(),
-    approvalNowMs: Date.now(),
     devicePairSetupOpen: false,
     devicePairSetupLifecycle: { phase: "selection", access: "full" },
     devicePairPendingCount: 0,
@@ -124,7 +124,6 @@ export function createApplicationOverlays(
     execApprovalQueue: [],
     execApprovalBusy: false,
     execApprovalErrors: new Map(),
-    execApprovalNowMs: Date.now(),
     execApprovalExpiryTimers: new Map(),
   };
 
@@ -138,7 +137,6 @@ export function createApplicationOverlays(
       approvalBusy: promptState.execApprovalBusy,
       approvalCanGrant: readGatewayOperatorAccess(gateway.snapshot).canGrantApprovals,
       approvalErrors: new Map(promptState.execApprovalErrors),
-      approvalNowMs: promptState.execApprovalNowMs ?? Date.now(),
       ...readDevicePairSetupSnapshot(devicePairSetupState),
     };
     for (const listener of listeners) {
@@ -187,10 +185,6 @@ export function createApplicationOverlays(
     snapshot = { ...snapshot, recordedUpdateAttempt };
     publish();
   };
-  const heldCampaignId = (schedule: UpdateScheduleState | null) =>
-    schedule?.campaign?.holdUntilMs !== undefined
-      ? schedule.campaign.id
-      : snapshot.heldUpdateCampaignId;
   const updateVerification = createUpdateVerificationController({
     getPending: () => pendingUpdate,
     clearPending: () => {
@@ -217,6 +211,7 @@ export function createApplicationOverlays(
         recordedUpdateAttempt: snapshot.recordedUpdateAttempt,
         heldUpdateCampaignId: snapshot.heldUpdateCampaignId,
       }),
+      updateCampaignStatusHydrated: true,
     };
     publish();
   };
@@ -330,6 +325,7 @@ export function createApplicationOverlays(
         updateSchedule: null,
         updateRunning: false,
         updateStatusRefreshing: false,
+        updateCampaignStatusHydrated: true,
       };
       updateCampaignPoller.stop();
       if (next.phase === "reload-required") {
@@ -344,8 +340,6 @@ export function createApplicationOverlays(
       publish();
       return;
     }
-    const updateSchedule =
-      connectedSourceChanged || helloChanged ? readUpdateSchedule(next.hello) : undefined;
     const serverBuildIdentity = {
       version: next.hello?.server?.version,
       buildId: next.hello?.server?.buildId,
@@ -355,11 +349,7 @@ export function createApplicationOverlays(
     snapshot = {
       ...snapshot,
       ...(connectedSourceChanged || helloChanged
-        ? {
-            updateAvailable: readUpdateAvailable(next.hello),
-            updateSchedule: updateSchedule ?? null,
-            heldUpdateCampaignId: heldCampaignId(updateSchedule ?? null),
-          }
+        ? projectConnectedUpdateSnapshot(snapshot, next.hello)
         : {}),
       controlUiRefreshRequired: connectedSourceChanged
         ? (exactBuildIdentityAvailable || connectedEpoch > 0) &&
@@ -411,19 +401,9 @@ export function createApplicationOverlays(
     }
     if (event.event === GATEWAY_EVENT_UPDATE_AVAILABLE) {
       const payload = event.payload as GatewayUpdateAvailableEventPayload | undefined;
-      const updateSchedule =
-        payload && Object.hasOwn(payload, "schedule")
-          ? readUpdateScheduleValue(payload.schedule)
-          : undefined;
       snapshot = {
         ...snapshot,
-        updateAvailable: readUpdateAvailableValue(payload?.updateAvailable),
-        ...(updateSchedule !== undefined
-          ? {
-              updateSchedule,
-              heldUpdateCampaignId: heldCampaignId(updateSchedule),
-            }
-          : {}),
+        ...projectUpdateAvailableEvent(snapshot, payload),
       };
       publish();
       updateCampaignPoller.sync();
@@ -441,16 +421,10 @@ export function createApplicationOverlays(
       publish();
       return;
     }
-    if (
-      event.event === "exec.approval.resolved" ||
-      event.event === "plugin.approval.resolved" ||
-      event.event === "openclaw.approval.resolved"
-    ) {
-      const resolved = parseExecApprovalResolved(event.payload);
-      if (resolved) {
-        clearResolvedExecApprovalPrompt(promptState, resolved.id);
-        publish();
-      }
+    const resolvedApproval = parseApprovalResolvedEvent(event.event, event.payload);
+    if (resolvedApproval) {
+      clearResolvedExecApprovalPrompt(promptState, resolvedApproval.id);
+      publish();
     }
   });
   synchronizeGateway(gateway.snapshot);
@@ -589,7 +563,10 @@ export function createApplicationOverlays(
             ...(updateSchedule !== undefined ? { updateSchedule } : {}),
             heldUpdateCampaignId: response.ok
               ? campaign.id
-              : heldCampaignId(updateSchedule ?? null),
+              : resolveHeldUpdateCampaignId(
+                  updateSchedule ?? snapshot.updateSchedule,
+                  snapshot.heldUpdateCampaignId,
+                ),
           };
           publish();
         }

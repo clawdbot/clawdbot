@@ -143,7 +143,7 @@ type ScriptProducerEvidenceParams = {
   failureReason?: string;
   producerId?: string;
   profile?: string;
-  status: "blocked" | "fail" | "pass";
+  status: "blocked" | "fail" | "pass" | "skipped";
 };
 
 export function buildScriptProducerEvidence(

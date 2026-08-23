@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   listAgentEntries,
-  resolveSystemAgentTargetAgentId,
+  resolveAmbientOwnerAgentId,
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
 import {
@@ -95,7 +95,7 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
       import("../agents/simple-completion-runtime.js"),
       import("../agents/harness/policy.js"),
     ]);
-  const modelOwnerAgentId = resolveSystemAgentTargetAgentId(runConfig, requestedAgentId);
+  const modelOwnerAgentId = resolveAmbientOwnerAgentId(runConfig, requestedAgentId);
   if (!agentScope.resolveAgentEffectiveModelPrimary(runConfig, modelOwnerAgentId)) {
     return null;
   }
@@ -212,7 +212,7 @@ export async function projectInferenceRoute(
   deps: SystemAgentRouteProjectionDeps = {},
 ): Promise<DefaultInferenceRouteProjection> {
   const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
-  const routeAgentId = resolveSystemAgentTargetAgentId(config, requestedAgentId);
+  const routeAgentId = resolveAmbientOwnerAgentId(config, requestedAgentId);
   const route = await resolveSystemAgentConfiguredRouteFromConfig(config, routeAgentId, deps);
   const list = listAgentEntries(config);
   const agent = list.find((entry) => normalizeAgentId(entry.id) === routeAgentId);

@@ -8,7 +8,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { getRegistryWorktree } from "./registry.js";
 import { acquireWorktreeRunLease, hasLiveWorktreeRunLease } from "./run-lease.js";
 import { testing as runLeaseTesting } from "./run-lease.test-support.js";
-import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
+import { classifyWorktreeRemovalError, IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -66,9 +66,13 @@ describe("ManagedWorktreeService removal against a live run lease", () => {
     const created = await createSessionWorktree();
     const lease = await acquireWorktreeRunLease(created.id, { env });
 
-    await expect(service.remove({ id: created.id, reason: "manual-delete" })).rejects.toThrow(
-      "worktree is busy",
-    );
+    const removalError = await service
+      .remove({ id: created.id, reason: "manual-delete" })
+      .then(() => undefined)
+      .catch((error: unknown) => error);
+    expect(removalError).toBeInstanceOf(Error);
+    expect((removalError as Error).message).toContain("worktree is busy");
+    expect(classifyWorktreeRemovalError(removalError)).toBe("busy");
     expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeUndefined();
     expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
     expect(await fs.stat(created.path)).toBeTruthy();

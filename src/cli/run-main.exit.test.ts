@@ -2531,6 +2531,8 @@ describe("runCli exit behavior", () => {
 
   it.each([
     ["cron", ["node", "openclaw", "cron", "status"]],
+    ["cron parent timeout", ["node", "openclaw", "cron", "--timeout", "250", "status"]],
+    ["automations parent port", ["node", "openclaw", "automations", "--port", "18789", "status"]],
     ["cron alias", ["node", "openclaw", "cron", "create", "daily", "message"]],
     ["cron removal alias", ["node", "openclaw", "cron", "delete", "job"]],
     ["cron scratch equals", ["node", "openclaw", "cron", "scratch", "job", "--set=text"]],
@@ -4100,6 +4102,48 @@ describe("runCli exit behavior", () => {
     });
   });
 
+  it("starts the local TUI when any explicit-roster agent has inference configured", async () => {
+    primeBareRootConfig({
+      agents: {
+        ownership: "explicit",
+        entries: {
+          alpha: { model: "openai/gpt-5.6-luna" },
+          beta: { model: "openai/gpt-5.6-sol" },
+        },
+      },
+    });
+    probeGatewayConfiguredModelMock.mockResolvedValueOnce({
+      kind: "unreachable",
+      detail: "offline",
+    });
+
+    await runBareCli();
+
+    expect(runTuiMock).toHaveBeenCalledWith({
+      deliver: false,
+      local: true,
+      forceProcessExitOnReturn: true,
+    });
+  });
+
+  it("routes an explicit roster with no configured inference to onboarding", async () => {
+    primeBareRootConfig({
+      agents: {
+        ownership: "explicit",
+        entries: { alpha: {}, beta: {} },
+      },
+    });
+    probeGatewayConfiguredModelMock.mockResolvedValueOnce({
+      kind: "unreachable",
+      detail: "offline",
+    });
+
+    await runBareCli();
+
+    expect(setupWizardCommandMock).toHaveBeenCalledWith({});
+    expect(runTuiMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     { label: "LAN IP", url: "ws://192.168.1.10:18789" },
     { label: "mDNS", url: "ws://gateway.local:18789" },
@@ -4195,7 +4239,7 @@ describe("runCli exit behavior", () => {
     expectBoundTui({ url, password: "configured-remote-password" });
   });
 
-  it("falls back to gateway env auth when configured remote SecretRefs are unresolved", async () => {
+  it("does not replace unresolved remote SecretRefs with gateway env auth", async () => {
     const url = "ws://127.0.0.1:18789";
     primeBareRootConfig({
       gateway: {
@@ -4228,17 +4272,9 @@ describe("runCli exit behavior", () => {
       },
     );
 
-    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
-      url,
-      token: "shell-fallback-auth-value",
-      password: "env-remote-password",
-    });
+    expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({ url });
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expectBoundTui({
-      url,
-      token: "shell-fallback-auth-value",
-      password: "env-remote-password",
-    });
+    expectBoundTui({ url });
   });
 
   it("probes an explicitly allowed plaintext private remote gateway", async () => {

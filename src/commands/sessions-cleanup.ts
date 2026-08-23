@@ -269,9 +269,9 @@ async function maybeRunGatewayCleanup(
     });
     return { delegated: true, result };
   } catch (error) {
-    if (isGatewayTransportError(error)) {
-      // A stopped gateway should not block local maintenance; fall back to the
-      // on-disk session stores when transport is unavailable.
+    if (isGatewayTransportError(error) && error.kind === "closed" && error.code === undefined) {
+      // Only a pre-connect failure proves the Gateway never received this
+      // mutation; timeouts and established closes must not replay it locally.
       return { delegated: false };
     }
     throw error;

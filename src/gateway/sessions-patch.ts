@@ -36,7 +36,10 @@ import {
   normalizeUsageDisplay,
   resolveSupportedThinkingLevel,
 } from "../auto-reply/thinking.js";
-import type { SessionEntry, SessionToolOverrides } from "../config/sessions.js";
+import type {
+  InternalSessionEntry as SessionEntry,
+  SessionToolOverrides,
+} from "../config/sessions.js";
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
@@ -74,6 +77,7 @@ import {
   isAgentSessionModelPatchOrigin,
   snapshotAgentModelFallback,
 } from "./session-model-patch-origin.js";
+import { applySessionContextWindowPatch } from "./sessions-patch-context-window.js";
 import { applySessionsPatchSubagentPolicy } from "./sessions-patch-subagent-policy.js";
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
@@ -653,15 +657,16 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
-  if (next.thinkingLevel && ("thinkingLevel" in patch || "model" in patch)) {
+  if ("thinkingLevel" in patch || "model" in patch) {
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
     const thinkingLevel = normalizeThinkLevel(next.thinkingLevel);
-    const thinkingCatalog = await loadPreparedModelCatalogForPatch();
+    let thinkingRuntime: string | undefined;
     if (!thinkingLevel) {
       delete next.thinkingLevel;
     } else {
-      const thinkingRuntime = resolveThinkingRuntime(effectiveProvider, effectiveModel, next);
+      const thinkingCatalog = await loadPreparedModelCatalogForPatch();
+      thinkingRuntime = resolveThinkingRuntime(effectiveProvider, effectiveModel, next);
       if (
         !isThinkingLevelSupported({
           provider: effectiveProvider,
@@ -687,6 +692,17 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
+  const contextWindowPatch = await applySessionContextWindowPatch({
+    defaultModel: resolvedDefault.model,
+    defaultProvider: resolvedDefault.provider,
+    loadModelCatalog: loadPreparedModelCatalogForPatch,
+    next,
+    patch,
+  });
+  if (!contextWindowPatch.ok) {
+    return invalid(contextWindowPatch.error);
+  }
+
   // A thinkingLevel change made on its own (no model switch) never touches the
   // agent-patch revert marker, so realign its restore target with the user's
   // newer choice; otherwise a later model-failure revert clobbers it.
@@ -695,9 +711,14 @@ export async function projectSessionsPatchEntry(params: {
     !("model" in patch) &&
     next.modelFallback?.source === "agent-patch"
   ) {
-    next.modelFallback = next.thinkingLevel
-      ? { ...next.modelFallback, prevThinkingLevel: next.thinkingLevel }
-      : { ...next.modelFallback, prevThinkingLevel: undefined };
+    next.modelFallback.prevThinkingLevel = next.thinkingLevel;
+  }
+  if (
+    "contextWindow" in patch &&
+    !("model" in patch) &&
+    next.modelFallback?.source === "agent-patch"
+  ) {
+    next.modelFallback.prevContextWindow = next.contextWindow;
   }
 
   if ("sendPolicy" in patch) {

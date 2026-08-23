@@ -12,6 +12,8 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import type { SessionEntry } from "./types.js";
 
+type SessionCanonicalDeliveryEvidence = Pick<SessionEntry, "delivery" | "groupId">;
+
 export function normalizeStoreSessionKey(sessionKey: string): string {
   return normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
 }
@@ -50,7 +52,7 @@ function normalizeEntryTarget(value: unknown): string {
   return trimmed.slice(Math.min(...sigilIndexes));
 }
 
-function entryDeliveryTargets(entry: SessionEntry | undefined): string[] {
+function entryDeliveryTargets(entry: SessionCanonicalDeliveryEvidence | undefined): string[] {
   const context = deliveryContextFromSession(entry);
   const origin = sessionDeliveryOrigin(entry);
   const candidates = [context?.to, origin?.nativeChannelId, origin?.to, entry?.groupId];
@@ -67,7 +69,7 @@ function normalizeEntryThreadId(value: unknown): string {
   return String(value).trim();
 }
 
-function entryThreadId(entry: SessionEntry | undefined): string {
+function entryThreadId(entry: SessionCanonicalDeliveryEvidence | undefined): string {
   return normalizeEntryThreadId(deliveryContextFromSession(entry)?.threadId);
 }
 
@@ -75,7 +77,7 @@ function entryThreadId(entry: SessionEntry | undefined): string {
  *  folded key is treated as a legacy alias. Segment-preserved legacy keys
  *  (Signal groups) keep their old permissive lowercase fallback. */
 export function isConfirmedLowercasedLegacyAlias(
-  entry: SessionEntry | undefined,
+  entry: SessionCanonicalDeliveryEvidence | undefined,
   normalizedKey: string,
 ): boolean {
   if (!entry) {
@@ -99,7 +101,7 @@ export function isConfirmedLowercasedLegacyAlias(
 }
 
 export function hasMismatchedCaseSensitiveDeliveryProof(
-  entry: SessionEntry | undefined,
+  entry: SessionCanonicalDeliveryEvidence | undefined,
   normalizedKey: string,
 ): boolean {
   if (!entry || !requiresFoldedSessionKeyAliasProof(normalizedKey)) {
@@ -119,7 +121,7 @@ export function hasMismatchedCaseSensitiveDeliveryProof(
 /** Restores an opaque case-sensitive peer only when the row's delivery target proves it. */
 export function resolveDeliveryProvenCanonicalSessionKey(
   sessionKey: string,
-  entry: SessionEntry,
+  entry: SessionCanonicalDeliveryEvidence,
 ): string {
   const normalizedKey = normalizeStoreSessionKey(sessionKey);
   const delivery = deliveryContextFromSession(entry);

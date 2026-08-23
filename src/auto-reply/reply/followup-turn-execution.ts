@@ -23,7 +23,6 @@ export type FollowupExecutionResult = {
   pendingToolTasks: Set<Promise<void>>;
   progress: {
     drain(): Promise<void>;
-    visibleToolErrorObserved(): boolean;
   };
 };
 
@@ -122,7 +121,6 @@ export async function executeFollowupTurn(params: {
       options: sourceOpts,
       resolveVerboseProgressVisibility: () => progressAllowed() && shouldEmitVerboseToolResult(),
     });
-  let visibleToolError = false;
   let progressChain: Promise<void> = Promise.resolve();
   let pendingProgressTaskFailure: unknown;
   const pendingProgressTasks = new Set<Promise<void>>();
@@ -212,14 +210,6 @@ export async function executeFollowupTurn(params: {
             const visible = (
               await settleProgressVisibilityCallbackResult(sourceOpts.onCommandOutput!(output))
             ).visible;
-            if (
-              visible &&
-              (output.status === "failed" ||
-                output.status === "error" ||
-                (typeof output.exitCode === "number" && output.exitCode !== 0))
-            ) {
-              visibleToolError = true;
-            }
             return visible;
           })
       : undefined,
@@ -236,12 +226,6 @@ export async function executeFollowupTurn(params: {
             const visible = (
               await settleProgressVisibilityCallbackResult(sourceOpts.onItemEvent!(item))
             ).visible;
-            if (
-              visible &&
-              (item.phase === "error" || item.status === "failed" || item.status === "error")
-            ) {
-              visibleToolError = true;
-            }
             return visible;
           })
       : undefined,
@@ -277,19 +261,7 @@ export async function executeFollowupTurn(params: {
               : false,
           )
       : undefined,
-    shouldSuppressToolErrorWarnings: () => {
-      const explicit = sourceOpts?.suppressToolErrorWarnings;
-      if (explicit !== undefined) {
-        return explicit;
-      }
-      if (visibleToolError) {
-        return true;
-      }
-      if (!shouldEmitToolResult()) {
-        return false;
-      }
-      return undefined;
-    },
+    suppressToolErrorWarnings: sourceOpts?.suppressToolErrorWarnings,
     onToolResult: async (payload) => {
       return await enqueueProgressResult(async () => {
         if (!progressAllowed()) {
@@ -313,9 +285,6 @@ export async function executeFollowupTurn(params: {
             ? (await settleProgressVisibilityCallbackResult(transientToolResultProgress(payload)))
                 .visible
             : await params.onToolResult(payload, { runId: turn.runId }).then(() => true);
-        if (visible && payload.isError === true) {
-          visibleToolError = true;
-        }
         return visible;
       });
     },
@@ -464,7 +433,6 @@ export async function executeFollowupTurn(params: {
             : new Error(formatErrorMessage(firstFailure));
         }
       },
-      visibleToolErrorObserved: () => visibleToolError,
     },
   };
 }

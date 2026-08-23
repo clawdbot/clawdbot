@@ -4,7 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type { callGateway as runtimeCallGateway } from "../../../gateway/call.js";
 import type { dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
-import { OutboundDeliveryError } from "../../../infra/outbound/deliver-types.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "../../../infra/outbound/deliver-types.js";
 import { sendMessage as runtimeSendMessage } from "../../../infra/outbound/message.js";
 import {
   testing as sessionBindingServiceTesting,
@@ -1918,6 +1921,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expectDeliveryPath(result, "direct");
+    expect(result).toMatchObject({ requesterVisibleFinalDelivered: true });
     expect(callGateway).not.toHaveBeenCalled();
     expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
       deliver: true,
@@ -2062,6 +2066,36 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: false,
     },
     {
+      name: "only pre-tool commentary",
+      payloads: [{ text: "Waiting for the delegated task.", isCommentary: true }],
+      delivered: false,
+    },
+    {
+      name: "only a compaction notice",
+      payloads: [{ text: "Compacting the session.", isCompactionNotice: true }],
+      delivered: false,
+    },
+    {
+      name: "only a provider-fallback notice",
+      payloads: [{ text: "Switching providers.", isFallbackNotice: true }],
+      delivered: false,
+    },
+    {
+      name: "only a transient status notice",
+      payloads: [{ text: "Still working.", isStatusNotice: true }],
+      delivered: false,
+    },
+    {
+      name: "only supplemental TTS audio",
+      payloads: [
+        {
+          mediaUrl: "file:///tmp/answer.mp3",
+          ttsSupplement: { spokenText: "answer", visibleTextAlreadyDelivered: true },
+        },
+      ],
+      delivered: false,
+    },
+    {
       name: "a failed-tool warning and a successful visible reply",
       payloads: [
         { text: "Yield failed before completion.", isError: true },
@@ -2073,6 +2107,14 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       name: "hidden reasoning and a successful visible reply",
       payloads: [
         { text: "Waiting for the delegated task.", isReasoning: true },
+        { text: "The delegated task completed." },
+      ],
+      delivered: true,
+    },
+    {
+      name: "a status notice and a successful visible reply",
+      payloads: [
+        { text: "Still working.", isStatusNotice: true },
         { text: "The delegated task completed." },
       ],
       delivered: true,
@@ -4041,6 +4083,33 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expected: missingRequesterFinal,
     },
     {
+      name: "rejects supplemental TTS audio instead of a final answer",
+      response: {
+        result: {
+          payloads: [
+            {
+              mediaUrl: "file:///tmp/answer.mp3",
+              ttsSupplement: { spokenText: "answer", visibleTextAlreadyDelivered: true },
+            },
+          ],
+        },
+      },
+      requireVisibleReply: true,
+      expected: missingRequesterFinal,
+    },
+    {
+      name: "preserves a visible answer with malformed supplemental media metadata",
+      response: {
+        result: {
+          payloads: [
+            { text: "The real answer.", mediaUrl: 1, ttsSupplement: { spokenText: "answer" } },
+          ],
+        },
+      },
+      requireVisibleReply: true,
+      expected: deliveredRequesterFinal,
+    },
+    {
       name: "rejects an explicitly hidden assistant payload",
       response: { result: { payloads: [{ text: "not user visible", visible: false }] } },
       requireVisibleReply: true,
@@ -4236,6 +4305,114 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(agentParams.sourceReplyDeliveryMode).toBeUndefined();
   });
 
+  it.each([
+    {
+      name: "a transient network cause wrapped by outbound delivery",
+      createError: () =>
+        new Error("outbound delivery failed", { cause: new Error("connect ECONNRESET") }),
+    },
+    {
+      name: "a transient network cause nested through multiple delivery wrappers",
+      createError: () =>
+        new Error("requester handoff failed", {
+          cause: new Error("outbound delivery failed", {
+            cause: new Error("connect ECONNREFUSED"),
+          }),
+        }),
+    },
+  ])("retries $name before any platform send", async ({ createError }) => {
+    const callGateway = vi
+      .fn()
+      .mockRejectedValueOnce(createError())
+      .mockResolvedValueOnce({ result: { payloads: [{ text: "recovered child completion" }] } });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway: callGateway as typeof runtimeCallGateway,
+      directIdempotencyKey: "announce-wrapped-transient-retry",
+    });
+
+    expect(result).toMatchObject({ delivered: true, path: "direct" });
+    expect(callGateway).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      name: "a wrapped permanent channel failure",
+      createError: () =>
+        new Error("outbound delivery failed", { cause: new Error("chat not found") }),
+    },
+    {
+      name: "a typed permanent platform rejection",
+      createError: () =>
+        new PlatformMessageNotDispatchedError("payload rejected by platform policy", {
+          cause: new Error("payload cannot be delivered"),
+          retryable: false,
+        }),
+    },
+    {
+      name: "a wrapped typed permanent rejection with a transient-looking cause",
+      createError: () =>
+        new Error("outbound delivery failed", {
+          cause: new PlatformMessageNotDispatchedError("payload rejected by platform policy", {
+            cause: new Error("connect ECONNRESET"),
+            retryable: false,
+          }),
+        }),
+    },
+  ])("classifies $name as a permanent failure", async ({ createError }) => {
+    const callGateway: typeof runtimeCallGateway = vi.fn(async () => {
+      throw createError();
+    });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      directIdempotencyKey: "announce-wrapped-permanent-rejection",
+    });
+
+    expect(result).toMatchObject({
+      delivered: false,
+      path: "direct",
+      disposition: "permanent_failure",
+    });
+    expect(callGateway).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      name: "an identified outbound platform send",
+      createError: () =>
+        new OutboundDeliveryError("connect ECONNRESET", {
+          cause: new Error("connect ECONNRESET"),
+          results: [{ channel: "telegram", messageId: "msg-already-sent" }],
+        }),
+    },
+    {
+      name: "a nested visible reply receipt",
+      createError: () =>
+        new Error("connect ECONNRESET", {
+          cause: Object.assign(new Error("platform send completed"), {
+            visibleReplySent: true,
+          }),
+        }),
+    },
+  ])("never retries a transient error after $name", async ({ createError }) => {
+    const callGateway: typeof runtimeCallGateway = vi.fn(async () => {
+      throw createError();
+    });
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      directIdempotencyKey: "announce-transient-after-confirmed-send",
+    });
+
+    expect(result).toMatchObject({
+      delivered: false,
+      path: "direct",
+      disposition: "ambiguous",
+    });
+    expect(callGateway).toHaveBeenCalledOnce();
+  });
+
   it("does not retry writer-claim rebound failures with send evidence", async () => {
     const sendErr = new OutboundDeliveryError("outbound delivery failed", {
       cause: new Error("outbound delivery failed"),
@@ -4346,6 +4523,27 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       reason: "source_owner_changed",
       terminal: true,
     });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not text-fallback after an identified incomplete platform send", async () => {
+    const callGateway: typeof runtimeCallGateway = vi.fn(async () => {
+      throw new OutboundDeliveryError("incomplete terminal response", {
+        cause: new Error("incomplete terminal response"),
+        results: [{ channel: "discord", messageId: "already-sent" }],
+      });
+    });
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceTool: "subagent_announce",
+      internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
+    });
+
+    expect(result).toMatchObject({ delivered: false, path: "direct", disposition: "ambiguous" });
     expect(callGateway).toHaveBeenCalledOnce();
     expect(sendMessage).not.toHaveBeenCalled();
   });

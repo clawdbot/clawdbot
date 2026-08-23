@@ -30,6 +30,7 @@ function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelProviders
     loading: false,
     refreshing: false,
     error: null,
+    providerUsageFailed: false,
     updatedAt: 1,
     costDays: 30,
     credentialAgentLabel: "Writer",
@@ -118,6 +119,15 @@ function selectSegment(group: SegmentedGroup, value: string) {
 }
 
 describe("renderModelProviders", () => {
+  it("surfaces a provider-usage failure on the provider list", () => {
+    const container = document.createElement("div");
+    render(renderModelProviders(props({ providerUsageFailed: true })), container);
+
+    expect(container.textContent).toContain(
+      "Provider usage is unavailable; the last request failed. Refresh to retry.",
+    );
+  });
+
   beforeEach(async () => {
     await i18n.setLocale("en");
   });

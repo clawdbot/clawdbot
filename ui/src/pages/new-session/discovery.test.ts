@@ -11,12 +11,14 @@ describe("readDraftCloudProfiles", () => {
           id: " zeta ",
           providerId: " static-ssh ",
           trust: "disposable",
+          executionMode: "worker-turn",
           settings: { token: "hidden" },
         },
         {
           id: "aws",
           providerId: "crabbox",
           trust: "persistent",
+          executionMode: "remote-exec",
           machines: [
             {
               id: "standard",
@@ -31,7 +33,12 @@ describe("readDraftCloudProfiles", () => {
           ],
         },
         { id: "legacy", providerId: "static-ssh" },
-        { id: "invalid-trust", providerId: "crabbox", trust: "temporary" },
+        {
+          id: "invalid-trust",
+          providerId: "crabbox",
+          trust: "temporary",
+          executionMode: "sandbox",
+        },
         { id: "", providerId: "crabbox" },
         { id: "missing-provider" },
       ]),
@@ -40,6 +47,7 @@ describe("readDraftCloudProfiles", () => {
         id: "aws",
         providerId: "crabbox",
         trust: "persistent",
+        executionMode: "remote-exec",
         machines: [
           {
             id: "standard",
@@ -51,9 +59,24 @@ describe("readDraftCloudProfiles", () => {
           { id: "fast", label: "Fast" },
         ],
       },
-      { id: "invalid-trust", providerId: "crabbox", trust: undefined },
-      { id: "legacy", providerId: "static-ssh", trust: undefined },
-      { id: "zeta", providerId: "static-ssh", trust: "disposable" },
+      {
+        id: "invalid-trust",
+        providerId: "crabbox",
+        trust: undefined,
+        executionMode: undefined,
+      },
+      {
+        id: "legacy",
+        providerId: "static-ssh",
+        trust: undefined,
+        executionMode: undefined,
+      },
+      {
+        id: "zeta",
+        providerId: "static-ssh",
+        trust: "disposable",
+        executionMode: "worker-turn",
+      },
     ]);
   });
 });
@@ -76,6 +99,28 @@ describe("readDraftEnvironments", () => {
         },
       ])[0]?.issues,
     ).toEqual([issue]);
+  });
+
+  it("normalizes bounded invocable commands separately from declared capabilities", () => {
+    expect(
+      readDraftEnvironments([
+        {
+          id: "node:runner",
+          type: "node",
+          status: "available",
+          capabilities: ["codex.exec-server.stdio.v1", "camera.snap"],
+          invocableCommands: [" z.command ", "camera.snap", "camera.snap", "x".repeat(129), ""],
+        },
+      ]),
+    ).toEqual([
+      {
+        id: "node:runner",
+        type: "node",
+        status: "available",
+        capabilities: ["codex.exec-server.stdio.v1", "camera.snap"],
+        invocableCommands: ["camera.snap", "z.command"],
+      },
+    ]);
   });
 
   it("keeps the closed environment types while rejecting malformed entries", () => {

@@ -212,6 +212,61 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     expect(await loginGateMounted()).toBe(false);
   });
 
+  it("redirects before setup detection without loading the discarded workspace", async () => {
+    const page = await createPage();
+    const workspaceModules = new Set([
+      "/src/components/app-sidebar.ts",
+      "/src/components/browser/browser-panel.ts",
+      "/src/components/custodian/custodian-panel.ts",
+      "/src/components/desktop/desktop-panel.ts",
+      "/src/components/terminal/terminal-panel-registration.ts",
+      "/src/pages/chat/chat-page.ts",
+    ]);
+    const requestedWorkspaceModules = new Set<string>();
+    page.on("request", (request) => {
+      const pathname = new URL(request.url()).pathname;
+      if (workspaceModules.has(pathname)) {
+        requestedWorkspaceModules.add(pathname);
+      }
+    });
+    const gateway = await installMockGateway(page, {
+      agentModel: null,
+      deferredMethods: ["openclaw.setup.detect"],
+      featureMethods: [
+        "browser.request",
+        "desktop.observe",
+        "openclaw.chat",
+        "openclaw.setup.detect",
+        "terminal.open",
+      ],
+      terminalEnabled: true,
+    });
+
+    await page.goto(server.baseUrl);
+    await page.waitForURL("**/settings/model-setup?firstRun=1");
+    expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
+    await gateway.waitForRequest("openclaw.setup.detect");
+    expect(await gateway.getRequests("openclaw.setup.detect")).toHaveLength(1);
+    const loading = page.getByText("Checking this Gateway for available AI access…", {
+      exact: true,
+    });
+    await loading.waitFor();
+    expect(await page.locator(".connect-splash").count()).toBe(0);
+    expect([...requestedWorkspaceModules]).toEqual([]);
+    await captureProof(page, "06-first-run-routed-before-detection");
+
+    await gateway.resolveDeferred("openclaw.setup.detect", {
+      candidates: [],
+      manualProviders: [],
+      setupComplete: false,
+      workspace: "/tmp/openclaw-e2e",
+    });
+    await loading.waitFor({ state: "detached" });
+    await page.getByRole("heading", { name: "Connect a verified AI model" }).waitFor();
+    expect([...requestedWorkspaceModules]).toEqual([]);
+    await captureProof(page, "07-first-run-model-setup-ready");
+  });
+
   it("falls back to the login gate when stored credentials are rejected", async () => {
     const page = await createPage();
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });

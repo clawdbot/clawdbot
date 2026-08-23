@@ -18,6 +18,7 @@ const conversation = {
   channel: "reef",
   accountId: "default",
   kind: "direct" as const,
+  peerId: "molty",
   target: "reef:molty",
   sessionId: "reef-session",
   sessionKey: "agent:main:reef:direct:molty",
@@ -136,7 +137,9 @@ function createDeps() {
       from: "reef:molty",
       to: conversation.target,
     })),
-    bindOutboundSessionEntry: vi.fn(async () => undefined),
+    bindOutboundSessionEntry: vi.fn(
+      async (_params: { assertCommitAllowed?: () => void }) => undefined,
+    ),
     runMessageAction: vi.fn(async () => sentResult()) as never,
     operations,
     update,
@@ -159,6 +162,37 @@ function persistIntent(input: Record<string, unknown>): void {
 }
 
 describe("runGatewayConversationTurn", () => {
+  it("rejects a stored conversation route owned by another agent", async () => {
+    const deps = createDeps();
+
+    await expect(
+      runGatewayConversationTurn(
+        {
+          config: {
+            agents: { entries: { main: {}, finance: {} } },
+            bindings: [
+              {
+                type: "route",
+                agentId: "finance",
+                match: { channel: "reef", accountId: "default" },
+              },
+            ],
+          },
+          agentId: "main",
+          senderIsOwner: true,
+          turnId: "turn-sibling-route",
+          conversationRef: conversation.conversationRef,
+          message: "hello",
+          timeoutMs: 1,
+        },
+        deps,
+      ),
+    ).rejects.toBeInstanceOf(ConversationInputError);
+    expect(deps.resolveOutboundChannelPlugin).not.toHaveBeenCalled();
+    expect(deps.beginOperation).not.toHaveBeenCalled();
+    expect(deps.runMessageAction).not.toHaveBeenCalled();
+  });
+
   it("creates a context binding only when a discovered address starts a turn", async () => {
     const deps = createDeps();
     const {
@@ -168,6 +202,11 @@ describe("runGatewayConversationTurn", () => {
       ...unbound
     } = conversation;
     deps.resolveConversation.mockReturnValueOnce(unbound).mockReturnValue(conversation);
+    deps.bindOutboundSessionEntry.mockImplementationOnce(
+      async (params: { assertCommitAllowed?: () => void }) => {
+        params.assertCommitAllowed?.();
+      },
+    );
     deps.runMessageAction = vi.fn(async (input: Record<string, unknown>) => {
       persistIntent(input);
       return sentResult();
@@ -195,6 +234,54 @@ describe("runGatewayConversationTurn", () => {
     expect(deps.registerPendingConversationTurn).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: conversation.sessionId }),
     );
+  });
+
+  it("rejects a route-owner change at the outbound session binding commit", async () => {
+    const deps = createDeps();
+    const {
+      sessionId: _sessionId,
+      sessionKey: _sessionKey,
+      role: _role,
+      ...unbound
+    } = conversation;
+    deps.resolveConversation.mockReturnValue(unbound);
+    deps.bindOutboundSessionEntry.mockImplementationOnce(
+      async (params: { assertCommitAllowed?: () => void }) => {
+        params.assertCommitAllowed?.();
+      },
+    );
+    const readCurrentConfig = vi
+      .fn()
+      .mockReturnValueOnce({})
+      .mockReturnValue({
+        agents: { entries: { main: {}, finance: {} } },
+        bindings: [
+          {
+            type: "route",
+            agentId: "finance",
+            match: { channel: "reef", accountId: "default" },
+          },
+        ],
+      });
+
+    await expect(
+      runGatewayConversationTurn(
+        {
+          config: {},
+          readCurrentConfig,
+          agentId: "main",
+          senderIsOwner: true,
+          turnId: "turn-revoked-during-bind",
+          conversationRef: conversation.conversationRef,
+          message: "hello molty",
+          timeoutMs: 1,
+        },
+        deps,
+      ),
+    ).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
+
+    expect(deps.beginOperation).not.toHaveBeenCalled();
+    expect(deps.runMessageAction).not.toHaveBeenCalled();
   });
 
   it("registers correlation before durable delivery and consumes a fast reply inline", async () => {
@@ -319,8 +406,6 @@ describe("runGatewayConversationTurn", () => {
       createdAt: 100,
       updatedAt: 300,
     });
-    deps.resolveConversation.mockReturnValue(undefined);
-
     await expect(
       runGatewayConversationTurn(
         {
@@ -335,9 +420,55 @@ describe("runGatewayConversationTurn", () => {
         deps,
       ),
     ).resolves.toMatchObject({ status: "replied", reply: { text: "ack" } });
-    expect(deps.resolveConversation).not.toHaveBeenCalled();
+    expect(deps.resolveConversation).toHaveBeenCalled();
     expect(deps.runMessageAction).not.toHaveBeenCalled();
     expect(deps.resolveOutboundChannelPlugin).not.toHaveBeenCalled();
+  });
+
+  it("does not reveal a completed reply after the route owner changes", async () => {
+    const deps = createDeps();
+    deps.operations.set("turn-reassigned", {
+      operationId: "turn-reassigned",
+      operationKind: "turn",
+      conversationRef: conversation.conversationRef,
+      channel: conversation.channel,
+      messageHash: "hello",
+      status: "replied",
+      preparedMessageId: "reef-outbound-1",
+      platformMessageId: "reef-outbound-1",
+      reply: {
+        messageId: "reply-private",
+        replyToId: "reef-outbound-1",
+        text: "private finance reply",
+        timestamp: 300,
+      },
+      createdAt: 100,
+      updatedAt: 300,
+    });
+
+    await expect(
+      runGatewayConversationTurn(
+        {
+          config: {
+            agents: { entries: { main: {}, finance: {} } },
+            bindings: [
+              {
+                type: "route",
+                agentId: "finance",
+                match: { channel: "reef", accountId: "default" },
+              },
+            ],
+          },
+          agentId: "main",
+          senderIsOwner: true,
+          turnId: "turn-reassigned",
+          conversationRef: conversation.conversationRef,
+          message: "hello",
+          timeoutMs: 1_000,
+        },
+        deps,
+      ),
+    ).rejects.toBeInstanceOf(ConversationInputError);
   });
 
   it("returns queued state without retrying recipient-visible I/O", async () => {
@@ -510,6 +641,46 @@ describe("runGatewayConversationTurn", () => {
       name: "ConversationInputError",
       message: "atomic message limit",
     });
+  });
+
+  it("rejects delivery after the admitted session generation is replaced", async () => {
+    const deps = createDeps();
+    let current = conversation;
+    deps.resolveConversation.mockImplementation(() => current);
+    deps.runMessageAction = vi.fn(async (input: Record<string, unknown>) => {
+      persistIntent(input);
+      current = {
+        ...conversation,
+        sessionId: "replacement-session",
+        sessionKey: "agent:main:reef:direct:replacement",
+      };
+      try {
+        await (input.onDeliveryAttempt as () => Promise<void>)();
+      } catch (error) {
+        deps.update("turn-replaced-session", {
+          status: "rejected",
+          rejectionError: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+      return sentResult();
+    }) as never;
+
+    await expect(
+      runGatewayConversationTurn(
+        {
+          config: {},
+          agentId: "main",
+          senderIsOwner: true,
+          turnId: "turn-replaced-session",
+          conversationRef: conversation.conversationRef,
+          message: "hello",
+          timeoutMs: 1_000,
+        },
+        deps,
+      ),
+    ).rejects.toMatchObject({ name: "ConversationInputError" });
+    expect(deps.runMessageAction).toHaveBeenCalledOnce();
   });
 
   it("rejects unsupported channels before registering or sending", async () => {
