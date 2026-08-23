@@ -444,14 +444,13 @@ export function authorCronRunCompletion<
     CronJobRunResult,
     "status" | "error" | "deliveryError" | "delivered" | "deliveryAttempted"
   >,
->(state: CronServiceState, job: CronJob, result: T) {
+>(_state: CronServiceState, job: CronJob, result: T) {
   const deliveryState = resolveDeliveryState({
     job,
     runStatus: result.status,
     delivered: result.delivered,
     deliveryAttempted: result.deliveryAttempted,
     error: result.deliveryError ?? result.error,
-    globalFailureDestination: state.deps.cronConfig?.failureAlert,
   });
   return {
     ...result,

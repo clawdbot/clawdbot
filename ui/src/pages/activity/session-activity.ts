@@ -1,4 +1,5 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { ACTIVITY_PERSON_PARAM } from "../../app-route-paths.ts";
 import {
   presenceViewerLabel,
   projectPresencePayload,
@@ -47,7 +48,7 @@ export function parseSessionActivityFilters(search: string): SessionActivityFilt
   const params = new URLSearchParams(search);
   const rawTime = params.get("time");
   return {
-    personId: normalized(params.get("person")) ?? null,
+    personId: normalized(params.get(ACTIVITY_PERSON_PARAM)) ?? null,
     query: params.get("q")?.trim() ?? "",
     time: isActivityTimeFilter(rawTime) ? rawTime : DEFAULT_ACTIVITY_TIME_FILTER,
   };
@@ -59,7 +60,7 @@ export function sessionActivitySearch(filters: SessionActivityFilters): string {
     params.set("time", filters.time);
   }
   if (filters.personId) {
-    params.set("person", filters.personId);
+    params.set(ACTIVITY_PERSON_PARAM, filters.personId);
   }
   if (filters.query) {
     params.set("q", filters.query);

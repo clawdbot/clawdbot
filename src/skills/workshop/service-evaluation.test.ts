@@ -455,7 +455,7 @@ describe("Skill Workshop proposal evaluation", () => {
         "skill-workshop",
         "proposals",
         proposal.record.id,
-        "PROPOSAL.md",
+        proposal.record.draftFile,
       ),
       "# Evaluation Drift\n\nUncommitted replacement.\n",
     );
@@ -511,7 +511,7 @@ describe("Skill Workshop proposal evaluation", () => {
         "skill-workshop",
         "proposals",
         proposal.record.id,
-        "PROPOSAL.md",
+        proposal.record.draftFile,
       ),
       "# Concurrent Drift\n\nReplaced while evaluating.\n",
     );

@@ -19,6 +19,28 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import { mintSecretSentinel } from "../sentinel.js";
+import {
+  classifyHiddenGitHubStoreName,
+  GITHUB_DEVICE_STORE_MAX_AGE_MS,
+  GITHUB_SETUP_HANDOFF_MAX_AGE_MS,
+} from "./secret-store-hidden-github.js";
+import {
+  SECRET_STORE_ALLOWED_HOSTS_MAX,
+  SECRET_STORE_VALUE_MAX_BYTES,
+  SecretStoreValidationError,
+} from "./secret-store-validation-error.js";
+
+export {
+  deleteHiddenGitHubSecretRecord,
+  listHiddenGitHubSecretRecordNames,
+  readHiddenGitHubSecretRecord,
+  writeHiddenGitHubSecretRecord,
+} from "./secret-store-hidden-github.js";
+export {
+  SECRET_STORE_ALLOWED_HOSTS_MAX,
+  SECRET_STORE_VALUE_MAX_BYTES,
+  SecretStoreValidationError,
+} from "./secret-store-validation-error.js";
 
 type SecretStoreDatabase = Pick<OpenClawStateKyselyDatabase, "secret_store_entries">;
 type SecretStoreRow = Selectable<OpenClawStateKyselyDatabase["secret_store_entries"]>;
@@ -54,27 +76,7 @@ type SecretStoreReadError =
   | { code: "SECRET_STORE_INVALID_NAME"; message: string }
   | { code: "SECRET_STORE_UNAVAILABLE"; message: string; cause: unknown };
 
-type SecretStoreValidationCode =
-  | "SECRET_STORE_INVALID_NAME"
-  | "SECRET_STORE_INVALID_ALLOWED_HOST"
-  | "SECRET_STORE_VALUE_TOO_LARGE"
-  | "SECRET_STORE_VALUE_EMPTY";
-
-export class SecretStoreValidationError extends Error {
-  constructor(
-    readonly code: SecretStoreValidationCode,
-    message: string,
-  ) {
-    super(message);
-    this.name = "SecretStoreValidationError";
-  }
-}
-
-export const SECRET_STORE_VALUE_MAX_BYTES = 64 * 1024;
-export const SECRET_STORE_ALLOWED_HOSTS_MAX = 128;
 const SECRET_STORE_RETENTION_MS = 30 * 24 * 60 * 60_000;
-const GITHUB_SETUP_HANDOFF_PATTERN = /^github-setup-[a-f0-9]{32}$/u;
-const GITHUB_SETUP_HANDOFF_MAX_AGE_MS = 10 * 60_000;
 
 function normalizeScope(_scope: SecretStoreScope): { scopeKind: "team"; scopeId: "" } {
   return { scopeKind: "team", scopeId: "" };
@@ -90,10 +92,10 @@ function assertSecretStoreEnvName(name: string): void {
 }
 
 function assertSecretStoreMutationName(name: string): void {
-  if (!ENV_SECRET_REF_ID_RE.test(name) && !GITHUB_SETUP_HANDOFF_PATTERN.test(name)) {
+  if (!ENV_SECRET_REF_ID_RE.test(name) && classifyHiddenGitHubStoreName(name) !== "setup") {
     throw new SecretStoreValidationError(
       "SECRET_STORE_INVALID_NAME",
-      `Secret store name must match ${String(ENV_SECRET_REF_ID_RE)} or ${String(GITHUB_SETUP_HANDOFF_PATTERN)}.`,
+      `Secret store name must match ${String(ENV_SECRET_REF_ID_RE)} or github-setup-<32 lowercase hex characters>.`,
     );
   }
 }
@@ -230,7 +232,7 @@ export function listSecretStoreEntries(params: {
           query = query.where("deleted_at_ms", "is", null);
         }
         return executeSqliteQuerySync(sqlite, query)
-          .rows.filter((row) => !GITHUB_SETUP_HANDOFF_PATTERN.test(row.name))
+          .rows.filter((row) => classifyHiddenGitHubStoreName(row.name) === undefined)
           .map(toMetadata);
       }, params.database ?? {}) ?? []
     );
@@ -248,7 +250,7 @@ export function consumeGitHubSetupHandoff(params: {
   nowMs?: number;
   database?: OpenClawStateDatabaseOptions;
 }): string | undefined {
-  if (!GITHUB_SETUP_HANDOFF_PATTERN.test(params.name)) {
+  if (classifyHiddenGitHubStoreName(params.name) !== "setup") {
     return undefined;
   }
   const now = params.nowMs ?? Date.now();
@@ -324,7 +326,10 @@ export function readSecretStoreExecEnvironment(params: {
         const secretEgressBindings: SecretStoreEgressBinding[] = [];
         const excludedNames = new Set(params.excludeNames ?? []);
         for (const row of rows) {
-          if (GITHUB_SETUP_HANDOFF_PATTERN.test(row.name) || excludedNames.has(row.name)) {
+          if (
+            classifyHiddenGitHubStoreName(row.name) !== undefined ||
+            excludedNames.has(row.name)
+          ) {
             continue;
           }
           if (row.kind === "env") {
@@ -530,19 +535,20 @@ export function deleteSecretStoreEntry(params: {
     runOpenClawStateWriteTransaction(
       ({ db: sqlite }) => {
         const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
-        const query = GITHUB_SETUP_HANDOFF_PATTERN.test(params.name)
-          ? db
-              .deleteFrom("secret_store_entries")
-              .where("scope_kind", "=", scopeKind)
-              .where("scope_id", "=", scopeId)
-              .where("name", "=", params.name)
-          : db
-              .updateTable("secret_store_entries")
-              .set({ deleted_at_ms: now, updated_at_ms: now })
-              .where("scope_kind", "=", scopeKind)
-              .where("scope_id", "=", scopeId)
-              .where("name", "=", params.name)
-              .where("deleted_at_ms", "is", null);
+        const query =
+          classifyHiddenGitHubStoreName(params.name) === "setup"
+            ? db
+                .deleteFrom("secret_store_entries")
+                .where("scope_kind", "=", scopeKind)
+                .where("scope_id", "=", scopeId)
+                .where("name", "=", params.name)
+            : db
+                .updateTable("secret_store_entries")
+                .set({ deleted_at_ms: now, updated_at_ms: now })
+                .where("scope_kind", "=", scopeKind)
+                .where("scope_id", "=", scopeId)
+                .where("name", "=", params.name)
+                .where("deleted_at_ms", "is", null);
         executeSqliteQuerySync(sqlite, query);
       },
       { ...params.database, database: state },
@@ -563,6 +569,7 @@ export function purgeExpiredSecretStoreEntries(
   const state = openOpenClawStateDatabase(params.database);
   const threshold = Date.now() - SECRET_STORE_RETENTION_MS;
   const handoffThreshold = Date.now() - GITHUB_SETUP_HANDOFF_MAX_AGE_MS;
+  const deviceThreshold = Date.now() - GITHUB_DEVICE_STORE_MAX_AGE_MS;
   try {
     return runOpenClawStateWriteTransaction(
       ({ db: sqlite }) => {
@@ -574,16 +581,24 @@ export function purgeExpiredSecretStoreEntries(
             .where("deleted_at_ms", "is not", null)
             .where("deleted_at_ms", "<", threshold),
         );
-        const handoffRows = executeSqliteQuerySync(
+        const hiddenRows = executeSqliteQuerySync(
           sqlite,
           db
             .selectFrom("secret_store_entries")
-            .select(["scope_kind", "scope_id", "name"])
+            .select(["scope_kind", "scope_id", "name", "created_at_ms"])
             .where("deleted_at_ms", "is", null)
-            .where("created_at_ms", "<", handoffThreshold),
-        ).rows.filter((row) => GITHUB_SETUP_HANDOFF_PATTERN.test(row.name));
-        let expiredHandoffs = 0;
-        for (const row of handoffRows) {
+            .where("created_at_ms", "<=", Math.max(handoffThreshold, deviceThreshold)),
+        ).rows.filter((row) => {
+          const kind = classifyHiddenGitHubStoreName(row.name);
+          const createdAtMs = normalizeSqliteNumber(row.created_at_ms);
+          return (
+            createdAtMs !== undefined &&
+            ((kind === "setup" && createdAtMs < handoffThreshold) ||
+              (kind === "device" && createdAtMs <= deviceThreshold))
+          );
+        });
+        let expiredHidden = 0;
+        for (const row of hiddenRows) {
           const result = executeSqliteQuerySync(
             sqlite,
             db
@@ -592,9 +607,9 @@ export function purgeExpiredSecretStoreEntries(
               .where("scope_id", "=", row.scope_id)
               .where("name", "=", row.name),
           );
-          expiredHandoffs += Number(result.numAffectedRows ?? 0n);
+          expiredHidden += Number(result.numAffectedRows ?? 0n);
         }
-        return Number(deleted.numAffectedRows ?? 0n) + expiredHandoffs;
+        return Number(deleted.numAffectedRows ?? 0n) + expiredHidden;
       },
       { ...params.database, database: state },
       { operationLabel: "secrets.store.purge" },

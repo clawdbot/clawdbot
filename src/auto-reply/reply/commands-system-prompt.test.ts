@@ -5,7 +5,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
 import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
-import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
+import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
 import {
   ensureSandboxWorkspaceForSession,
   resolveSandboxRuntimeStatus,
@@ -16,11 +16,18 @@ import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/sess
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-const { createOpenClawCodingToolsMock } = vi.hoisted(() => ({
+const { createOpenClawCodingToolsMock, logWarnMock, makeBootstrapWarnMock } = vi.hoisted(() => ({
   createOpenClawCodingToolsMock: vi.fn(() => []),
+  logWarnMock: vi.fn(),
+  makeBootstrapWarnMock: vi.fn((params: { warn?: (message: string) => void }) => params.warn),
+}));
+
+vi.mock("../../logging/subsystem.js", () => ({
+  createSubsystemLogger: vi.fn(() => ({ warn: logWarnMock })),
 }));
 
 vi.mock("../../agents/bootstrap-files.js", () => ({
+  makeBootstrapWarn: makeBootstrapWarnMock,
   resolveBootstrapContextForRun: vi.fn(async () => ({
     bootstrapFiles: [],
     contextFiles: [],
@@ -201,6 +208,26 @@ describe("resolveCommandsSystemPromptBundle", () => {
       "resolveBootstrapContextForRun",
     );
     expect(bootstrapParams.agentId).toBe("target");
+  });
+
+  it("records bootstrap exclusions for generated command prompts", async () => {
+    const params = makeParams();
+
+    await resolveCommandsSystemPromptBundle(params);
+
+    expect(vi.mocked(makeBootstrapWarn)).toHaveBeenCalledWith({
+      sessionLabel: "agent:main:default",
+      workspaceDir: "/tmp/workspace",
+      warn: expect.any(Function),
+    });
+    const bootstrapParams = requireFirstArg(
+      vi.mocked(resolveBootstrapContextForRun),
+      "resolveBootstrapContextForRun",
+    );
+    const warn = bootstrapParams.warn as ((message: string) => void) | undefined;
+    expect(warn).toEqual(expect.any(Function));
+    warn?.("excluding automatic memory context");
+    expect(logWarnMock).toHaveBeenCalledWith("excluding automatic memory context");
   });
 
   it("prefers the target session entry for bootstrap and tool metadata", async () => {

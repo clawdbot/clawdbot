@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
@@ -63,6 +64,7 @@ const sendDurableMessageBatch = vi.fn(
       channelData?: { telegram?: { buttons?: unknown; quoteText?: string } };
     }>;
     replyToId?: string;
+    reply?: ChannelMessageActionContext["reply"];
     threadId?: string | number;
     forceDocument?: boolean;
     silent?: boolean;
@@ -866,7 +868,13 @@ describe("handleTelegramAction", () => {
       telegramConfig(),
       {
         gatewayClientScopes: ["operator.write"],
+        deliveryRetryOwner: "caller",
         sessionKey: "agent:main:telegram:direct:123",
+        reply: {
+          replyToId: "456",
+          source: "implicit",
+          mode: "first",
+        },
       },
     );
     const call = mockCall(sendMessageTelegram, 0, "text message");
@@ -881,7 +889,11 @@ describe("handleTelegramAction", () => {
       to: "@testchannel",
       durability: "required",
       gatewayClientScopes: ["operator.write"],
+      // The gateway-owned plugin send must inherit the caller's retry ownership,
+      // or the failed row stays replay-eligible and duplicates (#124279).
+      deliveryRetryOwner: "caller",
       session: { key: "agent:main:telegram:direct:123", agentId: "main" },
+      reply: { replyToId: "456", source: "implicit", mode: "first" },
       payloads: [{ text: "Hello, Telegram!" }],
     });
     expect(result.content).toStrictEqual([

@@ -3,6 +3,7 @@ import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type {
   ChannelMessageUnknownSendReconciliationResult,
+  OutboundReplyFacts,
   RenderedMessageBatchPlanItem,
 } from "../../channels/message/types.js";
 import type { ReplyToMode } from "../../config/types.js";
@@ -45,8 +46,7 @@ export type QueuedDeliveryPayload = {
   payloads?: ReplyPayload[];
   renderedBatchPlan?: QueuedRenderedMessageBatchPlan;
   threadId?: string | number | null;
-  replyToId?: string | null;
-  replyToMode?: ReplyToMode;
+  reply?: OutboundReplyFacts;
   formatting?: OutboundDeliveryFormattingOptions;
   identity?: OutboundIdentity;
   bestEffort?: boolean;
@@ -69,6 +69,8 @@ export type QueuedDeliveryPayload = {
 
 type LegacyQueuedDeliveryPayload = Omit<QueuedDeliveryPayload, "preparedBatch" | "payloads"> & {
   payloads: ReplyPayload[];
+  replyToId?: string | null;
+  replyToMode?: ReplyToMode;
   replyPayloadSendingHook?: QueuedReplyPayloadSendingHook;
 };
 

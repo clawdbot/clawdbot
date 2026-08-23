@@ -1,16 +1,16 @@
 /** Sends cron announce payloads and best-effort failure notifications. */
 
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
-import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
+import {
+  durableMessageBatchMayHaveReachedRecipient,
+  sendDurableMessageBatchCore,
+} from "../channels/message/runtime.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { withTimeout } from "../infra/fs-safe.js";
 import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
-import { getChildLogger } from "../logging.js";
-import { resolveFailureDestination, resolveCronDeliveryPlan } from "./delivery-plan.js";
+import { resolveCronDeliveryPlan } from "./delivery-plan.js";
 import {
   resolveDeliveryTarget,
   type DeliveryTargetResolution,
@@ -18,10 +18,7 @@ import {
 import { resolveCronNotificationSessionKey } from "./session-target.js";
 import type { CronMessageChannel } from "./types.js";
 
-export { resolveCronDeliveryPlan, resolveFailureDestination };
-
-const FAILURE_NOTIFICATION_TIMEOUT_MS = 30_000;
-const cronDeliveryLogger = getChildLogger({ subsystem: "cron-delivery" });
+export { resolveCronDeliveryPlan };
 
 /** Channel target metadata used for cron announcements and failure notifications. */
 type CronAnnounceTarget = {
@@ -98,6 +95,7 @@ async function deliverCronAnnouncePayload(params: {
   };
   payload: ReplyPayload;
   abortSignal: AbortSignal;
+  onDeliveryAttempt?: (reachedRecipient: boolean) => void;
 }): Promise<void> {
   // Cron delivery is durable and non-best-effort for primary announces; partial
   // channel failure must surface as a cron run failure.
@@ -114,6 +112,7 @@ async function deliverCronAnnouncePayload(params: {
     deps: createOutboundSendDeps(params.deps),
     signal: params.abortSignal,
   });
+  params.onDeliveryAttempt?.(durableMessageBatchMayHaveReachedRecipient(send));
   if (send.status === "failed" || send.status === "partial_failed") {
     throw send.error;
   }
@@ -128,6 +127,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
   target: CronAnnounceTarget;
   payload: ReplyPayload;
   abortSignal: AbortSignal;
+  onDeliveryAttempt?: (reachedRecipient: boolean) => void;
 }): Promise<void> {
   const delivery = await resolveCronAnnounceDelivery(params);
   if (!delivery.ok) {
@@ -142,64 +142,6 @@ export async function sendCronAnnouncePayloadStrict(params: {
     delivery,
     payload: params.payload,
     abortSignal: params.abortSignal,
+    onDeliveryAttempt: params.onDeliveryAttempt,
   });
-}
-
-/** Sends a best-effort cron failure notification, logging resolution/send failures. */
-export async function sendFailureNotificationAnnounce(
-  deps: CliDeps,
-  cfg: OpenClawConfig,
-  agentId: string,
-  jobId: string,
-  target: CronAnnounceTarget,
-  payload: ReplyPayload,
-): Promise<void> {
-  const abortController = new AbortController();
-  let resolvedTarget: SuccessfulDeliveryTarget | undefined;
-
-  try {
-    // Bound resolution and transport together; either owner can stall while
-    // retaining the detached Gateway work admission.
-    await withTimeout(
-      (async () => {
-        const delivery = await resolveCronAnnounceDelivery({ cfg, agentId, jobId, target });
-        if (!delivery.ok) {
-          // Failure alerts must not mask the original cron run failure.
-          cronDeliveryLogger.warn(
-            { error: delivery.error.message },
-            "cron: failed to resolve failure destination target",
-          );
-          return;
-        }
-        resolvedTarget = delivery.resolvedTarget;
-        // A resolver can settle after its deadline; never start a late send
-        // after detached work ownership has already been released.
-        abortController.signal.throwIfAborted();
-        await deliverCronAnnouncePayload({
-          deps,
-          cfg,
-          delivery,
-          payload,
-          abortSignal: abortController.signal,
-        });
-      })(),
-      FAILURE_NOTIFICATION_TIMEOUT_MS,
-      {
-        createError: () => {
-          const error = new Error("cron: failure destination announcement timed out");
-          abortController.abort(error);
-          return error;
-        },
-      },
-    );
-  } catch (err) {
-    cronDeliveryLogger.warn(
-      {
-        err: formatErrorMessage(err),
-        channel: resolvedTarget?.channel ?? target.channel,
-        to: resolvedTarget?.to ?? target.to,
-      },
-      "cron: failure destination announce failed",
-    );
-  }
 }

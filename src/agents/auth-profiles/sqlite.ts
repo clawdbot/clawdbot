@@ -38,6 +38,7 @@ import {
 import { resolveUserPath } from "../../utils.js";
 import { resolveRegisteredAgentIdForDir } from "../agent-dir-registry.js";
 import { resolveSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
+import { prepareFreshSharedAuthStoreWrite } from "./shared-store-bootstrap.js";
 
 type AgentAuthProfileDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -166,11 +167,13 @@ function resolveAuthProfileDatabaseKind(
   agentDir: string | undefined,
   database?: Pick<AuthProfileDatabase, "db">,
 ): AuthProfileDatabaseTarget["kind"] {
-  return agentDir !== undefined
-    ? "agent"
-    : database && !("agentId" in database)
-      ? "shared-state"
-      : resolveAuthProfileDatabaseOptions(agentDir).kind;
+  if (database && "agentId" in database) {
+    return "agent";
+  }
+  if (database && "path" in database) {
+    return "shared-state";
+  }
+  return resolveAuthProfileDatabaseOptions(agentDir).kind;
 }
 
 function inspectAuthProfileTable(
@@ -658,12 +661,24 @@ export function writePersistedAuthProfileStateRaw(
 export function runAuthProfileWriteTransaction<T>(
   agentDir: string | undefined,
   operation: (database: AuthProfileDatabase) => T,
-  options: { env?: NodeJS.ProcessEnv; stateDir?: string } = {},
+  options: {
+    env?: NodeJS.ProcessEnv;
+    sharedStoreWrite?: boolean;
+    stateDir?: string;
+  } = {},
 ): T {
   const env =
     options.env ??
     (options.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: options.stateDir } : process.env);
-  const databaseTarget = resolveAuthProfileDatabaseOptions(agentDir, env);
+  const sharedStoreWrite = prepareFreshSharedAuthStoreWrite({
+    agentDir,
+    allowExplicitMain: options.sharedStoreWrite === true,
+    env,
+  });
+  const databaseTarget = resolveAuthProfileDatabaseOptions(
+    sharedStoreWrite ? undefined : agentDir,
+    env,
+  );
   if (databaseTarget.kind === "agent") {
     return runOpenClawAgentWriteTransaction(operation, databaseTarget);
   }

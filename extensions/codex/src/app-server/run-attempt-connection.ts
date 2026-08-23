@@ -21,6 +21,7 @@ import {
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
+  isCodexPairedNodeRemoteExecPlacementSandbox,
   isCodexRemoteExecPlacementSandbox,
   readCodexPluginConfig,
   readCodexRequirementsToml,
@@ -47,7 +48,10 @@ import {
   applyCodexSessionPermissionPolicy,
   resolveCodexSessionPermissionCwd,
 } from "./session-permission-policy.js";
-import { getLeasedSharedCodexAppServerClient } from "./shared-client.js";
+import {
+  createIsolatedCodexAppServerClient,
+  getLeasedSharedCodexAppServerClient,
+} from "./shared-client.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
 
 export async function prepareCodexAttemptConnection({ params, options }: CodexRunAttemptInput) {
@@ -69,7 +73,6 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const preDynamicStartupStages = createCodexDynamicToolBuildStageTracker({
     enabled: profilerEnabled,
   });
-  const attemptClientFactory = options.clientFactory ?? getLeasedSharedCodexAppServerClient;
   const runtimeArtifactRequest =
     params.captureRuntimeArtifact || params.expectedRuntimeArtifact
       ? params.expectedRuntimeArtifact
@@ -99,6 +102,12 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
           sessionKey: sandboxSessionKey,
           workspaceDir: resolvedWorkspace,
         });
+  // Upstream cannot remove registered environments, so node leases own one disposable client.
+  const attemptClientFactory =
+    options.clientFactory ??
+    (isCodexPairedNodeRemoteExecPlacementSandbox(sandbox)
+      ? createIsolatedCodexAppServerClient
+      : getLeasedSharedCodexAppServerClient);
   preDynamicStartupStages.mark("sandbox");
   const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
     // Explicit modes replace legacy fields; full also replaces approval-file floors.

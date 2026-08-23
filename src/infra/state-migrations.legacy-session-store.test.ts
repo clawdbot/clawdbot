@@ -106,6 +106,13 @@ it("normalizes compatibility writes before persistence", async () => {
         updatedAt: 1,
         provider: "slack",
         pendingFinalDeliveryAttemptCount: -1,
+        skillsSnapshot: {
+          prompt: "compact skill prompt",
+          skills: [{ name: "demo" }],
+          skillFilter: ["demo"],
+          resolvedSkills: [{ name: "demo", description: "runtime-only catalog" }],
+          version: 7,
+        },
       },
     } as unknown as Parameters<typeof saveLegacySessionStore>[1];
 
@@ -123,8 +130,15 @@ it("normalizes compatibility writes before persistence", async () => {
         context: { channel: "slack" },
         origin: { provider: "slack" },
       },
+      skillsSnapshot: {
+        prompt: "compact skill prompt",
+        skills: [{ name: "demo" }],
+        skillFilter: ["demo"],
+        version: 7,
+      },
     });
     expect(persisted["agent:main:main"]).not.toHaveProperty("channel");
     expect(persisted["agent:main:main"]).not.toHaveProperty("pendingFinalDeliveryAttemptCount");
+    expect(persisted["agent:main:main"]?.skillsSnapshot).not.toHaveProperty("resolvedSkills");
   });
 });

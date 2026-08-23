@@ -658,7 +658,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     });
     expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
       expect.objectContaining({
-        outcome: "completed",
+        outcome: "skipped",
         reason: "reply_operation_aborted",
       }),
     );
@@ -1095,7 +1095,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     });
     expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
       expect.objectContaining({
-        outcome: "completed",
+        outcome: "skipped",
         reason: "reply_operation_aborted",
       }),
     );

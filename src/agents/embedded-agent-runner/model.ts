@@ -419,7 +419,7 @@ export async function resolveModelAsync(
       });
     };
     const resolveDynamicAttempt = async () => {
-      await runtimeHooks.prepareProviderDynamicModel({
+      const preparedDynamicModel = await runtimeHooks.prepareProviderDynamicModel({
         provider: normalizedRef.provider,
         config: cfg,
         workspaceDir,
@@ -448,6 +448,7 @@ export async function resolveModelAsync(
         authProfileMode: options?.authProfileMode,
         preferredProfile: options?.preferredProfile,
         runtimeHooks,
+        ...(preparedDynamicModel ? { preparedDynamicModel } : {}),
         getStaticCatalogModel: getManifestStaticCatalogModel,
         ...(options?.allowBundledStaticCatalogFallback ? { skipConfiguredFallback: true } : {}),
       });

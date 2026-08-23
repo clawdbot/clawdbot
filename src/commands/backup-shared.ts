@@ -7,13 +7,24 @@ import {
   resolveOAuthDir,
   resolveStateDir,
 } from "../config/config.js";
-import { pathExists, shortenHomePath } from "../utils.js";
+import { pathExists, resolveUserPath, shortenHomePath } from "../utils.js";
 import { buildCleanupPlan, isPathWithin } from "./cleanup-utils.js";
 import { planUpgradeConfigRepair } from "./doctor/shared/automatic-upgrade-config-repair.js";
 
 // DEFLATE can legitimately encode zero-filled sparse ranges just over 1000:1.
 // Keep bounded headroom without disabling node-tar's decompression bomb guard.
 export const BACKUP_MAX_DECOMPRESSION_RATIO = 1100;
+
+export function resolveRequiredBackupPath(
+  value: string | undefined,
+  label: "--repository" | "--target" | "<snapshot>" | "--scratch",
+): string {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    throw new Error(`Missing required ${label} value.`);
+  }
+  return resolveUserPath(trimmed);
+}
 
 type BackupAssetKind = "state" | "config" | "credentials" | "workspace";
 type BackupSkipReason = "covered" | "missing";

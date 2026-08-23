@@ -1247,7 +1247,7 @@ async function loadWebMediaInternal(
       throw err;
     }
   }
-  const sniffedMime = await detectMime({ buffer: data });
+  const sniffedMime = hostReadCapability ? await detectMime({ buffer: data }) : undefined;
   const mime = await detectMime({ buffer: data, filePath: mediaUrl });
   const kind = kindFromMime(mime);
   if (hostReadCapability) {

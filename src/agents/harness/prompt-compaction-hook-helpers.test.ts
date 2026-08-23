@@ -3,6 +3,7 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
+import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { resolveAgentHarnessBeforePromptBuildResult } from "./prompt-compaction-hook-helpers.js";
 
@@ -110,6 +111,54 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
 
     expect(calls).toEqual(["heartbeat", "before_prompt_build"]);
     expect(result.prompt).toBe("heartbeat context\n\nprompt context\n\nhello");
+  });
+
+  it("runs authorized enrichment after restrictive hooks finalize the tool surface", async () => {
+    const calls: string[] = [];
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: () => {
+            calls.push("restrict");
+            return { prependContext: "regular context", toolsAllow: ["message"] };
+          },
+        },
+        {
+          hookName: "before_prompt_build",
+          requiresToolAuthority: true,
+          handler: (_event, ctx) => {
+            calls.push("enrich");
+            expect((ctx as PluginHookAgentContext).toolAuthority?.allows("memory_search")).toBe(
+              false,
+            );
+            return { prependContext: "authorized context" };
+          },
+        },
+      ]),
+    );
+    let activeToolNames: string[] = [];
+
+    const result = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "hello",
+      developerInstructions: {
+        build: ({ toolsAllow }) => {
+          calls.push("build");
+          activeToolNames = toolsAllow ?? [];
+          return "base instructions";
+        },
+      },
+      messages: [],
+      ctx: {},
+      toolAuthority: {
+        fingerprint: "turn-authority",
+        activeToolNames: () => activeToolNames,
+        assertActive: () => undefined,
+      },
+    });
+
+    expect(calls).toEqual(["restrict", "build", "enrich"]);
+    expect(result.prompt).toBe("regular context\n\nauthorized context\n\nhello");
   });
 
   it("skips heartbeat_prompt_contribution off a heartbeat turn", async () => {

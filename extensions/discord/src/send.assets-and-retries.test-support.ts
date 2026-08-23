@@ -222,12 +222,14 @@ export function registerSendAssetsAndRetriesTests(deps: SendAssetsAndRetriesDeps
           cfg: discordTestConfig,
           rest,
           token: "t",
+          threadId: "789",
         },
       );
       expect(res.messageId).toBe("msg1");
       expect(res.channelId).toBe("789");
       expect(res.receipt.parts[0]?.platformMessageId).toBe("msg1");
-      expect(res.receipt.parts[0]?.kind).toBe("card");
+      expect(res.receipt.parts[0]?.kind).toBe("poll");
+      expect(res.receipt.threadId).toBe("789");
       expect(requestPath(postMock as unknown as MockCallSource)).toBe(
         Routes.channelMessages("789"),
       );

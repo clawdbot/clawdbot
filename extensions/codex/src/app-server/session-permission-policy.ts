@@ -1,6 +1,6 @@
 import { hostname as readHostName } from "node:os";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import type {
   CodexAppServerApprovalPolicy,
   CodexAppServerApprovalsReviewer,

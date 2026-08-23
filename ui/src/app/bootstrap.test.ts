@@ -427,10 +427,14 @@ describe("normalizeInitialApplicationLocation", () => {
       hello: {
         auth: { role: "operator", scopes: ["operator.admin"] },
         features: { methods: ["openclaw.setup.detect"] },
+        snapshot: {
+          sessionDefaults: { defaultAgentId: "main", modelConfigured: false },
+        },
       },
     } as Parameters<GatewayListener>[0];
     connectedListener(gateway.snapshot);
-    await vi.waitFor(() => expect(replaceRoute).toHaveBeenCalledOnce(), STARTUP_STEP_WAIT);
+    expect(request).not.toHaveBeenCalled();
+    expect(replaceRoute).toHaveBeenCalledOnce();
     expect(replaceRoute).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
   });
 
@@ -772,7 +776,7 @@ describe("normalizeInitialApplicationLocation", () => {
       sessionKey: "main",
       lastActiveSessionKey: "main",
     });
-    window.history.replaceState({}, "", "/");
+    window.history.replaceState({}, "", "/settings/appearance");
     const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
     const pushState = vi.spyOn(window.history, "pushState");
     const replaceState = vi.spyOn(window.history, "replaceState");
@@ -915,7 +919,7 @@ describe("normalizeInitialApplicationLocation", () => {
       sessionKey: "main",
       lastActiveSessionKey: "main",
     });
-    window.history.replaceState({}, "", "/");
+    window.history.replaceState({}, "", "/settings/appearance");
     const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
     const routerStarted = deferred<void>();
     const routerStart = vi.spyOn(runtime.router, "start").mockReturnValue(routerStarted.promise);
@@ -937,7 +941,7 @@ describe("normalizeInitialApplicationLocation", () => {
     }
   });
 
-  it("resolves runtime startup when the bare default route is not found", async () => {
+  it("resolves runtime startup when the initial route is not found", async () => {
     const previousSettings = loadSettings();
     const previousUrl = window.location.href;
     saveSettings({
@@ -945,7 +949,7 @@ describe("normalizeInitialApplicationLocation", () => {
       sessionKey: "main",
       lastActiveSessionKey: "main",
     });
-    window.history.replaceState({}, "", "/");
+    window.history.replaceState({}, "", "/settings/about");
     const runtime = bootstrapApplication({ sessionPathBuilderReady: Promise.resolve() });
     const routerStart = vi
       .spyOn(runtime.router, "start")

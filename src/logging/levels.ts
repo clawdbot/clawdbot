@@ -11,6 +11,18 @@ export const ALLOWED_LOG_LEVELS = [
 
 export type LogLevel = (typeof ALLOWED_LOG_LEVELS)[number];
 
+// tslog v4 logLevelId (src/index.ts): silly=0, trace=1, debug=2, info=3, warn=4, error=5, fatal=6
+// tslog filters: logLevelId < minLevel is dropped, so higher minLevel = more restrictive.
+const MIN_LEVEL_BY_LOG_LEVEL: Record<LogLevel, number> = {
+  trace: 1,
+  debug: 2,
+  info: 3,
+  warn: 4,
+  error: 5,
+  fatal: 6,
+  silent: Number.POSITIVE_INFINITY,
+};
+
 export function tryParseLogLevel(level?: string): LogLevel | undefined {
   if (typeof level !== "string") {
     return undefined;
@@ -24,16 +36,5 @@ export function normalizeLogLevel(level?: string, fallback: LogLevel = "info") {
 }
 
 export function levelToMinLevel(level: LogLevel): number {
-  // tslog v4 logLevelId (src/index.ts): silly=0, trace=1, debug=2, info=3, warn=4, error=5, fatal=6
-  // tslog filters: logLevelId < minLevel is dropped, so higher minLevel = more restrictive.
-  const map: Record<LogLevel, number> = {
-    trace: 1,
-    debug: 2,
-    info: 3,
-    warn: 4,
-    error: 5,
-    fatal: 6,
-    silent: Number.POSITIVE_INFINITY,
-  };
-  return map[level];
+  return MIN_LEVEL_BY_LOG_LEVEL[level];
 }

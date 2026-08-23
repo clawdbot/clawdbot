@@ -18,7 +18,7 @@ import {
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
 import { recordCodexDynamicToolResult } from "./dynamic-tool-result-projection.js";
-import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
+import { routeCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { shouldEmitTranscriptToolProgress } from "./event-projector.js";
 import { readCodexDynamicToolCallParams } from "./protocol-validators.js";
 import type { JsonValue } from "./protocol.js";
@@ -103,7 +103,7 @@ export function createCodexAttemptServerRequestController(
           armCompletionWatchOnResponse = true;
           markCurrentTurnRequestProgress();
         }
-        return await handleCodexAppServerElicitationRequest({
+        const approvalResult = await routeCodexAppServerElicitationRequest({
           requestParams: request.params,
           paramsForRun: params,
           threadId: resourceState.thread.threadId,
@@ -113,6 +113,13 @@ export function createCodexAttemptServerRequestController(
             ? { computerUseMcpServerName: computerUseConfig.mcpServerName }
             : {}),
           signal,
+        });
+        if (approvalResult.kind === "handled") {
+          return approvalResult.response;
+        }
+        return await userInputBridgeRef.current?.handleElicitationRequest({
+          id: request.id,
+          params: request.params,
         });
       }
       if (request.method === "item/tool/requestUserInput") {

@@ -81,6 +81,33 @@ function createLoggedRouteHarness() {
   };
 }
 
+function createTrackedRouteLease() {
+  let active = true;
+  const cleanups = new Set<() => void>();
+  const lease = {
+    isActive: () => active,
+    retain: vi.fn((cleanup: () => void) => {
+      const release = () => {
+        if (cleanups.delete(release)) {
+          cleanup();
+        }
+      };
+      cleanups.add(release);
+      return release;
+    }),
+  };
+  return {
+    lease,
+    cleanups,
+    revoke: () => {
+      active = false;
+      for (const cleanup of cleanups) {
+        cleanup();
+      }
+    },
+  };
+}
+
 describe("registerPluginHttpRoute", () => {
   afterEach(() => {
     resetPluginRuntimeStateForTest();
@@ -640,5 +667,204 @@ describe("registerPluginHttpRoute", () => {
 
     unregister();
     expect(scopedRegistry.httpRoutes).toHaveLength(0);
+  });
+
+  it("tracks exact scoped route cleanup without removing unrelated routes", () => {
+    const registry = createEmptyPluginRegistry();
+    const owner = createTrackedRouteLease();
+    registerPluginHttpRoute({
+      path: "/unrelated-webhook",
+      auth: "plugin",
+      handler: vi.fn(),
+      registry,
+    });
+
+    const cleanup = withPluginHttpRouteRegistry(
+      registry,
+      () => [
+        registerPluginHttpRoute({
+          path: "/leased-anonymous-webhook",
+          auth: "plugin",
+          handler: vi.fn(),
+        }),
+        registerPluginHttpRoute({
+          path: "/leased-owned-webhook",
+          auth: "plugin",
+          handler: vi.fn(),
+          pluginId: "demo",
+        }),
+      ],
+      owner.lease,
+    );
+
+    expect(owner.cleanups.size).toBe(2);
+    cleanup[0]?.();
+    expect(owner.cleanups.size).toBe(1);
+    expect(registry.httpRoutes.map((route) => route.path)).toEqual([
+      "/unrelated-webhook",
+      "/leased-owned-webhook",
+    ]);
+    owner.revoke();
+    cleanup[0]?.();
+    cleanup[1]?.();
+    owner.revoke();
+    expect(owner.cleanups.size).toBe(0);
+    expect(registry.httpRoutes.map((route) => route.path)).toEqual(["/unrelated-webhook"]);
+  });
+
+  it.each([
+    { name: "anonymous", pluginId: undefined, explicitRegistry: false, nestedScope: false },
+    { name: "plugin-owned", pluginId: "demo", explicitRegistry: false, nestedScope: false },
+    {
+      name: "anonymous with an explicit registry",
+      pluginId: undefined,
+      explicitRegistry: true,
+      nestedScope: false,
+    },
+    {
+      name: "anonymous through a nested scope",
+      pluginId: undefined,
+      explicitRegistry: false,
+      nestedScope: true,
+    },
+  ])(
+    "rejects late $name route registration after its async service lease expires",
+    async ({ pluginId, explicitRegistry, nestedScope }) => {
+      const registry = createEmptyPluginRegistry();
+      const cleanups: Array<() => void> = [];
+      let active = true;
+      let releaseContinuation: (() => void) | undefined;
+      const continuation = new Promise<void>((resolve) => {
+        releaseContinuation = resolve;
+      });
+
+      const lateRegistration = withPluginHttpRouteRegistry(
+        registry,
+        async () => {
+          await continuation;
+          const register = () =>
+            registerPluginHttpRoute({
+              path: "/late-webhook",
+              auth: "plugin",
+              handler: vi.fn(),
+              throwOnFailure: true,
+              ...(pluginId ? { pluginId } : {}),
+              ...(explicitRegistry ? { registry } : {}),
+            });
+          if (nestedScope) {
+            withPluginHttpRouteRegistry(registry, register);
+          } else {
+            register();
+          }
+        },
+        {
+          isActive: () => active,
+          retain: (unregister) => {
+            cleanups.push(unregister);
+            return unregister;
+          },
+        },
+      );
+
+      active = false;
+      releaseContinuation?.();
+
+      await expect(lateRegistration).rejects.toThrow(
+        "plugin service HTTP route lease is no longer active",
+      );
+      expect(registry.httpRoutes).toHaveLength(0);
+      expect(cleanups).toHaveLength(0);
+    },
+  );
+
+  it("preserves non-throwing registration behavior for an expired route lease", () => {
+    const registry = createEmptyPluginRegistry();
+    const messages: string[] = [];
+
+    const unregister = withPluginHttpRouteRegistry(
+      registry,
+      () =>
+        registerPluginHttpRoute({
+          path: "/late-webhook",
+          auth: "plugin",
+          handler: vi.fn(),
+          log: (message) => messages.push(message),
+        }),
+      { isActive: () => false, retain: vi.fn() },
+    );
+
+    expect(messages).toEqual(["plugin service HTTP route lease is no longer active"]);
+    expect(registry.httpRoutes).toHaveLength(0);
+    expect(() => unregister()).not.toThrow();
+  });
+
+  it.each([
+    { name: "a different nested registry", childLease: false, expiredOwner: "parent" },
+    { name: "a supplied replacement lease", childLease: true, expiredOwner: "parent" },
+    { name: "an expired child under an active parent", childLease: true, expiredOwner: "child" },
+  ])("rejects expired ambient route authority through $name", ({ childLease, expiredOwner }) => {
+    const parentRegistry = createEmptyPluginRegistry();
+    const nestedRegistry = createEmptyPluginRegistry();
+    const parent = createTrackedRouteLease();
+    const child = createTrackedRouteLease();
+    (expiredOwner === "parent" ? parent : child).revoke();
+
+    expect(() =>
+      withPluginHttpRouteRegistry(
+        parentRegistry,
+        () =>
+          withPluginHttpRouteRegistry(
+            nestedRegistry,
+            () =>
+              registerPluginHttpRoute({
+                path: "/independent-webhook",
+                auth: "plugin",
+                handler: vi.fn(),
+                throwOnFailure: true,
+              }),
+            childLease ? child.lease : undefined,
+          ),
+        parent.lease,
+      ),
+    ).toThrow("plugin service HTTP route lease is no longer active");
+
+    expect(parentRegistry.httpRoutes).toHaveLength(0);
+    expect(nestedRegistry.httpRoutes).toHaveLength(0);
+    expect(parent.lease.retain).not.toHaveBeenCalled();
+    expect(child.lease.retain).not.toHaveBeenCalled();
+  });
+
+  it("releases nested routes from every ambient lease when any owner revokes", () => {
+    const parentRegistry = createEmptyPluginRegistry();
+    const nestedRegistry = createEmptyPluginRegistry();
+    const parent = createTrackedRouteLease();
+    const child = createTrackedRouteLease();
+
+    const unregister = withPluginHttpRouteRegistry(
+      parentRegistry,
+      () =>
+        withPluginHttpRouteRegistry(
+          nestedRegistry,
+          () =>
+            registerPluginHttpRoute({
+              path: "/nested-webhook",
+              auth: "plugin",
+              handler: vi.fn(),
+              throwOnFailure: true,
+            }),
+          child.lease,
+        ),
+      parent.lease,
+    );
+
+    expect(parent.cleanups.size).toBe(1);
+    expect(child.cleanups.size).toBe(1);
+    parent.revoke();
+
+    expect(nestedRegistry.httpRoutes).toHaveLength(0);
+    expect(parent.cleanups.size).toBe(0);
+    expect(child.cleanups.size).toBe(0);
+    unregister();
+    child.revoke();
   });
 });

@@ -654,9 +654,11 @@ describe("chat page split layout host", () => {
     await page.updateComplete;
 
     const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
+    const cells = [...page.querySelectorAll<HTMLElement>(".chat-split-view__cell")];
     const dividers = page.querySelectorAll<RenderedDivider>("resizable-divider");
     expect(panes.map((pane) => pane.paneId)).toEqual(["p1", "p2"]);
     expect(panes.map((pane) => pane.active)).toEqual([false, true]);
+    expect(cells.map((cell) => cell.getAttribute("aria-current"))).toEqual([null, "true"]);
     expect(dividers).toHaveLength(1);
     expect(itemAt(dividers, 0, "split divider").orientation).toBe("vertical");
     expect(
@@ -666,6 +668,27 @@ describe("chat page split layout host", () => {
     ).toBe(true);
     expect(panes.every((pane) => pane.onOpenSplitView === undefined)).toBe(true);
     expect(panes[0]?.chatMessagesBySession).toBe(panes[1]?.chatMessagesBySession);
+
+    itemAt(dividers, 0, "split divider").dispatchEvent(
+      new CustomEvent("resize", { detail: { splitRatio: 0.7 } }),
+    );
+    await page.updateComplete;
+    expect(getLayout(page)?.columnWeights[0]).toBeCloseTo(0.7);
+    expect(getLayout(page)?.columnWeights[1]).toBeCloseTo(0.3);
+    expect(loadSettings().chatSplitLayout).toBeUndefined();
+
+    itemAt(dividers, 0, "split divider").dispatchEvent(new CustomEvent("resize-end"));
+    expect(loadSettings().chatSplitLayout?.columnWeights[0]).toBeCloseTo(0.7);
+    expect(loadSettings().chatSplitLayout?.columnWeights[1]).toBeCloseTo(0.3);
+
+    itemAt(cells, 0, "split cell").dispatchEvent(new Event("pointerdown"));
+    await page.updateComplete;
+
+    expect(
+      [...page.querySelectorAll<HTMLElement>(".chat-split-view__cell")].map((cell) =>
+        cell.getAttribute("aria-current"),
+      ),
+    ).toEqual(["true", null]);
   });
 
   it("declares split panes, session switches, pane closes, and page disposal", async () => {

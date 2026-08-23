@@ -63,7 +63,6 @@ describe("nextcloud-talk send error responses", () => {
         await expect(
           sendMessageNextcloudTalk("room:abc123", "hello", {
             cfg: createTalkConfig(baseUrl),
-            timeoutMs: REQUEST_TIMEOUT_MS,
           }),
         ).rejects.toThrow(new Error(`Nextcloud Talk: bad request - ${prefix}…`));
       },
