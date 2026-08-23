@@ -3353,6 +3353,40 @@ describe("createConfiguredOllamaStreamFn", () => {
     );
   });
 
+  it("acquires the provider service when model baseUrl is whitespace", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const acquire = vi.fn(async () => ({ release: vi.fn() }));
+        const streamFn = createConfiguredOllamaStreamFn({
+          model: { baseUrl: "   " },
+          localService: { providerId: "ollama-gpu", acquire },
+        });
+        const stream = await Promise.resolve(
+          streamFn(
+            {
+              id: "qwen3:32b",
+              api: "ollama",
+              provider: "ollama-gpu",
+              contextWindow: 131072,
+            } as never,
+            { messages: [{ role: "user", content: "hello" }] } as never,
+            {} as never,
+          ),
+        );
+
+        const events = await collectStreamEvents(stream);
+
+        expect(events.at(-1)).toMatchObject({ type: "done" });
+        expect(acquire).toHaveBeenCalledOnce();
+        expect(getGuardedFetchCall(fetchMock).url).toBe("http://127.0.0.1:11434/api/chat");
+      },
+    );
+  });
+
   it("uses provider-level baseUrl when model baseUrl is absent", async () => {
     await withMockNdjsonFetch(
       [

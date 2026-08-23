@@ -1419,7 +1419,7 @@ export function createConfiguredOllamaStreamFn(params: {
   localService?: OllamaLocalService;
   providerBaseUrl?: string;
 }): StreamFn {
-  const modelBaseUrl = readStringValue(params.model.baseUrl);
+  const modelBaseUrl = readStringValue(params.model.baseUrl)?.trim();
   const baseUrl = resolveOllamaBaseUrlForRun({
     modelBaseUrl,
     providerBaseUrl: params.providerBaseUrl,
