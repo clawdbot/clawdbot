@@ -297,6 +297,42 @@ describe("image generation task lifecycle through QA-channel", () => {
       { interval: 50, timeout: 30_000 },
     );
 
+    // PR #128165: the background completion re-enters the agent loop as an
+    // inter-session turn labeled sourceChannel:"internal" (never the legacy
+    // "webchat" mislabel), while the outbound delivery still routes over the real
+    // QA channel above. annotateInterSessionPromptText surfaces sourceChannel in
+    // the model-facing prompt, so the mock provider captures it verbatim — this
+    // is the after-fix runtime evidence separating provenance from the route.
+    let completionReentry: MockOpenAiRequestSnapshot | undefined;
+    await vi.waitFor(
+      async () => {
+        completionReentry = (await readMockRequests(mock.baseUrl)).find(
+          (request) =>
+            request.allInputText.includes("[Inter-session message]") &&
+            request.allInputText.includes("sourceTool=image_generate"),
+        );
+        expect(completionReentry).toBeDefined();
+      },
+      { interval: 50, timeout: 30_000 },
+    );
+    const completionInputText = completionReentry?.allInputText ?? "";
+    const observedSourceChannel = completionInputText.match(/sourceChannel=(\S+)/)?.[1];
+    expect(observedSourceChannel).toBe("internal");
+    expect(completionInputText).not.toContain("sourceChannel=webchat");
+    const webchatLabeledInputs = (await readMockRequests(mock.baseUrl)).filter((request) =>
+      request.allInputText.includes("sourceChannel=webchat"),
+    );
+    expect(webchatLabeledInputs).toEqual([]);
+    console.log(
+      `PR128165_RUNTIME_TRACE ${JSON.stringify({
+        completionProvenanceSourceChannel: observedSourceChannel,
+        completionProvenanceSourceTool: "image_generate",
+        webchatLabeledInputs: webchatLabeledInputs.length,
+        deliveredImageOutcomes: 1,
+        deliveryRoutedOverInternalSentinel: false,
+      })}`,
+    );
+
     await sendExactRequest();
     const completedDuplicate = await waitForToolOutput(mock.baseUrl, "recently succeeded");
     expect(completedDuplicate.toolOutput).toContain(taskId);
