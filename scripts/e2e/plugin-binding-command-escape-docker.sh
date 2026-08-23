@@ -62,9 +62,12 @@ const { StringDecoder } = require("node:string_decoder");
 const logPath = process.argv[2];
 const scanBytes = 65536;
 const maxLineChars = 4096;
+const stat = fs.statSync(logPath);
+const length = Math.min(stat.size, scanBytes);
 const buffer = Buffer.alloc(scanBytes);
 const fd = fs.openSync(logPath, "r");
 const decoder = new StringDecoder("utf8");
+let diagnosticTail = "";
 let carry = "";
 let discardingLongLine = false;
 let invalidSummary = false;
@@ -115,6 +118,10 @@ function scanText(text) {
   appendLineSegment(text.slice(start), false);
 }
 
+function isInvalidProof() {
+  return invalidSummary || summaryCount < 1 || summaryCount > 2 || totalPassed !== 3;
+}
+
 try {
   while (true) {
     const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, offset);
@@ -126,14 +133,20 @@ try {
   }
   scanText(decoder.end());
   appendLineSegment("", true);
+  if (isInvalidProof() && length > 0) {
+    const bytesRead = fs.readSync(fd, buffer, 0, length, stat.size - length);
+    diagnosticTail = buffer.subarray(0, bytesRead).toString("utf8");
+  }
 } finally {
   fs.closeSync(fd);
 }
 
-if (invalidSummary || summaryCount < 1 || summaryCount > 2 || totalPassed !== 3) {
+if (isInvalidProof()) {
+  console.error("expected focused Vitest summary for exactly 3 passed tests");
   console.error(
-    `expected one aggregate or two split Vitest summaries for exactly 3 passed tests; saw ${summaryCount} summaries totaling ${totalPassed}`,
+    `saw ${summaryCount} summaries totaling ${totalPassed}; expected one aggregate or two split summaries`,
   );
+  console.error(diagnosticTail);
   process.exit(1);
 }
 NODE
