@@ -1620,3 +1620,34 @@ describe("buildInboundUserContextPrefix", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("current reply target under a saturated context budget", () => {
+  // Regression: the current Telegram reply target is emitted last and also
+  // suppresses the reply-chain fallback, so a large channel-supplied structured
+  // payload could exhaust the shared budget and drop the only quoted text the
+  // model needs to answer. The reply target must survive saturation.
+  it("keeps the current reply target when structured context fills the budget", () => {
+    const context = {
+      Provider: "telegram",
+      OriginatingChannel: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+      MessageSid: "5150",
+      ReplyToQuoteText: "the quoted sentence the model must answer",
+      ChannelStructuredContext: Array.from({ length: 200 }, (_, index) => ({
+        label: `Bulky channel payload ${index}`,
+        source: "telegram",
+        type: "directory",
+        payload: { blob: "x".repeat(60_000) },
+      })),
+    } as unknown as TemplateContext;
+
+    const prefix = buildInboundUserContextPrefix(context);
+
+    // Before the fix the saturated payload consumed the budget and this block
+    // was dropped behind the exhaustion marker.
+    expect(prefix).toContain("Current message:");
+    expect(prefix).toContain("the quoted sentence the model must answer");
+    expect(prefix).toContain("#5150:");
+  });
+});

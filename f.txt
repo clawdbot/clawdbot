@@ -1,0 +1,40 @@
+return sanitizeTranscriptField(ctx.ReplyToQuoteText) ?? sanitizeTranscriptBody(ctx.ReplyToBody);
+}
+
+function formatTelegramCurrentMessageContext(ctx: TemplateContext): string | undefined {
+  if (!isTelegramInboundContext(ctx)) {
+    return undefined;
+  }
+  const quote = resolveInlineReplyQuote(ctx);
+  if (!quote) {
+    return undefined;
+  }
+  const messageId =
+    normalizePromptMetadataString(ctx.MessageSid) ??
+    normalizePromptMetadataString(ctx.MessageSidFull);
+  const header = messageId ? `#${messageId}:` : undefined;
+  return ["Current message:", `[Replying to: ${JSON.stringify(quote)}]`, header]
+    .filter((line) => line !== undefined)
+    .join("\n");
+}
+
+/** Resolves whether inbound context should join directly with the user body. */
+export function resolveInboundUserContextPromptJoiner(ctx: TemplateContext): " " | undefined {
+  return formatTelegramCurrentMessageContext(ctx) ? " " : undefined;
+}
+
+function formatConversationTimestamp(
+  value: unknown,
+  envelope?: EnvelopeFormatOptions,
+): string | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return formatAgentEnvelopeTimestamp(value, envelope);
+}
+
+function resolveInboundChannel(ctx: TemplateContext): string | undefined {
+  const surfaceValue = normalizePromptMetadataString(ctx.Surface);
+  let channelValue = normalizePromptMetadataString(ctx.OriginatingChannel) ?? surfaceValue;
+  if (!channelValue) {
+    const provider = normalizePromptMetadataString(ctx.Prov

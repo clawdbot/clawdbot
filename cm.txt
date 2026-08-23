@@ -1,0 +1,43 @@
+idx -1
+et limit without mutating the stored goal", () => {
+    const entry = createGoalSessionEntry("active");
+    entry.totalTokens = 10;
+    entry.totalTokensFresh = true;
+    entry.totalTokensVersion = 1;
+    entry.goal = { ...entry.goal!, tokenBudget: 10 };
+
+    expect(buildInboundUserContextPrefix({} as TemplateContext, undefined, entry)).toBe("");
+    expect(entry.goal.status).toBe("active");
+  });
+
+  it("removes a captured goal line when a queued turn is admitted after completion", () => {
+    const goalContext =
+      "Active goal: Publish the release evidence — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.";
+    const context = {
+      text: ["Conversation info:", goalContext, "Current message:\nmessage_id=next-turn"].join(
+        "\n\n",
+      ),
+      injectedGoalContexts: [goalContext],
+    };
+
+    const refreshed = refreshActiveGoalContext(context, createGoalSessionEntry("complete"));
+
+    expect(refreshed?.text).toContain("Conversation info:");
+    expect(refreshed?.text).toContain("Current message:\nmessage_id=next-turn");
+    expect(refreshed?.text).not.toContain("Active goal:");
+  });
+
+  it("adds a goal activated while a queued turn waited for admission", () => {
+    const refreshed = refreshActiveGoalContext(
+      { text: "Current message:\nmessage_id=queued-turn" },
+      createGoalSessionEntry("active"),
+    );
+
+    expect(refreshed?.text).toBe(
+      "Active goal: Publish the release evidence — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final.\n\nCurrent message:\nmessage_id=queued-turn",
+    );
+  });
+
+  it("keeps the current-message anchor last when refreshing a queued goal", () => {
+    const goalContext =
+      "Active goal: Publish the release evidence — advance; keep active until fully achieved; block only after the same blocker on
