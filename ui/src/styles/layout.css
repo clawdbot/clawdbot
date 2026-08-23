@@ -3411,26 +3411,6 @@ wa-dropdown-item.session-menu__item::part(submenu-icon) {
   height: 6px;
 }
 
-.sidebar-agent-approval-count {
-  display: inline-flex;
-  min-width: 18px;
-  height: 18px;
-  align-items: center;
-  justify-content: center;
-  padding: 0 5px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--warn) 18%, transparent);
-  color: var(--warn);
-  font-size: calc(10px * var(--control-ui-text-scale));
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
-.sidebar-agent-card__approval-count {
-  flex: none;
-  margin-left: auto;
-}
-
 /* "Pages" section head: zone-style label plus the pin-editor affordance. */
 .sidebar-nav__head {
   position: absolute;

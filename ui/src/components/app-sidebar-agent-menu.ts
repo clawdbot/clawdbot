@@ -179,7 +179,6 @@ type SidebarAgentMenuParams = {
   connected: boolean;
   openMode: "hover" | "click";
   agentUnreadCount: (agentId: string) => number;
-  agentApprovalCount: (agentId: string) => number;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
   onAfterShow: () => void;
@@ -234,11 +233,6 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
   const label = normalizeAgentLabel(agent, identity);
   const active = agentId === params.activeId;
   const unread = active ? 0 : params.agentUnreadCount(agentId);
-  const approvals = params.agentApprovalCount(agentId);
-  const approvalLabel = t(
-    approvals === 1 ? "execApproval.agentPendingOne" : "execApproval.agentPending",
-    { count: String(approvals) },
-  );
   const option = { value: agentId, label, agent };
   return html`
     <wa-dropdown-item
@@ -257,14 +251,6 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
         </span>
         ${renderAgentSelectCopy(option)}
         <span class="sidebar-agent-menu__agent-status">
-          ${approvals > 0
-            ? html`<span
-                class="sidebar-agent-approval-count"
-                aria-label=${approvalLabel}
-                title=${approvalLabel}
-                >${approvals}</span
-              >`
-            : nothing}
           ${unread > 0
             ? html`<span
                 class="session-unread-dot"

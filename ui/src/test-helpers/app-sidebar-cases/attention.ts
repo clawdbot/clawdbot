@@ -285,7 +285,7 @@ describe("AppSidebar session attention", () => {
     expect(sidebar.textContent).not.toContain("Run failed:");
   });
 
-  it("uses canonical Home attention and shared agent approval tooltips", async () => {
+  it("uses canonical Home attention without duplicating an agent approval badge", async () => {
     const mainKey = "agent:main:main";
     const approval = {
       id: "approval-main",
@@ -311,14 +311,9 @@ describe("AppSidebar session attention", () => {
         ?.content,
     ).toBe("Waiting for approval");
 
-    const agentBadge = sidebar.querySelector(".sidebar-agent-card__approval-count");
-    const agentLabel = agentBadge?.getAttribute("aria-label");
-    expect(agentLabel).toBeTruthy();
-    expect(agentBadge?.hasAttribute("title")).toBe(false);
     expect(
-      (agentBadge?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
-        ?.content,
-    ).toBe(agentLabel);
+      sidebar.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label"),
+    ).not.toContain("pending approval");
   });
 
   it("shows an error icon and reason for an unread failure", async () => {

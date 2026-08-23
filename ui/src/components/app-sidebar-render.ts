@@ -95,7 +95,6 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
     return agentId !== cardAgentId && host.agentUnreadCount(agentId) > 0;
   });
   const cardName = normalizeAgentLabel(cardAgent ?? { id: cardAgentId }, cardIdentity);
-  const approvalCount = host.sessionData.approvalBadgeSnapshot().agentCounts.get(cardAgentId) ?? 0;
   const gateway = host.sessionDataContext?.gateway;
   const avatarAuthToken = gateway
     ? resolveControlUiAuthToken({
@@ -130,7 +129,6 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         .environment=${host.sessionDataContext?.config?.current?.environment ?? null}
         .menuOpen=${host.sidebarMenus.agentMenuPosition !== null}
         .menuUnread=${menuUnread}
-        .approvalCount=${approvalCount}
         .switcherAvailable=${cardAgents.length > 1}
         .onToggleMenu=${(trigger: HTMLElement) => host.sidebarMenus.toggleAgentMenu(trigger)}
         .onMenuPointerEnter=${(trigger: HTMLElement, event: PointerEvent) =>
