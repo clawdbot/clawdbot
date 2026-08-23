@@ -2,7 +2,11 @@
 // strings were already capped, but array entry counts and object key counts
 // crossed into the prompt unbounded.
 import { describe, expect, it } from "vitest";
-import { appendChannelPromptContext, formatContextJsonBlock } from "./channel-prompt-context.js";
+import {
+  appendChannelPromptContext,
+  formatContextJsonBlock,
+  MAX_CONTEXT_JSON_STRING_CHARS,
+} from "./channel-prompt-context.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
 
 /** The model-visible context block only, without the base body it is appended to. */
@@ -376,5 +380,29 @@ describe("appendChannelPromptContext", () => {
         50_000,
       );
     }
+  });
+});
+
+describe("capped object key identity", () => {
+  // Regression: capping channel-controlled keys can collapse two distinct keys
+  // onto the same string. `Object.fromEntries` then let the later property
+  // overwrite the earlier one silently, corrupting the structured context the
+  // model reads. Both values must survive under distinct keys.
+  it("keeps distinct oversized keys distinct after capping", () => {
+    const sharedPrefix = "k".repeat(MAX_CONTEXT_JSON_STRING_CHARS);
+    const firstKey = `${sharedPrefix}-alpha`;
+    const secondKey = `${sharedPrefix}-beta`;
+    const payload = { [firstKey]: "first", [secondKey]: "second" };
+
+    const parsed = parseContextJsonBlock(formatContextJsonBlock("Context:", payload)) as Record<
+      string,
+      unknown
+    >;
+    const values = Object.values(parsed).filter((v) => v === "first" || v === "second");
+
+    expect(Object.keys(payload)).toHaveLength(2);
+    // Before the fix this was 1: the second value overwrote the first.
+    expect(values).toHaveLength(2);
+    expect(new Set(values)).toEqual(new Set(["first", "second"]));
   });
 });

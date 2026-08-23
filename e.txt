@@ -1,0 +1,15 @@
+LINES=381
+    for (const count of [49_900, 49_977, 49_978, 50_000, 120_000]) {
+      const rendered = appendChannelPromptContext(
+        "hello",
+        Array.from({ length: count }, () => "x"),
+      );
+      const block = renderedBlock(rendered);
+      expect(block).toContain("…[truncated: context budget exhausted]");
+      expect(block.length, `${count} single-char entries exceeded the cap`).toBeLessThanOrEqual(
+        50_000,
+      );
+    }
+  });
+});
+

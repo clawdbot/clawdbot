@@ -682,6 +682,14 @@ export function buildInboundUserContextPrefix(
       : Boolean(replyToId && chatWindowMessageIds.has(replyToId));
   const chatWindowCoversHistory = structuredContext.some(isChatWindowHistoryContext);
   const currentMessageContext = formatTelegramCurrentMessageContext(ctx);
+  // The current reply target is the one block the model cannot reply correctly
+  // without, and it is emitted last while also suppressing the reply-chain
+  // fallback. Reserve its cost up front, the same way the exhaustion marker is
+  // reserved, so optional structured context cannot starve it.
+  const reservedCurrentMessageChars = currentMessageContext
+    ? currentMessageContext.length + BLOCK_SEPARATOR_CHARS
+    : 0;
+  contextBudgetRemaining -= reservedCurrentMessageChars;
   const senderId = normalizePromptMetadataString(ctx.SenderId);
   const senderE164 = normalizePromptMetadataString(ctx.SenderE164);
   const senderIdDigits = senderId?.replace(/\D/gu, "");
@@ -842,6 +850,10 @@ export function buildInboundUserContextPrefix(
   }
 
   if (currentMessageContext) {
+    // Hand the reservation back so the block can always be charged and pushed,
+    // even when everything before it exhausted the shared budget.
+    contextBudgetRemaining += reservedCurrentMessageChars;
+    contextBudgetExhausted = false;
     pushContextBlock(currentMessageContext);
   }
 

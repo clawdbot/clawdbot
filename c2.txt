@@ -1,0 +1,14 @@
+    break;
+  }
+  if (budgetExhausted) {
+    kept.push(BUDGET_TRUNCATION_MARKER);
+  }
+  const block = [header, ...kept].join("\n");
+  return [base, block].filter(Boolean).join("\n\n");
+}
+
+export const MAX_CONTEXT_JSON_STRING_CHARS = 2_000;
+// Same untrusted-entry budget as inbound-meta.ts (MAX_UNTRUSTED_HISTORY_ENTRIES):
+// repeated channel-supplied entries are capped at that count.
+const MAX_CONTEXT_JSON_ARRAY_ENTRIES = 20;
+// The largest first-party payload (the Conversation info block) carries

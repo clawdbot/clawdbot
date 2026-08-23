@@ -171,6 +171,7 @@ function sanitizeContextJsonValue(
   const entries = Object.entries(value);
   const kept = entries.slice(0, MAX_CONTEXT_JSON_OBJECT_KEYS);
   const result: Array<readonly [string, unknown]> = [];
+  const usedKeys = new Set<string>();
   let omitted = entries.length - kept.length;
   let budgetExhausted = false;
   for (const [key, entry] of kept) {
@@ -181,7 +182,11 @@ function sanitizeContextJsonValue(
     }
     // Keys are channel-controlled text too: cap them like string values and
     // charge them to the budget so key fan-out cannot bypass the total.
-    const safeKey = neutralizeMarkdownFences(truncateContextJsonString(key));
+    // Capping can map two distinct channel-controlled keys onto the same text.
+    // `Object.fromEntries` would then let the later property overwrite the
+    // earlier one silently, so disambiguate collisions before committing.
+    const cappedKey = neutralizeMarkdownFences(truncateContextJsonString(key));
+    const safeKey = uniqueKey(cappedKey, usedKeys);
     // Reserve the nested value against a scratch budget: the recursion debits
     // as it works, and the property is committed to the shared budget only
     // when accepted whole. Debiting the shared budget during recursion and
@@ -200,6 +205,7 @@ function sanitizeContextJsonValue(
       continue;
     }
     budget.remaining -= propertySize;
+    usedKeys.add(safeKey);
     result.push([safeKey, sanitized] as const);
   }
   // Truncation flag mirrors the sibling `history_truncated: true` convention.
@@ -209,6 +215,24 @@ function sanitizeContextJsonValue(
     result.push([`…[truncated: ${omitted} more ${omitted === 1 ? "key" : "keys"}]`, true] as const);
   }
   return Object.fromEntries(result);
+}
+
+/**
+ * Returns `cappedKey` when it is still unique, otherwise appends the smallest
+ * `~N` discriminator that is. Truncating channel-controlled keys can collapse
+ * distinct keys onto one string; without this, `Object.fromEntries` drops the
+ * earlier value silently and the model sees corrupted structured context.
+ */
+function uniqueKey(cappedKey: string, usedKeys: ReadonlySet<string>): string {
+  if (!usedKeys.has(cappedKey)) {
+    return cappedKey;
+  }
+  for (let suffix = 2; ; suffix += 1) {
+    const candidate = `${cappedKey}~${suffix}`;
+    if (!usedKeys.has(candidate)) {
+      return candidate;
+    }
+  }
 }
 
 const INBOUND_CONTEXT_MARKER_SUFFIX = ` ${INBOUND_CONTEXT_MARKER}`;

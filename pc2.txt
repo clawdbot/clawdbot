@@ -1,0 +1,53 @@
+648:     if (renderedLength > contextBudgetRemaining) {
+649:       contextBudgetExhausted = true;
+650:       blocks.push(CONTEXT_BUDGET_EXHAUSTED_BLOCK);
+651:       return;
+652:     }
+653:     contextBudgetRemaining -= renderedLength;
+654:     blocks.push(block);
+655:   };
+656:   const chatType = normalizeChatType(ctx.ChatType);
+657:   const isDirect = !chatType || chatType === "direct";
+658:   const directChannelValue = resolveInboundChannel(ctx);
+659:   const includeDirectConversationInfo = Boolean(
+660:     directChannelValue && directChannelValue !== "webchat",
+661:   );
+662:   const shouldIncludeConversationInfo = !isDirect || includeDirectConversationInfo;
+663: 
+664:   const messageId = normalizePromptMetadataString(ctx.MessageSid);
+665:   const messageIdFull = normalizePromptMetadataString(ctx.MessageSidFull);
+666:   const resolvedMessageId = messageId ?? messageIdFull;
+667:   const timestampStr = formatConversationTimestamp(ctx.Timestamp, envelope);
+668:   const inboundHistory = Array.isArray(ctx.InboundHistory) ? ctx.InboundHistory : [];
+669:   const boundedHistory = inboundHistory.slice(-MAX_UNTRUSTED_HISTORY_ENTRIES);
+670:   const replyChainPayload = buildReplyChainPayload(ctx, envelope);
+671:   const structuredContext = Array.isArray(ctx.ChannelStructuredContext)
+672:     ? ctx.ChannelStructuredContext
+673:     : [];
+674:   const chatWindowMessageIds = collectChatWindowMessageIds(structuredContext);
+675:   const replyToId = normalizePromptMetadataString(ctx.ReplyToId);
+676:   const chatWindowCoversReplyContext =
+677:     replyChainPayload.length > 0
+678:       ? replyChainPayload.every((entry) => {
+679:           const messageIdLocal = normalizePromptMetadataString(entry["message_id"]);
+680:           return messageIdLocal ? chatWindowMessageIds.has(messageIdLocal) : false;
+681:         })
+682:       : Boolean(replyToId && chatWindowMessageIds.has(replyToId));
+683:   const chatWindowCoversHistory = structuredContext.some(isChatWindowHistoryContext);
+684:   const currentMessageContext = formatTelegramCurrentMessageContext(ctx);
+685:   const senderId = normalizePromptMetadataString(ctx.SenderId);
+686:   const senderE164 = normalizePromptMetadataString(ctx.SenderE164);
+687:   const senderIdDigits = senderId?.replace(/\D/gu, "");
+688:   const senderE164Digits = senderE164?.replace(/\D/gu, "");
+689:   const senderIdentity = {
+690:     id: senderId,
+691:     name: normalizePromptMetadataString(ctx.SenderName),
+692:     username: normalizePromptMetadataString(ctx.SenderUsername),
+693:     e164: senderE164Digits && senderE164Digits === senderIdDigits ? undefined : senderE164,
+694:     is_bot: typeof ctx.SenderIsBot === "boolean" ? ctx.SenderIsBot : undefined,
+695:   };
+696: 
+697:   // Keep volatile conversation/message identifiers in the user-role block so the system
+698:   // prompt stays byte-stable across task-scoped sessions and reply turns.
+699:   const conversationInfo = {
+700:     chat_id: shouldIncludeConversationInfo ? normalizeOptionalString(ctx.OriginatingTo) : undefined,

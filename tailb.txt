@@ -1,0 +1,24 @@
+827:         },
+828:         envelope,
+829:       );
+830:       return line ? [line] : [];
+831:     });
+832:     if (historyLines.length > 0) {
+833:       pushContextBlock(
+834:         [markInboundContextLabel("Chat history since last reply:"), ...historyLines].join("\n"),
+835:       );
+836:     }
+837:   }
+838: 
+839:   const activeGoalContext = formatActiveGoalContext(sessionEntry);
+840:   if (activeGoalContext) {
+841:     pushContextBlock(activeGoalContext);
+842:   }
+843: 
+844:   if (currentMessageContext) {
+845:     pushContextBlock(currentMessageContext);
+846:   }
+847: 
+848:   return blocks.filter(Boolean).join("\n\n");
+849: }
+850: /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
