@@ -8,6 +8,7 @@ import {
   hasConfiguredOwnerMatching,
   ownerKey,
   normalizePreparedModelRuntimeInput,
+  preparedModelRuntimeConfigsMatch,
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
   resolveConfiguredOwner,
@@ -96,7 +97,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
           !configuredOwner.needsRefresh &&
           borrowed &&
           borrowed.metadataSnapshot === options.pluginGeneration.pluginMetadataSnapshot &&
-          borrowed.config === input.config &&
+          preparedModelRuntimeConfigsMatch(borrowed.config, input.config) &&
           borrowed.agentId === input.agentId &&
           borrowed.agentDir === input.agentDir &&
           borrowed.inheritedAuthDir === input.inheritedAuthDir &&

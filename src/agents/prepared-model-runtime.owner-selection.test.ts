@@ -375,6 +375,12 @@ describe("prepared model runtime owner selection", () => {
           );
           expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(registryLoads);
           resumed.release();
+          const clonedConfigLease = await acquireAgentRunPreparedModelRuntime(
+            runInput(structuredClone(previousConfig)),
+            { pluginGeneration: admitted!.pluginGeneration },
+          );
+          expect(clonedConfigLease.snapshot).toBe(previousSnapshot);
+          clonedConfigLease.release();
           await expect(
             acquireAgentRunPreparedModelRuntime(
               { ...runInput(previousConfig), workspaceDir: "/tmp/different-workspace" },
