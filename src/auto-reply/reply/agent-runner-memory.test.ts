@@ -3936,7 +3936,21 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
-  it("emits preflight compaction notices around a successful budget compaction", async () => {
+  it.each([
+    {
+      name: "a strict decrease",
+      tokensBefore: 8_614,
+      tokensAfter: 736,
+      expectedNotice: "🧹 Server-side compaction complete (8.6k → 736)",
+    },
+    { name: "equal counts", tokensBefore: 736, tokensAfter: 736 },
+    { name: "increasing counts", tokensBefore: 736, tokensAfter: 8_614 },
+    {
+      name: "a decrease with equal formatted labels",
+      tokensBefore: 12_499,
+      tokensAfter: 12_001,
+    },
+  ])("emits preflight compaction notices for $name", async (testCase) => {
     const sessionFile = path.join(rootDir, "notify-session.jsonl");
     await writeTestSessionTranscript({
       rootDir,
@@ -3955,7 +3969,11 @@ describe("runMemoryFlushIfNeeded", () => {
       ok: true,
       compacted: true,
       compactionKind: "server-endpoint",
-      result: { kind: "server-endpoint", tokensBefore: 8_614, tokensAfter: 736 },
+      result: {
+        kind: "server-endpoint",
+        tokensBefore: testCase.tokensBefore,
+        tokensAfter: testCase.tokensAfter,
+      },
     });
 
     await runPreflightCompactionIfNeeded({
@@ -3986,11 +4004,11 @@ describe("runMemoryFlushIfNeeded", () => {
     });
 
     expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
-    expect(onCompactionNotice).toHaveBeenNthCalledWith(
-      2,
-      "end",
-      "🧹 Server-side compaction complete (8.6k → 736)",
-    );
+    if ("expectedNotice" in testCase && testCase.expectedNotice) {
+      expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "end", testCase.expectedNotice);
+    } else {
+      expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "end");
+    }
   });
 
   it("emits an incomplete preflight compaction notice when post-compaction state update throws", async () => {

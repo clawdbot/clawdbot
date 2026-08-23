@@ -11,6 +11,7 @@ import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-contex
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
+import { resolveCompactionTokenDecrease } from "../../agents/compaction-token-counts.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
@@ -1030,11 +1031,21 @@ export async function runPreflightCompactionIfNeeded(params: {
       cfg: params.cfg,
       followupRun: params.followupRun,
     });
+    const serverTokenDecrease = resolveCompactionTokenDecrease(
+      result.result?.tokensBefore,
+      result.result?.tokensAfter,
+    );
+    const serverTokenLabels = serverTokenDecrease
+      ? {
+          before: formatTokenCount(serverTokenDecrease.before),
+          after: formatTokenCount(serverTokenDecrease.after),
+        }
+      : undefined;
     const serverNotice =
       result.compactionKind === "server-endpoint" &&
-      typeof result.result?.tokensBefore === "number" &&
-      typeof result.result.tokensAfter === "number"
-        ? `🧹 Server-side compaction complete (${formatTokenCount(result.result.tokensBefore)} → ${formatTokenCount(result.result.tokensAfter)})`
+      serverTokenLabels &&
+      serverTokenLabels.before !== serverTokenLabels.after
+        ? `🧹 Server-side compaction complete (${serverTokenLabels.before} → ${serverTokenLabels.after})`
         : undefined;
     await notifyTerminalCompaction("end", serverNotice);
     entry = params.sessionStore?.[params.sessionKey] ?? entry;
