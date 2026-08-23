@@ -235,3 +235,35 @@ export async function createInitialSubagentSession(params: {
     return { status: "error", error: `child session patch failed: ${message}` };
   }
 }
+/**
+ * Resolves the child session entry an accepted spawn should record/return.
+ * Fork rewrites the child sessionId afterward; prefer the post-context
+ * persisted entry (and for forks the durable fork UUID) over the provisional
+ * pre-fork identity so guarded cleanup and callers agree on the same UUID.
+ */
+export function resolveAcceptedChildSessionEntry(params: {
+  persistedChildEntry?: SessionEntry;
+  forked?: { sessionId: string; sessionFile: string };
+}): SessionEntry | undefined {
+  if (!params.forked) {
+    return params.persistedChildEntry;
+  }
+  const forkedSessionId = params.forked.sessionId.trim();
+  if (!forkedSessionId) {
+    return params.persistedChildEntry;
+  }
+  return {
+    ...(params.persistedChildEntry ?? {
+      sessionId: forkedSessionId,
+      updatedAt: Date.now(),
+    }),
+    sessionId: forkedSessionId,
+    ...(params.forked.sessionFile ? { sessionFile: params.forked.sessionFile } : {}),
+  };
+}
+
+/** Returns the durable child session id of an accepted spawn, if any. */
+export function resolveAcceptedChildSessionId(entry: SessionEntry | undefined): string | undefined {
+  const sessionId = entry?.sessionId;
+  return typeof sessionId === "string" && sessionId.trim() ? sessionId.trim() : undefined;
+}
