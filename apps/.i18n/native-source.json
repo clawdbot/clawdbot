@@ -39597,8 +39597,8 @@
       ]
     },
     {
-      "id": "native.apple.83f84908b64f015c",
-      "source": "Realtime tool call did not return a run id",
+      "id": "native.apple.3de730ada28b2b7b",
+      "source": "Realtime tool call did not return a complete run identity",
       "surface": "apple",
       "sites": [
         {

@@ -248,12 +248,27 @@ export const TalkClientMutationResultSchema = closedObject({
 });
 
 /** Agent run identity returned after accepting a Talk client tool call. */
-export const TalkClientToolCallResultSchema = closedObject({
-  runId: NonEmptyString,
-  idempotencyKey: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
-  agentSessionKey: Type.Optional(NonEmptyString),
-});
+export const TalkClientToolCallResultSchema = Type.Object(
+  {
+    runId: NonEmptyString,
+    idempotencyKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+    agentSessionKey: Type.Optional(NonEmptyString),
+  },
+  {
+    additionalProperties: false,
+    // Protocol-v4 acknowledgements omitted both target fields. Current
+    // acknowledgements must supply both so clients never accept a partial identity.
+    oneOf: [
+      { required: ["agentId", "agentSessionKey"] },
+      {
+        not: {
+          anyOf: [{ required: ["agentId"] }, { required: ["agentSessionKey"] }],
+        },
+      },
+    ],
+  },
+);
 
 /** Text steering request for a Talk session bound to an agent turn. */
 export const TalkClientSteerParamsSchema = closedObject({

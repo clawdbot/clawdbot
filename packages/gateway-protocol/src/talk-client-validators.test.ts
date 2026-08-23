@@ -21,4 +21,24 @@ describe("talk client validators", () => {
       }),
     ).toBe(true);
   });
+
+  it("rejects a tool-call acknowledgement with only an agent id", () => {
+    expect(
+      validateTalkClientToolCallResult({
+        runId: "run-1",
+        idempotencyKey: "talk-call-1",
+        agentId: "main",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects a tool-call acknowledgement with only an agent session key", () => {
+    expect(
+      validateTalkClientToolCallResult({
+        runId: "run-1",
+        idempotencyKey: "talk-call-1",
+        agentSessionKey: "agent:main:main",
+      }),
+    ).toBe(false);
+  });
 });
