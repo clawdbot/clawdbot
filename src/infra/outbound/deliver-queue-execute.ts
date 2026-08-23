@@ -89,6 +89,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
   let queuedPostSendState: QueuedPostSendState | undefined;
   let platformSendStarted = false;
   let platformSendRoute: PlatformSendRoute | undefined;
+  let platformSendSourceIndex: number | undefined;
   const auditPlatformStartedPayloads = new Set<number>();
   const platformDispatchedPayloads = new Set<number>();
   let deliveredResults: OutboundDeliveryResult[] = [];
@@ -204,6 +205,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     onPlatformSendStart: async (route, sourceIndex) => {
       params.abortSignal?.throwIfAborted();
       platformSendRoute = route;
+      platformSendSourceIndex = sourceIndex;
       if (platformQueueId && !exactReconciliationRequired && queuedPreSendState === undefined) {
         queuedPreSendState = await persistQueuedPreSendState({
           queueId: platformQueueId,
@@ -243,7 +245,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       await params.onPlatformSendDispatch?.();
       params.abortSignal?.throwIfAborted();
     },
-    onPlatformSendDispatch: async (sourceIndex) => {
+    onPlatformSendDispatch: async () => {
       params.abortSignal?.throwIfAborted();
       // Once any payload returns an identity, unknown-after-send protects the whole batch.
       // A later payload dispatch must not regress that durable evidence to attempt-started.
@@ -279,8 +281,8 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       params.abortSignal?.throwIfAborted();
       await params.onPlatformSendDispatch?.();
       params.abortSignal?.throwIfAborted();
-      if (sourceIndex !== undefined) {
-        platformDispatchedPayloads.add(sourceIndex);
+      if (platformSendSourceIndex !== undefined) {
+        platformDispatchedPayloads.add(platformSendSourceIndex);
       }
     },
     onError: (err: unknown, payload: NormalizedOutboundPayload) => {

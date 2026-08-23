@@ -99,9 +99,7 @@ export async function deliverOutboundPayloadsCore(
         await params.onPlatformSendStart?.(route, activeSourceIndex);
       },
       onDirectAdapterHandoff: params.onDirectAdapterHandoff,
-      onPlatformSendDispatch: async () => {
-        await params.onPlatformSendDispatch?.(activeSourceIndex);
-      },
+      onPlatformSendDispatch: params.onPlatformSendDispatch,
       onDeliveryResult: reportIdentifiedDeliveryResult,
     });
   const baseHandler = await createHandler([]);

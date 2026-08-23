@@ -216,7 +216,7 @@ export type DeliverOutboundPayloadsCoreParams = {
   /** @internal Revalidate caller authority before direct adapter code can run. */
   onDirectAdapterHandoff?: () => Promise<void>;
   /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
-  onPlatformSendDispatch?: (sourceIndex?: number) => Promise<void>;
+  onPlatformSendDispatch?: () => Promise<void>;
   /** Session/agent context used for hooks and media local-root scoping. */
   session?: OutboundSessionContext;
   mirror?: DeliveryMirror;

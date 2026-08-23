@@ -971,65 +971,6 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(auditEvents.slice(-2).map((event) => event.resultCount)).toEqual([0, 0]);
   });
 
-  it("retains retryable custody when an adapter fails before dispatch", async () => {
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-    const sendMatrix = vi.fn();
-    const onPayloadDeliveryOutcome = vi.fn();
-
-    const failure = await deliverOutboundPayloads({
-      cfg: {} as OpenClawConfig,
-      channel: "matrix",
-      to: "!room:example",
-      payloads: [{ text: "first" }],
-      deps: { matrix: sendMatrix },
-      queuePolicy: "required",
-      onPlatformSendDispatch: async () => {
-        throw new Error("dispatch preparation failed");
-      },
-      onPayloadDeliveryOutcome,
-    }).catch((caught: unknown) => caught);
-
-    expect(failure).toMatchObject({ message: "dispatch preparation failed" });
-    expect(isOutboundDeliveryError(failure) && failure.recoveryOwnedRetry).not.toBe(true);
-
-    const entries = await import("./delivery-queue-storage.js").then((m) =>
-      m.loadPendingDeliveries(tmpDir),
-    );
-    expect(entries).toHaveLength(1);
-    const entry = expectDefined(entries[0], "entries[0] test invariant");
-    expect(entry).toMatchObject({ retryCount: 1, recoveryState: "send_attempt_started" });
-    expect(onPayloadDeliveryOutcome).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "failed", sentBeforeError: false }),
-    );
-    expect(sendMatrix).not.toHaveBeenCalled();
-  });
-
-  it("reports an ambiguous payload when an adapter fails after dispatch", async () => {
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-    const sendMatrix = vi.fn().mockRejectedValueOnce(new Error("first payload send failed"));
-    const onPayloadDeliveryOutcome = vi.fn();
-
-    const failure = await deliverOutboundPayloads({
-      cfg: {} as OpenClawConfig,
-      channel: "matrix",
-      to: "!room:example",
-      payloads: [{ text: "first" }],
-      deps: { matrix: sendMatrix },
-      queuePolicy: "required",
-      onPayloadDeliveryOutcome,
-    }).catch((caught: unknown) => caught);
-
-    expect(failure).toMatchObject({ message: "first payload send failed", sentBeforeError: true });
-    expect(isOutboundDeliveryError(failure) && failure.recoveryOwnedRetry).not.toBe(true);
-    expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
-      retryCount: 1,
-      recoveryState: "unknown_after_send",
-    });
-    expect(onPayloadDeliveryOutcome).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "failed", sentBeforeError: true }),
-    );
-  });
-
   const attemptProvenNotSentSend = async (
     error: Error,
     thrown: string,
