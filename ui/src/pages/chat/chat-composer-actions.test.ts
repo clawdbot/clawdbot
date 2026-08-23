@@ -547,8 +547,9 @@ describe("renderChatComposer controls", () => {
     });
     const item = container.querySelector(".chat-queue__item");
     expect(item?.classList.contains("chat-queue__item--reconnect")).toBe(true);
-    expect(item?.querySelector(".chat-queue__dot")).not.toBeNull();
-    expect(item?.querySelector(".chat-queue__icon")).toBeNull();
+    expect(
+      item?.querySelector('.chat-queue__icon path[d="M21 5v12a2 2 0 0 1-2 2h-6"]'),
+    ).not.toBeNull();
     expect(item?.querySelector(".chat-queue__error")).toBeNull();
     const badge = item?.querySelector(".chat-queue__badge");
     expect(badge?.textContent?.trim()).toBe("Waiting for reconnect");

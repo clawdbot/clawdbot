@@ -5672,6 +5672,7 @@ export const en: TranslationMap = {
       reorderQueuedMessage: "Reorder queued message with the arrow keys",
       reorderUnavailable: "This message holds its place and cannot be reordered",
       editQueuedMessage: "Edit queued message",
+      moreActions: "More queued message actions",
       cancelEdit: "Cancel editing and keep the queued message",
       states: {
         applyingSettings: "Applying chat settings",

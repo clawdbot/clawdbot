@@ -759,7 +759,7 @@ describe("chat typing status", () => {
     expect(indicator?.textContent).toContain(expectedText);
   });
 
-  it("keeps queue and error state outside the transcript typing row", () => {
+  it("keeps the run error above typing and the queue attached to the composer", () => {
     const container = renderChatView({
       typingActors: [{ id: "ayaan", label: "Ayaan" }],
       runError: { summary: "Gateway unavailable" },
@@ -771,12 +771,20 @@ describe("chat typing status", () => {
       "typing status",
     );
 
-    expect(indicator.closest('[data-virtual-row-key="presence:typing"]')).not.toBeNull();
-    expect(container.querySelector(".chat-queue")).not.toBeNull();
-    expect(container.querySelector(".chat-error__content")?.textContent).toContain(
-      "Gateway unavailable",
-    );
-    expect(container.querySelector(".agent-chat__composer-shell")).not.toBeNull();
+    const typingRow = indicator.closest('[data-virtual-row-key="presence:typing"]');
+    if (!typingRow) {
+      throw new Error("expected typing transcript row");
+    }
+    const error = requireElement(container, ".chat-error__content", "run error");
+    const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
+    const queue = requireElement(container, ".chat-queue", "composer queue");
+    expect(error.textContent).toContain("Gateway unavailable");
+    expect(error.compareDocumentPosition(indicator)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(typingRow.compareDocumentPosition(shell)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(queue.closest(".agent-chat__composer-shell")).toBe(shell);
+    expect(
+      queue.compareDocumentPosition(requireElement(shell, ".agent-chat__input", "composer")),
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
   it("keeps transcript typing status with the model setup composer", () => {
@@ -1940,10 +1948,13 @@ describe("chat scroll-to-bottom affordance", () => {
       ],
     });
 
-    const wrapper = container.querySelector(".chat-scroll-to-bottom-wrap");
-    const queue = container.querySelector(".chat-queue");
-    expect(wrapper?.nextElementSibling).toBe(queue);
-    expect(queue?.nextElementSibling?.classList.contains("agent-chat__composer-shell")).toBe(true);
+    const wrapper = requireElement(container, ".chat-scroll-to-bottom-wrap", "scroll affordance");
+    const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
+    const queue = requireElement(container, ".chat-queue", "composer queue");
+    const composer = requireElement(shell, ".agent-chat__input", "composer");
+    expect(wrapper.nextElementSibling).toBe(shell);
+    expect(queue.closest(".agent-chat__composer-shell")).toBe(shell);
+    expect(queue.compareDocumentPosition(composer)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
   it("hides the scroll-to-bottom button when the transcript is already latest", () => {

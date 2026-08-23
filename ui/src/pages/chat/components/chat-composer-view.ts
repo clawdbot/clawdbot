@@ -257,6 +257,23 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         ${renderSessionProgressCard(props.progressCard, "composer", props.onDismissProgressCard)}
       </div>`
     : nothing;
+  const queue = renderChatQueue({
+    queue: props.queue,
+    offline: props.offline,
+    canAbort: showAbortableUi,
+    onQueueRetry: props.connected && canCompose ? props.onQueueRetry : undefined,
+    onQueueSteer: props.connected && canCompose ? props.onQueueSteer : undefined,
+    // Reordering is local bookkeeping, so it stays available while offline —
+    // exactly when a queue is long enough to need it.
+    onQueueMove: props.onQueueMove,
+    onQueueEdit: props.queuedEdit?.onEdit,
+    onQueueEditChange: props.queuedEdit?.onEditChange,
+    onQueueEditSubmit: props.queuedEdit?.onEditSubmit,
+    onQueueEditCancel: props.queuedEdit?.onCancel,
+    editingId: props.queuedEdit?.editingId ?? null,
+    editingText: props.queuedEdit?.editingText,
+    onQueueRemove: props.onQueueRemove,
+  });
   const goalCard = activeSession?.goal
     ? html`<div class="agent-chat__goal-float">
         ${renderChatGoal(state, activeSession.goal, {
@@ -272,22 +289,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
       </div>`
     : nothing;
   return html`
-    ${renderChatQueue({
-      queue: props.queue,
-      canAbort: showAbortableUi,
-      onQueueRetry: props.connected && canCompose ? props.onQueueRetry : undefined,
-      onQueueSteer: props.connected && canCompose ? props.onQueueSteer : undefined,
-      // Reordering is local bookkeeping, so it stays available while offline —
-      // exactly when a queue is long enough to need it.
-      onQueueMove: props.onQueueMove,
-      onQueueEdit: props.queuedEdit?.onEdit,
-      onQueueEditChange: props.queuedEdit?.onEditChange,
-      onQueueEditSubmit: props.queuedEdit?.onEditSubmit,
-      onQueueEditCancel: props.queuedEdit?.onCancel,
-      editingId: props.queuedEdit?.editingId ?? null,
-      editingText: props.queuedEdit?.editingText,
-      onQueueRemove: props.onQueueRemove,
-    })}
     <div class="agent-chat__composer-shell">
       ${questionPanelProps
         ? html`
@@ -298,7 +299,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             </div>
           `
         : nothing}
-      ${disabledBanner} ${progressCard} ${goalCard} ${composerAlerts}
+      ${disabledBanner} ${progressCard} ${queue} ${goalCard} ${composerAlerts}
       ${showComposerInput
         ? html`<div
               class="agent-chat__input agent-chat__input--chat ${props.offline
@@ -513,24 +514,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     },
                   })}
                   ${composerLeadControl}
-                  ${props.queuedEdit?.editingId
-                    ? html`
-                        <span class="agent-chat__composer-edit" role="status">
-                          <span class="agent-chat__composer-edit-icon" aria-hidden="true"
-                            >${icons.pencil}</span
-                          >
-                          <span class="agent-chat__sr-only">${t("chat.queue.states.editing")}</span>
-                          <button
-                            class="agent-chat__composer-edit-cancel"
-                            type="button"
-                            aria-label=${t("chat.queue.cancelEdit")}
-                            @click=${() => props.queuedEdit?.onCancel()}
-                          >
-                            ${icons.x}
-                          </button>
-                        </span>
-                      `
-                    : nothing}
                 </div>
                 <div class="agent-chat__composer-trail">
                   <div class="agent-chat__composer-meta agent-chat__composer-context">

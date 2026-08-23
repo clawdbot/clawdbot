@@ -3630,6 +3630,22 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("keeps the mobile queue steer label visible", async () => {
+    const page = await openBrowserPage(390, 844);
+    try {
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+        <button class="chat-queue__action chat-queue__steer"><span>Steer</span></button>
+      </body></html>`);
+      expect(
+        await page
+          .locator(".chat-queue__steer span")
+          .evaluate((node) => getComputedStyle(node).display),
+      ).not.toBe("none");
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   describe("slash command keyboard navigation", () => {
     let page: Page;
 
