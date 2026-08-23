@@ -2,6 +2,7 @@ package ai.openclaw.app.voice
 
 import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
+import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
@@ -274,7 +275,7 @@ class RealtimeCommunicationAudioTest {
 
     assertTrue("a confirmed read-back must yield a real token", token != RealtimeCommunicationAudioOwner.NO_OWNER)
     assertEquals(AudioManager.MODE_IN_COMMUNICATION, audioManager().mode)
-    assertTrue(owner.communicationModeActive)
+    assertTrue(owner.communicationAudioEligible)
   }
 
   @Test
@@ -288,7 +289,7 @@ class RealtimeCommunicationAudioTest {
     val token = owner.enter(audioManager())
 
     assertEquals(RealtimeCommunicationAudioOwner.NO_OWNER, token)
-    assertFalse(owner.communicationModeActive)
+    assertFalse(owner.communicationAudioEligible)
   }
 
   @Test
@@ -299,7 +300,7 @@ class RealtimeCommunicationAudioTest {
     val token = owner.enter(audioManager())
 
     assertEquals(RealtimeCommunicationAudioOwner.NO_OWNER, token)
-    assertFalse(owner.communicationModeActive)
+    assertFalse(owner.communicationAudioEligible)
   }
 
   @Test
@@ -313,7 +314,7 @@ class RealtimeCommunicationAudioTest {
     val token = owner.enter(audioManager())
 
     assertEquals(RealtimeCommunicationAudioOwner.NO_OWNER, token)
-    assertFalse(owner.communicationModeActive)
+    assertFalse(owner.communicationAudioEligible)
     assertEquals("a denied acquisition must not move the device mode", before, audioManager().mode)
   }
 
@@ -349,8 +350,8 @@ class RealtimeCommunicationAudioTest {
     // The capability correctly shrinks -- the attempt just read the device back as not in
     // communication mode, and that evidence must reach the full-duplex gate immediately rather
     // than waiting for the next watcher tick.
-    assertFalse("a refuted read-back must close full duplex", owner.communicationModeActive)
-    assertFalse(owner.communicationModeActiveUnsynchronized)
+    assertFalse("a refuted read-back must close full duplex", owner.communicationAudioEligible)
+    assertFalse(owner.communicationAudioEligibleUnsynchronized)
 
     // What must NOT happen is the live owner losing its token, its focus, or its mode: the failed
     // attempt may not reach over a session that is still running.
@@ -363,7 +364,7 @@ class RealtimeCommunicationAudioTest {
 
     // The live token still works, which is the property that keeps teardown able to unwind.
     owner.restore(manager, live)
-    assertFalse(owner.communicationModeActive)
+    assertFalse(owner.communicationAudioEligible)
     assertNotNull("teardown must abandon the focus the live owner held", shadowOf(manager).lastAbandonedAudioFocusRequest)
   }
 
@@ -377,12 +378,12 @@ class RealtimeCommunicationAudioTest {
     val owner = RealtimeCommunicationAudioOwner()
     val token = owner.enter(manager)
     assertTrue(token != RealtimeCommunicationAudioOwner.NO_OWNER)
-    assertTrue(owner.verifyCommunicationModeActive(manager))
+    assertTrue(owner.verifyCommunicationAudioEligible(manager))
 
     ShadowToggleableModeOwnerAudioManager.foreignOwner = true
 
-    assertFalse("a lost mode must close full duplex", owner.verifyCommunicationModeActive(manager))
-    assertFalse(owner.communicationModeActive)
+    assertFalse("a lost mode must close full duplex", owner.verifyCommunicationAudioEligible(manager))
+    assertFalse(owner.communicationAudioEligible)
 
     // The token must still work. Marking the mode lost by nulling the owner would orphan it:
     // teardown would abandon no focus and withdraw no mode request, leaving every other app
@@ -401,15 +402,15 @@ class RealtimeCommunicationAudioTest {
     shadowOf(manager).setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_FAILED)
     val owner = RealtimeCommunicationAudioOwner()
     assertEquals(RealtimeCommunicationAudioOwner.NO_OWNER, owner.enter(manager))
-    assertFalse(owner.communicationModeActive)
-    assertFalse(owner.communicationModeActiveUnsynchronized)
+    assertFalse(owner.communicationAudioEligible)
+    assertFalse(owner.communicationAudioEligibleUnsynchronized)
 
     shadowOf(manager).setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
     val recovered = owner.retryIfUnclaimed(manager)
 
     assertTrue("the retry must claim the mode once focus is available", recovered != RealtimeCommunicationAudioOwner.NO_OWNER)
-    assertTrue(owner.communicationModeActive)
-    assertTrue("the lock-free mirror must track it", owner.communicationModeActiveUnsynchronized)
+    assertTrue(owner.communicationAudioEligible)
+    assertTrue("the lock-free mirror must track it", owner.communicationAudioEligibleUnsynchronized)
     assertEquals(AudioManager.MODE_IN_COMMUNICATION, manager.mode)
 
     // And a retry against a session that already holds it must be a no-op, not a second claim.
@@ -453,7 +454,7 @@ class RealtimeCommunicationAudioTest {
         owner.retryIfUnclaimed(manager),
       )
     }
-    assertFalse(owner.communicationModeActive)
+    assertFalse(owner.communicationAudioEligible)
   }
 
   @Test
@@ -469,7 +470,7 @@ class RealtimeCommunicationAudioTest {
     }
 
     // Bounded: the budget runs out and the owner stops asking rather than retrying forever.
-    assertFalse(owner.communicationModeActive)
+    assertFalse(owner.communicationAudioEligible)
     shadowOf(manager).setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_GRANTED)
     assertEquals(
       "an exhausted budget must not resume retrying",
@@ -498,7 +499,7 @@ class RealtimeCommunicationAudioTest {
       AudioManager.MODE_NORMAL,
       manager.mode,
     )
-    assertFalse(owner.communicationModeActive)
+    assertFalse(owner.communicationAudioEligible)
   }
 
   @Test
@@ -521,6 +522,159 @@ class RealtimeCommunicationAudioTest {
 
       assertEquals("found=$found must be withdrawn to normal", AudioManager.MODE_NORMAL, manager.mode)
     }
+  }
+
+  // ---- audio focus as a live prerequisite ----------------------------------------------------
+
+  @Test
+  fun focusGrantWithAConfirmedModeMakesCommunicationAudioEligible() {
+    val manager = audioManager()
+    val owner = RealtimeCommunicationAudioOwner()
+
+    assertTrue(owner.enter(manager) != RealtimeCommunicationAudioOwner.NO_OWNER)
+
+    assertTrue(owner.communicationAudioEligible)
+    assertTrue(owner.communicationAudioEligibleUnsynchronized)
+  }
+
+  @Test
+  fun focusLossRevokesEligibilityWhileCommunicationModeStaysActive() {
+    // The ClawSweeper finding, reproduced exactly. The mode is deliberately left in
+    // MODE_IN_COMMUNICATION for the whole test so this cannot pass through the modeLost path:
+    // the only thing that changes is focus, and that alone must close full duplex.
+    val manager = audioManager()
+    val owner = RealtimeCommunicationAudioOwner()
+    assertTrue(owner.enter(manager) != RealtimeCommunicationAudioOwner.NO_OWNER)
+    assertEquals(AudioManager.MODE_IN_COMMUNICATION, manager.mode)
+    assertTrue(owner.communicationAudioEligible)
+
+    focusListener(manager).onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS)
+
+    assertEquals("the mode must still be active, or this test proves nothing", AudioManager.MODE_IN_COMMUNICATION, manager.mode)
+    assertFalse("re-verifying must still report ineligible, on the focus fact alone", owner.verifyCommunicationAudioEligible(manager))
+    assertFalse(owner.communicationAudioEligible)
+    assertFalse(owner.communicationAudioEligibleUnsynchronized)
+  }
+
+  @Test
+  fun transientFocusLossAlsoRevokesEligibility() {
+    val manager = audioManager()
+    val owner = RealtimeCommunicationAudioOwner()
+    assertTrue(owner.enter(manager) != RealtimeCommunicationAudioOwner.NO_OWNER)
+
+    focusListener(manager).onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT)
+
+    assertEquals(AudioManager.MODE_IN_COMMUNICATION, manager.mode)
+    assertFalse(owner.communicationAudioEligible)
+  }
+
+  @Test
+  fun aDuckableFocusLossThePlatformReportsAlsoRevokesEligibility() {
+    // Ducking is not benign here: another app is still on the loudspeaker the canceller uses as
+    // its reference. The platform only reports CAN_DUCK when it cannot duck this app itself --
+    // which, because the playout track is CONTENT_TYPE_SPEECH, is the case during playback. This
+    // covers the reported variant; a duck the platform handles silently produces no callback.
+    val manager = audioManager()
+    val owner = RealtimeCommunicationAudioOwner()
+    assertTrue(owner.enter(manager) != RealtimeCommunicationAudioOwner.NO_OWNER)
+
+    focusListener(manager).onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK)
+
+    assertEquals(AudioManager.MODE_IN_COMMUNICATION, manager.mode)
+    assertFalse(owner.communicationAudioEligible)
+  }
+
+  @Test
+  fun focusGainRestoresEligibilityForTheSameLiveOwner() {
+    val manager = audioManager()
+    val owner = RealtimeCommunicationAudioOwner()
+    assertTrue(owner.enter(manager) != RealtimeCommunicationAudioOwner.NO_OWNER)
+    val listener = focusListener(manager)
+    listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT)
+    assertFalse(owner.communicationAudioEligible)
+
+    listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_GAIN)
+
+    assertTrue("focus returning to a live owner restores eligibility", owner.communicationAudioEligible)
+    assertTrue(owner.communicationAudioEligibleUnsynchronized)
+  }
+
+  @Test
+  fun aStaleFocusLossCannotCloseFullDuplexForANewerOwner() {
+    // A: acquire, capture its listener, tear down. B: acquire. A's delayed callback then arrives.
+    val manager = audioManager()
+    val owner = RealtimeCommunicationAudioOwner()
+    val tokenA = owner.enter(manager)
+    val listenerA = focusListener(manager)
+    owner.restore(manager, tokenA)
+    val tokenB = owner.enter(manager)
+    assertTrue(tokenB != RealtimeCommunicationAudioOwner.NO_OWNER)
+    assertTrue(owner.communicationAudioEligible)
+
+    listenerA.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS)
+
+    assertTrue("a superseded request must not speak for the session that replaced it", owner.communicationAudioEligible)
+    assertTrue(owner.communicationAudioEligibleUnsynchronized)
+  }
+
+  @Test
+  fun aStaleFocusGainCannotResurrectEligibilityForANewerOwner() {
+    val manager = audioManager()
+    val owner = RealtimeCommunicationAudioOwner()
+    val tokenA = owner.enter(manager)
+    val listenerA = focusListener(manager)
+    owner.restore(manager, tokenA)
+    assertTrue(owner.enter(manager) != RealtimeCommunicationAudioOwner.NO_OWNER)
+    focusListener(manager).onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS)
+    assertFalse(owner.communicationAudioEligible)
+
+    listenerA.onAudioFocusChange(AudioManager.AUDIOFOCUS_GAIN)
+
+    assertFalse("a superseded request must not restore the newer owner", owner.communicationAudioEligible)
+  }
+
+  @Test
+  fun teardownRevokesEligibilityAndAbandonsOnlyThisOwnersRequest() {
+    val manager = audioManager()
+    val owner = RealtimeCommunicationAudioOwner()
+    val token = owner.enter(manager)
+    assertTrue(owner.communicationAudioEligibleUnsynchronized)
+
+    owner.restore(manager, token)
+
+    assertFalse(owner.communicationAudioEligible)
+    assertFalse("the snapshot must be false through the abandon, not after it", owner.communicationAudioEligibleUnsynchronized)
+    assertNotNull(shadowOf(manager).lastAbandonedAudioFocusRequest)
+    // And a callback delivered after the abandon is inert.
+    focusListener(manager).onAudioFocusChange(AudioManager.AUDIOFOCUS_GAIN)
+    assertFalse(owner.communicationAudioEligible)
+  }
+
+  @Test
+  fun initialFocusDenialLeavesNoOwnershipNoModeWriteAndNoEligibility() {
+    val manager = audioManager()
+    val before = manager.mode
+    shadowOf(manager).setNextFocusRequestResponse(AudioManager.AUDIOFOCUS_REQUEST_FAILED)
+    val owner = RealtimeCommunicationAudioOwner()
+
+    assertEquals(RealtimeCommunicationAudioOwner.NO_OWNER, owner.enter(manager))
+
+    assertEquals(before, manager.mode)
+    assertFalse(owner.communicationAudioEligible)
+    assertFalse(owner.communicationAudioEligibleUnsynchronized)
+  }
+
+  @Test
+  @Config(shadows = [ShadowForeignModeOwnerAudioManager::class])
+  fun aModeRefusalAfterFocusWasAcquiredAbandonsThatFocusAndGrantsNothing() {
+    val manager = audioManager()
+    val owner = RealtimeCommunicationAudioOwner()
+
+    assertEquals(RealtimeCommunicationAudioOwner.NO_OWNER, owner.enter(manager))
+
+    assertFalse(owner.communicationAudioEligible)
+    assertFalse(owner.communicationAudioEligibleUnsynchronized)
+    assertNotNull("the attempt must hand back the focus it took", shadowOf(manager).lastAbandonedAudioFocusRequest)
   }
 
   @Test
@@ -621,6 +775,20 @@ class RealtimeCommunicationAudioTest {
   }
 
   // ---- helpers -------------------------------------------------------------------------------
+
+  /**
+   * The focus listener the owner registered, as the platform would call it.
+   *
+   * `AudioFocusRequest` exposes no public getter, so this reads the field the framework class
+   * stores it in -- Robolectric runs the real framework class, so the field is the real one.
+   */
+  private fun focusListener(manager: AudioManager): AudioManager.OnAudioFocusChangeListener {
+    val last = shadowOf(manager).lastAudioFocusRequest
+    last.listener?.let { return it }
+    val field = AudioFocusRequest::class.java.getDeclaredField("mFocusListener")
+    field.isAccessible = true
+    return field.get(last.audioFocusRequest) as AudioManager.OnAudioFocusChangeListener
+  }
 
   private fun app() = RuntimeEnvironment.getApplication()
 

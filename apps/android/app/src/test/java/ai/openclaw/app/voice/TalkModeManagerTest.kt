@@ -14,6 +14,7 @@ import ai.openclaw.app.i18n.verbatimText
 import android.Manifest
 import android.content.ComponentName
 import android.content.IntentFilter
+import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
@@ -1551,6 +1552,9 @@ class TalkModeManagerTest {
   @Test
   fun captureForwardingDuringPlaybackFollowsActualEchoCancellation() {
     val manager = createManager()
+    // The gate needs live communication-audio eligibility as well as the effect capability, so
+    // the owner has to actually hold focus and the mode for this to exercise the AEC axis.
+    enterCommunicationModeForTest(manager, audioManagerForTest())
 
     // Nothing is playing: the microphone is forwarded either way.
     assertTrue(shouldAppendRealtimeCapturedFrame(manager, 4_800))
@@ -1609,7 +1613,7 @@ class TalkModeManagerTest {
       RealtimeCommunicationAudioOwner.NO_OWNER,
       readPrivateField(manager, "realtimeCommunicationAudioToken") as Long,
     )
-    assertFalse("a stranded claim must not leave the device in communication mode", owner.communicationModeActive)
+    assertFalse("a stranded claim must not leave the device in communication mode", owner.communicationAudioEligible)
     assertEquals(AudioManager.MODE_NORMAL, audioManager.mode)
   }
 
@@ -1631,6 +1635,37 @@ class TalkModeManagerTest {
       val token = enterCommunicationModeForTest(manager, audioManagerForTest())
       assertTrue("the mode must actually be owned for the positive half", token != RealtimeCommunicationAudioOwner.NO_OWNER)
       assertTrue(realtimeEchoCancellationGranted(manager, session))
+    } finally {
+      session.close()
+    }
+  }
+
+  @Test
+  @Config(shadows = [ShadowObservableAudioEffect::class])
+  fun losingAudioFocusDuringPlaybackSuppressesTheNextCapturedFrame() {
+    // The end-to-end policy boundary, not owner internals: AEC enabled, mode active, focus held,
+    // playback running -> the frame is forwarded. Deliver a real focus-loss callback while the
+    // mode deliberately stays in MODE_IN_COMMUNICATION -> the next frame is suppressed.
+    val manager = createManager()
+    val audioManager = audioManagerForTest()
+    val session = openCommunicationCaptureForTest()
+    try {
+      assertTrue(session.refreshCommunicationEchoCancellation())
+      val token = enterCommunicationModeForTest(manager, audioManager)
+      assertTrue(token != RealtimeCommunicationAudioOwner.NO_OWNER)
+      setRealtimeAecEnabled(manager, realtimeEchoCancellationGranted(manager, session))
+      assertTrue("precondition: all three facts hold", realtimeAecEnabled(manager))
+
+      // Playback is active, and with echo cancellation granted the uplink stays open.
+      setPrivateField(manager, "realtimePlaybackEndsAtMs", SystemClock.elapsedRealtime() + 5_000L)
+      assertTrue("with focus held the frame must be forwarded", shouldAppendRealtimeCapturedFrame(manager, 4_800))
+
+      // The platform hands focus to another app. The mode is untouched.
+      focusListenerFor(audioManager).onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS)
+      assertEquals("the mode must still be active", AudioManager.MODE_IN_COMMUNICATION, audioManager.mode)
+      setRealtimeAecEnabled(manager, realtimeEchoCancellationGranted(manager, session))
+
+      assertFalse("focus loss must close the uplink during playback", shouldAppendRealtimeCapturedFrame(manager, 4_800))
     } finally {
       session.close()
     }
@@ -1773,6 +1808,8 @@ class TalkModeManagerTest {
     runTest {
       val gateAtFirstWrite = AtomicReference<Boolean?>(null)
       val manager = playoutManagerObservingFirstWrite(gateAtFirstWrite, acceptWrites = true)
+      // Full duplex needs live communication-audio eligibility, not just the effect capability.
+      enterCommunicationModeForTest(manager, audioManagerForTest())
       setRealtimeAecEnabled(manager, true)
 
       manager.realtimeEvent(audioEventPayload(480))
@@ -2119,6 +2156,14 @@ class TalkModeManagerTest {
       )
     method.isAccessible = true
     method.invoke(manager, inputGeneration, sessionId)
+  }
+
+  private fun focusListenerFor(manager: AudioManager): AudioManager.OnAudioFocusChangeListener {
+    val last = shadowOf(manager).lastAudioFocusRequest
+    last.listener?.let { return it }
+    val field = AudioFocusRequest::class.java.getDeclaredField("mFocusListener")
+    field.isAccessible = true
+    return field.get(last.audioFocusRequest) as AudioManager.OnAudioFocusChangeListener
   }
 
   private fun audioManagerForTest(): AudioManager = RuntimeEnvironment.getApplication().getSystemService(AudioManager::class.java)

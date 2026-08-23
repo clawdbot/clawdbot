@@ -1580,10 +1580,11 @@ class TalkModeManager internal constructor(
   /**
    * Whether this session may treat the platform as cancelling its own echo.
    *
-   * Two independent facts, both required. The effect must report enabled -- read back, never
-   * inferred -- and this session must actually own MODE_IN_COMMUNICATION, read-back proven when
-   * it was claimed. An effect attached to a recorder while another app owns the communication
-   * mode is not cancelling this session's downlink, and granting full duplex on it would forward
+   * Two independent sources, and three facts. The effect must report enabled -- read back, never
+   * inferred -- and the owner must report its communication audio eligible, which is itself the
+   * conjunction of a live session token, the device still being in communication mode, and this
+   * app still holding audio focus. Any one of them failing means the canceller does not have this
+   * session's downlink as its reference, and forwarding the microphone during playback would send
    * the assistant's own voice back to the provider.
    *
    * [measure] re-measures the effect over IPC under the capture session's lifecycle lock, and may
@@ -1596,17 +1597,17 @@ class TalkModeManager internal constructor(
     val effectEnabled =
       if (measure) session.refreshCommunicationEchoCancellation() else session.communicationEchoCancellationEnabled
     // The measuring path also re-reads the device mode: acquisition proved it at one instant, and
-    // another app can move it afterwards. The read-loop path consults the flag that verification
+    // another app can move it afterwards. The read-loop path consults the snapshot the owner
     // maintains, so it stays free of the binder call.
-    val ownsMode =
+    val communicationAudioEligible =
       if (measure) {
-        realtimeCommunicationAudio.verifyCommunicationModeActive(systemAudioManager)
+        realtimeCommunicationAudio.verifyCommunicationAudioEligible(systemAudioManager)
       } else {
         // Lock-free mirror: the owner monitor is held across AudioService calls, so entering it
         // once per frame would put an IPC round trip back on the AudioRecord.read path.
-        realtimeCommunicationAudio.communicationModeActiveUnsynchronized
+        realtimeCommunicationAudio.communicationAudioEligibleUnsynchronized
       }
-    return effectEnabled && ownsMode
+    return effectEnabled && communicationAudioEligible
   }
 
   /**
@@ -1672,8 +1673,15 @@ class TalkModeManager internal constructor(
    * echo cancellation actually enabled, what the microphone hears during playback is the user, so
    * forwarding it is what lets the provider notice an interruption at all. Without it, the same
    * frames would be the assistant's own voice and the provider would interrupt itself.
+   *
+   * Two reads, not one. [realtimeAecEnabled] is the per-capture-generation capability, republished
+   * once per frame; the owner's own snapshot is consulted live so that focus lost between two
+   * frames closes the uplink on the very next forwarded frame instead of the next publication.
+   * Both are lock-free volatile reads, so this stays free of the monitor and of any IPC.
    */
-  private fun shouldSuppressRealtimeCaptureForPlayback(): Boolean = isRealtimePlaybackActive() && !realtimeAecEnabled
+  private fun shouldSuppressRealtimeCaptureForPlayback(): Boolean =
+    isRealtimePlaybackActive() &&
+      !(realtimeAecEnabled && realtimeCommunicationAudio.communicationAudioEligibleUnsynchronized)
 
   /**
    * Two independent reasons to hold a captured frame back, and both must be clear.

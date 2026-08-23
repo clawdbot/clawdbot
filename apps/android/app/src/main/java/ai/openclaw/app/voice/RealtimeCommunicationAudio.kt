@@ -2,6 +2,8 @@ package ai.openclaw.app.voice
 
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.os.Handler
+import android.os.HandlerThread
 import android.util.Log
 
 /**
@@ -27,19 +29,42 @@ internal class RealtimeCommunicationAudioOwner {
   private var previousMode: Int = AudioManager.MODE_NORMAL
   private var focusRequest: AudioFocusRequest? = null
 
+  /**
+   * Which focus request the listener callbacks belong to.
+   *
+   * Focus callbacks arrive asynchronously and can outlive the request that caused them, so a
+   * delayed LOSS from a torn-down session must not be allowed to close full duplex for the
+   * session that replaced it. Every request carries its own generation and a callback that does
+   * not match the current one is inert.
+   */
+  private var focusGeneration = 0L
+
+  /** Whether this app currently holds focus. Revocable session state, not an acquisition fact. */
+  private var focusActive = false
+
+  /**
+   * The generation a loss callback has already revoked.
+   *
+   * The platform may deliver a callback while `requestAudioFocus` is still on the stack, and the
+   * monitor is reentrant, so that callback runs *inside* the acquisition. Without this the grant
+   * path would then overwrite the revocation it just received and report focus this app no longer
+   * holds.
+   */
+  private var focusRevokedGeneration = -1L
+
   /** The mode was taken after acquisition. The token stays valid so teardown can still unwind. */
   private var modeLost = false
   private var lastFailure = LastFailure.None
   private var focusRetriesLeft = 0
 
   /**
-   * Lock-free mirror of [communicationModeActive] for the capture read loop.
+   * Lock-free mirror of [communicationAudioEligible] for the capture read loop.
    *
    * The monitor this class uses is held across AudioService binder calls, so a per-frame read that
    * entered it would put an IPC round trip on the critical path of `AudioRecord.read` -- the exact
    * coupling the capture-side cache exists to remove.
    */
-  @Volatile private var modeActiveSnapshot = false
+  @Volatile private var eligibilitySnapshot = false
 
   /** Why the last attempt failed, so the retry can act only on the kind that is transient. */
   private enum class LastFailure {
@@ -151,24 +176,36 @@ internal class RealtimeCommunicationAudioOwner {
   }
 
   /**
-   * Whether a live session holds the mode and the device is still in communication mode.
+   * Whether this session's communication audio is currently good enough to run full duplex.
    *
-   * Deliberately not called "owns": `AudioManager.getMode()` returns the device's effective mode,
-   * and Android exposes no per-app mode-owner query, so what is observable is "the device is in
-   * communication mode", not "this app is the one that put it there". That is the fact the
-   * canceller's reference signal actually depends on, so it is the fact this reports -- but the
-   * distinction matters and must not be overstated anywhere it is quoted.
+   * Three independent live facts, all revocable, and the single source of truth for the parts of
+   * the full-duplex decision this class owns:
+   *  - a live session still holds the token,
+   *  - the device is still in communication mode (`getMode()` reports the device's *effective*
+   *    mode; Android exposes no per-app owner query, so this is "the device is in communication
+   *    mode", not "this app put it there" -- the distinction must not be overstated),
+   *  - this app still holds audio focus.
+   *
+   * Focus belongs here rather than being an acquisition-time assumption: the platform can hand it
+   * to another app at any moment, and once it has, that app is on the same speaker the echo
+   * canceller uses as its reference. Forwarding the microphone during playback then means
+   * forwarding audio the canceller cannot subtract.
+   *
+   * Recovery is asymmetric, deliberately. A *transient* loss is followed by a GAIN callback and
+   * eligibility returns. A *permanent* loss is not: the platform sends no GAIN, and this class
+   * does not re-request, because a session that re-asks every tick is the focus thrash a previous
+   * review round had to remove. Such a session stays half duplex until Talk is restarted.
    */
   @get:Synchronized
-  val communicationModeActive: Boolean
-    get() = activeOwner != null && !modeLost
+  val communicationAudioEligible: Boolean
+    get() = activeOwner != null && !modeLost && focusActive
 
   /** The same fact, readable without entering the monitor. For the capture read loop only. */
-  val communicationModeActiveUnsynchronized: Boolean
-    get() = modeActiveSnapshot
+  val communicationAudioEligibleUnsynchronized: Boolean
+    get() = eligibilitySnapshot
 
   /**
-   * Re-reads the device mode and marks it lost when the device is no longer in communication mode.
+   * Re-reads the device mode, then reports whether communication audio is eligible overall.
    *
    * Acquisition proves the mode at one instant; another app can move it afterwards. Without this
    * the capability would stay granted for a session whose downlink the canceller is no longer
@@ -181,17 +218,18 @@ internal class RealtimeCommunicationAudioOwner {
    * communication mode permanently.
    */
   @Synchronized
-  fun verifyCommunicationModeActive(audioManager: AudioManager): Boolean {
+  fun verifyCommunicationAudioEligible(audioManager: AudioManager): Boolean {
     if (activeOwner == null) return false
     if (readMode(audioManager, AudioManager.MODE_INVALID) == AudioManager.MODE_IN_COMMUNICATION) {
       modeLost = false
-      publishSnapshot()
-      return true
+    } else {
+      if (!modeLost) Log.w(tag, "communication mode no longer active; dropping to half duplex")
+      modeLost = true
     }
-    if (!modeLost) Log.w(tag, "communication mode no longer active; dropping to half duplex")
-    modeLost = true
     publishSnapshot()
-    return false
+    // The mode is the only fact this re-reads; focus is maintained by the platform's own callback
+    // and the token by the session lifecycle. Returning the conjunction keeps one source of truth.
+    return activeOwner != null && !modeLost && focusActive
   }
 
   /**
@@ -256,33 +294,128 @@ internal class RealtimeCommunicationAudioOwner {
   }
 
   private fun publishSnapshot() {
-    modeActiveSnapshot = activeOwner != null && !modeLost
+    eligibilitySnapshot = activeOwner != null && !modeLost && focusActive
   }
 
   private fun acquireFocus(audioManager: AudioManager): FocusOutcome {
     if (focusRequest != null) return FocusOutcome.AlreadyHeld
+    val generation = ++focusGeneration
+    // This generation starts un-held; only a grant that no callback has already revoked sets it.
+    focusActive = false
     val request =
       AudioFocusRequest
         .Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
         .setAudioAttributes(realtimeCommunicationPlaybackAttributes())
+        // The listener is what makes focus a live fact rather than an acquisition-time one.
+        // Bound to this request's generation so a callback that outlives it cannot speak for
+        // whatever session came next.
+        //
+        // Dispatched on a private thread, not the default. The single-argument overload delivers
+        // on the main Looper, and this callback takes the monitor that `enter` and `restore` hold
+        // across AudioService calls -- a loss arriving during one of those would park the UI
+        // thread for the length of a HAL round trip.
+        .setOnAudioFocusChangeListener({ change -> onFocusChange(generation, change) }, focusCallbackHandler())
         .build()
     val granted = runCatching { audioManager.requestAudioFocus(request) }.getOrDefault(AudioManager.AUDIOFOCUS_REQUEST_FAILED)
     if (granted != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
       Log.w(tag, "communication audio focus not granted (code $granted)")
+      // requestAudioFocus registers the listener before it consults the service and does not
+      // unregister on refusal, so a denied request would otherwise pin its listener -- and this
+      // owner through it -- in a process-global map for the process lifetime. Each request now
+      // carries a distinct capturing lambda, so those entries would accumulate per denial.
+      runCatching { audioManager.abandonAudioFocusRequest(request) }
+      publishSnapshot()
       return FocusOutcome.Denied
     }
     focusRequest = request
+    // Not unconditional: a reentrant loss delivered during the call above already spoke for this
+    // generation, and the grant must not overwrite it.
+    if (focusGeneration == generation && focusRevokedGeneration != generation) focusActive = true
+    publishSnapshot()
     return FocusOutcome.Acquired
   }
 
+  /**
+   * The platform telling this app what happened to its focus.
+   *
+   * Every loss variant this app is told about revokes full-duplex eligibility, CAN_DUCK included:
+   * ducking still puts another app's audio on the loudspeaker the echo canceller is referencing,
+   * and the canceller has no reference for it.
+   *
+   * CAN_DUCK is delivered only when the platform cannot duck this app itself. Because the playout
+   * track is CONTENT_TYPE_SPEECH the platform declines to duck it and notifies instead -- but only
+   * while such a track is actually started. A duckable loss arriving between responses is handled
+   * silently by the platform and produces no callback, so this arm covers the case that matters
+   * (a duck during playback) rather than every duck.
+   *
+   * Callbacks are dispatched by the platform on its own thread, so this takes the monitor. It
+   * performs no AudioManager call, so it cannot block on a binder round trip while holding it.
+   */
+  @Synchronized
+  private fun onFocusChange(
+    generation: Long,
+    change: Int,
+  ) {
+    // A callback from an abandoned or superseded request must never touch newer state.
+    if (generation != focusGeneration) return
+    when (change) {
+      AudioManager.AUDIOFOCUS_GAIN -> {
+        // Only a live owner may be restored. Focus returning says nothing about the mode, which
+        // keeps its own independent read-back.
+        if (activeOwner == null) return
+        focusActive = true
+      }
+      AudioManager.AUDIOFOCUS_LOSS,
+      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK,
+      -> {
+        if (focusActive) Log.w(tag, "communication audio focus lost (change=$change); closing full duplex")
+        focusActive = false
+        focusRevokedGeneration = generation
+      }
+      else -> return
+    }
+    publishSnapshot()
+  }
+
   private fun releaseFocus(audioManager: AudioManager) {
+    // Revoked before the abandon, not after: the snapshot must never report eligible for a
+    // request that is already on its way out.
+    focusActive = false
+    focusGeneration += 1
+    publishSnapshot()
     focusRequest?.let { request ->
-      runCatching { audioManager.abandonAudioFocusRequest(request) }
+      val result = runCatching { audioManager.abandonAudioFocusRequest(request) }
+      val code = result.getOrNull()
+      if (result.isFailure || code != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+        // Worth seeing, because the platform may still consider this app a focus holder. The
+        // handle is dropped anyway: keeping it would make the next session's acquireFocus report
+        // AlreadyHeld and leave that session permanently ineligible, which is strictly worse than
+        // a stale platform-side request whose listener this generation fence has already made
+        // inert.
+        Log.w(tag, "communication audio focus not abandoned cleanly (code=${code ?: "threw"})")
+      }
       focusRequest = null
     }
   }
 
   internal companion object {
+    /**
+     * One process-wide thread for focus callbacks.
+     *
+     * Private rather than the main Looper so a callback can block on this class's monitor without
+     * parking the UI thread. Started once and left running: it is a single idle Looper thread for
+     * the process, and tying its lifetime to individual sessions would reintroduce the teardown
+     * race the generation fence exists to remove.
+     */
+    private val focusCallbackThread by lazy {
+      HandlerThread("realtime-audio-focus").also { it.start() }
+    }
+
+    private val focusCallbackHandlerInstance by lazy { Handler(focusCallbackThread.looper) }
+
+    private fun focusCallbackHandler(): Handler = focusCallbackHandlerInstance
+
     /** The token value a session that never acquired the mode carries. */
     const val NO_OWNER = 0L
     private const val FOCUS_RETRY_BUDGET = 6
