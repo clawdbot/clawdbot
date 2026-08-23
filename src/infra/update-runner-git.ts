@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { escapeRegExp } from "../shared/regexp.js";
 import {
   resolveControlUiAssetHealth,
   resolveControlUiDistIndexPathForRoot,
@@ -83,7 +85,7 @@ export async function updateGitCheckout(params: {
   const devTarget = channel === "dev" ? opts.devTarget : undefined;
   const hasDevTarget = devTarget !== undefined;
   const needsCheckoutMain = channel === "dev" && !hasDevTarget && branch !== DEV_BRANCH;
-  const totalSteps = channel === "dev" ? (needsCheckoutMain ? 12 : 11) : 9;
+  const totalSteps = channel === "dev" ? (needsCheckoutMain ? 12 : 11) : 11;
   const steps: UpdateStepResult[] = [];
   let stepIndex = 0;
   const step = (
@@ -384,11 +386,43 @@ export async function updateGitCheckout(params: {
   } else {
     const fetchFailure = await runRequiredStep(
       "git fetch",
-      ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"],
+      ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--no-tags"],
       "fetch-failed",
     );
     if (fetchFailure) {
       return fetchFailure;
+    }
+    const remoteStep = await runStep(step("git remote", ["git", "-C", gitRoot, "remote"], gitRoot));
+    if (remoteStep.exitCode !== 0) {
+      return buildError("fetch-failed");
+    }
+    for (const remote of normalizeStringEntries((remoteStep.stdoutTail ?? "").split("\n"))) {
+      const skipConfig = await runCommand(
+        [
+          "git",
+          "-C",
+          gitRoot,
+          "config",
+          "--type=bool",
+          "--get-regexp",
+          `^remote\\.${escapeRegExp(remote)}\\.(skipfetchall|skipdefaultupdate)$`,
+        ],
+        { cwd: gitRoot, timeoutMs },
+      );
+      if (skipConfig.code !== 0 && skipConfig.code !== 1) {
+        return buildError("fetch-failed");
+      }
+      if (skipConfig.stdout.trimEnd().split("\n").at(-1)?.endsWith(" true")) {
+        continue;
+      }
+      const tagFetchFailure = await runRequiredStep(
+        `git fetch ${remote} tags`,
+        ["git", "-C", gitRoot, "fetch", "--no-tags", "--", remote, "+refs/tags/*:refs/tags/*"],
+        "fetch-failed",
+      );
+      if (tagFetchFailure) {
+        return tagFetchFailure;
+      }
     }
     const tag = await resolveChannelTag(runCommand, gitRoot, timeoutMs, channel);
     if (!tag) {

@@ -502,9 +502,43 @@ describe("runGatewayUpdate", () => {
     return { sourceRoot, localRoot, baseSha, targetSha };
   }
 
+  async function createRecreatedReleaseTagFixture() {
+    const sourceRoot = await fixtureRootTracker.make("release-source");
+    const localRoot = await fixtureRootTracker.make("release-local");
+    const missingRemote = path.join(await fixtureRootTracker.make("release-missing"), "gone.git");
+    const releaseTag = "v1.0.0";
+    const localOnlyTag = "local-operator-tag";
+    await runRealGit(sourceRoot, "init", "--initial-branch=main");
+    await runRealGit(sourceRoot, "config", "user.name", "OpenClaw Test");
+    await runRealGit(sourceRoot, "config", "user.email", "openclaw@example.com");
+    await fs.writeFile(
+      path.join(sourceRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@10.0.0" }),
+    );
+    await fs.writeFile(path.join(sourceRoot, "openclaw.mjs"), "export {};\n");
+    await fs.writeFile(path.join(sourceRoot, "README.md"), "base\n");
+    await runRealGit(sourceRoot, "add", "package.json", "openclaw.mjs", "README.md");
+    await runRealGit(sourceRoot, "commit", "-m", "base");
+    const baseSha = await runRealGit(sourceRoot, "rev-parse", "HEAD");
+    await runRealGit(sourceRoot, "tag", releaseTag);
+    await runRealGit(path.dirname(localRoot), "clone", "--quiet", sourceRoot, localRoot);
+    await runRealGit(localRoot, "tag", localOnlyTag, baseSha);
+    await runRealGit(localRoot, "remote", "add", "skipped", missingRemote);
+    await runRealGit(localRoot, "config", "remote.skipped.skipFetchAll", "false");
+    await runRealGit(localRoot, "config", "remote.skipped.skipDefaultUpdate", "true");
+
+    await fs.writeFile(path.join(sourceRoot, "README.md"), "release\n");
+    await runRealGit(sourceRoot, "add", "README.md");
+    await runRealGit(sourceRoot, "commit", "-m", "release");
+    const releaseSha = await runRealGit(sourceRoot, "rev-parse", "HEAD");
+    await runRealGit(sourceRoot, "tag", "--force", releaseTag);
+
+    return { sourceRoot, localRoot, baseSha, releaseSha, releaseTag, localOnlyTag };
+  }
+
   function createRealGitUpdateRunner(params: { finalHead?: { root: string; sha: string } } = {}) {
     let headReads = 0;
-    return async (argv: string[], options: { cwd?: string; timeoutMs?: number }) => {
+    return async (argv: string[], options?: { cwd?: string; timeoutMs?: number }) => {
       if (argv[0] === "git") {
         const finalHead = params.finalHead;
         if (
@@ -519,15 +553,15 @@ describe("runGatewayUpdate", () => {
           }
         }
         return await runCommandWithTimeout(argv, {
-          cwd: options.cwd,
-          timeoutMs: options.timeoutMs ?? 5000,
+          cwd: options?.cwd,
+          timeoutMs: options?.timeoutMs ?? 5000,
         });
       }
       if (argv[0] === "pnpm" && argv[1] === "--version") {
         return toCommandResult({ stdout: PNPM_VERSION });
       }
       if (argv[0] === "pnpm" && (argv[1] === "build" || argv[1] === "ui:build")) {
-        const cwd = options.cwd ?? process.cwd();
+        const cwd = options?.cwd ?? process.cwd();
         const uiDir = path.join(cwd, "dist", "control-ui");
         await fs.mkdir(uiDir, { recursive: true });
         await fs.writeFile(path.join(uiDir, "index.html"), "ok\n");
@@ -535,6 +569,50 @@ describe("runGatewayUpdate", () => {
       return toCommandResult();
     };
   }
+
+  it("refreshes a recreated release tag without fetching skipped remotes or pruning local tags", async () => {
+    const { localRoot, releaseSha, releaseTag, localOnlyTag } =
+      await createRecreatedReleaseTagFixture();
+    const reachedMutation = new Error("reached release mutation");
+
+    await expect(
+      runWithCommand(createRealGitUpdateRunner(), {
+        cwd: localRoot,
+        channel: "stable",
+        beforeGitMutation: async () => {
+          throw reachedMutation;
+        },
+      }),
+    ).rejects.toBe(reachedMutation);
+
+    await expect(runRealGit(localRoot, "rev-parse", `${releaseTag}^{}`)).resolves.toBe(releaseSha);
+    await expect(runRealGit(localRoot, "rev-parse", "refs/remotes/origin/main")).resolves.toBe(
+      releaseSha,
+    );
+    await expect(runRealGit(localRoot, "rev-parse", localOnlyTag)).resolves.toBeTruthy();
+  });
+
+  it("keeps a configured non-tag non-fast-forward ref protected", async () => {
+    const { sourceRoot, localRoot, baseSha, releaseSha } = await createRecreatedReleaseTagFixture();
+    await runRealGit(sourceRoot, "branch", "protected", releaseSha);
+    await runRealGit(
+      localRoot,
+      "config",
+      "--add",
+      "remote.origin.fetch",
+      "refs/heads/protected:refs/heads/protected-cache",
+    );
+    await runRealGit(localRoot, "fetch", "--no-tags", "origin");
+    await runRealGit(sourceRoot, "branch", "--force", "protected", baseSha);
+
+    const result = await runWithCommand(createRealGitUpdateRunner(), {
+      cwd: localRoot,
+      channel: "stable",
+    });
+
+    expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
+    await expect(runRealGit(localRoot, "rev-parse", "protected-cache")).resolves.toBe(releaseSha);
+  });
 
   async function runWithCommand(
     runCommand: (
