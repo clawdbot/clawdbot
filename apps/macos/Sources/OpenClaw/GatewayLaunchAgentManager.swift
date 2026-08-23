@@ -170,8 +170,8 @@ enum GatewayLaunchAgentManager {
             self.logger.info("launchd change skipped (remote mode)")
             return nil
         }
-        if enabled, self.isLaunchAgentWriteDisabled() {
-            self.logger.info("launchd enable skipped (disable marker set)")
+        if self.isLaunchAgentWriteDisabled() {
+            self.logger.info("launchd change skipped (disable marker set)")
             return nil
         }
 

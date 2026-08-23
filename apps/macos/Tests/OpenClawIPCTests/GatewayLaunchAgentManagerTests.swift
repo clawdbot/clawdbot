@@ -187,9 +187,19 @@ struct GatewayLaunchAgentManagerTests {
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
 
             let error = GatewayLaunchAgentManager.applyAttachOnlyRuntimeOverride()
+            let installError = await GatewayLaunchAgentManager.set(
+                enabled: true,
+                bundlePath: "/Applications/OpenClaw.app",
+                port: 18789)
+            let uninstallError = await GatewayLaunchAgentManager.set(
+                enabled: false,
+                bundlePath: "/Applications/OpenClaw.app",
+                port: 18789)
             let kickstartError = await GatewayLaunchAgentManager.kickstart()
 
             #expect(error == nil)
+            #expect(installError == nil)
+            #expect(uninstallError == nil)
             #expect(kickstartError == nil)
             #expect(FileManager().fileExists(atPath: marker.path))
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
