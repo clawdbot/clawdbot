@@ -14,15 +14,19 @@ import {
   normalizeReleaseValidationInputs,
   releaseChildSpec,
   requireCanonicalReleaseContinuationWorkflowRef,
-  selectHistoricalReleaseSourceInputJob,
+  selectHistoricalReleaseChecksResolveJob,
+  selectHistoricalReusableInputJob,
+  selectHistoricalRootResolveJob,
   terminalPolicyPass,
   validateReleaseChildDispatchBinding,
   validateReleaseChildRunProvenance,
   validateReleaseExecutionPlanArtifact,
   verifyReleaseContinuationSource,
+  verifyReleaseContinuationSourceIdentity,
 } from "./full-release-validation-policy.mjs";
 import { verifyTrustedWorkflowRef } from "./full-release-validation-workflow-trust.mjs";
 import { plainGhAuthenticatedEnv, resolvePlainGhBin } from "./lib/plain-gh.mjs";
+import { loadHistoricalCandidateArtifactEvidence } from "./release-ci-summary.mjs";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_REPOSITORY = "openclaw/openclaw";
@@ -457,6 +461,18 @@ export async function preflightContinuation(
         sourceWorkflowSha: plan.workflowSha,
       };
   const sourceRun = await client.getRunAttempt(source.sourceRunId, source.sourceRunAttempt);
+  if (plan.continuation) {
+    verifyReleaseContinuationSourceIdentity({
+      continuation: plan.continuation,
+      repository,
+      sourceRun,
+      targetSha: plan.targetSha,
+    });
+    if (typeof client.verifyTrustedSourceSha !== "function") {
+      throw new Error("continuation client cannot verify its source workflow SHA");
+    }
+    await client.verifyTrustedSourceSha(plan.continuation.sourceWorkflowSha);
+  }
   const parentJobs = await client.getParentJobs(source.sourceRunId);
   const resolveJobs = parentJobs.filter(
     (job) =>
@@ -495,19 +511,39 @@ export async function preflightContinuation(
       source.sourceRunId,
       source.sourceRunAttempt,
     );
-    const sourceInputLog =
+    let historicalEvidence;
+    if (
       !sourceManifest &&
       plan.continuation.sourceEvidenceMode === HISTORICAL_CONTINUATION_SOURCE_MODE
-        ? await client.getJobLog(
-            selectHistoricalReleaseSourceInputJob(parentJobs, source.sourceRunAttempt).id,
-          )
-        : undefined;
+    ) {
+      const releaseChecksChild = selectedChildren(plan).find(
+        (child) => child.key === "releaseChecks",
+      );
+      if (!releaseChecksChild) {
+        throw new Error("historical continuation release-checks child is missing");
+      }
+      const releaseChecksJobs = await client.getParentJobs(releaseChecksChild.runId);
+      historicalEvidence = {
+        candidateArtifacts: await client.loadHistoricalCandidateArtifacts(source.candidate),
+        releaseChecksResolveLog: await client.getJobLog(
+          selectHistoricalReleaseChecksResolveJob(releaseChecksJobs, releaseChecksChild.runAttempt)
+            .id,
+        ),
+        reusableInputsLog: await client.getJobLog(
+          selectHistoricalReusableInputJob(parentJobs, source.sourceRunAttempt).id,
+        ),
+        rootResolveLog: await client.getJobLog(
+          selectHistoricalRootResolveJob(parentJobs, source.sourceRunAttempt).id,
+        ),
+        sourceWorkflow: await client.getWorkflowSource(source.sourceWorkflowSha),
+      };
+    }
     verifyReleaseContinuationSource({
       children: selectedChildren(plan),
       continuation: plan.continuation,
+      historicalEvidence,
       repository,
       sourceChildLogs,
-      sourceInputLog,
       sourceManifest,
       sourceRun,
       targetSha: plan.targetSha,
@@ -972,6 +1008,15 @@ export function createClient(repository, dependencies = {}) {
     getRunAttempt(runId, runAttempt) {
       return apiJson(`actions/runs/${runId}/attempts/${runAttempt}`);
     },
+    async getWorkflowSource(workflowSha) {
+      const response = await apiJson(
+        `contents/.github/workflows/full-release-validation.yml?ref=${workflowSha}`,
+      );
+      if (response.encoding !== "base64" || typeof response.content !== "string") {
+        throw new Error("historical continuation source workflow is unreadable");
+      }
+      return Buffer.from(response.content.replaceAll(/\s/gu, ""), "base64").toString("utf8");
+    },
     async getParentJobs(runId) {
       const output = await apiText(
         `actions/runs/${runId}/jobs?filter=all&per_page=100`,
@@ -986,6 +1031,9 @@ export function createClient(repository, dependencies = {}) {
     },
     getJobLog(jobId) {
       return apiText(`actions/jobs/${jobId}/logs`);
+    },
+    loadHistoricalCandidateArtifacts(candidate) {
+      return loadHistoricalCandidateArtifactEvidence(candidate, repository);
     },
     async rerunFailed(runId) {
       await mutate(["run", "rerun", runId, "--repo", repository, "--failed"]);
@@ -1123,19 +1171,13 @@ async function rerunWithTransientRetry(runId, priorRun, mutation, client) {
 }
 
 export async function continueFailed(plan, rootRunId, client, options = {}) {
-  await preflightContinuation(plan, rootRunId, client, client.repository ?? DEFAULT_REPOSITORY);
-  if (plan.continuation) {
-    if (typeof client.verifyTrustedSourceSha !== "function") {
-      throw new Error("continuation client cannot verify its source workflow SHA");
-    }
-    await client.verifyTrustedSourceSha(plan.continuation.sourceWorkflowSha);
-  }
   if (plan.legacy) {
     if (typeof client.verifyTrustedToolingSha !== "function") {
       throw new Error("legacy continuation client cannot verify its frozen Tooling SHA");
     }
     await client.verifyTrustedToolingSha(plan.continuation.toolingSha);
   }
+  await preflightContinuation(plan, rootRunId, client, client.repository ?? DEFAULT_REPOSITORY);
   let status = await inspectContinuation(plan, client);
   if (status.active.length > 0) {
     await waitForTerminal(

@@ -17,15 +17,18 @@ import {
   HISTORICAL_CONTINUATION_SOURCE_MODE,
   isCanonicalReleaseContinuationWorkflowRef,
   releaseCompositeJobsSha256,
-  selectHistoricalReleaseSourceInputJob,
+  selectHistoricalReleaseChecksResolveJob,
+  selectHistoricalReusableInputJob,
+  selectHistoricalRootResolveJob,
   terminalPolicyPass,
   validateReleaseChildDispatchBinding,
   validateReleaseExecutionPlanArtifact,
   validateReleaseChildRunProvenance,
   validateReleaseStateArtifact,
   verifyReleaseContinuationSource,
+  verifyReleaseContinuationSourceIdentity,
 } from "./full-release-validation-policy.mjs";
-import { execGhRead, plainGhEnv, resolvePlainGhBin } from "./lib/plain-gh.mjs";
+import { execGhRead, plainGhAuthenticatedEnv, resolvePlainGhBin } from "./lib/plain-gh.mjs";
 
 const DEFAULT_REPO = process.env.OPENCLAW_RELEASE_REPO || "openclaw/openclaw";
 const RELEASE_EVIDENCE_SCHEMA = "openclaw.release-validation-evidence/v3";
@@ -44,6 +47,10 @@ const MAX_EXECUTION_PLAN_BYTES = 128 * 1024;
 // headroom for GitHub latency while preventing one stalled read from consuming
 // the workflow budget.
 const GH_COMMAND_TIMEOUT_MS = 60_000;
+const ARTIFACT_DOWNLOAD_MIN_BYTES_PER_SECOND = 256 * 1024;
+const ARTIFACT_DOWNLOAD_OVERHEAD_MS = 60_000;
+const ARTIFACT_DOWNLOAD_MAX_TIMEOUT_MS = 30 * 60_000;
+const ARTIFACT_DOWNLOAD_ATTEMPTS = 2;
 const SUCCESSFUL_PARENT_JOB_CONCLUSIONS = new Set(["neutral", "skipped", "success"]);
 
 const CHILD_DISPATCHES = [
@@ -152,18 +159,227 @@ export function artifactDownloadArgs(artifactId, repository = DEFAULT_REPO) {
   return ["api", `repos/${repository}/actions/artifacts/${artifactId}/zip`];
 }
 
-function downloadArtifactZip(artifactId, destination, repository = DEFAULT_REPO) {
+export function artifactDownloadTimeoutMs(sizeInBytes) {
+  const size = Number(sizeInBytes);
+  if (!Number.isSafeInteger(size) || size < 1) {
+    throw new Error("artifact download size is invalid");
+  }
+  return Math.min(
+    ARTIFACT_DOWNLOAD_MAX_TIMEOUT_MS,
+    Math.max(
+      GH_COMMAND_TIMEOUT_MS,
+      Math.ceil((size / ARTIFACT_DOWNLOAD_MIN_BYTES_PER_SECOND) * 1000) +
+        ARTIFACT_DOWNLOAD_OVERHEAD_MS,
+    ),
+  );
+}
+
+function downloadArtifactZip(artifactId, destination, sizeInBytes, repository = DEFAULT_REPO) {
+  const timeout = sizeInBytes ? artifactDownloadTimeoutMs(sizeInBytes) : GH_COMMAND_TIMEOUT_MS;
+  for (let attempt = 1; attempt <= ARTIFACT_DOWNLOAD_ATTEMPTS; attempt += 1) {
+    const output = openSync(destination, "w");
+    try {
+      execFileSync(resolvePlainGhBin(), artifactDownloadArgs(artifactId, repository), {
+        env: plainGhAuthenticatedEnv(),
+        killSignal: "SIGKILL",
+        maxBuffer: 64 * 1024 * 1024,
+        stdio: ["ignore", output, "pipe"],
+        timeout,
+      });
+      return;
+    } catch (error) {
+      if (
+        attempt === ARTIFACT_DOWNLOAD_ATTEMPTS ||
+        classifyReleaseGhTransportError(error) !== "transient"
+      ) {
+        throw error;
+      }
+    } finally {
+      closeSync(output);
+    }
+  }
+}
+
+function sha256File(file) {
+  const output = execFileSync("shasum", ["-a", "256", file], {
+    encoding: "utf8",
+    maxBuffer: 1024,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const digest = output.trim().split(/\s+/u, 1)[0];
+  if (!/^[a-f0-9]{64}$/u.test(digest)) {
+    throw new Error(`cannot compute SHA-256 for ${file}`);
+  }
+  return digest;
+}
+
+function listZipEntries(archivePath) {
+  const output = execFileSync("unzip", ["-Z", "-1", archivePath], {
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return output.split(/\r?\n/u).filter(Boolean);
+}
+
+function extractZipEntry(archivePath, entry, destination) {
   const output = openSync(destination, "w");
   try {
-    execFileSync(resolvePlainGhBin(), artifactDownloadArgs(artifactId, repository), {
-      env: plainGhEnv(),
-      killSignal: "SIGKILL",
-      maxBuffer: 64 * 1024 * 1024,
+    execFileSync("unzip", ["-p", archivePath, entry], {
+      maxBuffer: 1024,
       stdio: ["ignore", output, "pipe"],
-      timeout: GH_COMMAND_TIMEOUT_MS,
     });
   } finally {
     closeSync(output);
+  }
+}
+
+function exactCandidateArtifactMetadata(candidate, kind, repository) {
+  const fields =
+    kind === "image"
+      ? ["imageArtifactId", "imageArtifactName", "imageArtifactDigest"]
+      : kind === "package"
+        ? ["packageArtifactId", "packageArtifactName", "packageArtifactDigest"]
+        : [
+            "prepublishPluginRegistryArtifactId",
+            "prepublishPluginRegistryArtifactName",
+            "prepublishPluginRegistryArtifactDigest",
+          ];
+  const [idKey, nameKey, digestKey] = fields;
+  const artifact = githubRestJson(`actions/artifacts/${candidate[idKey]}`, repository);
+  if (
+    String(artifact.id) !== String(candidate[idKey]) ||
+    artifact.name !== candidate[nameKey] ||
+    artifact.digest !== `sha256:${candidate[digestKey]}` ||
+    artifact.expired !== false ||
+    String(artifact.workflow_run?.id) !== String(candidate.packageArtifactRunId) ||
+    artifact.workflow_run?.head_branch === undefined ||
+    artifact.workflow_run?.head_sha === undefined ||
+    !Number.isSafeInteger(Number(artifact.size_in_bytes)) ||
+    Number(artifact.size_in_bytes) < 1
+  ) {
+    throw new Error(`historical continuation ${kind} artifact service identity changed`);
+  }
+  return artifact;
+}
+
+function candidateArtifactBase(candidate, artifact, archivePath) {
+  const archiveSha256 = sha256File(archivePath);
+  if (artifact.digest !== `sha256:${archiveSha256}`) {
+    throw new Error(`historical continuation artifact service digest changed: ${artifact.name}`);
+  }
+  const runAttempt = Number(candidate.packageArtifactRunAttempt);
+  if (!artifact.name.endsWith(`-${artifact.workflow_run.id}-${runAttempt}`)) {
+    throw new Error(`historical continuation artifact producer attempt changed: ${artifact.name}`);
+  }
+  return {
+    archiveSha256,
+    digest: artifact.digest,
+    expired: artifact.expired,
+    id: String(artifact.id),
+    name: artifact.name,
+    runAttempt,
+    runId: String(artifact.workflow_run.id),
+    workflowRef: artifact.workflow_run.head_branch,
+    workflowSha: artifact.workflow_run.head_sha,
+  };
+}
+
+export function loadHistoricalCandidateArtifactEvidence(candidate, repository = DEFAULT_REPO) {
+  const normalizedRepository = normalizeRepository(repository);
+  const directory = mkdtempSync(join(tmpdir(), "openclaw-historical-candidate-"));
+  try {
+    const evidence = {};
+    for (const kind of ["package", "pluginRegistry", "image"]) {
+      const artifact = exactCandidateArtifactMetadata(candidate, kind, normalizedRepository);
+      const archivePath = join(directory, `${kind}.zip`);
+      downloadArtifactZip(
+        String(artifact.id),
+        archivePath,
+        artifact.size_in_bytes,
+        normalizedRepository,
+      );
+      const base = candidateArtifactBase(candidate, artifact, archivePath);
+      const entries = listZipEntries(archivePath);
+      if (kind === "package") {
+        if (entries.length !== 1 || entries[0] !== candidate.packageFileName) {
+          throw new Error("historical continuation package artifact entries changed");
+        }
+        const tarballPath = join(directory, candidate.packageFileName);
+        extractZipEntry(archivePath, candidate.packageFileName, tarballPath);
+        const packageJson = JSON.parse(
+          execFileSync("tar", ["-xOf", tarballPath, "package/package.json"], {
+            encoding: "utf8",
+            maxBuffer: 1024 * 1024,
+            stdio: ["ignore", "pipe", "pipe"],
+          }),
+        );
+        const buildInfo = JSON.parse(
+          execFileSync("tar", ["-xOf", tarballPath, "package/dist/build-info.json"], {
+            encoding: "utf8",
+            maxBuffer: 1024 * 1024,
+            stdio: ["ignore", "pipe", "pipe"],
+          }),
+        );
+        evidence.package = {
+          ...base,
+          fileName: candidate.packageFileName,
+          fileSha256: sha256File(tarballPath),
+          packageName: packageJson.name,
+          packageSourceSha: buildInfo.commit,
+          packageVersion: packageJson.version,
+        };
+      } else if (kind === "pluginRegistry") {
+        const manifestEntry = entries.filter(
+          (entry) => entry === "prepublish-plugin-registry.json",
+        );
+        if (manifestEntry.length !== 1) {
+          throw new Error("historical continuation plugin registry manifest is missing");
+        }
+        const manifestPath = join(directory, "prepublish-plugin-registry.json");
+        extractZipEntry(archivePath, manifestEntry[0], manifestPath);
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+        evidence.pluginRegistry = {
+          ...base,
+          candidateVersion: manifest.candidateVersion,
+          manifestSha256: sha256File(manifestPath),
+          schema: manifest.schema,
+          schemaVersion: manifest.schemaVersion,
+          sourceSha: manifest.sourceSha,
+        };
+      } else {
+        const manifestEntries = entries.filter((entry) => entry === "shared-image-artifact.json");
+        const imageEntries = entries.filter((entry) => entry === "shared-images.tar.zst");
+        if (manifestEntries.length !== 1 || imageEntries.length !== 1 || entries.length !== 2) {
+          throw new Error("historical continuation image artifact entries changed");
+        }
+        const manifestPath = join(directory, "shared-image-artifact.json");
+        const imagePath = join(directory, "shared-images.tar.zst");
+        extractZipEntry(archivePath, manifestEntries[0], manifestPath);
+        extractZipEntry(archivePath, imageEntries[0], imagePath);
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+        evidence.image = {
+          ...base,
+          imageArchiveSha256: sha256File(imagePath),
+          imageArchiveFileName: manifest.archive?.filename,
+          imageArchiveFormat: manifest.archive?.format,
+          imageArchiveManifestSha256: manifest.archive?.sha256,
+          imageConclusion: manifest.conclusion,
+          imageKind: manifest.kind,
+          imageSchema: manifest.schema,
+          imageSchemaVersion: manifest.schemaVersion,
+          manifestRunAttempt: manifest.runAttempt,
+          manifestRunId: manifest.runId,
+          packageSha256: manifest.packageSha256,
+          packageSourceSha: manifest.packageSourceSha,
+          targetSha: manifest.targetSha,
+          imageWorkflowSha: manifest.workflowSha,
+        };
+      }
+    }
+    return evidence;
+  } finally {
+    rmSync(directory, { force: true, recursive: true });
   }
 }
 
@@ -1325,7 +1541,7 @@ function downloadParentManifestEvidence(runId, runAttempt, repository, manifestP
   const downloadDir = mkdtempSync(join(tmpdir(), "openclaw-release-ci-summary-"));
   try {
     const archivePath = join(downloadDir, "manifest.zip");
-    downloadArtifactZip(String(artifact.id), archivePath, targetRepository);
+    downloadArtifactZip(String(artifact.id), archivePath, artifact.size_in_bytes, targetRepository);
     const manifest = readManifestArtifactArchive(archivePath, artifact.digest);
     validateManifestArtifactCompatibility(artifact, manifest, runId, runAttempt);
     if (manifestPath) {
@@ -1413,6 +1629,16 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
     getRun(runId) {
       return githubRestJson(`actions/runs/${runId}`, normalizedRepository);
     },
+    getWorkflowSource(workflowSha) {
+      const response = githubRestJson(
+        `contents/.github/workflows/full-release-validation.yml?ref=${workflowSha}`,
+        normalizedRepository,
+      );
+      if (response.encoding !== "base64" || typeof response.content !== "string") {
+        throw new Error("historical continuation source workflow is unreadable");
+      }
+      return Buffer.from(response.content.replaceAll(/\s/gu, ""), "base64").toString("utf8");
+    },
     getRunView(runId) {
       return jsonGh([
         "run",
@@ -1429,6 +1655,9 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
     },
     loadExecutionPlan(runId) {
       return tryDownloadExecutionPlan(runId, normalizedRepository);
+    },
+    loadHistoricalCandidateArtifacts(candidate) {
+      return loadHistoricalCandidateArtifactEvidence(candidate, normalizedRepository);
     },
   };
 }
@@ -2022,6 +2251,20 @@ export function validateReleaseRunEvidence(
   if (executionPlan?.continuation) {
     const source = executionPlan.continuation;
     const sourceRun = evidenceClient.getRun(source.sourceRunId);
+    verifyReleaseContinuationSourceIdentity({
+      continuation: source,
+      recordedContinuation: rootEvidence.manifest.continuationSource,
+      repository: normalizedRepository,
+      sourceRun,
+      targetSha: executionPlan.targetSha,
+    });
+    validateTrustedProducerIdentity(
+      continuationSourceProducerEvidence(source, sourceRun),
+      evidenceClient,
+      verifier,
+      "main",
+      "refs/heads/main",
+    );
     const sourceManifestEvidence = evidenceClient.loadManifest(
       source.sourceRunId,
       source.sourceRunAttempt,
@@ -2058,18 +2301,37 @@ export function validateReleaseRunEvidence(
         return [child.manifestKey, evidenceClient.getJobLog(parentJob.id)];
       }),
     );
-    const sourceInputLog = !sourceManifest
-      ? evidenceClient.getJobLog(
-          selectHistoricalReleaseSourceInputJob(parentJobs, source.sourceRunAttempt).id,
-        )
-      : undefined;
+    let historicalEvidence;
+    if (!sourceManifest) {
+      const releaseChecksChild = executionPlan.children.find(
+        (child) => child.selected && child.key === "releaseChecks",
+      );
+      if (!releaseChecksChild) {
+        throw new Error("historical continuation release-checks child is missing");
+      }
+      const releaseChecksJobs = evidenceClient.getParentJobs(releaseChecksChild.runId);
+      historicalEvidence = {
+        candidateArtifacts: evidenceClient.loadHistoricalCandidateArtifacts(source.candidate),
+        releaseChecksResolveLog: evidenceClient.getJobLog(
+          selectHistoricalReleaseChecksResolveJob(releaseChecksJobs, releaseChecksChild.runAttempt)
+            .id,
+        ),
+        reusableInputsLog: evidenceClient.getJobLog(
+          selectHistoricalReusableInputJob(parentJobs, source.sourceRunAttempt).id,
+        ),
+        rootResolveLog: evidenceClient.getJobLog(
+          selectHistoricalRootResolveJob(parentJobs, source.sourceRunAttempt).id,
+        ),
+        sourceWorkflow: evidenceClient.getWorkflowSource(source.sourceWorkflowSha),
+      };
+    }
     verifyReleaseContinuationSource({
       children: executionPlan.children.filter((child) => child.selected),
       continuation: source,
+      historicalEvidence,
       recordedContinuation: rootEvidence.manifest.continuationSource,
       repository: normalizedRepository,
       sourceChildLogs,
-      sourceInputLog,
       sourceManifest,
       sourceRun,
       targetSha: executionPlan.targetSha,
@@ -2078,13 +2340,6 @@ export function validateReleaseRunEvidence(
       source,
       sourceRun,
       sourceManifest,
-    );
-    validateTrustedProducerIdentity(
-      sourceProducerEvidence,
-      evidenceClient,
-      verifier,
-      "main",
-      "refs/heads/main",
     );
     continuationCandidate = source.candidate;
     dispatchEvidence = {

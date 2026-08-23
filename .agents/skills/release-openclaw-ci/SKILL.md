@@ -169,8 +169,15 @@ until their dependent enforcement changes land.
 
   The continuation parent records the legacy source in its immutable plan and
   emits a normal `rerunGroup=all` manifest. If a canonical plan artifact exists,
-  legacy mode is rejected. Never infer missing legacy identity from a nearby
-  title, branch, latest run, or current `main`.
+  legacy mode is rejected. A historical source manifest is optional only for
+  these pre-support roots. When absent, preflight and publication independently
+  bind the exact successful root resolver, release-checks child resolver,
+  reusable-workflow Inputs group, source workflow-dispatch schema, and package,
+  plugin-registry, and Docker candidate artifacts. Blank omitted inputs are
+  accepted only when that complete Inputs group omits the key and the exact
+  trusted source schema declares an explicitly blank default. Never infer
+  missing legacy identity from a skipped reuse job, nearby title, branch, latest
+  run, later decision/drain/manifest artifact, or current `main`.
 
 - Controller retries are `ci`, `plugin-prerelease`, `install-smoke`,
   `cross-os`, `live-e2e`, `package`, `qa-parity`, `qa-live`, `npm-telegram`,

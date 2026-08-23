@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { stripVTControlCharacters } from "node:util";
 
 const SUCCESSFUL_JOB_CONCLUSIONS = new Set(["neutral", "skipped", "success"]);
 const MAX_REPORTED_ISSUES = 25;
@@ -11,7 +12,26 @@ const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
 const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
 export const HISTORICAL_CONTINUATION_SOURCE_MODE = "historical-exact-tuple";
 const RELEASE_CI_SHA_PINNED_BRANCH_PATTERN = /^release-ci\/[a-f0-9]{12}-[1-9][0-9]*$/u;
-const HISTORICAL_SOURCE_INPUT_JOB_NAME = "Check for reusable validation evidence";
+const HISTORICAL_ROOT_RESOLVE_JOB_NAME = "Resolve target ref";
+const HISTORICAL_RELEASE_CHECKS_RESOLVE_JOB_NAME = "resolve_target";
+const HISTORICAL_REUSABLE_INPUT_JOB_NAME =
+  "Prepare shared release candidate / validate_selected_ref";
+const HISTORICAL_INPUT_ALIASES = Object.freeze({
+  allow_unreleased_changelog: "allowUnreleasedChangelog",
+  codex_plugin_spec: "codexPluginSpec",
+  cross_os_suite_filter: "crossOsSuiteFilter",
+  live_suite_filter: "liveSuiteFilter",
+  mode: "mode",
+  npm_telegram_package_spec: "npmTelegramPackageSpec",
+  npm_telegram_provider_mode: "npmTelegramProviderMode",
+  npm_telegram_scenario: "npmTelegramScenario",
+  package_acceptance_package_spec: "packageAcceptancePackageSpec",
+  plugin_prerelease_node_exclude_patterns_json: "pluginPrereleaseNodeExcludePatternsJson",
+  provider: "provider",
+  release_package_spec: "releasePackageSpec",
+  skip_package_telegram_e2e: "skipPackageTelegramE2e",
+  target_context_ref: "targetContextRef",
+});
 const HARD_GH_TRANSPORT_PATTERN =
   /HTTP (?:400|401|403|404|422)\b|Bad credentials|authentication required|not authenticated|gh auth login|unknown (?:command|flag)|Usage: gh\b|ENOENT|EACCES/iu;
 const TRANSIENT_GH_TRANSPORT_PATTERN =
@@ -125,10 +145,11 @@ export const RELEASE_VALIDATION_INPUT_KEYS = Object.freeze(
     "targetContextRef",
   ].toSorted(),
 );
-
-function releaseValidationInputEnvironmentKey(key) {
-  return key.replaceAll(/([a-z0-9])([A-Z])/gu, "$1_$2").toUpperCase();
-}
+const HISTORICAL_REUSABLE_INPUTS = Object.freeze([
+  ["npm_telegram_provider_mode", "npmTelegramProviderMode"],
+  ["npm_telegram_scenario", "npmTelegramScenario"],
+  ["target_context_ref", "targetContextRef"],
+]);
 
 function releaseGhTransportErrorText(error) {
   const values = [error];
@@ -291,13 +312,11 @@ export function requireCanonicalReleaseContinuationWorkflowRef(workflowRef, work
   return boundedString(workflowRef, MAX_LABEL_LENGTH);
 }
 
-export function selectHistoricalReleaseSourceInputJob(parentJobs, sourceRunAttempt) {
+function selectExactSuccessfulHistoricalJob(parentJobs, sourceRunAttempt, name, label) {
   const attempt = positiveInteger(sourceRunAttempt);
   const matches = Array.isArray(parentJobs)
     ? parentJobs.filter(
-        (job) =>
-          job?.name === HISTORICAL_SOURCE_INPUT_JOB_NAME &&
-          positiveInteger(job?.run_attempt) === attempt,
+        (job) => job?.name === name && positiveInteger(job?.run_attempt) === attempt,
       )
     : [];
   if (
@@ -305,44 +324,381 @@ export function selectHistoricalReleaseSourceInputJob(parentJobs, sourceRunAttem
     matches[0].status !== "completed" ||
     matches[0].conclusion !== "success"
   ) {
-    throw new Error("historical continuation source input job is missing or ambiguous");
+    throw new Error(`historical continuation ${label} job is missing or ambiguous`);
   }
   return matches[0];
 }
 
-function verifyHistoricalReleaseSourceInputLog(log, continuation) {
-  const source = normalizedContinuation(continuation);
-  const expected = {
-    RELEASE_PROFILE: source.releaseProfile,
-    RUN_RELEASE_SOAK: source.runReleaseSoak,
-    ...Object.fromEntries(
-      RELEASE_VALIDATION_INPUT_KEYS.map((key) => [
-        releaseValidationInputEnvironmentKey(key),
-        source.validationInputs[key],
-      ]),
-    ),
-  };
-  const observed = new Map();
+export function selectHistoricalRootResolveJob(parentJobs, sourceRunAttempt) {
+  return selectExactSuccessfulHistoricalJob(
+    parentJobs,
+    sourceRunAttempt,
+    HISTORICAL_ROOT_RESOLVE_JOB_NAME,
+    "root resolver",
+  );
+}
+
+export function selectHistoricalReleaseChecksResolveJob(childJobs, childRunAttempt) {
+  return selectExactSuccessfulHistoricalJob(
+    childJobs,
+    childRunAttempt,
+    HISTORICAL_RELEASE_CHECKS_RESOLVE_JOB_NAME,
+    "release-checks resolver",
+  );
+}
+
+export function selectHistoricalReusableInputJob(parentJobs, sourceRunAttempt) {
+  return selectExactSuccessfulHistoricalJob(
+    parentJobs,
+    sourceRunAttempt,
+    HISTORICAL_REUSABLE_INPUT_JOB_NAME,
+    "reusable input",
+  );
+}
+
+function normalizedLogLine(rawLine) {
+  return stripVTControlCharacters(String(rawLine)).replace(
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z /u,
+    "",
+  );
+}
+
+function exactEnvironmentValues(log, expectedKeys, label) {
+  const expected = new Set(expectedKeys);
+  const blocks = [];
+  let current;
   for (const rawLine of String(log ?? "").split(/\r?\n/gu)) {
-    const line = rawLine.replace(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s+/u, "");
-    const match = line.match(/^\s*([A-Z][A-Z0-9_]+):(?: (.*))?$/u);
-    if (!match || !(match[1] in expected)) {
+    const line = normalizedLogLine(rawLine);
+    if (/^\s*env:\s*$/u.test(line)) {
+      if (current) {
+        blocks.push(current);
+      }
+      current = new Map();
       continue;
     }
-    if (observed.has(match[1])) {
-      throw new Error(`historical continuation source input is duplicated: ${match[1]}`);
+    if (!current) {
+      continue;
     }
-    observed.set(match[1], match[2] ?? "");
+    const match = line.match(/^\s+([A-Z][A-Z0-9_]+):(?: (.*))?$/u);
+    if (!match) {
+      if (current.size > 0) {
+        blocks.push(current);
+        current = undefined;
+      }
+      continue;
+    }
+    if (!expected.has(match[1])) {
+      continue;
+    }
+    if (current.has(match[1])) {
+      throw new Error(`historical continuation ${label} is duplicated: ${match[1]}`);
+    }
+    current.set(match[1], match[2] ?? "");
   }
-  for (const [key, value] of Object.entries(expected)) {
-    if (!observed.has(key)) {
-      throw new Error(`historical continuation source input is missing: ${key}`);
+  if (current) {
+    blocks.push(current);
+  }
+  const matches = blocks.filter((block) => [...expected].every((key) => block.has(key)));
+  if (matches.length !== 1) {
+    throw new Error(`historical continuation ${label} block is missing or ambiguous`);
+  }
+  return matches[0];
+}
+
+function parseHistoricalWorkflowDispatchDefaults(workflowSource) {
+  const defaults = new Map();
+  let currentInput;
+  let dispatchIndent = -1;
+  let inputIndent = -1;
+  let inputsIndent = -1;
+  let inDispatch = false;
+  let inInputs = false;
+  for (const rawLine of String(workflowSource ?? "").split(/\r?\n/gu)) {
+    if (!rawLine.trim() || rawLine.trimStart().startsWith("#")) {
+      continue;
     }
-    if (observed.get(key) !== value) {
-      throw new Error(`historical continuation source input changed: ${key}`);
+    const indent = rawLine.length - rawLine.trimStart().length;
+    const line = rawLine.trim();
+    if (!inDispatch) {
+      if (line === "workflow_dispatch:") {
+        dispatchIndent = indent;
+        inDispatch = true;
+      }
+      continue;
+    }
+    if (indent <= dispatchIndent) {
+      break;
+    }
+    if (!inInputs) {
+      if (line === "inputs:") {
+        inInputs = true;
+        inputsIndent = indent;
+      }
+      continue;
+    }
+    if (indent <= inputsIndent) {
+      break;
+    }
+    const inputMatch = line.match(/^([a-z][a-z0-9_]*):$/u);
+    if (inputMatch && (inputIndent === -1 || indent === inputIndent)) {
+      inputIndent = indent;
+      currentInput = inputMatch[1];
+      continue;
+    }
+    if (!currentInput || indent <= inputIndent) {
+      throw new Error("historical continuation workflow input schema is invalid");
+    }
+    const defaultMatch = line.match(/^default:\s*(.*)$/u);
+    if (!defaultMatch) {
+      continue;
+    }
+    if (defaults.has(currentInput)) {
+      throw new Error(
+        `historical continuation workflow input default is duplicated: ${currentInput}`,
+      );
+    }
+    const rawValue = defaultMatch[1].trim();
+    let value;
+    if (rawValue === '""' || rawValue === "''") {
+      value = "";
+    } else if (/^(?:true|false)$/u.test(rawValue)) {
+      value = rawValue;
+    } else if (/^"(?:[^"\\]|\\.)*"$/u.test(rawValue)) {
+      value = JSON.parse(rawValue);
+    } else if (/^[A-Za-z0-9@./_-]+$/u.test(rawValue)) {
+      value = rawValue;
+    } else {
+      throw new Error(
+        `historical continuation workflow input default is unsupported: ${currentInput}`,
+      );
+    }
+    defaults.set(currentInput, String(value));
+  }
+  if (!inDispatch || !inInputs) {
+    throw new Error("historical continuation workflow dispatch schema is missing");
+  }
+  for (const key of Object.keys(HISTORICAL_INPUT_ALIASES)) {
+    if (!defaults.has(key)) {
+      throw new Error(`historical continuation workflow input default is missing: ${key}`);
     }
   }
-  return canonicalValue(Object.fromEntries(observed));
+  return defaults;
+}
+
+function parseHistoricalInputsGroup(log) {
+  const groups = [];
+  let current;
+  for (const rawLine of String(log ?? "").split(/\r?\n/gu)) {
+    const line = normalizedLogLine(rawLine);
+    if (/^\s*##\[group\]\s+Inputs\s*$/u.test(line)) {
+      if (current) {
+        throw new Error("historical continuation reusable Inputs group is nested");
+      }
+      current = new Map();
+      continue;
+    }
+    if (/^\s*##\[endgroup\]\s*$/u.test(line)) {
+      if (current) {
+        groups.push(current);
+        current = undefined;
+      }
+      continue;
+    }
+    if (!current) {
+      continue;
+    }
+    const match = line.match(/^\s*([A-Za-z][A-Za-z0-9_]*):(?: (.*))?$/u);
+    if (!match) {
+      if (line.trim()) {
+        throw new Error("historical continuation reusable Inputs group is incomplete");
+      }
+      continue;
+    }
+    const canonicalKey =
+      HISTORICAL_INPUT_ALIASES[match[1]] ??
+      (RELEASE_VALIDATION_INPUT_KEYS.includes(match[1]) ? match[1] : undefined);
+    if (!canonicalKey) {
+      continue;
+    }
+    if (current.has(canonicalKey)) {
+      throw new Error(`historical continuation reusable input is duplicated: ${canonicalKey}`);
+    }
+    current.set(canonicalKey, match[2] ?? "");
+  }
+  if (current || groups.length !== 1) {
+    throw new Error("historical continuation reusable Inputs group is missing or ambiguous");
+  }
+  return groups[0];
+}
+
+function verifyHistoricalCandidateArtifacts(evidence, source) {
+  const candidate = source.candidate;
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+    throw new Error("historical continuation candidate artifact evidence is missing");
+  }
+  const specs = [
+    ["image", "imageArtifactId", "imageArtifactName", "imageArtifactDigest"],
+    ["package", "packageArtifactId", "packageArtifactName", "packageArtifactDigest"],
+    [
+      "pluginRegistry",
+      "prepublishPluginRegistryArtifactId",
+      "prepublishPluginRegistryArtifactName",
+      "prepublishPluginRegistryArtifactDigest",
+    ],
+  ];
+  for (const [key, idKey, nameKey, digestKey] of specs) {
+    const artifact = evidence[key];
+    if (
+      !artifact ||
+      typeof artifact !== "object" ||
+      Array.isArray(artifact) ||
+      String(artifact.id) !== String(candidate[idKey]) ||
+      artifact.name !== candidate[nameKey] ||
+      artifact.digest !== `sha256:${candidate[digestKey]}` ||
+      artifact.archiveSha256 !== candidate[digestKey] ||
+      artifact.expired !== false ||
+      String(artifact.runId) !== source.sourceRunId ||
+      Number(artifact.runAttempt) !== source.sourceRunAttempt ||
+      artifact.workflowRef !== source.sourceWorkflowRef ||
+      artifact.workflowSha !== source.sourceWorkflowSha
+    ) {
+      throw new Error(`historical continuation ${key} artifact identity changed`);
+    }
+  }
+  if (
+    evidence.package.fileName !== candidate.packageFileName ||
+    evidence.package.fileSha256 !== candidate.packageSha256 ||
+    evidence.package.packageName !== "openclaw" ||
+    evidence.package.packageVersion !== candidate.packageVersion ||
+    evidence.package.packageSourceSha !== candidate.packageSourceSha
+  ) {
+    throw new Error("historical continuation package artifact contents changed");
+  }
+  if (
+    evidence.pluginRegistry.manifestSha256 !== candidate.prepublishPluginRegistryManifestSha256 ||
+    evidence.pluginRegistry.schema !== "openclaw.prepublish-plugin-registry/v1" ||
+    evidence.pluginRegistry.schemaVersion !== 1 ||
+    evidence.pluginRegistry.sourceSha !== candidate.packageSourceSha ||
+    evidence.pluginRegistry.candidateVersion !== candidate.packageVersion
+  ) {
+    throw new Error("historical continuation plugin registry artifact contents changed");
+  }
+  if (
+    evidence.image.imageArchiveSha256 !== candidate.imageArchiveSha256 ||
+    evidence.image.imageArchiveFileName !== "shared-images.tar.zst" ||
+    evidence.image.imageArchiveFormat !== "docker-tar+zstd" ||
+    evidence.image.imageArchiveManifestSha256 !== candidate.imageArchiveSha256 ||
+    evidence.image.imageConclusion !== "success" ||
+    evidence.image.imageKind !== "docker-e2e" ||
+    evidence.image.imageSchema !== "openclaw.shared-docker-image-artifact/v1" ||
+    evidence.image.imageSchemaVersion !== 1 ||
+    evidence.image.targetSha !== candidate.packageSourceSha ||
+    evidence.image.packageSourceSha !== candidate.packageSourceSha ||
+    evidence.image.packageSha256 !== candidate.packageSha256 ||
+    evidence.image.imageWorkflowSha !== source.sourceWorkflowSha ||
+    String(evidence.image.manifestRunId) !== source.sourceRunId ||
+    Number(evidence.image.manifestRunAttempt) !== source.sourceRunAttempt
+  ) {
+    throw new Error("historical continuation image artifact contents changed");
+  }
+}
+
+export function verifyHistoricalReleaseContinuationEvidence(evidence, continuation) {
+  const source = normalizedContinuation(continuation);
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+    throw new Error("historical continuation source evidence is missing");
+  }
+  const rootExpected = {
+    RELEASE_PROFILE: source.releaseProfile,
+    RUN_RELEASE_SOAK: source.runReleaseSoak,
+    ALLOW_UNRELEASED_CHANGELOG: source.validationInputs.allowUnreleasedChangelog,
+    CODEX_PLUGIN_SPEC: source.validationInputs.codexPluginSpec,
+    CROSS_OS_SUITE_FILTER: source.validationInputs.crossOsSuiteFilter,
+    LIVE_SUITE_FILTER: source.validationInputs.liveSuiteFilter,
+    NPM_TELEGRAM_PACKAGE_SPEC: source.validationInputs.npmTelegramPackageSpec,
+    PACKAGE_ACCEPTANCE_PACKAGE_SPEC: source.validationInputs.packageAcceptancePackageSpec,
+    PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON:
+      source.validationInputs.pluginPrereleaseNodeExcludePatternsJson,
+    RELEASE_PACKAGE_SPEC: source.validationInputs.releasePackageSpec,
+    SKIP_PACKAGE_TELEGRAM_E2E: source.validationInputs.skipPackageTelegramE2e,
+  };
+  const rootObserved = exactEnvironmentValues(
+    evidence.rootResolveLog,
+    Object.keys(rootExpected),
+    "root resolver input",
+  );
+  for (const [key, value] of Object.entries(rootExpected)) {
+    if (!rootObserved.has(key)) {
+      throw new Error(`historical continuation root resolver input is missing: ${key}`);
+    }
+    if (rootObserved.get(key) !== value) {
+      throw new Error(`historical continuation root resolver input changed: ${key}`);
+    }
+  }
+  const childExpected = {
+    RELEASE_MODE_INPUT: source.validationInputs.mode,
+    RELEASE_PROVIDER_INPUT: source.validationInputs.provider,
+    RELEASE_REF_INPUT: source.candidate.packageSourceSha,
+  };
+  const childObserved = exactEnvironmentValues(
+    evidence.releaseChecksResolveLog,
+    ["CANDIDATE_ARTIFACT_JSON_INPUT", ...Object.keys(childExpected)],
+    "release-checks resolver input",
+  );
+  for (const [key, value] of Object.entries(childExpected)) {
+    if (!childObserved.has(key)) {
+      throw new Error(`historical continuation release-checks resolver input is missing: ${key}`);
+    }
+    if (childObserved.get(key) !== value) {
+      throw new Error(`historical continuation release-checks resolver input changed: ${key}`);
+    }
+  }
+  if (!childObserved.has("CANDIDATE_ARTIFACT_JSON_INPUT")) {
+    throw new Error(
+      "historical continuation release-checks resolver input is missing: CANDIDATE_ARTIFACT_JSON_INPUT",
+    );
+  }
+  let loggedCandidate;
+  try {
+    loggedCandidate = normalizeReleaseCandidate(
+      JSON.parse(childObserved.get("CANDIDATE_ARTIFACT_JSON_INPUT")),
+      {
+        parentRunAttempt: source.sourceRunAttempt,
+        parentRunId: source.sourceRunId,
+        targetSha: source.candidate.packageSourceSha,
+      },
+    );
+  } catch (error) {
+    throw new Error("historical continuation release-checks resolver candidate is invalid", {
+      cause: error,
+    });
+  }
+  if (JSON.stringify(loggedCandidate) !== JSON.stringify(source.candidate)) {
+    throw new Error(
+      "historical continuation release-checks resolver input changed: CANDIDATE_ARTIFACT_JSON_INPUT",
+    );
+  }
+  const defaults = parseHistoricalWorkflowDispatchDefaults(evidence.sourceWorkflow);
+  const reusableInputs = parseHistoricalInputsGroup(evidence.reusableInputsLog);
+  for (const [schemaKey, canonicalKey] of HISTORICAL_REUSABLE_INPUTS) {
+    const expectedValue = source.validationInputs[canonicalKey];
+    if (reusableInputs.has(canonicalKey)) {
+      if (reusableInputs.get(canonicalKey) !== expectedValue) {
+        throw new Error(`historical continuation reusable input changed: ${canonicalKey}`);
+      }
+      continue;
+    }
+    if (defaults.get(schemaKey) !== "" || expectedValue !== "") {
+      throw new Error(`historical continuation reusable input is missing: ${canonicalKey}`);
+    }
+  }
+  verifyHistoricalCandidateArtifacts(evidence.candidateArtifacts, source);
+  return {
+    candidateArtifacts: canonicalValue(evidence.candidateArtifacts),
+    releaseChecksInputs: canonicalValue(Object.fromEntries(childObserved)),
+    reusableInputs: canonicalValue(Object.fromEntries(reusableInputs)),
+    rootInputs: canonicalValue(Object.fromEntries(rootObserved)),
+  };
 }
 
 function normalizedContinuation(value) {
@@ -487,14 +843,10 @@ function continuationSourceChildren(children, source, validationInputs) {
   return normalized;
 }
 
-export function verifyReleaseContinuationSource({
-  children,
+export function verifyReleaseContinuationSourceIdentity({
   continuation,
   recordedContinuation,
   repository,
-  sourceChildLogs,
-  sourceInputLog,
-  sourceManifest,
   sourceRun,
   targetSha,
 }) {
@@ -524,7 +876,29 @@ export function verifyReleaseContinuationSource({
   if (source.candidate.packageSourceSha !== normalizedTargetSha) {
     throw new Error("continuation source identity differs from the immutable plan");
   }
+  return source;
+}
 
+export function verifyReleaseContinuationSource({
+  children,
+  continuation,
+  recordedContinuation,
+  repository,
+  sourceChildLogs,
+  historicalEvidence,
+  sourceManifest,
+  sourceRun,
+  targetSha,
+}) {
+  const source = verifyReleaseContinuationSourceIdentity({
+    continuation,
+    recordedContinuation,
+    repository,
+    sourceRun,
+    targetSha,
+  });
+  const normalizedRepository = boundedString(repository, MAX_LABEL_LENGTH);
+  const normalizedTargetSha = boundedString(targetSha, MAX_LABEL_LENGTH);
   const normalizedChildren = continuationSourceChildren(children, source, source.validationInputs);
   const expectedRunIds = Object.fromEntries(CHILD_SPECS.map((spec) => [spec.key, ""]));
   for (const child of normalizedChildren) {
@@ -542,7 +916,7 @@ export function verifyReleaseContinuationSource({
     if (source.sourceEvidenceMode !== HISTORICAL_CONTINUATION_SOURCE_MODE) {
       throw new Error("continuation source manifest is missing");
     }
-    verifyHistoricalReleaseSourceInputLog(sourceInputLog, source);
+    verifyHistoricalReleaseContinuationEvidence(historicalEvidence, source);
     return {
       children: normalizedChildren,
       continuation: source,

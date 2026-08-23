@@ -43,10 +43,23 @@ export function requireCanonicalReleaseContinuationWorkflowRef(
   workflowRef: unknown,
   workflowSha: unknown,
 ): string;
-export function selectHistoricalReleaseSourceInputJob(
+export function selectHistoricalRootResolveJob(
   parentJobs: ReleaseRecord[],
   sourceRunAttempt: unknown,
 ): ReleaseRecord;
+export function selectHistoricalReusableInputJob(
+  parentJobs: ReleaseRecord[],
+  sourceRunAttempt: unknown,
+): ReleaseRecord;
+export function selectHistoricalReleaseChecksResolveJob(
+  childJobs: ReleaseRecord[],
+  childRunAttempt: unknown,
+): ReleaseRecord;
+export function verifyHistoricalReleaseContinuationEvidence(
+  evidence: unknown,
+  continuation: unknown,
+): ReleaseRecord;
+export function verifyReleaseContinuationSourceIdentity(input: ReleaseRecord): ReleaseRecord;
 export function verifyReleaseContinuationSource(input: ReleaseRecord): ReleaseRecord;
 export function validateReleaseChildRunProvenance(
   run: ReleaseRecord,

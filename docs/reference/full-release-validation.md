@@ -125,15 +125,19 @@ the newest similarly named run.
 Historical legacy plans use `sourceEvidenceMode: historical-exact-tuple`.
 Their failed source root may omit the validation manifest that newer roots
 always emit, but only when the source has no canonical execution-plan artifact.
-Manifestless recovery also requires the exact successful
-`Check for reusable validation evidence` job log from the source attempt. That
-log must bind `releaseProfile`, `runReleaseSoak`, and every normalized validation
-input, including provider/mode, suite filters, package and plugin specs, plugin
-exclusions, Telegram package/provider/scenario inputs, and skip flags. Missing,
-duplicated, or changed values fail closed. The exact reviewed source, candidate,
-children, attempts, and child dispatch logs remain mandatory. A historical
-manifest that does exist is verified in full. Canonical continuation sources
-still require it.
+Manifestless recovery binds the exact successful root resolver, the successful
+release-checks child resolver, one complete reusable-workflow runner Inputs
+group, the exact source `workflow_dispatch` schema, and the package,
+plugin-registry, and Docker candidate artifacts. The candidate artifacts must
+match their producer run and attempt, service digests, and embedded hashes.
+Inputs omitted from the complete runner group are accepted only when the source
+schema declares an explicitly blank default and no conflicting value exists.
+Missing, duplicate, incomplete, or changed evidence fails closed. The exact
+reviewed source, candidate, children, attempts, and child dispatch logs remain
+mandatory. Historical decision, drain, plan, and final-manifest artifacts are
+not expected and later evidence is never attributed to the old root. A
+historical manifest that does exist is verified in full. Canonical continuation
+sources still require it.
 
 Historical source workflows must use protected `main` or the canonical
 `release-ci/<source-sha12>-<digits>` route. Older ad hoc branch names are rejected

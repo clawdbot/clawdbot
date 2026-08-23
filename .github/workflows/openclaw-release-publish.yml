@@ -121,7 +121,7 @@ jobs:
   resolve_release_target:
     name: Resolve release target
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     outputs:
       sha: ${{ steps.manifest.outputs.sha || steps.ref.outputs.sha }}
       preflight_artifact_name: ${{ steps.preflight_artifact.outputs.name }}

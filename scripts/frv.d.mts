@@ -24,6 +24,10 @@ export interface FrvClient {
   getParentJobs: (runId: string) => Promise<Record<string, unknown>[]>;
   getRun: (runId: string) => Promise<Record<string, unknown>>;
   getRunAttempt: (runId: string, runAttempt: number) => Promise<Record<string, unknown>>;
+  getWorkflowSource: (workflowSha: string) => Promise<string>;
+  loadHistoricalCandidateArtifacts: (
+    candidate: Record<string, unknown>,
+  ) => Promise<Record<string, unknown>> | Record<string, unknown>;
   loadSourceManifest?: (
     runId: string,
     runAttempt: number,
@@ -62,7 +66,16 @@ export function continuationBranchName(sourceRunId: string, toolingSha: string):
 export function preflightContinuation(
   plan: Record<string, unknown>,
   rootRunId: string,
-  client: Pick<FrvClient, "getJobLog" | "getParentJobs" | "getRunAttempt" | "loadSourceManifest">,
+  client: Pick<
+    FrvClient,
+    | "getJobLog"
+    | "getParentJobs"
+    | "getRunAttempt"
+    | "getWorkflowSource"
+    | "loadHistoricalCandidateArtifacts"
+    | "loadSourceManifest"
+    | "verifyTrustedSourceSha"
+  >,
   repository?: string,
 ): Promise<Record<string, unknown>>;
 export function loadPlan(

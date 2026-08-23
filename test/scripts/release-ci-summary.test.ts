@@ -13,6 +13,7 @@ import {
 } from "../../scripts/full-release-validation-policy.mjs";
 import {
   artifactDownloadArgs,
+  artifactDownloadTimeoutMs,
   expectedChildDispatches,
   expectedSelectedChildDispatches,
   githubRestArgs,
@@ -81,6 +82,12 @@ describe("GitHub API commands", () => {
     ]);
   });
 
+  it("budgets large artifact downloads for a conservative transfer rate", () => {
+    expect(artifactDownloadTimeoutMs(55 * 1024 * 1024)).toBeGreaterThan(60_000);
+    expect(artifactDownloadTimeoutMs(245 * 1024 * 1024)).toBeGreaterThan(15 * 60_000);
+    expect(() => artifactDownloadTimeoutMs(0)).toThrow("artifact download size is invalid");
+  });
+
   it.skipIf(!hasUnzip)("uses cached gh for evidence reads and plain gh only for ZIP bytes", () => {
     const root = mkdtempSync(join(tmpdir(), "release-ci-gh-routing-"));
     const workflowSha = "0".repeat(40);
@@ -126,6 +133,7 @@ const fixtures = JSON.parse(readFileSync(process.env.FIXTURES, "utf8"));
 const endpoint = args[1] ?? "";
 let output;
 if (args[0] === "run" && args[1] === "view") output = fixtures.parentView;
+else if (args[0] === "auth" && args[1] === "token") output = "wrapper-only-token";
 else if (endpoint === "rate_limit") output = fixtures.rate;
 else if (endpoint === "repos/openclaw/openclaw/actions/runs/${runId}") output = fixtures.parent;
 else if (endpoint.startsWith("repos/openclaw/openclaw/actions/runs/${runId}/artifacts?")) output = fixtures.artifactList;
@@ -144,6 +152,10 @@ process.stdout.write(typeof output === "string" ? output : JSON.stringify(output
 import { appendFileSync, readFileSync } from "node:fs";
 const args = process.argv.slice(2);
 appendFileSync(process.env.PLAIN_LOG, JSON.stringify(args) + "\\n");
+if (process.env.GH_TOKEN !== "wrapper-only-token") {
+  console.error("plain gh did not receive wrapper authentication");
+  process.exit(41);
+}
 if (args[0] !== "api" || args[1] !== "repos/openclaw/openclaw/actions/artifacts/${artifactId}/zip") {
   console.error("plain gh used for evidence read: " + args.join(" "));
   process.exit(42);
@@ -164,6 +176,10 @@ process.stdout.write(readFileSync(process.env.ARCHIVE));
         PLAIN_LOG: plainLog,
         SHIM_LOG: shimLog,
       };
+      delete env.GH_ENTERPRISE_TOKEN;
+      delete env.GITHUB_ENTERPRISE_TOKEN;
+      delete env.GITHUB_TOKEN;
+      delete env.GH_TOKEN;
       const lineageResult = spawnSync(
         process.execPath,
         [
@@ -190,6 +206,7 @@ process.stdout.write(readFileSync(process.env.ARCHIVE));
       const shimCalls = readFileSync(shimLog, "utf8");
       const plainCalls = readFileSync(plainLog, "utf8");
       expect(shimCalls).toContain('"run","view"');
+      expect(shimCalls).toContain('"auth","token"');
       expect(shimCalls).toContain(`"repos/openclaw/openclaw/actions/runs/${runId}"`);
       expect(shimCalls).toContain(
         `"repos/openclaw/openclaw/compare/${workflowSha}...${verifierSha}?per_page=1&page=2"`,
@@ -894,15 +911,31 @@ function strictContinuationFixture({
       },
     ]),
   );
-  const sourceInputJob = {
+  const rootResolveJob = {
     conclusion: "success",
     id: 899,
+    name: "Resolve target ref",
+    run_attempt: 1,
+    status: "completed",
+  };
+  const evidenceReuseJob = {
+    conclusion: "skipped",
+    id: 898,
     name: "Check for reusable validation evidence",
     run_attempt: 1,
     status: "completed",
   };
+  const reusableInputJob = {
+    conclusion: "success",
+    id: 897,
+    name: "Prepare shared release candidate / validate_selected_ref",
+    run_attempt: 1,
+    status: "completed",
+  };
   const sourceJobs = [
-    sourceInputJob,
+    rootResolveJob,
+    evidenceReuseJob,
+    reusableInputJob,
     ...selected
       .filter((child) => child.manifestKey in runIds)
       .map((child, index) => ({
@@ -913,30 +946,78 @@ function strictContinuationFixture({
         status: "completed",
       })),
   ];
-  const sourceInputLog = Object.entries({
+  const rootResolveEnvironment = {
     ALLOW_UNRELEASED_CHANGELOG: validationInputs.allowUnreleasedChangelog,
     CODEX_PLUGIN_SPEC: validationInputs.codexPluginSpec,
     CROSS_OS_SUITE_FILTER: validationInputs.crossOsSuiteFilter,
     LIVE_SUITE_FILTER: validationInputs.liveSuiteFilter,
-    MODE: validationInputs.mode,
     NPM_TELEGRAM_PACKAGE_SPEC: validationInputs.npmTelegramPackageSpec,
-    NPM_TELEGRAM_PROVIDER_MODE: validationInputs.npmTelegramProviderMode,
-    NPM_TELEGRAM_SCENARIO: validationInputs.npmTelegramScenario,
     PACKAGE_ACCEPTANCE_PACKAGE_SPEC: validationInputs.packageAcceptancePackageSpec,
     PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON:
       validationInputs.pluginPrereleaseNodeExcludePatternsJson,
-    PROVIDER: validationInputs.provider,
     RELEASE_PACKAGE_SPEC: validationInputs.releasePackageSpec,
     RELEASE_PROFILE: continuation.releaseProfile,
     RUN_RELEASE_SOAK: continuation.runReleaseSoak,
     SKIP_PACKAGE_TELEGRAM_E2E: validationInputs.skipPackageTelegramE2e,
-    TARGET_CONTEXT_REF: validationInputs.targetContextRef,
-  })
-    .map(([key, value]) => `2026-08-22T00:00:00Z   ${key}: ${value}`)
-    .join("\n");
+  };
+  const rootResolveLog = [
+    "2026-08-22T00:00:00Z ##[group]Run summarize",
+    "2026-08-22T00:00:00Z   env:",
+    ...Object.entries(rootResolveEnvironment).map(
+      ([key, value]) => `2026-08-22T00:00:00Z     ${key}: ${value}`,
+    ),
+    "2026-08-22T00:00:00Z ##[endgroup]",
+  ].join("\n");
+  const releaseChecksResolveEnvironment = {
+    CANDIDATE_ARTIFACT_JSON_INPUT: JSON.stringify(candidate),
+    RELEASE_MODE_INPUT: validationInputs.mode,
+    RELEASE_PROVIDER_INPUT: validationInputs.provider,
+    RELEASE_REF_INPUT: targetSha,
+  };
+  const releaseChecksResolveLog = [
+    "2026-08-22T00:00:00Z ##[group]Run capture",
+    "2026-08-22T00:00:00Z   env:",
+    ...Object.entries(releaseChecksResolveEnvironment).map(
+      ([key, value]) => `2026-08-22T00:00:00Z     ${key}: ${value}`,
+    ),
+    "2026-08-22T00:00:00Z ##[endgroup]",
+  ].join("\n");
+  const reusableInputsLog = [
+    "2026-08-22T00:00:00Z ##[group] Inputs",
+    ...Object.entries({
+      advisory: "false",
+      allow_unreleased_changelog: validationInputs.allowUnreleasedChangelog,
+      codex_plugin_spec: validationInputs.codexPluginSpec,
+      cross_os_suite_filter: validationInputs.crossOsSuiteFilter,
+      dispatch_release_evidence: "false",
+      expected_sha: targetSha,
+      fail_fast: "false",
+      live_suite_filter: validationInputs.liveSuiteFilter,
+      mode: validationInputs.mode,
+      npm_telegram_package_spec: validationInputs.npmTelegramPackageSpec,
+      npm_telegram_provider_mode: validationInputs.npmTelegramProviderMode,
+      npm_telegram_scenario: validationInputs.npmTelegramScenario,
+      package_acceptance_package_spec: validationInputs.packageAcceptancePackageSpec,
+      plugin_prerelease_node_exclude_patterns_json:
+        validationInputs.pluginPrereleaseNodeExcludePatternsJson,
+      prepare_only: "true",
+      provider: validationInputs.provider,
+      ref: targetSha,
+      release_package_spec: validationInputs.releasePackageSpec,
+      release_profile: continuation.releaseProfile,
+      rerun_group: "all",
+      reuse_evidence: "false",
+      run_release_soak: continuation.runReleaseSoak,
+      skip_package_telegram_e2e: validationInputs.skipPackageTelegramE2e,
+      target_context_ref: validationInputs.targetContextRef,
+    })
+      .filter(([key, value]) => key !== "npm_telegram_scenario" || value !== "")
+      .map(([key, value]) => `2026-08-22T00:00:00Z   ${key}: ${value}`),
+    "2026-08-22T00:00:00Z ##[endgroup]",
+  ].join("\n");
   const logByJobId = new Map(
     sourceJobs
-      .filter((job) => job.id !== sourceInputJob.id)
+      .filter((job) => selected.some((entry) => entry.parentJobName === job.name))
       .map((job) => {
         const child = selected.find((entry) => entry.parentJobName === job.name)!;
         const runId = runIds[child.manifestKey as keyof typeof runIds];
@@ -954,8 +1035,18 @@ function strictContinuationFixture({
       }),
   );
   logByJobId.set(
-    sourceInputJob.id,
-    sourceInputLogTransform ? sourceInputLogTransform(sourceInputLog) : sourceInputLog,
+    rootResolveJob.id,
+    sourceInputLogTransform ? sourceInputLogTransform(rootResolveLog) : rootResolveLog,
+  );
+  logByJobId.set(
+    reusableInputJob.id,
+    sourceInputLogTransform ? sourceInputLogTransform(reusableInputsLog) : reusableInputsLog,
+  );
+  logByJobId.set(
+    896,
+    sourceInputLogTransform
+      ? sourceInputLogTransform(releaseChecksResolveLog)
+      : releaseChecksResolveLog,
   );
   const artifact = (runId: string, ref: string, workflowSha: string, id: number) => ({
     digest: `sha256:${String(id).padStart(64, "0")}`,
@@ -967,6 +1058,94 @@ function strictContinuationFixture({
   });
   const sourceArtifact = artifact(sourceRunId, sourceRef, sourceWorkflowSha, 701);
   const rootArtifact = artifact(rootRunId, rootRef, toolingSha, 702);
+  const sourceWorkflow = [
+    "name: Full Release Validation",
+    "on:",
+    "  workflow_dispatch:",
+    "    inputs:",
+    ...Object.entries({
+      allow_unreleased_changelog: "false",
+      codex_plugin_spec: '""',
+      cross_os_suite_filter: '""',
+      live_suite_filter: '""',
+      mode: "both",
+      npm_telegram_package_spec: '""',
+      npm_telegram_provider_mode: "mock-openai",
+      npm_telegram_scenario: '""',
+      package_acceptance_package_spec: '""',
+      plugin_prerelease_node_exclude_patterns_json: '"[]"',
+      provider: "openai",
+      release_package_spec: '""',
+      skip_package_telegram_e2e: "false",
+      target_context_ref: '""',
+    }).flatMap(([key, value]) => {
+      const lines = [`      ${key}:`, `        default: ${value}`, "        type: string"];
+      if (key === "provider") {
+        lines.push("        options:", "          - openai", "          - anthropic");
+      }
+      return lines;
+    }),
+    "permissions:",
+    "  contents: read",
+  ].join("\n");
+  const candidateArtifactBase = (id: string, name: string, digest: string) => ({
+    archiveSha256: digest,
+    digest: `sha256:${digest}`,
+    expired: false,
+    id,
+    name,
+    runAttempt: 1,
+    runId: sourceRunId,
+    workflowRef: sourceRef,
+    workflowSha: sourceWorkflowSha,
+  });
+  const candidateArtifacts = {
+    image: {
+      ...candidateArtifactBase(
+        candidate.imageArtifactId,
+        candidate.imageArtifactName,
+        candidate.imageArtifactDigest,
+      ),
+      imageArchiveSha256: candidate.imageArchiveSha256,
+      imageArchiveFileName: "shared-images.tar.zst",
+      imageArchiveFormat: "docker-tar+zstd",
+      imageArchiveManifestSha256: candidate.imageArchiveSha256,
+      imageConclusion: "success",
+      imageKind: "docker-e2e",
+      imageSchema: "openclaw.shared-docker-image-artifact/v1",
+      imageSchemaVersion: 1,
+      imageWorkflowSha: sourceWorkflowSha,
+      manifestRunAttempt: 1,
+      manifestRunId: sourceRunId,
+      packageSha256: candidate.packageSha256,
+      packageSourceSha: candidate.packageSourceSha,
+      targetSha: candidate.packageSourceSha,
+    },
+    package: {
+      ...candidateArtifactBase(
+        candidate.packageArtifactId,
+        candidate.packageArtifactName,
+        candidate.packageArtifactDigest,
+      ),
+      fileName: candidate.packageFileName,
+      fileSha256: candidate.packageSha256,
+      packageName: "openclaw",
+      packageSourceSha: candidate.packageSourceSha,
+      packageVersion: candidate.packageVersion,
+    },
+    pluginRegistry: {
+      ...candidateArtifactBase(
+        candidate.prepublishPluginRegistryArtifactId,
+        candidate.prepublishPluginRegistryArtifactName,
+        candidate.prepublishPluginRegistryArtifactDigest,
+      ),
+      candidateVersion: candidate.packageVersion,
+      manifestSha256: candidate.prepublishPluginRegistryManifestSha256,
+      schema: "openclaw.prepublish-plugin-registry/v1",
+      schemaVersion: 1,
+      sourceSha: candidate.packageSourceSha,
+    },
+  };
   const lineageComparisons: string[] = [];
   const client = {
     compareCommitLineage: (base: string) => {
@@ -980,16 +1159,26 @@ function strictContinuationFixture({
     getParentJobs: (runId: string) =>
       runId === sourceRunId
         ? sourceJobs
-        : runId === runIds.productPerformance
+        : runId === runIds.releaseChecks
           ? [
               {
                 conclusion: "success",
-                name: "Verify artifact-only report mode",
+                id: 896,
+                name: "resolve_target",
                 run_attempt: 1,
                 status: "completed",
               },
             ]
-          : [],
+          : runId === runIds.productPerformance
+            ? [
+                {
+                  conclusion: "success",
+                  name: "Verify artifact-only report mode",
+                  run_attempt: 1,
+                  status: "completed",
+                },
+              ]
+            : [],
     getRef: () => ({ object: { sha: toolingSha } }),
     getRun: (runId: string) => {
       if (runId === rootRunId) {
@@ -1013,6 +1202,8 @@ function strictContinuationFixture({
       status: "completed",
       url: rootRun.html_url,
     }),
+    getWorkflowSource: () => sourceWorkflow,
+    loadHistoricalCandidateArtifacts: () => structuredClone(candidateArtifacts),
     loadExecutionPlan: (runId: string) => (runId === rootRunId ? executionPlan : undefined),
     loadManifest: (runId: string) =>
       runId === rootRunId
@@ -1022,6 +1213,7 @@ function strictContinuationFixture({
           : undefined,
   };
   return {
+    candidateArtifacts,
     client,
     executionPlan,
     lineageComparisons,
@@ -1029,6 +1221,7 @@ function strictContinuationFixture({
     rootRunId,
     sourceManifest,
     sourceRunId,
+    sourceWorkflow,
     sourceWorkflowSha,
     targetSha,
     toolingSha,
@@ -1647,7 +1840,9 @@ describe("release CI summary child correlation", () => {
       verifierSourceContent: readFileSync(SCRIPT),
       verifierSourceSha: "c".repeat(40),
     };
-    const evidence = validateReleaseRunEvidence(options, fixture.client);
+    const evidence = validateReleaseRunEvidence(options, fixture.client) as {
+      children: Array<{ role: string }>;
+    };
     expect(evidence.children.map((child) => child.role).toSorted()).toEqual([
       "normalCi",
       "pluginPrerelease",
@@ -1679,9 +1874,41 @@ describe("release CI summary child correlation", () => {
     ).toHaveLength(4);
   });
 
+  it("rejects untrusted historical source lineage before reading source artifacts", () => {
+    const fixture = strictContinuationFixture({
+      sourceLineageDiverged: true,
+      sourceManifestPresent: false,
+    });
+    let artifactReads = 0;
+    fixture.client.loadHistoricalCandidateArtifacts = () => {
+      artifactReads += 1;
+      return structuredClone(fixture.candidateArtifacts);
+    };
+    const loadManifest = fixture.client.loadManifest;
+    fixture.client.loadManifest = (runId: string) => {
+      if (runId === fixture.sourceRunId) {
+        artifactReads += 1;
+      }
+      return loadManifest(runId);
+    };
+    expect(() =>
+      validateReleaseRunEvidence(
+        {
+          repository: "openclaw/openclaw",
+          runId: fixture.rootRunId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        fixture.client,
+      ),
+    ).toThrow("release evidence producer is not on the trusted main verifier lineage");
+    expect(artifactReads).toBe(0);
+  });
+
   it("rejects manifestless historical source input drift during strict publication", () => {
     const fixture = strictContinuationFixture({
-      sourceInputLogTransform: (log) => log.replace("  PROVIDER: openai", "  PROVIDER: anthropic"),
+      sourceInputLogTransform: (log) =>
+        log.replace("  RELEASE_PROVIDER_INPUT: openai", "  RELEASE_PROVIDER_INPUT: anthropic"),
       sourceManifestPresent: false,
     });
     expect(() =>
@@ -1694,13 +1921,50 @@ describe("release CI summary child correlation", () => {
         },
         fixture.client,
       ),
-    ).toThrow("historical continuation source input changed: PROVIDER");
+    ).toThrow(
+      "historical continuation release-checks resolver input changed: RELEASE_PROVIDER_INPUT",
+    );
+  });
+
+  it("rejects manifestless historical candidate artifact drift during strict publication", () => {
+    const fixture = strictContinuationFixture({ sourceManifestPresent: false });
+    fixture.candidateArtifacts.image.imageArchiveSha256 = "f".repeat(64);
+    expect(() =>
+      validateReleaseRunEvidence(
+        {
+          repository: "openclaw/openclaw",
+          runId: fixture.rootRunId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        fixture.client,
+      ),
+    ).toThrow("historical continuation image artifact contents changed");
+  });
+
+  it("rejects an unknown historical dispatch schema during strict publication", () => {
+    const fixture = strictContinuationFixture({ sourceManifestPresent: false });
+    fixture.client.getWorkflowSource = () =>
+      fixture.sourceWorkflow.replace(
+        / {6}npm_telegram_scenario:\n {8}default: ""\n {8}type: string\n/u,
+        "",
+      );
+    expect(() =>
+      validateReleaseRunEvidence(
+        {
+          repository: "openclaw/openclaw",
+          runId: fixture.rootRunId,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        fixture.client,
+      ),
+    ).toThrow("historical continuation workflow input default is missing: npm_telegram_scenario");
   });
 
   it("rejects manifestless historical mode when the source has a canonical plan", () => {
     const fixture = strictContinuationFixture({ sourceManifestPresent: false });
-    fixture.client.loadExecutionPlan = (runId: string) =>
-      runId === fixture.rootRunId ? fixture.executionPlan : { kind: "canonical-source-plan" };
+    fixture.client.loadExecutionPlan = () => fixture.executionPlan;
     expect(() =>
       validateReleaseRunEvidence(
         {

@@ -32,7 +32,7 @@ const VALIDATION_INPUTS = {
   liveSuiteFilter: "",
   mode: "both",
   npmTelegramPackageSpec: "",
-  npmTelegramProviderMode: "",
+  npmTelegramProviderMode: "mock-openai",
   npmTelegramScenario: "",
   packageAcceptancePackageSpec: "",
   pluginPrereleaseNodeExcludePatternsJson: "[]",
@@ -177,7 +177,12 @@ function plan(children: ReturnType<typeof child>[]) {
   };
 }
 
-function continuationPlan(children: ReturnType<typeof child>[], source = continuation()) {
+function continuationPlan(
+  children: ReturnType<typeof child>[],
+  source: Omit<ReturnType<typeof continuation>, "sourceEvidenceMode"> & {
+    sourceEvidenceMode?: string;
+  } = continuation(),
+) {
   return {
     children: Object.fromEntries(children.map((entry) => [entry.key, entry])),
     continuation: source,
@@ -222,38 +227,190 @@ function sourceManifest(children: ReturnType<typeof child>[], source = continuat
   };
 }
 
-function historicalSourceInputLog(source = continuation()) {
+function historicalRootResolveLog(source = continuation()) {
   const environment = {
     ALLOW_UNRELEASED_CHANGELOG: source.validationInputs.allowUnreleasedChangelog,
     CODEX_PLUGIN_SPEC: source.validationInputs.codexPluginSpec,
     CROSS_OS_SUITE_FILTER: source.validationInputs.crossOsSuiteFilter,
     LIVE_SUITE_FILTER: source.validationInputs.liveSuiteFilter,
-    MODE: source.validationInputs.mode,
     NPM_TELEGRAM_PACKAGE_SPEC: source.validationInputs.npmTelegramPackageSpec,
-    NPM_TELEGRAM_PROVIDER_MODE: source.validationInputs.npmTelegramProviderMode,
-    NPM_TELEGRAM_SCENARIO: source.validationInputs.npmTelegramScenario,
     PACKAGE_ACCEPTANCE_PACKAGE_SPEC: source.validationInputs.packageAcceptancePackageSpec,
     PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON:
       source.validationInputs.pluginPrereleaseNodeExcludePatternsJson,
-    PROVIDER: source.validationInputs.provider,
     RELEASE_PACKAGE_SPEC: source.validationInputs.releasePackageSpec,
     RELEASE_PROFILE: source.releaseProfile,
     RUN_RELEASE_SOAK: source.runReleaseSoak,
     SKIP_PACKAGE_TELEGRAM_E2E: source.validationInputs.skipPackageTelegramE2e,
     TARGET_CONTEXT_REF: source.validationInputs.targetContextRef,
   };
-  return Object.entries(environment)
-    .map(([key, value]) => `2026-08-22T00:00:00Z   ${key}: ${value}`)
-    .join("\n");
+  return [
+    "2026-08-22T00:00:00Z ##[group]Run summarize",
+    "2026-08-22T00:00:00Z   env:",
+    ...Object.entries(environment).map(
+      ([key, value]) => `2026-08-22T00:00:00Z     ${key}: ${value}`,
+    ),
+    "2026-08-22T00:00:00Z ##[endgroup]",
+  ].join("\n");
+}
+
+function historicalReleaseChecksResolveLog(source = continuation()) {
+  const environment = {
+    CANDIDATE_ARTIFACT_JSON_INPUT: JSON.stringify(source.candidate),
+    RELEASE_MODE_INPUT: source.validationInputs.mode,
+    RELEASE_PROVIDER_INPUT: source.validationInputs.provider,
+    RELEASE_REF_INPUT: source.candidate.packageSourceSha,
+  };
+  return [
+    "2026-08-22T00:00:00Z ##[group]Run capture",
+    "2026-08-22T00:00:00Z   env:",
+    ...Object.entries(environment).map(
+      ([key, value]) => `2026-08-22T00:00:00Z     ${key}: ${value}`,
+    ),
+    "2026-08-22T00:00:00Z ##[endgroup]",
+  ].join("\n");
+}
+
+function historicalReusableInputsLog(source = continuation()) {
+  const entries = Object.entries({
+    advisory: "false",
+    allow_unreleased_changelog: source.validationInputs.allowUnreleasedChangelog,
+    codex_plugin_spec: source.validationInputs.codexPluginSpec,
+    cross_os_suite_filter: source.validationInputs.crossOsSuiteFilter,
+    dispatch_release_evidence: "false",
+    expected_sha: source.candidate.packageSourceSha,
+    fail_fast: "false",
+    live_suite_filter: source.validationInputs.liveSuiteFilter,
+    mode: source.validationInputs.mode,
+    npm_telegram_package_spec: source.validationInputs.npmTelegramPackageSpec,
+    npm_telegram_provider_mode: source.validationInputs.npmTelegramProviderMode,
+    npm_telegram_scenario: source.validationInputs.npmTelegramScenario,
+    package_acceptance_package_spec: source.validationInputs.packageAcceptancePackageSpec,
+    plugin_prerelease_node_exclude_patterns_json:
+      source.validationInputs.pluginPrereleaseNodeExcludePatternsJson,
+    prepare_only: "true",
+    provider: source.validationInputs.provider,
+    ref: source.candidate.packageSourceSha,
+    release_package_spec: source.validationInputs.releasePackageSpec,
+    release_profile: source.releaseProfile,
+    rerun_group: "all",
+    reuse_evidence: "false",
+    run_release_soak: source.runReleaseSoak,
+    skip_package_telegram_e2e: source.validationInputs.skipPackageTelegramE2e,
+    target_context_ref: source.validationInputs.targetContextRef,
+  })
+    .filter(([key, value]) => key !== "npm_telegram_scenario" || value !== "")
+    .map(([key, value]) => `2026-08-22T00:00:00Z   ${key}: ${value}`);
+  return [
+    "2026-08-22T00:00:00Z ##[group] Inputs",
+    ...entries,
+    "2026-08-22T00:00:00Z ##[endgroup]",
+  ].join("\n");
+}
+
+function historicalWorkflowSource() {
+  const defaults: Record<string, string> = {
+    allow_unreleased_changelog: "false",
+    codex_plugin_spec: '""',
+    cross_os_suite_filter: '""',
+    live_suite_filter: '""',
+    mode: "both",
+    npm_telegram_package_spec: '""',
+    npm_telegram_provider_mode: "mock-openai",
+    npm_telegram_scenario: '""',
+    package_acceptance_package_spec: '""',
+    plugin_prerelease_node_exclude_patterns_json: '"[]"',
+    provider: "openai",
+    release_package_spec: '""',
+    skip_package_telegram_e2e: "false",
+    target_context_ref: '""',
+  };
+  return [
+    "name: Full Release Validation",
+    "on:",
+    "  workflow_dispatch:",
+    "    inputs:",
+    ...Object.entries(defaults).flatMap(([key, value]) => {
+      const lines = [`      ${key}:`, `        default: ${value}`, "        type: string"];
+      if (key === "provider") {
+        lines.push("        options:", "          - openai", "          - anthropic");
+      }
+      return lines;
+    }),
+    "permissions:",
+    "  contents: read",
+  ].join("\n");
+}
+
+function historicalCandidateArtifacts(source = continuation()) {
+  const value = source.candidate;
+  const common = (id: string, name: string, digest: string) => ({
+    archiveSha256: digest,
+    digest: `sha256:${digest}`,
+    expired: false,
+    id,
+    name,
+    runAttempt: source.sourceRunAttempt,
+    runId: source.sourceRunId,
+    workflowRef: source.sourceWorkflowRef,
+    workflowSha: source.sourceWorkflowSha,
+  });
+  return {
+    image: {
+      ...common(value.imageArtifactId, value.imageArtifactName, value.imageArtifactDigest),
+      imageArchiveSha256: value.imageArchiveSha256,
+      imageArchiveFileName: "shared-images.tar.zst",
+      imageArchiveFormat: "docker-tar+zstd",
+      imageArchiveManifestSha256: value.imageArchiveSha256,
+      imageConclusion: "success",
+      imageKind: "docker-e2e",
+      imageSchema: "openclaw.shared-docker-image-artifact/v1",
+      imageSchemaVersion: 1,
+      imageWorkflowSha: source.sourceWorkflowSha,
+      manifestRunAttempt: source.sourceRunAttempt,
+      manifestRunId: source.sourceRunId,
+      packageSha256: value.packageSha256,
+      packageSourceSha: value.packageSourceSha,
+      targetSha: value.packageSourceSha,
+    },
+    package: {
+      ...common(value.packageArtifactId, value.packageArtifactName, value.packageArtifactDigest),
+      fileName: value.packageFileName,
+      fileSha256: value.packageSha256,
+      packageName: "openclaw",
+      packageSourceSha: value.packageSourceSha,
+      packageVersion: value.packageVersion,
+    },
+    pluginRegistry: {
+      ...common(
+        value.prepublishPluginRegistryArtifactId,
+        value.prepublishPluginRegistryArtifactName,
+        value.prepublishPluginRegistryArtifactDigest,
+      ),
+      candidateVersion: value.packageVersion,
+      manifestSha256: value.prepublishPluginRegistryManifestSha256,
+      schema: "openclaw.prepublish-plugin-registry/v1",
+      schemaVersion: 1,
+      sourceSha: value.packageSourceSha,
+    },
+  };
 }
 
 function preflightMethods(
   children: ReturnType<typeof child>[],
   childRun: (entry: ReturnType<typeof child>) => Record<string, unknown>,
   candidateIdentity?: ReturnType<typeof candidate>,
-  sourceInputLog = historicalSourceInputLog(),
+  historicalOverrides: Partial<{
+    candidateArtifacts: ReturnType<typeof historicalCandidateArtifacts>;
+    releaseChecksResolveLog: string;
+    reusableInputsLog: string;
+    rootResolveLog: string;
+    source: ReturnType<typeof continuation>;
+    sourceWorkflow: string;
+  }> = {},
 ) {
+  const source = historicalOverrides.source ?? continuation();
   const byRunId = new Map(children.map((entry) => [entry.runId, entry]));
+  const releaseChecks = children.find((entry) => entry.key === "releaseChecks");
   const jobs = [
     {
       conclusion: "success",
@@ -263,15 +420,22 @@ function preflightMethods(
       status: "completed",
     },
     {
-      conclusion: "success",
+      conclusion: "skipped",
       id: 2,
       name: "Check for reusable validation evidence",
       run_attempt: 1,
       status: "completed",
     },
+    {
+      conclusion: "success",
+      id: 3,
+      name: "Prepare shared release candidate / validate_selected_ref",
+      run_attempt: 1,
+      status: "completed",
+    },
     ...children.map((entry, index) => ({
       conclusion: "failure",
-      id: index + 3,
+      id: index + 4,
       name: releaseChildSpec(entry.key).parentJobName,
       run_attempt: entry.sourceParentAttempt,
       status: "completed",
@@ -280,12 +444,25 @@ function preflightMethods(
   return {
     getJobLog: async (jobId: number) => {
       if (jobId === 1) {
-        return `RERUN_GROUP: all\nTARGET_SHA: ${TARGET_SHA}`;
+        return [
+          `RERUN_GROUP: all`,
+          `TARGET_SHA: ${TARGET_SHA}`,
+          historicalOverrides.rootResolveLog ?? historicalRootResolveLog(source),
+        ].join("\n");
       }
-      if (jobId === 2) {
-        return sourceInputLog;
+      if (jobId === 3) {
+        return historicalOverrides.reusableInputsLog ?? historicalReusableInputsLog(source);
       }
-      const entry = children[jobId - 3]!;
+      if (jobId === 99) {
+        return (
+          historicalOverrides.releaseChecksResolveLog ??
+          historicalReleaseChecksResolveLog({
+            ...source,
+            candidate: candidateIdentity ?? source.candidate,
+          })
+        );
+      }
+      const entry = children[jobId - 4]!;
       return [
         `TARGET_SHA: ${TARGET_SHA}`,
         ...(entry.key === "productPerformance" ? ["-f publish_reports=false"] : []),
@@ -295,8 +472,23 @@ function preflightMethods(
         `Dispatched ${entry.workflow}: https://github.com/openclaw/openclaw/actions/runs/${entry.runId} (attempt ${entry.runAttempt})`,
       ].join("\n");
     },
-    getParentJobs: async () => jobs,
+    getParentJobs: async (runId: string) =>
+      runId === releaseChecks?.runId
+        ? [
+            {
+              conclusion: "success",
+              id: 99,
+              name: "resolve_target",
+              run_attempt: releaseChecks.runAttempt,
+              status: "completed",
+            },
+          ]
+        : jobs,
+    getWorkflowSource: async () => historicalOverrides.sourceWorkflow ?? historicalWorkflowSource(),
+    loadHistoricalCandidateArtifacts: async () =>
+      historicalOverrides.candidateArtifacts ?? historicalCandidateArtifacts(source),
     loadSourceManifest: async () => sourceManifest(children),
+    verifyTrustedSourceSha: async () => {},
     getRunAttempt: async (runId: string) => {
       if (runId === "77") {
         return {
@@ -911,24 +1103,90 @@ describe("frv continuation controller", () => {
     ).resolves.toMatchObject({ conclusion: "failure", id: 77 });
   });
 
+  it("rejects source identity before reading historical logs or artifacts", async () => {
+    const children = [
+      child("normalCi", "101"),
+      child("pluginPrerelease", "202"),
+      child("releaseChecks", "303"),
+      child("productPerformance", "404"),
+    ];
+    let evidenceReads = 0;
+    const methods = preflightMethods(children, (entry) => runFor(entry, 1, "failure"), candidate());
+    await expect(
+      preflightContinuation(continuationPlan(children), "77", {
+        ...methods,
+        getParentJobs: async () => {
+          evidenceReads += 1;
+          return [];
+        },
+        getRunAttempt: async () => ({
+          ...(await methods.getRunAttempt("77")),
+          head_sha: "f".repeat(40),
+        }),
+        loadHistoricalCandidateArtifacts: async () => {
+          evidenceReads += 1;
+          return {};
+        },
+        loadSourceManifest: async () => undefined,
+      }),
+    ).rejects.toThrow("source full release parent identity changed");
+    expect(evidenceReads).toBe(0);
+  });
+
+  it("rejects untrusted source lineage before reading historical logs or artifacts", async () => {
+    const children = [
+      child("normalCi", "101"),
+      child("pluginPrerelease", "202"),
+      child("releaseChecks", "303"),
+      child("productPerformance", "404"),
+    ];
+    let evidenceReads = 0;
+    const methods = preflightMethods(children, (entry) => runFor(entry, 1, "failure"), candidate());
+    await expect(
+      preflightContinuation(continuationPlan(children), "77", {
+        ...methods,
+        getParentJobs: async () => {
+          evidenceReads += 1;
+          return [];
+        },
+        loadHistoricalCandidateArtifacts: async () => {
+          evidenceReads += 1;
+          return {};
+        },
+        loadSourceManifest: async () => {
+          evidenceReads += 1;
+          return undefined;
+        },
+        verifyTrustedSourceSha: async () => {
+          throw new Error("source is not on protected main");
+        },
+      }),
+    ).rejects.toThrow("source is not on protected main");
+    expect(evidenceReads).toBe(0);
+  });
+
   it.each([
-    ["releaseProfile", "RELEASE_PROFILE"],
-    ["runReleaseSoak", "RUN_RELEASE_SOAK"],
-    ["allowUnreleasedChangelog", "ALLOW_UNRELEASED_CHANGELOG"],
-    ["codexPluginSpec", "CODEX_PLUGIN_SPEC"],
-    ["crossOsSuiteFilter", "CROSS_OS_SUITE_FILTER"],
-    ["liveSuiteFilter", "LIVE_SUITE_FILTER"],
-    ["mode", "MODE"],
-    ["npmTelegramPackageSpec", "NPM_TELEGRAM_PACKAGE_SPEC"],
-    ["npmTelegramProviderMode", "NPM_TELEGRAM_PROVIDER_MODE"],
-    ["npmTelegramScenario", "NPM_TELEGRAM_SCENARIO"],
-    ["packageAcceptancePackageSpec", "PACKAGE_ACCEPTANCE_PACKAGE_SPEC"],
-    ["pluginPrereleaseNodeExcludePatternsJson", "PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON"],
-    ["provider", "PROVIDER"],
-    ["releasePackageSpec", "RELEASE_PACKAGE_SPEC"],
-    ["skipPackageTelegramE2e", "SKIP_PACKAGE_TELEGRAM_E2E"],
-    ["targetContextRef", "TARGET_CONTEXT_REF"],
-  ])("rejects manifestless historical source log drift: %s", async (_field, environmentKey) => {
+    ["releaseProfile", "root", "RELEASE_PROFILE"],
+    ["runReleaseSoak", "root", "RUN_RELEASE_SOAK"],
+    ["allowUnreleasedChangelog", "root", "ALLOW_UNRELEASED_CHANGELOG"],
+    ["codexPluginSpec", "root", "CODEX_PLUGIN_SPEC"],
+    ["crossOsSuiteFilter", "root", "CROSS_OS_SUITE_FILTER"],
+    ["liveSuiteFilter", "root", "LIVE_SUITE_FILTER"],
+    ["mode", "child", "RELEASE_MODE_INPUT"],
+    ["npmTelegramPackageSpec", "root", "NPM_TELEGRAM_PACKAGE_SPEC"],
+    ["npmTelegramProviderMode", "inputs", "npm_telegram_provider_mode"],
+    ["npmTelegramScenario", "inputs", "npm_telegram_scenario"],
+    ["packageAcceptancePackageSpec", "root", "PACKAGE_ACCEPTANCE_PACKAGE_SPEC"],
+    [
+      "pluginPrereleaseNodeExcludePatternsJson",
+      "root",
+      "PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON",
+    ],
+    ["provider", "child", "RELEASE_PROVIDER_INPUT"],
+    ["releasePackageSpec", "root", "RELEASE_PACKAGE_SPEC"],
+    ["skipPackageTelegramE2e", "root", "SKIP_PACKAGE_TELEGRAM_E2E"],
+    ["targetContextRef", "inputs", "target_context_ref"],
+  ])("rejects manifestless historical source log drift: %s", async (_field, surface, key) => {
     const source = continuation();
     source.validationInputs = {
       allowUnreleasedChangelog: "true",
@@ -953,45 +1211,206 @@ describe("frv continuation controller", () => {
       child("productPerformance", "404"),
       child("npmTelegram", "505"),
     ];
-    const tamperedLog = historicalSourceInputLog(source)
-      .split("\n")
-      .map((line) => (line.includes(` ${environmentKey}:`) ? `${line}tampered` : line))
-      .join("\n");
+    const rootResolveLog = historicalRootResolveLog(source).replace(
+      new RegExp(` ${key}:.*`, "u"),
+      ` ${key}: tampered`,
+    );
+    const releaseChecksResolveLog = historicalReleaseChecksResolveLog(source).replace(
+      new RegExp(` ${key}:.*`, "u"),
+      ` ${key}: tampered`,
+    );
+    const reusableInputsLog = historicalReusableInputsLog(source).replace(
+      new RegExp(` ${key}:.*`, "u"),
+      ` ${key}: tampered`,
+    );
     await expect(
       preflightContinuation(continuationPlan(children, source), "77", {
-        ...preflightMethods(
-          children,
-          (entry) => runFor(entry, 1, "failure"),
-          candidate(),
-          tamperedLog,
-        ),
+        ...preflightMethods(children, (entry) => runFor(entry, 1, "failure"), candidate(), {
+          releaseChecksResolveLog:
+            surface === "child"
+              ? releaseChecksResolveLog
+              : historicalReleaseChecksResolveLog(source),
+          reusableInputsLog:
+            surface === "inputs" ? reusableInputsLog : historicalReusableInputsLog(source),
+          rootResolveLog: surface === "root" ? rootResolveLog : historicalRootResolveLog(source),
+          source,
+        }),
         loadSourceManifest: async () => undefined,
       }),
-    ).rejects.toThrow(`historical continuation source input changed: ${environmentKey}`);
+    ).rejects.toThrow("historical continuation");
   });
 
-  it("rejects a missing manifestless historical source input", async () => {
+  it("accepts an omitted blank npm Telegram scenario only from the exact source schema", async () => {
     const children = [
       child("normalCi", "101"),
       child("pluginPrerelease", "202"),
       child("releaseChecks", "303"),
       child("productPerformance", "404"),
     ];
-    const inputLog = historicalSourceInputLog()
+    await expect(
+      preflightContinuation(continuationPlan(children), "77", {
+        ...preflightMethods(children, (entry) => runFor(entry, 1, "failure"), candidate()),
+        loadSourceManifest: async () => undefined,
+      }),
+    ).resolves.toMatchObject({ id: 77 });
+  });
+
+  it("ignores reusable defaults shadowed by authoritative root inputs", async () => {
+    const source = continuation();
+    source.validationInputs = {
+      ...source.validationInputs,
+      codexPluginSpec: "@openclaw/codex@beta",
+      liveSuiteFilter: "qa-live-telegram",
+    };
+    const children = [
+      child("normalCi", "101"),
+      child("pluginPrerelease", "202"),
+      child("releaseChecks", "303"),
+      child("productPerformance", "404"),
+    ];
+    const reusableInputsLog = historicalReusableInputsLog(source)
+      .replace(" codex_plugin_spec: @openclaw/codex@beta", " codex_plugin_spec: ")
+      .replace(" live_suite_filter: qa-live-telegram", " live_suite_filter: ");
+    await expect(
+      preflightContinuation(continuationPlan(children, source), "77", {
+        ...preflightMethods(children, (entry) => runFor(entry, 1, "failure"), candidate(), {
+          reusableInputsLog,
+          source,
+        }),
+        loadSourceManifest: async () => undefined,
+      }),
+    ).resolves.toMatchObject({ id: 77 });
+  });
+
+  it("rejects an omitted input whose exact source schema default is nonblank", async () => {
+    const children = [
+      child("normalCi", "101"),
+      child("pluginPrerelease", "202"),
+      child("releaseChecks", "303"),
+      child("productPerformance", "404"),
+    ];
+    const reusableInputsLog = historicalReusableInputsLog()
       .split("\n")
-      .filter((line) => !line.includes(" NPM_TELEGRAM_SCENARIO:"))
+      .filter((line) => !line.includes(" npm_telegram_provider_mode:"))
       .join("\n");
     await expect(
       preflightContinuation(continuationPlan(children), "77", {
-        ...preflightMethods(
-          children,
-          (entry) => runFor(entry, 1, "failure"),
-          candidate(),
-          inputLog,
-        ),
+        ...preflightMethods(children, (entry) => runFor(entry, 1, "failure"), candidate(), {
+          reusableInputsLog,
+        }),
         loadSourceManifest: async () => undefined,
       }),
-    ).rejects.toThrow("historical continuation source input is missing: NPM_TELEGRAM_SCENARIO");
+    ).rejects.toThrow("historical continuation reusable input is missing: npmTelegramProviderMode");
+  });
+
+  it("rejects duplicate root resolver env blocks", async () => {
+    const children = [
+      child("normalCi", "101"),
+      child("pluginPrerelease", "202"),
+      child("releaseChecks", "303"),
+      child("productPerformance", "404"),
+    ];
+    const log = historicalRootResolveLog();
+    await expect(
+      preflightContinuation(continuationPlan(children), "77", {
+        ...preflightMethods(children, (entry) => runFor(entry, 1, "failure"), candidate(), {
+          rootResolveLog: `${log}\n${log}`,
+        }),
+        loadSourceManifest: async () => undefined,
+      }),
+    ).rejects.toThrow("historical continuation root resolver input block is missing or ambiguous");
+  });
+
+  it("rejects an incomplete reusable Inputs group", async () => {
+    const children = [
+      child("normalCi", "101"),
+      child("pluginPrerelease", "202"),
+      child("releaseChecks", "303"),
+      child("productPerformance", "404"),
+    ];
+    await expect(
+      preflightContinuation(continuationPlan(children), "77", {
+        ...preflightMethods(children, (entry) => runFor(entry, 1, "failure"), candidate(), {
+          reusableInputsLog: historicalReusableInputsLog().replace("##[endgroup]", ""),
+        }),
+        loadSourceManifest: async () => undefined,
+      }),
+    ).rejects.toThrow("historical continuation reusable Inputs group is missing or ambiguous");
+  });
+
+  it("rejects a source workflow schema missing an input default", async () => {
+    const children = [
+      child("normalCi", "101"),
+      child("pluginPrerelease", "202"),
+      child("releaseChecks", "303"),
+      child("productPerformance", "404"),
+    ];
+    const sourceWorkflow = historicalWorkflowSource().replace(
+      / {6}npm_telegram_scenario:\n {8}default: ""\n {8}type: string\n/u,
+      "",
+    );
+    await expect(
+      preflightContinuation(continuationPlan(children), "77", {
+        ...preflightMethods(children, (entry) => runFor(entry, 1, "failure"), candidate(), {
+          sourceWorkflow,
+        }),
+        loadSourceManifest: async () => undefined,
+      }),
+    ).rejects.toThrow(
+      "historical continuation workflow input default is missing: npm_telegram_scenario",
+    );
+  });
+
+  it.each([
+    ["service digest", "package", "archiveSha256"],
+    ["package hash", "package", "fileSha256"],
+    ["plugin manifest hash", "pluginRegistry", "manifestSha256"],
+    ["Docker archive hash", "image", "imageArchiveSha256"],
+    ["producer attempt", "image", "runAttempt"],
+  ])("rejects historical candidate artifact drift: %s", async (_label, kind, field) => {
+    const children = [
+      child("normalCi", "101"),
+      child("pluginPrerelease", "202"),
+      child("releaseChecks", "303"),
+      child("productPerformance", "404"),
+    ];
+    const candidateArtifacts = historicalCandidateArtifacts();
+    const artifact = candidateArtifacts[kind as keyof typeof candidateArtifacts] as Record<
+      string,
+      unknown
+    >;
+    artifact[field] = field === "runAttempt" ? 2 : "f".repeat(64);
+    await expect(
+      preflightContinuation(continuationPlan(children), "77", {
+        ...preflightMethods(children, (entry) => runFor(entry, 1, "failure"), candidate(), {
+          candidateArtifacts,
+        }),
+        loadSourceManifest: async () => undefined,
+      }),
+    ).rejects.toThrow("historical continuation");
+  });
+
+  it("rejects a release-checks resolver from the wrong child attempt", async () => {
+    const children = [
+      child("normalCi", "101"),
+      child("pluginPrerelease", "202"),
+      child("releaseChecks", "303"),
+      child("productPerformance", "404"),
+    ];
+    const methods = preflightMethods(children, (entry) => runFor(entry, 1, "failure"), candidate());
+    const getParentJobs = methods.getParentJobs;
+    await expect(
+      preflightContinuation(continuationPlan(children), "77", {
+        ...methods,
+        getParentJobs: async (runId: string) => {
+          const jobs = await getParentJobs(runId);
+          return runId === "303" ? jobs.map((childJob) => ({ ...childJob, run_attempt: 2 })) : jobs;
+        },
+        loadSourceManifest: async () => undefined,
+      }),
+    ).rejects.toThrow(
+      "historical continuation release-checks resolver job is missing or ambiguous",
+    );
   });
 
   it("keeps a canonical continuation source manifest mandatory", async () => {

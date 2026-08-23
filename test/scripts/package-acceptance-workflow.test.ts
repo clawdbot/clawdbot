@@ -1502,6 +1502,12 @@ function runReleaseChecksSummary(params: {
 }
 
 describe("package acceptance workflow", () => {
+  it("budgets release target resolution for historical artifact verification", () => {
+    const resolveJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
+
+    expect(resolveJob["timeout-minutes"]).toBe(60);
+  });
+
   it("forwards Plugin SDK acknowledgement through the canonical publish dispatch", () => {
     const workflow = readWorkflow(RELEASE_PUBLISH_WORKFLOW);
     const input = workflow.on?.workflow_dispatch?.inputs?.plugin_sdk_api_acknowledgement;
