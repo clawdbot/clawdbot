@@ -21,6 +21,7 @@ export type AttachmentCardHeaderOptions = {
   sizeBytes?: number;
   titleHref?: string;
   downloadHref?: string;
+  onDownload?: () => void;
   showExpandAction?: boolean;
   onExpand?: () => void;
   showExtensionLabel?: boolean;
@@ -93,6 +94,11 @@ export function renderAttachmentCardIcon(options: {
 export function renderAttachmentCardHeader(
   options: AttachmentCardHeaderOptions,
 ): TemplateResult {
+  const compactPreview = options.visualMode === "preview-with-favicon";
+  const compactSize =
+    compactPreview && options.sizeBytes !== undefined
+      ? ` · ${formatBytes(options.sizeBytes)}`
+      : undefined;
   const typeLabel = attachmentTypeLabel(options.kind, options.label, options.mimeType);
   const metadata = [
     typeLabel,
@@ -114,8 +120,15 @@ export function renderAttachmentCardHeader(
       >`;
   const downloadTitle = t("chat.mediaPlayer.download", { filename: options.label });
   const hasOpenAction = options.showExpandAction === true && options.onExpand !== undefined;
+  const downloadClass = `chat-assistant-attachment-card__action chat-assistant-attachment-card__download chat-assistant-attachment-card__download--ghost ${hasOpenAction
+    ? "chat-assistant-attachment-card__download--secondary"
+    : ""}`;
   return html`
-    <div class="chat-assistant-attachment-card__header">
+    <div
+      class="chat-assistant-attachment-card__header ${compactPreview
+        ? "chat-assistant-attachment-card__header--preview"
+        : ""}"
+    >
       <div class="chat-assistant-attachment-card__identity">
         ${renderAttachmentCardIcon({
           kind: options.kind,
@@ -124,37 +137,56 @@ export function renderAttachmentCardHeader(
           showExtensionLabel: options.showExtensionLabel,
           visualMode: options.visualMode,
         })}
-        <span class="chat-assistant-attachment-card__details">
+        <span
+          class="chat-assistant-attachment-card__details ${compactPreview
+            ? "chat-assistant-attachment-card__details--preview"
+            : ""}"
+        >
           ${title}
-          <span class="chat-assistant-attachment-card__meta">${metadata}</span>
+          ${compactPreview
+            ? compactSize
+              ? html`<span class="chat-assistant-attachment-card__meta">${compactSize}</span>`
+              : null
+            : html`<span class="chat-assistant-attachment-card__meta">${metadata}</span>`}
         </span>
       </div>
       <span class="chat-assistant-attachment-card__actions">
-        ${options.voiceNote
+        ${options.voiceNote && !compactPreview
           ? html`<span class="chat-assistant-attachment-badge"
               >${t("chat.messages.voiceNote")}</span
             >`
           : null}
         ${options.downloadHref
           ? html`<a
-              class="chat-assistant-attachment-card__action chat-assistant-attachment-card__download chat-assistant-attachment-card__download--ghost ${hasOpenAction
-                ? "chat-assistant-attachment-card__download--secondary"
-                : ""}"
+              class=${downloadClass}
               href=${options.downloadHref}
               download=${options.label}
               aria-label=${downloadTitle}
               title=${downloadTitle}
               >${icons.download}</a
             >`
-          : null}
+          : options.onDownload
+            ? html`<button
+                type="button"
+                class=${downloadClass}
+                aria-label=${downloadTitle}
+                title=${downloadTitle}
+                @click=${options.onDownload}
+                >${icons.download}</button
+              >`
+            : null}
         ${hasOpenAction
           ? html`<button
               type="button"
-              class="chat-assistant-attachment-card__action chat-assistant-attachment-card__action--labeled chat-assistant-attachment-card__expand"
+              class="chat-assistant-attachment-card__action ${compactPreview
+                ? "chat-assistant-attachment-card__expand--icon"
+                : "chat-assistant-attachment-card__action--labeled"} chat-assistant-attachment-card__expand"
               aria-label=${t("chat.attachments.expand", { filename: options.label })}
               title=${t("chat.attachments.expand", { filename: options.label })}
               @click=${options.onExpand}
-              ><span>${t("chat.attachments.open")}</span></button
+              >${compactPreview
+                ? icons.arrowUpRight
+                : html`<span>${t("chat.attachments.open")}</span>`}</button
             >`
           : null}
       </span>

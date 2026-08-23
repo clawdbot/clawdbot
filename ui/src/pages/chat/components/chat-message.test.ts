@@ -5064,10 +5064,11 @@ describe("grouped chat rendering", () => {
       sessionKey: "agent:main:main",
       artifactId,
     });
-    expect(container.querySelectorAll(".chat-image-action")).toHaveLength(3);
+    expect(container.querySelectorAll(".chat-assistant-attachment-card__action")).toHaveLength(2);
+    expect(container.querySelector(".chat-assistant-attachment-card__expand svg")).not.toBeNull();
   });
 
-  it("reuses one full-image fetch for download and copy actions", async () => {
+  it("downloads a managed image from the compact preview header", async () => {
     const attachmentId = crypto.randomUUID();
     const artifactId = `artifact_managed_image_${attachmentId}`;
     const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${attachmentId}/full`;
@@ -5089,22 +5090,12 @@ describe("grouped chat rendering", () => {
       blob: async () => imageBlob,
     }));
     vi.stubGlobal("fetch", fetchMock);
-    let copiedBlob: Blob | undefined;
-    class ClipboardItemMock {
-      constructor(readonly values: Record<string, Promise<Blob>>) {}
-    }
-    const write = vi.fn(async (items: ClipboardItemMock[]) => {
-      copiedBlob = await items[0]?.values["image/png"];
-    });
-    vi.stubGlobal("ClipboardItem", ClipboardItemMock);
-    vi.stubGlobal("navigator", { clipboard: { write } });
     const clickedDownloads: string[] = [];
     const click = vi
       .spyOn(HTMLAnchorElement.prototype, "click")
       .mockImplementation(function (this: HTMLAnchorElement) {
         clickedDownloads.push(this.download);
       });
-    const toastHost = document.body.appendChild(document.createElement("openclaw-toast-host"));
     const container = document.body.appendChild(document.createElement("div"));
     renderAssistantMessage(
       container,
@@ -5114,18 +5105,18 @@ describe("grouped chat rendering", () => {
     await vi.waitFor(() => expect(container.querySelector(".chat-message-image")).not.toBeNull());
     expect(fetchMock).toHaveBeenCalledWith(thumbnailUrl, expect.anything());
 
-    expectElement(container, 'button[aria-label="Download image"]', HTMLButtonElement).click();
+    expectElement(
+      container,
+      ".chat-assistant-attachment-card__download",
+      HTMLButtonElement,
+    ).click();
     await vi.waitFor(() => expect(click).toHaveBeenCalledOnce());
-    expect(clickedDownloads[0]).toBe("Ticketed image.png");
+    expect(clickedDownloads[0]).toBe("image.png");
 
-    expectElement(container, 'button[aria-label="Copy image"]', HTMLButtonElement).click();
-    await vi.waitFor(() => expect(copiedBlob?.type).toBe("image/png"));
-    await vi.waitFor(() => expect(toastHost.textContent).toContain("Copied!"));
     expect(fetchMock.mock.calls.filter((call: unknown[]) => call[0] === ticketedUrl)).toHaveLength(
       1,
     );
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
-    toastHost.remove();
     container.remove();
   });
 

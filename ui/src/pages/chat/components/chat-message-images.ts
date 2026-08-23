@@ -2,7 +2,6 @@ import { html, noChange, nothing, type TemplateResult } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
 import { until } from "lit/directives/until.js";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
-import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   openExternalUrlSafe,
@@ -10,8 +9,11 @@ import {
   resolveSafeExternalUrl,
 } from "../../../lib/open-external-url.ts";
 import { showToast } from "../../../lib/toast.ts";
+import {
+  openAttachmentCardFromClick,
+  renderAttachmentCardHeader,
+} from "./chat-attachment-card.ts";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
-import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import {
   buildAssistantAttachmentUrl,
@@ -206,33 +208,42 @@ export function renderMessageImages(images: RenderableImageBlock[], opts?: Image
   const renderImageElement = (img: RenderableImageBlock, previewUrl: string) => {
     const title = img.alt?.trim() || t("chat.imageLightbox.untitled");
     const managed = isManagedOutgoingImageSource(img.displayUrl);
+    const fileName = img.fileName?.trim() || resolveImageFileName(img);
+    const onOpen = () => openImage(img, previewUrl);
     return html`
-      <span class="chat-image-frame ${managed ? "chat-image-frame--managed" : ""}">
-        <button
-          type="button"
-          class="chat-message-image-button"
-          aria-label=${t("chat.imageLightbox.open", { title })}
-          @click=${() => openImage(img, previewUrl)}
-        >
-          <img
-            src=${previewUrl}
-            alt=${title}
-            class="chat-message-image"
-            width=${img.width ?? nothing}
-            height=${img.height ?? nothing}
-          />
-        </button>
-        ${managed
-          ? renderManagedImageActions(img, opts, () => openImage(img, previewUrl))
-          : nothing}
-        <span class="chat-image-file-icon">
-          ${renderAttachmentFileIcon({
-            filename: resolveImageFileName(img),
-            mimeType: "image/png",
-            mode: "preview-with-favicon",
-          })}
+      <div
+        class="chat-assistant-attachment-card chat-assistant-attachment-card--image chat-assistant-attachment-card--preview"
+        data-openable
+        @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, onOpen)}
+      >
+        ${renderAttachmentCardHeader({
+          kind: "image",
+          label: fileName,
+          mimeType: "image/png",
+          sizeBytes: img.sizeBytes,
+          downloadHref: managed ? undefined : previewUrl,
+          onDownload: managed ? () => void downloadManagedImage(img, opts, fileName) : undefined,
+          showExpandAction: true,
+          onExpand: onOpen,
+          visualMode: "preview-with-favicon",
+        })}
+        <span class="chat-image-frame ${managed ? "chat-image-frame--managed" : ""}">
+          <button
+            type="button"
+            class="chat-message-image-button"
+            aria-label=${t("chat.imageLightbox.open", { title })}
+            @click=${onOpen}
+          >
+            <img
+              src=${previewUrl}
+              alt=${title}
+              class="chat-message-image"
+              width=${img.width ?? nothing}
+              height=${img.height ?? nothing}
+            />
+          </button>
         </span>
-      </span>
+      </div>
     `;
   };
 
@@ -496,92 +507,17 @@ function downloadImageBlob(blob: Blob, fileName: string): void {
   globalThis.setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
 }
 
-async function convertImageBlobToPng(blob: Blob): Promise<Blob> {
-  if (blob.type === "image/png") {
-    return blob;
-  }
-  const bitmap = await createImageBitmap(blob);
-  try {
-    const canvas = document.createElement("canvas");
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    const context = canvas.getContext("2d");
-    if (!context) {
-      throw new Error("image conversion context is unavailable");
-    }
-    context.drawImage(bitmap, 0, 0);
-    return await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob(
-        (converted) =>
-          converted ? resolve(converted) : reject(new Error("image conversion failed")),
-        "image/png",
-      );
-    });
-  } finally {
-    bitmap.close();
-  }
-}
-
-function renderManagedImageActions(
+async function downloadManagedImage(
   image: RenderableImageBlock,
   opts: ImageRenderOptions | undefined,
-  onOpen: () => void,
-) {
-  const title = image.alt?.trim() || t("chat.imageLightbox.untitled");
-  const download = async () => {
-    try {
-      const blob = await readManagedOutgoingImageBlob(image.displayUrl, opts, image.artifactId);
-      downloadImageBlob(blob, imageDownloadFileName(title, blob.type));
-    } catch {
-      showToast({ message: t("chat.imageLightbox.downloadFailed") });
-    }
-  };
-  const copy = async () => {
-    try {
-      if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
-        throw new Error("image clipboard is unavailable");
-      }
-      const png = readManagedOutgoingImageBlob(image.displayUrl, opts, image.artifactId).then(
-        convertImageBlobToPng,
-      );
-      void png.catch(() => {});
-      await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
-      showToast({ message: t("common.copied") });
-    } catch {
-      showToast({ message: t("chat.imageLightbox.copyFailed") });
-    }
-  };
-  return html`
-    <span class="chat-image-actions">
-      <button
-        type="button"
-        class="chat-image-action"
-        title=${t("chat.imageLightbox.openOriginal")}
-        aria-label=${t("chat.imageLightbox.open", { title })}
-        @click=${onOpen}
-      >
-        ${icons.externalLink}
-      </button>
-      <button
-        type="button"
-        class="chat-image-action"
-        title=${t("chat.imageLightbox.download")}
-        aria-label=${t("chat.imageLightbox.download")}
-        @click=${() => void download()}
-      >
-        ${icons.download}
-      </button>
-      <button
-        type="button"
-        class="chat-image-action"
-        title=${t("chat.imageLightbox.copy")}
-        aria-label=${t("chat.imageLightbox.copy")}
-        @click=${() => void copy()}
-      >
-        ${icons.copy}
-      </button>
-    </span>
-  `;
+  fileName: string,
+): Promise<void> {
+  try {
+    const blob = await readManagedOutgoingImageBlob(image.displayUrl, opts, image.artifactId);
+    downloadImageBlob(blob, imageDownloadFileName(fileName, blob.type));
+  } catch {
+    showToast({ message: t("chat.imageLightbox.downloadFailed") });
+  }
 }
 
 function markManagedOutgoingImageUnavailable(resource: ChatMediaResource<string | null>): null {

@@ -7,7 +7,6 @@ import {
   openAttachmentCardFromClick,
   renderAttachmentCardHeader,
 } from "./chat-attachment-card.ts";
-import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 import {
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES,
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS,
@@ -518,30 +517,41 @@ export function renderAssistantAttachments(
         });
       }
       const title = attachment.label.trim() || t("chat.imageLightbox.untitled");
-      return html`<span class="chat-image-frame">
-        <button
-          type="button"
-          class="chat-message-image-button"
-          aria-label=${t("chat.imageLightbox.open", { title })}
-          @click=${() =>
-            openResolvedImage(
-              onOpenImage,
-              attachmentUrl,
-              title,
-              undefined,
-              onRequestOpenImage?.(),
-            )}
-        >
-          <img src=${attachmentUrl} alt=${title} class="chat-message-image" />
-        </button>
-        <span class="chat-image-file-icon">
-          ${renderAttachmentFileIcon({
-            filename: attachment.label,
-            mimeType: attachment.mimeType,
-            mode: "preview-with-favicon",
-          })}
+      const openImagePreview = () =>
+        openResolvedImage(
+          onOpenImage,
+          attachmentUrl,
+          title,
+          undefined,
+          onRequestOpenImage?.(),
+        );
+      return html`<div
+        class="chat-assistant-attachment-card chat-assistant-attachment-card--image chat-assistant-attachment-card--preview"
+        ?data-openable=${Boolean(openAttachmentSidebar)}
+        @click=${(event: MouseEvent) =>
+          openAttachmentCardFromClick(event, openAttachmentSidebar)}
+      >
+        ${renderAttachmentCardHeader({
+          kind: "image",
+          label: attachment.label,
+          mimeType: attachment.mimeType,
+          sizeBytes,
+          downloadHref: attachmentUrl,
+          showExpandAction: true,
+          onExpand: openAttachmentSidebar,
+          visualMode: "preview-with-favicon",
+        })}
+        <span class="chat-image-frame">
+          <button
+            type="button"
+            class="chat-message-image-button"
+            aria-label=${t("chat.imageLightbox.open", { title })}
+            @click=${openImagePreview}
+          >
+            <img src=${attachmentUrl} alt=${title} class="chat-message-image" />
+          </button>
         </span>
-      </span>`;
+      </div>`;
     }
     if (attachment.kind === "audio") {
       if (!attachmentUrl) {
