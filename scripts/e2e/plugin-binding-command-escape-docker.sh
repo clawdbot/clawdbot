@@ -33,7 +33,19 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run --rm 
   -e "FOCUSED_TEST_REGEX=$FOCUSED_TEST_REGEX" \
   -e OPENCLAW_VITEST_FS_MODULE_CACHE_PATH=/tmp/openclaw-vitest-cache \
   "$IMAGE_NAME" \
-  bash -lc 'set -euo pipefail; corepack enable; node scripts/run-vitest.mjs src/auto-reply/reply/dispatch-from-config.test.ts --reporter=verbose -t "$FOCUSED_TEST_REGEX"' \
+  bash -lc '
+    set -euo pipefail
+    # Main has one aggregate entry; frozen candidates may split binding cases into a second file.
+    test_files=(src/auto-reply/reply/dispatch-from-config.test.ts)
+    if [[ -f src/auto-reply/reply/dispatch-from-config.lifecycle-and-bindings.test.ts ]]; then
+      test_files=(
+        src/auto-reply/reply/dispatch-from-config.lifecycle-and-bindings.test.ts
+        src/auto-reply/reply/dispatch-from-config.test.ts
+      )
+    fi
+    corepack enable
+    node scripts/run-vitest.mjs "${test_files[@]}" --reporter=verbose -t "$FOCUSED_TEST_REGEX"
+  ' \
   >"$RUN_LOG" 2>&1
 status=$?
 set -e
@@ -46,22 +58,82 @@ fi
 
 if ! node - "$RUN_LOG" <<'NODE'
 const fs = require("node:fs");
+const { StringDecoder } = require("node:string_decoder");
 const logPath = process.argv[2];
 const scanBytes = 65536;
-const stat = fs.statSync(logPath);
-const length = Math.min(stat.size, scanBytes);
-const buffer = Buffer.alloc(length);
+const maxLineChars = 4096;
+const buffer = Buffer.alloc(scanBytes);
 const fd = fs.openSync(logPath, "r");
+const decoder = new StringDecoder("utf8");
+let carry = "";
+let discardingLongLine = false;
+let invalidSummary = false;
+let summaryCount = 0;
+let totalPassed = 0;
+let offset = 0;
+
+function scanLine(line) {
+  const normalized = line.replace(/\x1B\[[0-?]*[ -/]*[@-~]/gu, "");
+  const match = normalized.match(/^\s*Tests\s+(\d+) passed\b/u);
+  if (!match) {
+    return;
+  }
+  const count = Number.parseInt(match[1], 10);
+  summaryCount += 1;
+  if (!Number.isSafeInteger(count) || count <= 0 || summaryCount > 2) {
+    invalidSummary = true;
+    return;
+  }
+  totalPassed += count;
+}
+
+function appendLineSegment(segment, ended) {
+  if (!discardingLongLine) {
+    if (carry.length + segment.length <= maxLineChars) {
+      carry += segment;
+    } else {
+      carry = "";
+      discardingLongLine = true;
+    }
+  }
+  if (!ended) {
+    return;
+  }
+  if (!discardingLongLine) {
+    scanLine(carry.endsWith("\r") ? carry.slice(0, -1) : carry);
+  }
+  carry = "";
+  discardingLongLine = false;
+}
+
+function scanText(text) {
+  let start = 0;
+  for (let newline = text.indexOf("\n"); newline !== -1; newline = text.indexOf("\n", start)) {
+    appendLineSegment(text.slice(start, newline), true);
+    start = newline + 1;
+  }
+  appendLineSegment(text.slice(start), false);
+}
+
 try {
-  fs.readSync(fd, buffer, 0, length, stat.size - length);
+  while (true) {
+    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, offset);
+    if (bytesRead === 0) {
+      break;
+    }
+    offset += bytesRead;
+    scanText(decoder.write(buffer.subarray(0, bytesRead)));
+  }
+  scanText(decoder.end());
+  appendLineSegment("", true);
 } finally {
   fs.closeSync(fd);
 }
-const text = buffer.toString("utf8").replace(/\x1B\[[0-?]*[ -/]*[@-~]/gu, "");
 
-if (!/(?:^|\n)\s*Tests\s+3 passed\b/u.test(text)) {
-  console.error("expected focused Vitest summary for exactly 3 passed tests");
-  console.error(text.slice(-4000));
+if (invalidSummary || summaryCount < 1 || summaryCount > 2 || totalPassed !== 3) {
+  console.error(
+    `expected one aggregate or two split Vitest summaries for exactly 3 passed tests; saw ${summaryCount} summaries totaling ${totalPassed}`,
+  );
   process.exit(1);
 }
 NODE
