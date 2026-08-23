@@ -45,7 +45,6 @@ type CliOptions = {
   fixture?:
     | "approval"
     | "board"
-    | "chat-spacing"
     | "code-fences"
     | "swarm"
     | "update-available"
@@ -349,7 +348,6 @@ function parseFixture(value: string | undefined): CliOptions["fixture"] {
   if (
     value !== "approval" &&
     value !== "board" &&
-    value !== "chat-spacing" &&
     value !== "code-fences" &&
     value !== "swarm" &&
     value !== "update-available" &&
@@ -1299,27 +1297,18 @@ function buildScrollableChatHistory(baseTime: number): unknown[] {
   // Completed work turn: commentary + tool results ahead of the final reply
   // exercise the collapsed "Worked for X" rollup at the end of the thread.
   const workTurnBase = baseTime + 37 * 60_000;
-  const workRunId = "mock-work-run";
   messages.push(
+    chatHistoryMessage(
+      "user",
+      "Mock work request: refactor the render guard and rerun the suite.",
+      workTurnBase,
+    ),
+    chatHistoryMessage(
+      "assistant",
+      "Checking the guard implementation before editing.",
+      workTurnBase + 5_000,
+    ),
     {
-      ...chatHistoryMessage(
-        "user",
-        "Mock work request: refactor the render guard and rerun the suite.",
-        workTurnBase,
-      ),
-      __openclaw: { id: "mock-work-request", idempotencyKey: `${workRunId}:user` },
-    },
-    {
-      ...chatHistoryMessage(
-        "assistant",
-        "Checking the guard implementation before editing.",
-        workTurnBase + 5_000,
-      ),
-      __openclaw: { runId: workRunId },
-      phase: "commentary",
-    },
-    {
-      __openclaw: { runId: workRunId },
       role: "toolResult",
       toolCallId: "mock-work-read",
       toolName: "read",
@@ -1327,141 +1316,20 @@ function buildScrollableChatHistory(baseTime: number): unknown[] {
       timestamp: workTurnBase + 12_000,
     },
     {
-      __openclaw: { runId: workRunId },
       role: "toolResult",
       toolCallId: "mock-work-exec",
       toolName: "exec",
       content: [{ type: "text", text: "pnpm test chat-thread — 12 passed." }],
       timestamp: workTurnBase + 95_000,
     },
-    {
-      ...chatHistoryMessage(
-        "assistant",
-        "Refactored the render guard and reran the suite; all 12 tests pass.",
-        workTurnBase + 172_000,
-      ),
-      __openclaw: { runId: workRunId },
-      phase: "final_answer",
-    },
+    chatHistoryMessage(
+      "assistant",
+      "Refactored the render guard and reran the suite; all 12 tests pass.",
+      workTurnBase + 172_000,
+    ),
   );
 
   return messages;
-}
-
-const CHAT_SPACING_SESSION_KEY = "agent:main:dashboard:chat-spacing-review";
-const CHAT_SPACING_FIRST_RUN_ID = "mock-chat-spacing-initial-review";
-const CHAT_SPACING_REVIEW_RUN_ID = "mock-chat-spacing-maintainer-review";
-
-function chatSpacingToolResults(
-  runId: string,
-  startedAt: number,
-  counts: { commands: number; progressCards?: number; webSearches?: number },
-): unknown[] {
-  const names = [
-    ...Array.from({ length: counts.commands }, () => "exec"),
-    ...Array.from({ length: counts.progressCards ?? 0 }, () => "progress_card"),
-    ...Array.from({ length: counts.webSearches ?? 0 }, () => "web_search"),
-  ];
-  return names.map((toolName, index) => ({
-    __openclaw: { runId },
-    role: "toolResult",
-    toolCallId: `${runId}-${startedAt}-${index}`,
-    toolName,
-    content: [{ type: "text", text: `${toolName} mock result ${index + 1}` }],
-    timestamp: startedAt + index,
-  }));
-}
-
-function buildChatSpacingHistory(now: number): unknown[] {
-  const firstTurnAt = now - 3 * 60 * 60_000;
-  const userTurnAt = firstTurnAt + 10 * 60_000;
-  const forwarded =
-    "Full review-only OpenClaw maintainer review of #127841. Work from /home/openclaw/.openclaw/projects/05ecb4050064f070/openclaw. Use a clean exact-head worktree if feasible; if full materialization fails, use a sparse worktree or temporary bare repository plus only the touched/test paths. Do not mutate GitHub or source. Read root/scoped AGENTS.md and use openclaw-pr-maintainer plus testing/test-audit. Verify premise on current main and shipped behavior with exact line; architecture/owner/config/fallback/compat/protocol/schema/persistence/LOC; intent/history; provenance and reproducibility; complete evidence map; exact-head/current-main proof, CI and ClawSweeper; one verdict and single deciding reason; best-fix judgment and detailed file-level handoff. Do not stop for missing gh auth or a failed full checkout. Full access/high/fast/gateway execution configured. FINISH report; do not acknowledge only.";
-  const exactHead =
-    "Exact-head materialization succeeded: PR head `a0f2bb64…` is one commit ahead and 139 commits behind current `main` (`5c922502…`). Current main has since changed the same failure/retry surface and restored `send_attempt_started` for this case, so the deciding question is now semantic supersession—not merely rebase freshness. I’m tracing that later owner change and its linked bugs before judging.";
-  const plan = [
-    "Codex plan:",
-    "",
-    "- [completed] Read review/testing policy and recover isolated checkout",
-    "- [completed] Reconstruct PR metadata, exact diff, history, and evidence map",
-    "- [in_progress] Verify premise on exact head, current main, and shipped tags",
-    "- [pending] Audit tests, CI, ClawSweeper, compatibility, and LOC",
-    "- [pending] Deliver one verdict with deciding reason and file-level handoff",
-  ].join("\n");
-  const continuing =
-    "Continuing the review from the isolated exact-head checkout. I’m reconstructing the evidence gathered so far, then I’ll finish exact-head/current-main tests, CI and ClawSweeper checks, and return the single maintainer verdict with file-level handoff.";
-  const coherent =
-    "The exact-head patch is internally coherent, but the branch is now semantically stale: current `main` changed the same retry/queue-ownership neighborhood in #124310 and intentionally retains `send_attempt_started` for the adapter-rejection case. I’m now testing whether rebasing the PR would preserve the new caller-vs-queue retry contract or regress it; that is the deciding merge question.";
-
-  return [
-    {
-      ...chatHistoryMessage("assistant", forwarded, firstTurnAt),
-      senderLabel: "Forwarded from roboclaw",
-      provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-      __openclaw: { id: "mock-chat-spacing-forwarded", runId: CHAT_SPACING_FIRST_RUN_ID },
-    },
-    {
-      ...chatHistoryMessage(
-        "assistant",
-        "Materializing the exact PR head and tracing the current-main retry owner.",
-        firstTurnAt + 15_000,
-      ),
-      __openclaw: { runId: CHAT_SPACING_FIRST_RUN_ID },
-      phase: "commentary",
-    },
-    ...chatSpacingToolResults(CHAT_SPACING_FIRST_RUN_ID, firstTurnAt + 30_000, {
-      commands: 3,
-    }),
-    {
-      ...chatHistoryMessage("assistant", exactHead, firstTurnAt + 145_000),
-      __openclaw: { runId: CHAT_SPACING_FIRST_RUN_ID },
-      phase: "final_answer",
-    },
-    ...chatSpacingToolResults(CHAT_SPACING_FIRST_RUN_ID, firstTurnAt + 146_000, {
-      commands: 35,
-      webSearches: 4,
-    }),
-    {
-      ...chatHistoryMessage(
-        "user",
-        "Begin and complete the full PR #127841 maintainer review now. The complete requirements are recorded in the preceding session message; perform them and return the final report, not an acknowledgment.",
-        userTurnAt,
-      ),
-      senderLabel: "Vyctor Brzezowski",
-      __openclaw: {
-        id: "mock-chat-spacing-user",
-        idempotencyKey: `${CHAT_SPACING_REVIEW_RUN_ID}:user`,
-        senderId: "profile-vyctor",
-        senderName: "Vyctor Brzezowski",
-      },
-    },
-    {
-      ...chatHistoryMessage("assistant", plan, userTurnAt + 12_000),
-      __openclaw: { runId: CHAT_SPACING_REVIEW_RUN_ID },
-      phase: "commentary",
-    },
-    {
-      ...chatHistoryMessage("assistant", continuing, userTurnAt + 20_000),
-      __openclaw: { runId: CHAT_SPACING_REVIEW_RUN_ID },
-      phase: "commentary",
-    },
-    ...chatSpacingToolResults(CHAT_SPACING_REVIEW_RUN_ID, userTurnAt + 35_000, {
-      commands: 24,
-      progressCards: 1,
-      // The aggregate label counts generic tool calls together, so one
-      // progress_card plus two searches renders the reference's “×3”.
-      webSearches: 2,
-    }),
-    {
-      ...chatHistoryMessage("assistant", coherent, userTurnAt + 89_000),
-      __openclaw: { runId: CHAT_SPACING_REVIEW_RUN_ID },
-      phase: "final_answer",
-    },
-    ...chatSpacingToolResults(CHAT_SPACING_REVIEW_RUN_ID, userTurnAt + 90_000, {
-      commands: 13,
-      progressCards: 1,
-    }),
-  ];
 }
 
 function buildCodeFenceChatHistory(baseTime: number): unknown[] {
@@ -1491,10 +1359,9 @@ async function createChatPickerScenario(
   fixture?: CliOptions["fixture"],
 ): Promise<ControlUiMockGatewayScenario> {
   const baseTime = Date.parse("2026-05-22T09:00:00.000Z");
-  const chatSpacingFixture = fixture === "chat-spacing";
   const selfProfile: UserProfile = {
-    id: chatSpacingFixture ? "profile-vyctor" : "presence-riley",
-    displayName: chatSpacingFixture ? "Vyctor Brzezowski" : "Riley",
+    id: "presence-riley",
+    displayName: "Riley",
     avatarMime: null,
     mergedInto: null,
     createdAt: baseTime,
@@ -1812,24 +1679,6 @@ async function createChatPickerScenario(
   const activitySessions = buildActivitySessionRows(Date.now());
   const sessions = [
     ...activitySessions,
-    ...(chatSpacingFixture
-      ? [
-          sessionRow(CHAT_SPACING_SESSION_KEY, "PR #127841 maintainer review", Date.now(), {
-            createdActor: {
-              type: "human",
-              id: "profile-vyctor",
-              label: "Vyctor Brzezowski",
-            },
-            owner: {
-              actor: {
-                type: "human",
-                id: "profile-vyctor",
-                label: "Vyctor Brzezowski",
-              },
-            },
-          }),
-        ]
-      : []),
     ...(fixture === "workboard"
       ? [
           sessionRow(workboardMocks.sessionKey, "Product operations dashboard", baseTime, {
@@ -2017,9 +1866,8 @@ async function createChatPickerScenario(
     swarmEnabled: fixture === "swarm",
     workboardEnabled: fixture === "workboard",
   });
-  const historyMessages = chatSpacingFixture
-    ? buildChatSpacingHistory(Date.now())
-    : fixture === "code-fences"
+  const historyMessages =
+    fixture === "code-fences"
       ? buildCodeFenceChatHistory(baseTime)
       : buildScrollableChatHistory(baseTime);
   const planSessionInfo = {
@@ -2046,16 +1894,6 @@ async function createChatPickerScenario(
     sessionId: "control-ui-e2e-session",
     sessionInfo: planSessionInfo,
     inFlightRun: planInFlightRun,
-    thinkingLevel: null,
-  };
-  const chatSpacingHistory = {
-    messages: historyMessages,
-    sessionId: "control-ui-chat-spacing-session",
-    sessionInfo: {
-      activeRunIds: [],
-      hasActiveRun: false,
-      key: CHAT_SPACING_SESSION_KEY,
-    },
     thinkingLevel: null,
   };
   const custodianHistory = {
@@ -2199,48 +2037,12 @@ async function createChatPickerScenario(
     ],
     methodResponses: {
       ...buildBackgroundTasksMock(baseTime),
-      ...(chatSpacingFixture ? { "tasks.list": { tasks: [] } } : {}),
       ...cronMocks,
       "chat.history": {
-        cases: [
-          ...(chatSpacingFixture
-            ? [
-                {
-                  match: { sessionKey: CHAT_SPACING_SESSION_KEY },
-                  response: chatSpacingHistory,
-                },
-              ]
-            : []),
-          { match: { sessionKey: "agent:main:main" }, response: planChatHistory },
-        ],
+        cases: [{ match: { sessionKey: "agent:main:main" }, response: planChatHistory }],
       },
       "chat.startup": {
         cases: [
-          ...(chatSpacingFixture
-            ? [
-                {
-                  match: { sessionKey: CHAT_SPACING_SESSION_KEY },
-                  response: {
-                    ...chatSpacingHistory,
-                    agentsList: {
-                      agents: [
-                        {
-                          id: "main",
-                          identity: { name: "Molty" },
-                          name: "Molty",
-                          workspace: "/Users/vyctor/Code/openclaw",
-                          workspaceGit: true,
-                        },
-                      ],
-                      defaultId: "main",
-                      mainKey: "main",
-                      scope: "agent",
-                    },
-                    metadata: { models: modelProviders.models },
-                  },
-                },
-              ]
-            : []),
           {
             match: { sessionKey: "agent:main:main" },
             response: {
@@ -2264,25 +2066,7 @@ async function createChatPickerScenario(
           },
         ],
       },
-      "progressCard.get": chatSpacingFixture
-        ? {
-            card: {
-              sessionKey: CHAT_SPACING_SESSION_KEY,
-              revision: 1,
-              updatedAt: Date.now(),
-              steps: [
-                { step: "Read review/testing policy", status: "completed" },
-                { step: "Reconstruct exact-head evidence", status: "completed" },
-                {
-                  step: "Verify premise on exact head, current main, and shipped tags",
-                  status: "in_progress",
-                },
-                { step: "Audit CI, ClawSweeper, compatibility, and LOC", status: "pending" },
-                { step: "Deliver the maintainer verdict", status: "pending" },
-              ],
-            },
-          }
-        : { card: null },
+      "progressCard.get": { card: null },
       "users.self": { profile: selfProfile },
       // Talk settings page pickers: realtime catalog with the model/voice
       // suggestion lists the gateway emits for provider entries.
@@ -3192,11 +2976,7 @@ async function createChatPickerScenario(
       ],
     },
     sessionArchiveFiltering: true,
-    sessionKey: chatSpacingFixture
-      ? CHAT_SPACING_SESSION_KEY
-      : fixture === "workboard"
-        ? workboardMocks.sessionKey
-        : "agent:main:main",
+    sessionKey: fixture === "workboard" ? workboardMocks.sessionKey : "agent:main:main",
     workspace: "/Users/peter/Projects/openclaw",
     workspaceGit: true,
   };
@@ -3364,28 +3144,9 @@ function createStatefulMockInitScript(): string {
   return `(() => { const __name = (target) => target; (${installControlUiStatefulMocks.toString()})(${CUSTODIAN_CHAT_REPLY_DELAY_MS}, ${CHAT_SEND_REPLY_DELAY_MS}); })();`;
 }
 
-function createMockDocumentTitleScript(title: string): string {
-  return `(() => {
-    const title = ${JSON.stringify(title)};
-    const syncTitle = () => {
-      if (document.title !== title) document.title = title;
-    };
-    syncTitle();
-    new MutationObserver(syncTitle).observe(document.head, {
-      childList: true,
-      characterData: true,
-      subtree: true,
-    });
-  })();`;
-}
-
-function createMockGatewayPlugin(
-  scenario: ControlUiMockGatewayScenario,
-  documentTitle: string,
-): Plugin {
+function createMockGatewayPlugin(scenario: ControlUiMockGatewayScenario): Plugin {
   const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(scenario));
   const statefulInitScript = escapeScriptContent(createStatefulMockInitScript());
-  const titleInitScript = escapeScriptContent(createMockDocumentTitleScript(documentTitle));
   const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(scenario));
   return {
     configureServer(server) {
@@ -3403,7 +3164,7 @@ function createMockGatewayPlugin(
     transformIndexHtml(html) {
       return html.replace(
         "</head>",
-        `    <script data-openclaw-control-ui-mock-gateway>\n${initScript}\n${statefulInitScript}\n    </script>\n    <script data-openclaw-control-ui-mock-title>\n${titleInitScript}\n    </script>\n  </head>`,
+        `    <script data-openclaw-control-ui-mock-gateway>\n${initScript}\n${statefulInitScript}\n    </script>\n  </head>`,
       );
     },
   };
@@ -3483,10 +3244,7 @@ const server = await createServer({
       : {}),
     include: ["lit/directives/repeat.js"],
   },
-  plugins: [
-    createMockGatewayPlugin(scenario, `💬 Chat spacing · :${options.port}`),
-    createBoardFixturePlugin(),
-  ],
+  plugins: [createMockGatewayPlugin(scenario), createBoardFixturePlugin()],
   publicDir: path.join(uiRoot, "public"),
   resolve: {
     alias: [
