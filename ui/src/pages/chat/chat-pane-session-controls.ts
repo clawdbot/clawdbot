@@ -87,7 +87,7 @@ export function renderChatPaneComposerControls(params: {
   effortAccess: SessionMethodAccess;
   permissionAccess: SessionMethodAccess;
   canSelectFull: boolean;
-  toastAnchor?: Element;
+  toastAnchor: Element;
   onModelSetup: () => void;
 }): {
   composerControls: NonNullable<ChatProps["composerControls"]>;
@@ -171,7 +171,7 @@ export function renderChatPaneComposerControls(params: {
           );
           if (runWasActive) {
             const topbarHeight = toastAnchor
-              ?.querySelector(".chat-pane__header")
+              .querySelector(".chat-pane__header")
               ?.getBoundingClientRect().height;
             showToast({
               anchor: toastAnchor,

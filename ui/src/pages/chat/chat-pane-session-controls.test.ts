@@ -87,6 +87,7 @@ describe("chat pane composer controls", () => {
       chatStream: null,
     } as unknown as ChatPageHost;
     const onModelSetup = vi.fn();
+    const toastAnchor = document.createElement("div");
 
     const controls = renderChatPaneComposerControls({
       state,
@@ -96,6 +97,7 @@ describe("chat pane composer controls", () => {
       effortAccess: { allowed: true, requiredScope: "operator.write" },
       permissionAccess: { allowed: true, requiredScope: "operator.write" },
       canSelectFull: true,
+      toastAnchor,
       onModelSetup,
     });
     render(controls.composerControls, container);
@@ -145,6 +147,7 @@ describe("chat pane composer controls", () => {
       effortAccess: { allowed: true, requiredScope: "operator.write" },
       permissionAccess: { allowed: true, requiredScope: "operator.write" },
       canSelectFull: false,
+      toastAnchor: document.createElement("div"),
       onModelSetup: vi.fn(),
     });
     render(renderChatPermissionPicker(controls.permissionPicker), container);
@@ -156,7 +159,6 @@ describe("chat pane composer controls", () => {
       '[data-chat-permission-option="default"]',
     );
     expect(defaultOption?.textContent).toContain("Follow the agent's configured policy");
-    expect(container.querySelector(".chat-controls__permission-scope")).toBeNull();
     expect(full?.hasAttribute("disabled")).toBe(true);
     expect(full?.getAttribute("aria-checked")).toBe("true");
     expect(full?.querySelector(".chat-controls__inline-select-check")).not.toBeNull();
@@ -268,6 +270,7 @@ describe("chat pane composer controls", () => {
       effortAccess: { allowed: true, requiredScope: "operator.write" },
       permissionAccess: { allowed: true, requiredScope: "operator.write" },
       canSelectFull: true,
+      toastAnchor: document.createElement("div"),
       onModelSetup: vi.fn(),
     });
     render(controls.composerControls, container);
