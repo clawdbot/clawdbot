@@ -4467,7 +4467,9 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .sidebar-build-hover-card {
+  box-sizing: border-box;
   width: max-content;
+  padding: 16px;
 }
 
 .sidebar-build-hover-card__copy {
