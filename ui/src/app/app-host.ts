@@ -627,12 +627,16 @@ class OpenClawShell
     } else if (routeId === "custodian") {
       primaryContext = t("nav.askOpenClaw");
     }
-    const title = formatDocumentTitle({
+    let title = formatDocumentTitle({
       context: primaryContext,
       attentionCount: context.overlays.snapshot.approvalQueue.length,
       offline: context.gateway.snapshot.phase !== "connected",
       queuedCount: this.outboxStoreRuntime?.summarizeStoredChatOutboxes(outboxScopeHost).total ?? 0,
     });
+    const environment = context.config?.current.environment;
+    if (environment) {
+      title += ` · ${environment.label}`;
+    }
     if (document.title !== title) {
       document.title = title;
     }

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -11,8 +12,8 @@ import { getAgentScopedMediaLocalRootsForSources } from "../media/local-roots.js
 import { createKeyedFifoLeaseRegistry } from "../shared/keyed-fifo-lease.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
 import {
-  attachManagedOutgoingMediaToMessage,
   createManagedOutgoingMediaBlocks,
+  removeManagedOutgoingMediaBlocks,
 } from "./managed-image-attachments.js";
 import { prepareGatewayInjectedAssistantContent } from "./server-methods/chat-transcript-inject.js";
 
@@ -95,10 +96,12 @@ export async function persistInternalSourceReply(params: {
       return;
     }
     const mediaUrls = collectSourceReplyMediaUrls(params.payload);
+    const messageId = randomUUID();
     const mediaBlocks = await createManagedOutgoingMediaBlocks({
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       mediaUrls,
+      messageId,
       localRoots: getAgentScopedMediaLocalRootsForSources({
         cfg: params.cfg,
         agentId: params.agentId,
@@ -119,6 +122,7 @@ export async function persistInternalSourceReply(params: {
         : {}),
       ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
       content: prepareGatewayInjectedAssistantContent(content),
+      eventId: messageId,
       idempotencyKey: params.idempotencyKey,
       runId: params.runId,
       ...(params.sourceReplyFinal !== undefined
@@ -134,16 +138,11 @@ export async function persistInternalSourceReply(params: {
       config: params.cfg,
     });
     if (!appended.ok) {
+      await removeManagedOutgoingMediaBlocks({ blocks: mediaBlocks, messageId });
       throw new Error(`Internal source reply persistence failed: ${appended.reason}`);
     }
-    if (
-      mediaBlocks.length > 0 &&
-      !attachManagedOutgoingMediaToMessage({
-        messageId: appended.messageId,
-        blocks: mediaBlocks,
-      })
-    ) {
-      throw new Error("Internal source reply media ownership could not be persisted");
+    if (appended.messageId !== messageId) {
+      await removeManagedOutgoingMediaBlocks({ blocks: mediaBlocks, messageId });
     }
   } finally {
     lease?.release();

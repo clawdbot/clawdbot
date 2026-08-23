@@ -1113,16 +1113,10 @@
 }
 
 /* ── Activity group (a turn's run of tool rows) ── */
-/* Keep the activity summary, call bubbles, and flat result rows on one width.
-   Include the role classes so this wins over the generic tool-group rule. */
-.chat-group.tool.chat-group--activity .chat-group-messages {
-  max-width: var(--chat-message-max-width, min(760px, 100%));
-}
-
 .chat-activity-group {
   width: 100%;
   min-width: 0;
-  max-width: 100%;
+  max-width: var(--chat-message-max-width, min(760px, 100%));
 }
 
 .chat-activity-group__summary {

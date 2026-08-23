@@ -908,7 +908,12 @@ describe("canonical session message recovery", () => {
     expect(state.chatStream).toBe("Current partial reply");
   });
 
-  it("renders distinct live peers immediately and coalesces their stale history", async () => {
+  it("coalesces distinct live peers into one frame and their stale history into one load", async () => {
+    let renderFrame: FrameRequestCallback | undefined;
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+      renderFrame = callback;
+      return 1;
+    });
     let resolveHistory!: (result: {
       messages: unknown[];
       sessionId: string;
@@ -945,8 +950,10 @@ describe("canonical session message recovery", () => {
       });
 
       expect(state.chatMessages).toHaveLength(index + 1);
-      expect(state.requestUpdate).toHaveBeenCalledTimes(index + 1);
+      expect(state.requestUpdate).not.toHaveBeenCalled();
     }
+    renderFrame?.(0);
+    expect(state.requestUpdate).toHaveBeenCalledOnce();
 
     expect(request).toHaveBeenCalledOnce();
     resolveHistory({
@@ -1746,7 +1753,10 @@ describe("ChatStateController render lifecycle", () => {
     expect(state.waitingApprovalStatuses.size).toBe(0);
   });
 
-  it("skips no-op assistant invalidation while tool changes render immediately", () => {
+  it("skips no-op assistant invalidation while tool changes render on the next frame", () => {
+    const requestAnimationFrame = vi
+      .spyOn(globalThis, "requestAnimationFrame")
+      .mockImplementation(() => 1);
     const requestUpdate = vi.fn();
     const state = createStreamEventState({
       requestUpdate,
@@ -1768,7 +1778,9 @@ describe("ChatStateController render lifecycle", () => {
     expect(requestUpdate).not.toHaveBeenCalled();
 
     emitAgent(2, "tool", { phase: "start", name: "read", toolCallId: "tool-1" });
-    expect(requestUpdate).toHaveBeenCalledOnce();
+    emitAgent(3, "tool", { phase: "update", name: "read", toolCallId: "tool-1" });
+    expect(requestAnimationFrame).toHaveBeenCalledOnce();
+    expect(requestUpdate).not.toHaveBeenCalled();
   });
 
   it("coalesces stream invalidations into one animation frame", () => {
@@ -1814,9 +1826,11 @@ describe("ChatStateController render lifecycle", () => {
       event: "session.operation",
       payload: {},
     });
+    expect(frames.size).toBe(1);
+    expect(requestUpdate).toHaveBeenCalledOnce();
     staleFrame?.(0);
 
-    expect(cancelFrame).toHaveBeenCalledWith(2);
+    expect(cancelFrame).not.toHaveBeenCalledWith(2);
     expect(requestUpdate).toHaveBeenCalledTimes(2);
     expect(state.chatStreamRenderFrame).toBeNull();
   });
@@ -2396,7 +2410,7 @@ describe("refreshChatMetadata", () => {
     const refreshSessions = vi.fn().mockResolvedValue(undefined);
     const request = vi.fn(async (method: string, params?: unknown) => {
       expect(method).toBe("models.list");
-      expect(params).toEqual({ view: "configured", agentId: "work" });
+      expect(params).toEqual({ view: "configured", agentId: "work", refresh: true });
       return {
         models: [
           {

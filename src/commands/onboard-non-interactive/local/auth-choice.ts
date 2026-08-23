@@ -280,6 +280,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         apiKey: customApiKeyInput,
         providerId: customAuth.providerId,
         supportsImageInput: customAuth.supportsImageInput,
+        target: params.target,
       });
       if (result.providerIdRenamedFrom && result.providerId) {
         runtime.log(

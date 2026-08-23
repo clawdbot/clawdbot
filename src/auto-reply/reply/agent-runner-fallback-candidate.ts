@@ -80,7 +80,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   bindSourceReplyDeliveryRuntime(turn.followupRun.run, sourceReplyDeliveryRuntime);
   const sourceReplyDeliveryModeOrigin = sourceReplyDeliveryRuntime.origin;
   const preserveProgressCallbackStartOrder = turn.opts?.preserveProgressCallbackStartOrder === true;
-  const runLane = CommandLane.Main;
+  const runLane = turn.isHeartbeat ? CommandLane.CronNested : CommandLane.Main;
   let queuedUserMessagePersistedAcrossFallback = false;
   let assistantErrorPersistedAcrossFallback = false;
   const continuationRecords: FallbackContinuationRecord[] = [];
@@ -306,6 +306,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         }
         const candidate = await runEmbeddedFallbackCandidate({
           ...common,
+          runLane,
           githubPublicationAvailable: await (githubPublicationAvailability ??=
             turn.sessionKey && params.effectiveRun.agentId
               ? prepareGitHubPublicationAvailability({

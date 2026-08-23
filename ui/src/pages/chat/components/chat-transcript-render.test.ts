@@ -256,7 +256,7 @@ describe("chat transcript rendering", () => {
         {
           role: "assistant",
           content: "Preview\n...(truncated)...",
-          __openclaw: { id: "assistant-full-1" },
+          __openclaw: { id: "assistant-full-1", truncated: true },
           timestamp: 1_000,
         },
       ]),
@@ -295,7 +295,7 @@ describe("chat transcript rendering", () => {
         {
           role: "assistant",
           content: "Preview\n...(truncated)...",
-          __openclaw: { id: "assistant-retry-1" },
+          __openclaw: { id: "assistant-retry-1", truncated: true },
           timestamp: 1_000,
         },
       ]),

@@ -1273,8 +1273,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   ])("balances completed-work spacing on $label", async ({ width, hasTouch, expectedGap }) => {
     const page = await openBrowserPage(width, 720, { hasTouch, isolated: true });
     try {
+      // Isolate the final-layout contract from the 200ms settle-in transform.
       await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${completedWorkSpacingHtml()}</body></html>`,
+        `<!doctype html><html><head><style>${readUiCss()}</style><style>.chat-group--work { animation: none; }</style></head><body>${completedWorkSpacingHtml()}</body></html>`,
       );
       await waitForLayoutSettled(page, "[data-spacing-row], .chat-group--work");
 
@@ -1299,9 +1300,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         };
       });
 
-      // Browser font metrics can shift subpixel geometry by up to two CSS pixels.
-      expect(Math.abs(gaps.before - expectedGap)).toBeLessThanOrEqual(2);
-      expect(Math.abs(gaps.after - expectedGap)).toBeLessThanOrEqual(2);
+      expect(gaps.before).toBeCloseTo(expectedGap, 0);
+      expect(gaps.after).toBeCloseTo(expectedGap, 0);
     } finally {
       await closeBrowserPage(page);
     }
@@ -1384,6 +1384,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                   <div class="chat-activity-group">Activity</div>
                 </div>
               </div>
+              <div class="chat-group assistant chat-group--with-footer">
+                <div class="chat-group-messages" data-frame-lane>
+                  <div class="chat-activity-group">Framed activity</div>
+                </div>
+              </div>
             </div>
           </div>
           <div class="chat-prs" data-chat-prs>Pull requests</div>
@@ -1398,10 +1403,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           return { center: bounds.x + bounds.width / 2, width: bounds.width };
         };
         return {
-          activity: rect("[data-activity-lane]"),
+          activity: rect("[data-activity-lane] .chat-activity-group"),
           composer: rect("[data-composer]"),
           prs: rect("[data-chat-prs]"),
           shell: rect("[data-tool-shell]"),
+          framedActivity: rect("[data-frame-lane] .chat-activity-group"),
           thread: rect(".chat-thread-inner"),
           tool: rect("[data-tool-lane]"),
         };
@@ -1416,9 +1422,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(defaults.tool.width).toBeCloseTo(defaults.thread.width, 0);
       expect(defaults.shell.width).toBeCloseTo(760, 0);
       expect(defaults.activity.width).toBeCloseTo(760, 0);
+      expect(defaults.framedActivity.width).toBeCloseTo(defaults.activity.width, 0);
 
       const configured = await renderFixture(true);
-      for (const key of ["activity", "shell", "tool"] as const) {
+      for (const key of ["activity", "framedActivity", "shell", "tool"] as const) {
         expect(configured[key].width).toBeCloseTo(configured.thread.width, 0);
       }
       expect(configured.composer.width).toBeCloseTo(configured.prs.width, 0);

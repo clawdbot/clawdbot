@@ -5,8 +5,12 @@ import * as tar from "tar";
 import { resolveStateDir } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { resolveUserPath, shortenHomePath } from "../utils.js";
-import { BACKUP_MAX_DECOMPRESSION_RATIO, canonicalizePathForContainment } from "./backup-shared.js";
+import { shortenHomePath } from "../utils.js";
+import {
+  BACKUP_MAX_DECOMPRESSION_RATIO,
+  canonicalizePathForContainment,
+  resolveRequiredBackupPath,
+} from "./backup-shared.js";
 import { verifyBackupArchive } from "./backup-verify.js";
 import { isPathWithin } from "./cleanup-utils.js";
 
@@ -36,14 +40,6 @@ type BackupRestoreResult = {
   symlinkCount: number;
   warnings: string[];
 };
-
-function resolveRequiredTarget(value: string | undefined): string {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    throw new Error("Missing required --target value.");
-  }
-  return path.resolve(resolveUserPath(trimmed));
-}
 
 async function assertTargetOutsideLiveState(targetPath: string): Promise<void> {
   const [canonicalTarget, canonicalStateDir] = await Promise.all([
@@ -127,7 +123,7 @@ export async function backupRestoreCommand(
   runtime: RuntimeEnv,
   options: BackupRestoreOptions,
 ): Promise<BackupRestoreResult> {
-  const targetPath = resolveRequiredTarget(options.target);
+  const targetPath = resolveRequiredBackupPath(options.target, "--target");
   await assertTargetOutsideLiveState(targetPath);
   const verified = await verifyBackupArchive(options.archive);
   const target = await prepareRestoreTarget(targetPath);

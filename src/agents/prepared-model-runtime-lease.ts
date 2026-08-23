@@ -1,14 +1,17 @@
 /** Agent-run lease admission for lifecycle-owned prepared model runtimes. */
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
+import { getPreparedModelRuntimeBorrowedSnapshot } from "./prepared-model-runtime-generation-scope.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
   hasConfiguredOwnerMatching,
   ownerKey,
   normalizePreparedModelRuntimeInput,
+  preparedModelRuntimeConfigsMatch,
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
+  resolveConfiguredOwner,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeLease,
   type PreparedModelRuntimeOwner,
@@ -77,6 +80,42 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         key = ownerKey(input);
       }
       continue;
+    }
+    if (provenance === "run" && context.getGatewayLifecycleActive() && options.pluginGeneration) {
+      const configuredOwner = resolveConfiguredOwner(context.owners, input);
+      if (configuredOwner?.pending) {
+        await configuredOwner.pending.catch(() => undefined);
+        continue;
+      }
+      if (
+        configuredOwner &&
+        (configuredOwner.needsRefresh ||
+          configuredOwner.pluginGeneration !== options.pluginGeneration)
+      ) {
+        const borrowed = getPreparedModelRuntimeBorrowedSnapshot(options.pluginGeneration);
+        if (
+          !configuredOwner.needsRefresh &&
+          borrowed &&
+          borrowed.metadataSnapshot === options.pluginGeneration.pluginMetadataSnapshot &&
+          preparedModelRuntimeConfigsMatch(borrowed.config, input.config) &&
+          borrowed.agentId === input.agentId &&
+          borrowed.agentDir === input.agentDir &&
+          borrowed.inheritedAuthDir === input.inheritedAuthDir &&
+          borrowed.workspaceDir === input.workspaceDir &&
+          (!input.allowGatewaySubagentBinding || borrowed.allowGatewaySubagentBinding) &&
+          !input.readOnly &&
+          !input.loadRuntimePlugins &&
+          !input.skipCredentials &&
+          !input.env
+        ) {
+          // A turn may finish under its still-open parent lease after reload. Its historic
+          // generation must never publish over the configured owner for newly admitted work.
+          return { snapshot: borrowed, release: () => {} };
+        }
+        throw new PreparedModelRuntimeOwnerNotPublishedError(
+          `prepared model runtime plugin generation was superseded for ${input.agentDir}`,
+        );
+      }
     }
     let existing = context.owners.get(key);
     let staleDynamicOwner =

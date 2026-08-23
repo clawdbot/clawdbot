@@ -292,6 +292,13 @@ the general protocol version. Frames stay under 64 KiB, except a negotiated
 `worker.heartbeat`, `worker.transcript.commit`, `worker.live-event`,
 `worker.inference.start`, and `worker.inference.cancel`.
 
+For an identity-audited attached run, the live turn capability can record the
+credential, build, owner-epoch, and placement checks as one enforced admission
+receipt. The receipt contains none of the credential, build hashes, tokens,
+environment id, or session id. Worker operation rows and placement state remain
+their authoritative owners; successful connection is not an action-success
+receipt.
+
 Transcript commits use owner-epoch fencing, a gateway-owned session binding,
 base-leaf compare-and-swap, and durable sequence replay; the gateway generates
 transcript entry and parent IDs through the normal session writer. Ownership and

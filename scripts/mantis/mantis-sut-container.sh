@@ -555,8 +555,10 @@ lock_runtime_root() {
     destroy_bounded_filesystem "$safe_runtime" "$image_path"
     die "failed to remove the quarantined runtime input"
   fi
-  chown root:root "$safe_runtime"
-  chmod 0755 "$safe_runtime"
+  chown root:mantis-proof "$safe_runtime"
+  # The agent may stage developer files at runtime; sticky ownership keeps
+  # root-owned attestation files from being replaced or removed.
+  chmod 1770 "$safe_runtime"
   if ! ln -s "$safe_runtime" "$runtime_source"; then
     destroy_bounded_filesystem "$safe_runtime" "$image_path"
     die "failed to publish locked runtime root"
@@ -639,7 +641,70 @@ run_network_probe() {
 # shellcheck disable=SC2016
 readonly sut_command='
   set -eu
-  exec node openclaw.mjs gateway --port "$OPENCLAW_GATEWAY_PORT" >"$GATEWAY_LOG" 2>&1
+  runtime_source="${OPENCLAW_CONFIG_PATH%/*}"
+  gateway_pid_file="$runtime_source/gateway.pid"
+  restart_request="$runtime_source/gateway-restart.request"
+  gateway_pid=""
+  stopping=0
+  stop_gateway() {
+    stopping=1
+    if [ -n "$gateway_pid" ]; then
+      kill -TERM "$gateway_pid" 2>/dev/null || true
+    fi
+  }
+  cleanup_gateway_pid() {
+    rm -f "$gateway_pid_file"
+  }
+  trap stop_gateway TERM INT
+  trap cleanup_gateway_pid EXIT
+  : >"$GATEWAY_LOG"
+  while :; do
+    node openclaw.mjs gateway --port "$OPENCLAW_GATEWAY_PORT" >>"$GATEWAY_LOG" 2>&1 &
+    gateway_pid=$!
+    printf "%s\n" "$gateway_pid" >"$gateway_pid_file"
+    gateway_status=0
+    wait "$gateway_pid" || gateway_status=$?
+    gateway_pid=""
+    rm -f "$gateway_pid_file"
+    if [ "$stopping" -eq 1 ]; then
+      exit "$gateway_status"
+    fi
+    if [ -f "$restart_request" ]; then
+      rm -f "$restart_request"
+      printf "\n[mantis] restarting gateway\n" >>"$GATEWAY_LOG"
+      continue
+    fi
+    exit "$gateway_status"
+  done
+'
+
+require_active_sut() {
+  local container_name="$1"
+  local runtime_source="$2"
+  require_container_name "$container_name"
+  [[ "$runtime_source" =~ ^/tmp/openclaw-tg-crabbox-sut-[A-Za-z0-9]+$ ]] \
+    || die "invalid runtime source"
+  read_runtime_claim "$container_name" || die "missing or invalid runtime claim"
+  [[ "$claimed_runtime" == "$runtime_source" ]] || die "runtime claim path mismatch"
+  claim_process_is_active || die "runtime claim is not active"
+  require_runtime_claim_active "$container_name"
+}
+
+# shellcheck disable=SC2016
+readonly restart_command='
+  set -eu
+  request=gateway-restart.request
+  pid_file=gateway.pid
+  gateway_pid="$(cat "$pid_file")"
+  case "$gateway_pid" in
+    ""|*[!0-9]*) echo "invalid gateway pid" >&2; exit 65 ;;
+  esac
+  kill -0 "$gateway_pid"
+  : >"$request"
+  if ! kill -TERM "$gateway_pid"; then
+    rm -f "$request"
+    exit 1
+  fi
 '
 
 command="${1:-}"
@@ -955,6 +1020,40 @@ case "$command" in
     cleanup_network "$egress_network_name"
     trap - EXIT INT TERM
     ;;
+  exec)
+    [[ $# -ge 4 ]] || die "exec expects a container name, runtime root, and shell command"
+    container_name="$1"
+    runtime_source="$2"
+    shift 2
+    timeout_seconds=120
+    if [[ "${1:-}" == "--timeout-seconds" ]]; then
+      [[ $# -ge 3 ]] || die "exec --timeout-seconds needs a value"
+      timeout_seconds="$2"
+      shift 2
+    fi
+    require_positive_integer "$timeout_seconds"
+    ((timeout_seconds <= 1800)) || die "exec timeout exceeds 1800 seconds"
+    [[ "${1:-}" == "--" ]] || die "exec shell command must follow --"
+    shift
+    [[ $# -eq 1 ]] || die "exec expects one shell command"
+    require_active_sut "$container_name" "$runtime_source"
+    "$docker_bin" exec \
+      --user "$(id -u mantis-sut):$(id -g mantis-sut)" \
+      --workdir "$runtime_source" \
+      "$container_name" \
+      /usr/bin/timeout --signal=TERM --kill-after=5s "${timeout_seconds}s" \
+      sh -c "$1"
+    ;;
+  restart)
+    [[ $# -eq 2 ]] || die "restart expects a container name and runtime root"
+    container_name="$1"
+    runtime_source="$2"
+    require_active_sut "$container_name" "$runtime_source"
+    "$docker_bin" exec \
+      --user "$(id -u mantis-sut):$(id -g mantis-sut)" \
+      --workdir "$runtime_source" \
+      "$container_name" sh -c "$restart_command"
+    ;;
   stop)
     run_cleanup_with_deadline stop "$@"
     ;;
@@ -1035,5 +1134,5 @@ case "$command" in
     fi
     rm -f "$(runtime_cancel_path "$1")" "$(runtime_claim_path "$1")"
     ;;
-  *) die "expected build, check, run, stop, or destroy" ;;
+  *) die "expected build, check, run, exec, restart, stop, or destroy" ;;
 esac

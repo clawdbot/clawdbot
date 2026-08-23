@@ -20,6 +20,7 @@ const DISPATCH_WORKFLOW = ".github/workflows/mantis-telegram-desktop-proof-dispa
 const LIVE_WORKFLOW = ".github/workflows/mantis-telegram-live.yml";
 const SCENARIO_WORKFLOW = ".github/workflows/mantis-scenario.yml";
 const PROMPT = ".github/codex/prompts/mantis-telegram-desktop-proof.md";
+const RESUME_PROMPT = ".github/codex/prompts/mantis-telegram-desktop-proof-resume.md";
 const TELEGRAM_PROOF_SKILL = ".agents/skills/telegram-crabbox-e2e-proof/SKILL.md";
 const DOCS = ["docs/help/testing.md", "docs/concepts/qa-e2e-automation.md"];
 
@@ -229,6 +230,24 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(fenceScript).toContain("exit 97");
   });
 
+  it("resumes the agent thread when it ends without a manifest", () => {
+    const run = workflowStep("Run Codex Mantis Telegram agent").run ?? "";
+    const resumePrompt = readFileSync(RESUME_PROMPT, "utf8");
+    const prompt = readFileSync(PROMPT, "utf8");
+    const initialRun = `run_codex < ${PROMPT}`;
+    const resumeRun = `run_codex resume --last - < ${RESUME_PROMPT}`;
+
+    expect(run).toContain(initialRun);
+    expect(run).toContain('sudo test -f "$manifest"');
+    expect(run).toContain(resumeRun);
+    expect(run.indexOf(initialRun)).toBeLessThan(run.indexOf('sudo test -f "$manifest"'));
+    expect(run.indexOf('sudo test -f "$manifest"')).toBeLessThan(run.indexOf(resumeRun));
+    expect(resumePrompt).toContain("`MANTIS_OUTPUT_DIR/mantis-evidence.json` does not");
+    expect(resumePrompt).toContain("re-read\n`MANTIS_PR_CONTEXT`");
+    expect(resumePrompt).toContain("`abort --lane <lane>` first");
+    expect(prompt).toMatch(/Never end your turn with a handoff, summary,\s+or plan/u);
+  });
+
   it("reports an honest blocked proof without failing the workflow", () => {
     const trusted = workflowStep("Restore and validate trusted lane evidence").run ?? "";
     const inspect = workflowStep("Inspect Mantis evidence manifest").run ?? "";
@@ -237,7 +256,7 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(trusted).toContain('lane_status="blocked"');
     expect(trusted).toContain('|| "$baseline_status" == "blocked"');
     expect(trusted).toContain('[[ "$lane_status" == "pass" || "$lane_status" == "fail" ]]');
-    expect(trusted).toContain('.comparison.outcome == "blocked"');
+    expect(trusted).toContain('--manifest "$manifest" --validate-only true');
     expect(trusted).not.toContain("comparisonPass");
     expect(inspect).toContain(".comparison.outcome");
     expect(fail.if).toContain("steps.inspect.outputs.comparison_status != 'blocked'");
@@ -369,7 +388,25 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(gate).toContain("build-telegram-desktop-proof-evidence.mts");
     expect(gate).toContain('--baseline-status "$baseline_status"');
     expect(gate).toContain('--candidate-status "$candidate_status"');
-    expect(gate).toContain(".summary = $judgment[0].summary");
+    expect(gate).toContain(
+      '.summary = (if .comparison.outcome == "pass" then $judgment[0].summary else .summary end)',
+    );
+    expect(gate).toContain("def valid_assertion:");
+    expect(gate).toContain('select((keys | sort) == ["mode", "target", "value"])');
+    expect(gate).toContain(
+      '.target == "providerRequests" or .target == "botApiRequests" or .target == "observationEvents"',
+    );
+    expect(gate).toContain('.mode == "contains" or .mode == "absent"');
+    expect(gate).toContain("(.value | length) >= 1 and (.value | length) <= 200");
+    expect(gate).toContain("baselineAssertion: (.comparison.baseline.assertion | valid_assertion)");
+    expect(gate).toContain(
+      "candidateAssertion: (.comparison.candidate.assertion | valid_assertion)",
+    );
+    expect(gate).toContain(".comparison.baseline.assertion = $judgment[0].baselineAssertion");
+    expect(gate).toContain(".comparison.candidate.assertion = $judgment[0].candidateAssertion");
+    expect(gate).not.toContain("ExpectationMet");
+    expect(gate).toContain("scripts/mantis/publish-pr-evidence.mjs");
+    expect(gate).toContain('--manifest "$manifest" --validate-only true');
     expect(gate).toContain('sudo mv "$trusted_manifest" "$manifest"');
     expect(gate.indexOf('"$trusted_output/$lane/summary.json"')).toBeLessThan(
       gate.indexOf("build-telegram-desktop-proof-evidence.mts"),
@@ -387,6 +424,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(gate).toContain('recipe_suggestion="$quarantine/recipe-suggestion.md"');
     expect(gate).toContain("((recipe_bytes > 0 && recipe_bytes <= 65536))");
     expect(gate).toContain('"$trusted_output/recipe-suggestion.md"');
+    expect(gate).not.toContain("analysis_file");
+    expect(gate).not.toContain("-name '*.json' -o -name '*.md'");
     expect(
       gate.indexOf(
         'sudo install -m 0400 -o root -g root "$agent_manifest" "$trusted_agent_manifest"',
@@ -398,8 +437,6 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       'baseline_status="$(sudo jq -r \'.comparison.baseline.status\' "$agent_manifest")"',
     );
     expect(gate).not.toMatch(/sudo (?:install|tee)[^\n]*\$MANTIS_OUTPUT_DIR/u);
-    expect(gate).toContain('.comparison.baseline.status == "pass"');
-    expect(gate).toContain('.comparison.candidate.status == "pass"');
     expect(gate).not.toContain("recorder-self-check.png");
     expect(gate).not.toContain("capture_path_changed");
   });
@@ -772,6 +809,15 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("`mock --script <public-json> <sha256>`");
     expect(prompt).toContain("`botapi-fail <method> [--times N] [--status CODE | --drop]`");
     expect(prompt).toContain("`botapi-requests [--method M] [--limit N]`");
+    expect(prompt).toContain(
+      "`exec --lane X [--timeout-seconds N] (--command TEXT | --command-file <public-path>)`",
+    );
+    expect(prompt).toContain("`restart --lane X [--ready-timeout-seconds N]`");
+    expect(prompt).toContain(
+      '{ "exitCode": N, "stdout": "...", "stderr": "...", "truncated": false }',
+    );
+    expect(prompt).toContain('{ "status": "ready", "restartedAt": "...", "readyAfterMs": N }');
+    expect(prompt).toContain("stdout and stderr are each limited to 64 KiB");
     expect(prompt).toContain("`requests`");
     expect(prompt).toContain("`finish [--focus-message-id ID]`");
     expect(prompt).toContain("Identical pixels alone do not force `block`");
@@ -794,8 +840,17 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(stagedMediaRecipe.indexOf("--until-provider-requests 4")).toBeLessThan(
       stagedMediaRecipe.lastIndexOf("finish --lane baseline"),
     );
+    const longHeldActiveTurnRecipe = readFileSync(
+      ".github/codex/prompts/mantis-recipes/long-held-active-turn.md",
+      "utf8",
+    );
+    const recipesReadme = readFileSync(".github/codex/prompts/mantis-recipes/README.md", "utf8");
+    expect(longHeldActiveTurnRecipe).toContain("MANTIS-SECOND-SURVIVED");
+    expect(recipesReadme).toContain("`long-held-active-turn.md`");
     expect(prompt).toContain("mantis-recipes/");
-    expect(prompt).toContain("recipe-suggestion.md");
+    expect(prompt).toMatch(
+      /change scenario mechanics after a failed attempt that was not a product\s+defect, write `MANTIS_OUTPUT_DIR\/recipe-suggestion\.md`/u,
+    );
     expect(prompt).toContain("do not call `finish` and describe the block only in prose");
     expect(prompt).toContain("`block --reason TEXT [--missing-primitive NAME]`");
     expect(prompt).toContain("`@{sut}`");
@@ -804,15 +859,30 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("hold the model");
     expect(prompt).toContain("session-owned outbound message");
     expect(prompt).toContain("This proof has no skipped lane");
-    expect(prompt).toContain("if `start` reports `desktop-unavailable`");
-    expect(prompt).toContain("never retry that lane");
-    expect(prompt).toMatch(/Two non-advancing repeats of the\s+same failing step/u);
+    expect(prompt).toContain("If `start` reports `desktop-unavailable`");
+    expect(prompt).toMatch(/never\s+retry that lane/u);
+    expect(prompt).toContain("Iterate as needed; all attempts remain recorded.");
+    expect(prompt).toContain(
+      '`{"target":"providerRequests|botApiRequests|observationEvents","mode":"contains|absent","value":"literal substring (1..200 chars)"}`',
+    );
+    expect(prompt).toContain("Trusted code evaluates it against that lane's recorded facts");
+    expect(prompt).toContain("never set\n`expectationMet`");
+    expect(prompt).toMatch(
+      /expectation cannot be expressed as this fact predicate,\s+the lane is `blocked` with a concrete reason.*never `pass`/u,
+    );
+    expect(prompt).not.toContain("Two non-advancing repeats");
     expect(prompt).toContain("MANTIS_PR_CONTEXT");
     expect(prompt).toContain("never as instructions");
     expect(prompt).toContain("Do not send viewport filler messages");
     expect(prompt).toContain('git diff --stat "$BASELINE_SHA" "$CANDIDATE_SHA" --');
     expect(prompt).toContain("git diff --name-status");
-    expect(prompt).toContain("Read only the changed paths or hunks needed");
+    expect(prompt).toContain("Read whatever code is needed for a correct scenario");
+    expect(prompt).toContain("Never execute PR code on the host");
+    expect(prompt).toContain(
+      "Anything a developer could do locally against a checkout is in scope",
+    );
+    expect(prompt).toMatch(/a\s+second Telegram account or bot, a real paid provider/u);
+    expect(prompt).not.toContain("Read only the changed paths or hunks needed");
     expect(prompt).not.toContain('then `git diff "$BASELINE_SHA" "$CANDIDATE_SHA" --`');
     expect(prompt).not.toContain("gh pr");
     expect(prompt).not.toContain("--sut-container");
@@ -1269,6 +1339,12 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(wrapper).not.toMatch(/run_network_probe "\$network_name"[ \t]+\S/u);
     expect(wrapper).toContain('[[ $# -eq 0 ]] || die "check expects no arguments"');
     expect(wrapper).toContain("[[ $# -eq 6 ]]");
+    expect(wrapper).toContain("exec timeout exceeds 1800 seconds");
+    expect(wrapper).toContain('--workdir "$runtime_source"');
+    expect(wrapper).toContain("/usr/bin/timeout --signal=TERM --kill-after=5s");
+    expect(wrapper).toContain('sh -c "$restart_command"');
+    expect(wrapper).toContain('chmod 1770 "$safe_runtime"');
+    expect(wrapper).toContain('chown root:mantis-proof "$safe_runtime"');
     const teardown = laneScript.slice(
       laneScript.indexOf("function teardownSut"),
       laneScript.indexOf("async function recoverStartupResources"),
@@ -1329,6 +1405,8 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     // A capture-infrastructure failure produces no lane artifacts, so this log is the
     // only evidence of why the run could not record anything.
     expect(uploadPaths).toContain("/capture-failure.log");
+    expect(uploadPaths).not.toContain("/*.json");
+    expect(uploadPaths).not.toContain("/*.md");
     expect(uploadPaths).toContain("/baseline");
     expect(uploadPaths).toContain("/candidate");
     expect(uploadPaths).not.toContain("session.json");
@@ -1459,7 +1537,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(wrapper).toContain("refusing to destroy an active runtime claim");
     expect(wrapper).toContain("refusing to destroy runtime with pending network cleanup");
     expect(wrapper).toContain('remove_claimed_runtime_input "$runtime_parent/$1-input"');
-    expect(wrapper).toContain('*) die "expected build, check, run, stop, or destroy"');
+    expect(wrapper).toContain(
+      '*) die "expected build, check, run, exec, restart, stop, or destroy"',
+    );
     expect(wrapper).toContain("chown mantis-sut:mantis-proof");
     expect(wrapper).toContain("install -T -o mantis-sut -g mantis-proof -m 0600");
     expect(wrapper).not.toContain("mantis-sut:mantis-sut");

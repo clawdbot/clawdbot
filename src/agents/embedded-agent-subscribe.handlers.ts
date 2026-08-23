@@ -172,8 +172,8 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         const deliveryGeneration = ctx.getBlockReplyDeliveryGeneration();
         void scheduleAttemptEvent(
           evt,
-          () => {
-            return handleToolExecutionEnd(ctx, evt as never, { deliveryGeneration });
+          async () => {
+            await handleToolExecutionEnd(ctx, evt as never, { deliveryGeneration });
           },
           { detach: true },
         );

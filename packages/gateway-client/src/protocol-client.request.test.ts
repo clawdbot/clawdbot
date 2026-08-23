@@ -210,17 +210,42 @@ describe("GatewayProtocolClient requests", () => {
     await expect(aborted).rejects.toThrow("gateway request aborted for aborted");
 
     const replacement = client.request("replacement", {}, { timeoutMs: null });
-    expect(latestFrame(connection)).toMatchObject({ id: "same-id:1", method: "replacement" });
-    respond(connection, "same-id", { stale: true });
+    expect(latestFrame(connection)).toMatchObject({ id: "2:same-id", method: "replacement" });
+    respond(connection, "1:same-id", { stale: true });
     expect(client.hasPendingRequests).toBe(true);
-    respond(connection, "same-id:1", { current: true });
+    respond(connection, "2:same-id", { current: true });
     await expect(replacement).resolves.toEqual({ current: true });
 
     await expect(client.request("send.failure", {}, { timeoutMs: null })).rejects.toThrow(
       "synthetic send failure",
     );
-    expect(latestFrame(connection)).toMatchObject({ id: "same-id:2", method: "send.failure" });
+    expect(latestFrame(connection)).toMatchObject({ id: "3:same-id", method: "send.failure" });
     expect(client.hasPendingRequests).toBe(false);
+    client.stop();
+  });
+
+  it("keeps concurrent requests distinct when generated IDs contain sequence suffixes", async () => {
+    const generatedIds = ["same-id:1", "same-id"];
+    const { client, connections } = createRequestHarness({
+      createRequestId: () => generatedIds.shift() ?? "same-id",
+    });
+    const connection = connections[0];
+    if (!connection) {
+      throw new Error("expected request connection");
+    }
+
+    const first = client.request("first", {}, { timeoutMs: null });
+    const second = client.request("second", {}, { timeoutMs: null });
+    const [firstFrame, secondFrame] = connection.frames;
+    if (!firstFrame || !secondFrame) {
+      throw new Error("expected concurrent request frames");
+    }
+    expect(firstFrame.id).not.toBe(secondFrame.id);
+
+    respond(connection, firstFrame.id, { request: "first" });
+    respond(connection, secondFrame.id, { request: "second" });
+    await expect(first).resolves.toEqual({ request: "first" });
+    await expect(second).resolves.toEqual({ request: "second" });
     client.stop();
   });
 
@@ -242,14 +267,14 @@ describe("GatewayProtocolClient requests", () => {
       {},
       { timeoutMs: null, expectFinal: true, onAccepted },
     );
-    expect(latestFrame(connection)).toMatchObject({ id: "same-id:1", method: "agent" });
-    respond(connection, "same-id", { status: "accepted", runId: "old" });
-    respond(connection, "same-id", { status: "ok", runId: "old" });
+    expect(latestFrame(connection)).toMatchObject({ id: "2:same-id", method: "agent" });
+    respond(connection, "1:same-id", { status: "accepted", runId: "old" });
+    respond(connection, "1:same-id", { status: "ok", runId: "old" });
     expect(onAccepted).not.toHaveBeenCalled();
     expect(client.hasPendingRequests).toBe(true);
 
-    respond(connection, "same-id:1", { status: "accepted", runId: "new" });
-    respond(connection, "same-id:1", { status: "ok", runId: "new" });
+    respond(connection, "2:same-id", { status: "accepted", runId: "new" });
+    respond(connection, "2:same-id", { status: "ok", runId: "new" });
     await expect(replacement).resolves.toEqual({ status: "ok", runId: "new" });
     expect(onAccepted).toHaveBeenCalledExactlyOnceWith({ status: "accepted", runId: "new" });
     client.stop();
@@ -463,7 +488,7 @@ describe("GatewayProtocolClient requests", () => {
     client.stop();
   });
 
-  it("clears generation tombstones when the socket flushes", async () => {
+  it("restarts the request sequence when the socket flushes", async () => {
     vi.useFakeTimers();
     const { client, connections } = createRequestHarness({ createRequestId: () => "same-id" });
     const firstConnection = connections[0];
@@ -482,8 +507,8 @@ describe("GatewayProtocolClient requests", () => {
       throw new Error("expected replacement request connection");
     }
     const replacement = client.request("second", {}, { timeoutMs: null });
-    expect(latestFrame(secondConnection)).toMatchObject({ id: "same-id", method: "second" });
-    respond(secondConnection, "same-id", { ok: true });
+    expect(latestFrame(secondConnection)).toMatchObject({ id: "1:same-id", method: "second" });
+    respond(secondConnection, "1:same-id", { ok: true });
     await expect(replacement).resolves.toEqual({ ok: true });
     client.stop();
   });

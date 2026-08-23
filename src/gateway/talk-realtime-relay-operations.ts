@@ -4,7 +4,10 @@ import {
   type RealtimeVoiceAgentControlResult,
 } from "../talk/agent-run-control.js";
 import { registerClientVoiceConsultRun } from "../talk/client-voice-session.js";
-import type { RealtimeVoiceToolResultOptions } from "../talk/provider-types.js";
+import type {
+  RealtimeVoiceCloseOptions,
+  RealtimeVoiceToolResultOptions,
+} from "../talk/provider-types.js";
 import type { TalkEvent } from "../talk/talk-session-controller.js";
 import { abortChatRunById } from "./chat-abort.js";
 import { formatError } from "./server-utils.js";
@@ -78,6 +81,12 @@ export function abortRelayAgentRuns(session: RelaySession, reason: string): void
   session.activeAgentToolCalls.clear();
 }
 
+/** Releases relay-local correlation without cancelling durable voice-bound agent runs. */
+function detachRelayAgentRuns(session: RelaySession): void {
+  session.activeAgentRuns.clear();
+  session.activeAgentToolCalls.clear();
+}
+
 export function pruneInactiveRelayAgentRuns(session: RelaySession): number {
   for (const runId of session.activeAgentRuns.keys()) {
     if (!session.context.chatAbortControllers.has(runId)) {
@@ -92,14 +101,23 @@ export function pruneInactiveRelayAgentRuns(session: RelaySession): number {
   return session.activeAgentRuns.size;
 }
 
-export function closeRelaySession(session: RelaySession, reason: "completed" | "error"): void {
+export function closeRelaySession(
+  session: RelaySession,
+  reason: "completed" | "error",
+  options?: RealtimeVoiceCloseOptions,
+): void {
+  const disposition = options?.disposition ?? "abort";
   session.harness.close();
   relaySessions.delete(session.id);
   forgetUnifiedTalkSession(session.id);
   clearTimeout(session.cleanupTimer);
-  abortRelayAgentRuns(session, reason === "error" ? "relay-error" : "relay-closed");
+  if (disposition === "detach") {
+    detachRelayAgentRuns(session);
+  } else {
+    abortRelayAgentRuns(session, reason === "error" ? "relay-error" : "relay-closed");
+  }
   try {
-    session.bridge.close();
+    session.bridge.close({ disposition });
   } finally {
     // Provider teardown may throw, but the relay must still reach its durable
     // voice and owner-visible terminal state before that error is surfaced.
@@ -122,7 +140,7 @@ export function closeTalkRealtimeRelaySessionsForConnection(connId: string): voi
   closeTalkRelaySessionsForConnection({
     sessions: relaySessions.values(),
     connId,
-    closeSession: (session) => closeRelaySession(session, "completed"),
+    closeSession: (session) => closeRelaySession(session, "completed", { disposition: "detach" }),
     onCloseError: (error, session) => {
       session.context.logGateway.warn(
         `failed to close realtime relay session after connection disconnect: ${formatError(error)}`,

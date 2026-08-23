@@ -657,7 +657,7 @@ suite.define(() => {
       sessionKey: "main",
       state: "delta",
     });
-    await page.getByText("Working on it.").waitFor();
+    await page.locator(".chat-thread-inner").getByText("Working on it.").waitFor();
 
     const runningRow = page.locator(".chat-tool-row--running");
     await runningRow.waitFor();
@@ -882,7 +882,9 @@ suite.define(() => {
         });
       }
 
-      const activity = page.locator(".chat-group--activity");
+      const activity = page.locator(".chat-activity-group", {
+        has: page.locator(`.chat-activity-group__review-status[data-outcome="${groupOutcome}"]`),
+      });
       const summary = activity.locator(".chat-activity-group__summary");
       await summary.waitFor();
       const status = activity.locator(

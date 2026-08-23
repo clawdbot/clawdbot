@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
+import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { t } from "../i18n/index.ts";
 import { AuthenticatedAvatarRouteLoader } from "../lib/authenticated-avatar-route.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
@@ -16,6 +17,7 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) avatarAuthReady = false;
   @property({ attribute: false }) avatarText = "";
   @property({ attribute: false }) subtitle = "";
+  @property({ attribute: false }) environment: ControlUiEnvironment | null = null;
   @property({ attribute: false }) menuOpen = false;
   /** Unread sessions exist on non-active agents; surfaces next to the name. */
   @property({ attribute: false }) menuUnread = false;
@@ -83,7 +85,11 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
             }
           }}
         >
-          <span class="sidebar-agent-card__avatar">
+          <span
+            class="sidebar-agent-card__avatar ${this.environment
+              ? "sidebar-agent-card__avatar--environment"
+              : ""}"
+          >
             ${avatarUrl
               ? html`<img
                   src=${avatarUrl}
@@ -103,8 +109,17 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
                 >${icons.chevronDown}</span
               >
             </span>
-            ${this.subtitle
-              ? html`<span class="sidebar-agent-card__subtitle">${this.subtitle}</span>`
+            ${this.subtitle || this.environment
+              ? html`<span class="sidebar-agent-card__subtitle-row">
+                  ${this.subtitle
+                    ? html`<span class="sidebar-agent-card__subtitle">${this.subtitle}</span>`
+                    : nothing}
+                  ${this.environment
+                    ? html`<span class="control-ui-environment-pill"
+                        >${this.environment.label}</span
+                      >`
+                    : nothing}
+                </span>`
               : nothing}
           </span>
           ${this.approvalCount > 0

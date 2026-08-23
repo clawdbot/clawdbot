@@ -440,6 +440,54 @@ describe("settings sidebar search", () => {
     expect(onNavigate).toHaveBeenCalledWith("channels");
   });
 
+  it("clears a focused search before Escape exits Settings", () => {
+    let searchQuery = "gateway";
+    const onExit = vi.fn();
+    const rerender = () => {
+      render(
+        renderSettingsSidebar({
+          basePath: "",
+          activeRouteId: "appearance",
+          offline: false,
+          lastError: null,
+          gatewayVersion: "",
+          updateAvailable: null,
+          updateBusy: false,
+          onUpdate: vi.fn(),
+          ...inactiveRefresh,
+          searchQuery,
+          onExit,
+          onRetryConnect: vi.fn(),
+          onNavigate: vi.fn(),
+          onSearchQueryChange: (nextQuery) => {
+            searchQuery = nextQuery;
+            rerender();
+          },
+          preloadTimers: new Map(),
+          saveIndicator: saveIndicator(),
+        }),
+        container,
+      );
+    };
+
+    rerender();
+    const input = container.querySelector<HTMLInputElement>(".settings-sidebar__search-input");
+    expect(input).not.toBeNull();
+    input?.focus();
+
+    input?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(searchQuery).toBe("");
+    expect(document.activeElement).toBe(input);
+    expect(onExit).not.toHaveBeenCalled();
+
+    input?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(onExit).toHaveBeenCalledOnce();
+  });
+
   it("renders refreshed settings route titles from the active locale", async () => {
     i18n.registerTranslation("pt-BR", {
       routeTitles: {

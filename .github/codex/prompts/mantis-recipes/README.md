@@ -6,6 +6,7 @@ even when Telegram Desktop pixels match.
 
 - `send-failure-injection.md`: outbound Bot API failures and retry behavior
 - `busy-queue-scripted-provider.md`: ordered slow/fast multi-turn responses
+- `long-held-active-turn.md`: queued turn behind a >300-second active turn
 - `callback-data-payload-proof.md`: byte-level callback payload differences
 - `staged-media-provider-proof.md`: staged Telegram media proven through provider content facts
 

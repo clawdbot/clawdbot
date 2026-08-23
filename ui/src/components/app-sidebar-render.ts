@@ -131,6 +131,7 @@ export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
         .avatarAuthReady=${avatarAuthReady}
         .avatarText=${cardAvatarText}
         .subtitle=${host.agentChipSubtitle(cardAgentId)}
+        .environment=${host.sessionDataContext?.config?.current?.environment ?? null}
         .menuOpen=${host.sidebarMenus.agentMenuPosition !== null}
         .menuUnread=${menuUnread}
         .approvalCount=${approvalCount}

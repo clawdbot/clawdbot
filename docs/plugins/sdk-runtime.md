@@ -610,6 +610,12 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
     Inside the Gateway this runtime is in-process. In plugin CLI commands it calls the configured Gateway over RPC, so commands such as `openclaw googlemeet recover-tab` can inspect paired nodes from the terminal. Node commands still go through normal Gateway node pairing, command allowlists, plugin node-invoke policies, and node-local command handling.
 
+    When execution identity auditing is enabled for an admitted run, those
+    Gateway gates appear as enforced decision receipts. A successful node
+    result is attribution-only. A policy that returns without calling its
+    supplied `invokeNode` callback leaves the action unknown; returning a
+    successful plugin result does not prove that the node action occurred.
+
     Plugins that expose node-hosted agent tools can set `agentTool.defaultPlatforms` for non-dangerous commands that should be allowlisted by default. Omit it when operators must opt in with `gateway.nodes.commands.allow`. Dangerous node-host commands should register a node-invoke policy with `api.registerNodeInvokePolicy(...)`; the policy runs in the Gateway after command allowlist checks and before the command is forwarded to the node, so direct `node.invoke` calls, node-hosted plugin tools, and higher-level plugin tools share the same enforcement path.
 
     <Warning>

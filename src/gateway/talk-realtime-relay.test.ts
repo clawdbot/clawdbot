@@ -3887,6 +3887,55 @@ describe("talk realtime gateway relay", () => {
     expectNodeAbortPayload(nodeSendToSession);
   });
 
+  it("detaches linked agent consult runs when the gateway connection closes", () => {
+    const close = vi.fn();
+    const provider = createIdleRelayProvider();
+    provider.createBridge = () => makeRelayTransport({ close });
+    const { abortController, session } = createAbortableRelayRunFixture(provider);
+
+    cleanupTalkConnection("conn-1", { warn: vi.fn() });
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(abortController.signal.aborted).toBe(false);
+    expect(relaySessions.has(session.relaySessionId)).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "expires",
+      close: (session: { relaySessionId: string }) => {
+        const relay = relaySessions.get(session.relaySessionId);
+        if (!relay) {
+          throw new Error("expected active relay");
+        }
+        relay.expiresAtMs = Date.now() - 1;
+        sendTalkRealtimeRelayAudio({
+          relaySessionId: session.relaySessionId,
+          connId: "conn-1",
+          audioBase64: "AQI=",
+        });
+      },
+    },
+    {
+      name: "fails connection ownership",
+      close: (session: { relaySessionId: string }) => {
+        sendTalkRealtimeRelayAudio({
+          relaySessionId: session.relaySessionId,
+          connId: "conn-other",
+          audioBase64: "AQI=",
+        });
+      },
+    },
+  ])("aborts linked agent consult runs when the relay $name", ({ close }) => {
+    const fixture = createAbortableRelayRunFixture();
+
+    expect(() => close(fixture.session)).toThrow("Unknown realtime relay session");
+
+    expect(fixture.abortController.signal.aborted).toBe(true);
+    expectChatAbortPayload(fixture.broadcast, "relay-closed");
+    expectNodeAbortPayload(fixture.nodeSendToSession);
+  });
+
   it("aborts linked agent consult runs when the provider closes the relay", () => {
     const abortController = new AbortController();
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;

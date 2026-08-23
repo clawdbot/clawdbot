@@ -510,6 +510,7 @@ describe("sessions_spawn tool", () => {
       const registerRun = vi.fn();
       const tool = createSessionsSpawnTool({
         agentSessionKey: "agent:main:main",
+        requesterTurnRunId: "run-requester-visible-worktree",
         agentChannel: "slack",
         agentTo: "channel:C-stale",
         agentThreadId: "stale-thread",
@@ -567,6 +568,7 @@ describe("sessions_spawn tool", () => {
       expect(registerRun).toHaveBeenCalledWith(
         expect.objectContaining({
           runId: "run-visible",
+          requesterTurnRunId: "run-requester-visible-worktree",
           childSessionKey: "agent:main:dashboard:child",
           requesterSessionKey: "agent:main:main",
           requesterOrigin: {

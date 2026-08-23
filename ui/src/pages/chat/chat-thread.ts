@@ -28,6 +28,7 @@ export {
   coalesceStreamRuns,
   collapseCompletedTurnWork,
 } from "./chat-thread-grouping.ts";
+export { agentRunFrameGroups, coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 
 type CachedChatItems = {
   input: BuildChatItemsProps | null;
@@ -78,6 +79,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
     senderIdentityKey(previous.sender) === senderIdentityKey(next.sender) &&
     senderIdentityKey(previous.replyToSender) === senderIdentityKey(next.replyToSender) &&
     previous.isStreaming === next.isStreaming &&
+    previous.runId === next.runId &&
     previous.messages.length === next.messages.length &&
     previous.messages.every((entry, index) => {
       const candidate = next.messages[index];
@@ -127,10 +129,17 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.kind === "stream" &&
         previous.text === next.text &&
         previous.startedAt === next.startedAt &&
-        previous.isStreaming === next.isStreaming
+        previous.isStreaming === next.isStreaming &&
+        previous.runId === next.runId &&
+        previous.boundaryId === next.boundaryId
       );
     case "reading-indicator":
-      return previous.kind === "reading-indicator" && previous.startedAt === next.startedAt;
+      return (
+        previous.kind === "reading-indicator" &&
+        previous.startedAt === next.startedAt &&
+        previous.runId === next.runId &&
+        previous.boundaryId === next.boundaryId
+      );
     case "question":
       return (
         previous.kind === "question" &&
@@ -182,6 +191,7 @@ function stabilizeChatItems(
         !prior ||
         claimedGroupKeys.has(prior.key) ||
         prior.role !== item.role ||
+        prior.runId !== item.runId ||
         prior.senderLabel !== item.senderLabel ||
         senderIdentityKey(prior.sender) !== senderIdentityKey(item.sender)
       ) {

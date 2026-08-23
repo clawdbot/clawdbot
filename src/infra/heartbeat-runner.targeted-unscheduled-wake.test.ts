@@ -130,6 +130,32 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
     },
   );
 
+  it("runs one targeted exec-event wake when heartbeat cadence is disabled", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = await expectWakeDispatch({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
+      } as OpenClawConfig,
+      runSpy,
+      wake: {
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+        sessionKey: "agent:main:main",
+        coalesceMs: 0,
+      },
+      expectedCall: {
+        agentId: "main",
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+        sessionKey: "agent:main:main",
+      },
+    });
+    runner.stop();
+  });
+
   it("rejects targeted hook wakes for unconfigured agents", async () => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });

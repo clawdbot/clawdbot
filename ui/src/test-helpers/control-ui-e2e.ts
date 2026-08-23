@@ -231,6 +231,7 @@ export const defaultControlUiFeatureMethods = [
   "sessions.reclaim",
   "sessions.reset",
   "sessions.rewind",
+  "sessions.search",
   "tools.github.status",
   "tools.github.configure",
   "tools.github.authorize.start",
@@ -1707,6 +1708,7 @@ function installControlUiMockGateway(
               defaultAgentId: scenario.defaultAgentId,
               mainKey: "main",
               mainSessionKey: scenario.sessionKey,
+              modelConfigured: Boolean(scenario.agentModel),
               scope: "agent",
             },
           },
@@ -1859,6 +1861,8 @@ function installControlUiMockGateway(
           },
           params,
         );
+      case "sessions.search":
+        return { results: [] };
       case "sessions.patchMany": {
         const targets = isRecord(params) && Array.isArray(params.targets) ? params.targets : [];
         const result = {

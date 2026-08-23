@@ -19,10 +19,13 @@ import {
 } from "./telegram-desktop-recorder-contract.ts";
 import {
   destroyMantisSut,
+  execMantisSut,
   type MantisSutRecovery,
   preserveMantisSutRuntimeArtifacts,
+  restartMantisSut,
   startMantisSut,
   stopMantisSut,
+  waitForLogAfter,
 } from "./telegram-mantis-sut.ts";
 
 const execFileAsync = promisify(execFile);
@@ -121,6 +124,9 @@ const invocationSchema = z.object({
   at: z.string(),
   command: z.string(),
   cursor: z.number().int().nonnegative().optional(),
+  exitCode: z.number().int().optional(),
+  stderrBytes: z.number().int().nonnegative().optional(),
+  stdoutBytes: z.number().int().nonnegative().optional(),
 });
 const recorderArtifactsSchema = z.object({
   artifacts: z.record(z.string(), z.string()),
@@ -166,7 +172,9 @@ type ObserverResponse = {
 } & Record<string, unknown>;
 type DesktopRecorderFailureBudget = z.infer<typeof desktopRecorderFailureBudgetSchema>;
 
-const MAX_SENDS = 12;
+// Shared-QA-bot flood-safety ceiling; this is not a scenario or feasibility bound.
+const MAX_SENDS = 40;
+const MAX_EXEC_COMMAND_BYTES = 64 * 1024;
 const MAX_RPC_BYTES = 4 * 1024 * 1024;
 const commandOptions: Record<string, readonly string[]> = {
   abort: ["--lane"],
@@ -176,6 +184,7 @@ const commandOptions: Record<string, readonly string[]> = {
   "botapi-requests": ["--lane", "--method", "--limit"],
   delete: ["--lane", "--message-id"],
   desktop: ["--lane", "--actions-file", "--timeout-seconds"],
+  exec: ["--lane", "--timeout-seconds", "--command", "--command-file"],
   finish: ["--lane", "--focus-message-id"],
   mock: [
     "--lane",
@@ -195,6 +204,7 @@ const commandOptions: Record<string, readonly string[]> = {
   ],
   press: ["--lane", "--message-id", "--button"],
   requests: ["--lane"],
+  restart: ["--lane", "--ready-timeout-seconds"],
   screenshot: ["--lane"],
   send: ["--lane", "--text", "--text-file", "--media", "--reply-to"],
   start: ["--lane", "--repo-root", "--config"],
@@ -543,12 +553,14 @@ function appendInvocation(
   command: string,
   args: Record<string, unknown>,
   cursor?: number,
+  result?: { exitCode: number; stderrBytes: number; stdoutBytes: number },
 ): void {
   state.invocations.push({
     args,
     at: new Date().toISOString(),
     command,
     ...(cursor === undefined ? {} : { cursor }),
+    ...result,
   });
   if (cursor !== undefined) {
     state.lastCursor = cursor;
@@ -680,6 +692,12 @@ function redact(value: unknown, secret: string): unknown {
     );
   }
   return value;
+}
+
+function redactSutValue(value: unknown, sutToken: string): unknown {
+  const botId = sutToken.split(":", 1)[0] ?? "";
+  const aliasToken = botId ? `${botId}:${"A".repeat(35)}` : "";
+  return redact(redact(value, sutToken), aliasToken);
 }
 
 function providerRequests(state: ActiveSession, secret: string): unknown[] {
@@ -1532,6 +1550,85 @@ async function runDesktopActions(
   return { ...result, actionsSha256 };
 }
 
+function readExecCommand(values: Map<string, string>, outputRoot: string): string {
+  const direct = values.get("--command");
+  const commandFile = values.get("--command-file");
+  if ((direct === undefined) === (commandFile === undefined)) {
+    throw new Error("exec needs exactly one of --command or --command-file.");
+  }
+  const command =
+    commandFile !== undefined
+      ? readPublicFile(outputRoot, commandFile, "--command-file", MAX_EXEC_COMMAND_BYTES).text
+      : (direct ?? "");
+  const bytes = Buffer.byteLength(command);
+  if (bytes < 1 || bytes > MAX_EXEC_COMMAND_BYTES) {
+    throw new Error(`exec command must contain 1 to ${MAX_EXEC_COMMAND_BYTES} bytes.`);
+  }
+  return command;
+}
+
+async function runSutExec(
+  state: ActiveSession,
+  values: Map<string, string>,
+  roots: Roots,
+  sutToken: string,
+): Promise<Record<string, unknown>> {
+  const command = readExecCommand(values, roots.outputRoot);
+  const timeoutSeconds = values.has("--timeout-seconds")
+    ? numberOption(values, "--timeout-seconds", 1_800, 1)
+    : 120;
+  const result = await execMantisSut(state.sut, command, timeoutSeconds);
+  const redactedCommand = redactSutValue(command, sutToken) as string;
+  appendInvocation(state, "exec", { command: redactedCommand, timeoutSeconds }, undefined, {
+    exitCode: result.exitCode,
+    stderrBytes: result.stderrBytes,
+    stdoutBytes: result.stdoutBytes,
+  });
+  return redactSutValue(
+    {
+      exitCode: result.exitCode,
+      stderr: result.stderr,
+      stdout: result.stdout,
+      truncated: result.truncated,
+    },
+    sutToken,
+  ) as Record<string, unknown>;
+}
+
+async function restartSutGateway(
+  state: ActiveSession,
+  values: Map<string, string>,
+  roots: Roots,
+): Promise<Record<string, unknown>> {
+  const readyTimeoutSeconds = values.has("--ready-timeout-seconds")
+    ? numberOption(values, "--ready-timeout-seconds", 300, 1)
+    : 60;
+  const logOffset = fs.statSync(state.sut.gatewayLog).size;
+  const restartedAt = new Date().toISOString();
+  const startedAt = Date.now();
+  try {
+    restartMantisSut(state.sut);
+    await waitForLogAfter(
+      state.sut.gatewayLog,
+      logOffset,
+      /\[gateway\] ready/u,
+      "restarted gateway",
+      readyTimeoutSeconds * 1_000,
+    );
+  } catch (error) {
+    appendInvocation(state, "restart", {
+      readyAfterMs: Date.now() - startedAt,
+      readyTimeoutSeconds,
+      status: "failed",
+    });
+    saveActive(roots.sessionRoot, state);
+    throw error;
+  }
+  const readyAfterMs = Date.now() - startedAt;
+  appendInvocation(state, "restart", { readyAfterMs, readyTimeoutSeconds });
+  return { readyAfterMs, restartedAt, status: "ready" };
+}
+
 async function focusMessage(state: ActiveSession, messageId: string): Promise<void> {
   if (!/^\d+$/u.test(messageId) || BigInt(messageId) < 1n) {
     throw new Error("--message-id must be a positive Telegram server message id.");
@@ -1975,6 +2072,10 @@ async function main(): Promise<void> {
       outputJson({ count: requests.length, requests });
     } else if (cli.command === "desktop") {
       outputJson(await runDesktopActions(state, cli.values, roots));
+    } else if (cli.command === "exec") {
+      outputJson(await runSutExec(state, cli.values, roots, credential.sutToken));
+    } else if (cli.command === "restart") {
+      outputJson(await restartSutGateway(state, cli.values, roots));
     } else if (cli.command === "send") {
       const sent = await sendVisibleMessage(state, cli.values, roots, credential.sutToken);
       outputJson({ ...sent.response, revealedMessageId: sent.revealedMessageId });

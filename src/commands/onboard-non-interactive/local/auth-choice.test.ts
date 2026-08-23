@@ -270,6 +270,47 @@ describe("applyNonInteractiveAuthChoice", () => {
     expect(apiKeyParams?.secretInputMode).toBe("ref");
   });
 
+  it("keeps a custom provider model on the configured explicit-fleet system agent", async () => {
+    const runtime = createRuntime();
+    const nextConfig: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: {
+          systemAgent: { agentId: "ops" },
+          model: { primary: "anthropic/global" },
+        },
+        entries: {
+          main: { model: { primary: "anthropic/main" } },
+          ops: { model: { primary: "openai/ops" } },
+        },
+      },
+    };
+    resolveNonInteractiveApiKey.mockResolvedValueOnce(null);
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "custom-api-key",
+      opts: {
+        customBaseUrl: "https://models.custom.local/v1",
+        customModelId: "local-large",
+      } as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+      target: {
+        agentId: "ops",
+        agentDir: "/tmp/ops-agent",
+        workspaceDir: "/tmp/ops-workspace",
+      },
+    });
+
+    expect(result?.agents?.defaults?.model).toEqual({ primary: "anthropic/global" });
+    expect(result?.agents?.entries?.ops?.model).toEqual({
+      primary: "custom-models-custom-local/local-large",
+    });
+    expect(result?.agents?.entries?.main?.model).toEqual({ primary: "anthropic/main" });
+    expect(result?.models?.providers?.["custom-models-custom-local"]).toBeDefined();
+  });
+
   it("never commits an existing profile key as plaintext during custom secret-ref onboarding", async () => {
     const runtime = createRuntime();
     const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;

@@ -31,10 +31,7 @@ import type {
   HeartbeatWakeIntent,
   HeartbeatWakeRequest,
 } from "./heartbeat-wake-contracts.js";
-import {
-  isConfiguredHeartbeatAgent,
-  isTargetedImmediateUnscheduledWake,
-} from "./heartbeat-wake-policy.js";
+import { isConfiguredHeartbeatAgent, isTargetedUnscheduledWake } from "./heartbeat-wake-policy.js";
 import {
   areHeartbeatsEnabled,
   HEARTBEAT_SKIP_NO_PENDING_EVENT,
@@ -328,7 +325,7 @@ export function startHeartbeatRunnerScheduled(opts: {
     const allowsUnscheduledTarget =
       requestedTargetAgentId !== undefined &&
       isConfiguredHeartbeatAgent(wakeConfig, requestedTargetAgentId) &&
-      isTargetedImmediateUnscheduledWake({
+      isTargetedUnscheduledWake({
         source: params.source,
         intent,
         reason,

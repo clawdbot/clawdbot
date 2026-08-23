@@ -390,6 +390,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   text?: string;
   mediaUrls?: string[];
   content?: SessionTranscriptAssistantMessage["content"];
+  eventId?: string;
   idempotencyKey?: string;
   runId?: string;
   deliveryMirror?: InternalSessionTranscriptDeliveryMirror;
@@ -429,8 +430,9 @@ export async function appendAssistantMessageToSessionTranscript(params: {
       ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
       : {}),
     storePath: params.storePath,
-    idempotencyKey: params.idempotencyKey,
-    runId: params.runId,
+    ...(params.eventId ? { eventId: params.eventId } : {}),
+    ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+    ...(params.runId ? { runId: params.runId } : {}),
     updateMode: params.updateMode,
     config: params.config,
     ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
@@ -470,6 +472,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   message: SessionTranscriptAssistantMessage;
+  eventId?: string;
   idempotencyKey?: string;
   runId?: string;
   storePath?: string;
@@ -598,6 +601,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         messages: [
           {
             message: preparedUnkeyedMessage,
+            ...(params.eventId ? { eventId: params.eventId } : {}),
             ...(explicitIdempotencyKey ? { idempotencyLookup: "scan" } : {}),
             ...(explicitIdempotencyKey && params.beforeMessageWrite
               ? {

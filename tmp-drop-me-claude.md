@@ -1423,3 +1423,56 @@ for every conflict, then trace each owner to its callers and tests. No
 whole-file ours/theirs routing is permitted. All 34 shared paths remain in the
 broader silent-overlap and Gate 2.7 disposition walk even when Git reports no
 textual conflict.
+
+## 2026-08-23T09:24:28Z - Phase 3 textual conflict resolution
+
+The actual command
+`git -c merge.conflictStyle=zdiff3 merge --no-ff --no-commit
+3cb52f4bb869959dcd06cb6d4d33e34db3b6a665` stopped at the same four conflicts
+predicted by `merge-tree`. Before editing, every file was read in full and
+compared across index stages `:1` (old merge base), `:2` (accepted
+continuation), and `:3` (frozen upstream). Callers, callees, adjacent tests, and
+the introducing upstream commits were then inspected. No file or hunk used
+wholesale ours/theirs routing.
+
+### Restore-X/preserve-Y conflict ledger
+
+| Path                                                           | Accepted continuation intent preserved                                                                                                                                                                                                         | Frozen upstream intent restored                                                                                                                                                                                                         | Resolution and proof owner                                                                                                                                                                                                                                                                  |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/agents/embedded-agent-runner/run/attempt-client-tools.ts` | Per-instance plugin media trust, core trusted media, replay-safe names, and the closed `subscriptionToolTrust` package used by stream delivery.                                                                                                | `coreReadAuthorized` distinguishes the concrete core `read` tool from plugin/channel shadows so the one-shot Code Mode reconciliation is final-policy-authorized.                                                                       | Both derivations coexist. `coreReadAuthorized` stays a separate prompt-policy fact; the name/media sets stay only in `subscriptionToolTrust`, not duplicated at top level. Existing `attempt-client-tools`, prompt-policy, reconciliation, and media tests own the two behavior boundaries. |
+| `src/agents/embedded-agent-subscribe.handlers.ts`              | `deliveryGeneration` is captured before the detached callback and revalidated by `handleToolExecutionEnd` after awaited delivery/hook work so discarded compaction attempts cannot leak completion.                                            | The detached callback is explicitly `async` and awaits the now-value-bearing `handleToolExecutionEnd`, discarding its execution-provenance result as `Promise<void>`.                                                                   | The callback is `async () => await handleToolExecutionEnd(..., { deliveryGeneration })`. Start fencing and post-await generation fencing are both retained.                                                                                                                                 |
+| `src/infra/heartbeat-runner-scheduler.ts`                      | Accepted continuation wake contracts, retained-work accounting, and exact request/result types remain imported and consumed.                                                                                                                   | The unified `isTargetedUnscheduledWake` policy admits the exact `exec-event` + `event` targeted shape when recurring cadence is disabled, in addition to the already-authorized targeted sources.                                       | Type imports remain; policy import and call use the new unified predicate. The upstream disabled-cadence execution and targeted-dispatch tests own the behavior.                                                                                                                            |
+| `src/infra/heartbeat-wake.ts`                                  | Trusted continuation routing is read from the non-enumerable host marker before normalization, then explicitly carried into the queue; `parentRunId`, trust-domain coalescing, retries, barriers, and continuation wake lifecycle stay intact. | Wake scheduling and queue capture execute inside `runWithoutOwnedSessionTranscriptWrites`, preventing a later wake timer from inheriting the requesting attempt's transcript writer. Upstream wake completion diagnostics are retained. | The obsolete local `REASON_PRIORITY` copy remains deleted because `heartbeat-wake-coalescing.ts` owns priority. The merged queue spreads ordinary wake fields and then explicitly sets `trustedContinuationRouting`; ordinary spread alone would silently drop the non-enumerable marker.   |
+
+### Silent semantic repair found during conflict review
+
+Upstream added
+`src/infra/heartbeat-wake.transcript-context.test.ts` against the old exported
+name `requestHeartbeat`. The accepted continuation source canonically renamed
+that boundary to `requestHeartbeatRaw` so raw/core access is explicit. The new
+test now imports `requestHeartbeatRaw as requestHeartbeat`; its observable
+contract is unchanged and it still proves that a timer callback sees no stale
+owned transcript writer. Without this alias repair, the newly restored upstream
+test would fail module binding before exercising its invariant.
+
+The test-audit authoring gate was applied. No new coexistence-shape test was
+added: the existing core-read and subscription-media owner suites already fail
+independently if either half is dropped, while another structural result-object
+assertion would duplicate implementation shape. The changed transcript-context
+test protects an observable AsyncLocalStorage boundary, fails on the unresolved
+merged API name, and requires no test-only production seam.
+
+Two independent read-only semantic reviews challenged the exact staged
+base/source/upstream:
+
+- the agent-runtime review required separate `coreReadAuthorized` plus closed
+  `subscriptionToolTrust`, and required both `async`/`await` and
+  `deliveryGeneration`;
+- the heartbeat review required the unified unscheduled-wake policy, transcript
+  context clearing, and explicit trusted-routing carry because object spread
+  cannot preserve the non-enumerable symbol marker.
+
+Both converged with the staged resolution. The index has zero unmerged entries,
+all tracked conflict markers are gone, and `git diff --cached --check` passes.
+The 30 auto-resolved shared files plus these four conflicts remain subject to
+the complete post-merge shared-path, Gate 2, Gate 2.5, and Gate 2.7 walks.
